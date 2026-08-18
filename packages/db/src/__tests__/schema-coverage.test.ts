@@ -44,7 +44,8 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.appDeployTokenMints).toBeDefined();
     // The FK-free teardown outbox. Registered here so a future refactor that
     // drops it from the barrel fails loudly rather than silently disabling the
-    // only thing that stops a deleted page stranding a billing Fly app.
+    // only thing that stops a deleted environment (or drive, or user) stranding
+    // a billing Fly app.
     expect(schemaModule.schema.appHostingReclaims).toBeDefined();
   });
 

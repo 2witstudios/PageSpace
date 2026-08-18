@@ -409,12 +409,13 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
    * teardown would then enqueue a reclaim for an app it does not own.
    *
    * This is not the "arrangement vs membership" trap the note above warns about:
-   * nothing a user would notice is being left behind. The user's PAGE — the actual
-   * content — travels normally; what does not travel is the hosting deployment,
-   * which the tenant re-publishes to create a real app on its own infrastructure.
+   * nothing a user would notice is being left behind. The user's CONTENT — the
+   * pages, and the environment the row keys on via `envId` — travels normally;
+   * what does not travel is the hosting deployment, which the tenant re-publishes
+   * from that same env to create a real app on its own infrastructure.
    */
   published_apps:
-    'A pointer to a Fly app inside the SOURCE deployment\'s Fly ORGANIZATION: `flyAppName`, `machineId`, `networkName` and `imageDigest` all name resources reachable only with that org\'s token. Carried into a tenant, the row describes an app the tenant cannot start, stop, reach or destroy (403 on every call), while the source instance keeps billing for the real one — and the tenant\'s own teardown would enqueue a reclaim against another organization\'s app. The user\'s page travels normally; only the hosting deployment is left behind, and re-publishing in the tenant creates a real app on its own infrastructure.',
+    'A pointer to a Fly app inside the SOURCE deployment\'s Fly ORGANIZATION: `flyAppName`, `machineId`, `networkName` and `imageDigest` all name resources reachable only with that org\'s token. Carried into a tenant, the row describes an app the tenant cannot start, stop, reach or destroy (403 on every call), while the source instance keeps billing for the real one — and the tenant\'s own teardown would enqueue a reclaim against another organization\'s app. The environment it points at (`envId`) travels normally; only the hosting deployment is left behind, and re-publishing that env in the tenant creates a real app on its own infrastructure.',
 
   app_deploy_token_mints:
     'The audit trail of Fly deploy tokens minted for apps in the SOURCE deployment\'s Fly organization, and meaningless without them: every row points at a `published_apps` row the bundle deliberately does not carry, and at a credential scoped to an app the tenant has no access to. Fly returns no token id, so these rows exist purely so the SOURCE can answer "what did we mint and when" — a question about the source\'s own security posture, not about the user. Carrying them would import an audit history for credentials that were never issued in the destination.',

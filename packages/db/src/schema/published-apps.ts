@@ -2,7 +2,8 @@ import { pgTable, text, integer, timestamp, index, pgEnum, check } from 'drizzle
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
-import { pages, drives } from './core';
+import { drives } from './core';
+import { driveEnvs } from './drive-envs';
 
 /**
  * The lifecycle of a published app, as a state machine.
@@ -39,7 +40,8 @@ export const publishedAppTier = pgEnum('published_app_tier', ['metered', 'dedica
 export type PublishedAppTier = (typeof publishedAppTier.enumValues)[number];
 
 /**
- * publishedApps — one row per user app published to real hosting, one Fly app each.
+ * publishedApps — the Fly SERVING RECORD of a published environment: one row per
+ * published env, one Fly app each.
  *
  * The row is the SOURCE OF TRUTH FOR A BILLING RESOURCE, and it is written BEFORE
  * the Fly app exists. That ordering is the whole safety property: a crash between
@@ -70,13 +72,36 @@ export const publishedApps = pgTable('published_apps', {
    */
   id: text('id').primaryKey().$defaultFn(() => createId()),
 
-  /** The page being published. One published app per page. */
-  pageId: text('pageId').notNull().unique().references(() => pages.id, { onDelete: 'cascade' }),
+  /**
+   * The ENVIRONMENT this app serves — the publish target, and the only thing this
+   * row hangs off. One published app per env, enforced here.
+   *
+   * Publishing is something you do TO an environment: the Fly serving tier is
+   * built FROM an env's contents at publish time. It is deliberately NOT an env
+   * itself and has no session surface, which is why the pointer runs this way
+   * (hosting row → env) and never the reverse: `drive_envs` carries Sprite
+   * pointers only, and nothing on it may ever name a Fly app. That partition is
+   * what keeps the two teardown outboxes separate — Sprite pointers are rescued
+   * into `machine_sprite_reclaims`, Fly app names into `app_hosting_reclaims`.
+   *
+   * WHAT gets published is not recorded here. Promotion (which commit, which
+   * build) is a later concern and lands as its own additive column when it
+   * exists; a source pointer invented now would be a second, unsynchronised
+   * answer to a question the env already answers.
+   *
+   * Cascading: deleting the env destroys its hosting row, and the AFTER DELETE
+   * trigger below rescues `flyAppName` on the way out — an env delete can
+   * therefore never strand a billing Fly app. The reverse is NOT true and must
+   * not become true: unpublishing deletes this row and leaves the env alone.
+   */
+  envId: text('envId').notNull().unique().references(() => driveEnvs.id, { onDelete: 'cascade' }),
 
   /**
-   * Denormalized from the page so the claim and metering queries don't join
-   * through `pages` on every tick. Cascades independently: a permanent drive
-   * delete must reach this row even if the page rows go first.
+   * Denormalized from the env so the claim and metering queries don't join
+   * through `drive_envs` on every tick. Cascades independently: a permanent
+   * drive delete must reach this row even if the env rows go first. The service
+   * layer validates that `envId`'s env really belongs to this drive — the
+   * database cannot express that cross-row agreement, so the write path owns it.
    */
   driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
 
@@ -279,9 +304,9 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
    * assuming the mint failed.
    *
    * NO BACKFILL accompanies the migration that added this column, and none is
-   * possible: the migration that CREATES this table (0262) is in the same
+   * possible: the migration that CREATES this table (0264) is in the same
    * unreleased release, so no database has ever held a row here. `runMigrations`
-   * applies every pending entry in one invocation, which means 0262 and 0264 land
+   * applies every pending entry in one invocation, which means 0264 and 0266 land
    * together on every deployment, empty table first. Were legacy rows possible they
    * would have to be stamped `outcome = 'minted', settledAt = "mintedAt"`, since
    * the pre-two-phase code only ever inserted after a successful mint.
@@ -321,11 +346,11 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
  *
  * A published Fly app is a real, billing resource. The only way to find one is its
  * `flyAppName`, and that name lives on `published_apps` — which FK-cascades off
- * `pages.id` AND `drives.id` (and through them off `users.id`). So every path that
- * hard-deletes a page or a drive destroys the only pointer to an app that may still
- * be serving and billing: the 30-day GDPR purge, "delete permanently" from the
- * trash, a permanent drive delete, the account-erasure worker, and any path someone
- * adds tomorrow. This is not hypothetical — the Sprites equivalent of exactly this
+ * `drive_envs.id` AND `drives.id` (and through them off `users.id`). So every path
+ * that hard-deletes an environment or a drive destroys the only pointer to an app
+ * that may still be serving and billing: deleting an env, a permanent drive delete,
+ * the 30-day GDPR purge, the account-erasure worker, and any path someone adds
+ * tomorrow. This is not hypothetical — the Sprites equivalent of exactly this
  * bug put a stuck, unreferenced microVM into production that had to be killed by
  * hand, which is why `machine_sprite_reclaims` exists and why this table copies it.
  *
@@ -338,7 +363,7 @@ export const appDeployTokenMints = pgTable('app_deploy_token_mints', {
  * `published_apps` copies the name in here as the row is destroyed. Postgres fires
  * row-level triggers for rows deleted by a referential CASCADE exactly as it does
  * for a direct DELETE, so ONE trigger on `published_apps` captures the name no
- * matter which table's delete started it — a page purge, a drive delete, a user
+ * matter which table's delete started it — an env delete, a drive delete, a user
  * erasure, or a hand-run `DELETE FROM published_apps` in psql. The insert is part
  * of the deleting transaction: either the pointer moves here, or the delete does
  * not commit.
@@ -387,9 +412,9 @@ export const appHostingReclaims = pgTable('app_hosting_reclaims', {
 }));
 
 export const publishedAppsRelations = relations(publishedApps, ({ one, many }) => ({
-  page: one(pages, {
-    fields: [publishedApps.pageId],
-    references: [pages.id],
+  env: one(driveEnvs, {
+    fields: [publishedApps.envId],
+    references: [driveEnvs.id],
   }),
   drive: one(drives, {
     fields: [publishedApps.driveId],

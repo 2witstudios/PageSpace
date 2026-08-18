@@ -21,7 +21,7 @@ vi.mock('@pagespace/db/db', () => ({
 vi.mock('@pagespace/db/schema/published-apps', () => ({
   publishedApps: {
     id: 'id',
-    pageId: 'pageId',
+    envId: 'envId',
     status: 'status',
     subdomain: 'subdomain',
     flyAppName: 'flyAppName',
@@ -30,6 +30,12 @@ vi.mock('@pagespace/db/schema/published-apps', () => ({
     claimedBy: 'claimedBy',
   },
   appDeployTokenMints: { id: 'id', publishedAppId: 'publishedAppId' },
+}));
+// Distinct object identities, so a test can assert WHICH table a write targeted.
+// `drive_envs` is read-only from here: publishing must never write the
+// environment it serves.
+vi.mock('@pagespace/db/schema/drive-envs', () => ({
+  driveEnvs: { id: 'driveEnvs.id', driveId: 'driveEnvs.driveId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
@@ -44,6 +50,7 @@ vi.mock('../../../logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: errorMock, debug: vi.fn() } },
 }));
 
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import {
   createPublishedApp,
   destroyPublishedApp,
@@ -61,6 +68,10 @@ let callLog: string[] = [];
 let updatePatches: Record<string, unknown>[] = [];
 /** Every row handed to `db.insert().values()`, in order. */
 let insertedRows: Record<string, unknown>[] = [];
+/** Every table handed to `db.select().from()`, in order. */
+let selectedTables: unknown[] = [];
+/** Every table handed to `db.insert()`, `db.update()` or `db.delete()`, in order. */
+let writtenTables: unknown[] = [];
 
 /** The most recent `set()` patch. (`Array.prototype.at` is beyond this package's typecheck lib target.) */
 const lastPatch = (): Record<string, unknown> => updatePatches[updatePatches.length - 1] ?? {};
@@ -91,41 +102,67 @@ function deps(overrides: Partial<ProvisionerDeps> = {}): ProvisionerDeps {
  * row lock — so it returns a thenable that also carries `.for`.
  */
 function mockSelect(rows: unknown[], label = 'db:select'): void {
-  const limitResult = () => {
-    callLog.push(label);
-    const settled = Promise.resolve(rows);
-    return {
-      for: () => {
-        callLog.push('db:lock');
-        return settled;
-      },
-      then: settled.then.bind(settled),
-      catch: settled.catch.bind(settled),
-      finally: settled.finally.bind(settled),
-    };
-  };
+  mockSelectQueue([{ rows, label }]);
+}
+
+/**
+ * Sequenced reads: the first `select()` gets the first batch, and the last batch
+ * repeats once the queue runs out.
+ *
+ * `createPublishedApp` reads TWICE — the `drive_envs` row it is publishing (to
+ * prove it exists and belongs to the drive whose id is about to be denormalized
+ * onto the hosting row) and then the existing hosting row. One canned result for
+ * both would let the env check pass against whatever the second read returns,
+ * which is exactly the confusion the check exists to prevent.
+ */
+function mockSelectQueue(batches: { rows: unknown[]; label: string }[]): void {
+  let call = 0;
 
   selectMock.mockImplementation(() => ({
-    from: () => ({
-      where: () => ({
-        limit: limitResult,
-        orderBy: () => ({
-          limit: () => ({
-            for: () => {
-              callLog.push('db:claim');
-              return Promise.resolve(rows);
-            },
+    from: (table: unknown) => {
+      const batch = batches[Math.min(call, batches.length - 1)];
+      call += 1;
+      selectedTables.push(table);
+
+      const limitResult = () => {
+        callLog.push(batch.label);
+        const settled = Promise.resolve(batch.rows);
+        return {
+          for: () => {
+            callLog.push('db:lock');
+            return settled;
+          },
+          then: settled.then.bind(settled),
+          catch: settled.catch.bind(settled),
+          finally: settled.finally.bind(settled),
+        };
+      };
+
+      return {
+        where: () => ({
+          limit: limitResult,
+          orderBy: () => ({
+            limit: () => ({
+              for: () => {
+                callLog.push('db:claim');
+                return Promise.resolve(batch.rows);
+              },
+            }),
           }),
         }),
-      }),
-    }),
+      };
+    },
   }));
 }
 
 const NOW = new Date('2026-08-15T00:00:00Z');
+/** The environment being published. Read, never written. */
+const ENV = { id: 'env1', driveId: 'drive1' };
+const ENV_READ = { rows: [ENV], label: 'db:select:env' };
+
 const ROW = {
   id: 'app1',
-  pageId: 'page1',
+  envId: 'env1',
   driveId: 'drive1',
   ownerId: 'user1',
   flyAppName: 'pgs-app-app1',
@@ -147,14 +184,17 @@ beforeEach(() => {
   callLog = [];
   updatePatches = [];
   insertedRows = [];
+  selectedTables = [];
+  writtenTables = [];
   selectMock.mockReset();
   insertMock.mockReset();
   updateMock.mockReset();
   deleteMock.mockReset();
   errorMock.mockReset();
 
-  insertMock.mockImplementation(() => ({
+  insertMock.mockImplementation((table: unknown) => ({
     values: (row: Record<string, unknown>) => {
+      writtenTables.push(table);
       callLog.push('db:insert');
       insertedRows.push(row);
       return {
@@ -164,9 +204,10 @@ beforeEach(() => {
       };
     },
   }));
-  updateMock.mockImplementation(() => ({
+  updateMock.mockImplementation((table: unknown) => ({
     set: (patch: Record<string, unknown>) => ({
       where: () => {
+        writtenTables.push(table);
         callLog.push(`db:update:${String(patch.status ?? 'fields')}`);
         updatePatches.push(patch);
         return {
@@ -176,8 +217,9 @@ beforeEach(() => {
       },
     }),
   }));
-  deleteMock.mockImplementation(() => ({
+  deleteMock.mockImplementation((table: unknown) => ({
     where: () => {
+      writtenTables.push(table);
       callLog.push('db:delete');
       return Promise.resolve(undefined);
     },
@@ -190,7 +232,7 @@ describe('the kill switch — every entry point is dark when off', () => {
   it('given hosting is disabled, createPublishedApp denies and never reaches Fly', async () => {
     mockSelect([]);
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -228,7 +270,7 @@ describe('the kill switch — every entry point is dark when off', () => {
     });
 
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -258,10 +300,10 @@ describe('the kill switch — every entry point is dark when off', () => {
 });
 
 describe('createPublishedApp — row before Fly', () => {
-  it('given a fresh page, should INSERT the row before the first Fly call', async () => {
-    mockSelect([]);
+  it('given a fresh env, should INSERT the row before the first Fly call', async () => {
+    mockSelectQueue([ENV_READ, { rows: [], label: 'db:select' }]);
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -275,11 +317,11 @@ describe('createPublishedApp — row before Fly', () => {
     expect(callLog.indexOf('db:insert')).toBeLessThan(callLog.indexOf('fly:createApp'));
   });
 
-  it('given a fresh page, should create the Fly app on the SHARED network', async () => {
-    mockSelect([]);
+  it('given a fresh env, should create the Fly app on the SHARED network', async () => {
+    mockSelectQueue([ENV_READ, { rows: [], label: 'db:select' }]);
     const seen: string[] = [];
     await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -294,9 +336,9 @@ describe('createPublishedApp — row before Fly', () => {
   });
 
   it('given Fly fails, should stamp the row failed and NEVER delete it', async () => {
-    mockSelect([]);
+    mockSelectQueue([ENV_READ, { rows: [], label: 'db:select' }]);
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -316,10 +358,10 @@ describe('createPublishedApp — row before Fly', () => {
     expect(errorMock).toHaveBeenCalled();
   });
 
-  it('given a page that already has a running app, should no-op rather than create a second Fly app', async () => {
-    mockSelect([{ ...ROW, status: 'running' }]);
+  it('given an env that already has a running app, should no-op rather than create a second Fly app', async () => {
+    mockSelectQueue([ENV_READ, { rows: [{ ...ROW, status: 'running' }], label: 'db:select' }]);
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -331,9 +373,9 @@ describe('createPublishedApp — row before Fly', () => {
   });
 
   it('given a no-op, should return the row it already read rather than re-reading it', async () => {
-    mockSelect([{ ...ROW, status: 'running' }]);
+    mockSelectQueue([ENV_READ, { rows: [{ ...ROW, status: 'running' }], label: 'db:select' }]);
     const result = await createPublishedApp({
-      pageId: 'page1',
+      envId: 'env1',
       driveId: 'drive1',
       ownerId: 'user1',
       subdomain: 'acme',
@@ -345,6 +387,60 @@ describe('createPublishedApp — row before Fly', () => {
     // then returned `app: undefined` while typed as PublishedApp.
     expect(result).toEqual({ ok: true, app: { ...ROW, status: 'running' }, noop: true });
     expect(callLog.filter((c) => c === 'db:select')).toHaveLength(1);
+  });
+
+  it('given no such env, should refuse before writing anything', async () => {
+    mockSelectQueue([{ rows: [], label: 'db:select:env' }]);
+    const result = await createPublishedApp({
+      envId: 'ghost',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(callLog).not.toContain('db:insert');
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it("given an env belonging to another drive, should refuse rather than denormalize the wrong drive", async () => {
+    mockSelectQueue([{ rows: [{ id: 'env1', driveId: 'other-drive' }], label: 'db:select:env' }]);
+    const result = await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    // `driveId` is the copy billing and the claim queries trust. A row whose
+    // denormalized drive disagrees with its env bills the wrong drive and is
+    // invisible to the one that owns the app — the database cannot express the
+    // agreement, so this is the only place it can be refused.
+    expect(result).toEqual({ ok: false, reason: 'env_drive_mismatch' });
+    expect(callLog).not.toContain('db:insert');
+    expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it('given a publish, should read the env and never write it', async () => {
+    mockSelectQueue([ENV_READ, { rows: [], label: 'db:select' }]);
+    await createPublishedApp({
+      envId: 'env1',
+      driveId: 'drive1',
+      ownerId: 'user1',
+      subdomain: 'acme',
+      orgSlug: 'pagespace',
+      deps: deps(),
+    });
+
+    // The hosting row hangs off the env; the env knows nothing about Fly. A write
+    // in this direction would put a Fly pointer on a row whose only teardown
+    // outbox is `machine_sprite_reclaims`, which cannot kill a Fly app.
+    expect(selectedTables).toContain(driveEnvs);
+    expect(writtenTables).not.toContain(driveEnvs);
   });
 });
 
@@ -374,6 +470,17 @@ describe('destroyPublishedApp', () => {
     mockSelect([]);
     expect(await destroyPublishedApp('nope', deps())).toEqual({ ok: false, reason: 'not_found' });
     expect(callLog.filter((c) => c.startsWith('fly:'))).toEqual([]);
+  });
+
+  it('given a teardown, should leave the environment entirely alone', async () => {
+    mockSelect([ROW]);
+    await destroyPublishedApp('app1', deps());
+
+    // Unpublishing is not deleting an environment: the env keeps its Sprite, its
+    // sessions and its contents, and can be published again. The cascade runs one
+    // way only — deleting the env destroys the hosting row, never the reverse.
+    expect(writtenTables).not.toContain(driveEnvs);
+    expect(selectedTables).not.toContain(driveEnvs);
   });
 });
 

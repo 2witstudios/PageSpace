@@ -23,7 +23,8 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, inArray, sql } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { drives, pages } from '@pagespace/db/schema/core';
+import { drives } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { publishedApps, type PublishedAppStatus } from '@pagespace/db/schema/published-apps';
 import {
   claimPublishedAppsForWork,
@@ -45,28 +46,27 @@ const deps: ProvisionerDeps = {
   mintFlyDeployToken: async () => 'unused',
 };
 
-/** Every page/app id this file created, so a mid-suite failure cannot leak rows into the next run. */
-const pageIds: string[] = [];
+/** Every env this file created, so a mid-suite failure cannot leak rows into the next run. */
+const envIds: string[] = [];
 
 async function seedApp(
   status: PublishedAppStatus,
   columns: Partial<PublishedAppStatusColumns> = {},
 ): Promise<string> {
-  const pageId = createId();
+  const envId = createId();
   const appId = createId();
-  pageIds.push(pageId);
+  envIds.push(envId);
 
-  await db.insert(pages).values({
-    id: pageId,
-    title: 'published app page',
-    type: 'DOCUMENT',
-    position: 0,
+  await db.insert(driveEnvs).values({
+    id: envId,
     driveId,
+    name: `env-${envId}`,
+    createdBy: userId,
     updatedAt: new Date(),
   });
   await db.insert(publishedApps).values({
     id: appId,
-    pageId,
+    envId,
     driveId,
     ownerId: userId,
     flyAppName: `pgs-app-${appId}`,
@@ -95,15 +95,15 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
-  // published_apps cascades off pages; delete the pages and the apps go with them.
-  if (pageIds.length > 0) await db.delete(pages).where(inArray(pages.id, pageIds));
+  // published_apps cascades off drive_envs; delete the envs and the apps go with them.
+  if (envIds.length > 0) await db.delete(driveEnvs).where(inArray(driveEnvs.id, envIds));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(eq(users.id, userId));
 });
 
 beforeEach(async () => {
-  if (pageIds.length > 0) await db.delete(pages).where(inArray(pages.id, pageIds));
-  pageIds.length = 0;
+  if (envIds.length > 0) await db.delete(driveEnvs).where(inArray(driveEnvs.id, envIds));
+  envIds.length = 0;
 });
 
 describe('claimPublishedAppsForWork — two workers, disjoint sets, AFTER the transaction commits', () => {

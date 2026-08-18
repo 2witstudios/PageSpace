@@ -251,7 +251,7 @@ describe('planProvision', () => {
 
   assert({
     given: 'an existing running row',
-    should: 'no-op rather than create a second Fly app for the same page',
+    should: 'no-op rather than create a second Fly app for the same env',
     actual: planProvision({ enabled: true, existingStatus: 'running' }),
     expected: { action: 'noop', existingStatus: 'running' },
   });

@@ -233,9 +233,12 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'page_permissions',
     'page_share_links',
     'published_pages',
-    // The hosting deployment of a drive's published page — the drive's record,
-    // exactly as `published_pages` is. What the subject authored is the PAGE,
-    // exported under `pages`; this row is the Fly app it is served from.
+    // The hosting deployment of a drive's published ENVIRONMENT — the drive's
+    // record, exactly as `published_pages` and `drive_envs` above it are. The
+    // row keys on `envId`: it is the Fly app an env is served from, and it
+    // carries no content of the subject's. What the subject authored lives in
+    // the env (exported under its own categories) and in `pages`; this row is
+    // infrastructure the drive owns and pays for.
     'published_apps',
     'custom_domains',
     'global_assistant_config',

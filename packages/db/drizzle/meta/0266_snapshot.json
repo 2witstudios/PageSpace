@@ -1,6 +1,6 @@
 {
-  "id": "249181d6-3ba0-4d17-b640-b60fff59e582",
-  "prevId": "bd2369e7-bae3-472c-b561-59e4c6c75103",
+  "id": "4e4df2db-1bab-4a3f-9de8-9156e11adab0",
+  "prevId": "d66d0f53-9a36-4a64-857b-a81a3afe6802",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -19599,6 +19599,19 @@
           "notNull": true,
           "default": "now()"
         },
+        "outcome": {
+          "name": "outcome",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'pending'"
+        },
+        "settledAt": {
+          "name": "settledAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
         "expiry": {
           "name": "expiry",
           "type": "text",
@@ -19661,6 +19674,14 @@
         "app_deploy_token_mints_purpose_nonempty": {
           "name": "app_deploy_token_mints_purpose_nonempty",
           "value": "length(\"app_deploy_token_mints\".\"purpose\") > 0"
+        },
+        "app_deploy_token_mints_outcome_allowed": {
+          "name": "app_deploy_token_mints_outcome_allowed",
+          "value": "\"app_deploy_token_mints\".\"outcome\" IN ('pending', 'minted', 'failed')"
+        },
+        "app_deploy_token_mints_settled_coherent": {
+          "name": "app_deploy_token_mints_settled_coherent",
+          "value": "(\"app_deploy_token_mints\".\"outcome\" = 'pending') = (\"app_deploy_token_mints\".\"settledAt\" IS NULL)"
         }
       },
       "isRLSEnabled": false
@@ -19842,6 +19863,18 @@
           "primaryKey": false,
           "notNull": false
         },
+        "claimedAt": {
+          "name": "claimedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "claimedBy": {
+          "name": "claimedBy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "createdAt": {
           "name": "createdAt",
           "type": "timestamp with time zone",
@@ -19996,6 +20029,10 @@
         "published_apps_subdomain_nonempty": {
           "name": "published_apps_subdomain_nonempty",
           "value": "length(\"published_apps\".\"subdomain\") > 0"
+        },
+        "published_apps_claim_coherent": {
+          "name": "published_apps_claim_coherent",
+          "value": "(\"published_apps\".\"claimedAt\" IS NULL) = (\"published_apps\".\"claimedBy\" IS NULL)"
         }
       },
       "isRLSEnabled": false

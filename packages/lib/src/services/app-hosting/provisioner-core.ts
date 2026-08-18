@@ -180,7 +180,7 @@ export type ProvisionPlan =
  * An existing `failed` row is re-drivable: provisioning it again is the retry path,
  * which is why it plans `create` rather than `noop`. Any other existing row is a
  * no-op — the app is already in the pipeline, and re-provisioning would create a
- * second Fly app for the same page.
+ * second Fly app for the same env.
  */
 export function planProvision({
   enabled,
