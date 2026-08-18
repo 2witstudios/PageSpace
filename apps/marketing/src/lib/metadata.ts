@@ -183,22 +183,6 @@ export const pageMetadata = {
     keywords: ["download", "desktop app", "mobile app", "macOS", "Windows", "Linux", "iOS", "Android"],
   }),
 
-  blog: createMetadata({
-    title: "Blog",
-    description:
-      "Latest news, updates, and insights from the PageSpace team. Learn about AI, productivity, and building better workspaces.",
-    path: "/blog",
-    keywords: ["blog", "news", "updates", "AI", "productivity"],
-  }),
-
-  docs: createMetadata({
-    title: "Documentation",
-    description:
-      "PageSpace developer documentation. Learn how to use the API, integrate MCP servers, and extend your workspace.",
-    path: "/docs",
-    keywords: ["documentation", "API", "developers", "MCP", "integration"],
-  }),
-
   faq: createMetadata({
     title: "FAQ",
     description:

@@ -2,19 +2,20 @@ import Link from "next/link";
 import Image from "next/image";
 import { Github } from "lucide-react";
 import { ThemeToggle } from "@/components/ThemeToggle";
+import { docsUrl, blogUrl } from "@/lib/sites";
 
 const productLinks = [
   { label: "Pricing", href: "/pricing" },
   { label: "Downloads", href: "/downloads" },
-  { label: "Blog", href: "/blog" },
+  { label: "Blog", href: blogUrl() },
   { label: "Security", href: "/security" },
 ];
 
 const resourceLinks = [
-  { label: "Documentation", href: "/docs" },
-  { label: "Getting Started", href: "/docs/getting-started" },
-  { label: "Page Types", href: "/docs/page-types" },
-  { label: "Integrations", href: "/docs/integrations" },
+  { label: "Documentation", href: docsUrl() },
+  { label: "Getting Started", href: docsUrl("/getting-started") },
+  { label: "Page Types", href: docsUrl("/page-types") },
+  { label: "Integrations", href: docsUrl("/integrations") },
 ];
 
 const companyLinks = [

@@ -66,41 +66,6 @@ export const webApplicationSchema = {
 };
 
 /**
- * Article schema - for blog posts
- */
-export interface ArticleData {
-  title: string;
-  description: string;
-  slug: string;
-  publishedAt: string;
-  modifiedAt?: string;
-  author?: string;
-  image?: string;
-}
-
-export function createArticleSchema(article: ArticleData) {
-  return {
-    "@context": "https://schema.org",
-    "@type": "Article",
-    headline: article.title,
-    description: article.description,
-    url: `${SITE_URL}/blog/${article.slug}`,
-    datePublished: article.publishedAt,
-    dateModified: article.modifiedAt || article.publishedAt,
-    author: {
-      "@type": "Person",
-      name: article.author || "PageSpace Team",
-    },
-    publisher: organizationRef,
-    image: article.image || `${SITE_URL}/og-image.png`,
-    mainEntityOfPage: {
-      "@type": "WebPage",
-      "@id": `${SITE_URL}/blog/${article.slug}`,
-    },
-  };
-}
-
-/**
  * WebSite schema
  */
 export const websiteSchema = {

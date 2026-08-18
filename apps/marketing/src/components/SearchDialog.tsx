@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { FileText, BookOpen, HelpCircle, Globe } from "lucide-react";
+import { BookOpen, HelpCircle, Globe } from "lucide-react";
 import {
   CommandDialog,
   CommandEmpty,
@@ -15,12 +15,11 @@ import { searchEntries, type SearchEntry } from "@/lib/search-data";
 
 const categoryIcons: Record<SearchEntry["category"], React.ReactNode> = {
   Docs: <BookOpen className="h-4 w-4 text-primary" />,
-  Blog: <FileText className="h-4 w-4 text-green-500" />,
   FAQ: <HelpCircle className="h-4 w-4 text-amber-500" />,
   Pages: <Globe className="h-4 w-4 text-muted-foreground" />,
 };
 
-const groupOrder: SearchEntry["category"][] = ["Docs", "Blog", "FAQ", "Pages"];
+const groupOrder: SearchEntry["category"][] = ["Docs", "FAQ", "Pages"];
 
 export function SearchDialog() {
   const [open, setOpen] = useState(false);
