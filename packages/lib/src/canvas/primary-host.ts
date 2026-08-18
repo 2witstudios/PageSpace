@@ -51,6 +51,29 @@ export interface ActiveDomainRecord {
  * `ActiveDomainRecord`) and the settings UI (which carries an `id`) can reuse the
  * SAME selection — the badge/primary controls never drift from what is served.
  */
+/**
+ * Whether an ACTIVE domain may be considered for primary-host selection.
+ *
+ * A `platformOwned` row is normally an additional serving ALIAS, not the
+ * drive's identity — registering `pagespace.ai` to surface one page at a path
+ * must not retitle the drive's canonical URLs. The exception is a platform
+ * domain a platform admin explicitly flagged `isPrimary`, which means the
+ * opposite: this host IS the drive's public identity (how the platform docs
+ * and blog drives claim docs./blog.pagespace.ai).
+ *
+ * Lives here, shared, because BOTH the server resolver
+ * (`getActiveDomainRecords`) and the settings UI's "Primary" badge must admit
+ * exactly the same rows. Two hand-written filters drift, and the drift is
+ * invisible: the badge says one host while the published site canonicalizes
+ * another.
+ */
+export function isEligibleForPrimaryHost(domain: {
+  platformOwned?: boolean | null;
+  isPrimary?: boolean | null;
+}): boolean {
+  return !domain.platformOwned || Boolean(domain.isPrimary);
+}
+
 export function selectPrimaryActiveDomain<T extends ActiveDomainRecord>(activeDomains: T[]): T | null {
   if (activeDomains.length === 0) return null;
 

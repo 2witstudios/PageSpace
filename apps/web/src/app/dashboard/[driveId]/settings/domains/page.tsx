@@ -16,7 +16,7 @@ import { toast } from 'sonner';
 import { fetchWithAuth, del, patch } from '@/lib/auth/auth-fetch';
 import useSWR from 'swr';
 import { normalizeHostname, validateCustomDomain, buildDnsInstructions } from '@pagespace/lib/validators/custom-domain';
-import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
+import { selectPrimaryActiveDomain, isEligibleForPrimaryHost } from '@pagespace/lib/canvas/primary-host';
 import { PagePickerPopover } from '@/components/common/PagePickerPopover';
 import { PageType } from '@pagespace/lib/utils/enums';
 
@@ -27,6 +27,13 @@ interface CustomDomain {
   status: 'pending' | 'verified' | 'failed' | 'dns_failed' | 'provisioning' | 'active' | 'cert_failed';
   isPrimary: boolean;
   createdAt: string;
+  /**
+   * Platform-owned alias (e.g. pagespace.ai, or the docs/blog subdomains).
+   * Registered by a platform admin, not a customer, and excluded from
+   * primary-host selection unless explicitly flagged `isPrimary` — mirrors
+   * `getActiveDomainRecords` in apps/web/src/lib/canvas/custom-domain-mirror.ts.
+   */
+  platformOwned: boolean;
   /** Canvas page overriding this domain's root ('/'); null = use the drive-wide home page. */
   publishLandingPageId: string | null;
   /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
@@ -780,7 +787,10 @@ function CustomDomainsCard({ driveId, domains, limit, newDomain, onNewDomainChan
     () =>
       selectPrimaryActiveDomain(
         domains
-          .filter((d) => d.status === 'active')
+          // Literally the same predicate the server's getActiveDomainRecords
+          // applies, so the badge can never disagree with what the published
+          // site canonicalizes.
+          .filter((d) => d.status === 'active' && isEligibleForPrimaryHost(d))
           .map((d) => ({ id: d.id, hostname: d.hostname, createdAt: new Date(d.createdAt), isPrimary: d.isPrimary })),
       )?.id ?? null,
     [domains],
