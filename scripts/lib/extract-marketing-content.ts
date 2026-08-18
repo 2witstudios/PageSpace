@@ -434,7 +434,7 @@ export async function extractPosts(): Promise<ExtractedPost[]> {
  * upload-validation.ts`, because SVG is a script-execution vector), so an
  * entry here would only turn a clear local error into a confusing 400.
  */
-export const IMAGE_MIME_TYPES: Record<string, string> = {
+export const IMAGE_MIME_TYPES: Record<string, string | undefined> = {
   '.png': 'image/png',
   '.jpg': 'image/jpeg',
   '.jpeg': 'image/jpeg',
