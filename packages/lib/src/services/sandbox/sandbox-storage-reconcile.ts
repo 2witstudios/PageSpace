@@ -928,11 +928,17 @@ export async function reconcileSandboxStorage(
   // two defects — so the loop now touches only the per-kind records, and "the
   // flat total is the sum of the parts" is true by construction rather than by
   // discipline at six separate increment sites.
+  // Iterated, not named kind by kind: `StorageSubjectKind` is the source of
+  // truth for the key set, so a third unit added there gets a `billingByKind`
+  // entry from the `Record` type and would have been silently dropped from every
+  // flat total by a hand-written `session + env`. That is the same "by
+  // construction" claim this block makes about the sums themselves, so it should
+  // hold for the key set too.
   const sumBilling = (
     pick: (of: { billable: number; charged: number; skipped: number; failed: number }) => number,
-  ) => pick(billingByKind.session) + pick(billingByKind.env);
+  ) => Object.values(billingByKind).reduce((total, of) => total + pick(of), 0);
   const sumHealth = (pick: (of: { live: number; neverMeasured: number; stale: number }) => number) =>
-    pick(measurementHealth.session) + pick(measurementHealth.env);
+    Object.values(measurementHealth).reduce((total, of) => total + pick(of), 0);
 
   return {
     processed: subjects.length,

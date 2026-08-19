@@ -941,16 +941,14 @@ describe('reconcileSandboxStorage', () => {
     // charging satisfies it while every session fails.
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 's1' }), agentSession({ workspaceId: 's2' })],
-      listDriveEnvSprites: async () => [driveEnv({ envId: 'e1' })],
-      // Sessions cannot resolve a payer; the env can.
+      // A DIFFERENT drive from the sessions', so the lookup below can answer for
+      // one and not the other.
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'e1', driveId: 'drive-env' })],
+      // The sessions' drive cannot resolve a payer; the env's can.
       lookupDriveOwnerId: async (driveId) => (driveId === 'drive-1' ? null : `owner-of-${driveId}`),
     });
 
-    const result = await reconcileSandboxStorage(
-      Object.assign(deps, {
-        listDriveEnvSprites: async () => [driveEnv({ envId: 'e1', driveId: 'drive-env' })],
-      }),
-    );
+    const result = await reconcileSandboxStorage(deps);
 
     assert({
       given: 'two sessions whose payer is unresolvable beside one env that charges',
