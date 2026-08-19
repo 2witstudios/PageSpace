@@ -667,10 +667,13 @@ const SESSION_LIMIT_DETAIL =
  * and with every future one. Forwarding the intent would let one session's retry
  * — a wedged shell, a failed tool call, a client that retries on a timeout —
  * silently delete a team's environment out from under everyone working in it.
- * So it degrades to attach: the env's machine is handed back if it is there, and
- * the planner denies (`sandbox_not_provisioned` — an env has no ended state to
- * report) if it is not. Replacing an env's Sprite is `rebuildDriveEnv` and
- * nothing else — an
+ * So it degrades to attach: the env's machine is handed back if it is there,
+ * and the planner denies if it is not — `sandbox_not_provisioned` for an env
+ * that has never been provisioned, or `session_torn_down` for one whose Sprite
+ * a `rebuildDriveEnv` tore down and has not yet replaced (the shared planner's
+ * `isEnded` reads the env row's `spriteTornDownAt`, and the deny reasons stay
+ * session-worded on purpose — see `SpriteHolderDenyReason`). Replacing an env's
+ * Sprite is `rebuildDriveEnv` and nothing else — an
  * explicit, admin-aimed verb on the env itself, which is where the person
  * pressing it can see whose files they are destroying.
  *
@@ -789,11 +792,26 @@ export async function ensureAgentSessionSandbox({
   deps: AgentSessionSpriteDeps;
 }): Promise<EnsureAgentSessionSandboxResult> {
   if (row.envId !== null) {
+    // `attach` must never resurrect, and for an env-bound session that has to be
+    // said here: the shared planner refuses `attach` on an ended row
+    // (`session_torn_down`), but it only ever sees the ENV's row on this path,
+    // which knows nothing about the session having ended. Without this an
+    // attach against a live environment would succeed and then clear `endedAt`
+    // below — putting a session the user ended back in the sidebar holding the
+    // empty tree `endSession` already destroyed.
+    if (intent === 'attach' && row.endedAt !== null) {
+      return { ok: false, reason: 'denied', denial: 'session_torn_down' };
+    }
     const provisioned = await deps.ensureEnvSandbox({
       envId: row.envId,
       intent: envIntentForSessionIntent(intent),
     });
-    if (provisioned.ok) await reviveEnvBoundSession({ row, deps, now: deps.now() });
+    // Only the intents that MEAN "I want this session working" revive it. A
+    // plain `attach` is a read-only resolve; it stamps nothing, exactly as the
+    // planner's attach arm writes no revival stamps for an ordinary session.
+    if (provisioned.ok && intent !== 'attach') {
+      await reviveEnvBoundSession({ row, deps, now: deps.now() });
+    }
     return provisioned;
   }
   const { measureSessionStorage } = deps;

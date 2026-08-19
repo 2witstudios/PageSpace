@@ -1124,24 +1124,28 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
     // that landed while the env provisioned is the user's most recent word and
     // must stand. The sandbox handed back is unaffected — only the freshness
     // touch is skipped.
-    const store = makeAgentSessionStore([envRow]);
+    // Its OWN row object: the fake store holds what it is given by reference,
+    // so mutating a shared fixture here would leak an `endedAt` into every
+    // later test in this block.
+    const racing = makeSessionRecord({ envId: ENV_ID });
+    const store = makeAgentSessionStore([racing]);
     const host = makeSpriteHost();
 
     const result = await ensureAgentSessionSandbox({
-      row: toSpriteRow(envRow), // read while live...
+      row: toSpriteRow(racing), // read while live...
       intent: 'ensure',
       actor,
       deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async () => {
           // ...and ended while the env was being provisioned.
-          store.rows.get(envRow.id)!.endedAt = NOW;
+          store.rows.get(racing.id)!.endedAt = NOW;
           return { ok: true, sandboxId: ENV_SANDBOX, resumed: true };
         },
       }),
     });
 
     expect(result.ok).toBe(true);
-    expect(store.rows.get(envRow.id)!.endedAt).toEqual(NOW);
+    expect(store.rows.get(racing.id)!.endedAt).toEqual(NOW);
   });
 
   it('given the env provision FAILED, should leave the session row alone', async () => {
@@ -1163,6 +1167,53 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
 
     expect(store.rows.get(ended.id)!.endedAt).toEqual(NOW);
     expect(store.rows.get(ended.id)!.lastActiveAt).toBeNull();
+  });
+
+  it('given ATTACH on an ENDED env session, should DENY rather than resurrect it', async () => {
+    // The shared planner refuses `attach` on an ended row, but on this path it
+    // only ever sees the ENV's row, which knows nothing about the session
+    // ending. Without the explicit refusal an attach against a live environment
+    // would succeed and clear `endedAt` — putting a session the user ended back
+    // in the sidebar holding the empty tree `endSession` already destroyed.
+    const ended = makeSessionRecord({ envId: ENV_ID, endedAt: NOW });
+    const store = makeAgentSessionStore([ended]);
+    const host = makeSpriteHost();
+    let envCalls = 0;
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(ended),
+      intent: 'attach',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => {
+          envCalls += 1;
+          return { ok: true, sandboxId: ENV_SANDBOX, resumed: true };
+        },
+      }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'denied', denial: 'session_torn_down' });
+    expect(envCalls).toBe(0);
+    expect(store.rows.get(ended.id)!.endedAt).toEqual(NOW);
+  });
+
+  it('given ATTACH on a LIVE env session, should resolve without stamping — a read-only resolve writes nothing', async () => {
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'attach',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => ({ ok: true, sandboxId: ENV_SANDBOX, resumed: true }),
+      }),
+    });
+
+    expect(result).toEqual({ ok: true, sandboxId: ENV_SANDBOX, resumed: true });
+    // The planner's attach arm writes no revival stamps for an ordinary
+    // session either; this keeps the two kinds saying the same thing.
+    expect(store.rows.get(envRow.id)!.lastActiveAt).toBeNull();
   });
 
   it('given an ORDINARY session, should never consult the env seam', async () => {
