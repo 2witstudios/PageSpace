@@ -45,16 +45,15 @@ describe('/api/cron/reconcile-machine-storage', () => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     // A run the reconcile could ACTUALLY produce, because a fixture pinned
-    // against an impossible state is a weak guard. Two live sessions and a
-    // failed env listing: one session measured and charged, one never measured
-    // (so it bills the 0 floor and is not `charged` or `skipped`), and — since
-    // `listSource` yields no rows for a source that threw — every env counter is
-    // necessarily zero. `live` therefore sums to `processed`, and the per-unit
-    // `neverMeasured`/`stale` sum to the flat totals.
+    // against an impossible state is a weak guard. Two live sessions and one
+    // live env, both sources read cleanly: one session measured and charged,
+    // one never measured (so it bills the 0 floor and is neither `charged` nor
+    // `skipped`), the env measured and charged. `live` sums to `processed`, and
+    // the per-unit counters sum to the flat totals.
     mockReconcile.mockResolvedValue({
       outcome: 'reconciled',
-      processed: 2,
-      charged: 1,
+      processed: 3,
+      charged: 2,
       skipped: 0,
       failed: 0,
       chargedButUnadvanced: 0,
@@ -62,9 +61,9 @@ describe('/api/cron/reconcile-machine-storage', () => {
       neverMeasured: 1,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
-        env: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 1, neverMeasured: 0, stale: 0 },
       },
-      failedSources: ['env'],
+      failedSources: [],
       totalCostDollars: 0.001234,
     });
   });
@@ -91,8 +90,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
         resourceType: 'cron_job',
         resourceId: 'reconcile_machine_storage',
         details: expect.objectContaining({
-          processed: 2,
-          charged: 1,
+          processed: 3,
+          charged: 2,
           skipped: 0,
           failed: 0,
           chargedButUnadvanced: 0,
@@ -105,14 +104,37 @@ describe('/api/cron/reconcile-machine-storage', () => {
           // flat stale count and would hide a session-side outage.
           measurementHealth: {
             session: { live: 2, neverMeasured: 1, stale: 0 },
-            env: { live: 0, neverMeasured: 0, stale: 0 },
+            env: { live: 1, neverMeasured: 0, stale: 0 },
           },
-          failedSources: ['env'],
+          failedSources: [],
         }),
       }),
     );
     expect(body).toMatchObject({
       success: true,
+      processed: 3,
+      charged: 2,
+      skipped: 0,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 1,
+      measurementHealth: {
+        session: { live: 2, neverMeasured: 1, stale: 0 },
+        env: { live: 1, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+    });
+  });
+
+  it('given a row source that could NOT be read, should FAIL the tick while still reporting what it billed', async () => {
+    // Isolation inside the reconcile is right — an unreadable `drive_envs` must
+    // never stop SESSION billing — but a green 200 here would trade one silence
+    // for another: a deployment where the env table is unmigrated or unreadable
+    // fails EVERY tick, so "it accrues and is caught up next tick" never comes
+    // true, and the only trace is a logger this repo does not route to Sentry.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
       processed: 2,
       charged: 1,
       skipped: 0,
@@ -122,10 +144,29 @@ describe('/api/cron/reconcile-machine-storage', () => {
       neverMeasured: 1,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
+        // The env LIST threw, so `listSource` yielded no rows and every env
+        // counter is necessarily zero.
         env: { live: 0, neverMeasured: 0, stale: 0 },
       },
       failedSources: ['env'],
+      totalCostDollars: 0.001234,
     });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({
+      success: false,
+      error: expect.stringContaining('env'),
+      // The work that DID succeed is still reported in full — failing the tick
+      // must not hide the money that moved.
+      charged: 1,
+      totalCostDollars: 0.001234,
+      failedSources: ['env'],
+    });
+    // Still audited: the charges happened and the audit trail must show them.
+    expect(mockAudit).toHaveBeenCalledTimes(1);
   });
 
   it('given the advisory lock is held by another run, should no-op WITHOUT auditing and report lock_busy', async () => {

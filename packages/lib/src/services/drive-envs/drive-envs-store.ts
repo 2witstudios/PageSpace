@@ -254,6 +254,14 @@ export interface DriveEnvStore {
    * describes is gone: a torn-down row is never written, and the write CASes on
    * the INSTANCE measured so one generation's bytes can never be persisted
    * against its replacement's id.
+   *
+   * Returns whether the row was actually written — the one place this diverges
+   * from the session store's twin, which returns void. A refused CAS is not an
+   * error and must not throw, but for an ENV it is not harmless either: this is
+   * the only writer the row has, so a silent miss leaves it never-measured and
+   * billing the 0 floor with nothing to retry it. A session's twin can stay void
+   * because its bash and git writers correct the same miss on the next real work.
+   * `envStorageMeasureSeam` warns on `false`.
    */
   recordStorageMeasurement(input: {
     envId: string;
@@ -265,7 +273,7 @@ export interface DriveEnvStore {
     spriteInstanceId: string | null;
     measuredBytes: number;
     measuredAt: Date;
-  }): Promise<void>;
+  }): Promise<boolean>;
   /**
    * Record the durable teardown INTENT, BEFORE the kill — the one stamp written
    * ahead of its IO, so a crash between "we decided to kill" and "the kill was
@@ -576,7 +584,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     },
 
     async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
-      await db
+      const updated = await db
         .update(driveEnvs)
         .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
         .where(
@@ -588,7 +596,13 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
             // never persisting — plain `eq` never matches null in SQL.
             eqOrIsNull(driveEnvs.spriteInstanceId, spriteInstanceId),
           ),
-        );
+        )
+        .returning({ id: driveEnvs.id });
+      // Reported, not thrown: a refused CAS means the generation moved under a
+      // fire-and-forget `du`, which is correct behaviour, not an error. The
+      // CALLER decides it is worth a warning — and for an env it is, because
+      // nothing else will write this row.
+      return updated.length > 0;
     },
 
     async requestTeardown({ envId, sandboxId, spriteInstanceId, at }) {

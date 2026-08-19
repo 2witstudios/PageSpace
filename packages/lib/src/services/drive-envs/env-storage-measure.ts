@@ -43,10 +43,12 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
 /**
  * Build the `measureStorage` dep for an ENV's provisioning.
  *
- * Fired by `ensureSpriteHolderSandbox` on the `create` arm only, against a
- * Sprite that is already awake — never by waking a hibernating one, which would
- * recreate the keep-awake billing bug the reconcile exists to avoid. The core
- * calls it fire-and-forget, so a failure here can never fail a provision.
+ * Fired by `ensureSpriteHolderSandbox` on the two arms that CLEAR the row's
+ * measurement — `create` and `adopt` — against a Sprite that is already awake,
+ * never by waking a hibernating one, which would recreate the keep-awake billing
+ * bug the reconcile exists to avoid. (`resume` reconnects to the same
+ * filesystem, so its existing reading still describes it.) The core calls this
+ * fire-and-forget, so a failure here can never fail a provision.
  *
  * **The baseline it captures is a FLOOR, not a truth, and today it is the ONLY
  * writer — so read this before assuming envs are fully metered.** A
@@ -94,6 +96,10 @@ export function envStorageMeasureSeam(
     // indefinitely. The reconcile's `neverMeasured` shows the aggregate; this
     // names the env.
     let result: { measured: boolean } | undefined;
+    // Captured from the store's own answer rather than inferred: the persist
+    // callback runs inside the helper, so this is the only way its verdict
+    // reaches the logging below.
+    let persisted = false;
     try {
       result = await refreshSessionStorageMeasurement({
         handle,
@@ -112,8 +118,14 @@ export function envStorageMeasureSeam(
         // inside the window, leaving the row NULL with no other trigger to fix it.
         lastMeasuredAt: null,
         now: new Date(),
-        persist: ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) =>
-          store.recordStorageMeasurement({ envId: workspaceId, spriteInstanceId, measuredBytes, measuredAt }),
+        persist: async ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) => {
+          persisted = await store.recordStorageMeasurement({
+            envId: workspaceId,
+            spriteInstanceId,
+            measuredBytes,
+            measuredAt,
+          });
+        },
       });
     } catch (error) {
       // The PERSIST rejected (a DB blip mid-provision). `refreshSessionStorageMeasurement`
@@ -135,6 +147,22 @@ export function envStorageMeasureSeam(
       loggers.ai.warn(
         'Env storage measurement produced no reading — this env has no baseline and will bill the 0 floor until it is measured',
         { envId: holderId },
+      );
+      return;
+    }
+
+    if (!persisted) {
+      // The store's CAS refused: the row was torn down, or its Sprite generation
+      // moved while the `du` ran (it may take up to the measure timeout, and on
+      // the adopt arm the attached handle's instance can already differ from the
+      // one just written to the row). Correct of the store to refuse — those
+      // bytes describe a disk this row no longer points at — but for an ENV the
+      // consequence is the same NULL row with no second writer, so it is named
+      // rather than swallowed. Without this the module's promise that every
+      // failing path logs would simply be false.
+      loggers.ai.warn(
+        'Env storage measurement was refused by its compare-and-swap (row torn down, or the Sprite generation moved while measuring) — this env keeps no baseline and will bill the 0 floor until it is measured',
+        { envId: holderId, spriteInstanceId: handle.spriteInstanceId ?? null },
       );
     }
   };

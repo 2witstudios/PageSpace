@@ -23,6 +23,12 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * cron: the counters below aggregate both, and there is exactly one advisory
  * lock standing between a rolling deploy and a double-bill.
  *
+ * A row source that cannot be READ is isolated inside the reconcile — one
+ * unreadable unit must never stop the other's billing — but it still FAILS this
+ * endpoint (500, after the work that succeeded is reported), because a source
+ * failing every tick would otherwise be a permanently green cron quietly
+ * metering nothing.
+ *
  * Path kept as `reconcile-machine-storage` (Phase 8 teardown renamed the
  * body, not the cron path or its advisory-lock key — both are external
  * contracts: the scheduler config references this URL, and the lock name
@@ -88,6 +94,40 @@ export async function GET(request: Request) {
         totalCostDollars: run.totalCostDollars,
       },
     });
+
+    // A tick that could not READ a persistence unit is not a success, even
+    // though it billed everything it could see.
+    //
+    // Before envs were folded in, a row-source failure propagated out of the
+    // reconcile and landed in the catch below as a 500 — which is what a
+    // scheduler and its monitoring actually notice. `listSource` deliberately
+    // stopped that from aborting the tick (an env-side read error must never
+    // stop SESSION billing), but reporting the result as a green 200 would
+    // trade one silence for another: a deployment where `drive_envs` is
+    // unmigrated or unreadable would fail on EVERY tick, the "accrues and is
+    // caught up next tick" promise would never come true, and the only trace
+    // would be a logger this repo does not route to Sentry. So the work is
+    // done and reported in full, and THEN the tick is failed.
+    if (run.failedSources.length > 0) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `storage reconcile could not read row source(s): ${run.failedSources.join(', ')}`,
+          processed: run.processed,
+          charged: run.charged,
+          skipped: run.skipped,
+          failed: run.failed,
+          chargedButUnadvanced: run.chargedButUnadvanced,
+          staleMeasurements: run.staleMeasurements,
+          neverMeasured: run.neverMeasured,
+          measurementHealth: run.measurementHealth,
+          failedSources: run.failedSources,
+          totalCostDollars: run.totalCostDollars,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 500 },
+      );
+    }
 
     return NextResponse.json({
       success: true,

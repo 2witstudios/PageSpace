@@ -175,13 +175,14 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
 
     async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
       const row = rows.get(envId);
-      if (!row) return;
+      if (!row) return false;
       // Both real guards, modelled: never write to a torn-down row, and CAS on
       // the INSTANCE measured so a late measurement cannot land on the
-      // replacement generation's disk.
-      if (row.spriteTornDownAt !== null) return;
-      if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return;
+      // replacement generation's disk. A miss is an ANSWER (`false`), never a throw.
+      if (row.spriteTornDownAt !== null) return false;
+      if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
       rows.set(envId, { ...row, storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt });
+      return true;
     },
 
     async requestTeardown({ envId, sandboxId, spriteInstanceId, at }) {

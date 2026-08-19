@@ -34,13 +34,17 @@ beforeEach(() => {
   mockWarn.mockClear();
 });
 
-function makeStore(): { store: EnvStorageMeasureStore; writes: Measurement[] } {
+function makeStore(over: { casRefuses?: boolean } = {}): { store: EnvStorageMeasureStore; writes: Measurement[] } {
   const writes: Measurement[] = [];
   return {
     writes,
     store: {
+      // Returns whether the row was written — a refused CAS is an ANSWER, never
+      // a throw, and the seam is what decides it deserves a warning.
       recordStorageMeasurement: async (input) => {
+        if (over.casRefuses) return false;
         writes.push(input);
+        return true;
       },
     },
   };
@@ -181,5 +185,26 @@ describe('envStorageMeasureSeam', () => {
 
     expect({ writes: writes.length, errors: mockError.mock.calls.length, warns: mockWarn.mock.calls.length })
       .toEqual({ writes: 1, errors: 0, warns: 0 });
+  });
+
+  it('WARNS when the store REFUSES the write — a silent CAS miss is the same NULL row', async () => {
+    // The store refuses when the row was torn down or its Sprite generation moved
+    // while the `du` ran (it may take up to the measure timeout, and on the adopt
+    // arm the attached handle's instance can already differ from the one just
+    // written to the row). Refusing is correct — those bytes describe a disk the
+    // row no longer points at — but for an env it leaves no baseline and no second
+    // writer, so it must not be swallowed.
+    const { store } = makeStore({ casRefuses: true });
+
+    await envStorageMeasureSeam(store)({ holderId: 'env-cas', handle: makeHandle({ spriteInstanceId: 'gen-9' }) as never });
+
+    assert({
+      given: 'a store whose compare-and-swap refuses the measurement',
+      should: 'warn once, naming the env and the generation it measured',
+      actual: { calls: mockWarn.mock.calls.length, meta: mockWarn.mock.calls[0]?.[1] },
+      expected: { calls: 1, meta: { envId: 'env-cas', spriteInstanceId: 'gen-9' } },
+    });
+    // Still resolves, and still no error: a refused CAS is not a failure.
+    expect(mockError).not.toHaveBeenCalled();
   });
 });

@@ -46,6 +46,7 @@ import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { assert } from './riteway';
+import { createDbDriveEnvStore, type DriveEnvStore } from '../../drive-envs/drive-envs-store';
 import { defaultReconcileSandboxStorageDeps } from '../sandbox-storage-billing';
 import {
   reconcileSandboxStorage,
@@ -293,6 +294,110 @@ describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — 
       should: 'charge nothing — the watermark the first run wrote is what makes the meter idempotent',
       actual: { firstCharges: first.charges.length, secondCharges: second.charges.length, charged: result.charged },
       expected: { firstCharges: 1, secondCharges: 0, charged: 0 },
+    });
+  });
+});
+
+/**
+ * The measurement WRITER's compare-and-swap, in real SQL.
+ *
+ * The seam's own suite proves it warns when the store says `false`; this proves
+ * the store actually SAYS false when it should. Both halves are needed: an env
+ * has one measurement writer, so a CAS that silently reported success would
+ * leave the row NULL, billing the 0 floor, with the warning that exists to catch
+ * exactly that never firing.
+ *
+ * Real Postgres because `eqOrIsNull` is the point — `eq` never matches NULL in
+ * SQL, and an in-memory fake agrees with whichever semantics it was written to
+ * model rather than with the database.
+ */
+describe.skipIf(dbSkipExplicitlyAllowed())('recordStorageMeasurement — the CAS, in SQL', () => {
+  let store: DriveEnvStore;
+
+  beforeAll(async () => {
+    if (!dbAvailable) return;
+    store = await createDbDriveEnvStore();
+  });
+
+  async function readMeasurement(envId: string) {
+    const [row] = await db
+      .select({ bytes: driveEnvs.storageMeasuredBytes, at: driveEnvs.storageMeasuredAt })
+      .from(driveEnvs)
+      .where(eq(driveEnvs.id, envId));
+    return row;
+  }
+
+  it('WRITES and reports true when the measured generation matches the row', async () => {
+    const envId = await seedEnv({ spriteInstanceId: 'gen-1', storageMeasuredBytes: null, storageMeasuredAt: null });
+
+    const wrote = await store.recordStorageMeasurement({
+      envId,
+      spriteInstanceId: 'gen-1',
+      measuredBytes: 3_000_000_000,
+      measuredAt: NOW,
+    });
+
+    assert({
+      given: 'a measurement taken on the generation the row currently points at',
+      should: 'persist it and report the write',
+      actual: { wrote, bytes: (await readMeasurement(envId))?.bytes },
+      expected: { wrote: true, bytes: 3_000_000_000 },
+    });
+  });
+
+  it('REFUSES, reporting false, when the generation moved while the du ran', async () => {
+    const envId = await seedEnv({ spriteInstanceId: 'gen-2', storageMeasuredBytes: null, storageMeasuredAt: null });
+
+    const wrote = await store.recordStorageMeasurement({
+      envId,
+      // The `du` ran on the PREVIOUS generation — its bytes describe a disk this
+      // row no longer points at.
+      spriteInstanceId: 'gen-1',
+      measuredBytes: 3_000_000_000,
+      measuredAt: NOW,
+    });
+
+    assert({
+      given: "a measurement from a generation the row has since replaced",
+      should: 'refuse the write and SAY so, so the caller can name an env left without a baseline',
+      actual: { wrote, bytes: (await readMeasurement(envId))?.bytes },
+      expected: { wrote: false, bytes: null },
+    });
+  });
+
+  it('REFUSES, reporting false, on a torn-down row', async () => {
+    const envId = await seedEnv({
+      spriteInstanceId: 'gen-1',
+      spriteTornDownAt: new Date(NOW.getTime() - 1000),
+      storageMeasuredBytes: null,
+      storageMeasuredAt: null,
+    });
+
+    const wrote = await store.recordStorageMeasurement({
+      envId,
+      spriteInstanceId: 'gen-1',
+      measuredBytes: 3_000_000_000,
+      measuredAt: NOW,
+    });
+
+    expect({ wrote, bytes: (await readMeasurement(envId))?.bytes }).toEqual({ wrote: false, bytes: null });
+  });
+
+  it('matches a NULL instance against a NULL row — `eq` never would', async () => {
+    const envId = await seedEnv({ spriteInstanceId: null, storageMeasuredBytes: null, storageMeasuredAt: null });
+
+    const wrote = await store.recordStorageMeasurement({
+      envId,
+      spriteInstanceId: null,
+      measuredBytes: 1_000_000_000,
+      measuredAt: NOW,
+    });
+
+    assert({
+      given: 'a driver that reported no instance id, against a row that has none',
+      should: 'still persist — `eqOrIsNull` is what stops a null-instance sandbox from never being measured',
+      actual: { wrote, bytes: (await readMeasurement(envId))?.bytes },
+      expected: { wrote: true, bytes: 1_000_000_000 },
     });
   });
 });

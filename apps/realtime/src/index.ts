@@ -215,8 +215,9 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
           workspaceId,
           // The generation just minted, for the writer's CAS (see the web tier).
           spriteInstanceId: handle.spriteInstanceId ?? null,
-          // Null for the same reason as the web tier: this fires on the create
-          // arm, whose own stamps reset the measurement columns.
+          // Null for the same reason as the web tier: this fires on the arms
+          // whose own stamps reset the measurement columns — `create` and
+          // `adopt`.
           lastMeasuredAt: null,
           now: new Date(),
           persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
@@ -242,8 +243,10 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   });
   if (!result.ok) return { ok: false, reason: result.denial ?? result.reason };
 
-  // Opportunistic measurement for a RESUMED session. The create-arm hook above
-  // only ever sees an empty disk; this is the moment a shell-only session — one
+  // Opportunistic measurement for a RESUMED session. The provisioning hook above
+  // fires only on the arms that reset the measurement (`create`, `adopt`), and
+  // sees an empty or freshly-replaced disk; this is the moment a shell-only
+  // session — one
   // that never makes a chat tool call, and so never reaches the web tier's
   // measurement path — is both awake and worth measuring. Throttled per session,
   // and deliberately not awaited: a billing observation must never delay opening
