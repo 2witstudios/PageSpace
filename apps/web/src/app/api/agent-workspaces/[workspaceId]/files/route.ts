@@ -179,7 +179,25 @@ const RESOLVE_DENIAL_STATUS: Record<ResolveSessionSandboxHandleDenial, number> =
   not_authorized: 404,
 };
 
-function resolveDenialResponse(reason: ResolveSessionSandboxHandleDenial): NextResponse {
+/**
+ * Turn a resolver denial into a response — and RECORD the one that is a
+ * denial rather than a state.
+ *
+ * `not_authorized` is the only reason here that describes a person rather than
+ * a machine, and it is the one the audit trail most needs: a member downgraded
+ * to view-only, hammering writes against a drive's shared environment disk, is
+ * the actor closest to succeeding. Without this they are the only such actor
+ * NOT recorded — a non-member's attempt at the same endpoint is audited by
+ * `authorize` above. The others (`not_found`, `not_started`, `vanished`) are
+ * facts about the sandbox and say nothing about who asked.
+ */
+function resolveDenialResponse(
+  reason: ResolveSessionSandboxHandleDenial,
+  audit: { request: Request; userId: string; workspaceId: string },
+): NextResponse {
+  if (reason === 'not_authorized') {
+    auditSessionAccessDenial(audit.request, audit.userId, audit.workspaceId, reason, ROUTE);
+  }
   const error =
     reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
   // `not_authorized` is reported as `not_started` on the wire for the same
@@ -286,7 +304,7 @@ export async function GET(request: Request, context: RouteContext) {
   const path = confined.value;
 
   const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;
@@ -371,7 +389,7 @@ export async function POST(request: Request, context: RouteContext) {
 
   if (kind.value === 'directory') {
     const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
-    if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+    if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
     const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
     if (escape) return escape;
     const result = await createMachineDirectory({ handle: resolved.handle, path });
@@ -391,7 +409,7 @@ export async function POST(request: Request, context: RouteContext) {
   }
 
   const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;
   const result = await writeMachineFile({
@@ -437,7 +455,7 @@ export async function PATCH(request: Request, context: RouteContext) {
   if (!toPath.ok) return toPath.error;
 
   const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [
     { field: 'fromPath', path: fromPath.value },
@@ -481,7 +499,7 @@ export async function DELETE(request: Request, context: RouteContext) {
   const path = confinedPath.value;
 
   const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;

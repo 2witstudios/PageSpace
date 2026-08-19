@@ -1382,5 +1382,4 @@ export async function toSessionDTOWithEnv(row: AgentSessionRecord): Promise<Agen
   return toAgentSessionDTO(row, env);
 }
 
-export { toAgentSessionDTO };
 export type { AgentSessionRecord, AgentSessionListFilter };
