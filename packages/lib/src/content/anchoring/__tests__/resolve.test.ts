@@ -188,6 +188,53 @@ describe('resolveAnchor — the repair path, with no predecessor supplied', () =
     expect(resolved.status).toBe('shifted');
   });
 
+  it('rejects an inverted caret whose context is empty too', () => {
+    // Every check downstream is vacuous for this one: slice(1, 0) returns '',
+    // which the empty quote equals, and the empty context corroborates it. It
+    // would otherwise be reported as exact over an inverted, unusable range.
+    const degenerate = {
+      ...createAnchor('', 0, 0, { revision: 1 }),
+      start: 1,
+      end: 0,
+    };
+
+    expect(DOC.slice(degenerate.start, degenerate.end)).toBe(degenerate.exact);
+    expect(degenerate.prefix + degenerate.suffix).toBe('');
+    expect(resolveAnchor(DOC, degenerate)).toEqual({ status: 'orphaned' });
+  });
+
+  it('rejects fractional and non-finite offsets rather than handing them back', () => {
+    // The returned start/end are offsets a consumer will slice with, so they
+    // have to be integers even when the stored anchor is not.
+    // Each side is checked separately: with only one offset fractional the
+    // other bounds checks all pass, so nothing else would catch it. Note
+    // slice() truncates rather than rejecting, so `end: END + 0.5` would
+    // otherwise match the quote and hand back a fractional end.
+    for (const broken of [
+      { ...ANCHOR, start: START + 0.5 },
+      { ...ANCHOR, end: END + 0.5 },
+      { ...ANCHOR, start: Number.NaN },
+      { ...ANCHOR, end: Number.NaN },
+    ]) {
+      const placed = expectPlaced(resolveAnchor(DOC, broken));
+      expect(placed.status).not.toBe('exact');
+      expect(Number.isSafeInteger(placed.start)).toBe(true);
+      expect(Number.isSafeInteger(placed.end)).toBe(true);
+      expect(placed.start).toBe(START);
+    }
+
+    const caret = createAnchor(DOC, START, START, { revision: 1 });
+    expect(resolveAnchor(DOC, { ...caret, start: Number.NaN, end: Number.NaN })).toEqual({
+      status: 'shifted',
+      start: START,
+      end: START,
+      confidence: 0.95,
+    });
+    expect(
+      resolveAnchor(DOC, { ...caret, start: Number.POSITIVE_INFINITY, end: Number.POSITIVE_INFINITY })
+    ).toEqual({ status: 'shifted', start: START, end: START, confidence: 0.95 });
+  });
+
   it('rejects an inverted range instead of reading it as a vacuous match', () => {
     // String.slice(30, 20) returns '' rather than throwing, so a caret whose
     // offsets are the wrong way round would otherwise "hold" anywhere.

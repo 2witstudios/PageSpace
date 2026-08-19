@@ -164,11 +164,20 @@ export function textSimilarity(a: string, b: string): number {
  * check is vacuous.
  */
 export function positionHolds(text: string, anchor: TextAnchor): boolean {
-  // A negative start would make String.slice count back from the end and could
-  // fabricate a match. An inverted range needs no test of its own: slice yields
-  // '' for it, which only a caret can equal, and a caret then has to satisfy
-  // the context check below.
-  if (anchor.start < 0 || anchor.end > text.length) {
+  // Offsets arrive from storage and are not trustworthy. String.slice forgives
+  // every one of these and quietly returns something, which is the problem:
+  // a negative start counts back from the end and can fabricate a match; an
+  // inverted range yields '', which a caret equals — and a caret whose context
+  // is also empty then satisfies the check below vacuously, so `start > end`
+  // does need its own test; and a fractional or non-finite offset would be
+  // handed straight back to the caller as a position.
+  if (
+    !Number.isSafeInteger(anchor.start) ||
+    !Number.isSafeInteger(anchor.end) ||
+    anchor.start < 0 ||
+    anchor.start > anchor.end ||
+    anchor.end > text.length
+  ) {
     return false;
   }
   if (text.slice(anchor.start, anchor.end) !== anchor.exact) {

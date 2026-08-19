@@ -104,6 +104,15 @@ describe('projectContent', () => {
     expect(projectContent('<p>a</p><StYlE>.x{}</StYlE><p>b</p>', 'html')).toBe('a\nb');
   });
 
+  it('does not end a raw-text element on a tag that merely starts with its name', () => {
+    // `</scripture>` begins with `script`. Accepting it would stop the skip
+    // early and project the rest of the script body as visible prose.
+    expect(projectContent('<p>a</p><script>x</scripture>leaked</script><p>b</p>', 'html')).toBe(
+      'a\nb'
+    );
+    expect(projectContent('<p>a</p><style>i</styles>leaked</style><p>b</p>', 'html')).toBe('a\nb');
+  });
+
   it('leaves an unterminated comment, doctype or raw-text element harmless', () => {
     // Note both fixtures must still end in '>': detectPageContentFormat only
     // calls content HTML when it both starts with '<' and ends with '>'.

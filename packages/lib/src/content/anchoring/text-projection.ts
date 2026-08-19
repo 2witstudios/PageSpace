@@ -202,7 +202,14 @@ function skipRawText(html: string, index: number, name: string): number {
     if (html[i] !== '<' || html[i + 1] !== '/') {
       continue;
     }
-    if (html.slice(i + 2, i + 2 + name.length).toLowerCase() === name) {
+    // The name has to end where it ends: `</scripture>` starts with `script`,
+    // and accepting it would stop the skip early and project the rest of the
+    // script body as visible text.
+    const after = html[i + 2 + name.length];
+    if (
+      html.slice(i + 2, i + 2 + name.length).toLowerCase() === name &&
+      (after === undefined || !isTagNameChar(after))
+    ) {
       return readTag(html, i).next;
     }
   }
