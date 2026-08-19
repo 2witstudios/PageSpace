@@ -1,6 +1,7 @@
 import crypto from 'crypto';
 import { z } from 'zod/v4';
 import { secureCompare } from '@pagespace/lib/auth/secure-compare';
+import { DESKTOP_SHELLS } from './desktop-shell';
 
 // State expires after 10 minutes — prevents replay attacks
 const STATE_MAX_AGE_MS = 10 * 60 * 1000;
@@ -13,6 +14,11 @@ const INVITE_TOKEN_MAX_LENGTH = 128;
 const oauthStateDataSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
+  // Which desktop app started the flow. One Electron codebase ships two, each
+  // with its own protocol scheme, and the callback has to deep-link back into
+  // the one the user actually signed in from. Absent for web, iOS and older
+  // desktop builds, which all mean PageSpace.
+  shell: z.enum(DESKTOP_SHELLS).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),

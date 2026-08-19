@@ -32,6 +32,29 @@ describe('verifyOAuthState', () => {
     expect(result.status).toBe('valid');
   });
 
+  // The shell round-trip is what lets the OAuth callback deep-link back into
+  // the desktop app that actually started the flow. If the schema dropped it,
+  // a PageSpace Coder sign-in would silently hand its exchange code to
+  // PageSpace — the callback defaults to that shell when none is present.
+  it('round-trips the desktop shell that started the flow', () => {
+    const state = createState({ platform: 'desktop', shell: 'coder', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.shell).toBe('coder');
+  });
+
+  it('accepts state with no shell, as web, iOS and older desktop builds send', () => {
+    const state = createState({ platform: 'desktop', timestamp: Date.now() });
+    const result = verifyOAuthState(state);
+    expect(result.status).toBe('valid');
+    expect(result.status === 'valid' && result.data.shell).toBeUndefined();
+  });
+
+  it('rejects a shell value that is not a known app', () => {
+    const state = createState({ platform: 'desktop', shell: 'evil', timestamp: Date.now() });
+    expect(verifyOAuthState(state).status).not.toBe('valid');
+  });
+
   it('returns invalid_signature for tampered signature', () => {
     const state = Buffer.from(JSON.stringify({
       data: { returnUrl: '/dashboard' },

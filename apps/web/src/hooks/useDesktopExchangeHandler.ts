@@ -2,9 +2,14 @@
 
 import { useEffect } from 'react';
 import { isDesktopPlatform } from '@/lib/desktop-auth';
+import { currentDesktopShell, desktopDeepLink } from '@/lib/auth/desktop-shell';
 
-export function buildDesktopExchangeDeepLink(exchangeCode: string, state?: string | null): string {
-  const deepLinkUrl = new URL('pagespace://auth-exchange');
+export function buildDesktopExchangeDeepLink(
+  exchangeCode: string,
+  state?: string | null,
+  shell: unknown = currentDesktopShell(),
+): string {
+  const deepLinkUrl = new URL(desktopDeepLink(shell, 'auth-exchange'));
   deepLinkUrl.searchParams.set('code', exchangeCode);
   deepLinkUrl.searchParams.set('provider', 'magic-link');
   // Bind the exchange to the desktop instance's auth flow (finding L9): the
@@ -27,7 +32,7 @@ export function extractDesktopExchangeCode(search = typeof window !== 'undefined
 
 /**
  * Detects a `desktopExchange` URL param (set by magic-link verify for desktop)
- * and triggers the pagespace:// deep link to hand tokens off to the Electron app.
+ * and triggers this app's deep link to hand tokens off to the Electron app.
  *
  * The web session (cookies) is already established, so the deep link is
  * supplementary. If it fails, the user still has a working session.
