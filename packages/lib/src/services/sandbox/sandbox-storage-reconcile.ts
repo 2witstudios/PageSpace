@@ -51,8 +51,11 @@
  * double-bill, and only because the watermark writers are MONOTONIC: `now` is
  * captured once for the whole tick, so a provision landing mid-tick resets a
  * row's watermark forward, and an unguarded advance would drag it back over
- * that reset and re-bill the difference. See `sandbox-storage-billing.ts`'s
- * `lte` guard on both writers. Each row is isolated in its own try/catch
+ * that reset and re-bill the difference. Both the reconcile's advances AND the
+ * provision-side resets therefore write `GREATEST(column, <now>)` — the
+ * monotonicity lives in the SET, deliberately not in a `WHERE ... <= ...`
+ * predicate, so one statement can still tell a superseded watermark from a row
+ * that was simply deleted. Each row is isolated in its own try/catch
  * (below) so this failure mode stays scoped to one session and never aborts
  * the rest of the batch.
  *
@@ -297,7 +300,19 @@ export interface ReconcileSandboxStorageDeps {
 
 export interface ReconcileSandboxStorageResult {
   processed: number;
-  /** Rows where `chargeStorage` SUCCEEDED — the money moved, regardless of whether the watermark then advanced. Always reflected in `totalCostDollars`. */
+  /**
+   * Rows where `chargeStorage` RESOLVED — regardless of whether the watermark
+   * then advanced. Always reflected in `totalCostDollars`.
+   *
+   * "Resolved", not "the money moved", and the distinction is not pedantry: the
+   * production binding hands the charge to `AIMonitoring.trackUsage`, which
+   * returns `Promise<void>` and swallows its own failures into a
+   * `'AI usage tracking failed — spend may be UNBILLED'` log rather than
+   * rejecting. So with those deps this counter — and `totalCostDollars` — count
+   * charges SUBMITTED, and `failed` can only ever catch the steps BEFORE the
+   * charge. That log is the authoritative signal for a charge that did not land;
+   * tracked as a platform gap in issue #2444.
+   */
   charged: number;
   /** Rows with a positive accrual whose owner could not be resolved — left unbilled (watermark untouched) for a future run to retry. */
   skipped: number;
@@ -306,6 +321,11 @@ export interface ReconcileSandboxStorageResult {
    * charge — the payer lookup, the accrual computation, `chargeStorage` itself,
    * or (on a row whose window prices to $0) its watermark advance, which sits in
    * the same guarded block. Isolated per row so one bad row doesn't abort the batch.
+   *
+   * With the PRODUCTION binding the `chargeStorage` case is unreachable: that dep
+   * cannot reject (see `charged`). So in production this counts pre-charge
+   * failures only, and a test injecting a throwing `chargeStorage` is what
+   * exercises the rest.
    *
    * Distinct from {@link ReconcileSandboxStorageResult.chargedButUnadvanced},
    * which means the opposite: money DID move and only the watermark write
@@ -389,7 +409,12 @@ export interface ReconcileSandboxStorageResult {
    * see WHICH persistence unit went unbilled.
    */
   failedSources: StorageSubjectKind[];
-  /** Total money actually moved this run — accumulated the moment `chargeStorage` succeeds, never gated on the watermark advance that follows it. */
+  /**
+   * Total charged this run — accumulated the moment `chargeStorage` resolves,
+   * never gated on the watermark advance that follows it. See `charged` for why
+   * this is "charged", not "collected": with the production binding a charge that
+   * silently failed still lands here.
+   */
   totalCostDollars: number;
 }
 
@@ -647,9 +672,9 @@ export async function reconcileSandboxStorage(
 
     // The charge itself — isolated from the watermark advance below so the
     // two outcomes ("nothing was billed" vs "billed, but the watermark write
-    // failed") are never conflated. Real money moves the moment this
-    // resolves, so `charged`/`totalCostDollars` reflect it immediately,
-    // regardless of what happens next.
+    // failed") are never conflated. `charged`/`totalCostDollars` move the
+    // moment this resolves; whether that means money REACHED the ledger depends
+    // on the binding, and the production one cannot say (see `charged`'s doc).
     try {
       await deps.chargeStorage({
         payerId: resolved.ownerId,

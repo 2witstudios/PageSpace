@@ -128,6 +128,17 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
 
   lookupDriveOwnerId,
 
+  /**
+   * NOTE ON FAILURE: this cannot report one. `AIMonitoring.trackUsage` returns
+   * `Promise<void>` and swallows its own errors into a
+   * `'AI usage tracking failed — spend may be UNBILLED'` log rather than
+   * rejecting, so a credit-ledger outage looks identical to a successful charge
+   * from here — the reconcile counts it as `charged`, advances the watermark, and
+   * the window is closed for good. That swallow is deliberate upstream (a throw
+   * there would break user-facing generation), so it is not this PR's to undo;
+   * the consequence is documented on `ReconcileSandboxStorageResult.charged` and
+   * tracked in issue #2444.
+   */
   async chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
@@ -193,7 +204,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // it). An unguarded UPDATE would then drag the watermark BACKWARDS over that
   // reset, and the span between them is billed a second time on the next tick —
   // exactly the double-bill the module doc otherwise reserves for a crash
-  // between the charge and the advance. `lte` makes a newer reset win.
+  // between the charge and the advance. `GREATEST` in the SET makes a newer
+  // reset win — deliberately NOT a `WHERE ... <= ...` predicate, which would
+  // collapse "the guard declined" and "the row is gone" into the same empty
+  // result (see `classifyWatermarkWrite`).
   //
   // Losing the write is the safe direction: the row already claims to be billed
   // further ahead than this tick reached, so at worst one tick-duration of the
