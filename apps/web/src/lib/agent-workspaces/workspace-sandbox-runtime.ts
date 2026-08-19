@@ -28,7 +28,7 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { findSessionRecord, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
 
 export type ResolveSessionSandboxHandleResult =
@@ -71,16 +71,24 @@ export async function resolveSessionSandboxHandle(
   const session = await findSessionRecord(workspaceId);
   if (!session) return { ok: false, reason: 'not_found' };
   // The capability gate, asked BEFORE anything about the machine is revealed.
-  // `requestOrigin: 'user'` and the row's own drive/owner — the same arguments
-  // `provisionSessionSandbox` passes, so browsing a sandbox and provisioning
-  // one cannot disagree about who is allowed to.
-  const authorized = await canRunCode({
+  //
+  // Through `canRunCodeForSession` rather than a hand-rolled `canRunCode` call,
+  // because that helper is ALREADY the answer this session's GET returns as
+  // `sandboxEligible` — the field the client uses to disable the Shell and
+  // reattach controls for a requester who may not spend compute. Sharing it
+  // means the server cannot enforce a different rule than the UI advertises,
+  // and there is no second argument list to drift.
+  //
+  // Which is exactly what had gone wrong: `sandboxEligible`'s own docblock
+  // names the enforcement points that back it — "shells POST, realtime attach"
+  // — and these three browse routes were not among them. The UI hid the
+  // controls; nothing stopped the request.
+  const eligible = await canRunCodeForSession({
     userId: requesterId,
-    driveId: session.driveId ?? undefined,
+    driveId: session.driveId,
     ownerId: session.ownerId,
-    requestOrigin: 'user',
   });
-  if (!authorized.ok) return { ok: false, reason: 'not_authorized' };
+  if (!eligible) return { ok: false, reason: 'not_authorized' };
   // An ENDED session may not touch a filesystem, and for an env-bound one that
   // has to be said out loud. An ordinary ended session is refused by the
   // pointer check below anyway — ending it stamps `spriteTornDownAt` — but

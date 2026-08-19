@@ -20,7 +20,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockFindSessionRecord = vi.fn();
-const mockCanRunCode = vi.fn();
+const mockCanRunCodeForSession = vi.fn();
 const mockAttach = vi.fn();
 const mockResolveLiveSandboxId = vi.fn();
 
@@ -29,8 +29,11 @@ vi.mock('../agent-workspaces-runtime', () => ({
   getSandboxHost: async () => ({ attach: (...args: unknown[]) => mockAttach(...args) }),
   resolveSessionLiveSandboxId: (...args: unknown[]) => mockResolveLiveSandboxId(...args),
 }));
-vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
-  canRunCode: (...args: unknown[]) => mockCanRunCode(...args),
+// The SHARED capability helper — the same one the session GET calls to compute
+// `sandboxEligible`, which is the point: the gate and the field the UI renders
+// from must not be able to disagree.
+vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
+  canRunCodeForSession: (...args: unknown[]) => mockCanRunCodeForSession(...args),
 }));
 vi.mock('@pagespace/db/db', () => ({ db: { query: { users: { findFirst: vi.fn() } } } }));
 vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn() }));
@@ -55,7 +58,7 @@ const envSession = {
 beforeEach(() => {
   vi.clearAllMocks();
   mockFindSessionRecord.mockResolvedValue(envSession);
-  mockCanRunCode.mockResolvedValue({ ok: true });
+  mockCanRunCodeForSession.mockResolvedValue(true);
   mockResolveLiveSandboxId.mockResolvedValue('pgs-env-abc');
   mockAttach.mockResolvedValue({ sandboxId: 'pgs-env-abc' });
 });
@@ -65,7 +68,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     // The drive gate said yes (they are a member); the CAPABILITY gate says no.
     // Without this the files route's POST/PATCH/DELETE would write into a
     // drive-wide disk on behalf of someone with a view-only role.
-    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
+    mockCanRunCodeForSession.mockResolvedValue(false);
 
     expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({
       ok: false,
@@ -79,18 +82,19 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     // allowed to — so the arguments match `provisionSessionSandbox`'s exactly.
     await resolveSessionSandboxHandle(WORKSPACE, REQUESTER);
 
-    expect(mockCanRunCode).toHaveBeenCalledWith({
+    // Same shape `sandboxEligible` is computed from, so a requester the UI shows
+    // disabled controls to is exactly the requester this refuses.
+    expect(mockCanRunCodeForSession).toHaveBeenCalledWith({
       userId: REQUESTER,
       driveId: 'drive-1',
       ownerId: 'user-owner',
-      requestOrigin: 'user',
     });
   });
 
   it('should run the gate BEFORE resolving which machine exists', async () => {
     // Order is what stops the denial being an oracle: a refused requester must
     // not be able to tell a session with a live environment from one without.
-    mockCanRunCode.mockResolvedValue({ ok: false, reason: 'insufficient_role' });
+    mockCanRunCodeForSession.mockResolvedValue(false);
 
     await resolveSessionSandboxHandle(WORKSPACE, REQUESTER);
 
@@ -101,7 +105,7 @@ describe('resolveSessionSandboxHandle — the capability gate', () => {
     mockFindSessionRecord.mockResolvedValue(null);
 
     expect(await resolveSessionSandboxHandle(WORKSPACE, REQUESTER)).toEqual({ ok: false, reason: 'not_found' });
-    expect(mockCanRunCode).not.toHaveBeenCalled();
+    expect(mockCanRunCodeForSession).not.toHaveBeenCalled();
   });
 
   it('given an ENDED session, should refuse even with the capability', async () => {
