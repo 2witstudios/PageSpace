@@ -86,6 +86,9 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   const content = documentState?.content ?? '';
@@ -238,7 +241,12 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
-      <DocumentConflictGate pageId={pageId} previewMode="plain" />
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       <div className="relative flex flex-wrap items-center border-b">
         <button
           className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}

@@ -31,6 +31,9 @@ export function TaskListDescriptionContent({
     saveWithDebounce,
     forceSave,
     initializeAndActivate,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Seed the store from the parent's already-loaded page content to avoid a
@@ -74,7 +77,11 @@ export function TaskListDescriptionContent({
 
   return (
     <div className={className}>
-      <DocumentConflictGate pageId={pageId} />
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+      />
       <RichEditor
         value={content}
         onChange={handleChange}

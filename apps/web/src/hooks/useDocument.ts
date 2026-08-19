@@ -67,7 +67,26 @@ export const useDocumentSaving = (pageId: string) => {
   }, []);
 
   const saveDocument = useCallback(
-    async (content: string, options?: { expectedRevision?: number }) => {
+    async (
+      content: string,
+      options?: { expectedRevision?: number; resolvingConflict?: boolean }
+    ) => {
+      // Deepest guard: while a conflict is parked the stored revision is
+      // known-stale, so ONLY the resolution path may write. This is an explicit
+      // per-call opt-in rather than a temporary clear of the shared conflict
+      // state — clearing it early would open the debounce/forceSave guards for
+      // the whole duration of the awaited retry, letting a keystroke fire a
+      // second PATCH with the stale revision and park a phantom conflict for a
+      // save that actually succeeded.
+      if (
+        !options?.resolvingConflict &&
+        !canScheduleSave({
+          hasPendingConflict: useDocumentManagerStore.getState().conflicts.has(pageId),
+        })
+      ) {
+        return false;
+      }
+
       try {
         const saveStartTime = Date.now();
 
@@ -337,14 +356,25 @@ export const useDocument = (pageId: string) => {
         return true;
       }
 
-      // Clear first so the save is not blocked by its own conflict guard;
-      // a repeat 409 parks a fresh one.
-      state.clearConflict(pageId);
+      // The conflict stays PARKED for the whole retry, so the autosave guards
+      // stay closed and a keystroke mid-flight cannot race this PATCH. It is
+      // cleared only once the retry has actually succeeded; a repeat 409 leaves
+      // the fresher snapshot `saveDocument` just parked in its place, and any
+      // other failure leaves the banner up so the user can try again.
       setIsResolvingConflict(true);
       try {
-        return await saving
-          .saveDocument(plan.contentToSave, { expectedRevision: plan.expectedRevision })
+        const saved = await saving
+          .saveDocument(plan.contentToSave, {
+            expectedRevision: plan.expectedRevision,
+            resolvingConflict: true,
+          })
           .catch(() => false);
+
+        if (saved) {
+          useDocumentManagerStore.getState().clearConflict(pageId);
+        }
+
+        return saved;
       } finally {
         setIsResolvingConflict(false);
       }

@@ -376,6 +376,90 @@ describe('useDocument dirty flag integration', () => {
       expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
     });
 
+    it('given a resolution save in flight, should let neither typing nor forceSave issue a PATCH', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+      parkConflict(pageId);
+
+      // Hold the resolution PATCH open so we can act during its flight window.
+      let releaseRetry: (value: Response) => void = () => {};
+      const retryInFlight = new Promise<Response>((resolve) => {
+        releaseRetry = resolve;
+      });
+      vi.mocked(fetchWithAuth).mockReturnValueOnce(retryInFlight);
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      let resolution: Promise<boolean> | undefined;
+      act(() => {
+        resolution = result.current.resolveConflict('keep-mine');
+      });
+
+      // Exactly one request so far: the resolution retry itself.
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+
+      // The user keeps typing, and hits Cmd-S, while the retry is still open.
+      await act(async () => {
+        result.current.saveWithDebounce('my text, still typing', 0);
+        await result.current.forceSave();
+        await new Promise((r) => setTimeout(r, 5));
+      });
+
+      // Still one — no stale-revision PATCH raced the retry.
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        releaseRetry({
+          ok: true,
+          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+        } as Response);
+        await resolution;
+      });
+
+      expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
+    });
+
+    it('given a parked conflict, a direct saveDocument without the resolution opt-in should not PATCH', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      parkConflict(pageId);
+
+      const { result } = renderHook(() => useDocumentSaving(pageId));
+
+      let saved: boolean | undefined;
+      await act(async () => {
+        saved = await result.current.saveDocument('my text');
+      });
+
+      expect(saved).toBe(false);
+      expect(fetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given a resolution save that fails, should leave the conflict parked for another try', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+      parkConflict(pageId);
+
+      vi.mocked(fetchWithAuth).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: () => Promise.resolve({ error: 'Server error' }),
+      } as Response);
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      let resolved: boolean | undefined;
+      await act(async () => {
+        resolved = await result.current.resolveConflict('keep-mine');
+      });
+
+      expect(resolved).toBe(false);
+      expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(true);
+      expect(useDocumentManagerStore.getState().documents.get(pageId)?.content).toBe('my text');
+    });
+
     it('given no local document record, should refuse to resolve rather than save an empty document', async () => {
       const pageId = 'page-123';
       parkConflict(pageId);

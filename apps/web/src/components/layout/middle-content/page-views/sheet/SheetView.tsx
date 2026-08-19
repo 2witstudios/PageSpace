@@ -163,6 +163,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSaveNow,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useSheetPersistence({ pageId: page.id, socket, resetHistory });
 
   // Pull-to-refresh handler
@@ -843,7 +846,12 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   return (
     <div className="flex h-full flex-col">
-      <DocumentConflictGate pageId={page.id} previewMode="plain" />
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       <SheetFormulaBar
         isRange={selection.type === 'range'}
         selectionAddress={selectionAddress}

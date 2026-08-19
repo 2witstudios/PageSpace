@@ -237,6 +237,70 @@ Twice during this work `bun run typecheck` exited non-zero with a flood of TS605
 found` and **no diagnostics**, then passed on an immediate rerun. It looks like `web#typecheck`
 racing `web#build` in the same turbo graph. Worth knowing before someone bisects a phantom CI flake.
 
+## Round 3 — the resolution-save race, and the Gate's shape
+
+### The race (CodeRabbit, accepted — real)
+
+`resolveConflict` used to call `clearConflict` **before** awaiting the retry PATCH, with the
+comment "Clear first so the save is not blocked by its own conflict guard". Working around my own
+safety mechanism was the tell. For the entire duration of that request `hasPendingConflict()` was
+false, so the guards in `saveWithDebounce` and `forceSave` were open. A keystroke in that window
+fired a second PATCH carrying the **stale** stored revision, which 409'd and parked a phantom
+conflict — a conflict banner for a save that actually succeeded, intermittently. `isResolvingConflict`
+does not close those guards; it is spinner state.
+
+Fixed without dodging the guard:
+
+- The conflict stays **parked** for the whole retry, so the autosave guards stay closed.
+- `saveDocument` gained the guard itself — the deepest layer — with an explicit per-call
+  `resolvingConflict: true` opt-in for the resolution path. An option on the call, not a mutation
+  of shared state. This also covers the one direct caller outside the hook
+  (`PageSetupButton.tsx:79`), which already handles a `false` return by telling the user to save
+  first — so a content-mode conversion can no longer be attempted on top of an unresolved conflict.
+- The conflict is cleared **only after the retry succeeds**. A repeat 409 leaves the fresher
+  snapshot `saveDocument` just parked; any other failure leaves the banner up to retry. This also
+  closes a flaw I had raised against myself in review (a failed keep-mine used to drop the conflict
+  and let autosave resume against a stale revision).
+
+### The Gate no longer opens a second `useDocument`
+
+Verified both consequences the design note predicted, then removed the cause rather than patching it.
+
+`changeGroupId` is real: `useDocumentSaving` mints `sessionId` per hook instance and sends it as
+`changeGroupId`; `applyPageMutation` resolves it at `page-mutation-service.ts:100` and threads it
+into **both** `createPageVersion` (`:241`) and `logActivityWithTx`. A Gate-owned instance would put
+the resolution save in its own change group — splitting version and activity grouping at exactly
+the moment a user resolved a conflict. `isResolvingConflict` would likewise have been two
+independent booleans for one operation.
+
+`DocumentConflictGate` now takes `conflict` / `onResolve` / `isResolving` as **props** from the
+view's existing `useDocument` instance. There is one hook instance per page again, the change group
+is the editing session's, and the "render nothing until a conflict exists" guarantee still lives in
+one place. `useSheetPersistence` re-exports the three fields so `SheetView` can pass them through.
+The reasoning is recorded in the component's own docblock so the second instance is not
+reintroduced later.
+
+### Round 3 mutation checks
+
+| # | Mutation | Test that went red |
+|---|---|---|
+| M15 | restore the race — clear the conflict *before* the awaited retry | `given a resolution save in flight, should let neither typing nor forceSave issue a PATCH` (+ the failed-resolution test) |
+| M16 | remove `saveDocument`'s parked-conflict guard | `a direct saveDocument without the resolution opt-in should not PATCH` |
+| M17 | clear the conflict regardless of whether the retry succeeded | the repeat-409 re-park test + the failed-resolution test |
+| M13′ | delete the Gate's `if (!conflict) return null` (re-run after the props rewrite) | `should render nothing so views can mount it unconditionally` |
+
+### Round 3 gates
+
+`bunx tsc --noEmit` exits 0; `bun run lint` 15/15; `src/lib/documents` + the hook + all of
+`page-views`: **428 passed, 6 skipped**, one file failing (`useTaskSubTasks.integration.test.tsx`,
+needs a Postgres this worktree lacks and prints its own opt-out).
+
+### Note on review signal
+
+Two of the CodeRabbit findings on this PR were real defects (absent-content coercion, and this
+race), one was a correct factual catch (the changelog claim), and one was rejected on verified
+grounds (SWR). Worth weighting accordingly rather than treating the bot as noise.
+
 ## Deliberately not done
 
 - **No Yjs, CRDT, or collab code.** `RichEditor.tsx`'s extension list is untouched. Phases B+.

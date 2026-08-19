@@ -52,6 +52,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Track editor focus state for pull-to-refresh
@@ -335,7 +338,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
       {/* Save conflict — persistent until the user picks a side. The local
           buffer is untouched and autosave is paused while this is shown. */}
       <DocumentConflictGate
-        pageId={pageId}
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
         previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
       />
 
