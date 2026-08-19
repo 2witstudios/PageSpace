@@ -51,10 +51,12 @@ export * from './schema/data-subject-requests';
 export * from './schema/oauth';
 export * from './schema/form-targets';
 export * from './schema/machine-sprite-reclaims';
+export * from './schema/published-apps';
 export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 export * from './schema/agent-workspaces';
 export * from './schema/agent-workspace-nodes';
+export * from './schema/drive-envs';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -109,10 +111,12 @@ import * as dataSubjectRequests from './schema/data-subject-requests';
 import * as oauth from './schema/oauth';
 import * as formTargets from './schema/form-targets';
 import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
+import * as publishedApps from './schema/published-apps';
 import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 import * as agentWorkspaces from './schema/agent-workspaces';
 import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
+import * as driveEnvs from './schema/drive-envs';
 
 export const schema = {
   ...auth,
@@ -168,8 +172,10 @@ export const schema = {
   ...oauth,
   ...formTargets,
   ...machineSpriteReclaims,
+  ...publishedApps,
   ...emailBroadcasts,
   ...pageWebhooks,
   ...agentWorkspaces,
   ...agentWorkspaceNodes,
+  ...driveEnvs,
 };

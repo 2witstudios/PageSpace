@@ -461,6 +461,19 @@ export const releaseFramesForMessage = async (
     return;
   }
 
+  // The claim has to be a claim on THIS message. Without this the fence is checkable but not
+  // binding: `isReapClaimStillHeld` verifies the claim's OWN messageId, so a caller passing a
+  // valid claim for some other row would pass the check and then delete these frames — a live
+  // log destroyed by a fence that reported itself satisfied. The type makes the fence
+  // unforgettable; this makes it match the thing it is fencing.
+  if (fence.kind === 'reap-claim' && fence.claim.messageId !== messageId) {
+    loggers.ai.warn('frame-log: release by name refused — the claim names a different message', {
+      messageId,
+      claimedMessageId: fence.claim.messageId,
+    });
+    return;
+  }
+
   if (fence.kind === 'reap-claim' && !(await isReapClaimStillHeld(fence.claim))) {
     loggers.ai.warn('frame-log: release by name refused — the reap claim no longer holds', {
       messageId,

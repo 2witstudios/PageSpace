@@ -9,14 +9,26 @@
  * streaming pipeline a normal conversation uses and shows up live in the
  * sidebar. NEVER a second engine: this module contains no model call.
  *
- * The dispatch acts as the CALLER: it forwards the live request's own
- * credentials (cookie/Bearer/origin via `next/headers`) and, for cookie
- * sessions, MINTS a fresh CSRF token bound to that server-validated session —
- * so the worker acts as the same user who asked for it, through the same
- * admission control (credit gate, takeover discipline) the interactive path
- * runs. The chain depth rides the
- * `X-Agent-Dispatch-Depth` header, which both chat routes fold back into
- * `agentCallDepth` so the pure depth cap keeps terminating across the hop.
+ * The dispatch acts as the CALLER — it NAMES the acting user in a payload it
+ * SIGNS, rather than borrowing that user's browser credential. The worker still
+ * runs as the same person who asked for it, through the same admission control
+ * (credit gate, takeover discipline) the interactive path runs; what changed is
+ * how the internal hop proves itself.
+ *
+ * It used to forward the live request's own cookie/Bearer/origin out of
+ * `next/headers` and mint a CSRF token bound to that session. That made a live
+ * browser-ish credential a PRECONDITION for one agent messaging another, so
+ * every server-side surface — the voice bridge, cron, the workflow executor, the
+ * channel mention responder — was refused outright ("the calling request carries
+ * no session credentials to dispatch with"), and an SDK/CLI caller on a Bearer
+ * could never reach a global-assistant worker at all. Signing removes the
+ * precondition and the forwarded-cookie surface together. See
+ * `@pagespace/lib/auth/agent-dispatch-payload` for what the signature does and
+ * does not prove.
+ *
+ * The chain depth rides the SIGNED payload now, and the receiving route rebuilds
+ * `X-Agent-Dispatch-Depth` from it, so the pure depth cap keeps terminating
+ * across the hop on a value no caller can forge.
  */
 
 import { createId } from '@paralleldrive/cuid2';
@@ -28,16 +40,20 @@ import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes'
 import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
-import { sessionService } from '@pagespace/lib/auth/session-service';
+import { audit } from '@pagespace/lib/audit/audit-log';
+import {
+  AGENT_DISPATCH_SIGNATURE_HEADER,
+  signAgentDispatch,
+} from '@pagespace/lib/auth/agent-dispatch-payload';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/workspace-status';
-import { getSessionFromCookies } from '@/lib/auth/cookie-config';
 import {
   checkAccessForSubject,
   checkSessionAccess,
+  checkSessionEndAccess,
   createConversationInSession,
   endSession,
   ensureDriveSessionForConversation,
@@ -82,52 +98,6 @@ import { conversationPageId } from '@pagespace/lib/conversations/conversation-pa
 // ---------------------------------------------------------------------------
 
 /**
- * The headers the dispatch forwards verbatim — the caller's own credentials.
- *
- * `authorization` matters as much as `cookie`: desktop/mobile/MCP callers
- * authenticate with a Bearer token, carry no CSRF token, and often send a
- * cookie anyway (`credentials: 'include'`). Dropping their Bearer credential
- * degraded the hop to cookie-only session auth, which the chat routes rightly
- * refuse with "CSRF token required" (issue #2333).
- */
-const FORWARDED_HEADERS = ['cookie', 'x-csrf-token', 'origin', 'referer', 'authorization'] as const;
-
-/**
- * A fresh CSRF token for the internal hop, bound to the caller's
- * server-validated cookie session — the exact binding `validateCSRF` checks on
- * the receiving route. Minting (rather than replaying the browser's token)
- * keeps cookie-session dispatches working when the caller's own token is
- * absent (the route admitted them without one) or older than the 1-hour TTL
- * (an agent turn can outlive it) — issue #2333. This is a credential FOR the
- * caller's own session, not a bypass: no valid session cookie, no token, and
- * nothing here consults any attacker-suppliable header.
- *
- * Bearer hops return null: Bearer auth is CSRF-immune at the route layer, and
- * `authenticateSessionRequest` resolves Bearer before cookie, so the minted
- * token would bind to a session the route never looks at. The check mirrors
- * `getBearerToken`'s `Bearer ` prefix test exactly — a non-Bearer
- * Authorization header (e.g. a fronting proxy's `Basic …`) does NOT exempt
- * the hop from CSRF at the route, so it must not suppress the mint here.
- */
-async function mintDispatchCSRFToken(incoming: Headers): Promise<string | null> {
-  if (incoming.get('authorization')?.startsWith('Bearer ')) return null;
-  const sessionToken = getSessionFromCookies(incoming.get('cookie'));
-  if (!sessionToken) return null;
-  try {
-    const claims = await sessionService.validateSession(sessionToken, { expectedType: 'user' });
-    if (!claims) return null;
-    return generateCSRFToken(claims.sessionId);
-  } catch (error) {
-    // Transient session-store failure or missing CSRF_SECRET — degrade, never
-    // throw a raw internal error out of a tool (issue #2262 finding 3). The
-    // forwarded browser token (if any) is still sent, so the route gives its
-    // own honest answer.
-    loggers.ai.error('session dispatch: could not mint a CSRF token for the internal hop', error instanceof Error ? error : undefined);
-    return null;
-  }
-}
-
-/**
  * The self base URL for the internal hop.
  *
  * The CONFIGURED origin is authoritative, never the request's routing headers,
@@ -137,10 +107,11 @@ async function mintDispatchCSRFToken(incoming: Headers): Promise<string | null> 
  *     documented plain-HTTP deployment: `host` is present but the forwarded
  *     proto is not, so a header-first resolver builds `https://localhost:3000`
  *     and every dispatch fails before it reaches the chat pipeline.
- *  2. **Safety.** This hop forwards the caller's own cookie and CSRF token
- *     (see `FORWARDED_HEADERS`). Letting a client-supplied `x-forwarded-host`
- *     choose the destination would let a forged header steer those credentials
- *     at an attacker-chosen origin. The configured value cannot be influenced
+ *  2. **Safety.** This hop carries a SIGNED dispatch payload. Letting a
+ *     client-supplied `x-forwarded-host` choose the destination would let a
+ *     forged header steer a valid signature at an attacker-chosen origin, which
+ *     is a credential-exfiltration shape whether the credential is a cookie (as
+ *     it once was here) or an HMAC. The configured value cannot be influenced
  *     per-request either way; note that only `WEB_APP_URL` is in the boot schema
  *     (`env-validation.ts`), so the `NEXT_PUBLIC_APP_URL` fallback is validated
  *     here rather than at startup — which is why this guard is not redundant.
@@ -209,6 +180,16 @@ async function readLatestAssistantReply(conversationId: string): Promise<string>
  * cancelling the body leaves the worker running and visible in active-streams.
  * `wait: true` drains the stream to completion, then reads the reply off the
  * transcript.
+ *
+ * There is ONE path and no credential branch. The hop signs a payload naming
+ * `userId` as the actor; it does not read, forward, or require anything about
+ * the ambient request — which is precisely why a voice call, a cron run, a
+ * workflow step, and a browser turn can all dispatch identically. See
+ * `@pagespace/lib/auth/agent-dispatch-payload`.
+ *
+ * `scope` is the CEILING inherited from whatever credential started the chain,
+ * not a grant. It rides the signed body so a worker dispatched by a drive-scoped
+ * MCP token cannot come out the other side of the hop unscoped.
  */
 export async function dispatchThroughChatPipeline(input: {
   conversationId: string;
@@ -217,19 +198,8 @@ export async function dispatchThroughChatPipeline(input: {
   userId: string;
   depth: number;
   wait: boolean;
+  scope: { allowedDriveIds: string[]; mcpTokenId?: string };
 }): Promise<DispatchOutcome> {
-  let incoming: Headers;
-  try {
-    const { headers } = await import('next/headers');
-    incoming = await headers();
-  } catch {
-    return {
-      ok: false,
-      reason: 'failed',
-      detail: 'no live request to dispatch from (worker dispatch needs the calling user\'s own request context)',
-    };
-  }
-
   const base = resolveSelfBaseUrl();
   if (!base) {
     return {
@@ -238,42 +208,36 @@ export async function dispatchThroughChatPipeline(input: {
       detail: 'the app\'s own URL is not configured (set WEB_APP_URL or NEXT_PUBLIC_APP_URL)',
     };
   }
-  if (!incoming.get('cookie') && !incoming.get('authorization')) {
-    return { ok: false, reason: 'failed', detail: 'the calling request carries no session credentials to dispatch with' };
-  }
 
   // ONE internal path, whatever the worker is (epic "Agent-Session Single
-  // Source of Truth", Phase 5 — chat route consolidation). This used to branch
-  // on `agentPageId === null` to pick between two URLs, because two message
-  // tables forced two routes. Both URLs still exist and still work for the
-  // clients that address them by name, but they are one implementation now
-  // (`handle-chat-turn.ts`), and that implementation picks the page-agent or
-  // global-assistant strategy from the CONVERSATION — so dispatch names the
-  // pipeline once and lets it decide. A page worker still sends `chatId`; a
-  // global worker sends none, and the entry resolves its conversation.
-  const url = `${base}/api/ai/chat`;
+  // Source of Truth", Phase 5 — chat route consolidation). A page worker sends
+  // `chatId`; a global worker sends none, and the receiving route's strategy
+  // selection resolves its conversation. The target is now the internal
+  // dispatch route rather than the public `/api/ai/chat`, because the public
+  // URL's auth matrix is a policy about untrusted clients addressing arbitrary
+  // conversation ids — a policy that has no bearing on a hop whose actor the
+  // tool layer already authorized, and whose body is signed.
+  const url = `${base}/api/internal/agent-dispatch`;
+
+  const { body, signatureHeader } = signAgentDispatch({
+    v: 1,
+    actingUserId: input.userId,
+    conversationId: input.conversationId,
+    chatId: input.agentPageId,
+    depth: input.depth,
+    allowedDriveIds: input.scope.allowedDriveIds,
+    ...(input.scope.mcpTokenId ? { originatingMcpTokenId: input.scope.mcpTokenId } : {}),
+    // A synthetic id marks a server-side dispatch — it identifies this dispatch,
+    // not a browser tab.
+    browserSessionId: `agent-dispatch-${createId()}`,
+    messageId: createId(),
+    text: input.input,
+  });
 
   const requestHeaders: Record<string, string> = {
     'content-type': 'application/json',
-    // Required by the pipeline; a synthetic id marks a server-side dispatch —
-    // it identifies this dispatch, not a browser tab.
-    'x-browser-session-id': `agent-dispatch-${createId()}`,
-    'x-agent-dispatch-depth': String(input.depth),
+    [AGENT_DISPATCH_SIGNATURE_HEADER]: signatureHeader,
   };
-  for (const name of FORWARDED_HEADERS) {
-    const value = incoming.get(name);
-    if (value) requestHeaders[name] = value;
-  }
-  const mintedCSRFToken = await mintDispatchCSRFToken(incoming);
-  if (mintedCSRFToken) requestHeaders['x-csrf-token'] = mintedCSRFToken;
-
-  const body = JSON.stringify({
-    ...(input.agentPageId !== null ? { chatId: input.agentPageId } : {}),
-    conversationId: input.conversationId,
-    messages: [
-      { id: createId(), role: 'user', parts: [{ type: 'text', text: input.input }] },
-    ],
-  });
 
   let response: Response;
   try {
@@ -339,14 +303,24 @@ export async function dispatchThroughChatPipeline(input: {
  * row, to whichever member's agent asks. Shared-workspace semantics: a
  * session is one shared sandbox and filesystem by design, so knowing what
  * else is running there is the same visibility a human teammate has glancing
- * at the sidebar. TITLES, though, follow the one listing redaction rule
+ * at the sidebar.
+ *
+ * TITLES follow the one listing redaction rule
  * (`redactConversationTitleForViewer` — full rule documented on
  * `listSessionConversationsBulk`): the workspace's owner sees them all; a
  * caller listing a workspace they do NOT own (their conversation was spawned
  * into a shared one) sees `(private thread)` for siblings that are neither
- * theirs nor deliberately shared. TRANSCRIPT content stays owner-gated
- * either way — `read_session` still requires `openOwnSession`'s ownership
- * check, so seeing a sibling listed here grants no access to what it said.
+ * theirs nor deliberately shared.
+ *
+ * THAT RULE IS ALSO THE ADDRESSABILITY RULE NOW. It used to be strictly weaker
+ * than the verbs' gate — this note read "TRANSCRIPT content stays owner-gated
+ * either way" — and once the verbs widened from ownership to drive membership,
+ * leaving it that way would have shown an agent `(private thread)` for a row it
+ * could nonetheless message and read. So the verbs consult the SAME predicate
+ * (`isConversationVisibleToViewer`): a foreign worker is addressable exactly
+ * when its title is legible here. A thread stays private until its owner shares
+ * it, and "seeing a sibling listed here grants no access to what it said" stays
+ * true for every redacted row.
  */
 async function listWorkspaceWorkers({
   workspaceId,
@@ -566,7 +540,8 @@ const MAX_MEMBER_VISIBLE_WORKSPACES = 100;
  * every other listing, with titles routed through the ONE redaction rule
  * (`redactConversationTitleForViewer`): the caller sees their own and
  * deliberately-shared titles; another member's private thread keeps its row
- * (agent + activity — the orchestration signal) as `(private thread)`.
+ * (agent + activity — the orchestration signal) as `(private thread)`, and is
+ * not addressable by the verbs either — same predicate, one answer.
  * Bounded by {@link MAX_MEMBER_VISIBLE_WORKSPACES} (see its doc).
  */
 async function listSharedWorkspaces({
@@ -793,11 +768,13 @@ async function resolveWorkerPlacement(input: {
   callerConversationId: string;
   ownerId: string;
   agentPageId: string | null;
+  /** The calling credential's drive ceiling; `[]` = unscoped. */
+  allowedDriveIds: string[];
 }): Promise<
   | { ok: true; workspaceId: string; unwind: (() => Promise<void>) | null }
   | CreateWorkerSessionFailure
 > {
-  const { workspace, callerConversationId, ownerId, agentPageId } = input;
+  const { workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds } = input;
 
   if (workspace === undefined) {
     // The caller's own workspace — minted if it has none.
@@ -853,8 +830,19 @@ async function resolveWorkerPlacement(input: {
   }
 
   // An existing workspaceId, gated by the ONE session access decision
-  // (`checkSessionAccess` — owner or drive member).
-  const access = await checkSessionAccess(ownerId, workspace);
+  // (`checkSessionAccess` — owner or drive member) AND by the calling
+  // credential's ceiling. The access decision asks about the USER; a
+  // drive-scoped token is not its user, and PLACEMENT IS A WRITE — spawning a
+  // worker into a workspace outside the token's drives would put an agent, and
+  // its sandbox reach, somewhere that token was never granted. Refused with the
+  // same anti-enumeration answer, so scope leaks nothing membership did not.
+  // ONE rule, shared with the tool layer — see `credential-scope.ts` on why this
+  // must not be a second implementation. The workspace read is skipped entirely
+  // for an unscoped caller, for whom the answer cannot depend on it.
+  const withinScope =
+    allowedDriveIds.length === 0 ||
+    isDriveWithinCredentialScope(allowedDriveIds, (await describeWorkspace(workspace)).workspaceDriveId);
+  const access = withinScope ? await checkSessionAccess(ownerId, workspace) : { allowed: false as const };
   if (!access.allowed) {
     // Missing, foreign, and not-a-member all read identically — an
     // id-guessing caller learns nothing.
@@ -915,11 +903,35 @@ async function recoverMintedWorkspaceAfterThrow(
   return 'not_bound';
 }
 
+/**
+ * The two workspace facts the worker-verb gates need, from one read.
+ *
+ *  - `ownerId`: a caller who OWNS the workspace sees and addresses every thread
+ *    in it, including other members' private ones — they are the tenant of that
+ *    working context.
+ *  - `driveId`: where the workspace lives, so a drive-SCOPED credential can be
+ *    held to its ceiling. Drive membership is a fact about the USER; a token
+ *    confined to some of that user's drives must not reach a worker outside
+ *    them just because its owner could (PR review, P1).
+ */
+async function describeWorkspace(
+  workspaceId: string,
+): Promise<{ workspaceOwnerId: string | null; workspaceDriveId: string | null }> {
+  const store = await getAgentSessionStore();
+  const row = await store.findById(workspaceId);
+  return { workspaceOwnerId: row?.ownerId ?? null, workspaceDriveId: row?.driveId ?? null };
+}
+
 export function buildSessionToolsDeps(): SessionToolsDeps {
   return {
     findOwnWorkspace: async (conversationId) => {
       const row = await findSessionForConversation(conversationId);
-      return row ? { workspaceId: row.id } : null;
+      // `driveId` rides along so `list_sessions` can hold the BOUND workspace to
+      // the calling credential's ceiling: a conversation's binding can point at
+      // a workspace in a different drive than its agent page (spawn_session
+      // takes an explicit `workspace` id), so the page-scope check upstream does
+      // not cover it.
+      return row ? { workspaceId: row.id, driveId: row.driveId ?? null } : null;
     },
 
     // THE session-access decision, wired for the tool surface exactly as the
@@ -927,6 +939,11 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
     // binding says the workspace is addressable, never that it is still usable
     // — drive membership can be revoked out from under a permanent binding.
     checkWorkspaceAccess: (userId, workspaceId) => checkSessionAccess(userId, workspaceId),
+    // The END variant, through the SAME wrapper the verbs route uses — which is
+    // where `canRunCode` is already gathered, so routing through it rather than
+    // re-deciding here is what keeps the capability gate live without a second
+    // wiring for it to drift from.
+    checkWorkspaceEndAccess: (userId, workspaceId) => checkSessionEndAccess(userId, workspaceId),
     listWorkspaceWorkers,
     listOwnWorkspaces,
     listSharedWorkspaces,
@@ -968,6 +985,14 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         // closed thread therefore fails the `workspaceId` gate first; this stays
         // so the answer keeps its own name rather than becoming "never had one".
         isClosed: membership === null,
+        // The two facts `isConversationVisibleToViewer` needs to decide whether
+        // a NON-owner may address this worker. Carried on the row rather than
+        // re-read at the gate so the verbs and the listing weigh the same
+        // values, not merely the same rule.
+        isShared: conversation.isShared,
+        ...(membership
+          ? await describeWorkspace(membership.workspaceId)
+          : { workspaceOwnerId: null, workspaceDriveId: null }),
       };
     },
 
@@ -985,8 +1010,8 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
-    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace }) => {
-      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId });
+    createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {
+      const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds });
       if (!placement.ok) return placement;
       const { workspaceId, unwind } = placement;
 
@@ -1079,12 +1104,59 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
 
     readTranscript: readSessionTranscript,
 
-    killWorker: async ({ conversationId, userId }) => {
-      // Stop the worker's in-flight run (the caller's own streams only —
-      // abortConversationStreams' authorization). Deliberately NO sandbox
-      // teardown: a worker works in its SPAWNER's workspace, so tearing "its"
-      // sandbox down would destroy the caller's own working context.
-      await abortConversationStreams({ conversationId, userId }).catch(() => {});
+    killWorker: async ({ conversationId, streamOwnerId, actingUserId }) => {
+      // Abort as the STREAM'S OWNER, not the caller.
+      //
+      // `abortConversationStreams` filters `ai_stream_sessions` by user id and
+      // re-checks ownership per abort — deliberately stricter than the takeover's,
+      // so an explicit user Stop can never reach someone else's generation. That
+      // is right for a Stop button and wrong here: once the END decision has
+      // authorized a drive admin to stop another member's worker, aborting as the
+      // ADMIN would match zero rows and report success while the worker kept
+      // running. Authorization happened before this call; this names the rows.
+      //
+      // A CROSS-MEMBER stop is the one outcome nobody is told about: the worker's
+      // owner sees only an aborted stream, and the abort itself is recorded under
+      // THEIR id (above), so the row cannot say who did it. Record the acting
+      // user here — it is the only place both identities are in hand (PR review).
+      //
+      // Through `audit()` rather than the ordinary logger, because this is a
+      // cross-user ADMINISTRATIVE action: the audit pipeline dual-writes to the
+      // tamper-evident `security_audit_log`, which is what makes the event
+      // survive log rotation and show up in audit queries and exports. A plain
+      // `loggers.ai.warn` reaches neither, and on the default console
+      // destination may not be retained at all (PR review, #2423).
+      //
+      // AFTER the abort, and carrying its OUTCOME. Recording first would write
+      // "terminated" into a tamper-evident log whose whole value is that it does
+      // not say things that did not happen — and the abort's failure is
+      // swallowed here (the return below is `ok: true` either way, deliberately:
+      // the conversation and transcript survive regardless). A failed
+      // cross-member stop is not a non-event, though — an admin reaching into
+      // another member's worker is worth a row whichever way it lands — so the
+      // two outcomes get two event types rather than one type and one silence
+      // (PR review, #2423).
+      const aborted = await abortConversationStreams({ conversationId, userId: streamOwnerId })
+        .then(() => true)
+        .catch(() => false);
+      if (actingUserId !== streamOwnerId) {
+        audit({
+          eventType: aborted ? 'admin.session.terminate.success' : 'admin.session.terminate.failure',
+          // The ACTOR is the subject of an audit row, always — the owner rides
+          // in details, so "what did this admin do" is one indexed query.
+          userId: actingUserId,
+          resourceType: 'agent_worker',
+          resourceId: conversationId,
+          details: { workerOwnerId: streamOwnerId },
+          // Authorized (`checkWorkspaceEndAccess` cleared it upstream) but
+          // cross-user, so it warns rather than informs: worth a look, not an
+          // alarm. `audit()` picks the level off this threshold.
+          riskScore: 0.5,
+        });
+      }
+      // Deliberately NO sandbox teardown: a worker works in its SPAWNER's
+      // workspace, so tearing "its" sandbox down would destroy a working context
+      // that is not this worker's to release.
       return { ok: true, spriteTornDown: false };
     },
 

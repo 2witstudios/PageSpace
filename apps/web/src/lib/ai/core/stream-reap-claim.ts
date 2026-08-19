@@ -29,7 +29,8 @@ import { STREAM_HEARTBEAT_STALE_MS } from '@/lib/ai/core/stream-liveness';
  *   2. CLOCK SKEW. `isProvablyDead(row, Date.now())` compares a Postgres timestamp against the
  *      READING instance's clock. At N=1 there is one clock and it cancels out. At N>1 two
  *      machines drift, and the reaper is the one path where drift becomes deletion. Every
- *      comparison here is `now()` against a column — Postgres's clock on both sides.
+ *      comparison here is the database's own clock against a column — Postgres on both sides,
+ *      and read as UTC so the session's TimeZone cannot redefine it. See `dbNow` below.
  *   3. MUTUAL EXCLUSION. At N>1 several instances sweep the same rows concurrently. Exactly
  *      one UPDATE can set `reap_claimed_at`; the losers match zero rows and stand down.
  *
@@ -115,6 +116,34 @@ export interface ReapClaim {
 const staleInterval = (ms: number): SQL => sql`make_interval(secs => ${ms / 1000})`;
 
 /**
+ * `now()`, in the convention these columns are actually stored in.
+ *
+ * `last_heartbeat_at`, `reap_claimed_at` and friends are `timestamp WITHOUT time zone`, and
+ * Drizzle writes its JavaScript `Date`s into them as UTC wall-clock (`toISOString()`) and reads
+ * them back the same way. `now()` is a `timestamptz`, so comparing it against one of those
+ * columns resolves it through the SESSION's TimeZone — and every predicate in this module then
+ * silently means something different depending on a database setting nothing here controls.
+ *
+ * The failure is not subtle in either direction, and one of them is the exact catastrophe this
+ * module exists to prevent:
+ *
+ *   - A session BEHIND UTC makes `now()` earlier than every stored heartbeat, so nothing is ever
+ *     stale, no row is ever claimable, and the reap silently stops running — dead rows wedge in
+ *     `'streaming'` forever.
+ *   - A session AHEAD of UTC makes `now()` later, so LIVE rows look stale by hours and the reaper
+ *     destroys generating streams — with the fence agreeing, because the fence reads the same
+ *     skewed clock.
+ *
+ * A UTC-configured server hides both, which is precisely why this is pinned rather than assumed:
+ * CI and production are UTC, so nothing would catch a deployment that is not.
+ *
+ * Same convention, same reasoning, and for the same kind of mechanism (a claim whose whole value
+ * is that one clock decides it) as `dbNow()` in
+ * `packages/lib/src/services/broadcast/record-adapter.ts`.
+ */
+const dbNow = (): SQL => sql`(now() at time zone 'utc')`;
+
+/**
  * Take exclusive, time-bounded permission to reap this stream — or answer `null`.
  *
  * `null` covers every "not mine to destroy" case and they are deliberately indistinguishable to
@@ -157,7 +186,7 @@ export const claimDeadStream = async ({
       // MOCKED TESTS CANNOT SEE THIS. It lives entirely in the driver's type round trip, so the
       // guard against regression is `stream-reap-claim.integration.test.ts`, which runs the real
       // statements against the real database.
-      .set({ reapClaimedAt: sql`date_trunc('milliseconds', now())` })
+      .set({ reapClaimedAt: sql`date_trunc('milliseconds', ${dbNow()})` })
       .where(and(
         eq(aiStreamSessions.messageId, messageId),
         // A row that already left 'streaming' was reaped, or finished normally. Either way its
@@ -165,11 +194,11 @@ export const claimDeadStream = async ({
         eq(aiStreamSessions.status, 'streaming'),
         // Staleness, re-evaluated HERE rather than trusted from the caller's earlier read. This
         // is the TOCTOU close: a heartbeat that landed in between makes this false.
-        sql`${aiStreamSessions.lastHeartbeatAt} < now() - ${staleInterval(staleAfterMs)}`,
+        sql`${aiStreamSessions.lastHeartbeatAt} < ${dbNow()} - ${staleInterval(staleAfterMs)}`,
         // Unclaimed, or claimed by a reaper that has since gone quiet.
         or(
           isNull(aiStreamSessions.reapClaimedAt),
-          sql`${aiStreamSessions.reapClaimedAt} < now() - ${staleInterval(REAP_CLAIM_TTL_MS)}`,
+          sql`${aiStreamSessions.reapClaimedAt} < ${dbNow()} - ${staleInterval(REAP_CLAIM_TTL_MS)}`,
         ),
       ))
       .returning({

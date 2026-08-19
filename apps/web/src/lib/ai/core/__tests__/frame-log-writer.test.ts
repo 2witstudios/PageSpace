@@ -596,6 +596,28 @@ describe('releaseFramesForMessage — the BY-NAME release, for callers holding n
     });
   });
 
+  it('given a claim for a DIFFERENT message, refuses to delete', async () => {
+    // The fence is required by the type, but a required fence is not yet a BINDING one:
+    // `isReapClaimStillHeld` verifies the claim against its own messageId, so a perfectly valid
+    // claim for another row would answer `true` and the delete below it would still target
+    // THIS message — a live log destroyed by a fence reporting itself satisfied. The claim has
+    // to name the thing it is fencing.
+    mockIsReapClaimStillHeld.mockResolvedValue(true);
+
+    await releaseFramesForMessage('msg-target', REAP('msg-somewhere-else'));
+
+    assert({
+      given: 'a valid claim that names a different message than the one being released',
+      should: 'delete nothing, and not treat the unrelated claim as permission',
+      actual: {
+        deleted: mockDeleteFrames.mock.calls.length,
+        warned: mockLoggerWarn.mock.calls.some(([message]) =>
+          typeof message === 'string' && message.includes('names a different message')),
+      },
+      expected: { deleted: 0, warned: true },
+    });
+  });
+
   it('given a LIVE local writer, refuses BEFORE paying for a claim check', async () => {
     // The local check is the cheapest possible answer and it is authoritative when it fires, so
     // it must come first: a reap landing on the generating instance costs one Map lookup, not a

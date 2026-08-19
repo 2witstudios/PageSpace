@@ -39,6 +39,16 @@ describe('schema.ts exports', () => {
     expect(schemaModule.schema.userMentions).toBeDefined();
   });
 
+  it('schema object contains published-app hosting tables', () => {
+    expect(schemaModule.schema.publishedApps).toBeDefined();
+    expect(schemaModule.schema.appDeployTokenMints).toBeDefined();
+    // The FK-free teardown outbox. Registered here so a future refactor that
+    // drops it from the barrel fails loudly rather than silently disabling the
+    // only thing that stops a deleted environment (or drive, or user) stranding
+    // a billing Fly app.
+    expect(schemaModule.schema.appHostingReclaims).toBeDefined();
+  });
+
   it('no longer exposes the dropped legacy chat_messages table', () => {
     // Merged INTO `messages` across Phase 4 of the epic "Agent-Session Single
     // Source of Truth" and dropped at PR 15 (migration 0253). One message
@@ -166,6 +176,15 @@ describe('schema.ts exports', () => {
 
   it('schema object contains workflows tables', () => {
     expect(schemaModule.schema.workflows).toBeDefined();
+  });
+
+  it('schema object contains drive-envs tables', () => {
+    // Registered the moment the table landed, not when its first writer does.
+    // An unregistered table is absent from `schema` for every consumer that
+    // reaches for it by name (the drift guards over the GDPR and tenant
+    // exports both enumerate this object at runtime), and "nothing writes it
+    // yet" is a state that expires quietly.
+    expect(schemaModule.schema.driveEnvs).toBeDefined();
   });
 
   it('re-exports auth enums', () => {

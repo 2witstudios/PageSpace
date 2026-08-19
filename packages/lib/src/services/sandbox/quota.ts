@@ -20,6 +20,7 @@
 
 import type { SubscriptionTier } from '../subscription-utils';
 import { isSandboxAvailable } from '../../billing/sandbox-eligibility';
+import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 
 function envInt(name: string, fallback: number): number {
   const raw = process.env[name]?.trim();
@@ -284,4 +285,117 @@ export function resetSessionRuntimeGuardrail(): void {
 /** Current guardrail map size — test-only seam for verifying eviction bounds memory. */
 export function sessionActivityMapSize(): number {
   return sessionActivityByKey.size;
+}
+
+/**
+ * checkDriveEnvAllowance — the per-payer ceiling on PERSISTENT environments
+ * (`drive_envs`), the third axis this module caps and the only one that meters a
+ * ROW rather than a running thing.
+ *
+ * The other two ceilings above bound compute in flight: `checkCodeExecutionQuota`
+ * caps concurrent RUNS, `checkAgentSessionConcurrency` caps LIVE SANDBOXES. An
+ * environment is neither. It is the PERSISTENCE unit: its row exists — and its
+ * filesystem keeps costing real money — whether or not anyone is running
+ * anything inside it, and its whole purpose is to outlive every session that
+ * touches it. So the count that matters is how many envs the payer OWNS, not how
+ * many are awake: an env hibernating for a month still holds a disk someone is
+ * paying Fly for.
+ *
+ * Note the tense. The COST is real from the moment an env is provisioned; the
+ * app's own storage METER does not read `drive_envs` yet — `sandbox-storage-
+ * billing.ts` enumerates `agent_workspaces` only, and the env row source lands
+ * with the storage-reconcile follow-up. This ceiling exists because the cost is
+ * real, not because the meter has caught up, which is precisely why it is a
+ * ceiling on ROWS rather than on measured bytes.
+ *
+ * That is also why this gate belongs at `createDriveEnv` rather than at
+ * provisioning time, where the two ceilings above sit: creating the row is the
+ * moment the persistence is committed to, and an env that has never been
+ * provisioned is still an env the payer holds.
+ *
+ * **Ceilings, and the fact that they are placeholders.** The numbers below are a
+ * deliberate first cut pending the economics sign-off — free 0 (an env is a
+ * paid-tier feature; `isSandboxAvailable` already says so, and this table
+ * agrees rather than contradicting it), pro 2, founder 5, business 10. Each is
+ * overridable by env var (`DRIVE_ENV_LIMIT_FREE` and friends) precisely because
+ * they will move: an operator can retune a tier without a deploy, and the
+ * pricing work can land its real numbers as a one-line change.
+ *
+ * `payerId` is the DRIVE OWNER — envs are drive-owned and drive-billed, so a
+ * free-tier member creating an env in a Pro-owned drive is entitled and metered
+ * against the drive's owner, exactly as sandbox eligibility already resolves
+ * (`resolveSandboxPayerTier`). `countEnvsOwnedBy` is injected (the real
+ * implementation is `DriveEnvStore.countEnvsOwnedBy`, wired by the app) so this
+ * stays testable with no database.
+ */
+/**
+ * A tier ceiling, CLAMPED to what a listing can actually show.
+ *
+ * The two numbers are coupled whether or not anyone says so: an env listing is
+ * bounded by `MAX_DRIVE_ENVS_LISTED`, so a ceiling above it would let a payer
+ * legitimately create environments that `GET /envs` then silently omits — rows
+ * that still hold a Sprite and still bill storage, with no surface that admits
+ * they exist. Silently invisible billed infrastructure is a worse failure than
+ * a refused create, so the override is clamped rather than honored, and this is
+ * the one place the coupling has to be remembered.
+ *
+ * Raising the ceiling past 100 is therefore a two-part change on purpose: raise
+ * `MAX_DRIVE_ENVS_LISTED` (or paginate the listing) first, and this follows.
+ */
+function envLimit(name: string, fallback: number): number {
+  return Math.min(envInt(name, fallback), MAX_DRIVE_ENVS_LISTED);
+}
+
+/** The env ceiling for a tier — exported so a caller (or a test) can say WHAT the limit was, not just that it was hit. */
+const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
+  free: envLimit('DRIVE_ENV_LIMIT_FREE', 0),
+  pro: envLimit('DRIVE_ENV_LIMIT_PRO', 2),
+  founder: envLimit('DRIVE_ENV_LIMIT_FOUNDER', 5),
+  business: envLimit('DRIVE_ENV_LIMIT_BUSINESS', 10),
+};
+
+export function getDriveEnvLimit(tier: SubscriptionTier): number {
+  return DRIVE_ENV_LIMITS[tier];
+}
+
+/**
+ * Deliberately its own denial word rather than reusing `concurrency_limit`:
+ * these are different ceilings with different remedies (end a session vs. delete
+ * an environment), the API maps them to different messages, and the security
+ * audit files them as different events. Conflating them would tell a user to
+ * close sessions when what they have run out of is environments.
+ */
+export type DriveEnvAllowanceDenialReason = 'tier_ineligible' | 'env_limit_reached';
+
+export type DriveEnvAllowanceDecision =
+  | { allowed: true }
+  | { allowed: false; reason: DriveEnvAllowanceDenialReason; limit: number };
+
+export interface CheckDriveEnvAllowanceInput {
+  /** The DRIVE OWNER — envs are drive-owned and drive-billed. */
+  payerId: string;
+  /** The payer's tier, resolved by the caller (drive owner's subscription). */
+  tier: SubscriptionTier;
+  countEnvsOwnedBy: (payerId: string) => Promise<number>;
+}
+
+export async function checkDriveEnvAllowance({
+  payerId,
+  tier,
+  countEnvsOwnedBy,
+}: CheckDriveEnvAllowanceInput): Promise<DriveEnvAllowanceDecision> {
+  const limit = DRIVE_ENV_LIMITS[tier];
+  // Eligibility FIRST, and ahead of any count: a free-tier payer is refused for
+  // being on a tier without cloud machines at all, which is a different thing to
+  // tell them than "you are at your limit" — and it costs no database round-trip
+  // to say. Checked here as defense in depth, in addition to (not instead of)
+  // `can-run-code.ts`'s own tier gate, matching both checks above.
+  if (!isSandboxAvailable(tier)) {
+    return { allowed: false, reason: 'tier_ineligible', limit };
+  }
+  const owned = await countEnvsOwnedBy(payerId);
+  if (owned >= limit) {
+    return { allowed: false, reason: 'env_limit_reached', limit };
+  }
+  return { allowed: true };
 }

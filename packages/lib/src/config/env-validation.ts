@@ -161,6 +161,23 @@ export const serverEnvSchema = z
     // env validation. Read via resolveSpritesToken (services/sandbox/...).
     SPRITES_API_TOKEN: z.string().min(1).optional().or(z.literal('')),
 
+    // Published-app hosting global kill-switch (default OFF). Accept any string so
+    // a stray value (e.g. APP_HOSTING_ENABLED=0) never fails app-wide env
+    // validation; isAppHostingEnabled() enables only on the exact value 'true'.
+    APP_HOSTING_ENABLED: z.string().optional(),
+
+    // Fly Machines org token (Bearer) for the published-app provisioner. Optional:
+    // a blank value disables provisioning (the flaps client fails closed with an
+    // auth error surfaced as a provisioning failure) rather than failing app-wide
+    // env validation. Read via resolveFlyMachinesToken (services/app-hosting/...).
+    FLY_MACHINES_ORG_TOKEN: z.string().min(1).optional().or(z.literal('')),
+
+    // The ONE Fly network every published app is created on. Optional: unset falls
+    // back to PUBLISHED_APPS_NETWORK_DEFAULT. This is an org-level override (e.g. a
+    // separate staging network), never a per-app value — fly-replay cannot cross
+    // networks, so all published apps must share one.
+    PUBLISHED_APPS_NETWORK: z.string().optional(),
+
     // Sentry server/edge DSN. Fail-loud in production for cloud/tenant (see
     // superRefine below) — a missing DSN previously meant Sentry.init({dsn:
     // undefined}) silently no-op'd with zero alerts ever reaching a human.

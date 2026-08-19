@@ -82,3 +82,21 @@ export function buildSiteCsp(): string {
 export function buildDocumentCsp(): string {
   return `${ASSET_CSP_PREFIX} script-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'`;
 }
+
+/**
+ * The policy a canvas page's own document carries, chosen by the page's site-mode
+ * flag — the one place that choice is made.
+ *
+ * Exported because the preview route has to build its RESPONSE HEADER from the
+ * same choice `renderCanvasDocument` makes for the document's `<meta>`. Browsers
+ * enforce the INTERSECTION of every policy delivered, so two hand-copied
+ * ternaries silently withhold whatever the copies disagree about, with no error
+ * anywhere. One expression, two callers.
+ *
+ * The flag is optional because `renderCanvasDocument` takes it that way — an
+ * absent flag is not site mode, so it can never fall through to the permissive
+ * policy.
+ */
+export function buildCanvasCsp(siteMode?: boolean, formActionOrigin?: string): string {
+  return siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin);
+}

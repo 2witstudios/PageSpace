@@ -67,6 +67,17 @@ export type SecurityEventType =
   // Privileged operator read of another subject's personal data (#954, Art 32(1)(b)).
   // Distinct from data.read so DSAR/admin reads are separable in forensic queries.
   | 'admin.data.read'
+  // A drive owner/admin stopped ANOTHER member's running agent worker (#2413).
+  // The abort itself is filed under the worker's OWNER — `killWorker` aborts as
+  // the stream's owner so the `ai_stream_sessions` rows match — so this is the
+  // only record that can name who actually acted. Its own type rather than
+  // data.delete: nothing is deleted, and a cross-user administrative stop is
+  // what a dispute or incident review needs to query for. Split by outcome like
+  // the auth family, because the caller reports success either way: recording
+  // one type for both would let this log assert a termination that never
+  // happened, and recording nothing on failure would hide the attempt.
+  | 'admin.session.terminate.success'
+  | 'admin.session.terminate.failure'
   | 'security.anomaly.detected'
   | 'security.rate.limited'
   | 'security.brute.force.detected'

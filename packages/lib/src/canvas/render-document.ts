@@ -1,5 +1,5 @@
 import { sanitizeCSS } from './sanitize-css';
-import { buildBaselineCsp, buildSiteCsp } from './csp';
+import { buildCanvasCsp } from './csp';
 import { escapeHtml } from '../utils/html';
 
 /**
@@ -468,7 +468,7 @@ export function renderCanvasDocument(input: RenderCanvasDocumentInput): string {
   // reach arbitrary hosts, the exact tracking/exfiltration channel the
   // document pipeline's sanitizer exists to close.
   const siteModeApplies = Boolean(siteMode) && !cspOverride;
-  const csp = cspOverride ?? (siteMode ? buildSiteCsp() : buildBaselineCsp(formActionOrigin));
+  const csp = cspOverride ?? buildCanvasCsp(siteMode, formActionOrigin);
 
   const { css, body } = extractAndSanitizeStyles(unwrapFullDocument(html ?? ''), allowedAssetHosts, nonce, siteModeApplies);
   const rawTitle = title && title.trim() ? title : 'Untitled';

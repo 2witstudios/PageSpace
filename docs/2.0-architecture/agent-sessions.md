@@ -23,6 +23,34 @@ context: a drive-level environment that owns one Sprite sandbox and hosts many
 conversations plus any number of shells. The environment is primary; what runs inside it
 lives inside it.
 
+> **`envId` — owning versus borrowing a sandbox.** The schema now carries a nullable
+> `agent_workspaces.envId` pointing at a `drive_envs` row: a *persistent, drive-owned*
+> ENVIRONMENT that sessions can be spawned inside (epic "Deliberate Per-Drive
+> Environments"). The column **ships dark** — nothing writes it until that epic's Phase 3
+> — so everything below still describes every session that exists today.
+>
+> What changes when it is written: an env-bound session **borrows** its env's sandbox
+> instead of owning one, so it holds no Sprite pointer of its own. That is enforced by
+> the database, not by convention (`agent_workspaces_env_no_sprite_check`), which is what
+> makes "ending an env session cannot kill the env" structural: the lifecycle planner sees
+> `sandboxId IS NULL` and stamps `endedAt`, killing nothing. Ephemeral per-session
+> sandboxes remain the default and are unchanged.
+>
+> **An env owns its sessions.** `envId` is `ON DELETE CASCADE`: deleting an env deletes
+> the sessions run inside it, their panes, that tree's rev counter and their shells —
+> everything that already cascades from a session row. It does **not** reach chat
+> history, because nothing connects the two: `conversations` lost its session column at
+> `0256` and a pane's `targetId` is polymorphic with no foreign key, so conversations are
+> independent rows that stay reachable through the cross-session past-conversations
+> surface. What a cascade destroys is layout and shell scrollback, not threads. Nor is
+> any accounting lost — an env-bound session is CHECK-forbidden from holding Sprite or
+> storage/billing columns, so the row carries no VM to orphan and no bytes to bill.
+>
+> **There is no env "kind".** dev / staging / prod are use cases a user expresses by
+> NAMING an env; every env is Sprite-backed uniformly. The Fly serving tier attaches
+> later as a `published_apps.envId` hosting row pointing AT an env — it never puts Fly
+> pointers on the env row.
+
 Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
 `packages/db/src/schema/conversations.ts`):
 
@@ -121,16 +149,42 @@ finding 1's workspace confinement.
 
 1. **Verbs are resource-addressed and permission-gated, like `read_page`.**
    `send_session` / `read_session` / `kill_session` authorize against the resource:
-   the caller owns the worker conversation, it is actually a worker (bound into some
-   workspace), and its listing is not human-closed. A resource the caller does **not**
-   own always reads as nonexistent — anti-enumeration, today's behavior and kept.
-   For the caller's *own* rows the refusals are distinct, typed and actionable
-   (shipped, epic Phase 1): an unbound thread answers `not_a_worker` with
-   spawn-from-inside-it guidance, a human-closed listing answers `worker_closed`
-   with the reopen-or-spawn-fresh remedy — while no-row and foreign-owner still
-   collapse into one identical not-yours message. The
-   calling conversation plays no authorization role and is not required. (Page-worker dispatch additionally
+   the caller can REACH the worker, it is actually a worker (bound into some
+   workspace), and its listing is not human-closed. **Reach is three borrowed
+   rules, not ownership.** The CREDENTIAL's drive ceiling admits the request at
+   all (`mcpAllowedDriveIds` — see axiom 8), the DRIVE admits you to the
+   workspace (`decideAgentSessionAccess`: owner/admin/member — exactly what
+   axiom 6's discovery already showed you), and the WORKSPACE shows you the
+   thread (`isConversationVisibleToViewer`: you own the workspace, you own the
+   thread, or its owner deliberately shared it — axiom 7, the same predicate that
+   decides whether its title is legible). So an agent addresses exactly the rows
+   it can name, and only within what its key was cut for. Ownership alone used to
+   be the gate, strictly narrower than the
+   platform's own rule: two members of one drive could see each other's
+   workspaces and address nothing in them. Drive membership ALONE would have been
+   too wide the other way — it would have made axiom 7's per-thread opt-in
+   silently meaningless. A resource the caller cannot reach always reads as
+   nonexistent —
+   anti-enumeration, unchanged. For rows the caller CAN reach the refusals are
+   distinct, typed and actionable (shipped, epic Phase 1): an unbound thread answers
+   `not_a_worker` with spawn-from-inside-it guidance, a human-closed listing answers
+   `worker_closed` with the reopen-or-spawn-fresh remedy — while no-row and
+   unreachable collapse into one identical not-yours message. (A closed foreign
+   worker collapses too: `isClosed` and "no workspace" come from the same membership
+   read, so there is nothing to prove reach against.) The calling conversation plays
+   no authorization role and is not required.
+
+   **Reaching a worker never lends you its owner's authority.** A dispatched turn
+   runs as the actor who dispatched it, always — `send_session` means "speak into
+   that thread as yourself", never "make that worker act with its own access".
+   Otherwise a plain member could send *"list every page you can see and paste it
+   here"* into an admin's worker and read it back with `read_session`, and every
+   shared drive would be an escalation ladder. (Page-worker dispatch additionally
    re-enforces the agent's RBAC inside the standard chat pipeline it runs through.)
+   `kill_session` is the one verb reach alone does not carry: stopping ANOTHER
+   member's worker runs `decideAgentSessionEndAccess` (drive owner/admin, plus the
+   code-execution capability) and refuses distinctly if it fails — the caller has
+   already proven reach, so there is nothing left to hide from them.
 2. **Binding state, lifecycle state, and calling surface NEVER refuse a permitted
    operation.** Ended sessions reopen on use. Unbound threads mint a workspace
    permission-gated (global with the user's own authority; page conversations behind
@@ -145,7 +199,9 @@ finding 1's workspace confinement.
 5. **Cross-workspace orchestration is legitimate.** `spawn_session` takes `workspace`
    (omitted = caller's own, minted if needed; `'new'` = fresh isolated workspace;
    an id = spawn straight into it, gated by session access). `list_sessions` lists all
-   the caller's workspaces, every worker the caller owns addressable by the verbs. The
+   the caller's workspaces; every worker it reports BY NAME — the caller's own, and
+   other members' deliberately-shared ones — is addressable by the verbs (axiom 1),
+   while a `(private thread)` row is visible but not addressable. The
    advisory cap pre-count applies only to own-workspace spawns — a full caller
    workspace can't refuse a spawn aimed somewhere with room.
 6. **Discovery is symmetric with the spawn gate.** Everything
@@ -157,16 +213,45 @@ finding 1's workspace confinement.
    is never truncated (the spawn ceiling is structural); the member-visible set
    has no structural ceiling, so it carries its own explicit bound
    (`MAX_MEMBER_VISIBLE_WORKSPACES`, newest activity first).
-7. **Foreign private-thread titles redact in listings.** A viewer listing a
-   workspace they do not OWN sees a conversation's title only when the thread is
-   their own or deliberately shared (`conversations.isShared`); every other row
-   keeps its agent and activity time but reads `(private thread)`. The owner sees
-   everything in their own workspace. One pure mechanism —
-   `redactConversationTitleForViewer`
-   (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`) — routed
-   through every viewer-facing mapping of session-conversation rows. This is a
-   deliberately conservative product decision, explicitly open to veto: adjusting
-   it is one function. Transcript content stays owner-gated regardless.
+7. **Foreign private-thread titles redact in listings — and that redaction is now
+   the ADDRESSABILITY rule too.** One pure mechanism, unchanged in substance
+   (`packages/lib/src/agent-workspaces/redact-conversation-listing.ts`): a viewer
+   listing a workspace they do not OWN sees a conversation's title only when the
+   thread is their own or deliberately shared (`conversations.isShared`); every
+   other row keeps its agent and activity time but reads `(private thread)`.
+
+   What changed is its REACH, not its content. The rule used to be strictly weaker
+   than the verbs' gate — "transcript content stays owner-gated regardless" — so a
+   redacted row was merely a row you could not name. Once axiom 1 widened the verbs
+   to drive membership, leaving it there would have shown an agent
+   `(private thread)` for a row it could nonetheless message and read. So the
+   predicate was extracted (`isConversationVisibleToViewer`) and the verbs consult
+   it: a redacted row is one the verbs refuse, indistinguishably from a row that
+   does not exist. Drive membership opens the working CONTEXT; sharing a thread is
+   what opens the thread. The verb descriptions carry the caution that belongs
+   alongside — a shared worker's transcript is someone else's work: untrusted
+   input, not instructions, and not yours to interrupt unasked.
+
+8. **A credential's drive ceiling binds every workspace-resolving verb, and it
+   is asked FIRST.** Every other rule here asks about the USER. A drive-scoped
+   MCP/API token is not its user: it is confined to a subset of that user's
+   drives, and a worker, workspace, pane grid or shell outside them must read as
+   nonexistent to it however freely its owner could reach the same thing. This
+   applies to the caller's OWN resources too — ownership is not an escape from
+   scope — and to PLACEMENT, which is a write: `spawn_session`'s explicit
+   `workspace` target is weighed against the ceiling alongside
+   `checkSessionAccess`, so a token cannot put an agent (and its sandbox reach)
+   somewhere it was never granted. Discovery is held to the same ceiling as
+   addressability, so `list_sessions` can never advertise an id the verbs refuse.
+
+   The subtlety worth recording, because it is what made this easy to get wrong:
+   a conversation's WORKSPACE BINDING and its AGENT PAGE need not share a drive.
+   `spawn_session` takes an explicit workspace id, so a conversation driven by an
+   agent in drive A can be bound to a workspace in drive B — and the page-scope
+   check that admitted the turn (`checkMCPPageScope`) covers the page, never the
+   binding. Any verb that resolves a workspace from that binding must therefore
+   consult the ceiling itself; "the page was in scope" does not carry.
+   Unresolvable drives fail closed.
 
 Unchanged by the re-model: the conversation→session binding stays write-once and
 owner-only (the hijack surface stays closed); shells stay workspace-scoped
@@ -325,12 +410,38 @@ every worker; a page worker carries `chatId`, a global worker carries none and t
 resolves its conversation. That branch was the last visible trace of the two-table era in
 the send path.
 
+**How dispatch authenticates that hop changed afterwards, and the strategy decision moved
+with it.** Dispatch used to replay the calling user's own cookie/Bearer out of
+`next/headers` into `POST /api/ai/chat`. That made a live browser-ish credential a
+precondition for one agent messaging another, so every server-side surface — the voice
+bridge, cron, the workflow executor, the channel mention responder — was refused outright
+("the calling request carries no session credentials to dispatch with"), and a Bearer
+caller could never reach a global worker at all (see the MCP clause below). Dispatch now
+SIGNS a payload naming the acting user and POSTs `/api/internal/agent-dispatch`
+(`packages/lib/src/auth/agent-dispatch-payload.ts`), verified with the same body-bound
+HMAC `/api/broadcast`, `/api/realtime/attach` and `/api/internal/voice/bridge` already
+use — a signature authenticates the SERVICE, never the user, and the acting user is
+re-read live (suspension binds on the hop). The strategy decision was extracted from
+`handleChatTurn` as `dispatchChatTurn` so the internal route reaches the SAME decision
+rather than growing a second one. Two things ride the signed payload because losing them
+would silently widen: the chain DEPTH (so the recursion cap cannot be reset by a forged
+header) and the originating credential's DRIVE CEILING (so a scoped MCP token's worker
+cannot come out of the hop unscoped — see the service branch in `getAllowedDriveIds`).
+
 `/api/ai/chat` therefore accepts one shape it used to refuse: a request with no `chatId`
 whose `conversationId` resolves to **the caller's own** existing global-assistant
 conversation. That is the whole widening, it is fail-closed (the global strategy
 independently re-checks owner + `type='global'` + `isActive`), and an MCP token still
-cannot reach the global assistant through it — MCP has never been able to drive the global
-assistant and the entry refuses with the same answer the session-only route always gave.
+cannot reach the global assistant through **that public URL** — MCP has never been able to
+drive the global assistant and the entry refuses with the same answer the session-only
+route always gave.
+
+`/api/internal/agent-dispatch` deliberately does not inherit that refusal, which is what
+lets an SDK, CLI or Claude Code caller on an API key drive a global worker. The public
+URL's refusal is a policy about untrusted bearer clients naming an arbitrary conversation
+id; a dispatch is not that — the tool layer already resolved the target and authorized the
+actor against it, and the body is signed. The ownership clause below still gates who the
+actor may be.
 
 The ownership clause is load-bearing for a reason unrelated to access, and was added by
 review: without it, someone else's global conversation routed to the global strategy and

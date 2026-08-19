@@ -41,6 +41,21 @@ import { canUserViewPage } from '@pagespace/lib/permissions/permissions';
 const request = () => new Request('http://localhost/api/canvas/page-1/preview');
 const context = (pageId = 'page-1') => ({ params: Promise.resolve({ pageId }) });
 
+/**
+ * A CSP as its list of whole directives, so two policies compare exactly rather
+ * than by substring. Depends on the `<meta>` content being emitted unescaped
+ * (`render-document.ts`), which is why no entity decoding happens here.
+ */
+const directivesOf = (policy: string) =>
+  policy.split(';').map((directive) => directive.trim()).filter(Boolean);
+
+/**
+ * The only two directives the response header may carry that the document's
+ * `<meta>` does not: a `<meta>` cannot meaningfully deliver either. Everything
+ * else must match on both sides — see the invariant test below.
+ */
+const HEADER_ONLY_DIRECTIVE = /^(frame-ancestors|sandbox)\b/;
+
 const canvasPage = (over: Record<string, unknown> = {}) => ({
   id: 'page-1',
   title: 'Welcome',
@@ -190,9 +205,78 @@ describe('GET /api/canvas/[pageId]/preview', () => {
     }
   });
 
-  it('given a non-siteMode page, should serve the baseline policy', async () => {
-    const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
+  /**
+   * The rendered document carries its own <meta> CSP, and browsers enforce the
+   * INTERSECTION of every policy delivered. A header that permits form-action
+   * while the meta still says 'none' is therefore inert — the fix has to reach
+   * both, or it only looks applied.
+   */
+  it('given an app origin, should scope the meta policy too, not just the header', async () => {
+    const previous = process.env.WEB_APP_URL;
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+    try {
+      const body = await (await GET(request(), context())).text();
+      expect(body).toContain("form-action 'self' https://app.pagespace.ai");
+      expect(body).not.toContain("form-action 'none'");
+    } finally {
+      if (previous === undefined) delete process.env.WEB_APP_URL;
+      else process.env.WEB_APP_URL = previous;
+    }
+  });
 
-    expect(csp).not.toMatch(/connect-src[^;]*\bhttps:/);
+  /**
+   * General invariant behind the two specific cases above: the document's <meta>
+   * policy and the response header are built by separate calls that must be fed
+   * the same inputs. Browsers intersect them, so any directive one grants and the
+   * other withholds is silently withheld. This pins every base directive rather
+   * than one parameter, so a third input added later cannot diverge unnoticed.
+   *
+   * The origin only bites in the siteMode=false case — site mode permits any
+   * https origin and takes no origin argument. The siteMode=true case is here to
+   * catch the flag itself failing to reach one of the two calls.
+   */
+  it.each([false, true])('given siteMode=%s, should deliver the same base policy in meta and header', async (siteMode) => {
+    const previous = process.env.WEB_APP_URL;
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue(canvasPage({ siteMode }) as never);
+    try {
+      const res = await GET(request(), context());
+      const header = res.headers.get('Content-Security-Policy') ?? '';
+      const meta = /<meta http-equiv="Content-Security-Policy" content="([^"]*)"/.exec(await res.text())?.[1] ?? '';
+
+      expect(meta).not.toBe('');
+      // Equality, not containment. Compared whole rather than by substring,
+      // because `connect-src https://app.pagespace.ai` is a substring of
+      // `connect-src https://app.pagespace.ai.evil` — a substring check would
+      // call a widened header identical. And compared in BOTH directions, minus
+      // the closed list of directives a <meta> cannot carry: under intersection
+      // a directive the header grants and the meta never mentions is just as
+      // dead as one the meta contradicts, so "the meta's are a subset" would
+      // wave through exactly the divergence this test exists to catch.
+      expect(directivesOf(header).filter((d) => !HEADER_ONLY_DIRECTIVE.test(d))).toEqual(
+        directivesOf(meta),
+      );
+    } finally {
+      if (previous === undefined) delete process.env.WEB_APP_URL;
+      else process.env.WEB_APP_URL = previous;
+    }
+  });
+
+  it('given a non-siteMode page, should serve the baseline policy', async () => {
+    // Cleared, not assumed absent: an ambient app origin in the developer's own
+    // environment scopes `connect-src` to it, and this assertion would then fail
+    // locally while passing in CI, where neither var is set.
+    const prevWeb = process.env.WEB_APP_URL;
+    const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.WEB_APP_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    try {
+      const csp = (await GET(request(), context())).headers.get('Content-Security-Policy') ?? '';
+
+      expect(csp).not.toMatch(/connect-src[^;]*\bhttps:/);
+    } finally {
+      if (prevWeb !== undefined) process.env.WEB_APP_URL = prevWeb;
+      if (prevPublic !== undefined) process.env.NEXT_PUBLIC_APP_URL = prevPublic;
+    }
   });
 });

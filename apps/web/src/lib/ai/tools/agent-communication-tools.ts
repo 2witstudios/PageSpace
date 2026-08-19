@@ -22,6 +22,7 @@ import { DEFAULT_PROVIDER, DEFAULT_MODEL, AI_PROVIDERS, getModelDisplayName } fr
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
 import type { ToolExecutionContext } from '@/lib/ai/core/types';
 import { createId } from '@paralleldrive/cuid2';
+import { buildSessionTools } from './session-tools-runtime';
 import { driveTools } from './drive-tools';
 import { pageReadTools } from './page-read-tools';
 import { guardReadPageToolForVision } from './read-page-vision-output';
@@ -64,6 +65,22 @@ async function getConfiguredModel(userId: string, agentConfig: { aiProvider?: st
 }
 
 /**
+ * The session family, built ONCE and reused.
+ *
+ * Every other entry in `availableTools` is a module-level constant; this one is
+ * a factory call, so without the cache each mention-triggered turn rebuilt the
+ * whole family just to look one name up. The tools hold no per-request state —
+ * they read the caller off `experimental_context` at execute time — so a single
+ * instance is the same instance a fresh call would have produced. Lazy rather
+ * than module-level to keep the import cycle this construction exists to avoid.
+ */
+let sessionToolsCache: ReturnType<typeof buildSessionTools> | null = null;
+function getSessionTools(): ReturnType<typeof buildSessionTools> {
+  sessionToolsCache ??= buildSessionTools();
+  return sessionToolsCache;
+}
+
+/**
  * Filter tools for agent configuration
  */
 function filterToolsForAgent(enabledTools: string[] | null): Record<string, unknown> {
@@ -79,6 +96,14 @@ function filterToolsForAgent(enabledTools: string[] | null): Record<string, unkn
     ...searchTools,
     ...taskManagementTools,
     ...agentTools,
+    // The session family, so an @-mentioned agent can delegate like any other.
+    // It was absent for a structural reason that is now gone: this engine runs
+    // detached from any request (a channel message triggers it), and dispatch
+    // used to require the calling user's live browser credential — so
+    // spawn_session/send_session could only ever have refused here. Dispatch
+    // signs its own hop now. Still gated per agent by `enabledTools` below, so
+    // adding it here widens nothing on its own.
+    ...getSessionTools(),
     // Note: Not including agentCommunicationTools to prevent infinite recursion
   };
   
