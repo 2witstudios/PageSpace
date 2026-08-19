@@ -1196,13 +1196,12 @@ export async function provisionSessionSandbox(
           // The generation just minted — the CAS target for the write. Taken
           // from the handle, not the row: this is the VM the `du` runs on.
           spriteInstanceId: handle.spriteInstanceId ?? null,
-          // NULL, not the row's value: this callback fires only on the arms that
-          // RESET the measurement columns — `create` (a new Sprite generation is
-          // an empty filesystem) and `adopt` (a replacement VM is a different
-          // disk). Passing the pre-provision timestamp would let the throttle
-          // skip the baseline measurement of a session re-provisioned or
-          // replaced inside the window, leaving the row null with no other
-          // trigger to fix it.
+          // NULL, not the row's value: this callback only fires on the `create`
+          // arm, where the same operation resets the measurement columns (a new
+          // Sprite generation is an empty filesystem). Passing the pre-provision
+          // timestamp would let the throttle skip the baseline measurement of a
+          // session re-provisioned inside the window, leaving the row null with
+          // no other trigger to fix it.
           lastMeasuredAt: null,
           now: new Date(),
           persist: (measurement) => store.recordStorageMeasurement(measurement),
@@ -1216,11 +1215,9 @@ export async function provisionSessionSandbox(
 /**
  * Opportunistically measure a WARM session's storage.
  *
- * The provisioner's own `measureSessionStorage` fires only on the arms that reset
- * the measurement columns (`create`, against a filesystem that is empty by
- * definition, and `adopt`, against a replacement VM's) — so on its own it pins
- * every session at that baseline while the reconcile keeps advancing the
- * watermark. The
+ * The provisioner's own `measureSessionStorage` only fires on `create`, against
+ * a filesystem that is empty by definition — so on its own it pins every session
+ * at the baseline forever while the reconcile keeps advancing the watermark. The
  * figure that actually matters is the one taken while the agent is doing real
  * work, which is what this is for: call it where a sandbox is already awake and
  * a handle is cheap. Throttled per session (default 1h), so a burst of tool

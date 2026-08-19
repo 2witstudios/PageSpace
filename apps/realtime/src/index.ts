@@ -215,9 +215,8 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
           workspaceId,
           // The generation just minted, for the writer's CAS (see the web tier).
           spriteInstanceId: handle.spriteInstanceId ?? null,
-          // Null for the same reason as the web tier: this fires on the arms
-          // whose own stamps reset the measurement columns — `create` and
-          // `adopt`.
+          // Null for the same reason as the web tier: this fires on the create
+          // arm, whose own stamps reset the measurement columns.
           lastMeasuredAt: null,
           now: new Date(),
           persist: async ({ spriteInstanceId, measuredBytes, measuredAt }) => {
@@ -243,22 +242,12 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   });
   if (!result.ok) return { ok: false, reason: result.denial ?? result.reason };
 
-  // Opportunistic measurement for a RESUMED session. The provisioning hook above
-  // fires only on the arms that reset the measurement (`create`, `adopt`) and
-  // sees an empty or freshly-replaced disk; this is the moment a shell-only
-  // session — one that never makes a chat tool call, and so never reaches the
-  // web tier's measurement path — is both awake and worth measuring. Throttled
-  // per session, and deliberately not awaited: a billing observation must never
-  // delay opening a shell.
-  //
-  // On the `create` and `adopt` arms this DOUBLES UP with the provisioning hook:
-  // those arms null `storageMeasuredAt` in the same write, so the throttle below
-  // reads null and always fires, and two `du` walks run concurrently on the same
-  // sandbox. Harmless — both carry the same reading, each is capped at 20s, and
-  // neither is awaited — but it is two execs where one would do. Suppressing it
-  // needs the provisioner to report whether it measured, which is a change to
-  // the shared holder core; left alone deliberately rather than raced against
-  // the env-sessions work landing in that file.
+  // Opportunistic measurement for a RESUMED session. The create-arm hook above
+  // only ever sees an empty disk; this is the moment a shell-only session — one
+  // that never makes a chat tool call, and so never reaches the web tier's
+  // measurement path — is both awake and worth measuring. Throttled per session,
+  // and deliberately not awaited: a billing observation must never delay opening
+  // a shell.
   void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
 
   return { ok: true, sandboxId: result.sandboxId };

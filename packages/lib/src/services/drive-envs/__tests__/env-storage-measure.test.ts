@@ -189,11 +189,10 @@ describe('envStorageMeasureSeam', () => {
 
   it('WARNS when the store REFUSES the write — a silent CAS miss is the same NULL row', async () => {
     // The store refuses when the row was torn down or its Sprite generation moved
-    // while the `du` ran (it may take up to the measure timeout, and on the adopt
-    // arm the attached handle's instance can already differ from the one just
-    // written to the row). Refusing is correct — those bytes describe a disk the
-    // row no longer points at — but for an env it leaves no baseline and no second
-    // writer, so it must not be swallowed.
+    // while the `du` ran (it may take up to the measure timeout). Refusing is
+    // correct — those bytes describe a disk the row no longer points at — but for
+    // an env it leaves no baseline and no second writer, so it must not be
+    // swallowed.
     const { store } = makeStore({ casRefuses: true });
 
     await envStorageMeasureSeam(store)({ holderId: 'env-cas', handle: makeHandle({ spriteInstanceId: 'gen-9' }) as never });

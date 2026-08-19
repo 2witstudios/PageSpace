@@ -26,9 +26,8 @@
  * every session bills its empty-disk baseline forever while the watermark
  * advances over whatever it actually wrote. Three writers exist:
  *
- *  - the provisioner's `measureSessionStorage`, on the two arms that reset the
- *    measurement columns (`create` and `adopt`) — a baseline against a disk that
- *    is empty or newly replaced, so useful only as a floor;
+ *  - the provisioner's `measureSessionStorage`, on `create` — a baseline
+ *    against a disk that is empty by definition, so useful only as a floor;
  *  - `measureStorage` on the bash path, fired from `release` AFTER the op;
  *  - the same seam on the git path, likewise post-op — the one that matters
  *    most, since `git_clone` is the largest writer in the system.
