@@ -109,17 +109,26 @@ export function useTaskSubTasks(
   const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
   const statusConfigs = pages?.[0]?.statusConfigs ?? [];
 
+  const hasMore = getSubTasksHasMore(pages);
+
   return {
     subTasks,
     statusConfigs,
-    hasMore: getSubTasksHasMore(pages),
+    hasMore,
     // With the gate shut there is no key, so SWR reports neither loading nor data —
     // report "not loading" rather than leaving a caller spinning forever.
     isLoading: gateOpen && isLoading,
     // A "Load more" click bumps `size` past 1 before the new page resolves into
     // `pages`. `size > 1` keeps the initial load out of this — that one is `isLoading`.
-    isLoadingMore: gateOpen && size > 1 && (pages === undefined || pages.length < size),
+    // The `hasMore` term is what stops this latching on: once the loaded pages end in
+    // hasMore: false, the key function returns null for every further index, so `pages`
+    // can never catch up to an inflated `size` and a bare length comparison would report
+    // "loading more" forever. While a page really is in flight, the last LOADED page still
+    // says hasMore, so this stays true exactly as long as it should.
+    isLoadingMore: gateOpen && size > 1 && hasMore && (pages === undefined || pages.length < size),
     error: error as Error | undefined,
-    loadMore: () => setSize(size + 1),
+    // Functional form: two clicks in the same tick both read the same stale `size` otherwise,
+    // and the second overwrites the first with the same value instead of advancing a page.
+    loadMore: () => setSize((currentSize) => currentSize + 1),
   };
 }

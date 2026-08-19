@@ -256,6 +256,28 @@ describe('useTaskSubTasks', () => {
     });
   });
 
+  it('does not report loading-more forever once the list is exhausted', async () => {
+    // Only one page exists. A caller that calls loadMore anyway (the hook is public API and
+    // does not police it) bumps `size` to 2, but the key function returns null for index 1,
+    // so `pages` can never reach that size. Without the hasMore term this latched on forever.
+    fetchWithAuth.mockResolvedValue(respond(makeBody([makeSubTask('a')], false)));
+
+    const { result } = renderHook(
+      () => useTaskSubTasks({ pageId: 'parent-page', subTaskCount: 1 }),
+      { wrapper: makeWrapper() },
+    );
+    await waitFor(() => expect(result.current.subTasks).toHaveLength(1));
+    await act(async () => { result.current.loadMore(); });
+    await new Promise((r) => setTimeout(r, 0));
+
+    assert({
+      given: 'loadMore called after a page that reported hasMore false',
+      should: 'not be stuck reporting isLoadingMore',
+      actual: { isLoadingMore: result.current.isLoadingMore, requests: fetchWithAuth.mock.calls.length },
+      expected: { isLoadingMore: false, requests: 1 },
+    });
+  });
+
   it('pages through a long sub-task list on demand', async () => {
     fetchWithAuth
       .mockResolvedValueOnce(respond(makeBody([makeSubTask('a')], true)))

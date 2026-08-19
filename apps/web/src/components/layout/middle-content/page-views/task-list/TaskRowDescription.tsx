@@ -21,6 +21,14 @@ export const shouldShowPlaceholder = (pageId: string | null | undefined): boolea
 export const shouldShowSkeleton = (isLoading: boolean, content: string | null): boolean =>
   isLoading && content === null;
 
+/**
+ * `TaskItem.pageId` is nullable, and a task whose linked page is gone has nowhere to navigate
+ * to. Interpolating it anyway yields `/dashboard/{driveId}/null` — a link that looks live and
+ * lands on a dead route. `null` here means "render the row, but not as a link".
+ */
+export const subTaskHref = (driveId: string, pageId: string | null | undefined): string | null =>
+  pageId ? `/dashboard/${driveId}/${pageId}` : null;
+
 export function TaskRowDescription({ task, driveId }: TaskRowDescriptionProps) {
   const { content, isLoading } = usePageContent({
     pageId: task.pageId ?? null,
@@ -30,7 +38,7 @@ export function TaskRowDescription({ task, driveId }: TaskRowDescriptionProps) {
   // Gated on task.subTaskCount inside the hook: a leaf task issues no request at
   // all, which also keeps the route from lazily creating a task_list + 4 status
   // configs for it. See useTaskSubTasks.
-  const { subTasks, hasMore, isLoading: isLoadingSubTasks, isLoadingMore, loadMore } =
+  const { subTasks, hasMore, isLoading: isLoadingSubTasks, isLoadingMore, loadMore, error } =
     useTaskSubTasks(task);
 
   const subTaskCount = task.subTaskCount ?? 0;
@@ -53,22 +61,44 @@ export function TaskRowDescription({ task, driveId }: TaskRowDescriptionProps) {
             <Skeleton className="h-8 w-full" />
           ) : (
             <ul className="space-y-0.5">
-              {subTasks.map((subTask) => (
-                <li key={subTask.id}>
-                  <Link
-                    href={`/dashboard/${driveId}/${subTask.pageId}`}
-                    className="flex items-center gap-1.5 px-1 py-0.5 rounded text-sm hover:bg-muted/60 hover:underline"
-                  >
+              {subTasks.map((subTask) => {
+                const href = subTaskHref(driveId, subTask.pageId);
+                const body = (
+                  <>
                     {subTask.completedAt
                       ? <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       : <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
                     <span className={subTask.completedAt ? 'line-through text-muted-foreground' : ''}>
                       {subTask.title}
                     </span>
-                  </Link>
-                </li>
-              ))}
+                  </>
+                );
+                return (
+                  <li key={subTask.id}>
+                    {href ? (
+                      <Link
+                        href={href}
+                        className="flex items-center gap-1.5 px-1 py-0.5 rounded text-sm hover:bg-muted/60 hover:underline"
+                      >
+                        {body}
+                      </Link>
+                    ) : (
+                      <span className="flex items-center gap-1.5 px-1 py-0.5 rounded text-sm text-muted-foreground">
+                        {body}
+                      </span>
+                    )}
+                  </li>
+                );
+              })}
             </ul>
+          )}
+          {/* The header above has already told the user this task has N sub-tasks. Rendering an
+              empty list under that count when the fetch failed reads as "there are none" — say
+              what actually happened instead. */}
+          {error && (
+            <p className="px-1 text-xs text-muted-foreground italic">
+              Could not load sub-tasks.
+            </p>
           )}
           {hasMore && (
             <Button
