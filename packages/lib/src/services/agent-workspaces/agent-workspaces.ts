@@ -23,11 +23,29 @@ import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import { planSpriteHolderLifecycle, type SpriteHolderLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionDTO } from '../../agent-workspaces/session-contract';
 import { deriveSandboxStatus } from './workspace-status';
-import type { AgentSessionListFilter, AgentSessionRecord, AgentSessionStore } from './agent-workspaces-store';
+import type {
+  AgentSessionListFilter,
+  AgentSessionRecord,
+  AgentSessionStore,
+  DriveEnvSpritePointers,
+} from './agent-workspaces-store';
 
 export interface SpawnAgentSessionDeps {
   store: Pick<AgentSessionStore, 'createIfUnderLimit'>;
   now: () => Date;
+  /**
+   * Resolve the ENVIRONMENT a session is being spawned into — the drive it
+   * belongs to, or null when there is no such env.
+   *
+   * REQUIRED even though a spawn without `envId` never calls it, for the same
+   * reason `maxActiveSessions` is required: an env binding that skipped this
+   * lookup would write an `envId` nothing proved belongs to the caller's
+   * drive, and routing provisioning at that env would put a member's session
+   * onto ANOTHER drive's shared filesystem through an authorization path that
+   * never looked at that drive. A dep cannot be forgotten; a call-site check
+   * can.
+   */
+  findEnv: (envId: string) => Promise<{ driveId: string } | null>;
   /**
    * The most NOT-ENDED sessions this owner may hold. REQUIRED, mirroring
    * `checkConcurrency` in `agent-workspace-sprite.ts`: the ceiling used to be a
@@ -44,7 +62,14 @@ export type SpawnAgentSessionResult =
   /** The drive does not exist (FK refused) or the insert failed outright. */
   | { ok: false; reason: 'spawn_failed'; detail?: string }
   /** The owner is already at `maxActiveSessions` not-ended sessions. */
-  | { ok: false; reason: 'session_limit_reached' };
+  | { ok: false; reason: 'session_limit_reached' }
+  /**
+   * No such environment, OR it belongs to a different drive than the session
+   * being spawned. ONE reason for both, deliberately — the same collapse
+   * `resolveEnvInDrive` makes: a caller who may not see a drive must not learn
+   * from the error which of its envs exist, so both answer 404.
+   */
+  | { ok: false; reason: 'env_not_found' };
 
 /**
  * Spawn a session: mint the workspace row.
@@ -59,25 +84,62 @@ export type SpawnAgentSessionResult =
  *
  * No idempotency and nothing to race: the id is minted here, so two spawns are
  * two sessions, which is precisely what two spawns mean.
+ *
+ * **`envId` binds the session to a persistent ENVIRONMENT**, and the validation
+ * is deliberately three facts and no more: the env exists, it belongs to THIS
+ * session's drive, and the actor passed the drive gate — which the caller has
+ * already established by choosing `driveId` (that is what choosing it IS, the
+ * same rule `listAgentSessions` states about its filter). There is nothing else
+ * to check: envs carry no kind and no substrate, so there is no shape of env
+ * that refuses sessions.
+ *
+ * The drive agreement is what makes that sufficient. `drive_envs.driveId` is NOT
+ * NULL, so requiring `env.driveId === driveId` also refuses a global-assistant
+ * spawn (`driveId === null`) into any env at all — structurally, with no
+ * separate branch — which is the same state
+ * `agent_workspaces_env_needs_drive_check` forbids in the database. A session
+ * that could carry an env and no drive would route work into a drive's shared
+ * filesystem through `decideAgentSessionAccess`, which derives access from
+ * `driveId` alone and would therefore never look at that drive.
+ *
+ * Nothing here touches the env's Sprite: an env provisions LAZILY, on the first
+ * ensure of a session inside it, so spawning into an environment stays as
+ * instant and as free as spawning outside one.
  */
 export async function spawnAgentSession({
   ownerId,
   driveId,
+  envId,
   name,
   deps,
 }: {
   ownerId: string;
   /** null = a global-assistant session (user-scoped, outside any drive). */
   driveId: string | null;
+  /**
+   * The persistent environment to run inside, or null/absent for the ordinary
+   * ephemeral session that owns its own Sprite.
+   */
+  envId?: string | null;
   /** Display label only. Absent leaves it null. */
   name?: string | null;
   deps: SpawnAgentSessionDeps;
 }): Promise<SpawnAgentSessionResult> {
+  const boundEnvId = envId ?? null;
+  if (boundEnvId !== null) {
+    const env = await deps.findEnv(boundEnvId);
+    // Both misses collapse to one answer — see `SpawnAgentSessionResult`. Note
+    // that `driveId === null` can never satisfy this comparison, because
+    // `drive_envs.driveId` is NOT NULL: a global-assistant session is refused
+    // an env here without a branch of its own.
+    if (!env || env.driveId !== driveId) return { ok: false, reason: 'env_not_found' };
+  }
   try {
     const result = await deps.store.createIfUnderLimit({
       ownerId,
       driveId,
       name: name ?? null,
+      envId: boundEnvId,
       now: deps.now(),
       maxActive: deps.maxActiveSessions,
     });
@@ -239,8 +301,21 @@ async function endProvisionedSession({
  * `Date` never crosses the boundary (ISO-8601 strings only — see `contract.ts`),
  * and `name` coalesces to empty rather than null because it is a LABEL: a
  * session with no label still renders, it just renders unlabelled.
+ *
+ * `sandboxStatus` is the one field that is not a projection of this row alone:
+ * an env-bound session's machine belongs to its ENV's row, so the env's
+ * pointers are passed in beside it.
  */
-export function toAgentSessionDTO(row: AgentSessionRecord): AgentSessionDTO {
+export function toAgentSessionDTO(
+  row: AgentSessionRecord,
+  /**
+   * The env's Sprite pointers when `row.envId` is set; `null` otherwise. See
+   * `deriveSandboxStatus` for why this is a required argument rather than an
+   * optional one — an env-bound session's own Sprite columns are permanently
+   * null, so a forgotten argument reports a live machine as `'none'`.
+   */
+  env: DriveEnvSpritePointers | null,
+): AgentSessionDTO {
   return {
     workspaceId: row.id,
     // Rolling-deploy compat, one release only: the same value under the
@@ -250,7 +325,8 @@ export function toAgentSessionDTO(row: AgentSessionRecord): AgentSessionDTO {
     driveId: row.driveId,
     ownerId: row.ownerId,
     name: row.name ?? '',
-    sandboxStatus: deriveSandboxStatus(row),
+    envId: row.envId,
+    sandboxStatus: deriveSandboxStatus(row, env),
     createdAt: row.createdAt.toISOString(),
     lastActiveAt: row.lastActiveAt?.toISOString() ?? null,
     endedAt: row.endedAt?.toISOString() ?? null,
@@ -278,5 +354,8 @@ export async function listAgentSessions({
   deps: ListAgentSessionsDeps;
 }): Promise<AgentSessionDTO[]> {
   const rows = await deps.store.list(filter);
-  return rows.map(toAgentSessionDTO);
+  // The env's pointers ride along on each row (the store's LEFT JOIN), so this
+  // stays ONE query no matter how many of the listed sessions are env-bound —
+  // and never a per-row lookup fired from a projection.
+  return rows.map((row) => toAgentSessionDTO(row, row.env));
 }

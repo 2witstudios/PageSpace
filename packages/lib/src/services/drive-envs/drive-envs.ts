@@ -288,17 +288,19 @@ type TeardownEnvSpriteResult =
  * a concurrent provision may have put a LIVE replacement into this row, and
  * marking that one torn down would hide a billing VM from every pointer there is.
  *
- * **What recovers a crash here, precisely.** For a DELETED env row the reclaim
- * outbox does: the AFTER DELETE trigger parks the pointer and
- * `reconcileOrphanSprites` drains it (source A). For a SURVIVING row it does
- * NOT: that cron's second source enumerates `agent_workspaces` only, and
- * `drive_envs` is not folded into its row sources yet (the schema PR defers that
- * to when envs join the crons). So an env whose kill failed keeps a live VM its
- * own row still points at — nothing is leaked or unbilled — and the retry is the
- * next delete or rebuild, or a plain `ensure`, which resumes the VM and clears
- * the stale intent. Folding envs into the reconciler is the follow-up that makes
- * that automatic; it is deliberately not smuggled into this dark-shipped layer,
- * because it changes the behavior of a cron that is live for sessions today.
+ * **What recovers a crash here, precisely.** Both halves are automatic now. For
+ * a DELETED env row the reclaim outbox does it: the AFTER DELETE trigger parks
+ * the pointer and `reconcileOrphanSprites` drains it (source A). For a SURVIVING
+ * row that cron's holder source does it: `drive_envs` is one of its row sources,
+ * enumerated on exactly the predicate this function leaves behind — a teardown
+ * intent stamped, no confirmation, a sandbox still pointed at — so an env whose
+ * kill failed is retried on the next tick under the same instance-CAS guard a
+ * session gets, rather than waiting for a person to press delete again. (An
+ * earlier cut of this docblock said the opposite, correctly for its release: the
+ * fold landed with the PR that first provisions env Sprites, which is when a
+ * failed env kill became something that could actually happen in production.)
+ * The next delete, rebuild or plain `ensure` still recovers it too — the cron is
+ * a floor under those, not a replacement for them.
  */
 async function teardownEnvSprite({
   envId,

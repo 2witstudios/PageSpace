@@ -19,7 +19,11 @@ import type {
   SandboxStreamSessionInfo,
 } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
-import type { AgentSessionRecord, AgentSessionStore } from '../agent-workspaces-store';
+import type {
+  AgentSessionRecord,
+  AgentSessionStore,
+  DriveEnvSpritePointers,
+} from '../agent-workspaces-store';
 import { stampColumns } from '../agent-workspaces-store';
 import { planSessionReopen } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
@@ -66,6 +70,12 @@ export interface FakeAgentSessionStore {
   calls: { create: number; updateSpriteIdentity: number };
   /** conversationId → workspaceId, modelling the chat-bound node that IS membership. */
   conversationBindings: Map<string, string>;
+  /**
+   * envId → the env row's Sprite pointers, modelling what the real `list()`
+   * LEFT JOINs off `drive_envs`. An `envId` with no entry here models an env
+   * that vanished under the query — the same null the join yields.
+   */
+  envSprites: Map<string, DriveEnvSpritePointers>;
 }
 
 export function makeAgentSessionStore(
@@ -78,6 +88,7 @@ export function makeAgentSessionStore(
   const reclaims = new Map<string, string | null>();
   const calls = { create: 0, updateSpriteIdentity: 0 };
   const conversationBindings = new Map<string, string>();
+  const envSprites = new Map<string, DriveEnvSpritePointers>();
   let minted = 0;
 
   const store: AgentSessionStore = {
@@ -101,6 +112,7 @@ export function makeAgentSessionStore(
         ownerId: input.ownerId,
         driveId: input.driveId,
         name: input.name,
+        envId: input.envId,
         storageLastBilledAt: input.now,
         createdAt: input.now,
         updatedAt: input.now,
@@ -109,7 +121,7 @@ export function makeAgentSessionStore(
       return row;
     },
 
-    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+    async createIfUnderLimit({ ownerId, driveId, name, envId, now, maxActive }) {
       const activeCount = [...rows.values()].filter((row) => row.ownerId === ownerId && row.endedAt === null).length;
       if (activeCount >= maxActive) return { ok: false, reason: 'limit_reached' };
       calls.create += 1;
@@ -119,6 +131,7 @@ export function makeAgentSessionStore(
         ownerId,
         driveId,
         name,
+        envId,
         storageLastBilledAt: now,
         createdAt: now,
         updatedAt: now,
@@ -156,7 +169,10 @@ export function makeAgentSessionStore(
           if (aAt !== bAt) return bAt - aAt;
           return b.createdAt.getTime() - a.createdAt.getTime();
         })
-        .slice(0, MAX_ACTIVE_WORKSPACES_PER_OWNER);
+        .slice(0, MAX_ACTIVE_WORKSPACES_PER_OWNER)
+        // The real store's LEFT JOIN, modelled: an env-bound row carries its
+        // env's pointers, an ordinary row carries null.
+        .map((row) => ({ ...row, env: row.envId === null ? null : (envSprites.get(row.envId) ?? null) }));
     },
 
     async countActive(ownerId) {
@@ -263,7 +279,7 @@ export function makeAgentSessionStore(
     },
   };
 
-  return { store, rows, reclaims, calls, conversationBindings };
+  return { store, rows, reclaims, calls, conversationBindings, envSprites };
 }
 
 export interface FakeSpriteHost {

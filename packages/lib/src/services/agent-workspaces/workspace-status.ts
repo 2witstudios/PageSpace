@@ -29,6 +29,7 @@
  */
 
 import type { SandboxStatus } from '../../agent-workspaces/session-contract';
+import type { DriveEnvSpritePointers } from './agent-workspaces-store';
 
 /** The only columns the status depends on — so any row shape can be classified. */
 export interface SandboxStatusColumns {
@@ -37,8 +38,48 @@ export interface SandboxStatusColumns {
   endedAt: Date | null;
 }
 
-export function deriveSandboxStatus(row: SandboxStatusColumns): SandboxStatus {
+/**
+ * An ENV-BOUND session reads its sandbox off the ENV's row, and this is the
+ * whole of the difference.
+ *
+ * Such a session is CHECK-forbidden from holding Sprite pointers of its own
+ * (`agent_workspaces_env_no_sprite_check`), so its own three columns say
+ * "never provisioned" for its entire life no matter how live the machine it is
+ * working on. Passing the env's pointers switches the reading to the row that
+ * actually owns the VM.
+ *
+ * Two mappings are deliberate:
+ *
+ *  - **The session's `endedAt` still wins.** Ending a session is a fact about
+ *    the session, and it is the only way an env-bound row can read `'ended'` —
+ *    its `spriteTornDownAt` is structurally null.
+ *  - **A torn-down ENV reads `'none'`, never `'ended'`.** `deriveDriveEnvStatus`
+ *    calls that state `'stopped'`, but there is no such session status, and
+ *    `'ended'` would tell the sidebar a live session had finished because
+ *    somebody rebuilt the machine under it. `'none'` says what is actually
+ *    true for the session: no live sandbox, and the next ensure provisions one
+ *    — behaviorally identical to a session that never touched a Sprite.
+ */
+export function deriveSandboxStatus(
+  row: SandboxStatusColumns,
+  /**
+   * The env's Sprite pointers when this session is env-bound; `null` for an
+   * ordinary session that owns its own Sprite. An env-bound session whose env
+   * could not be read (a delete racing the listing) also passes null, and
+   * reads `'none'` — a machine we cannot see is not one to report as running.
+   *
+   * REQUIRED rather than optional, and that is the point: a default would let
+   * a caller holding an env-bound row silently fall through to that row's
+   * permanently-null Sprite columns and report a running machine as `'none'`.
+   * A parameter that has to be answered makes every reader of a session say
+   * which row they mean.
+   */
+  env: DriveEnvSpritePointers | null,
+): SandboxStatus {
   if (row.spriteTornDownAt !== null || row.endedAt !== null) return 'ended';
+  if (env !== null) {
+    return env.spriteTornDownAt === null && env.sandboxId !== null ? 'running' : 'none';
+  }
   if (row.sandboxId !== null) return 'running';
   return 'none';
 }

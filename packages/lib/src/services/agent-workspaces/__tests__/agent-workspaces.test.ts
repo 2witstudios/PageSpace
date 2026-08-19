@@ -32,6 +32,9 @@ function makeSpawnDeps(
     store: store.store,
     now: () => NOW,
     maxActiveSessions: 100,
+    // No env exists unless a test declares one — a spawn that passes `envId`
+    // against this default is refused, which is the behavior under test.
+    findEnv: async () => null,
     ...over,
   };
 }
@@ -365,6 +368,9 @@ describe('end then ensure — the same session key comes back', () => {
         authorize: async () => ({ ok: true }),
         checkFullEgressEnablement: async () => ({ ok: true }),
         checkConcurrency: async () => ({ allowed: true }),
+        ensureEnvSandbox: async () => {
+          throw new Error('ensureEnvSandbox called for an ephemeral session');
+        },
         now: () => NOW,
       },
     });
@@ -382,36 +388,174 @@ describe('end then ensure — the same session key comes back', () => {
 
 describe('toAgentSessionDTO', () => {
   it('should address the session by its OWN id and carry its drive', () => {
-    const dto = toAgentSessionDTO(makeSessionRecord());
+    const dto = toAgentSessionDTO(makeSessionRecord(), null);
     expect(dto.workspaceId).toBe(SESSION_ID);
     expect(Object.keys(dto)).not.toContain('conversationId');
   });
 
   it('should emit ISO timestamps, never Date objects', () => {
-    const dto = toAgentSessionDTO(makeSessionRecord({ lastActiveAt: NOW, endedAt: NOW }));
+    const dto = toAgentSessionDTO(makeSessionRecord({ lastActiveAt: NOW, endedAt: NOW }), null);
     expect(dto.createdAt).toBe(NOW.toISOString());
     expect(dto.lastActiveAt).toBe(NOW.toISOString());
     expect(dto.endedAt).toBe(NOW.toISOString());
   });
 
   it('should satisfy the shared contract schema', () => {
-    expect(() => agentSessionDtoSchema.parse(toAgentSessionDTO(makeSessionRecord()))).not.toThrow();
+    expect(() => agentSessionDtoSchema.parse(toAgentSessionDTO(makeSessionRecord(), null))).not.toThrow();
     expect(() =>
       agentSessionDtoSchema.parse(
-        toAgentSessionDTO(makeSessionRecord({ driveId: null, name: 'labelled', sandboxId: SESSION_KEY })),
+        toAgentSessionDTO(makeSessionRecord({ driveId: null, name: 'labelled', sandboxId: SESSION_KEY }), null),
       ),
     ).not.toThrow();
   });
 
   it('given an unlabelled session, should report an empty label rather than null', () => {
-    expect(toAgentSessionDTO(makeSessionRecord({ name: null })).name).toBe('');
+    expect(toAgentSessionDTO(makeSessionRecord({ name: null }), null).name).toBe('');
   });
 
   it('should derive the sandbox status from the row', () => {
-    expect(toAgentSessionDTO(makeSessionRecord()).sandboxStatus).toBe('none');
-    expect(toAgentSessionDTO(makeSessionRecord({ sandboxId: SESSION_KEY })).sandboxStatus).toBe('running');
+    expect(toAgentSessionDTO(makeSessionRecord(), null).sandboxStatus).toBe('none');
+    expect(toAgentSessionDTO(makeSessionRecord({ sandboxId: SESSION_KEY }), null).sandboxStatus).toBe('running');
     expect(
-      toAgentSessionDTO(makeSessionRecord({ sandboxId: SESSION_KEY, spriteTornDownAt: NOW })).sandboxStatus,
+      toAgentSessionDTO(makeSessionRecord({ sandboxId: SESSION_KEY, spriteTornDownAt: NOW }), null).sandboxStatus,
+    ).toBe('ended');
+  });
+});
+
+/**
+ * Sessions INSIDE an environment — the spawn half.
+ *
+ * What is being pinned is the validation being exactly three facts (env exists,
+ * env is in this session's drive, and the actor already passed the drive gate by
+ * choosing the drive) and no more. Under-checking would let a member bind a
+ * session to another drive's shared filesystem; over-checking is how a refusal
+ * the product does not have gets invented.
+ */
+describe('spawnAgentSession — inside an environment', () => {
+  const ENV_ID = 'env-1';
+  const envInDrive = { findEnv: async () => ({ driveId: DRIVE_ID }) };
+
+  it('given an env in the session\'s drive, should bind the session to it and STILL provision nothing', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, envInDrive),
+    });
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.envId).toBe(ENV_ID);
+    // The env's Sprite is minted LAZILY, on the first ensure — spawning into an
+    // environment stays as instant and free as spawning outside one.
+    expect(result.session.sandboxId).toBeNull();
+    expect(result.session.spriteKey).toBeNull();
+  });
+
+  it('given no such env, should refuse rather than mint a row pointing at nothing', async () => {
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, { findEnv: async () => null }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(store.calls.create).toBe(0);
+  });
+
+  it('given an env in ANOTHER drive, should refuse under the SAME reason — the drive gate is the whole authorization', async () => {
+    // The actor passed the gate for THIS drive by choosing it; nothing proved
+    // anything about the other one. Answering `env_not_found` rather than a
+    // distinct "wrong drive" keeps a caller who cannot see that drive from
+    // enumerating its environments through spawn errors.
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-other' }) }),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(store.calls.create).toBe(0);
+  });
+
+  it('given a GLOBAL-assistant spawn, should refuse an env with no branch of its own — drive_envs.driveId is NOT NULL', async () => {
+    // A row with an env and no drive is what `agent_workspaces_env_needs_drive_check`
+    // forbids, and it would route work into a drive's shared filesystem through
+    // an access path (`decideAgentSessionAccess`) that only ever reads driveId.
+    const store = makeAgentSessionStore();
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: null,
+      envId: ENV_ID,
+      deps: makeSpawnDeps(store, envInDrive),
+    });
+
+    expect(result).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(store.calls.create).toBe(0);
+  });
+
+  it('given no envId, should never consult the env lookup at all', async () => {
+    const store = makeAgentSessionStore();
+    let looked = 0;
+    const result = await spawnAgentSession({
+      ownerId: OWNER_ID,
+      driveId: DRIVE_ID,
+      deps: makeSpawnDeps(store, {
+        findEnv: async () => {
+          looked += 1;
+          return null;
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(looked).toBe(0);
+    if (!result.ok) return;
+    expect(result.session.envId).toBeNull();
+  });
+});
+
+describe('toAgentSessionDTO — env-bound sessions', () => {
+  const ENV_ID = 'env-1';
+
+  it('should carry envId on the wire, so a client can group sessions by the filesystem they share', () => {
+    const dto = toAgentSessionDTO(makeSessionRecord({ envId: ENV_ID }), null);
+    expect(dto.envId).toBe(ENV_ID);
+    expect(agentSessionDtoSchema.safeParse(dto).success).toBe(true);
+    expect(toAgentSessionDTO(makeSessionRecord(), null).envId).toBeNull();
+  });
+
+  it('should read the sandbox status off the ENV\'s row, not the session\'s permanently-null columns', () => {
+    const row = makeSessionRecord({ envId: ENV_ID });
+    expect(
+      toAgentSessionDTO(row, { sandboxId: 'pgs-env-abc', spriteTornDownAt: null }).sandboxStatus,
+    ).toBe('running');
+    expect(toAgentSessionDTO(row, { sandboxId: null, spriteTornDownAt: null }).sandboxStatus).toBe('none');
+  });
+
+  it('given the ENV\'s machine was torn down, should report none — not ended, which is a fact about the SESSION', () => {
+    // A rebuild or reclaim under a live session must not make the sidebar say
+    // the user's session finished. There is no live sandbox; the next ensure
+    // makes one.
+    const dto = toAgentSessionDTO(makeSessionRecord({ envId: ENV_ID }), {
+      sandboxId: 'pgs-env-abc',
+      spriteTornDownAt: NOW,
+    });
+    expect(dto.sandboxStatus).toBe('none');
+    expect(dto.endedAt).toBeNull();
+  });
+
+  it('given the SESSION itself ended, should report ended whatever the env is doing', () => {
+    expect(
+      toAgentSessionDTO(makeSessionRecord({ envId: ENV_ID, endedAt: NOW }), {
+        sandboxId: 'pgs-env-abc',
+        spriteTornDownAt: null,
+      }).sandboxStatus,
     ).toBe('ended');
   });
 });
@@ -449,6 +593,30 @@ describe('listAgentSessions', () => {
     const byId = new Map(sessions.map((session) => [session.workspaceId, session.sandboxStatus]));
     expect(byId.get('ses-a')).toBe('running');
     expect(byId.get('ses-c')).toBe('none');
+  });
+
+  it('given env-bound sessions, should report the ENV\'s status for each — one query, no per-row lookup', async () => {
+    // Two sessions in one environment are two windows onto one machine, so
+    // both must read `running` off that machine's row while their own Sprite
+    // columns stay null forever.
+    const store = makeAgentSessionStore([
+      makeSessionRecord({ id: 'ses-env-a', envId: 'env-1' }),
+      makeSessionRecord({ id: 'ses-env-b', envId: 'env-1' }),
+      makeSessionRecord({ id: 'ses-env-stopped', envId: 'env-2' }),
+      makeSessionRecord({ id: 'ses-plain' }),
+    ]);
+    store.envSprites.set('env-1', { sandboxId: 'pgs-env-live', spriteTornDownAt: null });
+    store.envSprites.set('env-2', { sandboxId: 'pgs-env-dead', spriteTornDownAt: NOW });
+
+    const sessions = await listAgentSessions({ filter: { driveId: DRIVE_ID }, deps: { store: store.store } });
+    const byId = new Map(sessions.map((session) => [session.workspaceId, session]));
+
+    expect(byId.get('ses-env-a')!.sandboxStatus).toBe('running');
+    expect(byId.get('ses-env-b')!.sandboxStatus).toBe('running');
+    expect(byId.get('ses-env-a')!.envId).toBe('env-1');
+    expect(byId.get('ses-env-stopped')!.sandboxStatus).toBe('none');
+    expect(byId.get('ses-plain')!.sandboxStatus).toBe('none');
+    expect(byId.get('ses-plain')!.envId).toBeNull();
   });
 
   it('given no sessions, should return an empty list rather than fail', async () => {

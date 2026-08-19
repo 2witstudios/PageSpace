@@ -30,7 +30,9 @@ import {
   SESSION_STORAGE_MEASUREMENT_THROTTLE_MS,
 } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
-import type { SandboxHandle, SandboxHost } from '@pagespace/lib/services/sandbox/sandbox-host';
+import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
+import { getSandboxHost } from './sandbox-host-runtime';
+import { ensureEnvSandboxForSession, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   decideFullEgressEnablement,
@@ -131,36 +133,10 @@ export function getAgentSessionStore(): Promise<AgentSessionStore> {
   return sessionStorePromise;
 }
 
-// The Fly Sprites driver is loaded via a DYNAMIC import, never a static one —
-// @fly/sprites is ESM-only and @pagespace/lib compiles to CJS (see
-// sandbox-tools-runtime.ts for the full rationale). Fail CLOSED with an
-// actionable message on a pre-Node-24 runtime, and never memoize a rejection.
-const MIN_SANDBOX_NODE_MAJOR = 24;
-
-function assertSandboxRuntime(): void {
-  const major = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
-  if (Number.isNaN(major) || major < MIN_SANDBOX_NODE_MAJOR) {
-    throw new Error(
-      `Agent sessions require Node.js >= ${MIN_SANDBOX_NODE_MAJOR} ` +
-        `(the @fly/sprites SDK is Node ${MIN_SANDBOX_NODE_MAJOR}+ / ESM-only); ` +
-        `this process is Node ${process.versions.node}.`,
-    );
-  }
-}
-
-let machineHostPromise: Promise<SandboxHost> | null = null;
-
-export function getSandboxHost(): Promise<SandboxHost> {
-  machineHostPromise ??= (async () => {
-    assertSandboxRuntime();
-    const { createProductionSandboxHost } = await import('@/lib/sandbox/sprites-client');
-    return createProductionSandboxHost();
-  })().catch((error) => {
-    machineHostPromise = null;
-    throw error;
-  });
-  return machineHostPromise;
-}
+// The Sprites host now lives in `sandbox-host-runtime.ts` — see that module for
+// why (both Sprite-holder runtimes need it, and this one needs the env runtime,
+// which would make the pair a cycle). Re-exported so its importers do not churn.
+export { getSandboxHost };
 
 // ---------------------------------------------------------------------------
 // Row-fact lookups (null-plumbing only)
@@ -790,14 +766,26 @@ export async function countOpenConversationsForSession(workspaceId: string): Pro
 export async function spawnSession(input: {
   userId: string;
   driveId: string | null;
+  /** The persistent environment to run inside, or null for the ordinary ephemeral session. */
+  envId?: string | null;
   name?: string | null;
 }): Promise<SpawnAgentSessionResult> {
   const store = await getAgentSessionStore();
   return spawnAgentSession({
     ownerId: input.userId,
     driveId: input.driveId,
+    envId: input.envId,
     name: input.name,
-    deps: { store, now: () => new Date(), maxActiveSessions: MAX_ACTIVE_WORKSPACES_PER_OWNER },
+    deps: {
+      store,
+      now: () => new Date(),
+      maxActiveSessions: MAX_ACTIVE_WORKSPACES_PER_OWNER,
+      // The env's own drive, for the service's `env.driveId === driveId`
+      // check. Deliberately NOT `resolveEnvInDrive`: that helper asks a
+      // question the service is asking, and answering it twice in two places
+      // is how the two answers come to differ.
+      findEnv: async (envId) => (await getDriveEnvStore()).findById(envId),
+    },
   });
 }
 
@@ -1189,6 +1177,11 @@ export async function provisionSessionSandbox(
       // `storageMeasuredBytes` and prices every session at the never-measured
       // 0 floor while still advancing its watermark, silently discarding the
       // interval. Fire-and-forget inside the seam; throttled per session.
+      // An env-bound session provisions its ENV instead of itself — the router
+      // is inside the shared `ensureAgentSessionSandbox`, so this seam is the
+      // only thing this call site has to supply for it.
+      ensureEnvSandbox: ({ envId, intent }) =>
+        ensureEnvSandboxForSession({ envId, intent, requesterId }),
       measureSessionStorage: async ({ workspaceId, handle }) => {
         await refreshSessionStorageMeasurement({
           handle,
@@ -1334,6 +1327,27 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
 export async function listSessions(filter: AgentSessionListFilter): Promise<AgentSessionDTO[]> {
   const store = await getAgentSessionStore();
   return listAgentSessions({ filter, deps: { store } });
+}
+
+/**
+ * One session's wire DTO, with its env's Sprite pointers resolved.
+ *
+ * The single-row counterpart of the listing's LEFT JOIN. `sandboxStatus` is a
+ * reading of whichever row owns the machine — the session's own for an ordinary
+ * session, the ENV's for an env-bound one — so a route that answers with a
+ * session must resolve the env before projecting it, or it reports every live
+ * environment as `'none'` (the session's own Sprite columns being
+ * CHECK-forbidden to hold anything).
+ *
+ * Async for the env-bound case only: an ordinary session issues no query at all.
+ */
+export async function toSessionDTOWithEnv(row: AgentSessionRecord): Promise<AgentSessionDTO> {
+  if (row.envId === null) return toAgentSessionDTO(row, null);
+  const env = await (await getDriveEnvStore()).findById(row.envId);
+  // A null env is a delete racing this read, not a state: the FK cascades, so
+  // the session row is on its way out too. Reporting `'none'` says the only
+  // honest thing — there is no machine here that we can see.
+  return toAgentSessionDTO(row, env);
 }
 
 export { toAgentSessionDTO };

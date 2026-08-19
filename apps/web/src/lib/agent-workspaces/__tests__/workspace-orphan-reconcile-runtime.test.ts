@@ -23,12 +23,24 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-vi.mock('./../agent-workspaces-runtime', () => ({
+vi.mock('./../sandbox-host-runtime', () => ({
   getSandboxHost: async () => ({ kill: (...args: unknown[]) => mockKill(...args) }),
+}));
+
+vi.mock('./../agent-workspaces-runtime', () => ({
   getAgentSessionStore: async () => ({
     stampSpriteTornDown: (...args: unknown[]) => mockStampSpriteTornDown(...args),
     enqueueReclaim: (...args: unknown[]) => mockEnqueueReclaim(...args),
     findById: async () => null,
+  }),
+}));
+
+const mockEnvStampSpriteTornDown = vi.fn();
+const mockEnvFindById = vi.fn(async () => null as unknown);
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
+  getDriveEnvStore: async () => ({
+    stampSpriteTornDown: (...args: unknown[]) => mockEnvStampSpriteTornDown(...args),
+    findById: (...args: unknown[]) => mockEnvFindById(...(args as [])),
   }),
 }));
 
@@ -94,13 +106,14 @@ describe('killSprite', () => {
   });
 });
 
-describe('markSessionTornDown', () => {
+describe('markHolderTornDown', () => {
   beforeEach(() => vi.clearAllMocks());
 
   it('should stamp under the store CAS so a re-provisioned live VM is never marked dead', async () => {
     mockStampSpriteTornDown.mockResolvedValueOnce(true);
 
-    const result = await deps.markSessionTornDown({
+    const result = await deps.markHolderTornDown({
+      kind: 'agent-session',
       workspaceId: 'conv-1',
       sandboxId: 'sbx-1',
       spriteInstanceId: 'i-1',
@@ -112,10 +125,35 @@ describe('markSessionTornDown', () => {
     expect(call[0].stamps.spriteTornDownAt).toBeInstanceOf(Date);
   });
 
+  it('given a drive-env row, should stamp the ENV store under the same instance CAS', async () => {
+    // The one place this cron knows there are two holder tables. An env row
+    // stamped through the SESSION store would silently no-op — a live VM left
+    // billing with a teardown request nothing ever clears.
+    mockEnvStampSpriteTornDown.mockResolvedValueOnce(true);
+
+    const result = await deps.markHolderTornDown({
+      kind: 'drive-env',
+      envId: 'env-1',
+      sandboxId: 'pgs-env-1',
+      spriteInstanceId: 'i-1',
+    });
+
+    expect(result).toBe(true);
+    expect(mockStampSpriteTornDown).not.toHaveBeenCalled();
+    const [call] = mockEnvStampSpriteTornDown.mock.calls;
+    expect(call[0]).toMatchObject({ envId: 'env-1', sandboxId: 'pgs-env-1', spriteInstanceId: 'i-1' });
+    expect(call[0].stamps.spriteTornDownAt).toBeInstanceOf(Date);
+  });
+
   it('given the CAS loses to a concurrent re-provision, should report false', async () => {
     mockStampSpriteTornDown.mockResolvedValueOnce(false);
     expect(
-      await deps.markSessionTornDown({ workspaceId: 'conv-1', sandboxId: 'sbx-1', spriteInstanceId: 'i-1' }),
+      await deps.markHolderTornDown({
+        kind: 'agent-session',
+        workspaceId: 'conv-1',
+        sandboxId: 'sbx-1',
+        spriteInstanceId: 'i-1',
+      }),
     ).toBe(false);
   });
 });
@@ -132,17 +170,79 @@ describe('chaseReclaimInstance', () => {
   });
 });
 
+describe('isTeardownStillRequested', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('given a drive-env row, should re-read the ENV row rather than look for a session that does not exist', async () => {
+    mockEnvFindById.mockResolvedValueOnce({ teardownRequestedAt: new Date(), spriteTornDownAt: null });
+    expect(
+      await deps.isTeardownStillRequested({
+        kind: 'drive-env',
+        envId: 'env-1',
+        sandboxId: 'pgs-env-1',
+        spriteInstanceId: 'i-1',
+      }),
+    ).toBe(true);
+  });
+
+  it('given an env REVIVED since listing, should refuse the kill', async () => {
+    // A session opening in this environment re-provisions it and clears the
+    // intent. Destroying that filesystem is the one irreversible mistake here —
+    // and it is SHARED, so worse for an env than for a session.
+    mockEnvFindById.mockResolvedValueOnce({ teardownRequestedAt: null, spriteTornDownAt: null });
+    expect(
+      await deps.isTeardownStillRequested({
+        kind: 'drive-env',
+        envId: 'env-1',
+        sandboxId: 'pgs-env-1',
+        spriteInstanceId: 'i-1',
+      }),
+    ).toBe(false);
+  });
+
+  it('given a vanished env row, should refuse the kill — the AFTER DELETE trigger owns that pointer now', async () => {
+    mockEnvFindById.mockResolvedValueOnce(null);
+    expect(
+      await deps.isTeardownStillRequested({
+        kind: 'drive-env',
+        envId: 'env-1',
+        sandboxId: 'pgs-env-1',
+        spriteInstanceId: 'i-1',
+      }),
+    ).toBe(false);
+  });
+});
+
 describe('listOrphanCandidates', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('should return both sources, tagged by kind', async () => {
+  const reclaimRow = { sandboxId: 'sbx-reclaim', spriteInstanceId: 'i-r' };
+  const sessionRow = {
+    workspaceId: 'conv-1',
+    sandboxId: 'sbx-session',
+    spriteInstanceId: 'i-s',
+    teardownRequestedAt: new Date(),
+  };
+  const envRow = {
+    envId: 'env-1',
+    sandboxId: 'pgs-env-1',
+    spriteInstanceId: 'i-e',
+    teardownRequestedAt: new Date(),
+  };
+
+  /** The three sources, in the order `Promise.allSettled` receives them. */
+  function stubSources(reclaim: unknown, session: unknown, env: unknown) {
     mockSelect
-      .mockImplementationOnce(selectResolving([{ sandboxId: 'sbx-reclaim', spriteInstanceId: 'i-r' }]))
-      .mockImplementationOnce(
-        selectResolving([
-          { workspaceId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s', teardownRequestedAt: new Date() },
-        ]),
-      );
+      .mockImplementationOnce(reclaim as () => unknown)
+      .mockImplementationOnce(session as () => unknown)
+      .mockImplementationOnce(env as () => unknown);
+  }
+
+  it('should return all THREE sources, tagged by kind', async () => {
+    // The env source is the whole point of the fold: before it, a `drive_envs`
+    // row whose kill failed was retried only by the next delete, rebuild or
+    // ensure — which is to say, by a person.
+    stubSources(selectResolving([reclaimRow]), selectResolving([sessionRow]), selectResolving([envRow]));
 
     const { rows, capped, incomplete } = await deps.listOrphanCandidates();
 
@@ -151,49 +251,49 @@ describe('listOrphanCandidates', () => {
     expect(rows).toEqual([
       { kind: 'reclaim', sandboxId: 'sbx-reclaim', spriteInstanceId: 'i-r' },
       { kind: 'agent-session', workspaceId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s' },
+      { kind: 'drive-env', envId: 'env-1', sandboxId: 'pgs-env-1', spriteInstanceId: 'i-e' },
     ]);
   });
 
-  it('given the reclaim-outbox query fails, should still return the session candidates', async () => {
-    // The two sources are independent; one degraded query must not park every
+  it('given the reclaim-outbox query fails, should still return the other candidates', async () => {
+    // The sources are independent; one degraded query must not park every
     // reclaim, because those are billing VMs nobody is using.
-    mockSelect
-      .mockImplementationOnce(selectRejecting('outbox unreachable'))
-      .mockImplementationOnce(
-        selectResolving([
-          { workspaceId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s', teardownRequestedAt: new Date() },
-        ]),
-      );
+    stubSources(selectRejecting('outbox unreachable'), selectResolving([sessionRow]), selectResolving([envRow]));
 
     const { rows, incomplete } = await deps.listOrphanCandidates();
 
-    expect(rows).toEqual([
-      { kind: 'agent-session', workspaceId: 'conv-1', sandboxId: 'sbx-session', spriteInstanceId: 'i-s' },
-    ]);
+    expect(rows.map((row) => row.kind)).toEqual(['agent-session', 'drive-env']);
     // Reported, not swallowed: a source that fails every tick would otherwise
     // produce a clean-looking run while its Sprites bill indefinitely.
     expect(incomplete).toBe(true);
   });
 
-  it('given the session-row query fails, should still return the outbox candidates', async () => {
-    mockSelect
-      .mockImplementationOnce(selectResolving([{ sandboxId: 'sbx-reclaim', spriteInstanceId: null }]))
-      .mockImplementationOnce(selectRejecting('sessions unreachable'));
+  it('given the session-row query fails, should still return the other candidates', async () => {
+    stubSources(selectResolving([reclaimRow]), selectRejecting('sessions unreachable'), selectResolving([envRow]));
 
     const { rows, incomplete } = await deps.listOrphanCandidates();
 
-    expect(rows).toEqual([{ kind: 'reclaim', sandboxId: 'sbx-reclaim', spriteInstanceId: null }]);
+    expect(rows.map((row) => row.kind)).toEqual(['reclaim', 'drive-env']);
     expect(incomplete).toBe(true);
   });
 
-  it('given more rows than the cap, should truncate and report the backlog', async () => {
+  it('given the drive-env query fails, should still return the other candidates', async () => {
+    stubSources(selectResolving([reclaimRow]), selectResolving([sessionRow]), selectRejecting('envs unreachable'));
+
+    const { rows, incomplete } = await deps.listOrphanCandidates();
+
+    expect(rows.map((row) => row.kind)).toEqual(['reclaim', 'agent-session']);
+    expect(incomplete).toBe(true);
+  });
+
+  it('given more rows than the cap in ANY source, should truncate and report the backlog', async () => {
     const overflow = Array.from({ length: MAX_CANDIDATES_PER_TABLE + 1 }, (_, i) => ({
-      sandboxId: `sbx-${i}`,
+      envId: `env-${i}`,
+      sandboxId: `pgs-env-${i}`,
       spriteInstanceId: null,
+      teardownRequestedAt: new Date(),
     }));
-    mockSelect
-      .mockImplementationOnce(selectResolving(overflow))
-      .mockImplementationOnce(selectResolving([]));
+    stubSources(selectResolving([]), selectResolving([]), selectResolving(overflow));
 
     const { rows, capped } = await deps.listOrphanCandidates();
 

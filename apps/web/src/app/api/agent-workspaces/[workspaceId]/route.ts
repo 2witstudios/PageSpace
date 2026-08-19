@@ -47,7 +47,7 @@ import {
   endSession,
   findSessionRecord,
   provisionSessionSandbox,
-  toAgentSessionDTO,
+  toSessionDTOWithEnv,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { canRunCodeForSession } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 
@@ -124,7 +124,7 @@ export async function GET(request: Request, context: RouteContext) {
   // it discloses nothing the caller could not learn by pressing the button.
   const endAccess = await checkSessionEndAccess(auth.userId, workspaceId);
   return NextResponse.json({
-    session: toAgentSessionDTO(row),
+    session: await toSessionDTOWithEnv(row),
     sandboxEligible,
     canEndSession: endAccess.allowed,
   });
@@ -190,7 +190,7 @@ export async function POST(request: Request, context: RouteContext) {
     // server-side inconsistency, not a client-addressable state.
     return NextResponse.json({ error: 'Failed to load the session' }, { status: 500 });
   }
-  return NextResponse.json({ session: toAgentSessionDTO(row) });
+  return NextResponse.json({ session: await toSessionDTOWithEnv(row) });
 }
 
 export async function DELETE(request: Request, context: RouteContext) {

@@ -26,10 +26,22 @@
  *     Rows leave the outbox only on a CONFIRMED kill, so a failure is retried
  *     forever rather than forgotten.
  *
- * (B) SESSION ROWS WHOSE TEARDOWN WAS REQUESTED BUT NEVER CONFIRMED — the row
+ * (B) HOLDER ROWS WHOSE TEARDOWN WAS REQUESTED BUT NEVER CONFIRMED — the row
  *     still exists, so nothing cascaded and the outbox never saw it.
  *     `endAgentSession` stamps `teardownRequestedAt` BEFORE it kills, so a failed
  *     kill (or a process that died mid-teardown) is reclaimable on the next tick.
+ *
+ *     **Both Sprite-holder kinds belong to this source**, not just sessions.
+ *     `drive_envs` rows carry the same three pointer columns and the same
+ *     intent-before-kill contract (`deleteDriveEnv` and `rebuildDriveEnv` both
+ *     stamp `teardownRequestedAt` and then abort on a kill they cannot confirm),
+ *     so an env whose kill failed is a live VM its own surviving row still
+ *     points at. Before envs were folded in here, the only retry was the next
+ *     delete, rebuild or ensure — which is to say, a person. A holder row is a
+ *     holder row: the guards below (re-read the intent, CAS on the instance)
+ *     apply to it unchanged, and the ONLY thing that differs is which store the
+ *     runtime dispatches to, which is why the deps below take the ROW rather
+ *     than an id.
  *
  * **`teardownRequestedAt` IS REQUIRED for (B), and that requirement is the whole
  * safety story.** A `host.kill` is an IRREVERSIBLE DESTROY — the VM's filesystem
@@ -46,7 +58,7 @@
  * restore guards:
  *   1. `isTeardownStillRequested` is re-read immediately BEFORE the kill, so a
  *      session revived since listing is skipped entirely.
- *   2. `markSessionTornDown` is a COMPARE-AND-SWAP conditional on the row still
+ *   2. `markHolderTornDown` is a COMPARE-AND-SWAP conditional on the row still
  *      pointing at the INSTANCE we killed. If a revive commits between the check
  *      and the write, the write no-ops rather than marking a LIVE Sprite dead —
  *      which would hide it from this reconciler AND from every other pointer,
@@ -86,7 +98,26 @@ export type SpriteOrphanRow =
    * deleting it would break the conversation's link to the sandbox it owned — so
    * the release is a STAMP, never a delete.
    */
-  | { kind: 'agent-session'; workspaceId: string; sandboxId: string; spriteInstanceId: string | null };
+  | { kind: 'agent-session'; workspaceId: string; sandboxId: string; spriteInstanceId: string | null }
+  /**
+   * A `drive_envs` row whose teardown was REQUESTED but never confirmed.
+   *
+   * The same shape and the same release for the same reason: an env row outlives
+   * its machine BY DESIGN (that is what makes an environment an environment), so
+   * this is a stamp too. An env that never had a session in it is not a
+   * candidate and never will be — the intent stamp is the whole licence, and
+   * nothing stamps it but an explicit delete or rebuild.
+   */
+  | { kind: 'drive-env'; envId: string; sandboxId: string; spriteInstanceId: string | null };
+
+/**
+ * The two HOLDER sources — everything that is not the outbox.
+ *
+ * They are the rows that still exist, and therefore the rows that can be
+ * re-checked before the kill and CAS-stamped after it. An outbox pointer can do
+ * neither, which is the whole reason the union is discriminated.
+ */
+export type SpriteOrphanHolderRow = Exclude<SpriteOrphanRow, { kind: 'reclaim' }>;
 
 export interface ReconcileOrphanSpritesDeps {
   /**
@@ -107,11 +138,15 @@ export interface ReconcileOrphanSpritesDeps {
    */
   listOrphanCandidates: () => Promise<{ rows: SpriteOrphanRow[]; capped: boolean; incomplete?: boolean }>;
   /**
-   * Fresh re-read of the session's teardown intent, immediately before the kill.
-   * A session REVIVED since listing (a concurrent `ensure` clears the request as
+   * Fresh re-read of the HOLDER's teardown intent, immediately before the kill.
+   * A holder REVIVED since listing (a concurrent `ensure` clears the request as
    * part of recording the new identity) must not have its live Sprite destroyed.
+   *
+   * Takes the row, not an id: which store answers the question is the runtime's
+   * to dispatch, and passing a bare id would make that dispatch impossible
+   * without the caller re-deriving the kind the row already carries.
    */
-  isTeardownStillRequested: (workspaceId: string) => Promise<boolean>;
+  isTeardownStillRequested: (row: SpriteOrphanHolderRow) => Promise<boolean>;
   /**
    * Idempotent kill — an already-gone Sprite reports `ok`. Never throws; failures
    * come back as `{ ok: false }`.
@@ -129,21 +164,18 @@ export interface ReconcileOrphanSpritesDeps {
     | { ok: false; error: unknown }
     /**
      * A DIFFERENT VM holds this name now — our target is already gone, but what
-     * that MEANS depends on `row.kind` (see #2254). For an `agent-session` row
-     * the session's own identity CAS still protects a live replacement, so this
-     * is handled exactly like `ok: true`. For a `reclaim` row the outbox entry
+     * that MEANS depends on `row.kind` (see #2254). For a HOLDER row —
+     * `agent-session` or `drive-env` — that holder's own identity CAS still
+     * protects a live replacement, so this is handled exactly like `ok: true`.
+     * For a `reclaim` row the outbox entry
      * is the LAST pointer to whatever VM exists here — there is no row left to
      * protect it — so treating this as "confirmed gone" would delete the only
      * pointer to a Sprite that is still alive under `actualInstanceId`.
      */
     | { ok: 'replaced'; actualInstanceId: string }
   >;
-  /** CAS-stamp `spriteTornDownAt` on the session row (never delete it — it is re-provisionable identity): only if the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
-  markSessionTornDown: (input: {
-    workspaceId: string;
-    sandboxId: string;
-    spriteInstanceId: string | null;
-  }) => Promise<boolean>;
+  /** CAS-stamp `spriteTornDownAt` on the HOLDER's row (never delete it — a session row is re-provisionable identity, an env row IS the environment): only if the row still points at the INSTANCE we killed. Reports whether it actually wrote. */
+  markHolderTornDown: (row: SpriteOrphanHolderRow) => Promise<boolean>;
   /** Drop an outbox row — ONLY after its Sprite is confirmed gone. */
   releaseReclaim: (sandboxId: string) => Promise<void>;
   /** Record a failed kill against its outbox row (attempts/lastError) so a Sprite that cannot be killed becomes visible rather than silently retried forever. */
@@ -194,11 +226,11 @@ export async function reconcileOrphanSprites(
 
   for (const row of rows) {
     try {
-      // Guard 1 (session rows only): a revive that landed since the candidate
-      // list was read. Killing a revived session's Sprite would destroy a live
+      // Guard 1 (HOLDER rows only): a revive that landed since the candidate
+      // list was read. Killing a revived holder's Sprite would destroy a live
       // VM's filesystem — the one genuinely irreversible mistake this cron could
-      // make. An outbox row has no session left to revive, so it skips this.
-      if (row.kind === 'agent-session' && !(await deps.isTeardownStillRequested(row.workspaceId))) {
+      // make. An outbox row has no row left to revive, so it skips this.
+      if (row.kind !== 'reclaim' && !(await deps.isTeardownStillRequested(row))) {
         skipped += 1;
         continue;
       }
@@ -267,11 +299,7 @@ export async function reconcileOrphanSprites(
         continue;
       }
 
-      const released = await deps.markSessionTornDown({
-        workspaceId: row.workspaceId,
-        sandboxId: row.sandboxId,
-        spriteInstanceId: row.spriteInstanceId,
-      });
+      const released = await deps.markHolderTornDown(row);
       if (!released) {
         skipped += 1;
         continue;

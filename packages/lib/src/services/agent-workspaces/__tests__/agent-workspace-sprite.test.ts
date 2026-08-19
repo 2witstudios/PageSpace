@@ -41,6 +41,14 @@ function makeDeps(
     authorize: async () => ({ ok: true }),
     checkFullEgressEnablement: async () => ({ ok: true }),
     checkConcurrency: async () => ({ allowed: true }),
+    // The default row is ephemeral (`envId: null`), so this seam is never
+    // reached; a test that binds a session to an env overrides it. Throwing
+    // rather than returning a canned success is deliberate — an env-bound row
+    // that fell through to the SESSION arm would be the bug, and a silent
+    // success would hide it.
+    ensureEnvSandbox: async () => {
+      throw new Error('ensureEnvSandbox called for an ephemeral session');
+    },
     now: () => NOW,
     ...over,
   };
@@ -932,5 +940,161 @@ describe('ensureAgentSessionSandbox — concurrency ceiling', () => {
     // an owner sitting at their limit can still recover their own session
     // rather than being locked out of a Sprite they are already paying for.
     expect(seen).toEqual([{ ownerId: OWNER_ID, alreadyProvisioned: true }]);
+  });
+});
+
+/**
+ * Sessions INSIDE an environment — the routing half.
+ *
+ * The property under test is that an env-bound session NEVER takes the session
+ * arm. Not "usually", and not "when the call site remembers": the row is
+ * CHECK-forbidden from holding Sprite pointers, so a session-arm provision
+ * would mint a real, billed VM under the session keyspace and then fail its own
+ * identity CAS — an orphan, from a code path that looked like it worked.
+ */
+describe('ensureAgentSessionSandbox — inside an environment', () => {
+  const ENV_ID = 'env-1';
+  const ENV_SANDBOX = 'pgs-env-abc';
+  const envRow = makeSessionRecord({ envId: ENV_ID });
+
+  function envDeps(over: Partial<AgentSessionSpriteDeps> = {}) {
+    return over;
+  }
+
+  it('should provision the ENV and hand back the ENV\'s sandbox — never the session\'s own', async () => {
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+    const seen: Array<{ envId: string; intent: string }> = [];
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, envDeps({
+        ensureEnvSandbox: async (input) => {
+          seen.push(input);
+          return { ok: true, sandboxId: ENV_SANDBOX, resumed: false };
+        },
+      })),
+    });
+
+    expect(result).toEqual({ ok: true, sandboxId: ENV_SANDBOX, resumed: false });
+    expect(seen).toEqual([{ envId: ENV_ID, intent: 'ensure' }]);
+    // Nothing was minted under the SESSION's key, and the session row still
+    // holds no pointer — which is what the database's CHECK requires of it.
+    expect(host.calls.provision).toEqual([]);
+    expect(store.rows.get(envRow.id)!.sandboxId).toBeNull();
+    expect(store.rows.get(envRow.id)!.spriteKey).toBeNull();
+  });
+
+  it('given TWO sessions in ONE env, should resolve the SAME sandbox — sharing is the env, not a threaded handle', async () => {
+    const second = makeSessionRecord({ id: 'ses-2', envId: ENV_ID });
+    const store = makeAgentSessionStore([envRow, second]);
+    const host = makeSpriteHost();
+    const ensureEnvSandbox = async () => ({ ok: true as const, sandboxId: ENV_SANDBOX, resumed: true });
+
+    const [a, b] = await Promise.all([
+      ensureAgentSessionSandbox({
+        row: toSpriteRow(envRow),
+        intent: 'ensure',
+        actor,
+        deps: makeDeps({ store, host }, envDeps({ ensureEnvSandbox })),
+      }),
+      ensureAgentSessionSandbox({
+        row: toSpriteRow(second),
+        intent: 'ensure',
+        actor,
+        deps: makeDeps({ store, host }, envDeps({ ensureEnvSandbox })),
+      }),
+    ]);
+
+    expect(a).toEqual(b);
+    expect(a.ok && a.sandboxId).toBe(ENV_SANDBOX);
+  });
+
+  it('given the session-level REPROVISION intent, should degrade to ATTACH — one session\'s retry must never wipe a shared disk', async () => {
+    // Replacing an env's Sprite is `rebuildDriveEnv` and nothing else. Forwarding
+    // the intent would let a wedged shell or a retrying client delete a team's
+    // environment out from under everyone working in it.
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+    const seen: string[] = [];
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'reprovision',
+      actor,
+      deps: makeDeps({ store, host }, envDeps({
+        ensureEnvSandbox: async ({ intent }) => {
+          seen.push(intent);
+          return { ok: true, sandboxId: ENV_SANDBOX, resumed: true };
+        },
+      })),
+    });
+
+    expect(seen).toEqual(['attach']);
+  });
+
+  it('should forward ATTACH unchanged, so an unprovisioned env is DENIED rather than lazily minted on a reconnect', async () => {
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+    const seen: string[] = [];
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'attach',
+      actor,
+      deps: makeDeps({ store, host }, envDeps({
+        ensureEnvSandbox: async ({ intent }) => {
+          seen.push(intent);
+          return { ok: false, reason: 'denied', denial: 'sandbox_not_provisioned' };
+        },
+      })),
+    });
+
+    expect(seen).toEqual(['attach']);
+    expect(result).toEqual({ ok: false, reason: 'denied', denial: 'sandbox_not_provisioned' });
+  });
+
+  it('should never reach the per-owner live-SESSION ceiling — the env is the billed unit', async () => {
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+    let ceilingChecks = 0;
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, envDeps({
+        ensureEnvSandbox: async () => ({ ok: true, sandboxId: ENV_SANDBOX, resumed: false }),
+        checkConcurrency: async () => {
+          ceilingChecks += 1;
+          return { allowed: true };
+        },
+      })),
+    });
+
+    expect(ceilingChecks).toBe(0);
+  });
+
+  it('given an ORDINARY session, should never consult the env seam', async () => {
+    const store = makeAgentSessionStore([makeSessionRecord()]);
+    const host = makeSpriteHost();
+    let envCalls = 0;
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(makeSessionRecord()),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, envDeps({
+        ensureEnvSandbox: async () => {
+          envCalls += 1;
+          return { ok: true, sandboxId: ENV_SANDBOX, resumed: false };
+        },
+      })),
+    });
+
+    expect(envCalls).toBe(0);
+    expect(result).toEqual({ ok: true, sandboxId: SESSION_KEY, resumed: false });
   });
 });

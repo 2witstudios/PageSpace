@@ -33,8 +33,8 @@ function makeDeps(over: Partial<ReconcileOrphanSpritesDeps> = {}): {
       killed.push(sandboxId);
       return { ok: true };
     },
-    markSessionTornDown: async ({ workspaceId }) => {
-      stampedSessions.push(workspaceId);
+    markHolderTornDown: async (row) => {
+      stampedSessions.push(row.kind === 'drive-env' ? row.envId : row.workspaceId);
       return true;
     },
     releaseReclaim: async (sandboxId) => {
@@ -62,6 +62,13 @@ const reclaimRow: SpriteOrphanRow = {
   kind: 'reclaim',
   sandboxId: 'pgs-ses-orphaned',
   spriteInstanceId: 'inst-orphaned',
+};
+
+const envRow: SpriteOrphanRow = {
+  kind: 'drive-env',
+  envId: 'env-1',
+  sandboxId: 'pgs-env-1',
+  spriteInstanceId: 'inst-env-1',
 };
 
 describe('reconcileOrphanSprites — the reclaim outbox (a pointer whose row is already gone)', () => {
@@ -170,7 +177,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     const revived: SpriteOrphanRow = { ...sessionRow, workspaceId: 'conv-revived', sandboxId: 'pgs-ses-revived' };
     const { deps, stampedSessions } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [revived, sessionRow], capped: false }),
-      isTeardownStillRequested: async (workspaceId) => workspaceId !== 'conv-revived',
+      isTeardownStillRequested: async (row) => row.kind === 'drive-env' || row.workspaceId !== 'conv-revived',
       killSprite,
     });
 
@@ -205,7 +212,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     // dead would make it invisible to this cron forever.
     const { deps } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
-      markSessionTornDown: async () => false,
+      markHolderTornDown: async () => false,
     });
 
     const result = await reconcileOrphanSprites(deps);
@@ -266,7 +273,7 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
   it('counts a post-kill stamp failure as failed, leaving the row for the next (idempotent) run', async () => {
     const { deps, killed } = makeDeps({
       listOrphanCandidates: async () => ({ rows: [sessionRow], capped: false }),
-      markSessionTornDown: async () => {
+      markHolderTornDown: async () => {
         throw new Error('db write failed');
       },
     });
@@ -328,5 +335,96 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
     expect(killed).toEqual([]);
     expect(stampedSessions).toEqual([]);
     expect(releasedReclaims).toEqual([]);
+  });
+});
+
+/**
+ * `drive_envs` as a SECOND holder source.
+ *
+ * An env's teardown follows the same intent-before-kill contract a session's
+ * does (`deleteDriveEnv`/`rebuildDriveEnv` stamp, then abort on a kill they
+ * cannot confirm), which is exactly how a surviving env row comes to point at a
+ * live VM nobody is retrying. What these pin is that it gets the SAME two
+ * guards — not a weaker path bolted on beside them.
+ */
+describe('reconcileOrphanSprites — drive environments', () => {
+  it('kills a surviving env row\'s Sprite and stamps it, rather than leaving the retry to a person', async () => {
+    const { deps, killed, stampedSessions } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [envRow], capped: false }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(killed).toEqual(['pgs-env-1']);
+    expect(stampedSessions).toEqual(['env-1']);
+  });
+
+  it('NEVER kills the Sprite of an env REVIVED since the candidate list was read', async () => {
+    // Guard 1, unchanged for envs: a session opening in this environment
+    // between the listing and the kill re-provisions it and clears the intent.
+    // Destroying that filesystem is the one irreversible mistake here — and it
+    // is a SHARED filesystem, so it is worse for an env than for a session.
+    const killSprite = vi.fn(async () => ({ ok: true }) as const);
+    const { deps, stampedSessions } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [envRow], capped: false }),
+      isTeardownStillRequested: async (row) => row.kind !== 'drive-env',
+      killSprite,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 1, failed: 0 });
+    expect(killSprite).not.toHaveBeenCalled();
+    expect(stampedSessions).toEqual([]);
+  });
+
+  it('counts an env CAS lost to a concurrent provision as skipped — a live replacement must never be marked dead', async () => {
+    const { deps } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [envRow], capped: false }),
+      markHolderTornDown: async () => false,
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 1, failed: 0 });
+  });
+
+  it('KEEPS the env row untouched when the kill fails, so the next tick retries it', async () => {
+    const { deps, stampedSessions } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [envRow], capped: false }),
+      killSprite: async () => ({ ok: false, error: new Error('sprite unreachable') }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 0, skipped: 0, failed: 1 });
+    expect(stampedSessions).toEqual([]);
+  });
+
+  it('treats a REPLACED instance as confirmed-gone for an env, as it does for a session — the row\'s own CAS protects the replacement', async () => {
+    // Unlike an outbox pointer, an env row is not the last pointer to the VM:
+    // whatever took the name is on the row (or will be), and the CAS below
+    // refuses if it is. So this is `ok`-shaped, and must not be chased.
+    const { deps, chasedInstances } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [envRow], capped: false }),
+      killSprite: async () => ({ ok: 'replaced', actualInstanceId: 'inst-newer' }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 1, capped: false, incomplete: false, torndown: 1, skipped: 0, failed: 0 });
+    expect(chasedInstances).toEqual([]);
+  });
+
+  it('processes all three sources in one run, isolating each row\'s outcome', async () => {
+    const { deps, killed } = makeDeps({
+      listOrphanCandidates: async () => ({ rows: [reclaimRow, sessionRow, envRow], capped: false }),
+    });
+
+    const result = await reconcileOrphanSprites(deps);
+
+    expect(result).toEqual({ processed: 3, capped: false, incomplete: false, torndown: 3, skipped: 0, failed: 0 });
+    expect(killed).toEqual(['pgs-ses-orphaned', 'pgs-ses-1', 'pgs-env-1']);
   });
 });

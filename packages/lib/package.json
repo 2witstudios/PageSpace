@@ -107,6 +107,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./services/drive-envs/env-provision-deps": {
+      "types": "./dist/services/drive-envs/env-provision-deps.d.ts",
+      "import": "./dist/services/drive-envs/env-provision-deps.js",
+      "require": "./dist/services/drive-envs/env-provision-deps.js"
+    },
     "./services/drive-envs/drive-envs": {
       "types": "./dist/services/drive-envs/drive-envs.d.ts",
       "import": "./dist/services/drive-envs/drive-envs.js",
