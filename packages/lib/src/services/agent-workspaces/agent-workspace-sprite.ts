@@ -680,6 +680,16 @@ const SESSION_LIMIT_DETAIL =
  * Note what "attach-or-deny" costs and does not cost: a lazily-unprovisioned env
  * denies rather than minting, which is correct, because `reprovision` is never
  * the FIRST touch — `ensure` is, and it provisions.
+ *
+ * **No production caller reaches the `reprovision` arm yet**, and that is worth
+ * stating rather than leaving to be discovered. `reprovision` is only ever
+ * requested against a session the client already knows about, and nothing in the
+ * product sends `envId` on spawn while this ships dark — so today every env-bound
+ * session exists only in tests, and this mapping is a guard placed BEFORE the
+ * surface that could trip it rather than a response to a live call path. It is
+ * covered by unit tests for exactly that reason: the first UI that offers
+ * "restart this session" inside an environment must find the rule already here,
+ * not discover that it deletes a team's filesystem.
  */
 function envIntentForSessionIntent(intent: SpriteHolderProvisionIntent): SpriteHolderProvisionIntent {
   return intent === 'reprovision' ? 'attach' : intent;

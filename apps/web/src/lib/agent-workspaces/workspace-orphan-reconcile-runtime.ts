@@ -105,8 +105,19 @@ export const defaultReconcileAgentSessionOrphanSpritesDeps: ReconcileOrphanSprit
           and(
             // The same three predicates as the session source, on the same
             // three columns — which is the point: an env is a Sprite holder,
-            // not a second kind of thing to reclaim. `drive_envs_live_sprite_idx`
-            // is the partial index this predicate was written for.
+            // not a second kind of thing to reclaim.
+            //
+            // `drive_envs_live_sprite_idx` covers only TWO of them: it is
+            // partial on `sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`
+            // and keyed on those same columns, so it narrows the scan to rows
+            // that still believe they hold a live Sprite — the permanent
+            // majority-eliminator, since never-provisioned envs fall outside it
+            // forever. The `teardownRequestedAt` filter and the ordering below
+            // are NOT served by it and are applied on top. That is fine at this
+            // table's size (rows matching the partial predicate are the envs
+            // with machines, not all envs); if it ever stops being fine, the
+            // fix is to add `teardownRequestedAt` to the index, not to change
+            // this query.
             isNotNull(driveEnvs.teardownRequestedAt),
             isNull(driveEnvs.spriteTornDownAt),
             isNotNull(driveEnvs.sandboxId),

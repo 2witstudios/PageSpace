@@ -148,25 +148,20 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     const force = new URL(request.url).searchParams.get('force') === 'true';
     const result = await deleteEnv({ envId, force });
 
+    // Two refusals, both terminal. There is deliberately no `teardown_failed`
+    // arm any more: the delete now kills the Sprite only AFTER the row is gone,
+    // so a kill this request could not confirm is the reclaim outbox's problem
+    // rather than a failure to report — the environment IS deleted either way.
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
-      if (result.reason === 'live_sessions') {
-        return NextResponse.json(
-          {
-            error: 'Sessions are still running in this environment',
-            reason: 'live_sessions',
-            liveSessionCount: result.liveSessionCount,
-          },
-          { status: 409 },
-        );
-      }
-      // The kill could not be confirmed, so the row was deliberately NOT
-      // deleted: it is the only remaining pointer at a VM that may still be
-      // running, and for a surviving env row the retry is a later delete or
-      // rebuild rather than a cron. A retry is the right client behavior,
-      // hence 503.
-      loggers.api.error('Drive environment teardown failed', new Error(result.detail), { envId });
-      return NextResponse.json({ error: 'Could not tear down the environment machine', reason: 'teardown_failed' }, { status: 503 });
+      return NextResponse.json(
+        {
+          error: 'Sessions are still running in this environment',
+          reason: 'live_sessions',
+          liveSessionCount: result.liveSessionCount,
+        },
+        { status: 409 },
+      );
     }
 
     auditRequest(request, {

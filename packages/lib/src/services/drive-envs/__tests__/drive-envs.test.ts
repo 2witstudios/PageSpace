@@ -223,21 +223,20 @@ describe('deleteDriveEnv', () => {
     expect(store.rows.has(ENV_ID)).toBe(false);
   });
 
-  it('should record the teardown INTENT before the kill — a crash in between must stay reclaimable', async () => {
+  it('should DELETE the row before killing anything — the kill must not be able to reach a live session', async () => {
+    // The ordering IS the safety property. While the kill came first, a session
+    // that bound between the unlocked count and the kill lost the environment's
+    // filesystem and the caller was then told the delete had failed. Killing
+    // only after the row is gone makes that unreachable: no session is bound to
+    // a row that does not exist, and none can become bound.
     const order: string[] = [];
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: `inst-${SANDBOX_ID}` })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: `inst-${SANDBOX_ID}` } } });
-    const realRequest = store.store.requestTeardown.bind(store.store);
-    store.store.requestTeardown = async (input) => {
-      order.push('requestTeardown');
-      // The stamp must be DURABLE before the kill, not merely called first.
-      expect(store.rows.get(ENV_ID)?.teardownRequestedAt).toBeNull();
-      await realRequest(input);
-      expect(store.rows.get(ENV_ID)?.teardownRequestedAt).toEqual(NOW);
-    };
     const realKill = host.host.kill.bind(host.host);
     host.host.kill = async (input) => {
       order.push('kill');
+      // The row is ALREADY gone when the kill runs — not merely scheduled to be.
+      expect(store.rows.has(ENV_ID)).toBe(false);
       await realKill(input);
     };
     const realDelete = store.store.deleteIfUnoccupied.bind(store.store);
@@ -248,7 +247,10 @@ describe('deleteDriveEnv', () => {
 
     await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
-    expect(order).toEqual(['requestTeardown', 'kill', 'deleteIfUnoccupied']);
+    expect(order).toEqual(['deleteIfUnoccupied', 'kill']);
+    // No intent stamp on this path any more: there is no row left to carry one,
+    // and the outbox is the record instead.
+    expect(store.calls.requestTeardown).toBe(0);
   });
 
   it('should CAS the kill on the INSTANCE the row records, not just the name', async () => {
@@ -260,17 +262,24 @@ describe('deleteDriveEnv', () => {
     expect(host.calls.kill).toEqual([{ sandboxId: SANDBOX_ID, expectedInstanceId: 'inst-1' }]);
   });
 
-  it('given the kill FAILS, should abort the delete and leave the row as the reconciler handle', async () => {
+  it('given the kill FAILS, should still report the env deleted and hand the VM to the reclaim outbox', async () => {
+    // The env IS gone — that is what the caller asked for and it succeeded. What
+    // failed is a best-effort cleanup whose retry the outbox owns, so there is
+    // no failure here the caller could act on. `spriteTornDown: false` is the
+    // honest report that this request did not itself stop the machine.
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } }, killError: new Error('control plane down') });
 
     const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
-    expect(result).toMatchObject({ ok: false, reason: 'teardown_failed' });
-    expect(store.calls.deleteIfUnoccupied).toBe(0);
-    expect(store.rows.has(ENV_ID)).toBe(true);
-    // The intent survives, which is what licenses the orphan reconciler to retry.
-    expect(store.rows.get(ENV_ID)?.teardownRequestedAt).toEqual(NOW);
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(store.rows.has(ENV_ID)).toBe(false);
+    // The pointer OUTLIVED the row, which is the whole guarantee: the AFTER
+    // DELETE trigger parked it, and the reconciler retries it forever.
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+    // The VM really is still up — so the outbox entry is not bookkeeping, it is
+    // the only thing standing between this failure and a Sprite that bills forever.
+    expect(host.live.has(SANDBOX_ID)).toBe(true);
   });
 
   it('given a REPLACEMENT VM already holds the name, should treat the target as gone and finish the delete', async () => {
@@ -309,69 +318,82 @@ describe('deleteDriveEnv', () => {
     expect(host.calls.kill).toEqual([]);
   });
 
-  it('given a CONFIRMED teardown, should enqueue NOTHING — the trigger must not have the cron chase a dead name', async () => {
+  it('given a live Sprite, should ALWAYS enqueue the pointer — the row is deleted while it still reads live', async () => {
+    // The cost of killing last, stated as a test. The trigger fires on
+    // `sandboxId IS NOT NULL AND spriteTornDownAt IS NULL`, and at delete time
+    // that is still true because nothing has been killed yet — so every delete
+    // of a running env leaves an outbox row, including the ones whose kill then
+    // succeeds a moment later.
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
 
-    await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
+    const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
-    expect(store.reclaims.size).toBe(0);
+    expect(result).toEqual({ ok: true, spriteTornDown: true });
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+    // Harmless, and self-healing rather than a leak in the other direction:
+    // `killSprite` is idempotent, so the cron's kill of this already-dead VM is
+    // a no-op that then releases the row. The alternative — killing first so the
+    // trigger stays quiet — is the bug this ordering exists to prevent.
+    expect(host.live.has(SANDBOX_ID)).toBe(false);
   });
 
-  it('given a concurrent re-provision won the confirmation CAS, should still delete AND leave the live replacement to the reclaim outbox', async () => {
-    // The crash net doing its actual job. Our kill destroyed instance 1; while
-    // it ran, another provisioner put a LIVE instance 2 on the row. The
-    // confirmation CAS correctly refuses (stamping that VM dead would hide a
-    // billing machine forever), so the row goes to DELETE still believing it is
-    // live — which is exactly the shape the AFTER DELETE trigger fires on.
+  it('given a REPLACEMENT VM took the name between the delete and the kill, should not destroy it', async () => {
+    // A re-provision cannot race a row that no longer exists, but the NAME is
+    // deterministic and reusable, so a replacement can still appear under it.
+    // The instance guard is what stops this call destroying somebody else's new
+    // machine — and a refusal here is deliberately NOT a confirmation, because
+    // the outbox row must go on chasing whatever is alive under that name.
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
-    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
-    const realKill = host.host.kill.bind(host.host);
-    host.host.kill = async (input) => {
-      await realKill(input);
-      const row = store.rows.get(ENV_ID);
-      if (row) store.rows.set(ENV_ID, { ...row, spriteInstanceId: 'inst-2' });
-    };
+    const host = makeSpriteHost({
+      seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } },
+      killError: new SandboxSpriteReplacedError(SANDBOX_ID, 'inst-1', 'inst-2'),
+    });
 
     const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
     expect(result).toEqual({ ok: true, spriteTornDown: false });
     expect(store.rows.has(ENV_ID)).toBe(false);
-    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-2');
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+    expect(host.live.has(SANDBOX_ID)).toBe(true);
   });
 
-  it('given a session binds DURING the teardown, should refuse the delete rather than cascade it away', async () => {
-    // The window Codex named: the cheap guard read zero, and by the time the
-    // row would be deleted a session is live in the env. `agent_workspaces.envId`
-    // is ON DELETE CASCADE, so an unguarded delete here destroys work nobody
-    // opted into destroying. The atomic re-guard inside the delete refuses.
+  it('given a session binds after the cheap count, should refuse the delete AND leave the machine untouched', async () => {
+    // The regression test for the race this ordering fixes. A session appears
+    // between the unlocked pre-count and the locked delete; the atomic re-guard
+    // refuses, as it always did. What is new is the second half: the
+    // environment's machine is still RUNNING when the caller is told the delete
+    // was refused. Under the old kill-first ordering this same interleaving
+    // returned the same refusal while the shared filesystem was already gone —
+    // a refusal that read as "nothing happened" and was not.
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
-    const realKill = host.host.kill.bind(host.host);
-    host.host.kill = async (killInput) => {
-      await realKill(killInput);
+    const realDelete = store.store.deleteIfUnoccupied.bind(store.store);
+    store.store.deleteIfUnoccupied = async (deleteInput) => {
       store.liveSessions.set(ENV_ID, 1);
+      return realDelete(deleteInput);
     };
 
     const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
     expect(result).toEqual({ ok: false, reason: 'live_sessions', liveSessionCount: 1 });
-    // The env survives, machineless — an ordinary `stopped` env the racing
-    // session re-provisions on its next ensure. A rebuilt machine is
-    // recoverable; a deleted live session's work is not.
     expect(store.rows.has(ENV_ID)).toBe(true);
-    expect(store.rows.get(ENV_ID)?.spriteTornDownAt).toEqual(NOW);
+    // Nothing was touched — the whole point.
+    expect(host.calls.kill).toEqual([]);
+    expect(host.live.has(SANDBOX_ID)).toBe(true);
+    expect(store.rows.get(ENV_ID)?.spriteTornDownAt).toBeNull();
+    expect(store.rows.get(ENV_ID)?.teardownRequestedAt).toBeNull();
   });
 
-  it('given force, should delete even when a session binds during the teardown', async () => {
+  it('given force, should delete even when a session binds after the cheap count', async () => {
     // Forcing means the caller was told sessions are live and said destroy them
     // anyway, so the atomic re-guard skips the count — not the lock.
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
-    const realKill = host.host.kill.bind(host.host);
-    host.host.kill = async (killInput) => {
-      await realKill(killInput);
+    const realDelete = store.store.deleteIfUnoccupied.bind(store.store);
+    store.store.deleteIfUnoccupied = async (deleteInput) => {
       store.liveSessions.set(ENV_ID, 1);
+      return realDelete(deleteInput);
     };
 
     const result = await deleteDriveEnv({ envId: ENV_ID, force: true, deps: makeDeleteDeps(store, host) });
