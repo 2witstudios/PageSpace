@@ -27,9 +27,14 @@
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-const canRunCode = vi.fn<(input: unknown) => Promise<{ ok: boolean; reason?: string }>>(async () => ({ ok: true }));
+// Typed FROM the real export rather than hand-shaped: `authorize` below narrows
+// on this result, so a change to what `canRunCode` answers should break this
+// file rather than let the mock keep promising a shape the gate no longer
+// returns.
+type CanRunCode = typeof import('../../sandbox/can-run-code').canRunCode;
+const canRunCode = vi.fn<CanRunCode>(async () => ({ ok: true }));
 vi.mock('../../sandbox/can-run-code', () => ({
-  canRunCode: (input: unknown) => canRunCode(input),
+  canRunCode: (...args: Parameters<CanRunCode>) => canRunCode(...args),
   isCodeExecutionEnabled: () => true,
 }));
 
@@ -126,8 +131,13 @@ describe('buildEnvProvisionDeps', () => {
   });
 
   it('given the actor may not run code here, should surface the refusal as the denial detail', async () => {
-    canRunCode.mockResolvedValue({ ok: false, reason: 'not_a_member' });
-    expect(await deps().authorize()).toEqual({ ok: false, reason: 'not_a_member' });
+    // A REAL `CodeExecutionDenialReason`. The mock used to answer
+    // `'not_a_member'`, which the gate has never returned — the assertion passed
+    // because it compared the fabrication to itself, proving only that the
+    // adapter copies a string. Typing the mock from the export is what surfaced
+    // it.
+    canRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
+    expect(await deps().authorize()).toEqual({ ok: false, reason: 'no_drive_access' });
   });
 
   it('given a payer whose tier lost sandbox access, should refuse at the mint site', async () => {
