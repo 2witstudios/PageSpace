@@ -575,6 +575,48 @@ function toEnvSubject(
   };
 }
 
+/** What one subject's window prices to this tick. Pure — no IO, no counters, no decisions about what to DO with it. */
+interface SubjectWindowPrice {
+  /** The span actually billed, after any cap. */
+  elapsedMs: number;
+  /** The cap BIT — this window was shortened. Whether that gets counted is the caller's call, and depends on whether the window then actually closed. */
+  clamped: boolean;
+  /** Null when never measured — the caller distinguishes that from merely stale. */
+  lastMeasuredGB: number | null;
+  stale: boolean;
+  gbMonths: number;
+  costDollars: number;
+}
+
+/**
+ * Price one subject's window (pure).
+ *
+ * Lifted out of the metering loop so the ARITHMETIC can be read — and reviewed —
+ * without the IO orchestration around it, and so the loop reads as what it
+ * actually is: decide, then act. Every input is already on the subject; nothing
+ * here reads a clock of its own or touches a counter.
+ */
+function priceSubjectWindow(subject: BillableStorageSubject, now: Date): SubjectWindowPrice {
+  const rawElapsedMs = now.getTime() - subject.storageLastBilledAt.getTime();
+  // Capped, never extrapolated — see MAX_BILLABLE_SPAN_MS. The caller still
+  // advances the watermark to `now`, so the excess is forgiven once rather than
+  // accumulating into an ever-larger retroactive charge.
+  const clampable = CLAMPED_SUBJECT_KINDS.includes(subject.kind);
+  const elapsedMs = clampable ? Math.min(rawElapsedMs, MAX_BILLABLE_SPAN_MS) : rawElapsedMs;
+  const lastMeasuredGB = subject.measuredBytes === null ? null : bytesToGB(subject.measuredBytes);
+  const awake = now.getTime() - subject.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
+  const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: subject.measuredAt, awake, now });
+  const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
+  return {
+    elapsedMs,
+    clamped: clampable && rawElapsedMs > MAX_BILLABLE_SPAN_MS,
+    lastMeasuredGB,
+    stale,
+    gbMonths,
+    costDollars: calculateMachineStorageCostDollars(gbMonths),
+  };
+}
+
 /**
  * Read one row source, converting a LIST failure into an empty tick for THAT
  * source alone.
@@ -683,20 +725,7 @@ export async function reconcileSandboxStorage(
     // nothing was billed, so it counts as `failed` exactly like before.
     let resolved: { ownerId: string; costDollars: number; gbMonths: number; clamped: boolean } | undefined;
     try {
-      const rawElapsedMs = now.getTime() - subject.storageLastBilledAt.getTime();
-      // Capped, never extrapolated — see MAX_BILLABLE_SPAN_MS. The watermark
-      // still advances to `now` below, so the excess is forgiven once rather
-      // than accumulating into an ever-larger retroactive charge.
-      const clampable = CLAMPED_SUBJECT_KINDS.includes(subject.kind);
-      const elapsedMs = clampable ? Math.min(rawElapsedMs, MAX_BILLABLE_SPAN_MS) : rawElapsedMs;
-      // Whether the cap BIT. Counted below only where it actually took effect —
-      // a row that goes on to be SKIPPED keeps its whole window, so counting it
-      // here would make `spanClamped` permanently non-zero for one unresolvable
-      // drive and double-report what `skipped` already says.
-      const clampBit = clampable && rawElapsedMs > MAX_BILLABLE_SPAN_MS;
-      const lastMeasuredGB = subject.measuredBytes === null ? null : bytesToGB(subject.measuredBytes);
-      const awake = now.getTime() - subject.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
-      const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: subject.measuredAt, awake, now });
+      const { elapsedMs, clamped, lastMeasuredGB, stale, gbMonths, costDollars } = priceSubjectWindow(subject, now);
       // Two DISTINCT health signals, and conflating them would hide the worse
       // one. `staleMeasurements` is measured-but-ageing — a footprint we know,
       // billing on an old reading. `neverMeasured` is a live row with NO reading
@@ -718,9 +747,6 @@ export async function reconcileSandboxStorage(
         staleMeasurements += 1;
         health.stale += 1;
       }
-      const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
-      const costDollars = calculateMachineStorageCostDollars(gbMonths);
-
       // Nothing to charge this window (zero elapsed, a never-measured 0 floor,
       // or a footprint so tiny its per-window cost rounds to $0). ALWAYS advance
       // the watermark to now when real time elapsed — for measured and
@@ -744,7 +770,7 @@ export async function reconcileSandboxStorage(
         if (elapsedMs > 0) {
           // The window closes here, so a clamp on this row really did forgive
           // its excess.
-          if (clampBit) spanClamped += 1;
+          if (clamped) spanClamped += 1;
           if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
         }
         continue;
@@ -775,7 +801,7 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      resolved = { ownerId, costDollars, gbMonths, clamped: clampBit };
+      resolved = { ownerId, costDollars, gbMonths, clamped };
     } catch (error) {
       failed += 1;
       loggers.ai.error(
