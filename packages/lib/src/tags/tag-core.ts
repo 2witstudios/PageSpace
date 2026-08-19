@@ -18,6 +18,7 @@
  * @module @pagespace/lib/tags/tag-core
  */
 
+import { isValidCellAddress } from '../sheets/address';
 import type { SheetCellAnchor, TextAnchor } from '../content/anchoring/types';
 import type { PageTypeValue } from '../utils/enums';
 
@@ -34,6 +35,22 @@ export const MAX_TAG_NAME_LENGTH = 64;
  * caller who hands over a whole document.
  */
 export const MAX_RAW_TAG_INPUT = 512;
+
+/**
+ * The longest key a valid name can produce, for whoever sizes the column.
+ *
+ * MAX_TAG_NAME_LENGTH bounds the NAME; the key is derived through NFKC, which
+ * expands. Measured exhaustively over all 1.1M code points, the worst single
+ * character is U+FDFA (an Arabic ligature) at 18 code points, so the ceiling is
+ * 64 x 18 = 1152 code points, or 2112 bytes of UTF-8.
+ *
+ * Exported because Phase 2 chooses `normalizedKey`'s type from these constants,
+ * and the obvious `varchar(64)` mirroring the name limit would reject a legal
+ * tag at INSERT time — the exact failure mode this module refuses characters to
+ * avoid. It fits under Postgres's ~2704-byte btree tuple limit, so the unique
+ * index is safe, but not with much room to spare.
+ */
+export const MAX_TAG_KEY_LENGTH = MAX_TAG_NAME_LENGTH * 18;
 
 /**
  * Why a name was refused. A discriminated union rather than a boolean or a
@@ -78,10 +95,19 @@ export type TagNameResult = { ok: true; name: string; key: string } | TagNameRej
  * The obvious implementation — strip everything Default_Ignorable — mangles all
  * four, and its membership tracks the engine's ICU version besides.
  *
- * Enumerated literally for that same reason: a Unicode property escape would
- * make the result depend on which runtime evaluated it.
+ * The list covers the whole non-orthographic family, not just the famous
+ * members: WORD JOINER U+2060 is the modern replacement for U+FEFF-as-ZWNBSP
+ * and would otherwise be the same hole with a different code point, and the
+ * invisible math operators, CGJ, the interlinear annotation marks and the
+ * musical format controls are all equally unrenderable and equally usable to
+ * mint a duplicate tag that looks identical in every chip and autocomplete.
+ *
+ * Enumerated literally rather than by Unicode property: a property escape's
+ * membership tracks the engine's ICU build, which would make the key depend on
+ * which runtime computed it.
  */
-const INVISIBLE_FORMATTING = /[\u00ad\u061c\u200b\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g;
+const INVISIBLE_FORMATTING =
+  /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb\u{1d173}-\u{1d17a}]/gu;
 
 /**
  * Whitespace collapsed to a single space. Deliberately WIDER than
@@ -103,6 +129,25 @@ const COLLAPSIBLE_WHITESPACE =
 /** Greek FINAL sigma, folded to the medial form so one word is one tag. */
 const FINAL_SIGMA = /\u03c2/g;
 const MEDIAL_SIGMA = '\u03c3';
+
+/**
+ * Matches a value in which nothing renders — including the empty string, which
+ * is why this subsumes a length check rather than sitting beside one.
+ *
+ * Two groups of code points. The joiners and selectors are KEPT deliberately
+ * (see INVISIBLE_FORMATTING) because they are meaningful NEXT TO other
+ * characters — but a name made only of them is not a name. The Hangul fillers
+ * and the Braille blank are the classic blank-name trick: ordinary letters by
+ * category, blank on screen, and each a different code point, so several
+ * distinct blank tags could coexist with nobody able to retype, search for, or
+ * tell them apart.
+ *
+ * A denylist rather than a Unicode property test, and therefore best-effort:
+ * property membership moves with the engine's ICU build, which the whole module
+ * is built to avoid.
+ */
+const NOTHING_VISIBLE =
+  /^[\u200c\u200d\u115f\u1160\u3164\uffa0\u2800\ufe00-\ufe0f\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]*$/u;
 
 /** The collapsible characters that are also C0/C1 — whitespace, not damage. */
 const COLLAPSIBLE_CONTROLS = new Set([0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x85]);
@@ -237,7 +282,9 @@ export function normalizeTagName(raw: string): TagNameResult {
   // must compose to a-acute, which cannot happen while the ZWSP sits between.
   const name = collapse(raw.replace(INVISIBLE_FORMATTING, '').normalize('NFC'));
 
-  if (name.length === 0) {
+  // 'empty' means nothing a reader can SEE, not merely a zero-length string: a
+  // chip that renders blank is unusable however many code points back it.
+  if (NOTHING_VISIBLE.test(name)) {
     return { ok: false, reason: 'empty' };
   }
 
@@ -373,13 +420,28 @@ export function validateTarget(pageType: PageTypeValue, target: TagTarget): Targ
     };
   }
 
-  if (target.kind === 'sheet_cell' && target.anchor.address.length === 0) {
-    return {
-      ok: false,
-      reason: 'payload_mismatch',
-      kind: target.kind,
-      detail: 'sheet cell address is empty',
-    };
+  if (target.kind === 'sheet_cell') {
+    // Both halves of the natural key, not just one. A sheet cell is identified
+    // by (sheet name, A1 address), so an anchor missing either half points at
+    // nothing — and an address that is merely non-empty still points at nothing
+    // if it is not in A1 form. isValidCellAddress is the same check the sheet
+    // code itself uses, so the guard and the storage agree by construction.
+    if (target.anchor.sheet.length === 0) {
+      return {
+        ok: false,
+        reason: 'payload_mismatch',
+        kind: target.kind,
+        detail: 'sheet name is empty',
+      };
+    }
+    if (!isValidCellAddress(target.anchor.address)) {
+      return {
+        ok: false,
+        reason: 'payload_mismatch',
+        kind: target.kind,
+        detail: `not an A1 cell address: ${JSON.stringify(target.anchor.address)}`,
+      };
+    }
   }
 
   return { ok: true };

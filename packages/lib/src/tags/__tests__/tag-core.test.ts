@@ -6,6 +6,7 @@ import { PAGE_TYPE_CONFIGS } from '../../content/page-types.config';
 import type { SheetCellAnchor, TextAnchor } from '../../content/anchoring/types';
 import {
   MAX_RAW_TAG_INPUT,
+  MAX_TAG_KEY_LENGTH,
   MAX_TAG_NAME_LENGTH,
   TAG_TARGETS,
   type TagTarget,
@@ -157,6 +158,34 @@ describe('normalizeTagName — invisible characters', () => {
   it('strips before normalizing, so a split accent still composes', () => {
     // Leave the ZWSP in place and NFC cannot join the two halves.
     expect(expectOk('a' + ZWSP + COMBINING_ACUTE).name).toBe(U(0x00e1));
+  });
+
+  it('strips the whole non-orthographic family, not just the famous members', () => {
+    // WORD JOINER is the modern replacement for U+FEFF-as-ZWNBSP: stripping one
+    // and not the other leaves the identical hole under a different code point.
+    // Anyone could mint a second `design` tag that renders the same in every
+    // chip, and Phase 2 is about to bake that key into a unique index.
+    expect(expectOk('de' + U(0x2060) + 'sign').key).toBe(expectOk('design').key);
+
+    for (const cp of [0x2060, 0x2061, 0x2064, 0x034f, 0x180e, 0xfff9, 0x1d173]) {
+      expect(expectOk('a' + U(cp) + 'b').name, `U+${cp.toString(16)}`).toBe('ab');
+    }
+  });
+
+  it('refuses a name that renders as nothing, however many code points it has', () => {
+    // Neither stripped nor collapsed, and each a different code point — so
+    // several distinct blank tags could coexist, and nobody could retype,
+    // search for, or tell them apart. The Hangul fillers and the Braille blank
+    // are the classic version of this trick.
+    for (const cp of [0x200c, 0x200d, 0xfe0f, 0xfe0e, 0xe0100, 0xe01ef, 0x3164, 0x2800, 0x115f, 0x1160, 0xffa0, 0xe0061]) {
+      expect(normalizeTagName(U(cp)), `U+${cp.toString(16)}`).toEqual({
+        ok: false,
+        reason: 'empty',
+      });
+    }
+    // One visible character is enough to make it a name again.
+    expect(expectOk('a' + U(0x200d) + 'b').name).toBe('a' + U(0x200d) + 'b');
+    expect(expectOk(U(0x2800) + 'x').name).toBe(U(0x2800) + 'x');
   });
 
   it('KEEPS the joiners, which are meaning rather than noise', () => {
@@ -314,6 +343,35 @@ describe('normalizeTagName — length', () => {
     expect(expectOk(('e' + COMBINING_ACUTE).repeat(MAX_TAG_NAME_LENGTH)).name).toHaveLength(
       MAX_TAG_NAME_LENGTH
     );
+  });
+
+  it('publishes the real key ceiling, which is not the name ceiling', () => {
+    // NFKC expands. Measured exhaustively over all 1.1M code points, the worst
+    // single character is U+FDFA at 18, so a 64-code-point name can key to
+    // 1152. Phase 2 sizes normalizedKey from this constant; the obvious
+    // varchar(64) mirroring the name limit would reject a legal tag at INSERT.
+    const worst = expectOk(U(0xfdfa).repeat(MAX_TAG_NAME_LENGTH));
+    expect([...worst.name]).toHaveLength(MAX_TAG_NAME_LENGTH);
+    expect([...worst.key]).toHaveLength(MAX_TAG_KEY_LENGTH);
+    expect(MAX_TAG_KEY_LENGTH).toBeGreaterThan(MAX_TAG_NAME_LENGTH);
+    // And it must still fit a btree index tuple, which caps around 2704 bytes.
+    expect(new TextEncoder().encode(worst.key).length).toBeLessThan(2704);
+  });
+
+  it('never produces a key longer than the published ceiling', () => {
+    const samples = [
+      'x'.repeat(MAX_TAG_NAME_LENGTH),
+      U(0xfdfa).repeat(MAX_TAG_NAME_LENGTH),
+      U(0x2121).repeat(MAX_TAG_NAME_LENGTH),
+      U(0x33a1).repeat(MAX_TAG_NAME_LENGTH),
+      U(0x1f600).repeat(MAX_TAG_NAME_LENGTH),
+    ];
+    for (const sample of samples) {
+      const { key } = expectOk(sample);
+      expect([...key].length, JSON.stringify(sample.slice(0, 8))).toBeLessThanOrEqual(
+        MAX_TAG_KEY_LENGTH
+      );
+    }
   });
 
   it('guards the raw input before doing any Unicode work', () => {
@@ -491,9 +549,20 @@ describe('validateTarget', () => {
       reason: 'payload_mismatch',
       kind: 'ai_message',
     });
+    // Both halves of the (sheet name, A1 address) natural key, and the address
+    // has to be an actual A1 reference — merely non-empty still points nowhere.
     expect(
       validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: '' } })
     ).toMatchObject({ reason: 'payload_mismatch', kind: 'sheet_cell' });
+    expect(
+      validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: '', address: 'A1' } })
+    ).toMatchObject({ reason: 'payload_mismatch', detail: 'sheet name is empty' });
+    expect(
+      validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'banana' } })
+    ).toMatchObject({ reason: 'payload_mismatch', kind: 'sheet_cell' });
+    // A real address is accepted, in either case.
+    expect(validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'B12' } })).toEqual({ ok: true });
+    expect(validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'aa10' } })).toEqual({ ok: true });
   });
 
   it('refuses an unknown page type instead of throwing', () => {
