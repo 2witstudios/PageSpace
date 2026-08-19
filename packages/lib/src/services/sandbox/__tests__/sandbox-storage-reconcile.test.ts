@@ -146,8 +146,10 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     chargeStorage: async (input) => {
       chargeCalls.push(input);
     },
-    // `true` = the row was written. The real writers are monotonic and answer
-    // `false` when a provision already reset the watermark past this tick.
+    // `'advanced'` = the row was written with the value we asked for. The real
+    // writers are monotonic and answer `'superseded'` when a provision already
+    // reset the watermark past this tick, or `'row_gone'` when the row was
+    // deleted mid-tick — three outcomes, not a boolean.
     advanceAgentSessionWatermark: async (input) => {
       agentSessionAdvanceCalls.push(input);
       return 'advanced';

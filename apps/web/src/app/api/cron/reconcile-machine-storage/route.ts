@@ -24,11 +24,13 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * cron: the counters below aggregate both, and there is exactly one advisory
  * lock standing between a rolling deploy and a double-bill.
  *
- * A row source that cannot be READ is isolated inside the reconcile — one
- * unreadable unit must never stop the other's billing — but it still raises a
- * SENTRY alert and fails this endpoint (500, after the work that succeeded is
- * reported), because a source failing every tick would otherwise be a
- * permanently green cron quietly metering nothing.
+ * A tick that accomplished nothing it should have — a row source that could not
+ * be READ, or a run where EVERY row failed to bill — raises a SENTRY alert and
+ * fails this endpoint (500, after the work that succeeded is reported). Either
+ * one, left reporting success, is a permanently green cron quietly metering
+ * nothing. The source-read failure is still isolated INSIDE the reconcile, so
+ * one unreadable unit never stops the other's billing; what changes here is only
+ * how the tick is reported.
  *
  * The Sentry call is the part that actually alerts, and it is not belt-and-braces:
  * the docker cron invokes this through `cron-curl`, which runs `curl -sS`
@@ -122,23 +124,50 @@ export async function GET(request: Request) {
     // to Sentry are the only trace. So the work is done and reported in full,
     // and THEN this alerts and fails — see the module doc on why the alert, not
     // the status code, is what actually reaches a human here.
-    if (run.failedSources.length > 0) {
-      // Fingerprinted on the SOURCES, never the message: the message would carry
-      // changing counts and open a fresh issue per tick, burying a fault that
-      // recurs hourly in noise.
-      Sentry.captureException(
-        new Error(`Storage reconcile could not read row source(s): ${run.failedSources.join(', ')}`),
-        {
-          level: 'error',
-          fingerprint: ['storage-reconcile-source-unreadable', ...run.failedSources],
-          tags: { check: 'storage_reconcile', failedSources: run.failedSources.join(',') },
-          extra: {
-            processed: run.processed,
-            charged: run.charged,
-            totalCostDollars: run.totalCostDollars,
-          },
+    // TWO ways this tick can have accomplished nothing it should have, and
+    // neither is a success even though the process did not crash.
+    //
+    // A row source that could not be READ is the first: its rows went unmetered
+    // entirely. A tick where EVERY row failed is the second, and it is the same
+    // silence one level down — a persistent fault reading `drives` (a
+    // permissions regression, schema drift) makes the payer lookup throw for
+    // every subject, so `failed === processed`, nothing is charged, and without
+    // this the cron reports success on every tick forever.
+    //
+    // `chargedButUnadvanced` is deliberately NOT an alert condition: it is the
+    // documented crash-window residual, bounded to one re-billed window, and it
+    // is already counted, logged and audited.
+    const alertReason =
+      run.failedSources.length > 0
+        ? `could not read row source(s): ${run.failedSources.join(', ')}`
+        : run.processed > 0 && run.failed === run.processed
+          ? `every row failed to bill (${run.failed} of ${run.processed})`
+          : null;
+
+    if (alertReason) {
+      // Fingerprinted on the CAUSE, never the message: the message carries
+      // changing counts and would open a fresh issue per tick, burying a fault
+      // that recurs hourly in noise.
+      const fingerprint =
+        run.failedSources.length > 0
+          ? ['storage-reconcile-source-unreadable', ...run.failedSources]
+          : ['storage-reconcile-all-rows-failed'];
+      Sentry.captureException(new Error(`Storage reconcile ${alertReason}`), {
+        level: 'error',
+        fingerprint,
+        tags: {
+          check: 'storage_reconcile',
+          reason: run.failedSources.length > 0 ? 'source_unreadable' : 'all_rows_failed',
+          failedSources: run.failedSources.join(','),
         },
-      );
+        extra: {
+          processed: run.processed,
+          charged: run.charged,
+          failed: run.failed,
+          skipped: run.skipped,
+          totalCostDollars: run.totalCostDollars,
+        },
+      });
       // `flush` resolves false when the queue did not drain OR when no client is
       // initialised — and that second case is the dangerous one, because then
       // `captureException` was a no-op too and this alert vanished silently. The
@@ -150,13 +179,13 @@ export async function GET(request: Request) {
         alertDelivered = await Sentry.flush(2000);
       } catch (flushError) {
         loggers.system.error(
-          '[Cron] Storage reconcile: Sentry.flush threw — the unreadable-source alert was almost certainly not delivered',
+          '[Cron] Storage reconcile: Sentry.flush threw — the alert was almost certainly not delivered',
           flushError as Error,
         );
       }
       if (!alertDelivered) {
         loggers.system.error(
-          '[Cron] Storage reconcile: a row source was unreadable and the Sentry alert did NOT confirm delivery — ' +
+          '[Cron] Storage reconcile: a tick failed and the Sentry alert did NOT confirm delivery — ' +
             'either the transport is failing or no client is initialised, in which case captureException was a no-op. ' +
             'Check SENTRY_DSN and the transport.',
         );
@@ -165,7 +194,7 @@ export async function GET(request: Request) {
       return NextResponse.json(
         {
           success: false,
-          error: `storage reconcile could not read row source(s): ${run.failedSources.join(', ')}`,
+          error: `storage reconcile ${alertReason}`,
           alertDelivered,
           processed: run.processed,
           charged: run.charged,

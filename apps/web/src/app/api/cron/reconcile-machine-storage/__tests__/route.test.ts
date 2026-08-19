@@ -191,6 +191,92 @@ describe('/api/cron/reconcile-machine-storage', () => {
     });
   });
 
+  it('given EVERY row failed to bill, should alert and fail — a total wipeout is not a success', async () => {
+    // The same silence one level down from an unreadable source: a persistent
+    // fault reading `drives` makes the payer lookup throw for every subject, so
+    // nothing is charged and, without this, the cron reports success forever.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 4,
+      charged: 0,
+      skipped: 0,
+      failed: 4,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      measurementHealth: {
+        session: { live: 2, neverMeasured: 0, stale: 0 },
+        env: { live: 2, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('every row failed') });
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+    // Fingerprinted distinctly from an unreadable source — the two faults have
+    // different causes and need separate issues, not one bucket.
+    expect(mockCapture.mock.calls[0][1].fingerprint).toEqual(['storage-reconcile-all-rows-failed']);
+  });
+
+  it('given SOME rows failed but others billed, should NOT alert — a partial failure is already counted', async () => {
+    // The condition is deliberately total-wipeout, not a threshold: a tuned
+    // percentage invites debate and false alarms, while "nothing at all got
+    // billed though there was work to do" is unambiguous.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 4,
+      charged: 1,
+      skipped: 0,
+      failed: 3,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      measurementHealth: {
+        session: { live: 2, neverMeasured: 0, stale: 0 },
+        env: { live: 2, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0.5,
+    });
+
+    const res = await GET(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('given a tick with NO rows at all, should NOT alert — an idle meter is not a broken one', async () => {
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 0,
+      charged: 0,
+      skipped: 0,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      measurementHealth: {
+        session: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
   it('given the Sentry queue does not drain, should say so rather than claim the alert landed', async () => {
     // `flush` resolves false when no client is initialised — and then
     // `captureException` was a no-op too, so the alert vanished. Reporting
