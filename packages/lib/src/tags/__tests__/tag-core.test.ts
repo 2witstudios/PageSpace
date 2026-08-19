@@ -447,6 +447,31 @@ describe('normalizeTagName — length', () => {
     expect(new TextEncoder().encode(worst.key).length).toBeLessThan(2704);
   });
 
+  it('derives the expansion factor rather than trusting the constant', () => {
+    // MAX_TAG_KEY_LENGTH is MAX_TAG_NAME_LENGTH x 18, and that 18 is the only
+    // magic number left in the module. It came from an exhaustive scan, but a
+    // scan I ran once is exactly the kind of fact that rots: a future Unicode
+    // version could assign a character that expands further, and the constant
+    // would then understate the real ceiling for a column Phase 2 sizes from
+    // it. So the scan runs here instead — ~200ms for all 1.1M code points.
+    let worstExpansion = 0;
+    let worstCodePoint = 0;
+
+    for (let cp = 0; cp < 0x110000; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) {
+        continue;
+      }
+      const expanded = [...U(cp).normalize('NFKC').toLowerCase()].length;
+      if (expanded > worstExpansion) {
+        worstExpansion = expanded;
+        worstCodePoint = cp;
+      }
+    }
+
+    expect(worstCodePoint).toBe(0xfdfa);
+    expect(MAX_TAG_KEY_LENGTH).toBe(MAX_TAG_NAME_LENGTH * worstExpansion);
+  });
+
   it('never produces a key longer than the published ceiling', () => {
     const samples = [
       'x'.repeat(MAX_TAG_NAME_LENGTH),
