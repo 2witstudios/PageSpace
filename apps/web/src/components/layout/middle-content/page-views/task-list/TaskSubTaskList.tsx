@@ -14,9 +14,11 @@ interface TaskSubTaskListProps {
 }
 
 /**
- * `TaskItem.pageId` is nullable, and a task whose linked page is gone has nowhere to navigate
- * to. Interpolating it anyway yields `/dashboard/{driveId}/null` — a link that looks live and
- * lands on a dead route. `null` here means "render the row, but not as a link".
+ * `TaskItem.pageId` is typed `string | null` — WIDER than the database, where
+ * `task_items.pageId` is genuinely `notNull()`. So this guard is not defending against data the
+ * route can currently return; it is refusing to rely on a constraint the type in front of us
+ * contradicts. Interpolating a null anyway yields `/dashboard/{driveId}/null`: a link that looks
+ * live and lands on a dead route. `null` here means "render the row, but not as a link".
  */
 export const subTaskHref = (driveId: string, pageId: string | null | undefined): string | null =>
   pageId ? `/dashboard/${driveId}/${pageId}` : null;
