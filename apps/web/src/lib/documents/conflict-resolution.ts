@@ -93,9 +93,17 @@ export interface ConflictResolutionInput {
  *
  * `keep-mine` re-saves the local content with `expectedRevision` set to the
  * revision we just observed, so the retry compare-and-swaps against the version
- * that caused the conflict instead of the stale one. The other person's text is
- * not destroyed: every `applyPageMutation` writes a `page_versions` row, so
- * their revision is already in page history.
+ * that caused the conflict instead of the stale one.
+ *
+ * `keep-mine` IS destructive to the other person's text from the user's point of
+ * view, and the UI must say so. Every `applyPageMutation` does write a
+ * `page_versions` row, so their revision is durably stored — but that is an
+ * operator-level fact, not a recovery path: `history/route.ts` is GET-only,
+ * there is no restore endpoint, no UI reads page history, and the rows expire
+ * after 30 days. Do not turn this into a reassurance to the user that their
+ * colleague's version can be recovered. Instead the banner shows the parked
+ * remote content inline so the choice is informed. (Multiplayer Documents epic,
+ * Phase A — task `jc5su9gmeohiyo3ulzu7o143`.)
  */
 export function planConflictResolution(
   choice: ConflictResolutionChoice,
