@@ -7,6 +7,7 @@ import {
   bytesToGB,
   MS_PER_STORAGE_MONTH,
   STALE_MEASUREMENT_MS,
+  MAX_BILLABLE_SPAN_MS,
   type ReconcileSandboxStorageDeps,
   type AgentSessionStorageRow,
   type DriveEnvStorageRow,
@@ -164,13 +165,18 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
   return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls };
 }
 
-/** A measured agent-session Sprite: 1GB written, measured just before `now`, in `drive-1`. */
+/**
+ * A measured agent-session Sprite: 1GB written, measured just before `now`, in
+ * `drive-1`, with its watermark exactly one MAX_BILLABLE_SPAN old — the largest
+ * window a single tick may bill, so these tests exercise the ordinary path
+ * rather than the clamp (which has its own tests).
+ */
 function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionStorageRow {
   return {
     workspaceId: 'session-1',
     driveId: 'drive-1',
     ownerId: 'session-owner-1',
-    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
     lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
@@ -178,12 +184,12 @@ function agentSession(over: Partial<AgentSessionStorageRow> = {}): AgentSessionS
   };
 }
 
-/** A measured drive-env Sprite: 1GB written, measured just before `now`, in `drive-1`. */
+/** A measured drive-env Sprite, same shape and same one-span-old watermark as `agentSession`. */
 function driveEnv(over: Partial<DriveEnvStorageRow> = {}): DriveEnvStorageRow {
   return {
     envId: 'env-1',
     driveId: 'drive-1',
-    storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+    storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
     lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
@@ -205,7 +211,8 @@ describe('reconcileSandboxStorage', () => {
       actual: { charged: result.charged, driveId: chargeCalls[0]?.driveId, subjectKind: chargeCalls[0]?.subjectKind },
       expected: { charged: 1, driveId: 'drive-1', subjectKind: 'session' },
     });
-    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    // One full billable span of 1GB — a day's share of a 30-day storage month.
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH, 8);
     expect(chargeCalls[0].costDollars).toBeGreaterThan(0);
     expect(agentSessionAdvanceCalls).toEqual([{ workspaceId: 'session-1', billedThrough: new Date('2026-07-01T00:00:00.000Z') }]);
   });
@@ -360,7 +367,7 @@ describe('reconcileSandboxStorage', () => {
         subjectId: 'env-7',
       },
     });
-    expect(chargeCalls[0].gbMonths).toBeCloseTo(1, 5);
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH, 8);
     // The env's OWN watermark advanced — and the SESSION watermark writer was
     // never touched, which is what keeps the two row sources' billing windows
     // independent.
@@ -547,6 +554,49 @@ describe('reconcileSandboxStorage', () => {
       should: 'report both rows as failed rather than raising out of the reconcile',
       actual: { processed: result.processed, failed: result.failed, charged: result.charged },
       expected: { processed: 2, failed: 2, charged: 0 },
+    });
+  });
+
+  it('CAPS a frozen window rather than billing it retroactively, and counts the clamp', async () => {
+    // The skipped-row shape: a payer that could not be resolved for weeks keeps
+    // this row's watermark frozen while its footprint grows. Uncapped, the tick
+    // where the lookup finally resolves prices the whole frozen span at TODAY's
+    // footprint — the retroactive over-bill the `$0` branch refuses, reached by a
+    // different door.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
+      ],
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a row whose watermark has been frozen for forty days',
+      should: 'bill one capped span and report the clamp — the excess is forgiven, never billed',
+      actual: {
+        charged: result.charged,
+        spanClamped: result.spanClamped,
+        gbMonths: Number(chargeCalls[0]?.gbMonths.toFixed(8)),
+      },
+      expected: {
+        charged: 1,
+        spanClamped: 1,
+        gbMonths: Number((MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH).toFixed(8)),
+      },
+    });
+  });
+
+  it('does not clamp a window exactly AT the cap — the boundary bills in full', async () => {
+    const { deps, chargeCalls } = makeDeps({ listDriveEnvSprites: async () => [driveEnv()] });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({ spanClamped: result.spanClamped, gbMonths: chargeCalls[0]?.gbMonths }).toEqual({
+      spanClamped: 0,
+      gbMonths: MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH,
     });
   });
 

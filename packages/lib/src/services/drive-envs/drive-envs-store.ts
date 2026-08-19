@@ -359,15 +359,26 @@ export function revivedDriveEnvColumns(input: {
   egressPolicyToken: string | null;
   stamps: SpriteHolderRowStamps;
   now: Date;
-  /** The watermark to write — see the column comment below for why this is not just `now`. */
-  storageLastBilledAt: Date | SQL;
+  /**
+   * The watermark to write — an `SQL` EXPRESSION, never a bare `Date`, and the
+   * type is the enforcement.
+   *
+   * The monotonic guarantee lives in the caller's `GREATEST(...)` because only
+   * the store has the table and `sql` in scope (this helper stays pure and free
+   * of the DB graph). That split is safe only if a caller cannot accidentally
+   * pass `now` and silently reopen the double-bill the guard closes — so the
+   * parameter refuses one. A future third caller gets a type error, not a
+   * production regression with no red test.
+   */
+  storageLastBilledAt: SQL;
 }) {
   return {
     spriteKey: input.spriteKey,
     sandboxId: input.sandboxId,
     spriteInstanceId: input.spriteInstanceId,
     egressPolicyToken: input.egressPolicyToken,
-    // MONOTONIC, and supplied by the caller rather than derived from `now`.
+    // MONOTONIC, and supplied by the caller as an SQL expression rather than
+    // derived from `now` here.
     // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
     // IO, so by the time this write lands it can be tens of seconds stale — and a
     // reconcile tick that charged through a LATER instant may already have
@@ -375,8 +386,8 @@ export function revivedDriveEnvColumns(input: {
     // past what was just billed, and the next tick would re-bill the difference.
     // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
     // (a new generation must not inherit the old one's window) without ever
-    // moving the watermark down. A plain `Date` is accepted for tests and for any
-    // caller that has already proven the direction.
+    // moving the watermark down. The parameter's type refuses a bare `Date`, so
+    // this cannot be reopened by a caller that forgets.
     storageLastBilledAt: input.storageLastBilledAt,
     updatedAt: input.now,
     ...envStampColumns(input.stamps),

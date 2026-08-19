@@ -3,6 +3,7 @@ import {
   reconcileSandboxStorageSerialized,
 } from '@pagespace/lib/services/sandbox/sandbox-storage-billing';
 import * as Sentry from '@sentry/nextjs';
+import type { StorageSubjectKind } from '@pagespace/lib/services/sandbox/sandbox-storage-reconcile';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
@@ -24,13 +25,17 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * cron: the counters below aggregate both, and there is exactly one advisory
  * lock standing between a rolling deploy and a double-bill.
  *
- * A tick that accomplished nothing it should have — a row source that could not
- * be READ, or a run where EVERY row failed to bill — raises a SENTRY alert and
- * fails this endpoint (500, after the work that succeeded is reported). Either
- * one, left reporting success, is a permanently green cron quietly metering
- * nothing. The source-read failure is still isolated INSIDE the reconcile, so
- * one unreadable unit never stops the other's billing; what changes here is only
- * how the tick is reported.
+ * A tick that accomplished nothing it should have raises a SENTRY alert and
+ * fails this endpoint (500, after the work that succeeded is reported) — left
+ * reporting success it would be a permanently green cron quietly metering
+ * nothing. Source-read failures stay isolated INSIDE the reconcile, so one
+ * unreadable unit never stops the other's billing; what changes here is only how
+ * the tick is reported.
+ *
+ * Severity is split by whether the unit is LIVE. Envs ship dark, so an
+ * unreadable `drive_envs` is captured as a warning and the tick still succeeds —
+ * a dark feature must not redden a cron that is metering real sessions
+ * correctly. The session source, and a whole-tick billing wipeout, are loud.
  *
  * The Sentry call is the part that actually alerts, and it is not belt-and-braces:
  * the docker cron invokes this through `cron-curl`, which runs `curl -sS`
@@ -79,7 +84,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, superseded ${run.watermarkSuperseded}, neverMeasured ${run.neverMeasured} (sessions ${run.measurementHealth.session.neverMeasured}/${run.measurementHealth.session.live}, envs ${run.measurementHealth.env.neverMeasured}/${run.measurementHealth.env.live}), failedSources [${run.failedSources.join(', ')}], total $${run.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, superseded ${run.watermarkSuperseded}, spanClamped ${run.spanClamped}, billable ${run.billableRows}, neverMeasured ${run.neverMeasured} (sessions ${run.measurementHealth.session.neverMeasured}/${run.measurementHealth.session.live}, envs ${run.measurementHealth.env.neverMeasured}/${run.measurementHealth.env.live}), failedSources [${run.failedSources.join(', ')}], total $${run.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -102,9 +107,17 @@ export async function GET(request: Request) {
         // guard declined the advance — bounded, safe-direction, but counted
         // rather than invisible.
         watermarkSuperseded: run.watermarkSuperseded,
+        // A row's window had been frozen for over a day and was capped rather
+        // than billed retroactively at today's footprint.
+        spanClamped: run.spanClamped,
+        billableRows: run.billableRows,
         // Split per persistence unit: an env's baseline-only measurement makes
         // its stale count saturate by construction, which would otherwise drown
         // a genuine session-side measurement outage in the flat totals.
+        //
+        // These count ROWS, not outcomes — `live` includes rows the tick then
+        // SKIPPED for an unresolvable payer. Measurement staleness is a fact
+        // about the row either way; do not read `live` as "billed".
         measurementHealth: run.measurementHealth,
         failedSources: run.failedSources,
         totalCostDollars: run.totalCostDollars,
@@ -124,48 +137,86 @@ export async function GET(request: Request) {
     // to Sentry are the only trace. So the work is done and reported in full,
     // and THEN this alerts and fails — see the module doc on why the alert, not
     // the status code, is what actually reaches a human here.
-    // TWO ways this tick can have accomplished nothing it should have, and
-    // neither is a success even though the process did not crash.
+    // WHICH failures are allowed to redden a LIVE billing cron.
     //
-    // A row source that could not be READ is the first: its rows went unmetered
-    // entirely. A tick where EVERY row failed is the second, and it is the same
-    // silence one level down — a persistent fault reading `drives` (a
-    // permissions regression, schema drift) makes the payer lookup throw for
-    // every subject, so `failed === processed`, nothing is charged, and without
-    // this the cron reports success on every tick forever.
+    // The rule is that a dark feature must not page anyone. Envs ship dark and
+    // nothing provisions them yet, so an unreadable `drive_envs` — an unmigrated
+    // image, a permissions gap on a tenant that will never create an env — must
+    // not fail a cron that is metering real sessions perfectly well. It is
+    // logged, counted in `failedSources`, and captured at WARNING level so the
+    // fault is discoverable without being an incident. When envs become
+    // user-visible this distinction goes away and the env source joins the loud
+    // set; the `LOUD_SOURCES` list below is the one line that changes.
     //
-    // The wipeout condition needs MORE THAN ONE row to have agreed, and that is
-    // not a tuning knob — it is the smallest claim the data supports. A single
-    // row failing is indistinguishable from one unlucky transient, which the
-    // meter already isolates per row and retries next tick; two or more failing
-    // together is what makes a shared cause the likely reading. On a deployment
-    // with one live billable row (today's reality — envs ship dark) the per-row
-    // counters, not this alert, are the signal.
+    // What IS loud: the SESSION source failing (real money, live feature), and a
+    // tick where every row of more than one failed to bill. That `> 1` is the
+    // smallest claim the data supports rather than a tuning knob — one row
+    // failing is indistinguishable from one unlucky transient the meter already
+    // isolates and retries, while two or more failing together makes a shared
+    // cause the likely reading. On a one-row deployment the per-row counters,
+    // not this alert, are the signal.
     //
-    // `chargedButUnadvanced` is deliberately NOT an alert condition either: it is
-    // the documented crash-window residual, bounded to one re-billed window, and
+    // `chargedButUnadvanced` is deliberately not a condition either: the
+    // documented crash-window residual, bounded to one re-billed window, and
     // already counted, logged and audited.
+    const LOUD_SOURCES: StorageSubjectKind[] = ['session'];
+    const loudSources = run.failedSources.filter((source) => LOUD_SOURCES.includes(source));
+    const quietSources = run.failedSources.filter((source) => !LOUD_SOURCES.includes(source));
+
+    if (quietSources.length > 0) {
+      // Discoverable, not an incident. No `flush` and no non-2xx: this is a dark
+      // feature's read failing, and the tick's real work succeeded.
+      Sentry.captureMessage(`Storage reconcile could not read dark row source(s): ${quietSources.join(', ')}`, {
+        level: 'warning',
+        fingerprint: ['storage-reconcile-dark-source-unreadable', ...quietSources],
+        tags: { check: 'storage_reconcile', reason: 'dark_source_unreadable' },
+      });
+    }
+
+    // A tick where every row was SKIPPED is the third silence, and for envs it is
+    // the most reachable of the three: `resolveEnvPayerId` has no owner fallback,
+    // so any persistent fault resolving `drives.ownerId` — a regression, replica
+    // lag, an ownership migration in flight — returns null for every row. That
+    // leaves `charged: 0`, `failed: 0`, `skipped === processed`, and without this
+    // the endpoint reports success forever while metering nothing.
+    //
+    // The wipeout condition also requires that there was WORK TO DO, which only
+    // `billableRows` can answer: if every row failed then `charged` is zero by
+    // definition, so no outcome counter distinguishes a broken meter from a tick
+    // over rows that all priced to $0 — and envs meter ~$0 today by
+    // construction, so that is the common case. Without this guard a transient
+    // watermark-write error on the zero-cost path pages someone with "every row
+    // failed to bill" when nothing was billable and the only loss is an advance
+    // that self-heals next tick.
     const alertReason =
-      run.failedSources.length > 0
-        ? `could not read row source(s): ${run.failedSources.join(', ')}`
-        : run.processed > 1 && run.failed === run.processed
-          ? `every row failed to bill (${run.failed} of ${run.processed})`
-          : null;
+      loudSources.length > 0
+        ? `could not read row source(s): ${loudSources.join(', ')}`
+        : run.processed > 1 && run.skipped === run.processed
+          ? `every row was skipped for an unresolvable payer (${run.skipped} of ${run.processed})`
+          : run.processed > 1 && run.failed === run.processed && run.billableRows > 0
+            ? `every row failed to bill (${run.failed} of ${run.processed})`
+            : null;
 
     if (alertReason) {
       // Fingerprinted on the CAUSE, never the message: the message carries
       // changing counts and would open a fresh issue per tick, burying a fault
       // that recurs hourly in noise.
-      const fingerprint =
-        run.failedSources.length > 0
-          ? ['storage-reconcile-source-unreadable', ...run.failedSources]
-          : ['storage-reconcile-all-rows-failed'];
       Sentry.captureException(new Error(`Storage reconcile ${alertReason}`), {
         level: 'error',
-        fingerprint,
+        fingerprint:
+          loudSources.length > 0
+            ? ['storage-reconcile-source-unreadable', ...loudSources]
+            : run.skipped === run.processed
+              ? ['storage-reconcile-all-rows-skipped']
+              : ['storage-reconcile-all-rows-failed'],
         tags: {
           check: 'storage_reconcile',
-          reason: run.failedSources.length > 0 ? 'source_unreadable' : 'all_rows_failed',
+          reason:
+            loudSources.length > 0
+              ? 'source_unreadable'
+              : run.skipped === run.processed
+                ? 'all_rows_skipped'
+                : 'all_rows_failed',
           failedSources: run.failedSources.join(','),
         },
         extra: {
@@ -173,37 +224,22 @@ export async function GET(request: Request) {
           charged: run.charged,
           failed: run.failed,
           skipped: run.skipped,
+          billableRows: run.billableRows,
           totalCostDollars: run.totalCostDollars,
         },
       });
-      // `flush` resolves false when the queue did not drain OR when no client is
-      // initialised — and that second case is the dangerous one, because then
-      // `captureException` was a no-op too and this alert vanished silently. The
-      // logger is a deliberately separate channel so a Sentry outage still leaves
-      // evidence, and `alertDelivered` rides in the body so an HTTP monitor can
-      // see the answer without Sentry being involved at all.
-      let alertDelivered = false;
-      try {
-        alertDelivered = await Sentry.flush(2000);
-      } catch (flushError) {
-        loggers.system.error(
-          '[Cron] Storage reconcile: Sentry.flush threw — the alert was almost certainly not delivered',
-          flushError as Error,
-        );
-      }
-      if (!alertDelivered) {
-        loggers.system.error(
-          '[Cron] Storage reconcile: a tick failed and the Sentry alert did NOT confirm delivery — ' +
-            'either the transport is failing or no client is initialised, in which case captureException was a no-op. ' +
-            'Check SENTRY_DSN and the transport.',
-        );
-      }
+      // Deliberately NOT awaiting `Sentry.flush` here. This runs in a long-lived
+      // container, not a per-request serverless invocation, so the transport
+      // drains on its own — and awaiting it would add up to its timeout to every
+      // failing tick's response for no delivery guarantee this endpoint can act
+      // on. The logger below is the independent channel that survives a Sentry
+      // outage.
+      loggers.system.error(`[Cron] Storage reconcile FAILED: ${alertReason}`);
 
       return NextResponse.json(
         {
           success: false,
           error: `storage reconcile ${alertReason}`,
-          alertDelivered,
           processed: run.processed,
           charged: run.charged,
           skipped: run.skipped,
@@ -212,6 +248,8 @@ export async function GET(request: Request) {
           staleMeasurements: run.staleMeasurements,
           neverMeasured: run.neverMeasured,
           watermarkSuperseded: run.watermarkSuperseded,
+          spanClamped: run.spanClamped,
+          billableRows: run.billableRows,
           measurementHealth: run.measurementHealth,
           failedSources: run.failedSources,
           totalCostDollars: run.totalCostDollars,
@@ -231,6 +269,8 @@ export async function GET(request: Request) {
       staleMeasurements: run.staleMeasurements,
       neverMeasured: run.neverMeasured,
       watermarkSuperseded: run.watermarkSuperseded,
+      spanClamped: run.spanClamped,
+      billableRows: run.billableRows,
       measurementHealth: run.measurementHealth,
       failedSources: run.failedSources,
       totalCostDollars: run.totalCostDollars,

@@ -23,11 +23,16 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
-const { mockCapture, mockFlush } = vi.hoisted(() => ({
+const { mockCapture, mockMessage, mockFlush } = vi.hoisted(() => ({
   mockCapture: vi.fn(),
+  mockMessage: vi.fn(),
   mockFlush: vi.fn(async () => true),
 }));
-vi.mock('@sentry/nextjs', () => ({ captureException: mockCapture, flush: mockFlush }));
+vi.mock('@sentry/nextjs', () => ({
+  captureException: mockCapture,
+  captureMessage: mockMessage,
+  flush: mockFlush,
+}));
 
 vi.mock('next/server', () => ({
   NextResponse: {
@@ -67,6 +72,10 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 1,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      // Two of the three rows had a positive accrual; the never-measured one
+      // priced to $0 and is not billable.
+      billableRows: 2,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -109,6 +118,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
           // entirely unread this tick.
           neverMeasured: 1,
           watermarkSuperseded: 0,
+          spanClamped: 0,
+          billableRows: 2,
           // Per-unit, because an env's baseline-only measurement saturates the
           // flat stale count and would hide a session-side outage.
           measurementHealth: {
@@ -129,6 +140,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 1,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 2,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -153,6 +166,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 1,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         // The env LIST threw, so `listSource` yielded no rows and every env
@@ -166,29 +181,83 @@ describe('/api/cron/reconcile-machine-storage', () => {
     const res = await GET(makeRequest());
     const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body).toMatchObject({
-      success: false,
-      error: expect.stringContaining('env'),
-      // The work that DID succeed is still reported in full — failing the tick
-      // must not hide the money that moved.
-      charged: 1,
-      totalCostDollars: 0.001234,
-      failedSources: ['env'],
-      alertDelivered: true,
-    });
-    // Still audited: the charges happened and the audit trail must show them.
+    // A DARK feature's source failing must not redden a LIVE billing cron: envs
+    // ship dark and nothing provisions them yet, so an unreadable `drive_envs`
+    // is discoverable, not an incident. The tick's real work succeeded.
+    expect(res.status).toBe(200);
+    expect(body).toMatchObject({ success: true, charged: 1, failedSources: ['env'] });
     expect(mockAudit).toHaveBeenCalledTimes(1);
-    // And ALERTED. This is the part that reaches a human: the docker cron runs
-    // `curl -sS` without `-f`, so it exits 0 on a 500 and the status code alone
-    // would be decorative.
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockMessage).toHaveBeenCalledTimes(1);
+    expect(mockMessage.mock.calls[0][1]).toMatchObject({
+      level: 'warning',
+      fingerprint: ['storage-reconcile-dark-source-unreadable', 'env'],
+    });
+  });
+
+  it('given the SESSION source is unreadable, should be LOUD — a live unit failing is an incident', async () => {
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 0,
+      charged: 0,
+      skipped: 0,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
+      measurementHealth: {
+        session: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: ['session'],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('session') });
     expect(mockCapture).toHaveBeenCalledTimes(1);
     expect(mockCapture.mock.calls[0][1]).toMatchObject({
       level: 'error',
-      // Fingerprinted on the SOURCES, not the message — a message carrying
-      // changing counts would open a fresh issue every hour.
-      fingerprint: ['storage-reconcile-source-unreadable', 'env'],
+      fingerprint: ['storage-reconcile-source-unreadable', 'session'],
     });
+  });
+
+  it('given EVERY row was SKIPPED for an unresolvable payer, should alert — the third silence', async () => {
+    // Most reachable for envs, since `resolveEnvPayerId` has no owner fallback:
+    // any persistent fault resolving `drives.ownerId` returns null for every row,
+    // leaving charged 0, failed 0, and — without this — a green cron forever.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 3,
+      charged: 0,
+      skipped: 3,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
+      measurementHealth: {
+        session: { live: 3, neverMeasured: 0, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('skipped') });
+    expect(mockCapture.mock.calls[0][1].fingerprint).toEqual(['storage-reconcile-all-rows-skipped']);
   });
 
   it('given EVERY row failed to bill, should alert and fail — a total wipeout is not a success', async () => {
@@ -205,6 +274,10 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 0,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      // All four HAD something to charge — that is what makes "every row failed"
+      // evidence of a broken meter rather than a tick with nothing to do.
+      billableRows: 4,
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -238,6 +311,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 0,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -267,6 +342,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 0,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
       measurementHealth: {
         session: { live: 1, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -292,6 +369,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       staleMeasurements: 0,
       neverMeasured: 0,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -306,34 +385,34 @@ describe('/api/cron/reconcile-machine-storage', () => {
     expect(mockCapture).not.toHaveBeenCalled();
   });
 
-  it('given the Sentry queue does not drain, should say so rather than claim the alert landed', async () => {
-    // `flush` resolves false when no client is initialised — and then
-    // `captureException` was a no-op too, so the alert vanished. Reporting
-    // success there would rebuild the exact silence this branch exists to close.
-    mockFlush.mockResolvedValue(false);
+  it('given every row failed but NOTHING was billable, should NOT alert — no work was lost', async () => {
+    // Today's common shape: envs meter ~$0 by construction, so a transient
+    // watermark-write error on the zero-cost path would otherwise page someone
+    // with "every row failed to bill" when nothing was billable at all.
     mockReconcile.mockResolvedValue({
       outcome: 'reconciled',
-      processed: 0,
+      processed: 3,
       charged: 0,
       skipped: 0,
-      failed: 0,
+      failed: 3,
       chargedButUnadvanced: 0,
       staleMeasurements: 0,
       neverMeasured: 0,
       watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 0,
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
-        env: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 3, neverMeasured: 0, stale: 0 },
       },
-      failedSources: ['env'],
+      failedSources: [],
       totalCostDollars: 0,
     });
 
     const res = await GET(makeRequest());
-    const body = await res.json();
 
-    expect(res.status).toBe(500);
-    expect(body).toMatchObject({ success: false, alertDelivered: false });
+    expect(res.status).toBe(200);
+    expect(mockCapture).not.toHaveBeenCalled();
   });
 
   it('given a healthy tick, should raise NO alert — an hourly false alarm is worse than none', async () => {

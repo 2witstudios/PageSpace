@@ -52,6 +52,7 @@ import { defaultReconcileSandboxStorageDeps } from '../sandbox-storage-billing';
 import {
   reconcileSandboxStorage,
   MS_PER_STORAGE_MONTH,
+  MAX_BILLABLE_SPAN_MS,
   type ReconcileSandboxStorageDeps,
 } from '../sandbox-storage-reconcile';
 
@@ -61,8 +62,15 @@ const envCreatorId = createId();
 const driveId = createId();
 
 const NOW = new Date('2026-08-18T00:00:00.000Z');
-/** One full storage-month before `NOW`, so a 1GB footprint prices to exactly 1 GB-month. */
-const ONE_MONTH_AGO = new Date(NOW.getTime() - MS_PER_STORAGE_MONTH);
+/**
+ * The default seeded watermark: exactly one MAX_BILLABLE_SPAN before `NOW`, so a
+ * 1GB footprint prices to the largest window a single tick may bill — one day,
+ * i.e. `1/30` of a GB-month. Deliberately AT the cap rather than beyond it, so
+ * these tests exercise the ordinary path; the clamp itself has its own test.
+ */
+const ONE_MAX_SPAN_AGO = new Date(NOW.getTime() - MAX_BILLABLE_SPAN_MS);
+/** A day's share of a 30-day storage month — what 1GB accrues over one full billable span. */
+const ONE_DAY_OF_GB_MONTH = MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH;
 
 type ChargeCall = Parameters<ReconcileSandboxStorageDeps['chargeStorage']>[0];
 
@@ -128,7 +136,7 @@ async function seedEnv(
     sandboxId: over.sandboxId === undefined ? `sprite-${id.slice(0, 8)}` : over.sandboxId,
     spriteInstanceId: over.spriteInstanceId ?? null,
     spriteTornDownAt: over.spriteTornDownAt ?? null,
-    storageLastBilledAt: over.storageLastBilledAt ?? ONE_MONTH_AGO,
+    storageLastBilledAt: over.storageLastBilledAt ?? ONE_MAX_SPAN_AGO,
     // 1 GB, measured just before `now` — a fresh measurement, so nothing here
     // is billed off a stale reading unless a test asks for it.
     storageMeasuredBytes: over.storageMeasuredBytes === undefined ? 1_000_000_000 : over.storageMeasuredBytes,
@@ -219,7 +227,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — 
         driveId,
         subjectKind: 'env',
         subjectId: envId,
-        gbMonths: 1,
+        gbMonths: Number(ONE_DAY_OF_GB_MONTH.toFixed(6)),
       },
     });
     // `createdBy` is audit only: it must not be reachable as a payer.
@@ -635,3 +643,130 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
   });
 
 });
+
+/**
+ * SINGLE BILLING for one disk — the invariant the env/session split rests on.
+ *
+ * An env-bound session shares the ENV's filesystem and owns no Sprite of its
+ * own. If such a row ever appeared in `listAgentSessionSprites` alongside the
+ * env in `listDriveEnvSprites`, one disk would be metered twice, against the
+ * same payer, every tick.
+ *
+ * Today that rests entirely on `agent_workspaces_env_no_sprite_check` — a CHECK
+ * constraint forbidding an `envId` row from carrying Sprite pointers — plus the
+ * row source's `sandboxId IS NOT NULL` predicate. Neither is asserted anywhere,
+ * and "the schema makes it impossible" is exactly the kind of claim that stops
+ * being true quietly. So it is pinned here, against the real table and the real
+ * predicate.
+ */
+describe.skipIf(dbSkipExplicitlyAllowed())('single billing: an env-bound session is never its own row source', () => {
+  it('is ABSENT from listAgentSessionSprites, so one filesystem is metered once', async () => {
+    const envId = await seedEnv();
+    const boundSessionId = createId();
+    // The shape an env-bound session has by construction: `envId` set, and NO
+    // Sprite pointers — the CHECK constraint refuses any other combination.
+    await db.insert(agentWorkspaces).values({
+      id: boundSessionId,
+      driveId,
+      ownerId: driveOwnerId,
+      envId,
+      updatedAt: new Date(),
+    });
+
+    const sessions = await defaultReconcileSandboxStorageDeps.listAgentSessionSprites();
+    const envs = (await defaultReconcileSandboxStorageDeps.listDriveEnvSprites()).filter(
+      (row) => row.driveId === driveId,
+    );
+
+    assert({
+      given: 'a session bound to an env, sharing that env\'s filesystem',
+      should: 'appear in NEITHER row source as a billable sandbox — only the env itself is metered',
+      actual: {
+        sessionListed: sessions.some((row) => row.workspaceId === boundSessionId),
+        envListed: envs.some((row) => row.envId === envId),
+      },
+      expected: { sessionListed: false, envListed: true },
+    });
+
+    await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, boundSessionId));
+  });
+
+  it('is refused by the database if it ever tries to carry its own Sprite', async () => {
+    // The structural half. If this CHECK were dropped, the row above could
+    // acquire a `sandboxId`, enter `listAgentSessionSprites`, and double-bill
+    // the env's disk — so the constraint is asserted rather than assumed.
+    const envId = await seedEnv();
+
+    await expect(
+      db.insert(agentWorkspaces).values({
+        id: createId(),
+        driveId,
+        ownerId: driveOwnerId,
+        envId,
+        sandboxId: 'pgs-should-be-refused',
+        updatedAt: new Date(),
+      }),
+    ).rejects.toThrow();
+  });
+});
+
+/**
+ * The billable-span CAP — the guard against a frozen watermark becoming a
+ * retroactive over-bill.
+ *
+ * A `skipped` row keeps its watermark while its footprint grows. Without a cap,
+ * the tick where the payer finally resolves prices the WHOLE frozen span at
+ * TODAY's footprint — the same retroactive over-bill the `$0` branch refuses,
+ * arriving by a different door. The excess is forgiven (an under-bill, the
+ * accepted direction) and counted.
+ */
+describe.skipIf(dbSkipExplicitlyAllowed())('the billable-span cap', () => {
+  it('bills at most ONE span for a watermark frozen far longer, and forgives the rest', async () => {
+    // Forty days frozen, 1GB measured. Uncapped this would bill 40 days of 1GB
+    // against a real payer for a period most of which held far less.
+    const envId = await seedEnv({
+      storageLastBilledAt: new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000),
+    });
+    const { deps, charges } = realDepsCapturingCharges();
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'an env whose watermark has been frozen for forty days',
+      should: 'bill exactly one capped span, count the clamp, and advance the watermark so the excess is forgiven once',
+      actual: {
+        charged: result.charged,
+        spanClamped: result.spanClamped,
+        gbMonths: Number(charges[0]?.gbMonths.toFixed(6)),
+        billedAt: await readBilledAt(envId),
+      },
+      expected: {
+        charged: 1,
+        spanClamped: 1,
+        gbMonths: Number(ONE_DAY_OF_GB_MONTH.toFixed(6)),
+        billedAt: NOW,
+      },
+    });
+  });
+
+  it('does NOT clamp — or count — an ordinary window inside the cap', async () => {
+    await seedEnv({ storageLastBilledAt: new Date(NOW.getTime() - 60 * 60 * 1000) });
+    const { deps, charges } = realDepsCapturingCharges();
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'an hour-old watermark, well inside the cap',
+      should: 'bill the real elapsed hour and report no clamp',
+      actual: {
+        spanClamped: result.spanClamped,
+        gbMonths: Number(charges[0]?.gbMonths.toFixed(8)),
+      },
+      expected: {
+        spanClamped: 0,
+        gbMonths: Number((60 * 60 * 1000 / MS_PER_STORAGE_MONTH).toFixed(8)),
+      },
+    });
+  });
+});
+

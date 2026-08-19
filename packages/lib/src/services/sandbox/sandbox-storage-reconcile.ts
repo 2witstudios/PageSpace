@@ -139,6 +139,31 @@ export const STALE_MEASUREMENT_MS = 24 * 60 * 60 * 1000;
 /** A sandbox touched within this window counts as "awake" for staleness — a real-work wake is refreshing its measurement. */
 export const RECENTLY_ACTIVE_MS = 5 * 60 * 1000;
 
+/**
+ * The most accrual ONE tick may bill for ONE row, whatever its watermark says.
+ *
+ * Without this, a frozen watermark becomes a retroactive over-bill — the exact
+ * shape the `costDollars <= 0` branch below is written to prevent, arriving by a
+ * different door. A `skipped` row (payer unresolvable: a `drives.ownerId`
+ * regression, replica lag, an ownership transfer in flight) keeps its watermark
+ * while its footprint grows and is re-measured. When the lookup finally
+ * resolves, one tick would price the WHOLE frozen span at TODAY's footprint —
+ * 100GB × a week, against a real payer, for storage that was 1GB most of it.
+ *
+ * So the span is capped and the watermark still advances to `now`: the excess is
+ * FORGIVEN, which is an under-bill, which is the accepted direction everywhere
+ * in this meter. Counted as `spanClamped` so it is never silent.
+ *
+ * The value trades two failures against each other. It must be long enough that
+ * an ordinary cron outage still bills what it should (an hourly cron down for a
+ * few hours is routine, and forgiving that would be a real revenue loss); short
+ * enough that a pathological frozen span cannot become a large retroactive
+ * charge. A day covers any outage that is not itself an incident someone is
+ * already handling, and bounds the worst case to one day's accrual. Tightening
+ * it is this one constant.
+ */
+export const MAX_BILLABLE_SPAN_MS = 24 * 60 * 60 * 1000;
+
 /** Pure: bytes → DECIMAL gigabytes (÷1e9), matching how the platform expresses its allocation ("100 GB") and its per-GB-month rate — NOT binary GiB. Invalid or non-positive input floors to 0. */
 export function bytesToGB(bytes: number): number {
   if (!Number.isFinite(bytes) || bytes <= 0) return 0;
@@ -403,6 +428,28 @@ export interface ReconcileSandboxStorageResult {
    */
   watermarkSuperseded: number;
   /**
+   * Rows that had something to charge this tick — a positive accrual, before any
+   * attempt to resolve a payer or move money.
+   *
+   * The answer to "was there work to do?", which no combination of the outcome
+   * counters can give: if every row failed, `charged` is zero BY DEFINITION, so
+   * a caller asking "did this tick bill nothing though it should have?" cannot
+   * tell a broken meter from a tick over rows that all priced to $0. Envs meter
+   * ~$0 today by construction, so that is the common case, not a corner.
+   */
+  billableRows: number;
+  /**
+   * Rows whose accrual window exceeded {@link MAX_BILLABLE_SPAN_MS} and was
+   * capped — the excess forgiven rather than billed retroactively at today's
+   * footprint.
+   *
+   * Expected to be ZERO in steady state. A non-zero value means some row's
+   * watermark had been frozen for over a day: either the cron itself was down
+   * that long, or that row kept being `skipped` for an unresolvable payer. Both
+   * are worth knowing, and neither is visible any other way.
+   */
+  spanClamped: number;
+  /**
    * Row sources whose LIST threw this tick — their rows were not metered at all
    * (not skipped, not billed: unread). Their accrual is untouched and is caught
    * up in full on the next tick. Named rather than counted so an operator can
@@ -581,6 +628,8 @@ export async function reconcileSandboxStorage(
   let staleMeasurements = 0;
   let neverMeasured = 0;
   let watermarkSuperseded = 0;
+  let spanClamped = 0;
+  let billableRows = 0;
   let totalCostDollars = 0;
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
     session: { live: 0, neverMeasured: 0, stale: 0 },
@@ -595,7 +644,12 @@ export async function reconcileSandboxStorage(
     // nothing was billed, so it counts as `failed` exactly like before.
     let resolved: { ownerId: string; costDollars: number; gbMonths: number } | undefined;
     try {
-      const elapsedMs = now.getTime() - subject.storageLastBilledAt.getTime();
+      const rawElapsedMs = now.getTime() - subject.storageLastBilledAt.getTime();
+      // Capped, never extrapolated — see MAX_BILLABLE_SPAN_MS. The watermark
+      // still advances to `now` below, so the excess is forgiven once rather
+      // than accumulating into an ever-larger retroactive charge.
+      const elapsedMs = Math.min(rawElapsedMs, MAX_BILLABLE_SPAN_MS);
+      if (rawElapsedMs > MAX_BILLABLE_SPAN_MS) spanClamped += 1;
       const lastMeasuredGB = subject.measuredBytes === null ? null : bytesToGB(subject.measuredBytes);
       const awake = now.getTime() - subject.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
       const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: subject.measuredAt, awake, now });
@@ -638,6 +692,10 @@ export async function reconcileSandboxStorage(
       // residual is negligible; retroactively over-charging is not.
       //
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
+      // Counted BEFORE the payer lookup and before any write: a fact about the
+      // ACCRUAL, not about whether the tick managed to act on it.
+      if (costDollars > 0) billableRows += 1;
+
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
           if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
@@ -660,6 +718,12 @@ export async function reconcileSandboxStorage(
         // Can't resolve who to bill (e.g. the drive vanished). Leave the
         // watermark untouched so this window keeps accruing until it either
         // resolves on a later run or the row itself is torn down/deleted.
+        //
+        // The accrual it keeps is BOUNDED by `MAX_BILLABLE_SPAN_MS`: a row that
+        // stays unresolvable for weeks and then resolves is billed a day, not
+        // weeks-at-today's-footprint. Freezing the watermark is what makes the
+        // skip lossless for short outages; the cap is what stops a long one
+        // becoming a retroactive over-bill.
         skipped += 1;
         continue;
       }
@@ -730,6 +794,8 @@ export async function reconcileSandboxStorage(
     staleMeasurements,
     neverMeasured,
     watermarkSuperseded,
+    spanClamped,
+    billableRows,
     measurementHealth,
     failedSources,
     totalCostDollars,
