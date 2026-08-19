@@ -146,3 +146,65 @@ export interface TaskHandlers {
   onStartEdit: (task: TaskItem) => void;
   onConfigureTriggers?: (task: TaskItem) => void;
 }
+
+/**
+ * Which list a task belongs to, alongside the task itself.
+ *
+ * Every task write goes to `/api/pages/{listPageId}/tasks/{taskId}`, where
+ * `listPageId` is the page of the list CONTAINING the task — not the task's own
+ * page. At the top level that is always the viewed page, which is why the
+ * handlers hard-coded it. Nested rows belong to their parent task's list, so
+ * the list id has to travel with the task id or a sub-task's PATCH goes to the
+ * root list and 404s on the parent-child check.
+ */
+export interface TaskLocation {
+  readonly listPageId: string;
+  readonly taskId: string;
+}
+
+/**
+ * The same handler set, but addressed by TaskLocation. This is what TaskListView
+ * implements; `bindTaskHandlersToList` narrows it back down for the surfaces
+ * that only ever render top-level tasks.
+ */
+export interface LocatedTaskHandlers {
+  onToggleComplete: (loc: TaskLocation, task: TaskItem) => void;
+  onStatusChange: (loc: TaskLocation, status: string) => void;
+  onPriorityChange: (loc: TaskLocation, priority: string) => void;
+  onAssigneeChange: (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => void;
+  onMultiAssigneeChange?: (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
+  onDueDateChange: (loc: TaskLocation, date: Date | null) => void;
+  onSaveTitle: (loc: TaskLocation, title: string) => void;
+  onDelete: (loc: TaskLocation) => void;
+  onNavigate: (task: TaskItem) => void;
+  onStartEdit: (task: TaskItem) => void;
+  onConfigureTriggers?: (task: TaskItem) => void;
+}
+
+/**
+ * Adapt located handlers to the flat `TaskHandlers` shape by fixing the list.
+ *
+ * Kanban and the mobile card list only ever render tasks of the viewed list, so
+ * they keep their existing prop contract instead of being churned through the
+ * whole tree refactor.
+ */
+export const bindTaskHandlersToList = (
+  h: LocatedTaskHandlers,
+  listPageId: string,
+): TaskHandlers => ({
+  onToggleComplete: (task) => h.onToggleComplete({ listPageId, taskId: task.id }, task),
+  onStatusChange: (taskId, status) => h.onStatusChange({ listPageId, taskId }, status),
+  onPriorityChange: (taskId, priority) => h.onPriorityChange({ listPageId, taskId }, priority),
+  onAssigneeChange: (taskId, assigneeId, agentId) =>
+    h.onAssigneeChange({ listPageId, taskId }, assigneeId, agentId),
+  ...(h.onMultiAssigneeChange && {
+    onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) =>
+      h.onMultiAssigneeChange!({ listPageId, taskId }, assigneeIds),
+  }),
+  onDueDateChange: (taskId, date) => h.onDueDateChange({ listPageId, taskId }, date),
+  onSaveTitle: (taskId, title) => h.onSaveTitle({ listPageId, taskId }, title),
+  onDelete: (taskId) => h.onDelete({ listPageId, taskId }),
+  onNavigate: h.onNavigate,
+  onStartEdit: h.onStartEdit,
+  ...(h.onConfigureTriggers && { onConfigureTriggers: h.onConfigureTriggers }),
+});

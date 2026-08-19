@@ -92,6 +92,7 @@ import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
 import Toolbar from '@/components/editors/Toolbar';
 import { TaskRowDescription } from './TaskRowDescription';
+import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -99,13 +100,16 @@ import {
   TaskItem,
   TaskListData,
   TaskStatusConfig,
+  TaskLocation,
+  LocatedTaskHandlers,
+  bindTaskHandlersToList,
   buildStatusConfig,
   getStatusOrder,
   isCompletedStatus,
   PRIORITY_CONFIG,
-  TaskHandlers,
   canExpandTask,
 } from './task-list-types';
+import { resolveToggleStatus, blockedByOpenSubTasks } from '@/lib/tasks/task-cache-core';
 
 interface TaskListViewProps {
   page: TreePage;
@@ -464,7 +468,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, cont
 
   const expansionRow = (
     <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
-      <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
+      <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-2 border-b bg-muted/20">
         {isExpanded && <TaskRowDescription task={task} driveId={driveId} />}
       </td>
     </tr>
@@ -519,7 +523,15 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
+  // Carries the list the task belongs to, not just the task: TaskAgentTriggersDialog
+  // writes through /api/pages/{pageId}/tasks/... , and for a nested task that is its
+  // parent task's page, not the viewed list's.
+  const [triggerDialogTask, setTriggerDialogTask] =
+    useState<{ task: TaskItem; listPageId: string } | null>(null);
+  const openTriggerDialog = useCallback(
+    (task: TaskItem, listPageId: string) => setTriggerDialogTask({ task, listPageId }),
+    [],
+  );
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
   const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
   const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
@@ -738,13 +750,15 @@ function TaskListView({ page }: TaskListViewProps) {
     visibleEl?.scrollIntoView({ block: 'center' });
   }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
-  // Create new task (with optional status for kanban)
-  const handleCreateTask = async (title?: string, status?: string) => {
+  // Create new task (with optional status for kanban).
+  // `listPageId` defaults to the viewed list; nested "+ sub-task" rows pass their
+  // own task's page so the task is created under that task, not at the root.
+  const handleCreateTask = async (listPageId: string, title?: string, status?: string) => {
     const taskTitle = (title ?? newTaskTitle).trim();
     if (!taskTitle || !canEdit) return;
 
     try {
-      await post(`/api/pages/${page.id}/tasks`, {
+      await post(`/api/pages/${listPageId}/tasks`, {
         title: taskTitle,
         ...(status && { status }),
       });
@@ -755,12 +769,16 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
+  // Create at the root of the viewed list — the toolbar / new-task-row entry point.
+  const handleCreateRootTask = (title?: string, status?: string) =>
+    handleCreateTask(page.id, title, status);
+
   // Update task status
-  const handleStatusChange = async (taskId: string, newStatus: string) => {
+  const handleStatusChange = async (loc: TaskLocation, newStatus: string) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { status: newStatus });
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { status: newStatus });
       mutateTasks();
     } catch {
       toast.error('Failed to update status');
@@ -768,11 +786,11 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Update task priority
-  const handlePriorityChange = async (taskId: string, newPriority: string) => {
+  const handlePriorityChange = async (loc: TaskLocation, newPriority: string) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { priority: newPriority });
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { priority: newPriority });
       mutateTasks();
     } catch {
       toast.error('Failed to update priority');
@@ -780,33 +798,20 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Toggle task completion - uses group-based detection
-  const handleToggleComplete = async (task: TaskItem) => {
+  const handleToggleComplete = async (loc: TaskLocation, task: TaskItem) => {
     if (!canEdit) return;
 
     const isDone = isCompletedStatus(task.status, statusConfigs);
-    if (isDone) {
-      // Move to first "todo" group status
-      const todoStatus = statusOrder.find(slug => {
-        const cfg = statusConfigMap[slug];
-        return cfg && cfg.group === 'todo';
-      }) || 'pending';
-      await handleStatusChange(task.id, todoStatus);
-    } else {
-      // Block completion when sub-tasks are incomplete
-      const subTaskCount = task.subTaskCount ?? 0;
-      const subTaskCompletedCount = task.subTaskCompletedCount ?? 0;
-      if (subTaskCount > 0 && subTaskCompletedCount < subTaskCount) {
-        const pending = subTaskCount - subTaskCompletedCount;
-        toast.error(`Finish ${pending} sub-task${pending > 1 ? 's' : ''} first`);
+    if (!isDone) {
+      // Block completion when sub-tasks are incomplete. The server enforces the
+      // same rule with a 422; this avoids the round trip and the visible flip.
+      const blocked = blockedByOpenSubTasks(task);
+      if (blocked) {
+        toast.error(`Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`);
         return;
       }
-      // Move to first "done" group status
-      const doneStatus = statusOrder.find(slug => {
-        const cfg = statusConfigMap[slug];
-        return cfg && cfg.group === 'done';
-      }) || 'completed';
-      await handleStatusChange(task.id, doneStatus);
     }
+    await handleStatusChange(loc, resolveToggleStatus(statusConfigs, isDone));
   };
 
   // Start editing title
@@ -817,9 +822,9 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Shared function to save task title
-  const handleSaveTaskTitle = async (taskId: string, title: string) => {
+  const handleSaveTaskTitle = async (loc: TaskLocation, title: string) => {
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { title });
       mutateTasks();
     } catch {
       toast.error('Failed to update task');
@@ -833,16 +838,16 @@ function TaskListView({ page }: TaskListViewProps) {
       return;
     }
 
-    await handleSaveTaskTitle(editingTaskId, editingTitle.trim());
+    await handleSaveTaskTitle({ listPageId: page.id, taskId: editingTaskId }, editingTitle.trim());
     setEditingTaskId(null);
   };
 
   // Delete task
-  const handleDeleteTask = async (taskId: string) => {
+  const handleDeleteTask = async (loc: TaskLocation) => {
     if (!canEdit) return;
 
     try {
-      await del(`/api/pages/${page.id}/tasks/${taskId}`);
+      await del(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`);
       mutateTasks();
       toast.success('Task deleted');
     } catch {
@@ -851,11 +856,11 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Update task assignee (user or agent) - legacy single assignee
-  const handleAssigneeChange = async (taskId: string, assigneeId: string | null, agentId: string | null) => {
+  const handleAssigneeChange = async (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, {
         assigneeId,
         assigneeAgentId: agentId,
       });
@@ -866,11 +871,11 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Update task assignees (multiple)
-  const handleMultiAssigneeChange = async (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
+  const handleMultiAssigneeChange = async (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeIds });
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { assigneeIds });
       mutateTasks();
     } catch {
       toast.error('Failed to update assignees');
@@ -878,11 +883,11 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Update task due date
-  const handleDueDateChange = async (taskId: string, dueDate: Date | null) => {
+  const handleDueDateChange = async (loc: TaskLocation, dueDate: Date | null) => {
     if (!canEdit) return;
 
     try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
+      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, {
         dueDate: dueDate?.toISOString() || null,
       });
       mutateTasks();
@@ -891,10 +896,14 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
+  // Collapse every expanded row the moment a drag begins — see the onDragStart
+  // comment on DndContext for why this can't wait until the drop.
+  const handleDragStart = () => setExpandedTaskIds(new Set());
+
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    setExpandedTaskIds(new Set()); // collapse all rows before reorder
+    setExpandedTaskIds(new Set()); // also covers drag-cancel and keeps the post-drop tree flat
     if (!over || active.id === over.id || !canEdit) return;
 
     const tasks = filteredTasks;
@@ -963,19 +972,23 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Handlers object for kanban view
-  const taskHandlers: TaskHandlers = {
+  // Every write is addressed by TaskLocation so a nested row can target its own
+  // parent list. Kanban and the mobile cards only ever render top-level tasks, so
+  // they keep the flat TaskHandlers contract via the root binding below.
+  const locatedHandlers: LocatedTaskHandlers = {
     onToggleComplete: handleToggleComplete,
     onStatusChange: handleStatusChange,
     onPriorityChange: handlePriorityChange,
     onAssigneeChange: handleAssigneeChange,
+    onMultiAssigneeChange: handleMultiAssigneeChange,
     onDueDateChange: handleDueDateChange,
     onSaveTitle: handleSaveTaskTitle,
     onDelete: handleDeleteTask,
     onNavigate: handleNavigate,
     onStartEdit: handleStartEdit,
-    onConfigureTriggers: setTriggerDialogTask,
+    onConfigureTriggers: (task) => openTriggerDialog(task, page.id),
   };
+  const taskHandlers = bindTaskHandlersToList(locatedHandlers, page.id);
 
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
@@ -1148,20 +1161,16 @@ function TaskListView({ page }: TaskListViewProps) {
           <MobileTaskCard
             task={task}
             canEdit={canEdit}
-            onToggleComplete={handleToggleComplete}
-            onStatusChange={handleStatusChange}
-            onPriorityChange={handlePriorityChange}
-            onMultiAssigneeChange={handleMultiAssigneeChange}
-            onDueDateChange={handleDueDateChange}
-            onSaveTitle={handleSaveTaskTitle}
-            onStartEdit={handleStartEdit}
-            onDelete={handleDeleteTask}
-            onNavigate={(t) => {
-              if (t.pageId) {
-                router.push(`/dashboard/${page.driveId}/${t.pageId}`);
-              }
-            }}
-            onConfigureTriggers={(t) => setTriggerDialogTask(t)}
+            onToggleComplete={taskHandlers.onToggleComplete}
+            onStatusChange={taskHandlers.onStatusChange}
+            onPriorityChange={taskHandlers.onPriorityChange}
+            onMultiAssigneeChange={taskHandlers.onMultiAssigneeChange!}
+            onDueDateChange={taskHandlers.onDueDateChange}
+            onSaveTitle={taskHandlers.onSaveTitle}
+            onStartEdit={taskHandlers.onStartEdit}
+            onDelete={taskHandlers.onDelete}
+            onNavigate={taskHandlers.onNavigate}
+            onConfigureTriggers={taskHandlers.onConfigureTriggers}
             driveId={page.driveId}
             isEditing={editingTaskId === task.id}
             editingTitle={editingTitle}
@@ -1185,7 +1194,7 @@ function TaskListView({ page }: TaskListViewProps) {
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateTask();
+                if (e.key === 'Enter') handleCreateRootTask();
               }}
               className="border-0 shadow-none focus-visible:ring-0 px-0"
             />
@@ -1213,7 +1222,7 @@ function TaskListView({ page }: TaskListViewProps) {
             editingTitle={editingTitle}
             onEditingTitleChange={setEditingTitle}
             onCancelEdit={() => setEditingTaskId(null)}
-            onCreateTask={handleCreateTask}
+            onCreateTask={handleCreateRootTask}
             statusConfigs={statusConfigs}
           />
           {loadMoreControl}
@@ -1227,6 +1236,12 @@ function TaskListView({ page }: TaskListViewProps) {
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
+              // Collapse BEFORE the drag, not after. Today the expansion row is
+              // always rendered and merely CSS-`hidden`, so it has no layout and
+              // verticalListSortingStrategy sees contiguous sortables either way.
+              // Once expansions render real sibling rows with layout, dragging
+              // with rows open produces wrong transforms and wrong drop targets.
+              onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
             >
               <div className="overflow-x-auto">
@@ -1268,12 +1283,12 @@ function TaskListView({ page }: TaskListViewProps) {
                               <Pencil className="h-4 w-4 mr-2" />
                               Rename
                             </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setTriggerDialogTask(task)} disabled={!canEdit}>
+                            <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
                               <Zap className="h-4 w-4 mr-2" />
                               Agent triggers…
                             </ContextMenuItem>
                             <ContextMenuItem
-                              onSelect={() => handleDeleteTask(task.id)}
+                              onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
                               className="text-destructive"
                               disabled={!canEdit}
                             >
@@ -1287,7 +1302,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         <TableCell>
                           <Checkbox
                             checked={isCompletedStatus(task.status, statusConfigs)}
-                            onCheckedChange={() => handleToggleComplete(task)}
+                            onCheckedChange={() => handleToggleComplete({ listPageId: page.id, taskId: task.id }, task)}
                             disabled={!canEdit}
                           />
                         </TableCell>
@@ -1343,7 +1358,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         <TableCell>
                           <Select
                             value={task.status}
-                            onValueChange={(value) => handleStatusChange(task.id, value)}
+                            onValueChange={(value) => handleStatusChange({ listPageId: page.id, taskId: task.id }, value)}
                             disabled={!canEdit}
                           >
                             <SelectTrigger className="h-8 w-28">
@@ -1371,7 +1386,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         <TableCell>
                           <Select
                             value={task.priority}
-                            onValueChange={(value) => handlePriorityChange(task.id, value)}
+                            onValueChange={(value) => handlePriorityChange({ listPageId: page.id, taskId: task.id }, value)}
                             disabled={!canEdit}
                           >
                             <SelectTrigger className="h-8 w-28">
@@ -1397,13 +1412,13 @@ function TaskListView({ page }: TaskListViewProps) {
                             <MultiAssigneeSelect
                               driveId={page.driveId}
                               assignees={task.assignees || []}
-                              onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
+                              onUpdate={(assigneeIds) => handleMultiAssigneeChange({ listPageId: page.id, taskId: task.id }, assigneeIds)}
                               disabled={!canEdit}
                             />
                             {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
                               <button
                                 type="button"
-                                onClick={() => setTriggerDialogTask(task)}
+                                onClick={() => openTriggerDialog(task, page.id)}
                                 title="Agent trigger configured — click to edit"
                                 aria-label="Agent trigger configured — click to edit"
                                 className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
@@ -1419,7 +1434,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         <TableCell>
                           <DueDatePicker
                             currentDate={task.dueDate}
-                            onSelect={(date) => handleDueDateChange(task.id, date)}
+                            onSelect={(date) => handleDueDateChange({ listPageId: page.id, taskId: task.id }, date)}
                             disabled={!canEdit}
                           />
                         </TableCell>
@@ -1443,12 +1458,12 @@ function TaskListView({ page }: TaskListViewProps) {
                                 <Pencil className="h-4 w-4 mr-2" />
                                 Rename
                               </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => setTriggerDialogTask(task)} disabled={!canEdit}>
+                              <DropdownMenuItem onClick={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
                                 <Zap className="h-4 w-4 mr-2" />
                                 Agent triggers…
                               </DropdownMenuItem>
                               <DropdownMenuItem
-                                onClick={() => handleDeleteTask(task.id)}
+                                onClick={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
                                 className="text-destructive"
                                 disabled={!canEdit}
                               >
@@ -1471,14 +1486,14 @@ function TaskListView({ page }: TaskListViewProps) {
                       <TableCell>
                         <Checkbox disabled className="opacity-30" />
                       </TableCell>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={TASK_TABLE_COLUMN_COUNT - 2}>
                         <Input
                           id="new-task-input"
                           placeholder="+ Add a new task..."
                           value={newTaskTitle}
                           onChange={(e) => setNewTaskTitle(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleCreateTask();
+                            if (e.key === 'Enter') handleCreateRootTask();
                           }}
                           className="border-0 shadow-none focus-visible:ring-0 px-0"
                         />
@@ -1514,11 +1529,11 @@ function TaskListView({ page }: TaskListViewProps) {
         <TaskAgentTriggersDialog
           open={!!triggerDialogTask}
           onOpenChange={(open) => { if (!open) setTriggerDialogTask(null); }}
-          taskId={triggerDialogTask.id}
-          taskTitle={triggerDialogTask.title}
-          pageId={page.id}
+          taskId={triggerDialogTask.task.id}
+          taskTitle={triggerDialogTask.task.title}
+          pageId={triggerDialogTask.listPageId}
           driveId={page.driveId}
-          hasDueDate={!!triggerDialogTask.dueDate}
+          hasDueDate={!!triggerDialogTask.task.dueDate}
           onSaved={() => mutateTasks()}
         />
       )}
