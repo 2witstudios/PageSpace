@@ -160,6 +160,26 @@ describe('resolveAnchor with duplicated quote text', () => {
     expect(resolvedFirst.start).toBe(FIRST + 2);
   });
 
+  it('measures distance to where the QUOTE lands, not where the context starts', () => {
+    // Two context matches whose needles start at 0 and 100, so the quotes
+    // themselves sit at 32 and 132. With the hint at 60 the first quote is the
+    // nearer one (28 away vs 72) even though the second NEEDLE is nearer (40
+    // away vs 60). Comparing needle starts instead of quote starts picks the
+    // wrong copy, and only a hint inside this window exposes it.
+    const needle = `${SEG}${TARGET}${SEG}`;
+    const doc = `${needle}${'-'.repeat(100 - needle.length)}${needle}`;
+
+    expect(doc.indexOf(needle)).toBe(0);
+    expect(doc.lastIndexOf(needle)).toBe(100);
+
+    const drifted = { ...createAnchor(doc, SEG.length, SEG.length + TARGET.length, { revision: 1 }), start: 60, end: 66 };
+    expect(doc.slice(drifted.start, drifted.end)).not.toBe(TARGET);
+
+    const resolved = expectPlaced(resolveAnchor(doc, drifted));
+    expect(resolved.start).toBe(SEG.length);
+    expect(resolved.end).toBe(SEG.length + TARGET.length);
+  });
+
   it('reports lower confidence when the match was ambiguous', () => {
     const secondAnchor = createAnchor(DUP, SECOND, SECOND + TARGET.length, { revision: 1 });
     const ambiguous = expectPlaced(resolveAnchor(`xx${DUP}`, secondAnchor));

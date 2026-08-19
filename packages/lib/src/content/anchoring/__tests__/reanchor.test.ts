@@ -128,6 +128,18 @@ describe('portAnchor — forward-porting through the diff', () => {
     expect(ported.confidence).toBeGreaterThan(0.5);
   });
 
+  it('a repaired anchor never claims exact, even landing back on its stale offsets', () => {
+    // Hint is 2 too far right, so it has to be repaired against the old text
+    // (found at 20). The edit then shifts the quote 2 to the right, back onto
+    // the very offset the anchor recorded — a coincidence, not evidence.
+    const drifted = { ...ANCHOR, start: START + 2, end: END + 2 };
+    const ported = expectPlaced(portAnchor(drifted, DOC, `xx${DOC}`));
+
+    expect(ported.start).toBe(drifted.start);
+    expect(ported.status).toBe('shifted');
+    expect(ported.confidence).toBeLessThan(1);
+  });
+
   it('orphans when the anchor cannot be found in the old text either', () => {
     expect(portAnchor(ANCHOR, 'nothing like the anchored prose at all', DOC)).toEqual({
       status: 'orphaned',

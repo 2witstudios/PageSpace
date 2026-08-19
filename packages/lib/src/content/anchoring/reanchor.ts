@@ -25,7 +25,10 @@ import { type DiffChange, diffContent } from '../diff-utils';
 import { resolveAnchor } from './resolve';
 import type { AnchorResolution, TextAnchor } from './types';
 
-const ORPHANED: AnchorResolution = { status: 'orphaned' };
+/** A fresh object per call: a shared constant would be mutable by callers. */
+function orphaned(): AnchorResolution {
+  return { status: 'orphaned' };
+}
 
 type OldRange = { from: number; to: number; confidence: number };
 
@@ -75,7 +78,12 @@ function survivingSpans(changes: readonly DiffChange[]): SurvivingSpan[] {
   return spans;
 }
 
-/** Map a single old-text offset forward. Null when it fell inside deleted text. */
+/**
+ * Map a single old-text offset forward. Null when it fell inside deleted text.
+ * Spans are checked in order, so a caret sitting on the boundary of an edit
+ * maps to the earlier side of it — i.e. it stays put rather than jumping over
+ * text inserted at its position.
+ */
 function mapPoint(spans: readonly SurvivingSpan[], point: number): number | null {
   for (const span of spans) {
     if (point >= span.oldStart && point <= span.oldEnd) {
@@ -99,15 +107,18 @@ export function portAnchor(
 ): AnchorResolution {
   const located = locateInOldText(anchor, oldText);
   if (!located) {
-    return ORPHANED;
+    return orphaned();
   }
 
-  const spans = survivingSpans(diffContent(oldText, newText).changes);
+  // Both sides are projections, which are plain text by construction. Saying so
+  // skips diff-utils' format sniff, which would otherwise attempt to JSON.parse
+  // the whole document on every port.
+  const spans = survivingSpans(diffContent(oldText, newText, { format: 'text' }).changes);
 
   if (located.from === located.to) {
     const mapped = mapPoint(spans, located.from);
     if (mapped === null) {
-      return ORPHANED;
+      return orphaned();
     }
     return {
       status: mapped === anchor.start ? 'exact' : 'shifted',
@@ -139,16 +150,17 @@ export function portAnchor(
   }
 
   if (survived === 0) {
-    return ORPHANED;
+    return orphaned();
   }
 
-  const ported = newText.slice(portedStart, portedEnd);
-  const intact = ported === anchor.exact;
-  const status = intact
-    ? portedStart === anchor.start
-      ? 'exact'
-      : 'shifted'
-    : 'fuzzy';
+  // 'exact' is reserved for a quote that came through byte-identical AND still
+  // sits at the offsets the anchor recorded. A repaired hint (confidence < 1)
+  // could only land back on its recorded offsets by accident, so it never
+  // claims to be exact.
+  let status: 'exact' | 'shifted' | 'fuzzy' = 'fuzzy';
+  if (newText.slice(portedStart, portedEnd) === anchor.exact) {
+    status = portedStart === anchor.start && located.confidence === 1 ? 'exact' : 'shifted';
+  }
 
   const fidelity = survived / (located.to - located.from);
   return {
