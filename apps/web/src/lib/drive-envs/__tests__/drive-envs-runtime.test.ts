@@ -66,9 +66,18 @@ vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
   canRunCode: vi.fn(async () => ({ ok: true })),
   isCodeExecutionEnabled: () => true,
 }));
-/** Typed FROM THE REAL STORE contract, for the same anti-drift reason the deps type below is. */
+/**
+ * Typed FROM THE REAL STORE contract, for the same anti-drift reason the deps
+ * type below is — and it must resolve TRUE, not void.
+ *
+ * The real `recordStorageMeasurement` answers whether its compare-and-swap wrote
+ * the row, and `envStorageMeasureSeam` warns when it says no. A mock resolving
+ * `undefined` is falsy, so it silently exercises the CAS-REFUSED branch while
+ * a test asserting only "was it called" still passes — green for the wrong
+ * reason, on the success path this file exists to prove.
+ */
 const recordStorageMeasurement = vi.hoisted(() =>
-  vi.fn<(input: EnvMeasurementWrite) => Promise<void>>(async () => {}),
+  vi.fn<(input: EnvMeasurementWrite) => Promise<boolean>>(async () => true),
 );
 vi.mock('@pagespace/lib/services/drive-envs/drive-envs-store', () => ({
   createDbDriveEnvStore: async () => ({ recordStorageMeasurement }),

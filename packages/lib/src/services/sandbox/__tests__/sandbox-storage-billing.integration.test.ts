@@ -400,4 +400,103 @@ describe.skipIf(dbSkipExplicitlyAllowed())('recordStorageMeasurement — the CAS
       expected: { wrote: true, bytes: 1_000_000_000 },
     });
   });
+
+});
+
+/**
+ * The retroactive-OVER-bill guard, in real SQL.
+ *
+ * Every other failure in this meter under-bills; this is the one shape that
+ * could over-bill a real payer, so it is pinned against the database rather than
+ * argued from a docblock. A torn-down env leaves the live listing
+ * (`spriteTornDownAt IS NOT NULL`), so its watermark stops advancing and can sit
+ * frozen indefinitely — and because Sprite names are deterministic, provisioning
+ * again resumes the SAME filesystem, so the baseline `du` immediately records a
+ * real footprint. The reset in `revivedDriveEnvColumns` is what stands between
+ * those two facts and a bill for weeks in which no machine existed.
+ */
+describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormancy', () => {
+  let store: DriveEnvStore;
+
+  beforeAll(async () => {
+    if (!dbAvailable) return;
+    store = await createDbDriveEnvStore();
+  });
+  it('RESETS the billing watermark when a torn-down env is provisioned again — the retroactive-over-bill guard', async () => {
+    // The scenario worth pinning, because it is the one way the meter could
+    // over-bill rather than under-bill. A torn-down env leaves the live listing
+    // (`spriteTornDownAt IS NOT NULL`), so its watermark stops advancing and can
+    // sit frozen for weeks. Sprite names are deterministic, so provisioning
+    // again resumes the SAME filesystem and the baseline `du` immediately
+    // records its real footprint. If the watermark were still the pre-teardown
+    // one, the next tick would multiply that footprint by the entire dormant
+    // span and charge a real payer for weeks in which no machine existed.
+    const longAgo = new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000);
+    const envId = await seedEnv({
+      sandboxId: 'pgs-env-dormant',
+      spriteInstanceId: 'gen-old',
+      spriteTornDownAt: new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000),
+      storageLastBilledAt: longAgo,
+    });
+
+    // Provisioning again is the `create` arm (the row reads as torn down), which
+    // goes through the identity write.
+    const wrote = await store.updateSpriteIdentity({
+      envId,
+      previousSandboxId: 'pgs-env-dormant',
+      spriteKey: 'env-key',
+      sandboxId: 'pgs-env-dormant',
+      spriteInstanceId: 'gen-new',
+      egressPolicyToken: null,
+      stamps: { lastActiveAt: NOW, teardownRequestedAt: null, spriteTornDownAt: null },
+      now: NOW,
+    });
+
+    assert({
+      given: 'a torn-down env, dormant for 40 days, being provisioned again',
+      should: "reset its billing watermark to now, so the dormant span can never be billed retroactively",
+      actual: { wrote, billedAt: await readBilledAt(envId) },
+      expected: { wrote: true, billedAt: NOW },
+    });
+  });
+
+  it('bills a revived env only from its RESET watermark, not from before its dormancy', async () => {
+    // The same guarantee, end to end through the real reconcile: revive, measure,
+    // then meter. A frozen watermark would price 40 days of a 1GB footprint;
+    // a reset one prices nothing, because no time has passed since the revive.
+    const envId = await seedEnv({
+      sandboxId: 'pgs-env-dormant-2',
+      spriteInstanceId: 'gen-old',
+      spriteTornDownAt: new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000),
+      storageLastBilledAt: new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000),
+    });
+    await store.updateSpriteIdentity({
+      envId,
+      previousSandboxId: 'pgs-env-dormant-2',
+      spriteKey: 'env-key',
+      sandboxId: 'pgs-env-dormant-2',
+      spriteInstanceId: 'gen-new',
+      egressPolicyToken: null,
+      stamps: { lastActiveAt: NOW, teardownRequestedAt: null, spriteTornDownAt: null },
+      now: NOW,
+    });
+    // The baseline the create arm's seam would have taken, on the resumed disk.
+    await store.recordStorageMeasurement({
+      envId,
+      spriteInstanceId: 'gen-new',
+      measuredBytes: 1_000_000_000,
+      measuredAt: NOW,
+    });
+
+    const { deps, charges } = realDepsCapturingCharges();
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'an env revived from 40 days of dormancy, then metered',
+      should: 'charge NOTHING for the dormant span — zero elapsed since the revive reset its watermark',
+      actual: { charged: result.charged, processed: result.processed, charges: charges.length },
+      expected: { charged: 0, processed: 1, charges: 0 },
+    });
+  });
+
 });
