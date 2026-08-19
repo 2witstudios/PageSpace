@@ -135,10 +135,17 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // The billed unit, named in the meter line itself. Sessions keep the
       // string they have always written (renaming it would split one meter's
       // history across two labels in every existing usage breakdown); envs get
-      // their own, so a drive owner reading their bill can tell a persistent
-      // ENVIRONMENT apart from an ephemeral session's scratch disk. Neither
-      // string names a substrate — an env that moves to a bigger guest, a GPU
-      // host or another platform keeps billing under this same label.
+      // their own. Neither string names a substrate — an env that moves to a
+      // bigger guest, a GPU host or another platform keeps billing under this
+      // same label.
+      //
+      // What this label does NOT yet do is separate the two in the usage
+      // breakdown's per-agent section: that view buckets every `source:
+      // 'terminal'` row by `pageId`, and an env has none, so env storage lands
+      // in the same "Unattributed agent" line as global-assistant session
+      // storage. Only the by-model view distinguishes them today. Ratified as
+      // acceptable for this slice; envs get their own breakdown section as a
+      // binding requirement on the Environments UI task.
       model: subjectKind === 'env' ? 'drive-env-storage' : 'terminal-machine-storage',
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
