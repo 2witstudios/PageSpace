@@ -196,6 +196,98 @@ describe('claimPublishedAppsForWork — two workers, disjoint sets, AFTER the tr
   });
 });
 
+/**
+ * The build reconciler's premise is "this app has been building for twenty minutes,
+ * so its worker is dead". That question is answered by `updatedAt` — and CLAIMING
+ * WRITES THE ROW, which bumps `updatedAt` via drizzle's `$onUpdate`. A mocked test
+ * can show the predicate we emit; only a real Postgres shows that the age filter is
+ * evaluated against the PRE-CLAIM timestamp and that a fresh row is genuinely
+ * invisible to a stale-only claim.
+ */
+describe('claimPublishedAppsForWork — the staleness filter is the query’s, not the caller’s', () => {
+  it('given a row that has just moved, should not be claimed by a stale-only pass', async () => {
+    await seedApp('building');
+    const claim = await claimPublishedAppsForWork({
+      statuses: ['building'],
+      limit: 10,
+      staleForMs: 60_000,
+      deps,
+    });
+    expect(claim.apps).toEqual([]);
+  });
+
+  it('given a row that has sat past the horizon, should claim it', async () => {
+    const appId = await seedApp('building');
+    await db
+      .update(publishedApps)
+      .set({ updatedAt: sql`now() - interval '1 hour'` })
+      .where(eq(publishedApps.id, appId));
+
+    const claim = await claimPublishedAppsForWork({
+      statuses: ['building'],
+      limit: 10,
+      staleForMs: 60_000,
+      deps,
+    });
+    expect(claim.apps.map((app) => app.id)).toEqual([appId]);
+  });
+
+  it('given a claim, should bump updatedAt — which is why the filter cannot live in the caller', async () => {
+    const appId = await seedApp('building');
+    await db
+      .update(publishedApps)
+      .set({ updatedAt: sql`now() - interval '1 hour'` })
+      .where(eq(publishedApps.id, appId));
+
+    await claimPublishedAppsForWork({ statuses: ['building'], limit: 10, staleForMs: 60_000, deps });
+
+    const [row] = await db.select().from(publishedApps).where(eq(publishedApps.id, appId));
+    expect(row.updatedAt.getTime()).toBeGreaterThan(Date.now() - 60_000);
+  });
+});
+
+/**
+ * `imageSizeBytes` feeds the economics dashboard's SUM. A negative value there is
+ * not a small number, it is a silent credit against every other app's storage cost
+ * — so the column is CHECK-constrained, and this is the test that the database
+ * actually enforces it rather than the schema merely describing it.
+ */
+describe('published_apps.imageSizeBytes — the economics column', () => {
+  it('given a negative size, should be rejected by Postgres', async () => {
+    const appId = await seedApp('building');
+    const error = await db
+      .update(publishedApps)
+      .set({ imageSizeBytes: -1 })
+      .where(eq(publishedApps.id, appId))
+      .then(() => null)
+      .catch((err: unknown) => err);
+
+    expect(error, 'Postgres accepted a negative image size').not.toBe(null);
+    // Drizzle wraps the driver error; the constraint name is on the cause, and
+    // naming it is what makes this a test of THIS constraint rather than of any
+    // failure at all.
+    const cause = (error as { cause?: { constraint?: string } })?.cause;
+    expect(cause?.constraint).toBe('published_apps_image_size_nonneg');
+  });
+
+  it('given a size beyond 32 bits, should round-trip — images are gigabytes', async () => {
+    const appId = await seedApp('building');
+    await db
+      .update(publishedApps)
+      .set({ imageSizeBytes: 8_000_000_000 })
+      .where(eq(publishedApps.id, appId));
+
+    const [row] = await db.select().from(publishedApps).where(eq(publishedApps.id, appId));
+    expect(row.imageSizeBytes).toBe(8_000_000_000);
+  });
+
+  it('given no size, should stay null — absent is a legal answer', async () => {
+    const appId = await seedApp('building');
+    const [row] = await db.select().from(publishedApps).where(eq(publishedApps.id, appId));
+    expect(row.imageSizeBytes).toBe(null);
+  });
+});
+
 describe('transitionPublishedApp — the pure rules and the CHECK constraints agree', () => {
   /**
    * The LEAST a row must carry to exist in a given status at all — no more, so the

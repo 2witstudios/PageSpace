@@ -1,11 +1,12 @@
 import { BrowserWindow, shell } from 'electron';
 import * as path from 'path';
 import { store } from './store';
-import { getAppUrl } from './app-url';
+import { getAppOrigin, getStartUrl } from './app-url';
 import { mainWindow, setMainWindow, isQuitting } from './state';
 import { injectDesktopStyles, injectDoubleClickHandler } from './window-injections';
 import { setupAutoUpdater } from './updater';
 import { classifyNavigation } from '../shared/navigation-guard';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 const storeAny = store as any;
 
@@ -45,8 +46,7 @@ export function createWindow(): void {
   const window = new BrowserWindow(windowOptions);
   setMainWindow(window);
 
-  const appUrl = getAppUrl();
-  window.loadURL(appUrl);
+  window.loadURL(getStartUrl());
 
   window.webContents.on('did-finish-load', () => {
     injectDesktopStyles();
@@ -66,8 +66,7 @@ export function createWindow(): void {
       console.log(`Network error (${errorCode}): ${errorDescription} for ${validatedURL}`);
 
       const offlinePath = path.join(__dirname, '../../src/offline.html');
-      const appUrl = getAppUrl();
-      window.loadFile(offlinePath, { hash: encodeURIComponent(appUrl) });
+      window.loadFile(offlinePath, { hash: encodeURIComponent(getStartUrl()) });
     }
   });
 
@@ -96,16 +95,16 @@ export function createWindow(): void {
   // the preload bridge: raw session token + MCP exec). Off-origin http(s) links
   // are opened in the system browser instead; everything else is dropped.
   const guardNavigation = (event: Electron.Event, url: string): void => {
-    let appOrigin: string;
-    try {
-      appOrigin = new URL(getAppUrl()).origin;
-    } catch {
-      // Configured app URL is unparseable — fail closed and block.
+    // getAppOrigin() is documented never to fail, but this is a security
+    // branch — do not delete it on the strength of an invariant that lives in
+    // another module.
+    const appOrigin = getAppOrigin();
+    if (!appOrigin) {
       event.preventDefault();
       console.warn('[Navigation] Blocked navigation; app origin unresolved for URL:', url);
       return;
     }
-    switch (classifyNavigation(url, appOrigin)) {
+    switch (classifyNavigation(url, appOrigin, APP_IDENTITY.deepLinkScheme)) {
       case 'allow':
         // Same-origin app navigation — let it proceed.
         return;
@@ -148,8 +147,7 @@ export function createWindow(): void {
 
 export function reloadMainWindow(): void {
   if (mainWindow) {
-    const appUrl = getAppUrl();
-    mainWindow.loadURL(appUrl);
+    mainWindow.loadURL(getStartUrl());
   }
 }
 

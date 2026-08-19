@@ -20,12 +20,8 @@
  * which is the function the rest of the app asks. Each case below therefore
  * checks the membership set AND cross-checks it against the other direction.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
-import { db } from '@pagespace/db/db';
-import { users } from '@pagespace/db/schema/auth';
-import { drives, pages } from '@pagespace/db/schema/core';
-import { pagePermissions, driveMembers } from '@pagespace/db/schema/members';
 import { getUsersWhoCanViewPage, getBatchPagePermissions } from '../permissions';
 
 /**
@@ -46,14 +42,23 @@ async function expectAgreesWithPerUserCheck(pageId: string, candidateIds: string
   return viewers;
 }
 
+/**
+ * No table-wide cleanup here, deliberately. This suite used to open every test with
+ * `db.delete(users)` and friends — unscoped deletes of pages, drives, drive_members and users.
+ *
+ * CI runs `turbo run test:coverage` without --concurrency=1, so @pagespace/lib and web execute
+ * against the SAME Postgres service at the same time. Those deletes therefore reach into other
+ * packages' suites and remove rows they are mid-test on: a web suite that had just seeded a user
+ * and was writing its activity log failed with
+ * `activity_logs_userId_users_id_fk`, and another lost its seeded messages
+ * ("expected [] to deeply equal ['keep me']"). The repo already learned this once — a TRUNCATE
+ * of `users` was scoped down for taking ACCESS EXCLUSIVE on shared tables and deleting other
+ * packages' fixtures; this reintroduced the same hazard with DELETE.
+ *
+ * Nothing here needs it: every test seeds its own users, drive and page, and every call passes
+ * an explicit candidate list, so leftover rows from any other suite cannot enter these results.
+ */
 describe('getUsersWhoCanViewPage (integration)', () => {
-  beforeEach(async () => {
-    await db.delete(pagePermissions);
-    await db.delete(pages);
-    await db.delete(driveMembers);
-    await db.delete(drives);
-    await db.delete(users);
-  });
 
   it('includes an accepted member of a non-private channel with no explicit grant', async () => {
     // The regression case: this user has no page_permissions row and is not an
