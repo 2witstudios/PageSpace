@@ -232,11 +232,14 @@ describe('deleteDriveEnv', () => {
     const order: string[] = [];
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: `inst-${SANDBOX_ID}` })]);
     const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: `inst-${SANDBOX_ID}` } } });
+    // RECORDED, not asserted inline: `killDeletedEnvSprite` catches everything the
+    // kill throws (a failed kill must not fail the delete), so an `expect` in here
+    // would be swallowed and the test would pass whatever the row state was.
+    let rowGoneWhenKillRan: boolean | undefined;
     const realKill = host.host.kill.bind(host.host);
     host.host.kill = async (input) => {
       order.push('kill');
-      // The row is ALREADY gone when the kill runs — not merely scheduled to be.
-      expect(store.rows.has(ENV_ID)).toBe(false);
+      rowGoneWhenKillRan = !store.rows.has(ENV_ID);
       await realKill(input);
     };
     const realDelete = store.store.deleteIfUnoccupied.bind(store.store);
@@ -248,9 +251,41 @@ describe('deleteDriveEnv', () => {
     await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
 
     expect(order).toEqual(['deleteIfUnoccupied', 'kill']);
+    // The row was ALREADY gone when the kill ran — not merely scheduled to be.
+    expect(rowGoneWhenKillRan).toBe(true);
     // No intent stamp on this path any more: there is no row left to carry one,
     // and the outbox is the record instead.
     expect(store.calls.requestTeardown).toBe(0);
+  });
+
+  it('given a kill that never answers, should still answer the delete and leave the VM to the outbox', async () => {
+    // The delete has COMMITTED by the time the kill runs, so a control plane that
+    // stops answering must not hold the request open: every millisecond after the
+    // commit is a user waiting on work whose outcome cannot change their answer.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    // A kill that never settles, at all.
+    host.host.kill = () => new Promise<void>(() => {});
+    // Fire the deadline immediately rather than really waiting for it.
+    const fired: number[] = [];
+    const setTimeoutFn = ((fn: () => void, ms: number) => {
+      fired.push(ms);
+      return setTimeout(fn, 0);
+    }) as DeleteDriveEnvDeps['setTimeoutFn'];
+
+    const result = await deleteDriveEnv({
+      envId: ENV_ID,
+      force: false,
+      deps: { ...makeDeleteDeps(store, host), setTimeoutFn },
+    });
+
+    // Deleted — and honest about not having confirmed the machine stopped.
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(store.rows.has(ENV_ID)).toBe(false);
+    // The pointer is in the outbox, so the cron finishes what the stall interrupted.
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+    // A real deadline was armed, not an accidental zero.
+    expect(fired).toEqual([5_000]);
   });
 
   it('should CAS the kill on the INSTANCE the row records, not just the name', async () => {

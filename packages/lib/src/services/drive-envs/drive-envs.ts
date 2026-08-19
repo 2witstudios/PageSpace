@@ -393,6 +393,13 @@ export interface DeleteDriveEnvDeps {
   store: Pick<DriveEnvStore, 'findById' | 'countLiveSessionsInEnv' | 'deleteIfUnoccupied'>;
   host: SandboxHost;
   now: () => Date;
+  /**
+   * Timer seam for the post-commit kill's deadline. Production leaves it unset
+   * and gets `setTimeout`; a test injects one so "the delete answers without
+   * waiting for a control plane that never replies" is assertable in
+   * microseconds rather than by really waiting five seconds.
+   */
+  setTimeoutFn?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
 }
 
 export type DeleteDriveEnvResult =
@@ -514,14 +521,38 @@ export async function deleteDriveEnv({
 }
 
 /**
+ * How long the DELETE request is willing to WAIT for the post-commit kill before
+ * handing it to the reclaim outbox and answering.
+ *
+ * Deliberately short. The delete has already committed by the time this runs, so
+ * every millisecond spent here is a user waiting on work whose outcome cannot
+ * change their answer — the environment is gone either way. `SandboxHost.kill`
+ * has no deadline of its own (it is `getSprite` + `deleteSprite` against a
+ * control plane), so without this a stalled provider holds the request open long
+ * after the only thing the caller asked for has succeeded.
+ */
+const ENV_DELETE_KILL_WAIT_MS = 5_000;
+
+/**
  * Best-effort kill of the Sprite belonging to an env row that has ALREADY been
- * deleted. Never throws, and never reports a failure to the caller, because by
- * this point there is no failure the caller could act on: the env is gone (which
- * is what they asked for) and the outbox owns the retry.
+ * deleted. Never throws, never blocks for long, and never reports a failure to
+ * the caller, because by this point there is no failure the caller could act on:
+ * the env is gone (which is what they asked for) and the outbox owns the retry.
  *
  * Returns whether the kill was CONFIRMED — reported to the caller as
  * `spriteTornDown` and audited, so "did this request also stop the machine"
- * stays an honest answer rather than an assumed one.
+ * stays an honest answer rather than an assumed one. A timeout answers `false`,
+ * which is exactly right: we do not know that we stopped it.
+ *
+ * **The timeout does not cancel the underlying call, and does not need to.**
+ * `SandboxHost.kill` takes no `AbortSignal`, so the provider request runs on
+ * after we stop waiting — which is harmless here in a way it would not be for an
+ * ordinary operation: the call is idempotent, nothing downstream reads its
+ * result, and the outbox reclaims the VM whether it lands or not. The failure
+ * modes it could leave behind (killed late, or not killed at all) are both
+ * states the reconciler already handles by design. What we must not do is leave
+ * the promise unobserved, so its rejection is caught rather than allowed to
+ * surface as an unhandled rejection long after this function returned.
  *
  * `expectedInstanceId` is load-bearing exactly as it is on every other kill
  * path: the name is reused across re-creates, so an unqualified "destroy
@@ -539,22 +570,46 @@ async function killDeletedEnvSprite({
   envId: string;
   sandboxId: string;
   expectedInstanceId: string | null;
-  deps: Pick<DeleteDriveEnvDeps, 'host'>;
+  deps: Pick<DeleteDriveEnvDeps, 'host' | 'setTimeoutFn'>;
 }): Promise<boolean> {
+  const TIMED_OUT = Symbol('timed_out');
+  const setTimeoutFn = deps.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
+
+  // Observed exactly once, here, no matter which branch of the race wins — so a
+  // late rejection can never escape as an unhandled rejection.
+  const kill = deps.host
+    .kill({ sandboxId, expectedInstanceId })
+    .then(() => ({ ok: true as const }))
+    .catch((error: unknown) => ({ ok: false as const, error }));
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+    timer = setTimeoutFn(() => resolve(TIMED_OUT), ENV_DELETE_KILL_WAIT_MS);
+  });
+
   try {
-    await deps.host.kill({ sandboxId, expectedInstanceId });
-    return true;
-  } catch (error) {
-    if (error instanceof SandboxSpriteReplacedError) return false;
+    const outcome = await Promise.race([kill, deadline]);
+
+    if (outcome === TIMED_OUT) {
+      loggers.ai.warn(
+        'Drive environment sprite kill did not answer in time; answering the delete and leaving the VM to the reclaim outbox',
+        { envId, sandboxId, waitedMs: ENV_DELETE_KILL_WAIT_MS },
+      );
+      return false;
+    }
+    if (outcome.ok) return true;
+    if (outcome.error instanceof SandboxSpriteReplacedError) return false;
     // Logged, not swallowed silently: the outbox will retry forever, but a kill
     // that fails is still the signal that something is wrong with the substrate,
     // and a VM that keeps refusing to die bills the whole time.
     loggers.ai.error(
       'Drive environment sprite kill failed after the row was deleted; reclaim outbox will retry',
-      error instanceof Error ? error : new Error(String(error)),
+      outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error)),
       { envId, sandboxId },
     );
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 

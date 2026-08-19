@@ -20,11 +20,16 @@
  *         - `agent_workspaces` (`endAgentSession` stamps the intent BEFORE it
  *           kills). The row survives on purpose — it is re-provisionable
  *           identity.
- *         - `drive_envs` (`deleteDriveEnv` and `rebuildDriveEnv` stamp it the
- *           same way, and both ABORT rather than proceed when the kill cannot
- *           be confirmed, which is precisely how a surviving row comes to point
- *           at a live VM nobody is retrying). An env row surviving its machine
- *           is the normal state of an environment, not an anomaly.
+ *         - `drive_envs`, but via `rebuildDriveEnv` ONLY. It stamps the intent
+ *           the same way and then ABORTS rather than proceed when the kill
+ *           cannot be confirmed, which is precisely how a surviving row comes
+ *           to point at a live VM nobody is retrying. An env row surviving its
+ *           machine is the normal state of an environment, not an anomaly.
+ *
+ *           `deleteDriveEnv` is deliberately NOT a producer of work for this
+ *           source: it kills only AFTER the row is gone, so it stamps no intent
+ *           (there is no row left to stamp) and a failed kill lands in the
+ *           reclaim outbox — source (A) above — rather than here.
  *
  *       Release is a STAMP for both, via each store's own `stampSpriteTornDown`
  *       CAS, never a delete.
