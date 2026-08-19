@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { createAnchor } from '../anchor';
-import { portAnchor } from '../reanchor';
+import { MAX_EXACT_DIFF_REGION, changedRegionSize, portAnchor } from '../reanchor';
 import { resolveAnchor } from '../resolve';
 import type { AnchorResolution } from '../types';
 
@@ -143,6 +143,70 @@ describe('portAnchor — forward-porting through the diff', () => {
     expect(ported.confidence).toBeLessThan(1);
   });
 
+  it('still ports exactly through a small edit in a very large document', () => {
+    // The cap is on the CHANGED region, not on document size: the common
+    // prefix and suffix strip everything but the keystrokes, so an ordinary
+    // save on a big page keeps the exact path no matter how big the page is.
+    const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(1000); // ~39KB
+    const old = `${filler}${QUOTE}${filler}`;
+    const inserted = 'NEW ';
+    const updated = `${inserted}${old}`;
+
+    const bigAnchor = createAnchor(old, filler.length, filler.length + QUOTE.length, {
+      revision: 1,
+    });
+
+    expect(portAnchor(bigAnchor, old, updated)).toEqual({
+      status: 'shifted',
+      start: filler.length + inserted.length,
+      end: filler.length + QUOTE.length + inserted.length,
+      confidence: 1,
+    });
+  });
+
+  it('measures the changed region from both ends', () => {
+    const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(1000); // ~39KB
+
+    // Shared text only in FRONT of the change — the prefix scan carries it.
+    expect(changedRegionSize(`${filler}tail`, `${filler}TAIL`)).toBe(4);
+    // Shared text only BEHIND the change — the suffix scan carries it.
+    expect(changedRegionSize(`head${filler}`, `HEAD${filler}`)).toBe(4);
+    // Shared text on both sides of it.
+    expect(changedRegionSize(`${filler}mid${filler}`, `${filler}MID${filler}`)).toBe(3);
+    // Nothing shared at all: the whole of the longer text is the change.
+    expect(changedRegionSize('abcdef', 'uvwxyz!!')).toBe(8);
+    // Identical texts have no changed region, however large they are.
+    expect(changedRegionSize(filler, filler)).toBe(0);
+    // An insertion is measured by what was inserted, not by what surrounds it.
+    expect(changedRegionSize(`${filler}${filler}`, `${filler}xyz${filler}`)).toBe(3);
+
+    // And the cap is what turns that measurement into a routing decision.
+    const under = 'q'.repeat(MAX_EXACT_DIFF_REGION);
+    const over = 'q'.repeat(MAX_EXACT_DIFF_REGION + 1);
+    expect(changedRegionSize(filler, `${filler}${under}`)).toBe(MAX_EXACT_DIFF_REGION);
+    expect(changedRegionSize(filler, `${filler}${over}`)).toBeGreaterThan(MAX_EXACT_DIFF_REGION);
+  });
+
+  it('keeps the exact path for a trailing edit in a very large document', () => {
+    // Guards the common-prefix half of the strip specifically: here the shared
+    // text is all in front of the change, so only the prefix scan can keep this
+    // under the cap and on the exact path.
+    const filler = 'lorem ipsum dolor sit amet consectetur '.repeat(1000); // ~39KB
+    const old = `${filler}${QUOTE} middle`;
+    const updated = `${old} and a short tail`;
+
+    const bigAnchor = createAnchor(old, filler.length, filler.length + QUOTE.length, {
+      revision: 1,
+    });
+
+    expect(portAnchor(bigAnchor, old, updated)).toEqual({
+      status: 'exact',
+      start: filler.length,
+      end: filler.length + QUOTE.length,
+      confidence: 1,
+    });
+  });
+
   it('orphans when the anchor cannot be found in the old text either', () => {
     expect(portAnchor(ANCHOR, 'nothing like the anchored prose at all', DOC)).toEqual({
       status: 'orphaned',
@@ -181,6 +245,19 @@ describe('portAnchor beats a text search on duplicated quote text', () => {
       confidence: 1,
     });
     expect(NEW.slice(SECOND + INSERTION.length, SECOND + INSERTION.length + TARGET.length)).toBe(TARGET);
+  });
+
+  it('degrades to the search once the rewrite is too large to diff exactly', () => {
+    // The character diff is quadratic in the size of the change, so above the
+    // cap portAnchor stops paying for it and takes the repair path instead.
+    // The visible cost of that trade is exactly the disambiguation above: with
+    // a big enough rewrite, the port and the search agree — on the wrong copy.
+    const bigInsertion = 'qqqq '.repeat(600); // 3000 chars, over the 2048 cap
+    const cut = SEG.length * 2 + TARGET.length;
+    const rewritten = OLD.slice(0, cut) + bigInsertion + OLD.slice(cut);
+
+    expect(portAnchor(anchor, OLD, rewritten)).toEqual(resolveAnchor(rewritten, anchor));
+    expect(expectPlaced(portAnchor(anchor, OLD, rewritten)).start).toBe(FIRST);
   });
 
   it('a text search — the fallback — lands on the WRONG copy, which is the point', () => {

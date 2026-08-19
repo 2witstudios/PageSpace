@@ -70,7 +70,11 @@ describe('anchoring determinism', () => {
   it('the core reaches diff-match-patch only through those two pinned paths', () => {
     // A new module constructing its own DiffMatchPatch would inherit the
     // unpinned defaults, so the import itself is the thing to keep scarce.
-    const importers = MODULES.filter((name) => readModule(name).includes('diff-match-patch'));
+    const importers = MODULES.filter((name) =>
+      [...readModule(name).matchAll(/^import[^'"]*from ['"]([^'"]+)['"];?$/gm)].some(
+        (m) => m[1] === 'diff-match-patch'
+      )
+    );
     expect(importers).toEqual(['resolve']);
   });
 });

@@ -57,6 +57,30 @@ describe('projectContent', () => {
     expect(projectContent('<p>2 < 3 &lt; 4</p>', 'html')).toBe('2 < 3 < 4');
   });
 
+  it('treats < followed by a letter as a tag, exactly as the HTML parser does', () => {
+    // Looks like data loss, and is not: per the HTML tokenizer, `<` followed by
+    // an ASCII letter enters the tag-open state, so a browser also drops
+    // `<y then z is big>` as an unknown element and renders only "if x". The
+    // projection has to mirror what the reader actually sees, or offsets would
+    // index text nobody can point at. Escaping the `<` keeps it, as below.
+    expect(projectContent('<p>if x<y then z is big</p>', 'html')).toBe('if x');
+    expect(projectContent('<p>if x&lt;y then z is big</p>', 'html')).toBe('if x<y then z is big');
+  });
+
+  it('keeps reading a tag whose unquoted attribute value contains an apostrophe', () => {
+    // A quote only opens where a value begins. Treating any quote character as
+    // a delimiter opened a state that never closed, silently swallowing the
+    // rest of the document and orphaning every anchor on the page.
+    expect(projectContent("<div data-x=it's fine>hello world</div>", 'html')).toBe('hello world');
+    expect(projectContent("<div data-x = 'y'>quoted</div>", 'html')).toBe('quoted');
+    expect(projectContent('<div data-x = "y">quoted</div>', 'html')).toBe('quoted');
+  });
+
+  it('drops raw-text elements whatever their case', () => {
+    expect(projectContent('<p>a</p><SCRIPT>bad</SCRIPT><p>b</p>', 'html')).toBe('a\nb');
+    expect(projectContent('<p>a</p><StYlE>.x{}</StYlE><p>b</p>', 'html')).toBe('a\nb');
+  });
+
   it('leaves an unterminated comment, doctype or raw-text element harmless', () => {
     // Note both fixtures must still end in '>': detectPageContentFormat only
     // calls content HTML when it both starts with '<' and ends with '>'.
@@ -117,6 +141,23 @@ describe('projectContent', () => {
 
   it('renders an empty tiptap document as the empty string', () => {
     expect(projectContent('{"type":"doc","content":[]}', 'html')).toBe('');
+  });
+
+  it('sniffs format per revision, which can flip mid-edit — a caller-side hazard', () => {
+    // detectPageContentFormat only calls content HTML when the trimmed body
+    // both starts with '<' AND ends with '>'. Unclosed trailing markup — routine
+    // in imported HTML and reachable mid-edit — therefore projects in a
+    // different coordinate system from the same page a revision earlier.
+    // Pinned rather than fixed: the sniffer is shared with diff-utils and
+    // others, and the durable fix is a stored per-page format, which arrives
+    // with the schema in a later phase. Until then a caller must confirm both
+    // sides projected the same way before trusting a port — resolveProjectionFormat
+    // is exported for exactly that, and anchor.textHash catches the rest.
+    expect(projectContent('<p>one</p>', 'html')).toBe('one');
+    expect(resolveProjectionFormat('<p>one</p>', 'html')).toBe('html');
+
+    expect(resolveProjectionFormat('<p>one</p><p>tail text', 'html')).toBe('text');
+    expect(projectContent('<p>one</p><p>tail text', 'html')).toBe('<p>one</p><p>tail text');
   });
 
   it('is deterministic: identical input yields identical output across formats', () => {

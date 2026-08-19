@@ -144,18 +144,29 @@ function readTag(html: string, index: number): { name: string; closing: boolean;
     cursor += 1;
   }
 
+  // A quote only opens where an attribute VALUE begins — directly after `=`,
+  // whitespace allowed. Treating any quote character as a delimiter would let
+  // an apostrophe inside an unquoted value (`<div data-x=it's fine>`) open a
+  // state that never closes, swallowing the rest of the document. Browsers keep
+  // reading such a tag, and so must we.
   let quote = '';
+  let expectingValue = false;
   while (cursor < html.length) {
     const char = html[cursor];
     if (quote) {
       if (char === quote) {
         quote = '';
       }
-    } else if (char === '"' || char === "'") {
-      quote = char;
     } else if (char === '>') {
       cursor += 1;
       break;
+    } else if (char === '=') {
+      expectingValue = true;
+    } else if (expectingValue && (char === '"' || char === "'")) {
+      quote = char;
+      expectingValue = false;
+    } else if (!isWhitespace(char)) {
+      expectingValue = false;
     }
     cursor += 1;
   }
@@ -163,14 +174,21 @@ function readTag(html: string, index: number): { name: string; closing: boolean;
   return { name: name.toLowerCase(), closing, next: cursor };
 }
 
-/** Skip to just past the closing tag of a raw-text element (`script`, `style`). */
+/**
+ * Skip to just past the closing tag of a raw-text element (`script`, `style`).
+ * Scans case-insensitively over a window rather than lower-casing the whole
+ * document, which would allocate a full copy of the page per element.
+ */
 function skipRawText(html: string, index: number, name: string): number {
-  const needle = `</${name}`;
-  const found = html.toLowerCase().indexOf(needle, index);
-  if (found === -1) {
-    return html.length;
+  for (let i = index; i < html.length; i += 1) {
+    if (html[i] !== '<' || html[i + 1] !== '/') {
+      continue;
+    }
+    if (html.slice(i + 2, i + 2 + name.length).toLowerCase() === name) {
+      return readTag(html, i).next;
+    }
   }
-  return readTag(html, found).next;
+  return html.length;
 }
 
 function projectHtml(html: string): string {
@@ -332,6 +350,16 @@ export function resolveProjectionFormat(content: string, contentMode: string): P
  * - `text`   — newlines normalised, nothing else touched.
  *
  * Always returns the same output for the same input, on any runtime.
+ *
+ * CAVEAT: the strategy is sniffed per call, and detectPageContentFormat only
+ * calls content HTML when the trimmed body both starts with '<' and ends with
+ * '>'. A page whose markup gains an unclosed trailing element therefore
+ * projects as raw text where the revision before it projected as stripped
+ * prose — two incompatible coordinate systems for the same page. A caller
+ * comparing two revisions should confirm resolveProjectionFormat agrees on both
+ * before trusting offsets across them. The durable fix is a format stored per
+ * page rather than re-derived, which needs the schema a later phase adds; the
+ * sniffer itself is shared with diff-utils and is not this module's to change.
  */
 export function projectContent(content: string, contentMode: string): string {
   if (!content) {

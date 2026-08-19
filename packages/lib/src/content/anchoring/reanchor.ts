@@ -30,8 +30,32 @@
  */
 
 import { type DiffChange, diffContent } from '../diff-utils';
-import { resolveAnchor } from './resolve';
+import { positionHolds, resolveAnchor } from './resolve';
 import type { AnchorResolution, TextAnchor } from './types';
+
+/**
+ * How much genuine change portAnchor will diff character-by-character, measured
+ * after the common prefix and suffix are stripped.
+ *
+ * A character diff is quadratic in the size of the differing region. Measured
+ * on this repo's diff-match-patch, two fully dissimilar strings take ~142ms at
+ * 2KB, ~558ms at 4KB and ~13.9s at 20KB — and portAnchor runs once per anchor,
+ * so an unbounded diff of a wholesale rewrite would block the event loop for
+ * minutes on a page carrying a handful of tags.
+ *
+ * Capping the CLOCK instead would be worse than useless here: diff-match-patch
+ * does not fail when its deadline expires, it returns a valid but suboptimal
+ * diff, so the same edit would segment differently on a fast machine than on a
+ * loaded one and confidence would wobble across the orphan threshold. Bounding
+ * the INPUT keeps the result identical everywhere.
+ *
+ * An ordinary save never comes close: the affixes strip everything but the
+ * keystrokes, and a 60KB document with a 14-character insertion measures 0ms.
+ * Above the cap the anchor degrades to the quote-and-context repair path, which
+ * is what that path is for — a large enough rewrite is no longer an edit the
+ * offsets can be carried through.
+ */
+export const MAX_EXACT_DIFF_REGION = 2048;
 
 /** A fresh object per call: a shared constant would be mutable by callers. */
 function orphaned(): AnchorResolution {
@@ -47,11 +71,7 @@ type OldRange = { from: number; to: number; confidence: number };
  * against the old text first so the forward-port maps the right span.
  */
 function locateInOldText(anchor: TextAnchor, oldText: string): OldRange | null {
-  if (
-    anchor.start >= 0 &&
-    anchor.end <= oldText.length &&
-    oldText.slice(anchor.start, anchor.end) === anchor.exact
-  ) {
+  if (positionHolds(oldText, anchor)) {
     return { from: anchor.start, to: anchor.end, confidence: 1 };
   }
 
@@ -101,18 +121,66 @@ function mapPoint(spans: readonly SurvivingSpan[], point: number): number | null
   return null;
 }
 
+function commonPrefixLength(a: string, b: string): number {
+  const limit = Math.min(a.length, b.length);
+  let i = 0;
+  while (i < limit && a[i] === b[i]) {
+    i += 1;
+  }
+  return i;
+}
+
+function commonSuffixLength(a: string, b: string, floor: number): number {
+  const limit = Math.min(a.length, b.length) - floor;
+  let i = 0;
+  while (i < limit && a[a.length - 1 - i] === b[b.length - 1 - i]) {
+    i += 1;
+  }
+  return i;
+}
+
+/**
+ * How much of the two texts actually differs — the same common-affix strip a
+ * character diff would do first, but linear and done up front so the quadratic
+ * part can be skipped when it would be too expensive.
+ *
+ * Exported because it is the policy behind MAX_EXACT_DIFF_REGION: which edits
+ * keep the exact path and which degrade to repair is worth being able to state
+ * and test directly, rather than only inferring it from a port's output.
+ */
+export function changedRegionSize(oldText: string, newText: string): number {
+  const prefix = commonPrefixLength(oldText, newText);
+  const suffix = commonSuffixLength(oldText, newText, prefix);
+  return Math.max(oldText.length, newText.length) - prefix - suffix;
+}
+
 /**
  * Forward-port `anchor` from `oldText` to `newText`.
  *
  * Both arguments are projections (see text-projection.ts), never stored blobs.
  * Being a pure function of `(anchor, oldText, newText)` — rather than of
  * `(anchor, newText)` alone — is what makes the exact mapping possible.
+ *
+ * CALLER CONTRACT: `oldText` must be the projection the anchor was measured
+ * against, and both projections must have been produced the same way. Neither
+ * can be checked from here — this function receives two strings and has no way
+ * to know which page or revision they came from — and getting it wrong yields a
+ * confident wrong answer rather than an error, because a mislaid quote is still
+ * found and still ported. `anchor.textHash` hashes the exact projection the
+ * anchor was built against, so a call site that cares can compare it against
+ * `hashText(oldText)` before trusting the result. Note that projectContent's
+ * strategy is sniffed per revision and can flip on unclosed trailing markup
+ * (see its own docs), which is one concrete way the two sides drift apart.
  */
 export function portAnchor(
   anchor: TextAnchor,
   oldText: string,
   newText: string
 ): AnchorResolution {
+  if (changedRegionSize(oldText, newText) > MAX_EXACT_DIFF_REGION) {
+    return resolveAnchor(newText, anchor);
+  }
+
   const located = locateInOldText(anchor, oldText);
   if (!located) {
     return orphaned();

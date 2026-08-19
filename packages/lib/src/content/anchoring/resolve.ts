@@ -48,6 +48,16 @@ const MAX_FUZZY_PATTERN = 32;
 export const FUZZY_SIMILARITY_FLOOR = 0.5;
 
 /**
+ * Longest quote the fuzzy stage will score. Levenshtein via dmp is quadratic:
+ * measured on this repo's diff-match-patch, two fully dissimilar strings take
+ * ~36ms at 1KB, ~558ms at 4KB and ~14s at 20KB. Nothing bounds a quote —
+ * `createAnchor(text, 0, text.length, …)` is a legal call for a user selecting
+ * a whole page — so the ceiling has to live here. Strategies 1 and 2 are linear
+ * and still run for any size; only the last-resort approximate match is capped.
+ */
+const MAX_FUZZY_QUOTE = 1024;
+
+/**
  * How much each strategy is trusted. `ambiguous` applies when several copies of
  * the text matched and only the positional hint chose between them — the guess
  * forward-porting never has to make.
@@ -147,6 +157,34 @@ export function textSimilarity(a: string, b: string): number {
 }
 
 /**
+ * Does the anchor still describe `text` at the offsets it recorded?
+ *
+ * Exported because `portAnchor` asks the same question of the predecessor
+ * content, and the two must agree — particularly about carets, where the naive
+ * check is vacuous.
+ */
+export function positionHolds(text: string, anchor: TextAnchor): boolean {
+  // A negative start would make String.slice count back from the end and could
+  // fabricate a match. An inverted range needs no test of its own: slice yields
+  // '' for it, which only a caret can equal, and a caret then has to satisfy
+  // the context check below.
+  if (anchor.start < 0 || anchor.end > text.length) {
+    return false;
+  }
+  if (text.slice(anchor.start, anchor.end) !== anchor.exact) {
+    return false;
+  }
+  if (anchor.exact.length > 0) {
+    return true;
+  }
+  // A caret's own text is empty, so the slice check above passes at EVERY
+  // in-range offset — it is no evidence at all. Corroborate with the context,
+  // or a caret would claim maximum confidence against unrelated content.
+  const from = Math.max(0, anchor.start - anchor.prefix.length);
+  return text.slice(from, anchor.end + anchor.suffix.length) === anchor.prefix + anchor.suffix;
+}
+
+/**
  * Locate `anchor` in `text` (a projection, never a stored blob).
  *
  * Use this only when the predecessor content is unavailable; when both sides of
@@ -157,11 +195,7 @@ export function resolveAnchor(text: string, anchor: TextAnchor): AnchorResolutio
   const hint = clamp(anchor.start, 0, text.length);
 
   // 1. Position — the recorded offsets still hold.
-  if (
-    anchor.start >= 0 &&
-    anchor.end <= text.length &&
-    text.slice(anchor.start, anchor.end) === exact
-  ) {
+  if (positionHolds(text, anchor)) {
     return {
       status: 'exact',
       start: anchor.start,
@@ -171,9 +205,19 @@ export function resolveAnchor(text: string, anchor: TextAnchor): AnchorResolutio
   }
 
   if (exact.length === 0) {
-    // A zero-length anchor carries no quote to search for; once its offsets
-    // stop holding there is nothing left to repair from.
-    return orphaned();
+    // A caret has no quote to search for, but it does have context, and the two
+    // halves are adjacent precisely because the quote between them is empty.
+    if (prefix.length === 0 && suffix.length === 0) {
+      return orphaned();
+    }
+    return (
+      searchQuote(
+        text,
+        hint,
+        { needle: prefix + suffix, offsetWithin: prefix.length, length: 0 },
+        CONFIDENCE.context
+      ) ?? orphaned()
+    );
   }
 
   // 2a. Quote with its surrounding context — the strongest textual evidence.
@@ -201,6 +245,9 @@ export function resolveAnchor(text: string, anchor: TextAnchor): AnchorResolutio
   }
 
   // 3. Bounded fuzzy match, biased towards the positional hint.
+  if (exact.length > MAX_FUZZY_QUOTE) {
+    return orphaned();
+  }
   const probe = exact.length > MAX_FUZZY_PATTERN ? exact.slice(0, MAX_FUZZY_PATTERN) : exact;
   const location = dmp.match_main(text, probe, hint);
   if (location === -1) {

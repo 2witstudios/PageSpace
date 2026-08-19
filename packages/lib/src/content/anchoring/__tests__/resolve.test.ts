@@ -91,7 +91,7 @@ describe('resolveAnchor — the repair path, with no predecessor supplied', () =
     expect(resolveAnchor('   \n\t  \n ', ANCHOR)).toEqual({ status: 'orphaned' });
   });
 
-  it('orphans a zero-length anchor once its offsets stop holding', () => {
+  it('repairs a zero-length (caret) anchor from the context around it', () => {
     const caret = createAnchor(DOC, START, START, { revision: 3 });
 
     expect(resolveAnchor(DOC, caret)).toEqual({
@@ -100,18 +100,66 @@ describe('resolveAnchor — the repair path, with no predecessor supplied', () =
       end: START,
       confidence: 1,
     });
-    // A caret carries no quote, so there is no evidence a shift even happened:
-    // its offsets trivially still "hold" and it silently stays put. That is the
-    // accuracy floor this path represents, and precisely why portAnchor — which
-    // maps a caret through the diff exactly — is the primary mechanism.
+    // A caret's own text is empty, so `text.slice(start, end) === exact` passes
+    // at EVERY in-range offset and is no evidence at all. The prefix and suffix
+    // are adjacent precisely because the quote between them is empty, so they
+    // relocate the caret exactly.
     expect(resolveAnchor(`xx${DOC}`, caret)).toEqual({
-      status: 'exact',
-      start: START,
-      end: START,
-      confidence: 1,
+      status: 'shifted',
+      start: START + 2,
+      end: START + 2,
+      confidence: 0.95,
     });
     // Once the offsets fall outside the content there is nothing left to repair.
     expect(resolveAnchor('', caret)).toEqual({ status: 'orphaned' });
+    expect(resolveAnchor('nothing like the anchored prose', caret)).toEqual({
+      status: 'orphaned',
+    });
+  });
+
+  it('never claims a caret is exact just because its offsets are in range', () => {
+    // The regression this guards: an unqualified slice check reports a caret as
+    // status 'exact' with confidence 1 against arbitrary unrelated content, and
+    // a consumer gating on confidence === 1 cannot tell that apart from a hit.
+    const caret = createAnchor(DOC, START, START, { revision: 3 });
+    const unrelated = 'x'.repeat(DOC.length);
+
+    expect(caret.end).toBeLessThanOrEqual(unrelated.length);
+    expect(unrelated.slice(caret.start, caret.end)).toBe(caret.exact);
+    expect(resolveAnchor(unrelated, caret)).toEqual({ status: 'orphaned' });
+  });
+
+  it('orphans a caret that has no context either — nothing is left to go on', () => {
+    const caret = createAnchor('', 0, 0, { revision: 1 });
+    expect(caret.prefix).toBe('');
+    expect(caret.suffix).toBe('');
+
+    expect(resolveAnchor('', caret)).toEqual({
+      status: 'exact',
+      start: 0,
+      end: 0,
+      confidence: 1,
+    });
+    expect(resolveAnchor('anything at all', { ...caret, start: 99, end: 99 })).toEqual({
+      status: 'orphaned',
+    });
+  });
+
+  it('does not attempt a quadratic fuzzy score on a document-sized quote', () => {
+    // dmp's Levenshtein is quadratic and nothing bounds a quote: selecting a
+    // whole page is a legal anchor. Strategies 1 and 2 are linear and still run
+    // at any size; only the last-resort approximate match is capped.
+    const huge = 'lorem ipsum dolor sit amet '.repeat(120); // > 1024 chars
+    const doc = `head ${huge} tail`;
+    const anchor = createAnchor(doc, 5, 5 + huge.length, { revision: 1 });
+
+    expect(anchor.exact.length).toBeGreaterThan(1024);
+    // Intact and merely moved: found by the linear quote search, not by fuzzy.
+    const moved = expectPlaced(resolveAnchor(`xx${doc}`, anchor));
+    expect(moved.status).toBe('shifted');
+    // Edited inside, so only the fuzzy stage could place it — and it declines.
+    const edited = doc.replace('lorem ipsum dolor', 'LOREM IPSUM DOLOR');
+    expect(resolveAnchor(edited, anchor)).toEqual({ status: 'orphaned' });
   });
 
   it('searches on the quote alone when the anchor has no context at all', () => {
@@ -125,6 +173,29 @@ describe('resolveAnchor — the repair path, with no predecessor supplied', () =
     const resolved = expectPlaced(resolveAnchor(`padding ${whole}`, anchor));
     expect(resolved.status).toBe('shifted');
     expect(resolved.start).toBe('padding '.length);
+  });
+
+  it('rejects a negative start, which String.slice would read from the far end', () => {
+    // slice(-5, 65) returns the LAST five characters, so an anchor with a
+    // negative start can match its own quote and be reported as exact — at a
+    // negative offset no consumer could use.
+    const tailQuote = DOC.slice(-5);
+    const anchor = createAnchor(DOC, DOC.length - 5, DOC.length, { revision: 1 });
+    const negative = { ...anchor, start: -5, end: DOC.length };
+
+    expect(DOC.slice(negative.start, negative.end)).toBe(tailQuote);
+
+    const resolved = expectPlaced(resolveAnchor(DOC, negative));
+    expect(resolved.start).toBe(DOC.length - 5);
+    expect(resolved.status).toBe('shifted');
+  });
+
+  it('rejects an inverted range instead of reading it as a vacuous match', () => {
+    // String.slice(30, 20) returns '' rather than throwing, so a caret whose
+    // offsets are the wrong way round would otherwise "hold" anywhere.
+    const inverted = { ...createAnchor(DOC, START, START, { revision: 1 }), start: END, end: START };
+    expect(DOC.slice(inverted.start, inverted.end)).toBe(inverted.exact);
+    expect(resolveAnchor(DOC, inverted).status).not.toBe('exact');
   });
 
   it('does not read past the end of shorter content when checking the offsets', () => {
