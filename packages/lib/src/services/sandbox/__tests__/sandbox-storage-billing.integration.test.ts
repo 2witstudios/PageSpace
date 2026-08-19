@@ -45,6 +45,7 @@ import { requireDb, dbSkipExplicitlyAllowed } from '@pagespace/db/test/require-d
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { assert } from './riteway';
 import { createDbDriveEnvStore, type DriveEnvStore } from '../../drive-envs/drive-envs-store';
 import { defaultReconcileSandboxStorageDeps } from '../sandbox-storage-billing';
@@ -497,6 +498,70 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
       actual: { charged: result.charged, processed: result.processed, charges: charges.length },
       expected: { charged: 0, processed: 1, charges: 0 },
     });
+  });
+
+
+  it('REFUSES to move a watermark BACKWARDS — a provision that landed mid-tick must win', async () => {
+    // The race, concretely. A tick captures ONE `now` and then makes several
+    // awaits per row, so it can span minutes. If a user rebuilds an env inside
+    // that window, `revivedDriveEnvColumns` resets the row's watermark FORWARD to
+    // the provision time — correct, because a new Sprite generation is a fresh
+    // disk. An unguarded advance would then drag it BACK to the tick's `now`, and
+    // the span between the two would be billed a second time on the next tick.
+    const envId = await seedEnv({ storageLastBilledAt: NOW });
+    // The mid-tick provision: watermark reset to 30s AFTER the tick's `now`.
+    const resetTo = new Date(NOW.getTime() + 30_000);
+    await db.update(driveEnvs).set({ storageLastBilledAt: resetTo }).where(eq(driveEnvs.id, envId));
+
+    // The tick's advance, arriving late and carrying the older timestamp.
+    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
+
+    assert({
+      given: 'a watermark already reset forward by a provision that landed during the tick',
+      should: 'leave the newer value alone — moving it back would re-bill the span between them',
+      actual: await readBilledAt(envId),
+      expected: resetTo,
+    });
+  });
+
+  it('still advances a watermark FORWARD in the ordinary case', async () => {
+    const envId = await seedEnv({ storageLastBilledAt: new Date(NOW.getTime() - 60_000) });
+
+    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
+
+    assert({
+      given: 'a watermark older than the tick that is closing it',
+      should: 'advance normally — the guard must refuse only backwards writes',
+      actual: await readBilledAt(envId),
+      expected: NOW,
+    });
+  });
+
+  it('applies the SAME monotonic guard to the session watermark', async () => {
+    // The session twin has the identical race — a re-provision resets its
+    // watermark the same way — so it gets the identical guard. The two row
+    // sources share a meter; they must not disagree about how a watermark moves.
+    const sessionId = createId();
+    await db.insert(agentWorkspaces).values({
+      id: sessionId,
+      driveId,
+      ownerId: driveOwnerId,
+      storageLastBilledAt: new Date(NOW.getTime() + 30_000),
+      updatedAt: new Date(),
+    });
+
+    await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
+      workspaceId: sessionId,
+      billedThrough: NOW,
+    });
+
+    const [row] = await db
+      .select({ at: agentWorkspaces.storageLastBilledAt })
+      .from(agentWorkspaces)
+      .where(eq(agentWorkspaces.id, sessionId));
+    expect(row?.at).toEqual(new Date(NOW.getTime() + 30_000));
+
+    await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, sessionId));
   });
 
 });

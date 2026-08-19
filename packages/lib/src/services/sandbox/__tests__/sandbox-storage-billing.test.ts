@@ -11,6 +11,7 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...parts) => ({ op: 'and', parts })),
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
+  lte: vi.fn((a, b) => ({ op: 'lte', a, b })),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
@@ -240,7 +241,21 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
     });
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
-    expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_workspaces.id', b: 'session-3' }]);
+    assert({
+      given: "a session watermark advance",
+      should:
+        'key on the row AND refuse to move backwards — `now` is captured once per tick, so a provision landing mid-tick resets the watermark forward and an unguarded write would drag it back and re-bill the difference',
+      actual: whereCalls,
+      expected: [
+        {
+          op: 'and',
+          parts: [
+            { op: 'eq', a: 'agent_workspaces.id', b: 'session-3' },
+            { op: 'lte', a: 'agent_workspaces.storageLastBilledAt', b: new Date('2026-07-01T00:00:00.000Z') },
+          ],
+        },
+      ],
+    });
   });
 });
 
@@ -371,7 +386,20 @@ describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
     });
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
-    expect(whereCalls).toEqual([{ op: 'eq', a: 'drive_envs.id', b: 'env-3' }]);
+    assert({
+      given: 'an env watermark advance',
+      should: 'carry the SAME monotonic guard as the session twin — one meter, one rule for how a watermark moves',
+      actual: whereCalls,
+      expected: [
+        {
+          op: 'and',
+          parts: [
+            { op: 'eq', a: 'drive_envs.id', b: 'env-3' },
+            { op: 'lte', a: 'drive_envs.storageLastBilledAt', b: new Date('2026-07-01T00:00:00.000Z') },
+          ],
+        },
+      ],
+    });
   });
 });
 

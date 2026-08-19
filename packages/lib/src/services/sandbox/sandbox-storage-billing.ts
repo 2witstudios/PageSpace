@@ -43,7 +43,7 @@
  * while this cron kept advancing its watermark.
  */
 
-import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';
+import { eq, and, isNotNull, isNull, lte } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
@@ -152,22 +152,40 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // The `agent_workspaces` Sprite's OWN watermark — directly on the row itself:
   // the design's "per-row watermark" made literal, no separate tracking
   // table.
+  //
+  // MONOTONIC, and that guard is load-bearing rather than defensive.
+  // `billedThrough` is the ONE `now` the whole tick captured, and a tick makes
+  // several awaits per row, so it can span minutes. A provision landing inside
+  // that window resets the row's watermark FORWARD to its own provision time
+  // (`revivedAgentSessionColumns`/`revivedDriveEnvColumns` — a new Sprite
+  // generation is a fresh disk, so the old window must not be billed against
+  // it). An unguarded UPDATE would then drag the watermark BACKWARDS over that
+  // reset, and the span between them is billed a second time on the next tick —
+  // exactly the double-bill the module doc otherwise reserves for a crash
+  // between the charge and the advance. `lte` makes a newer reset win.
+  //
+  // Losing the write is the safe direction: the row already claims to be billed
+  // further ahead than this tick reached, so at worst one tick-duration of the
+  // DEAD generation's window goes unbilled.
   async advanceAgentSessionWatermark({ workspaceId, billedThrough }) {
     await db
       .update(agentWorkspaces)
       .set({ storageLastBilledAt: billedThrough })
-      .where(eq(agentWorkspaces.id, workspaceId));
+      .where(and(eq(agentWorkspaces.id, workspaceId), lte(agentWorkspaces.storageLastBilledAt, billedThrough)));
   },
 
-  // The env row's OWN watermark, same literal per-row design. Deliberately NOT
-  // guarded on the Sprite pointers: the charge it follows has already happened,
-  // so refusing the advance because the env was torn down mid-run would re-bill
-  // that window on the next tick.
+  // The env row's OWN watermark, same literal per-row design and the same
+  // monotonic guard — envs need it more, since `rebuildDriveEnv` is a verb a
+  // user can invoke at any moment, including the middle of a reconcile tick.
+  //
+  // Deliberately NOT guarded on the Sprite pointers, though: the charge it
+  // follows has already happened, so refusing the advance because the env was
+  // torn down mid-run would re-bill that window on the next tick.
   async advanceDriveEnvWatermark({ envId, billedThrough }) {
     await db
       .update(driveEnvs)
       .set({ storageLastBilledAt: billedThrough })
-      .where(eq(driveEnvs.id, envId));
+      .where(and(eq(driveEnvs.id, envId), lte(driveEnvs.storageLastBilledAt, billedThrough)));
   },
 
   now: () => new Date(),

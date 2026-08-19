@@ -47,7 +47,12 @@
  * is a plain column update) — deliberately charge-before-advance so a crash
  * before charging never loses a window. The flip side: if the process dies
  * BETWEEN the two (rare — no I/O happens in between), that row's window is
- * billed again on the next run. Each row is isolated in its own try/catch
+ * billed again on the next run. That crash is the ONLY way to reach a
+ * double-bill, and only because the watermark writers are MONOTONIC: `now` is
+ * captured once for the whole tick, so a provision landing mid-tick resets a
+ * row's watermark forward, and an unguarded advance would drag it back over
+ * that reset and re-bill the difference. See `sandbox-storage-billing.ts`'s
+ * `lte` guard on both writers. Each row is isolated in its own try/catch
  * (below) so this failure mode stays scoped to one session and never aborts
  * the rest of the batch.
  *
