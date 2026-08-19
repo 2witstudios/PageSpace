@@ -92,12 +92,13 @@ export function TaskRowDescription({ task, driveId }: TaskRowDescriptionProps) {
               })}
             </ul>
           )}
-          {/* The header above has already told the user this task has N sub-tasks. Rendering an
-              empty list under that count when the fetch failed reads as "there are none" — say
-              what actually happened instead. */}
-          {error && (
+          {/* The header above has already told the user this task has N sub-tasks, so an empty
+              list under that count reads as "there are none" — the one thing that is definitely
+              not true. Both ways of getting there say what actually happened: the fetch failed,
+              or the children went away between the parent list loading and this expansion. */}
+          {!isLoadingSubTasks && (error || subTasks.length === 0) && (
             <p className="px-1 text-xs text-muted-foreground italic">
-              Could not load sub-tasks.
+              {error ? 'Could not load sub-tasks.' : 'These sub-tasks are no longer here.'}
             </p>
           )}
           {hasMore && (

@@ -76,7 +76,17 @@ export interface UseTaskSubTasksOptions {
 
 export interface UseTaskSubTasksResult {
   subTasks: TaskItem[];
-  /** The sub-task list's own status configs — a sub-task's statuses come from its parent task's list. */
+  /**
+   * The SUB-LIST's own status configs — status configs are per-task-list, so these come from
+   * this task's list, not the root one.
+   *
+   * WARNING for whoever renders nested rows: do NOT feed these to a sub-task's status dropdown
+   * by default. On a list whose statuses were customized, the sub-list has quietly received the
+   * 4 defaults instead, so rendering these puts a different status vocabulary one level down
+   * from its parent — visibly wrong with both on screen at once. The epic's decision is to
+   * inherit the ROOT list's configs and diverge only on explicit customization. These are here
+   * because that comparison needs both sides.
+   */
   statusConfigs: TaskStatusConfig[];
   hasMore: boolean;
   isLoading: boolean;
@@ -110,6 +120,12 @@ export function useTaskSubTasks(
   const statusConfigs = pages?.[0]?.statusConfigs ?? [];
 
   const hasMore = getSubTasksHasMore(pages);
+  // SWR types its error as `any`, so asserting `as Error` here would be a claim this code
+  // cannot make — a fetcher can reject with anything. Normalize instead, so a caller reading
+  // `.message` always gets a string rather than `undefined` from a thrown non-Error.
+  const normalizedError = error === undefined || error === null
+    ? undefined
+    : error instanceof Error ? error : new Error(String(error));
 
   return {
     subTasks,
@@ -126,7 +142,7 @@ export function useTaskSubTasks(
     // "loading more" forever. While a page really is in flight, the last LOADED page still
     // says hasMore, so this stays true exactly as long as it should.
     isLoadingMore: gateOpen && size > 1 && hasMore && (pages === undefined || pages.length < size),
-    error: error as Error | undefined,
+    error: normalizedError,
     // Functional form: two clicks in the same tick both read the same stale `size` otherwise,
     // and the second overwrites the first with the same value instead of advancing a page.
     loadMore: () => setSize((currentSize) => currentSize + 1),

@@ -99,6 +99,20 @@ describe('TaskRowDescription sub-task rows', () => {
     });
   });
 
+  it('does not leave a bare count standing when the sub-tasks are gone', () => {
+    // subTaskCount rode in on the parent list's response; the children can be trashed between
+    // that response and this expansion. An empty list under "1 sub-task" reads as a lie.
+    useTaskSubTasks.mockReturnValue(hookResult({ subTasks: [] }));
+    render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);
+
+    assert({
+      given: 'a header claiming 1 sub-task and a successful fetch that returned none',
+      should: 'explain the discrepancy rather than render nothing under the count',
+      actual: !!screen.getByText('These sub-tasks are no longer here.'),
+      expected: true,
+    });
+  });
+
   it('stays quiet when the fetch succeeded', () => {
     useTaskSubTasks.mockReturnValue(hookResult({ subTasks: [subTask()] }));
     render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);
