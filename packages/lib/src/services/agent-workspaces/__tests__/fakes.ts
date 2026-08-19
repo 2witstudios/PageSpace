@@ -329,12 +329,21 @@ export function makeHandle(
     spriteInstanceId: instanceId,
     egressPolicyToken,
     exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
+    // Both directions COPY. A real handle's bytes cross a wire, so neither side
+    // can hand the caller a reference into the VM's disk — and a fake that did
+    // would be more permissive than the thing it models: a caller mutating the
+    // buffer it read would silently rewrite the file, and the next read would
+    // agree with it, so a test could pass against a bug that cannot exist in
+    // production.
     writeFiles: async (files) => {
       for (const file of files) {
         disk.set(file.path, Buffer.from(file.content as string | Uint8Array));
       }
     },
-    readFile: async ({ path }) => disk.get(path) ?? null,
+    readFile: async ({ path }) => {
+      const content = disk.get(path);
+      return content === undefined ? null : Buffer.from(content);
+    },
     stream: async () => unusedStream,
     listStreams: async (): Promise<SandboxStreamSessionInfo[]> => [],
     killSession: async () => {},

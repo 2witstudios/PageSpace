@@ -324,6 +324,29 @@ describe('a session inside an environment — provisioning', () => {
     );
   });
 
+  it('should hand each reader its OWN bytes — a read is a copy, as it is over a real wire', async () => {
+    // Guards the FAKE, which the two assertions above lean on entirely. A real
+    // handle's bytes cross a wire, so no caller can hold a reference into the
+    // VM's disk; a fake that returned its stored buffer would let one session
+    // mutate a file it merely read, and the next session would agree — a test
+    // passing against a bug production cannot have.
+    const envId = await seedEnv();
+    const envKey = deriveDriveEnvSpriteKey({ tenantId: payerId, envId, secret: SECRET });
+    sandboxIds.add(envKey);
+    const host = makeSpriteHost();
+    const provisioned = await ensureForSession(await spawnInEnv(envId), host);
+    expect(provisioned.ok).toBe(true);
+    if (!provisioned.ok) return;
+
+    const handle = await host.host.attach({ sandboxId: provisioned.sandboxId });
+    await handle!.writeFiles([{ path: '/home/user/notes.md', content: 'original' }]);
+
+    const first = await handle!.readFile({ path: '/home/user/notes.md' });
+    first!.write('X', 0);
+
+    expect((await handle!.readFile({ path: '/home/user/notes.md' }))?.toString()).toBe('original');
+  });
+
   it('given a session in a DIFFERENT env, should NOT see those files — sharing is per environment, not global', async () => {
     // The other half of the claim. Two envs fold two Sprite names, so they are
     // two VMs and two disks; an env that leaked into its neighbour would be a
