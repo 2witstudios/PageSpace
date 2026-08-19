@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { assert } from '../../sandbox/__tests__/riteway';
 import { ensureSpriteHolderSandbox, type SpriteHolderProvisionDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
 import type { SpriteHolderLifecycleRow } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { stampColumns } from '../agent-workspaces-store';
@@ -299,5 +300,72 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     });
 
     expect(measured).toEqual([ENV_ID]);
+  });
+
+  it('should ALSO measure on the ADOPT arm — the other arm that clears the row\'s measurement', async () => {
+    // A replacement VM answered to this env's deterministic name. `adopt` nulls
+    // `storageMeasuredBytes`/`storageMeasuredAt` (a different disk, so the old
+    // reading describes storage that no longer exists) — so an adopt that did
+    // not re-measure would leave the env with NO reading at all, billing the
+    // never-measured 0 floor while the reconcile advanced its watermark. A
+    // session survives that by accident, via its bash/git writers; an env has
+    // exactly one other writer, on the arm not taken.
+    const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-old' });
+    const store = makeEnvStore([provisionedEnv]);
+    const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-new' } } });
+    const measured: string[] = [];
+
+    const result = await ensureSpriteHolderSandbox({
+      row: provisionedEnv,
+      intent: 'ensure',
+      deps: makeEnvDeps(
+        { store, host },
+        {
+          measureStorage: async ({ holderId }) => {
+            measured.push(holderId);
+          },
+        },
+      ),
+    });
+
+    assert({
+      given: 'an env whose Sprite was replaced under the same name, so the plan is ADOPT',
+      should: 'adopt the live instance AND re-measure, because the adopt stamps just cleared the old reading',
+      actual: { result, measured, instance: store.rows.get(ENV_ID)?.spriteInstanceId },
+      expected: {
+        result: { ok: true, sandboxId: 'pgs-env-1', resumed: true },
+        measured: [ENV_ID],
+        instance: 'inst-new',
+      },
+    });
+    // Nothing was minted — adoption reconnects, it does not provision.
+    expect(host.calls.provision).toHaveLength(0);
+  });
+
+  it('should NOT measure on a plain RESUME — the same disk, so its existing reading still describes it', async () => {
+    const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-1' });
+    const store = makeEnvStore([provisionedEnv]);
+    const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-1' } } });
+    const measured: string[] = [];
+
+    await ensureSpriteHolderSandbox({
+      row: provisionedEnv,
+      intent: 'ensure',
+      deps: makeEnvDeps(
+        { store, host },
+        {
+          measureStorage: async ({ holderId }) => {
+            measured.push(holderId);
+          },
+        },
+      ),
+    });
+
+    assert({
+      given: 'an env reconnecting to the SAME Sprite instance',
+      should: 'skip the measurement — resume clears nothing, so a `du` here would buy nothing',
+      actual: measured,
+      expected: [],
+    });
   });
 });

@@ -22,14 +22,26 @@
  * credit pipeline is not what this file is proving, and charging real credits to
  * assert an attribution would make the test's own failure mode expensive.
  *
- * Runs in CI (the Unit Tests job provides Postgres). Locally:
+ * Runs in CI (the Unit Tests job provides Postgres) and is deliberately NOT in
+ * `vitest.config.ts`'s exclude list — that list feeds `test:coverage`, which is
+ * what CI actually runs, so excluding a suite removes it from CI as well as from
+ * the local unit run. A billing proof that never executes is worse than no proof,
+ * because the green tick still appears.
+ *
+ * The cost of staying in the run is that a developer without Postgres hits a
+ * failure rather than a skip. `requireDb` below makes that failure LOUD and
+ * gives the one explicit opt-out (`ALLOW_SKIP_DB_TESTS=1`), which CI never sets
+ * — so this can never become a silent, zero-assertion pass.
+ *
+ * Locally:
  *     DATABASE_URL=... bun run --filter '@pagespace/lib' test -- src/services/sandbox/__tests__/sandbox-storage-billing.integration.test.ts
  */
 
 import { describe, it, expect, beforeAll, afterAll, beforeEach } from 'vitest';
 import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
-import { eq, inArray } from '@pagespace/db/operators';
+import { eq, inArray, sql } from '@pagespace/db/operators';
+import { requireDb, dbSkipExplicitlyAllowed } from '@pagespace/db/test/require-db';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
@@ -139,7 +151,20 @@ async function seedDrive(): Promise<void> {
     .onConflictDoNothing();
 }
 
+/** Set only when the operator explicitly opted out of DB suites AND Postgres is genuinely absent. */
+let dbAvailable = true;
+
 beforeAll(async () => {
+  try {
+    await db.execute(sql`SELECT 1`);
+  } catch (error) {
+    // Throws unless `ALLOW_SKIP_DB_TESTS=1`. There is no self-declared "the
+    // database was optional" path: a missing Postgres is an environment failure
+    // and is reported as one.
+    requireDb('sandbox-storage-billing.integration.test.ts', error);
+    dbAvailable = false;
+    return;
+  }
   await db
     .insert(users)
     .values([
@@ -151,6 +176,7 @@ beforeAll(async () => {
 });
 
 beforeEach(async () => {
+  if (!dbAvailable) return;
   await db.delete(driveEnvs).where(eq(driveEnvs.driveId, driveId));
   // Re-seeded per test, not once: the skip case below DELETES the drive to
   // reproduce a mid-delete read, and a failing assertion there must not cascade
@@ -159,12 +185,15 @@ beforeEach(async () => {
 });
 
 afterAll(async () => {
+  if (!dbAvailable) return;
   await db.delete(driveEnvs).where(eq(driveEnvs.driveId, driveId));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(inArray(users.id, [driveOwnerId, envCreatorId]));
 });
 
-describe('environment persistence billing — real table, real attribution', () => {
+// `skipIf` only ever fires under the explicit opt-out above — never on CI, and
+// never as a suite's own decision that the database did not matter.
+describe.skipIf(dbSkipExplicitlyAllowed())('environment persistence billing — real table, real attribution', () => {
   it('bills a live env to its DRIVE OWNER (never its creator) and advances THAT ROW\'s watermark', async () => {
     const envId = await seedEnv();
     const { deps, charges } = realDepsCapturingCharges();

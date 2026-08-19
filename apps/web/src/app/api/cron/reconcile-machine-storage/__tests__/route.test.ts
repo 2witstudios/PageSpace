@@ -44,22 +44,25 @@ describe('/api/cron/reconcile-machine-storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
+    // A run the reconcile could ACTUALLY produce, because a fixture pinned
+    // against an impossible state is a weak guard. Two live sessions and a
+    // failed env listing: one session measured and charged, one never measured
+    // (so it bills the 0 floor and is not `charged` or `skipped`), and — since
+    // `listSource` yields no rows for a source that threw — every env counter is
+    // necessarily zero. `live` therefore sums to `processed`, and the per-unit
+    // `neverMeasured`/`stale` sum to the flat totals.
     mockReconcile.mockResolvedValue({
       outcome: 'reconciled',
-      processed: 3,
-      charged: 2,
-      skipped: 1,
+      processed: 2,
+      charged: 1,
+      skipped: 0,
       failed: 0,
       chargedButUnadvanced: 0,
-      staleMeasurements: 1,
-      neverMeasured: 2,
-      // Internally consistent, because an inconsistent fixture is a weak guard:
-      // `live` sums to `processed`, and the per-unit `neverMeasured`/`stale`
-      // sum to the flat totals — `neverMeasured` can never exceed `live`, since
-      // both are incremented on the same row in the same branch.
+      staleMeasurements: 0,
+      neverMeasured: 1,
       measurementHealth: {
-        session: { live: 2, neverMeasured: 1, stale: 1 },
-        env: { live: 1, neverMeasured: 1, stale: 0 },
+        session: { live: 2, neverMeasured: 1, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
       },
       failedSources: ['env'],
       totalCostDollars: 0.001234,
@@ -88,21 +91,21 @@ describe('/api/cron/reconcile-machine-storage', () => {
         resourceType: 'cron_job',
         resourceId: 'reconcile_machine_storage',
         details: expect.objectContaining({
-          processed: 3,
-          charged: 2,
-          skipped: 1,
+          processed: 2,
+          charged: 1,
+          skipped: 0,
           failed: 0,
           chargedButUnadvanced: 0,
-          staleMeasurements: 1,
+          staleMeasurements: 0,
           // The two signals that make an under-billing meter visible: storage
           // held with no reading at all, and a persistence unit that went
           // entirely unread this tick.
-          neverMeasured: 2,
+          neverMeasured: 1,
           // Per-unit, because an env's baseline-only measurement saturates the
           // flat stale count and would hide a session-side outage.
           measurementHealth: {
-            session: { live: 2, neverMeasured: 1, stale: 1 },
-            env: { live: 1, neverMeasured: 1, stale: 0 },
+            session: { live: 2, neverMeasured: 1, stale: 0 },
+            env: { live: 0, neverMeasured: 0, stale: 0 },
           },
           failedSources: ['env'],
         }),
@@ -110,20 +113,16 @@ describe('/api/cron/reconcile-machine-storage', () => {
     );
     expect(body).toMatchObject({
       success: true,
-      processed: 3,
-      charged: 2,
-      skipped: 1,
+      processed: 2,
+      charged: 1,
+      skipped: 0,
       failed: 0,
       chargedButUnadvanced: 0,
-      staleMeasurements: 1,
-      neverMeasured: 2,
-      // Internally consistent, because an inconsistent fixture is a weak guard:
-      // `live` sums to `processed`, and the per-unit `neverMeasured`/`stale`
-      // sum to the flat totals — `neverMeasured` can never exceed `live`, since
-      // both are incremented on the same row in the same branch.
+      staleMeasurements: 0,
+      neverMeasured: 1,
       measurementHealth: {
-        session: { live: 2, neverMeasured: 1, stale: 1 },
-        env: { live: 1, neverMeasured: 1, stale: 0 },
+        session: { live: 2, neverMeasured: 1, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
       },
       failedSources: ['env'],
     });

@@ -182,6 +182,14 @@ export interface SpriteHolderProvisionDeps {
    * awake right after a provision, capture its used bytes onto the holder's row so
    * the storage reconcile can bill them — without ever waking a hibernating
    * Sprite. Best-effort and fire-and-forget; omitting it disables measurement.
+   *
+   * Fired on the two arms that CLEAR the row's measurement — `create` and
+   * `adopt` — and on neither of the others. Both mint or claim a different disk
+   * than the one the old reading described, so both null the columns; an arm
+   * that cleared without re-measuring would leave the holder billing the
+   * never-measured 0 floor while the reconcile advanced its watermark. `resume`
+   * reconnects to the SAME filesystem, so its existing measurement still
+   * describes it and re-measuring would be a `du` for nothing.
    */
   measureStorage?: (input: { holderId: string; handle: SandboxHandle }) => Promise<void>;
   now: () => Date;
@@ -528,6 +536,26 @@ export async function ensureSpriteHolderSandbox({
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'race_lost' };
       }
+
+      // Measure, for the same reason the `create` arm does — and it is the SAME
+      // reason, not a similar one. `adopt`'s stamps null `storageMeasuredBytes`
+      // and `storageMeasuredAt` (a replacement VM is a different disk, so the
+      // old reading describes storage that no longer exists), which leaves this
+      // row with no measurement at all. Without a re-measure here the holder
+      // bills the never-measured 0 floor while the reconcile keeps advancing its
+      // watermark. A session survived that by accident — its bash and git paths
+      // re-measure on the next real work — but a drive ENV has exactly one other
+      // writer, on the arm not taken, so for an env the loss is permanent.
+      // Fire-and-forget, like the create arm: a billing observation must never
+      // be awaited by, or fail, a provision.
+      if (deps.measureStorage) {
+        void deps
+          .measureStorage({ holderId: row.holderId, handle })
+          .catch(() => {
+            /* Best-effort: the seam already logs; provisioning must never fail on it. */
+          });
+      }
+
       return { ok: true, sandboxId: plan.sandboxId, resumed: true };
     }
 

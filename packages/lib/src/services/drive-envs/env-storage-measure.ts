@@ -67,15 +67,16 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  *    TO RETRY IT, so that env bills the 0 floor indefinitely — and because the
  *    reconcile advances its watermark anyway (deliberately: freezing it would
  *    let a later measurement retroactively over-bill the frozen span), each
- *    skipped window is discarded for good rather than deferred. On a REBUILD the
- *    same failure runs the other way: `revivedDriveEnvColumns` does not clear the
- *    measurement columns, so a failed baseline on the fresh empty disk leaves the
- *    env billing the DEAD generation's footprint. Every one of those paths LOGS
- *    with the env's id, and the reconcile counts the aggregate as
- *    `neverMeasured`, so the failure is observable both per-env and in the
- *    meter's own health output — but observability is not repair. The retry
- *    belongs on the resume arm and/or the warm path, which is the env ensure
- *    path's to own: tracked in issue #2443.
+ *    skipped window is discarded for good rather than deferred. The direction of
+ *    that error is always UNDER-billing, never over: both arms that fire this
+ *    seam (`create` and `adopt`) null the measurement columns in the same write,
+ *    via `reviveStamps`/`adopt`'s stamps through `envStampColumns`, so a failed
+ *    measurement leaves a NULL row rather than the dead generation's footprint.
+ *    Every one of those paths LOGS with the env's id, and the reconcile counts
+ *    the aggregate as `neverMeasured`, so the failure is observable both per-env
+ *    and in the meter's own health output — but observability is not repair.
+ *    Retrying belongs on the warm path, which is the env ensure path's to own:
+ *    tracked in issue #2443.
  *  - A measurement is never REDUCED by this path; it only ever writes what it
  *    read. Shrink correction likewise waits on the warm path.
  */
@@ -103,12 +104,12 @@ export function envStorageMeasureSeam(
         // the HANDLE, never from a row read: this is the VM the `du` actually ran
         // on, and a row re-read could already describe its replacement.
         spriteInstanceId: handle.spriteInstanceId ?? null,
-        // NULL, not the row's value: this only fires on the `create` arm, where the
-        // same operation resets the measurement columns (a new Sprite generation is
-        // an empty filesystem). Passing the pre-provision timestamp would let the
-        // throttle skip the baseline measurement of an env rebuilt inside the
-        // window, leaving the row describing a disk that no longer exists with no
-        // other trigger to fix it.
+        // NULL, not the row's value: this fires only on the two arms that RESET
+        // the measurement columns in the same write — `create` (a new Sprite
+        // generation is an empty filesystem) and `adopt` (a replacement VM is a
+        // different disk). Passing the pre-provision timestamp would let the
+        // throttle skip the baseline measurement of an env rebuilt or replaced
+        // inside the window, leaving the row NULL with no other trigger to fix it.
         lastMeasuredAt: null,
         now: new Date(),
         persist: ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) =>

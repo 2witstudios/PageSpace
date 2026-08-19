@@ -279,7 +279,17 @@ export interface ReconcileSandboxStorageResult {
   charged: number;
   /** Rows with a positive accrual whose owner could not be resolved — left unbilled (watermark untouched) for a future run to retry. */
   skipped: number;
-  /** Rows where `chargeStorage` ITSELF threw — nothing was billed, isolated so one bad row doesn't abort the batch. */
+  /**
+   * Rows where NOTHING was billed because something threw before or during the
+   * charge — the payer lookup, the accrual computation, `chargeStorage` itself,
+   * or (on a row whose window prices to $0) its watermark advance, which sits in
+   * the same guarded block. Isolated per row so one bad row doesn't abort the batch.
+   *
+   * Distinct from {@link ReconcileSandboxStorageResult.chargedButUnadvanced},
+   * which means the opposite: money DID move and only the watermark write
+   * failed. Worth knowing which way round for envs in particular, since they
+   * meter near-zero today and therefore take the $0 branch on almost every tick.
+   */
   failed: number;
   /**
    * Rows where `chargeStorage` succeeded but the FOLLOWING watermark advance
