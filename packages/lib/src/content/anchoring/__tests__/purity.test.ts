@@ -43,3 +43,34 @@ describe('anchoring purity', () => {
     }
   });
 });
+
+/**
+ * Every diff-match-patch entry point the core uses must have its deadline
+ * pinned. The library default is a one-second timeout after which diff_main
+ * returns a suboptimal — and therefore machine-speed-dependent — diff, which
+ * would make the same anchor resolve differently on a fast host than on a
+ * loaded one.
+ */
+describe('anchoring determinism', () => {
+  it('resolve.ts pins every dmp knob it relies on', () => {
+    const src = readModule('resolve');
+    expect(src).toMatch(/dmp\.Diff_Timeout = 0;/);
+    expect(src).toMatch(/dmp\.Match_Threshold = [\d.]+;/);
+    expect(src).toMatch(/dmp\.Match_Distance = \d+;/);
+  });
+
+  it('reanchor.ts pins the diff it delegates to diff-utils', () => {
+    const src = readModule('reanchor');
+    const call = src.match(/diffContent\([^)]*\)/s);
+    expect(call).not.toBeNull();
+    expect(call?.[0]).toContain('timeout: 0');
+    expect(call?.[0]).toContain("format: 'text'");
+  });
+
+  it('the core reaches diff-match-patch only through those two pinned paths', () => {
+    // A new module constructing its own DiffMatchPatch would inherit the
+    // unpinned defaults, so the import itself is the thing to keep scarce.
+    const importers = MODULES.filter((name) => readModule(name).includes('diff-match-patch'));
+    expect(importers).toEqual(['resolve']);
+  });
+});

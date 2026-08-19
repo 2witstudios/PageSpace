@@ -18,6 +18,14 @@
  * Zero I/O — no db, no fetch, no clock, no env — enforced by the purity test in
  * __tests__/purity.test.ts.
  *
+ * COST: portAnchor diffs the whole document once per anchor, which is the right
+ * shape for a pure function of (anchor, oldText, newText) and the wrong shape
+ * for a page carrying many anchors. The diff depends only on the two texts, so
+ * the call site that ports a page's anchors in bulk should compute it once and
+ * reuse it. That call site does not exist yet — wiring this into
+ * applyPageMutation is a later phase — so the hoist belongs there, not here,
+ * where it would mean inventing an API with no caller to shape it.
+ *
  * @module @pagespace/lib/content/anchoring/reanchor
  */
 
@@ -110,10 +118,18 @@ export function portAnchor(
     return orphaned();
   }
 
-  // Both sides are projections, which are plain text by construction. Saying so
-  // skips diff-utils' format sniff, which would otherwise attempt to JSON.parse
-  // the whole document on every port.
-  const spans = survivingSpans(diffContent(oldText, newText, { format: 'text' }).changes);
+  // `format` because both sides are projections, which are plain text by
+  // construction — saying so skips a sniff that would otherwise attempt to
+  // JSON.parse the whole document on every port.
+  //
+  // `timeout: 0` because diff-utils otherwise imposes a one-second deadline,
+  // and an expired deadline yields a valid but differently SEGMENTED diff. The
+  // ported offsets would still be correct, but `survived` counts characters per
+  // unchanged span, so the reported confidence — and the orphan decision at the
+  // floor — would depend on how fast the machine happened to be.
+  const spans = survivingSpans(
+    diffContent(oldText, newText, { format: 'text', timeout: 0 }).changes
+  );
 
   if (located.from === located.to) {
     const mapped = mapPoint(spans, located.from);

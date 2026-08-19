@@ -28,6 +28,14 @@ import type { AnchorResolution, TextAnchor } from './types';
 const dmp = new DiffMatchPatch();
 dmp.Match_Threshold = 0.5;
 dmp.Match_Distance = 1000;
+// 0 disables the deadline, which is the whole point: the library default of one
+// second makes diff_main return a SUBOPTIMAL diff when the clock runs out, so
+// the same two strings score differently on a fast machine than on a loaded
+// one. Anchors have to resolve identically everywhere, and a confidence that
+// wobbles across the FUZZY_SIMILARITY_FLOOR would orphan a tag on one host and
+// keep it on another. The work is bounded by the caller: textSimilarity only
+// ever compares a quote against a slice of its own length.
+dmp.Diff_Timeout = 0;
 
 /**
  * dmp's bitap matcher refuses patterns longer than `Match_MaxBits` (32), so the

@@ -73,6 +73,9 @@ describe('portAnchor — forward-porting through the diff', () => {
       newText: DOC.replace(QUOTE, 'jumps'),
       // 'jumps over the' -> 'jumps the': the quote's trailing space survives
       // along with 'jumps', so 6 of its 10 characters are still there.
+      // The exact figure is only stable because portAnchor pins the diff
+      // deadline; on a timed-out diff the segmentation, and so this count,
+      // would depend on machine speed.
       expected: { status: 'fuzzy', start: START, end: START + 'jumps '.length, confidence: 0.6 },
     },
     {
