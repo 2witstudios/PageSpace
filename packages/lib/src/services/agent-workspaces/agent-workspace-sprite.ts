@@ -3,8 +3,8 @@
  * code path that gives a holder its sandbox.
  *
  * A **sprite holder** is any row that owns exactly one Sprite under a
- * deterministic name: an agent session (`agent_workspaces`) today, a per-drive
- * environment (`drive_envs`) next. The provisioning core below knows nothing about
+ * deterministic name: an agent session (`agent_workspaces`) and a per-drive
+ * environment (`drive_envs`). The provisioning core below knows nothing about
  * which — it is handed a store slice, a key-derivation function, an
  * authorization function and a quota check, and it runs the same
  * probe → plan → provision → CAS machinery over whatever they address.
@@ -230,6 +230,30 @@ export interface AgentSessionSpriteDeps {
     workspaceId: string;
     handle: SandboxHandle;
   }) => Promise<void>;
+  /**
+   * Provision the ENVIRONMENT an env-bound session runs inside — the same
+   * holder-neutral core below, bound to the ENV's store, keyspace and gates
+   * instead of the session's.
+   *
+   * **REQUIRED, and that is the whole safety property.** A session carrying
+   * `envId` is CHECK-forbidden from holding Sprite pointers
+   * (`agent_workspaces_env_no_sprite_check`), so a caller that "just" ran the
+   * session arm for one would not quietly get the wrong machine — it would mint
+   * a REAL, billed VM under a session keyspace and then fail the CAS write on
+   * the constraint, orphaning it. Making this optional would leave every
+   * present and future entry point (the web tool path, the realtime PTY bridge,
+   * whatever comes next) one forgotten dep away from that. It is not defaulted
+   * for the same reason `checkQuota` is not: a seam whose absence is a silent
+   * fault is not one a default should paper over.
+   *
+   * It takes an intent because the caller's intent has to be TRANSLATED, not
+   * forwarded — see `ensureAgentSessionSandbox` for the one case where the two
+   * differ.
+   */
+  ensureEnvSandbox: (input: {
+    envId: string;
+    intent: SpriteHolderProvisionIntent;
+  }) => Promise<EnsureSpriteHolderSandboxResult>;
   now: () => Date;
 }
 
@@ -431,7 +455,7 @@ async function probeRecordedSprite(
 export type AgentSessionSpriteRow = Omit<SpriteHolderLifecycleRow, 'holderId'> & {
   /** The session's id — its `holderId`. Kept under this name so call sites do not churn. */
   workspaceId: string;
-} & Pick<AgentSessionRecord, 'driveId' | 'ownerId'>;
+} & Pick<AgentSessionRecord, 'driveId' | 'ownerId' | 'envId'>;
 
 /**
  * Ensure this holder's sandbox exists (or resume/adopt the one it has), and
@@ -658,6 +682,105 @@ const SESSION_LIMIT_DETAIL =
   'live agent-session limit reached for your plan — end an existing session before starting another';
 
 /**
+ * How a SESSION's intent reads when the holder being provisioned is its ENV
+ * (pure).
+ *
+ * Two of the three pass straight through. The third does not, and it is the
+ * reason this is a function rather than a forwarded argument:
+ *
+ * **`reprovision` becomes `attach`.** For an ordinary session, reprovision means
+ * "this VM is unusable, replace it under the same key" — the caller owns the
+ * filesystem it is discarding. For an env-bound session the filesystem is not
+ * the caller's to discard: it is SHARED with every other session in that env,
+ * and with every future one. Forwarding the intent would let one session's retry
+ * — a wedged shell, a failed tool call, a client that retries on a timeout —
+ * silently delete a team's environment out from under everyone working in it.
+ * So it degrades to attach: the env's machine is handed back if it is there,
+ * and the planner denies if it is not — `sandbox_not_provisioned` for an env
+ * that has never been provisioned, or `session_torn_down` for one whose Sprite
+ * a `rebuildDriveEnv` tore down and has not yet replaced (the shared planner's
+ * `isEnded` reads the env row's `spriteTornDownAt`, and the deny reasons stay
+ * session-worded on purpose — see `SpriteHolderDenyReason`). Replacing an env's
+ * Sprite is `rebuildDriveEnv` and nothing else — an
+ * explicit, admin-aimed verb on the env itself, which is where the person
+ * pressing it can see whose files they are destroying.
+ *
+ * Note what "attach-or-deny" costs and does not cost: a lazily-unprovisioned env
+ * denies rather than minting, which is correct, because `reprovision` is never
+ * the FIRST touch — `ensure` is, and it provisions.
+ *
+ * **No production caller reaches the `reprovision` arm yet**, and that is worth
+ * stating rather than leaving to be discovered. `reprovision` is only ever
+ * requested against a session the client already knows about, and nothing in the
+ * product sends `envId` on spawn while this ships dark — so today every env-bound
+ * session exists only in tests, and this mapping is a guard placed BEFORE the
+ * surface that could trip it rather than a response to a live call path. It is
+ * covered by unit tests for exactly that reason: the first UI that offers
+ * "restart this session" inside an environment must find the rule already here,
+ * not discover that it deletes a team's filesystem.
+ */
+function envIntentForSessionIntent(intent: SpriteHolderProvisionIntent): SpriteHolderProvisionIntent {
+  return intent === 'reprovision' ? 'attach' : intent;
+}
+
+/**
+ * Stamp an env-bound session's row as live, after its ENVIRONMENT has been
+ * provisioned.
+ *
+ * The env arm returns a sandbox without going anywhere near
+ * `ensureSpriteHolderSandbox`, which is correct — the machine belongs to the
+ * env's row — but it meant the SESSION's row was never written at all, and the
+ * row carries lifecycle facts the env's cannot:
+ *
+ *  - **`endedAt`.** A torn-down ordinary session revives on `ensure` (that is
+ *    what `reviveStamps` is for, and why the row is kept). Without this, an
+ *    ended env session would be handed a working sandbox while still reading as
+ *    ended — absent from every listing, reported as `'ended'` by the API, and
+ *    refused the filesystem by `resolveSessionSandboxHandle`, all while its
+ *    tools worked. A session that is usable and invisible is worse than one
+ *    that is simply refused.
+ *  - **`lastActiveAt`.** The listing orders on it, so an env session that never
+ *    stamped it sorts below every ephemeral one forever, however recently it
+ *    was used.
+ *  - **`teardownRequestedAt`.** Cleared for the same reason the shared planner
+ *    clears it: a row that is live again must not keep an intent to kill.
+ *
+ * What it deliberately does NOT write is any Sprite or storage column. Those
+ * are CHECK-forbidden on this row (`agent_workspaces_env_no_sprite_check`) and
+ * belong to the env, so this stamps the session's own lifecycle and nothing
+ * else.
+ *
+ * **The CAS mirrors the ordinary session's two arms rather than inventing a
+ * third rule.** Which guard applies is decided by the row we read:
+ *
+ *  - **It was NOT ended** — the ordinary `resume` case. Guarded on `endedAt`
+ *    still being null, because these stamps were computed assuming the session
+ *    was live and a concurrent `end` that landed in between must not be
+ *    silently erased (review #2261/1, which is the same hazard on the session
+ *    arm). A refusal is not a failure: the sandbox handed back is unaffected,
+ *    only the freshness touch is skipped.
+ *  - **It WAS ended** — the ordinary `create` case, a deliberate revive. Ending
+ *    is what the user last asked for, but ensuring is what they are asking for
+ *    now, and the session is retained precisely so it can come back. Unguarded,
+ *    exactly as the create arm's identity write is.
+ */
+async function reviveEnvBoundSession({
+  row,
+  deps,
+  now,
+}: {
+  row: AgentSessionSpriteRow;
+  deps: Pick<AgentSessionSpriteDeps, 'store'>;
+  now: Date;
+}): Promise<void> {
+  await deps.store.applyStamps({
+    workspaceId: row.workspaceId,
+    stamps: { lastActiveAt: now, endedAt: null, teardownRequestedAt: null },
+    ...(row.endedAt === null ? { cas: { endedAt: null } } : {}),
+  });
+}
+
+/**
  * Ensure THIS SESSION's sandbox exists — the entry point web and realtime call.
  *
  * A wrapper, not an implementation: it names the session's flavor of each seam
@@ -665,6 +788,35 @@ const SESSION_LIMIT_DETAIL =
  * ceiling, its store's `workspaceId` column name) and hands them to the one
  * provisioning core. Adding a holder kind means adding a sibling wrapper, never a
  * second copy of the CAS.
+ *
+ * **An ENV-BOUND session is provisioned at its ENV, and the routing is here —
+ * inside the shared entry point — on purpose.** Every surface that gives a
+ * session a sandbox comes through this function (the web tool path, the shells
+ * route, the realtime PTY bridge), so a session that borrows a machine borrows
+ * it identically on all of them. Routing at a call site instead would mean each
+ * caller remembering; the one that forgot would mint a second, billed VM under
+ * the session keyspace and then fail the identity CAS on
+ * `agent_workspaces_env_no_sprite_check`, orphaning it.
+ *
+ * Three consequences worth stating, because they are what the epic rests on:
+ *
+ *  - **The env's Sprite is created LAZILY, on the first ensure of any session
+ *    inside it** — never at env-create time. Concurrent first-ensures are
+ *    serialized by the identity CAS on the ENV row (the same CAS a session's own
+ *    provision runs), so N sessions opening at once yield ONE VM and N callers
+ *    holding its id; the losers reconcile rather than kill, exactly as they do
+ *    for a session.
+ *  - **Every session in an env resolves the SAME `sandboxId`**, because the env's
+ *    Sprite name folds the ENV's id. Nothing threads a "shared" handle around —
+ *    the shells, the fs and diff tools, the git runners and the realtime bridge
+ *    are all sandbox-handle-keyed, so they share a filesystem by construction and
+ *    needed no change to do it.
+ *  - **`checkConcurrency` is never reached for an env session**, structurally
+ *    rather than by a flag: the per-owner live-SESSION ceiling belongs to the
+ *    session arm below, and an env session never enters it. The env is the billed
+ *    unit, its allowance is metered where the commitment is made (env create),
+ *    and the per-run code-execution semaphore still applies to every tool call
+ *    either way.
  */
 export async function ensureAgentSessionSandbox({
   row,
@@ -677,6 +829,29 @@ export async function ensureAgentSessionSandbox({
   actor: AgentSessionActorContext;
   deps: AgentSessionSpriteDeps;
 }): Promise<EnsureAgentSessionSandboxResult> {
+  if (row.envId !== null) {
+    // `attach` must never resurrect, and for an env-bound session that has to be
+    // said here: the shared planner refuses `attach` on an ended row
+    // (`session_torn_down`), but it only ever sees the ENV's row on this path,
+    // which knows nothing about the session having ended. Without this an
+    // attach against a live environment would succeed and then clear `endedAt`
+    // below — putting a session the user ended back in the sidebar holding the
+    // empty tree `endSession` already destroyed.
+    if (intent === 'attach' && row.endedAt !== null) {
+      return { ok: false, reason: 'denied', denial: 'session_torn_down' };
+    }
+    const provisioned = await deps.ensureEnvSandbox({
+      envId: row.envId,
+      intent: envIntentForSessionIntent(intent),
+    });
+    // Only the intents that MEAN "I want this session working" revive it. A
+    // plain `attach` is a read-only resolve; it stamps nothing, exactly as the
+    // planner's attach arm writes no revival stamps for an ordinary session.
+    if (provisioned.ok && intent !== 'attach') {
+      await reviveEnvBoundSession({ row, deps, now: deps.now() });
+    }
+    return provisioned;
+  }
   const { measureSessionStorage } = deps;
   return ensureSpriteHolderSandbox({
     row: { ...row, holderId: row.workspaceId },

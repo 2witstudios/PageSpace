@@ -13,8 +13,14 @@
  *
  * **DELETE is the destructive verb.** It refuses while sessions are live inside
  * the env (409) unless `?force=true`, because deleting the row CASCADES those
- * sessions away — see `deleteDriveEnv`, which owns the ordering (guard → kill →
- * confirm → row) and aborts the delete if the kill could not be confirmed.
+ * sessions away — see `deleteDriveEnv`, which owns the ordering: guard → delete
+ * the row → kill the machine, in that order and for that reason. The kill comes
+ * LAST so that a refusal cannot leave a destroyed filesystem behind, and it is
+ * therefore best-effort: a kill that fails or stalls does NOT abort the delete
+ * and does not fail this request. The environment is gone; the reclaim outbox
+ * finishes stopping the machine. `spriteTornDown` in the response says whether
+ * this request also managed that, which is why it is reported rather than
+ * assumed — there is deliberately no 503 arm.
  */
 
 import { NextResponse } from 'next/server';
@@ -148,25 +154,20 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
     const force = new URL(request.url).searchParams.get('force') === 'true';
     const result = await deleteEnv({ envId, force });
 
+    // Two refusals, both terminal. There is deliberately no `teardown_failed`
+    // arm any more: the delete now kills the Sprite only AFTER the row is gone,
+    // so a kill this request could not confirm is the reclaim outbox's problem
+    // rather than a failure to report — the environment IS deleted either way.
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
-      if (result.reason === 'live_sessions') {
-        return NextResponse.json(
-          {
-            error: 'Sessions are still running in this environment',
-            reason: 'live_sessions',
-            liveSessionCount: result.liveSessionCount,
-          },
-          { status: 409 },
-        );
-      }
-      // The kill could not be confirmed, so the row was deliberately NOT
-      // deleted: it is the only remaining pointer at a VM that may still be
-      // running, and for a surviving env row the retry is a later delete or
-      // rebuild rather than a cron. A retry is the right client behavior,
-      // hence 503.
-      loggers.api.error('Drive environment teardown failed', new Error(result.detail), { envId });
-      return NextResponse.json({ error: 'Could not tear down the environment machine', reason: 'teardown_failed' }, { status: 503 });
+      return NextResponse.json(
+        {
+          error: 'Sessions are still running in this environment',
+          reason: 'live_sessions',
+          liveSessionCount: result.liveSessionCount,
+        },
+        { status: 409 },
+      );
     }
 
     auditRequest(request, {

@@ -64,6 +64,8 @@ import {
 import { resolveSessionShellById } from '@pagespace/lib/services/agent-workspaces/workspace-shells';
 import { createDbSessionShellStore } from '@pagespace/lib/services/agent-workspaces/workspace-shells-store';
 import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
+import { createDbDriveEnvStore } from '@pagespace/lib/services/drive-envs/drive-envs-store';
+import { ensureDriveEnvSandbox } from '@pagespace/lib/services/drive-envs/env-provision-deps';
 import { ensureAgentSessionSandbox } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
@@ -120,6 +122,10 @@ const agentTerminalSessionMap = createTerminalSessionMap();
 // The shell:* family's stores (agent sessions + their shells) — created once
 // at module level, not per-connection.
 const dbAgentSessionStorePromise = createDbAgentSessionStore();
+// The drive-environment store, for sessions that run INSIDE an environment: a
+// shell opened over the socket provisions the env's Sprite exactly as a web
+// tool call does, through the same shared core.
+const dbDriveEnvStorePromise = createDbDriveEnvStore();
 const dbSessionShellStorePromise = createDbSessionShellStore();
 
 /**
@@ -154,6 +160,22 @@ async function resolveOwnerTier(ownerId: string) {
     .where(eq(users.id, ownerId))
     .limit(1);
   return toSubscriptionTier(row?.subscriptionTier);
+}
+
+/**
+ * An ENVIRONMENT's payer — the drive's OWNER — and their tier, with NO fallback.
+ *
+ * The web tier's `resolveDriveEnvPayer` says the same thing; both fail closed on
+ * a vanished drive for the same reason `resolveSessionTenantId` does. The payer
+ * id is the TENANT an env's Sprite key folds under, so substituting the acting
+ * user would derive a different Sprite NAME for the same environment and hand
+ * back a different machine — splitting one env across two identities, one per
+ * tier of the system.
+ */
+async function resolveDriveEnvPayer(driveId: string) {
+  const [drive] = await db.select({ ownerId: drives.ownerId }).from(drives).where(eq(drives.id, driveId)).limit(1);
+  if (!drive) return null;
+  return { payerId: drive.ownerId, tier: await resolveOwnerTier(drive.ownerId) };
 }
 
 /**
@@ -224,6 +246,17 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
           },
         });
       },
+      // An env-bound session provisions its ENVIRONMENT, not itself — the same
+      // `ensureDriveEnvSandbox` the web tier binds, so both processes fold one
+      // keyspace under one tenant. Routing lives inside
+      // `ensureAgentSessionSandbox`; this is only the binding it calls.
+      ensureEnvSandbox: async ({ envId, intent }) =>
+        ensureDriveEnvSandbox({
+          envId,
+          intent,
+          requesterId: userId,
+          deps: { store: await dbDriveEnvStorePromise, host, resolvePayer: resolveDriveEnvPayer },
+        }),
       checkConcurrency: async ({ ownerId, alreadyProvisioned }) => {
         // Tier of the PAYER — the session's tenant (drive owner, else session
         // owner), resolved above — not the session creator's own tier (review

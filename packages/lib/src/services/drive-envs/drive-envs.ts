@@ -26,6 +26,7 @@
  * because an env's whole contract with its users is that the files stay put.
  */
 
+import { loggers } from '../../logging/logger-config';
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import {
@@ -288,17 +289,34 @@ type TeardownEnvSpriteResult =
  * a concurrent provision may have put a LIVE replacement into this row, and
  * marking that one torn down would hide a billing VM from every pointer there is.
  *
- * **What recovers a crash here, precisely.** For a DELETED env row the reclaim
- * outbox does: the AFTER DELETE trigger parks the pointer and
- * `reconcileOrphanSprites` drains it (source A). For a SURVIVING row it does
- * NOT: that cron's second source enumerates `agent_workspaces` only, and
- * `drive_envs` is not folded into its row sources yet (the schema PR defers that
- * to when envs join the crons). So an env whose kill failed keeps a live VM its
- * own row still points at — nothing is leaked or unbilled — and the retry is the
- * next delete or rebuild, or a plain `ensure`, which resumes the VM and clears
- * the stale intent. Folding envs into the reconciler is the follow-up that makes
- * that automatic; it is deliberately not smuggled into this dark-shipped layer,
- * because it changes the behavior of a cron that is live for sessions today.
+ * **This is the REBUILD path only.** `deleteDriveEnv` does not come through
+ * here: it kills after the row is gone, where there is no row to stamp and the
+ * reclaim outbox is the record. Rebuild by definition keeps the row, so it is
+ * the one caller that still needs intent-before-kill.
+ *
+ * **What recovers a failed kill here, and the one gap in it.** `drive_envs` is a
+ * row source of `reconcileOrphanSprites`, enumerated on exactly the predicate
+ * this function leaves behind — a teardown intent stamped, no confirmation, a
+ * sandbox still pointed at — so an env whose kill failed is normally retried on
+ * the next tick under the same instance-CAS guard a session gets, rather than
+ * waiting for a person to press rebuild again.
+ *
+ * That retry licence is `teardownRequestedAt`, and **a concurrent `ensure` can
+ * clear it**: a resume verdict's stamps reset the teardown request as part of
+ * recording that the holder is live again (`plan-workspace-lifecycle.ts`, the
+ * `resume` arm). So the sequence "kill fails ⇒ somebody opens a shell in the env
+ * ⇒ the resume clears the intent" leaves a VM this process knows it failed to
+ * kill with nothing enumerating it: the row reads live, and it IS live, so no
+ * source claims it. It stops being an orphan and becomes an env whose machine
+ * was never actually replaced — wrong for a rebuild, but not leaked, and the
+ * next rebuild kills it.
+ *
+ * Not closed here on purpose: re-stamping the intent after a failed kill would
+ * race the very resume that cleared it, and stamping a teardown intent onto a
+ * row a user is actively working in is how you get the reconciler to destroy a
+ * live filesystem — the one mistake this whole subsystem is built to avoid. The
+ * honest mitigation is the ERROR below, which surfaces the failed kill at the
+ * moment it happens rather than relying on a cron to notice later.
  */
 async function teardownEnvSprite({
   envId,
@@ -344,12 +362,16 @@ async function teardownEnvSprite({
     // — confirmed enough to stamp (the CAS below still refuses if the row has
     // moved on to that replacement).
     if (!(error instanceof SandboxSpriteReplacedError)) {
-      // A real failure: the VM may still be running. Reported rather than
-      // swallowed, because for a SURVIVING env row nothing retries this on its
-      // own (see the doc above) — the next delete, rebuild or ensure does. And
-      // the caller must NOT go on to delete the row: the row is what still
-      // points at the VM, and deleting it would hand the reclaim job to the
-      // AFTER DELETE trigger while we believe the kill is retryable here.
+      // A real failure: the VM may still be running, and it bills until
+      // something kills it. LOGGED here rather than only returned, because the
+      // cron retry that would otherwise cover this can have its licence cleared
+      // by a concurrent ensure (see the doc above) — so this line is the one
+      // signal guaranteed to be emitted at the moment the kill fails.
+      loggers.ai.error(
+        'Drive environment sprite teardown failed; env row keeps its teardown intent',
+        error instanceof Error ? error : new Error(String(error)),
+        { envId, sandboxId },
+      );
       return { ok: false, detail: error instanceof Error ? error.message : String(error) };
     }
   }
@@ -363,20 +385,28 @@ async function teardownEnvSprite({
 // ---------------------------------------------------------------------------
 
 export interface DeleteDriveEnvDeps {
-  store: Pick<
-    DriveEnvStore,
-    'findById' | 'countLiveSessionsInEnv' | 'requestTeardown' | 'stampSpriteTornDown' | 'deleteIfUnoccupied'
-  >;
+  /**
+   * No teardown stamps here, unlike `RebuildDriveEnvDeps`: this verb kills the
+   * Sprite AFTER the row is gone, so there is no row left to stamp an intent or
+   * a confirmation onto. The reclaim outbox holds that record instead.
+   */
+  store: Pick<DriveEnvStore, 'findById' | 'countLiveSessionsInEnv' | 'deleteIfUnoccupied'>;
   host: SandboxHost;
   now: () => Date;
+  /**
+   * Timer seam for the post-commit kill's deadline. Production leaves it unset
+   * and gets `setTimeout`; a test injects one so "the delete answers without
+   * waiting for a control plane that never replies" is assertable in
+   * microseconds rather than by really waiting five seconds.
+   */
+  setTimeoutFn?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
 }
 
 export type DeleteDriveEnvResult =
   | { ok: true; spriteTornDown: boolean }
   | { ok: false; reason: 'not_found' }
   /** Sessions are still live in here and `force` was not given. Nothing was touched. */
-  | { ok: false; reason: 'live_sessions'; liveSessionCount: number }
-  | { ok: false; reason: 'teardown_failed'; detail: string };
+  | { ok: false; reason: 'live_sessions'; liveSessionCount: number };
 
 /**
  * Delete an environment — the destructive verb, and the only one that takes a
@@ -385,43 +415,51 @@ export type DeleteDriveEnvResult =
  * The flow, in the order the invariants require:
  *
  *  1. **Guard, cheaply.** Refuse while sessions are live inside the env, unless
- *     `force`. First, because the row delete CASCADES to those sessions: by the
- *     time the row is gone, the work someone was doing in it is gone too. This
- *     read is deliberately NOT the authoritative guard — it is the one that
- *     refuses before anything is destroyed, which is what makes the common case
- *     cost nothing.
- *  2. **Teardown.** Kill the env's Sprite while the row still points at it, so
- *     the kill is confirmed by the caller that asked for it. A failed kill
- *     ABORTS the delete: the row keeps its teardown request and stays as the
- *     only pointer at the VM, so a retry can finish what this call started.
- *  3. **Delete, atomically re-guarded.** `deleteIfUnoccupied` repeats the count
- *     inside one transaction holding `FOR UPDATE` on the env row, which is what
- *     actually closes the window: a session cannot bind between the count and
- *     the delete, because binding needs an FK lock on the row this transaction
+ *     `force`. This read is deliberately NOT the authoritative guard — it is the
+ *     one that refuses without taking a lock, which is what makes the common
+ *     case cost nothing.
+ *  2. **Delete, atomically guarded.** `deleteIfUnoccupied` repeats the count
+ *     inside one transaction holding `FOR UPDATE` on the env row, and THAT is
+ *     the guard that decides: a session cannot bind between the count and the
+ *     delete, because binding needs an FK lock on the row this transaction
  *     holds. The cascade then removes bound sessions (and their panes, rev
  *     counters and shells).
+ *  3. **Kill, once nothing can be harmed by it.** Only after the row is gone.
  *
- * A session that binds during step 2 therefore REFUSES the delete rather than
- * being cascaded away — and leaves the env with a torn-down Sprite. That state
- * is ordinary (`status: 'stopped'`, indistinguishable from a reclaim) and costs
- * the racing session a re-provision on its next ensure, which is the right
- * price: a machine rebuilt is recoverable, a live session's work deleted
- * without consent is not.
+ * **The kill comes LAST, and the order is the whole safety property.** It used
+ * to come second — kill, then delete under the lock — and that was wrong in a
+ * way the refusal disguised: a session binding between the unlocked count and
+ * the kill had the environment's machine destroyed under it, and then the
+ * authoritative re-count refused the delete and told the caller the delete had
+ * FAILED. Nothing was deleted, so the failure read as "nothing happened" — but
+ * the shared filesystem was already gone, and an env's entire contract with its
+ * users is that the files stay put. Killing after the delete cannot reach a
+ * live session at all: once the row is gone no session is bound to it and none
+ * can become bound (the FK has nothing to point at), so by construction there
+ * is nobody left to harm.
  *
- * The AFTER DELETE trigger is the crash net UNDER step 2, not a second copy of
- * it: it fires only `WHEN sandboxId IS NOT NULL AND spriteTornDownAt IS NULL` —
- * a row that still believes it holds a live Sprite. After a confirmed teardown
- * that predicate is false and nothing is enqueued, which is correct: an outbox
- * row for a dead name would have the reclaim cron chase it forever. What the
- * trigger DOES catch is the case step 2 cannot close by itself — a concurrent
- * provision put a live replacement on the row, the confirmation CAS rightly
- * refused, and the delete carries a machine nothing else would ever find.
+ * **What happens to a kill that fails now.** The row is already gone, so this
+ * function cannot hold the pointer for a retry — the reclaim outbox does,
+ * which is precisely what it exists for. The AFTER DELETE trigger fires
+ * `WHEN sandboxId IS NOT NULL AND spriteTornDownAt IS NULL` — true for exactly
+ * the rows whose Sprite we are about to kill — and parks the pointer inside the
+ * deleting transaction. So the pointer OUTLIVES the row unconditionally, and
+ * `reconcileOrphanSprites` drains the outbox with a retry that never gives up
+ * and an attempt count that makes a stuck VM visible. The kill here is an
+ * OPTIMISATION on that: it reclaims promptly in the overwhelming common case,
+ * and when it fails the cron finishes the job. `killSprite` is idempotent, so
+ * the cron re-killing a VM this call already destroyed is a no-op that then
+ * releases the outbox row.
+ *
+ * This is the one place the reclaim outbox is load-bearing rather than a crash
+ * net, and that is a deliberate trade: a lingering VM costs money until the next
+ * cron tick, a destroyed filesystem costs someone their work.
  *
  * The cascade cannot strand a VM: an env-bound session is CHECK-forbidden from
  * holding Sprite pointers (`agent_workspaces_env_no_sprite_check`), so the only
- * machine in play is the env's own, which step 2 has already dealt with. That is
- * also why `force` does not need to end sessions one by one first — there is
- * nothing in a session row for an orderly end to release.
+ * machine in play is the env's own. That is also why `force` does not need to
+ * end sessions one by one first — there is nothing in a session row for an
+ * orderly end to release.
  */
 export async function deleteDriveEnv({
   envId,
@@ -436,6 +474,10 @@ export async function deleteDriveEnv({
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
 
+  // Step 1. Cheap and non-authoritative — see the docblock. Its only job is to
+  // refuse the common "you have sessions open in here" case without taking a
+  // lock. It is safe for this read to be stale in EITHER direction now: nothing
+  // is destroyed until step 2, which re-decides under the lock.
   const liveSessionCount = await deps.store.countLiveSessionsInEnv(envId);
   const plan = planEnvDelete({ row, liveSessionCount, force });
 
@@ -443,40 +485,157 @@ export async function deleteDriveEnv({
     return { ok: false, reason: 'live_sessions', liveSessionCount: plan.liveSessionCount };
   }
 
-  let spriteTornDown = false;
-  if (plan.action === 'teardown_then_delete') {
-    const teardown = await teardownEnvSprite({
-      envId,
-      sandboxId: plan.sandboxId,
-      expectedInstanceId: plan.expectedInstanceId,
-      row,
-      deps,
-    });
-    // A kill we could not confirm must NOT be followed by a row delete: the row
-    // is the only remaining pointer at a VM whose kill may still have to be
-    // retried, and the reclaim outbox is a net for crashes, not a substitute
-    // for a teardown this process knows failed.
-    if (!teardown.ok) return { ok: false, reason: 'teardown_failed', detail: teardown.detail };
-    // `stamped: false` means the confirmation CAS refused — a concurrent
-    // provision owns this row's pointer now. The delete still proceeds (the
-    // caller asked for the env to be gone, and it is), and the replacement VM
-    // is handed to the reclaim outbox by the AFTER DELETE trigger, which fires
-    // precisely because the row still reads as live.
-    spriteTornDown = teardown.stamped;
-  }
-
+  // Step 2. THE guard. A refusal here means nothing was touched — which is now
+  // literally true, where before it meant "nothing was deleted, but the machine
+  // is already gone".
   const deleted = await deps.store.deleteIfUnoccupied({ envId, force });
   if (!deleted.ok) {
     // `not_found`: a concurrent delete removed the row first. The env is gone
     // either way, which is what the caller asked for — but say so honestly
     // rather than claim this call is what killed the Sprite.
     if (deleted.reason === 'not_found') return { ok: false, reason: 'not_found' };
-    // `live_sessions`: a session bound during the teardown above. Refusing
-    // costs that session a re-provision; cascading it away would cost someone
+    // `live_sessions`: a session bound between step 1 and the lock. Refusing
+    // costs that session nothing at all; cascading it away would cost someone
     // their work.
     return { ok: false, reason: 'live_sessions', liveSessionCount: deleted.liveSessionCount };
   }
+
+  // Step 3. The row is gone, so this kill can no longer reach a live session.
+  // Reclamation is guaranteed either way: the row was deleted while it still
+  // read live, so the AFTER DELETE trigger parked the pointer in the outbox for
+  // the cron to drain. (The one interleaving where it did NOT — a rebuild
+  // confirming a teardown between this function's read and the delete — is the
+  // case where there is nothing left to reclaim, because that rebuild already
+  // killed the VM. The kill below is instance-guarded, so it cannot touch the
+  // replacement it minted.) Killing here is therefore an optimisation on the
+  // outbox: promptness is worth a network call, and a failure costs a cron tick
+  // rather than a leak.
+  if (plan.action !== 'delete_then_teardown') return { ok: true, spriteTornDown: false };
+  const spriteTornDown = await killDeletedEnvSprite({
+    envId,
+    sandboxId: plan.sandboxId,
+    expectedInstanceId: plan.expectedInstanceId,
+    deps,
+  });
   return { ok: true, spriteTornDown };
+}
+
+/**
+ * How long the DELETE request is willing to WAIT for the post-commit kill before
+ * handing it to the reclaim outbox and answering.
+ *
+ * Deliberately short. The delete has already committed by the time this runs, so
+ * every millisecond spent here is a user waiting on work whose outcome cannot
+ * change their answer — the environment is gone either way. `SandboxHost.kill`
+ * has no deadline of its own (it is `getSprite` + `deleteSprite` against a
+ * control plane), so without this a stalled provider holds the request open long
+ * after the only thing the caller asked for has succeeded.
+ */
+const ENV_DELETE_KILL_WAIT_MS = 5_000;
+
+/**
+ * Best-effort kill of the Sprite belonging to an env row that has ALREADY been
+ * deleted. Never throws, never blocks for long, and never reports a failure to
+ * the caller, because by this point there is no failure the caller could act on:
+ * the env is gone (which is what they asked for) and the outbox owns the retry.
+ *
+ * Returns whether the kill was CONFIRMED — reported to the caller as
+ * `spriteTornDown` and audited, so "did this request also stop the machine"
+ * stays an honest answer rather than an assumed one. A timeout answers `false`,
+ * which is exactly right: we do not know that we stopped it.
+ *
+ * **"Never throws" is structural here, not a promise about the host.** Everything
+ * this function does happens AFTER the row delete has committed, so anything it
+ * lets escape converts a delete that succeeded into a 500 for the caller — the
+ * precise failure the post-commit ordering exists to prevent. `SandboxHost.kill`
+ * returns a promise, but it is an interface: an implementation that is not
+ * `async` could throw synchronously, before the rejection handler is ever
+ * attached. The logging could throw too. So the whole body is guarded and the
+ * guard ANSWERS rather than propagates — the contract does not depend on every
+ * present and future `SandboxHost` remembering to be `async`, nor on a logger
+ * behaving.
+ *
+ * **The timeout does not cancel the underlying call, and does not need to.**
+ * `SandboxHost.kill` takes no `AbortSignal`, so the provider request runs on
+ * after we stop waiting — which is harmless here in a way it would not be for an
+ * ordinary operation: the call is idempotent, nothing downstream reads its
+ * result, and the outbox reclaims the VM whether it lands or not. The failure
+ * modes it could leave behind (killed late, or not killed at all) are both
+ * states the reconciler already handles by design. What we must not do is leave
+ * the promise unobserved, so its rejection is caught rather than allowed to
+ * surface as an unhandled rejection long after this function returned.
+ *
+ * `expectedInstanceId` is load-bearing exactly as it is on every other kill
+ * path: the name is reused across re-creates, so an unqualified "destroy
+ * whatever holds this name" could destroy a replacement that legitimately took
+ * it. A `SandboxSpriteReplacedError` therefore means our target is already gone
+ * — nothing to do, and NOT a confirmation, because the outbox row must go on
+ * chasing whatever is alive under that name now.
+ */
+async function killDeletedEnvSprite({
+  envId,
+  sandboxId,
+  expectedInstanceId,
+  deps,
+}: {
+  envId: string;
+  sandboxId: string;
+  expectedInstanceId: string | null;
+  deps: Pick<DeleteDriveEnvDeps, 'host' | 'setTimeoutFn'>;
+}): Promise<boolean> {
+  const TIMED_OUT = Symbol('timed_out');
+  const setTimeoutFn = deps.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    // `.catch` observes the promise exactly once, immediately, so a rejection
+    // arriving long after the deadline won cannot surface as an unhandled
+    // rejection. A SYNCHRONOUS throw (a non-`async` host) never reaches it and is
+    // caught by the block below instead — which is why that block exists.
+    const kill = deps.host
+      .kill({ sandboxId, expectedInstanceId })
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeoutFn(() => resolve(TIMED_OUT), ENV_DELETE_KILL_WAIT_MS);
+    });
+
+    const outcome = await Promise.race([kill, deadline]);
+
+    if (outcome === TIMED_OUT) {
+      loggers.ai.warn(
+        'Drive environment sprite kill did not answer in time; answering the delete and leaving the VM to the reclaim outbox',
+        { envId, sandboxId, waitedMs: ENV_DELETE_KILL_WAIT_MS },
+      );
+      return false;
+    }
+    if (outcome.ok) return true;
+    if (outcome.error instanceof SandboxSpriteReplacedError) return false;
+    // Logged, not swallowed silently: the outbox will retry forever, but a kill
+    // that fails is still the signal that something is wrong with the substrate,
+    // and a VM that keeps refusing to die bills the whole time.
+    loggers.ai.error(
+      'Drive environment sprite kill failed after the row was deleted; reclaim outbox will retry',
+      outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error)),
+      { envId, sandboxId },
+    );
+    return false;
+  } catch (error) {
+    // Nothing above SHOULD reach here — the kill's own rejection is handled, and
+    // the rest is logging. It exists because this runs after the commit, where
+    // "should not" is not a good enough reason to let an exception turn a delete
+    // that succeeded into a 500. Answering `false` is accurate: we did not
+    // confirm the machine stopped, and the outbox will.
+    loggers.ai.error(
+      'Drive environment sprite cleanup threw after the row was deleted; the env IS deleted and the reclaim outbox will retry',
+      error instanceof Error ? error : new Error(String(error)),
+      { envId, sandboxId },
+    );
+    return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
 }
 
 // ---------------------------------------------------------------------------

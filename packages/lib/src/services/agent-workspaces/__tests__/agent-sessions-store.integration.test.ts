@@ -181,7 +181,7 @@ beforeEach(async () => {
 
 describe('create + findByConversation', () => {
   it('mints a session with its own id, and two bound conversations resolve the SAME row', async () => {
-    const created = await store.create({ ownerId, driveId, name: 'api refactor', now: new Date() });
+    const created = await store.create({ ownerId, driveId, name: 'api refactor', envId: null, now: new Date() });
     workspaceIds.push(created.id);
 
     for (const convName of ['conv-x', 'conv-y']) {
@@ -831,6 +831,7 @@ describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)'
       ownerId,
       driveId,
       name: 'ceiling test',
+      envId: null,
       now: new Date(),
       maxActive: 1_000_000,
     });
@@ -842,7 +843,7 @@ describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)'
 
   it('given the owner is AT the ceiling, should refuse without inserting', async () => {
     const before = await store.countActive(ownerId);
-    const result = await store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive: before });
+    const result = await store.createIfUnderLimit({ ownerId, driveId, name: null, envId: null, now: new Date(), maxActive: before });
     expect(result).toEqual({ ok: false, reason: 'limit_reached' });
     expect(await store.countActive(ownerId)).toBe(before);
   });
@@ -855,7 +856,7 @@ describe('createIfUnderLimit — the spawn ceiling made atomic (review #2261/2)'
 
     const results = await Promise.all(
       Array.from({ length: attempts }, () =>
-        store.createIfUnderLimit({ ownerId, driveId, name: null, now: new Date(), maxActive }),
+        store.createIfUnderLimit({ ownerId, driveId, name: null, envId: null, now: new Date(), maxActive }),
       ),
     );
     const minted = results.filter((r): r is Extract<typeof r, { ok: true }> => r.ok);
