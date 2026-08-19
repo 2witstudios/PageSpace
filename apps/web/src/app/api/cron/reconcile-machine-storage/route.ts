@@ -8,14 +8,20 @@ import { NextResponse } from 'next/server';
 import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
 
 /**
- * Cron endpoint that meters agent sessions' persistent-storage cost (Sprites
- * Platform Alignment 6-1). The platform bills for the bytes a session's
- * sandbox has ACTUALLY written (TRIM-friendly), not the provisioned
- * allocation, so this bills EVERY known session sandbox — active or
- * hibernating — from its last PERSISTED MEASURED footprint, to the session's
- * agent page (or its owner, for a global-assistant session). It NEVER wakes a
- * sprite to measure; a never-measured session bills a conservative 0 for that
- * window.
+ * Cron endpoint that meters PERSISTENT-storage cost (Sprites Platform
+ * Alignment 6-1). The platform bills for the bytes a sandbox has ACTUALLY
+ * written (TRIM-friendly), not the provisioned allocation, so this bills EVERY
+ * known sandbox — active or hibernating — from its last PERSISTED MEASURED
+ * footprint. It NEVER wakes a sprite to measure; a never-measured row bills a
+ * conservative 0 for that window.
+ *
+ * TWO persistence units, ONE meter and ONE schedule: agent SESSIONS (billed to
+ * the session's drive owner, or to its own owner for a global-assistant
+ * session) and drive ENVIRONMENTS (billed to the DRIVE OWNER, with no
+ * fallback — an unresolvable drive skips the cycle rather than misattributing
+ * a charge). Envs joined as a row source deliberately, rather than as a second
+ * cron: the counters below aggregate both, and there is exactly one advisory
+ * lock standing between a rolling deploy and a double-bill.
  *
  * Path kept as `reconcile-machine-storage` (Phase 8 teardown renamed the
  * body, not the cron path or its advisory-lock key — both are external

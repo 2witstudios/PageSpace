@@ -26,6 +26,7 @@ import {
   isContainmentVerified,
 } from '@pagespace/lib/services/sandbox/containment';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
+import { refreshSessionStorageMeasurement } from '@pagespace/lib/services/sandbox/sandbox-storage-measure';
 import { resolveSandboxNetworkOptions } from '@pagespace/lib/services/sandbox/network-options';
 import { getConfiguredEgressIpTag } from '@pagespace/lib/services/sandbox/egress-ip';
 import { deriveDriveEnvSpriteKey } from '@pagespace/lib/drive-envs/env-sprite-key';
@@ -231,6 +232,46 @@ function buildEnvProvisionDeps({
     checkQuota: async () => {
       if (isSandboxAvailable(payer.tier)) return { allowed: true };
       return { allowed: false, denial: 'not_authorized', reason: 'tier_ineligible' };
+    },
+    /**
+     * Opportunistic storage measurement — the WRITE side of the meter that
+     * bills this env.
+     *
+     * An env is the billed PERSISTENCE unit, and the storage reconcile only ever
+     * READS `drive_envs.storageMeasuredBytes`. With no writer an env prices at
+     * the never-measured 0 floor forever while the cron keeps advancing its
+     * watermark, permanently discarding every interval — an env would be free,
+     * silently, which is the one outcome the billing work exists to prevent.
+     * Wired at the env's provisioning deps rather than inside the holder-neutral
+     * core for the reason every other seam here is: WHICH row a measurement
+     * lands on is the holder kind's answer, not the provisioner's.
+     *
+     * Fired by the core on the `create` arm only, against a Sprite that is
+     * already awake — never by waking a hibernating one. That baseline is a
+     * floor rather than a truth: an env accumulates its real footprint across
+     * sessions, and refreshing it from warm env sessions is the sessions-in-env
+     * path's own seam to call, using this same store writer.
+     */
+    measureStorage: async ({ holderId, handle }) => {
+      await refreshSessionStorageMeasurement({
+        handle,
+        // The holder-neutral seam still names its subject `workspaceId`; here it
+        // addresses a `drive_envs` row, which is what `persist` below writes to.
+        workspaceId: holderId,
+        // The generation just minted — the CAS target for the write. Taken from
+        // the handle, not the row: this is the VM the `du` runs on.
+        spriteInstanceId: handle.spriteInstanceId ?? null,
+        // NULL, not the row's value: this callback only fires on the `create`
+        // arm, where the same operation resets the measurement columns (a new
+        // Sprite generation is an empty filesystem). Passing the pre-provision
+        // timestamp would let the throttle skip the baseline measurement of an
+        // env rebuilt inside the window, leaving the row stale with no other
+        // trigger to fix it.
+        lastMeasuredAt: null,
+        now: new Date(),
+        persist: ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) =>
+          store.recordStorageMeasurement({ envId: workspaceId, spriteInstanceId, measuredBytes, measuredAt }),
+      });
     },
     now: () => new Date(),
   };

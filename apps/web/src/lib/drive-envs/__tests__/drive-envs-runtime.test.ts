@@ -66,8 +66,12 @@ vi.mock('@pagespace/lib/services/sandbox/can-run-code', () => ({
   canRunCode: vi.fn(async () => ({ ok: true })),
   isCodeExecutionEnabled: () => true,
 }));
+/** Typed FROM THE REAL STORE contract, for the same anti-drift reason the deps type below is. */
+const recordStorageMeasurement = vi.hoisted(() =>
+  vi.fn<(input: EnvMeasurementWrite) => Promise<void>>(async () => {}),
+);
 vi.mock('@pagespace/lib/services/drive-envs/drive-envs-store', () => ({
-  createDbDriveEnvStore: async () => ({}),
+  createDbDriveEnvStore: async () => ({ recordStorageMeasurement }),
 }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({ getSandboxHost: async () => ({}) }));
 
@@ -114,9 +118,13 @@ import type {
   SpriteHolderProvisionDeps,
   SpriteHolderProvisionIntent,
 } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
+import type { DriveEnvStore } from '@pagespace/lib/services/drive-envs/drive-envs-store';
 import type { SpriteHolderLifecycleRow } from '@pagespace/lib/agent-workspaces/plan-workspace-lifecycle';
 import type { SubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { rebuildEnv } from '../drive-envs-runtime';
+
+/** What the env store's measurement writer is owed — derived, so a change to it breaks this suite. */
+type EnvMeasurementWrite = Parameters<DriveEnvStore['recordStorageMeasurement']>[0];
 
 /** The core's own call shape — derived, so a change to it breaks this suite instead of sliding past. */
 type EnsureSpriteHolderInput = {
@@ -220,5 +228,61 @@ describe('rebuildEnv wiring', () => {
     await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
 
     expect(ensureSpriteHolderSandbox).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The measurement seam — the WRITE side of the meter that bills this env.
+ *
+ * An env is the billed persistence unit, and the storage reconcile only READS
+ * `drive_envs.storageMeasuredBytes`. Wire nothing here and every env prices at
+ * the never-measured 0 floor forever while the cron keeps advancing its
+ * watermark: the env runs free, silently, with no error anywhere. So the
+ * assertions below are about the seam EXISTING and landing on the ENV's row —
+ * not about `du`, which has its own suite.
+ */
+describe('rebuildEnv wiring — storage measurement', () => {
+  /** An already-awake sandbox handle reporting a 2GB tree, the one input measurement needs. */
+  function fakeHandle(spriteInstanceId: string | null = 'inst-1') {
+    return {
+      sandboxId: 'pgs-env-probe',
+      spriteInstanceId,
+      exec: vi.fn(async () => ({ exitCode: 0, stdout: '2000000000\t/workspace\n', stderr: '' })),
+    };
+  }
+
+  it('should wire a measureStorage seam at all — without one an env bills the 0 floor forever', async () => {
+    await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
+
+    expect(typeof lastProvisionCall().deps.measureStorage).toBe('function');
+  });
+
+  it("should persist the measured bytes onto the ENV's own row, CASed on the measured instance", async () => {
+    await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
+    const handle = fakeHandle();
+
+    await lastProvisionCall().deps.measureStorage?.({
+      holderId: ENV_ID,
+      handle: handle as never,
+    });
+
+    expect(recordStorageMeasurement).toHaveBeenCalledTimes(1);
+    const written = recordStorageMeasurement.mock.calls[0]?.[0];
+    expect({
+      envId: written?.envId,
+      spriteInstanceId: written?.spriteInstanceId,
+      measuredBytes: written?.measuredBytes,
+    }).toEqual({ envId: ENV_ID, spriteInstanceId: 'inst-1', measuredBytes: 2_000_000_000 });
+  });
+
+  it("should take the CAS instance from the HANDLE, never from the row — the du ran on that VM", async () => {
+    await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
+
+    await lastProvisionCall().deps.measureStorage?.({
+      holderId: ENV_ID,
+      handle: fakeHandle('freshly-minted-instance') as never,
+    });
+
+    expect(recordStorageMeasurement.mock.calls[0]?.[0].spriteInstanceId).toBe('freshly-minted-instance');
   });
 });

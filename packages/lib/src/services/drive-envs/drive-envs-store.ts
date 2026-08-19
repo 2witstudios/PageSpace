@@ -244,6 +244,29 @@ export interface DriveEnvStore {
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   /**
+   * Persist an opportunistic storage measurement — the WRITE side of what the
+   * storage reconcile only ever reads. Without it an env bills the
+   * never-measured 0 floor forever while the cron keeps advancing its watermark,
+   * silently discarding every interval.
+   *
+   * Two guards, both the session store's (`recordStorageMeasurement`) verbatim,
+   * because a measurement is fire-and-forget and can land after the disk it
+   * describes is gone: a torn-down row is never written, and the write CASes on
+   * the INSTANCE measured so one generation's bytes can never be persisted
+   * against its replacement's id.
+   */
+  recordStorageMeasurement(input: {
+    envId: string;
+    /**
+     * The instance actually measured. Null when the driver reports none — then
+     * the row's own null matches and the CAS degrades to the liveness guard,
+     * which is the most any caller can know without a generation id.
+     */
+    spriteInstanceId: string | null;
+    measuredBytes: number;
+    measuredAt: Date;
+  }): Promise<void>;
+  /**
    * Record the durable teardown INTENT, BEFORE the kill — the one stamp written
    * ahead of its IO, so a crash between "we decided to kill" and "the kill was
    * confirmed" leaves a durable record of the intent rather than a silent
@@ -550,6 +573,22 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       // so a miss (the row was deleted) is not a refusal.
       if (cas?.sandboxId === undefined) return true;
       return updated.length > 0;
+    },
+
+    async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
+      await db
+        .update(driveEnvs)
+        .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+        .where(
+          and(
+            eq(driveEnvs.id, envId),
+            isNull(driveEnvs.spriteTornDownAt),
+            // CAS on the generation measured. `eqOrIsNull` so a driver that
+            // reports no instance id still matches its own null row rather than
+            // never persisting — plain `eq` never matches null in SQL.
+            eqOrIsNull(driveEnvs.spriteInstanceId, spriteInstanceId),
+          ),
+        );
     },
 
     async requestTeardown({ envId, sandboxId, spriteInstanceId, at }) {

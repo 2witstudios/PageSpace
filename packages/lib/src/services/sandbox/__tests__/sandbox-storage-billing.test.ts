@@ -30,6 +30,19 @@ vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
   },
 }));
 
+vi.mock('@pagespace/db/schema/drive-envs', () => ({
+  driveEnvs: {
+    id: 'drive_envs.id',
+    driveId: 'drive_envs.driveId',
+    sandboxId: 'drive_envs.sandboxId',
+    spriteTornDownAt: 'drive_envs.spriteTornDownAt',
+    storageLastBilledAt: 'drive_envs.storageLastBilledAt',
+    storageMeasuredBytes: 'drive_envs.storageMeasuredBytes',
+    storageMeasuredAt: 'drive_envs.storageMeasuredAt',
+    lastActiveAt: 'drive_envs.lastActiveAt',
+  },
+}));
+
 const mockTrackUsage = vi.hoisted(() => vi.fn());
 vi.mock('../../../monitoring/ai-monitoring', () => ({ AIMonitoring: { trackUsage: mockTrackUsage } }));
 
@@ -134,7 +147,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      workspaceId: 'session-1',
+      subjectKind: 'session',
+      subjectId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -150,8 +164,11 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
       // First-class attribution — top-level columns, not just metadata forensics.
       driveId: 'drive-1',
       // `AIUsageData.sessionId` is the shared analytics column many sources
-      // write; the workspace id is mapped onto it at the boundary.
+      // write; the subject's own id is mapped onto it at the boundary.
       sessionId: 'session-1',
+      // The billed unit, named in the meter line — sessions keep the label
+      // they have always written.
+      model: 'terminal-machine-storage',
     });
     expect(call.holdId).toBeUndefined();
     expect(call.metadata).toMatchObject({ type: 'terminal_storage', gbMonths: 0.2 });
@@ -163,7 +180,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      workspaceId: 'session-1',
+      subjectKind: 'session',
+      subjectId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -177,7 +195,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: 'drive-1',
-      workspaceId: 'session-1',
+      subjectKind: 'session',
+      subjectId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -193,7 +212,8 @@ describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
     await defaultReconcileSandboxStorageDeps.chargeStorage({
       payerId: 'owner-1',
       driveId: undefined,
-      workspaceId: 'session-1',
+      subjectKind: 'session',
+      subjectId: 'session-1',
       costDollars: 0.05,
       gbMonths: 0.2,
     });
@@ -221,6 +241,137 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
 
     expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
     expect(whereCalls).toEqual([{ op: 'eq', a: 'agent_workspaces.id', b: 'session-3' }]);
+  });
+});
+
+describe('defaultReconcileSandboxStorageDeps.listDriveEnvSprites', () => {
+  it("selects each env's own measurement/watermark and its drive — the same live-Sprite predicate the session source uses", async () => {
+    const rows = [
+      {
+        envId: 'env-1',
+        driveId: 'drive-1',
+        storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+        measuredBytes: 1_000_000_000,
+        measuredAt: new Date('2026-06-30T00:00:00.000Z'),
+        lastActiveAt: new Date('2026-06-30T12:00:00.000Z'),
+      },
+    ];
+    let selectedShape: Record<string, unknown> | undefined;
+    let whereArg: unknown;
+    mockDb.select.mockImplementation((shape: Record<string, unknown>) => {
+      selectedShape = shape;
+      return {
+        from: () => ({
+          where: (w: unknown) => {
+            whereArg = w;
+            return rows;
+          },
+        }),
+      };
+    });
+
+    await expect(defaultReconcileSandboxStorageDeps.listDriveEnvSprites()).resolves.toEqual(rows);
+
+    // No `ownerId`: `drive_envs` has none, and `createdBy` is audit-only —
+    // selecting it would be the first step toward billing the creator.
+    expect(Object.keys(selectedShape ?? {}).sort()).toEqual(
+      ['driveId', 'envId', 'lastActiveAt', 'measuredAt', 'measuredBytes', 'storageLastBilledAt'].sort(),
+    );
+    assert({
+      given: "the env row source's predicate",
+      should: 'match the partial live-Sprite index — provisioned and not torn down',
+      actual: whereArg,
+      expected: {
+        op: 'and',
+        parts: [
+          { op: 'isNotNull', a: 'drive_envs.sandboxId' },
+          { op: 'isNull', a: 'drive_envs.spriteTornDownAt' },
+        ],
+      },
+    });
+  });
+
+  it('falls back a null lastActiveAt to the epoch — an env is persistent, so idleness is a health reading only', async () => {
+    mockDb.select.mockReturnValue({
+      from: () => ({
+        where: async () => [
+          {
+            envId: 'env-1',
+            driveId: 'drive-1',
+            storageLastBilledAt: new Date('2026-06-01T00:00:00.000Z'),
+            measuredBytes: null,
+            measuredAt: null,
+            lastActiveAt: null,
+          },
+        ],
+      }),
+    });
+
+    const rows = await defaultReconcileSandboxStorageDeps.listDriveEnvSprites();
+
+    expect(rows[0]).toMatchObject({ driveId: 'drive-1', lastActiveAt: new Date(0) });
+  });
+});
+
+describe('defaultReconcileSandboxStorageDeps.chargeStorage — env subjects', () => {
+  it('bills an env on the SAME meter, labelled as an environment and attributed to its drive', async () => {
+    mockTrackUsage.mockResolvedValue(undefined);
+
+    await defaultReconcileSandboxStorageDeps.chargeStorage({
+      payerId: 'drive-owner-1',
+      driveId: 'drive-1',
+      subjectKind: 'env',
+      subjectId: 'env-1',
+      costDollars: 0.05,
+      gbMonths: 0.2,
+    });
+
+    const call = mockTrackUsage.mock.calls[0][0];
+    assert({
+      given: 'an environment storage charge',
+      should: "ride the same provider/source/markup as a session's, under its own billed-unit label",
+      actual: {
+        provider: call.provider,
+        source: call.source,
+        model: call.model,
+        driveId: call.driveId,
+        sessionId: call.sessionId,
+        userId: call.userId,
+        markupBpsOverride: call.markupBpsOverride,
+        type: call.metadata.type,
+      },
+      expected: {
+        provider: 'sprites',
+        source: 'terminal',
+        model: 'drive-env-storage',
+        driveId: 'drive-1',
+        sessionId: 'env-1',
+        userId: 'drive-owner-1',
+        markupBpsOverride: MACHINE_MARKUP_BPS,
+        type: 'env_storage',
+      },
+    });
+  });
+});
+
+describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
+  it("updates the ENV row's own storageLastBilledAt, keyed by the env id", async () => {
+    const setCalls: unknown[] = [];
+    const whereCalls: unknown[] = [];
+    mockDb.update.mockReturnValue({
+      set: (values: unknown) => {
+        setCalls.push(values);
+        return { where: async (w: unknown) => { whereCalls.push(w); } };
+      },
+    });
+
+    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({
+      envId: 'env-3',
+      billedThrough: new Date('2026-07-01T00:00:00.000Z'),
+    });
+
+    expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect(whereCalls).toEqual([{ op: 'eq', a: 'drive_envs.id', b: 'env-3' }]);
   });
 });
 
@@ -258,9 +409,11 @@ describe('reconcileSandboxStorageSerialized', () => {
   function makeDeps(overrides: Partial<ReconcileSandboxStorageDeps> = {}): ReconcileSandboxStorageDeps {
     return {
       listAgentSessionSprites: vi.fn(async () => []),
+      listDriveEnvSprites: vi.fn(async () => []),
       lookupDriveOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceAgentSessionWatermark: vi.fn(async () => {}),
+      advanceDriveEnvWatermark: vi.fn(async () => {}),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };

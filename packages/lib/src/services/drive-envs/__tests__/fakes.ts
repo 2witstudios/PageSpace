@@ -173,6 +173,17 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
+    async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
+      const row = rows.get(envId);
+      if (!row) return;
+      // Both real guards, modelled: never write to a torn-down row, and CAS on
+      // the INSTANCE measured so a late measurement cannot land on the
+      // replacement generation's disk.
+      if (row.spriteTornDownAt !== null) return;
+      if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return;
+      rows.set(envId, { ...row, storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt });
+    },
+
     async requestTeardown({ envId, sandboxId, spriteInstanceId, at }) {
       calls.requestTeardown += 1;
       const row = rows.get(envId);

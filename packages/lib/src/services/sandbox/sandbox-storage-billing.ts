@@ -1,8 +1,18 @@
 /**
  * Default (real) IO composition for the storage reconcile cron (Sprites
- * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to the
- * `agent_workspaces` table and the credit pipeline. Reads the last PERSISTED
- * measured bytes (never the provisioned cap, never waking a sprite).
+ * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to its
+ * TWO row sources (`agent_workspaces` and `drive_envs`) and the credit
+ * pipeline. Reads the last PERSISTED measured bytes (never the provisioned cap,
+ * never waking a sprite).
+ *
+ * **Envs are a row source here, not a meter of their own.** A drive environment
+ * is the billed persistence unit, and it is billed through this same
+ * composition: same cron, same advisory lock, same credit pipeline, one extra
+ * SELECT and one extra watermark UPDATE. The only place the two units diverge
+ * is the payer — an env resolves to its DRIVE OWNER with no fallback
+ * (`resolveEnvPayerId`), because `drive_envs` has no owner column to fall back
+ * to. Nothing here names a substrate: an env that later runs on a bigger guest,
+ * a GPU host or a non-Fly platform bills through these exact lines.
  *
  * Narrowed by the Phase 8 teardown: this used to also enumerate FOUR
  * machine-tree row sources (a Machine's own Sprite, every live branch
@@ -24,12 +34,19 @@
  *
  * All three are throttled per session and best-effort: a billing observation
  * must never wake a paused Sprite, delay a tool call, or fail one.
+ *
+ * An ENV's measurements come from the same seam, bound at its own provisioner:
+ * `buildEnvProvisionDeps` (apps/web `drive-envs-runtime.ts`) supplies
+ * `measureStorage`, so a freshly-provisioned env is measured while its Sprite is
+ * still awake. Without it an env would bill the never-measured 0 floor forever
+ * while this cron kept advancing its watermark.
  */
 
 import { eq, and, isNotNull, isNull } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -59,13 +76,47 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * The ENV row source — the same "still believed live" predicate, against the
+   * partial index `drive_envs_live_sprite_idx` exists for. Never-provisioned
+   * envs (`sandboxId` null) fall outside it and cost nothing to skip: an env row
+   * with no machine holds no filesystem, so there is nothing to meter.
+   */
+  async listDriveEnvSprites() {
+    const rows = await db
+      .select({
+        envId: driveEnvs.id,
+        driveId: driveEnvs.driveId,
+        storageLastBilledAt: driveEnvs.storageLastBilledAt,
+        measuredBytes: driveEnvs.storageMeasuredBytes,
+        measuredAt: driveEnvs.storageMeasuredAt,
+        lastActiveAt: driveEnvs.lastActiveAt,
+      })
+      .from(driveEnvs)
+      .where(and(isNotNull(driveEnvs.sandboxId), isNull(driveEnvs.spriteTornDownAt)));
+    // `lastActiveAt` is nullable on `drive_envs` too ("reported, never acted on"
+    // — an env is persistent, so idleness must not destroy it). Same
+    // honest-conservative epoch fallback: reads as "not awake" for the staleness
+    // flag only, never for billing.
+    return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
+  },
+
   lookupDriveOwnerId,
 
-  async chargeStorage({ payerId, driveId, workspaceId, costDollars, gbMonths }) {
+  async chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
     await AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
-      model: 'terminal-machine-storage',
+      // The billed unit, named in the meter line itself. Sessions keep the
+      // string they have always written (renaming it would split one meter's
+      // history across two labels in every existing usage breakdown); envs get
+      // their own, so a drive owner reading their bill can tell a persistent
+      // ENVIRONMENT apart from an ephemeral session's scratch disk. Neither
+      // string names a substrate — an env that moves to a bigger guest, a GPU
+      // host or another platform keeps billing under this same label.
+      model: subjectKind === 'env' ? 'drive-env-storage' : 'terminal-machine-storage',
+      // One feature bucket for both: this is sandbox persistence either way, and
+      // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
       // No pageId: a session is a drive-level workspace, not page-anchored, so
       // there is no page to group its storage under. `trackUsage` treats a
@@ -77,8 +128,10 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // global-assistant session (mirrors `pageId`'s "unattributed" reading).
       driveId,
       // `AIUsageData.sessionId` is the shared analytics column (`monitoring.session_id`),
-      // written by many sources — out of this rename's scope, so map at the boundary.
-      sessionId: workspaceId,
+      // written by many sources — out of this rename's scope, so map at the
+      // boundary. Carries the `drive_envs` id for an env row; `model` above is
+      // what says which table the id addresses.
+      sessionId: subjectId,
       providerCostDollars: costDollars,
       // Not a wall-clock duration (this is a background storage charge, not a
       // single timed run) — 0 mirrors the shape of every other non-timed
@@ -91,7 +144,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
       markupBpsOverride: MACHINE_MARKUP_BPS,
-      metadata: { type: 'terminal_storage', gbMonths },
+      metadata: { type: subjectKind === 'env' ? 'env_storage' : 'terminal_storage', gbMonths },
     });
   },
 
@@ -103,6 +156,17 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .update(agentWorkspaces)
       .set({ storageLastBilledAt: billedThrough })
       .where(eq(agentWorkspaces.id, workspaceId));
+  },
+
+  // The env row's OWN watermark, same literal per-row design. Deliberately NOT
+  // guarded on the Sprite pointers: the charge it follows has already happened,
+  // so refusing the advance because the env was torn down mid-run would re-bill
+  // that window on the next tick.
+  async advanceDriveEnvWatermark({ envId, billedThrough }) {
+    await db
+      .update(driveEnvs)
+      .set({ storageLastBilledAt: billedThrough })
+      .where(eq(driveEnvs.id, envId));
   },
 
   now: () => new Date(),
