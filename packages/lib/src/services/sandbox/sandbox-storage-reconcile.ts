@@ -496,10 +496,6 @@ async function listSource<T>(
 export async function reconcileSandboxStorage(
   deps: ReconcileSandboxStorageDeps,
 ): Promise<ReconcileSandboxStorageResult> {
-  // Both sources are read BEFORE any charging (so the whole tick is planned
-  // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
-  // see `listSource` for why one source's failure must not stop the other's
-  // money.
   // ONE drive-owner lookup per DRIVE per tick, not per row.
   //
   // A drive's rows all resolve to the same owner, and a tick reads several of
@@ -521,6 +517,10 @@ export async function reconcileSandboxStorage(
     return ownerId;
   };
 
+  // Both sources are read BEFORE any charging (so the whole tick is planned
+  // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
+  // see `listSource` for why one source's failure must not stop the other's
+  // money.
   const [sessions, envs] = await Promise.all([
     // Called through a closure, not passed unbound: a deps implementation is
     // free to be a real object whose row source reads `this`, and an unbound
