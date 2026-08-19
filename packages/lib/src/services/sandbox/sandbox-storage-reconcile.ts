@@ -718,7 +718,6 @@ export async function reconcileSandboxStorage(
   if (envs.failed) failedSources.push('env');
   const now = deps.now();
 
-  let charged = 0;
   let skipped = 0;
   let failed = 0;
   let chargedButUnadvanced = 0;
@@ -726,7 +725,6 @@ export async function reconcileSandboxStorage(
   let neverMeasured = 0;
   let watermarkSuperseded = 0;
   let spanClamped = 0;
-  let billableRows = 0;
   let totalCostDollars = 0;
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
     session: { live: 0, neverMeasured: 0, stale: 0 },
@@ -784,10 +782,7 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       // Counted BEFORE the payer lookup and before any write: a fact about the
       // ACCRUAL, not about whether the tick managed to act on it.
-      if (costDollars > 0) {
-        billableRows += 1;
-        billingByKind[subject.kind].billable += 1;
-      }
+      if (costDollars > 0) billingByKind[subject.kind].billable += 1;
 
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
@@ -866,7 +861,6 @@ export async function reconcileSandboxStorage(
       continue;
     }
     totalCostDollars += resolved.costDollars;
-    charged += 1;
     billingByKind[subject.kind].charged += 1;
 
     try {
@@ -892,9 +886,17 @@ export async function reconcileSandboxStorage(
     }
   }
 
+  // DERIVED from the per-kind record rather than accumulated alongside it.
+  // Two counters incremented in parallel are two counters that can drift, and
+  // drift between exactly these two is what produced the alert's last two
+  // defects. Summing makes "the flat total is the sum of the parts" true by
+  // construction instead of by discipline.
+  const sumByKind = (pick: (of: { billable: number; charged: number }) => number) =>
+    pick(billingByKind.session) + pick(billingByKind.env);
+
   return {
     processed: subjects.length,
-    charged,
+    charged: sumByKind((of) => of.charged),
     skipped,
     failed,
     chargedButUnadvanced,
@@ -902,7 +904,7 @@ export async function reconcileSandboxStorage(
     neverMeasured,
     watermarkSuperseded,
     spanClamped,
-    billableRows,
+    billableRows: sumByKind((of) => of.billable),
     billingByKind,
     measurementHealth,
     failedSources,
