@@ -5,6 +5,11 @@
  * Both are honesty bugs rather than crashes — a dead link that looks live, and an empty list
  * under a header that just claimed there are N sub-tasks — so they have to be asserted against
  * rendered output.
+ *
+ * Rendered through TaskRowDescription rather than TaskSubTaskList directly, even though the
+ * logic lives in the latter: what matters is what the assembled expansion puts on screen, and
+ * this way the test survives the two halves being rearranged (which is what the epic's
+ * sub-tasks-vs-document branch will do next).
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
