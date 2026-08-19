@@ -47,7 +47,11 @@
  * is a plain column update) — deliberately charge-before-advance so a crash
  * before charging never loses a window. The flip side: if the process dies
  * BETWEEN the two (rare — no I/O happens in between), that row's window is
- * billed again on the next run. That crash is the ONLY way to reach a
+ * billed again on the next run. That is the ONE over-bill path left in this
+ * meter, it predates drive environments, and closing it properly needs an
+ * idempotency key on the charge (or a durable billed-interval record) rather
+ * than anything reachable from here — tracked in issue #2445.
+ * `chargedButUnadvanced` counts it meanwhile. That crash is the ONLY way to reach a
  * double-bill, and only because the watermark writers are MONOTONIC: `now` is
  * captured once for the whole tick, so a provision landing mid-tick resets a
  * row's watermark forward, and an unguarded advance would drag it back over
