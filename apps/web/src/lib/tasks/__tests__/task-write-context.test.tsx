@@ -46,14 +46,24 @@ const pages = (tasks: TaskItem[]): TaskListData[] => [{
  * Stands in for swr/infinite's bound mutate: records what it was called with,
  * and (like SWR) runs the async updater and rethrows its rejection.
  */
-const makeMutate = () => {
+const makeMutate = (initial: TaskListData[]) => {
+  // Records what SWR was asked to do, and — like SWR — resolves functional
+  // `optimisticData` and the async updater against the CURRENT cache value,
+  // which is what proves the writer never patches a captured snapshot.
   const calls: { optimisticData?: TaskListData[]; revalidate?: boolean; rollbackOnError?: boolean }[] = [];
   const results: (TaskListData[] | undefined)[] = [];
+  let current: TaskListData[] | undefined = initial;
   const mutate = vi.fn(async (data?: unknown, opts?: Record<string, unknown>) => {
-    calls.push(opts ?? {});
+    const rawOptimistic = opts?.optimisticData;
+    const optimisticData = typeof rawOptimistic === 'function'
+      ? (rawOptimistic as (c?: TaskListData[]) => TaskListData[])(current)
+      : rawOptimistic as TaskListData[] | undefined;
+    calls.push({ ...opts, optimisticData } as never);
+    if (optimisticData) current = optimisticData;
     if (typeof data === 'function') {
-      const out = await (data as () => Promise<TaskListData[] | undefined>)();
+      const out = await (data as (c?: TaskListData[]) => Promise<TaskListData[] | undefined>)(current);
       results.push(out);
+      if (out) current = out;
       return out;
     }
     return undefined;
@@ -62,19 +72,17 @@ const makeMutate = () => {
 };
 
 const setup = (initial: TaskListData[], revalidateAll = vi.fn()) => {
-  const { mutate, calls, results } = makeMutate();
-  let current = initial;
+  const { mutate, calls, results } = makeMutate(initial);
   const view = renderHook(() => {
     const machinery = useTaskWriteMachinery('user-me', revalidateAll);
     const writer = useTaskWriter({
       mutatePages: mutate as never,
-      getPages: () => current,
       onRevisionConflict: revalidateAll,
       machinery,
     });
     return { machinery, writer };
   });
-  return { view, mutate, calls, results, revalidateAll, setCurrent: (p: TaskListData[]) => { current = p; } };
+  return { view, mutate, calls, results, revalidateAll };
 };
 
 beforeEach(() => {

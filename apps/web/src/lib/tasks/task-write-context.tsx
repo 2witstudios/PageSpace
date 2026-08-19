@@ -34,11 +34,15 @@ import { taskWriteErrorMessage, isRevisionConflict } from './task-write-errors';
  * the shared machinery to whichever cache the caller is rendering from.
  */
 
+type PagesUpdater = (
+  current: TaskListData[] | undefined,
+) => Promise<TaskListData[] | undefined> | TaskListData[] | undefined;
+
 type MutatePages = (
-  data?: TaskListData[] | Promise<TaskListData[] | undefined> | undefined
-    | ((current: TaskListData[] | undefined) => Promise<TaskListData[] | undefined> | TaskListData[] | undefined),
+  data?: TaskListData[] | Promise<TaskListData[] | undefined> | PagesUpdater | undefined,
   opts?: {
-    optimisticData?: TaskListData[] | undefined;
+    optimisticData?: TaskListData[]
+      | ((current: TaskListData[] | undefined, displayed: TaskListData[] | undefined) => TaskListData[]);
     rollbackOnError?: boolean;
     revalidate?: boolean;
   },
@@ -148,16 +152,16 @@ export interface TaskWriter {
 /**
  * Bind the view-wide write machinery to one cache.
  *
- * `getPages` is a getter rather than a value so a write that resolves several
- * renders later reconciles against the current cache, not the snapshot the
- * handler closed over.
+ * Both the optimistic value and the reconciled one are computed from the cache
+ * SWR hands the updater, never from a snapshot captured at call time — a write
+ * can resolve many renders after it started, and patching a stale array would
+ * silently drop everything that landed in between.
  *
  * `onRevisionConflict` is the escape hatch for 409/428: the rollback would
  * restore data that is already stale, so the caller refetches instead.
  */
 export function useTaskWriter(params: {
   mutatePages: MutatePages;
-  getPages: () => TaskListData[] | undefined;
   onRevisionConflict?: () => void;
   machinery?: TaskWriteContextValue;
 }): TaskWriter {
@@ -167,23 +171,22 @@ export function useTaskWriter(params: {
     throw new Error('useTaskWriter requires a TaskWriteProvider or an explicit machinery prop');
   }
   const { noteSelfWriteStart, noteSelfWriteSettled } = machinery;
-  const { mutatePages, getPages, onRevisionConflict } = params;
+  const { mutatePages, onRevisionConflict } = params;
 
   const writeTaskField = useCallback(async ({
     loc, body, optimistic, fallbackMessage,
   }: WriteTaskFieldParams): Promise<boolean> => {
-    const optimisticData = applyTaskPatchToPages(getPages(), loc.taskId, optimistic);
     noteSelfWriteStart(loc.taskId);
     try {
       await mutatePages(
-        async () => {
+        async (current) => {
           const updated = await patch<TaskItem>(
             `/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, body,
           );
           noteSelfWriteSettled(loc.taskId, updated?.updatedAt ?? null);
-          // Reconcile against the server's values rather than keeping the guess:
+          // Reconcile onto the server's values rather than keeping the guess:
           // completedAt in particular is a server-stamped timestamp.
-          return applyTaskPatchToPages(getPages(), loc.taskId, {
+          return applyTaskPatchToPages(current, loc.taskId, {
             status: updated?.status,
             completedAt: updated?.completedAt,
             priority: updated?.priority,
@@ -193,7 +196,11 @@ export function useTaskWriter(params: {
             updatedAt: updated?.updatedAt,
           });
         },
-        { optimisticData, rollbackOnError: true, revalidate: false },
+        {
+          optimisticData: (current) => applyTaskPatchToPages(current, loc.taskId, optimistic) ?? [],
+          rollbackOnError: true,
+          revalidate: false,
+        },
       );
       return true;
     } catch (e) {
@@ -202,7 +209,7 @@ export function useTaskWriter(params: {
       toast.error(taskWriteErrorMessage(e, fallbackMessage));
       return false;
     }
-  }, [mutatePages, getPages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled]);
+  }, [mutatePages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled]);
 
   return { writeTaskField };
 }

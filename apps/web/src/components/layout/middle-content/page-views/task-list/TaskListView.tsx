@@ -67,8 +67,6 @@ import {
   GripVertical,
   Zap,
   Bell,
-  ChevronRight,
-  ChevronDown,
 } from 'lucide-react';
 import {
   DndContext,
@@ -92,8 +90,10 @@ import { TaskKanbanView } from './TaskKanbanView';
 import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
 import Toolbar from '@/components/editors/Toolbar';
-import { TaskRowDescription } from './TaskRowDescription';
 import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
+import { TaskRowGroup } from './TaskRowGroup';
+import { TaskTreeProvider } from './task-tree-context';
+import { makeNodePath, rootNodePath, toggleNodePath, type TaskNodePath } from './task-tree-core';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -108,7 +108,6 @@ import {
   getStatusOrder,
   isCompletedStatus,
   PRIORITY_CONFIG,
-  canExpandTask,
 } from './task-list-types';
 import { resolveToggleStatus, blockedByOpenSubTasks } from '@/lib/tasks/task-cache-core';
 import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-context';
@@ -340,15 +339,6 @@ function MobileTaskCard({
   );
 }
 
-export const getExpansionRowClass = (isExpanded: boolean): string =>
-  isExpanded ? '' : 'hidden';
-
-export const toggleSet = (set: Set<string>, id: string): Set<string> => {
-  const next = new Set(set);
-  if (next.has(id)) next.delete(id); else next.add(id);
-  return next;
-};
-
 // Only the most recently loaded page's hasMore matters — earlier pages are stale
 // snapshots of a bound that may have shifted as tasks were added/removed since.
 export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): boolean => {
@@ -414,20 +404,23 @@ export const redistributeTasksAcrossPages = <P extends { tasks: TaskItem[] }>(
   });
 };
 
-// Sortable row component for drag-and-drop
+/**
+ * The top-level row: a sortable `<tr>` plus its context menu.
+ *
+ * It owns only the row now. Expansion content — the document and the nested
+ * sub-task rows — is emitted by TaskRowGroup as SIBLING rows in the same
+ * `<tbody>`, so the columns of a sub-task line up with its parent's instead of
+ * living inside a colspan cell.
+ */
 interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
-  isExpanded: boolean;
-  // Sub-task links in the expansion are drive-scoped page URLs, and the row has no
-  // other route to the drive it lives in.
-  driveId: string;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -447,6 +440,7 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, cont
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
+      aria-level={1}
       className={cn(
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
@@ -468,33 +462,14 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, cont
     </TableRow>
   );
 
-  const expansionRow = (
-    <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
-      <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-2 border-b bg-muted/20">
-        {isExpanded && <TaskRowDescription task={task} driveId={driveId} />}
-      </td>
-    </tr>
-  );
-
-  if (!contextMenu) {
-    return (
-      <>
-        {row}
-        {expansionRow}
-      </>
-    );
-  }
+  if (!contextMenu) return row;
 
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-        {contextMenu}
-      </ContextMenu>
-      {expansionRow}
-    </>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      {contextMenu}
+    </ContextMenu>
   );
-
 }
 
 function TaskListView({ page }: TaskListViewProps) {
@@ -535,8 +510,14 @@ function TaskListView({ page }: TaskListViewProps) {
     [],
   );
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
-  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
-  const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
+  // Keyed by PATH (rootPageId/taskId/taskId…), not task id: it makes "collapse
+  // this node's whole subtree" a prefix operation and gives React an
+  // unambiguous key when the same task could appear in two places.
+  const [expandedPaths, setExpandedPaths] = useState<Set<TaskNodePath>>(new Set());
+  const toggleExpanded = useCallback(
+    (path: TaskNodePath) => setExpandedPaths(prev => toggleNodePath(prev, path)),
+    [],
+  );
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   // Description is always collapsed on load; the user expands it via the header toggle.
@@ -639,13 +620,6 @@ function TaskListView({ page }: TaskListViewProps) {
   const tasksRef = useRef(data?.tasks);
   useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
 
-  // Latest loaded pages, for optimistic writes. Handlers are recreated on every
-  // render but a write can resolve several renders later, so the writer reads
-  // the cache through this getter rather than a snapshot it closed over.
-  const taskPagesRef = useRef(taskPages);
-  useEffect(() => { taskPagesRef.current = taskPages; }, [taskPages]);
-  const getTaskPages = useCallback(() => taskPagesRef.current, []);
-
   // View-wide: the log of writes this tab made (so its own socket echoes can be
   // told apart from everyone else's — including the same account in another
   // tab), plus the deferred-revalidation flag.
@@ -664,7 +638,6 @@ function TaskListView({ page }: TaskListViewProps) {
    */
   const { writeTaskField } = useTaskWriter({
     mutatePages: mutateTaskPages,
-    getPages: getTaskPages,
     onRevisionConflict: mutateTasks,
     machinery: writeMachinery,
   });
@@ -870,17 +843,6 @@ function TaskListView({ page }: TaskListViewProps) {
     });
   };
 
-  // Save edited title (wraps shared function with state cleanup)
-  const handleSaveEdit = async () => {
-    if (!editingTaskId || !editingTitle.trim()) {
-      setEditingTaskId(null);
-      return;
-    }
-
-    await handleSaveTaskTitle({ listPageId: page.id, taskId: editingTaskId }, editingTitle.trim());
-    setEditingTaskId(null);
-  };
-
   // Delete task
   const handleDeleteTask = async (loc: TaskLocation) => {
     if (!canEdit) return;
@@ -934,12 +896,12 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Collapse every expanded row the moment a drag begins — see the onDragStart
   // comment on DndContext for why this can't wait until the drop.
-  const handleDragStart = () => setExpandedTaskIds(new Set());
+  const handleDragStart = () => setExpandedPaths(new Set());
 
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    setExpandedTaskIds(new Set()); // also covers drag-cancel and keeps the post-drop tree flat
+    setExpandedPaths(new Set()); // also covers drag-cancel and keeps the post-drop tree flat
     if (!over || active.id === over.id || !canEdit) return;
 
     const tasks = filteredTasks;
@@ -1026,6 +988,29 @@ function TaskListView({ page }: TaskListViewProps) {
   };
   const taskHandlers = bindTaskHandlersToList(locatedHandlers, page.id);
 
+  const rootPath = rootNodePath(page.id);
+  // Everything a row needs that is identical at every depth. What varies per
+  // node — the task, its depth, the list it writes to, and the handlers bound to
+  // the cache that holds it — travels on props instead.
+  const treeValue = useMemo(() => ({
+    canEdit,
+    driveId: page.driveId,
+    rootStatusConfigs: statusConfigs,
+    onNavigate: handleNavigate,
+    onStartEdit: handleStartEdit,
+    openTriggerDialog,
+    expandedPaths,
+    toggleExpanded,
+    editingTaskId,
+    editingTitle,
+    onEditingTitleChange: setEditingTitle,
+    onCancelEdit: () => setEditingTaskId(null),
+  // handleNavigate and handleStartEdit are redefined every render; including
+  // them would defeat the memo, and both read only state already listed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [canEdit, page.driveId, statusConfigs, openTriggerDialog, expandedPaths,
+       toggleExpanded, editingTaskId, editingTitle]);
+
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
   const loadMoreControl = (hasMoreTasks || isLoadingMoreTasks || loadMoreFailed) && (
@@ -1095,6 +1080,7 @@ function TaskListView({ page }: TaskListViewProps) {
   }
 
   return (
+    <TaskTreeProvider value={treeValue}>
     <div className="flex flex-col h-full min-w-0 @container">
       <TaskListHeader
         pageId={page.id}
@@ -1300,216 +1286,50 @@ function TaskListView({ page }: TaskListViewProps) {
                 >
                   <TableBody>
                     {filteredTasks.map((task) => (
-                      <SortableTaskRow
+                      <TaskRowGroup
                         key={task.id}
                         task={task}
-                        canEdit={canEdit}
-                        isCompleted={isCompletedStatus(task.status, statusConfigs)}
-                        isExpanded={expandedTaskIds.has(task.id)}
-                        driveId={page.driveId}
-                        contextMenu={
-                          <ContextMenuContent>
-                            {task.pageId && (
-                              <ContextMenuItem onSelect={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                                <FileText className="h-4 w-4 mr-2" />
-                                Open
-                              </ContextMenuItem>
-                            )}
-                            <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
-                              <Pencil className="h-4 w-4 mr-2" />
-                              Rename
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
-                              <Zap className="h-4 w-4 mr-2" />
-                              Agent triggers…
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
-                              className="text-destructive"
-                              disabled={!canEdit}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </ContextMenuItem>
-                          </ContextMenuContent>
-                        }
-                      >
-                        {/* Checkbox */}
-                        <TableCell>
-                          <Checkbox
-                            checked={isCompletedStatus(task.status, statusConfigs)}
-                            onCheckedChange={() => handleToggleComplete({ listPageId: page.id, taskId: task.id }, task)}
-                            disabled={!canEdit}
-                          />
-                        </TableCell>
-
-                        {/* Title */}
-                        <TableCell>
-                          {editingTaskId === task.id ? (
-                            <Input
-                              value={editingTitle}
-                              onChange={(e) => setEditingTitle(e.target.value)}
-                              onBlur={handleSaveEdit}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveEdit();
-                                if (e.key === 'Escape') setEditingTaskId(null);
-                              }}
-                              autoFocus
-                              className="h-8"
-                            />
-                          ) : (
-                            <div className="flex items-center gap-1">
-                              {canExpandTask(task) ? (
-                                <button
-                                  type="button"
-                                  aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
-                                  onClick={() => toggleTaskExpand(task.id)}
-                                  className="text-muted-foreground hover:text-foreground shrink-0"
-                                >
-                                  {expandedTaskIds.has(task.id)
-                                    ? <ChevronDown className="h-3.5 w-3.5" />
-                                    : <ChevronRight className="h-3.5 w-3.5" />}
-                                </button>
-                              ) : (
-                                <span className="inline-block w-[19px] shrink-0" />
-                              )}
-                              <span
-                                className={cn(
-                                  'cursor-pointer hover:text-primary hover:underline',
-                                  isCompletedStatus(task.status, statusConfigs) && 'line-through'
+                        depth={0}
+                        listPageId={page.id}
+                        path={makeNodePath(rootPath, task.id)}
+                        handlers={locatedHandlers}
+                        statusConfigs={statusConfigs}
+                        renderRow={(cells) => (
+                          <SortableTaskRow
+                            task={task}
+                            canEdit={canEdit}
+                            isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                            contextMenu={
+                              <ContextMenuContent>
+                                {task.pageId && (
+                                  <ContextMenuItem onSelect={() => handleNavigate(task)}>
+                                    <FileText className="h-4 w-4 mr-2" />
+                                    Open
+                                  </ContextMenuItem>
                                 )}
-                                onClick={() => {
-                                  if (task.pageId) {
-                                    router.push(`/dashboard/${page.driveId}/${task.pageId}`);
-                                  }
-                                }}
-                              >
-                                {task.title}
-                              </span>
-                            </div>
-                          )}
-                        </TableCell>
-
-                        {/* Status - uses dynamic status configs */}
-                        <TableCell>
-                          <Select
-                            value={task.status}
-                            onValueChange={(value) => handleStatusChange({ listPageId: page.id, taskId: task.id }, value)}
-                            disabled={!canEdit}
+                                <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Rename
+                                </ContextMenuItem>
+                                <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
+                                  <Zap className="h-4 w-4 mr-2" />
+                                  Agent triggers…
+                                </ContextMenuItem>
+                                <ContextMenuItem
+                                  onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
+                                  className="text-destructive"
+                                  disabled={!canEdit}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            }
                           >
-                            <SelectTrigger className="h-8 w-28">
-                              <SelectValue>
-                                <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
-                                  {statusConfigMap[task.status]?.label || task.status}
-                                </Badge>
-                              </SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {statusOrder.map(slug => {
-                                const cfg = statusConfigMap[slug];
-                                if (!cfg) return null;
-                                return (
-                                  <SelectItem key={slug} value={slug}>
-                                    <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-
-                        {/* Priority */}
-                        <TableCell>
-                          <Select
-                            value={task.priority}
-                            onValueChange={(value) => handlePriorityChange({ listPageId: page.id, taskId: task.id }, value)}
-                            disabled={!canEdit}
-                          >
-                            <SelectTrigger className="h-8 w-28">
-                              <SelectValue>
-                                <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                                  {PRIORITY_CONFIG[task.priority].label}
-                                </Badge>
-                              </SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
-                                <SelectItem key={key} value={key}>
-                                  <Badge className={cn('text-xs', color)}>{label}</Badge>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-
-                        {/* Multiple Assignees */}
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <MultiAssigneeSelect
-                              driveId={page.driveId}
-                              assignees={task.assignees || []}
-                              onUpdate={(assigneeIds) => handleMultiAssigneeChange({ listPageId: page.id, taskId: task.id }, assigneeIds)}
-                              disabled={!canEdit}
-                            />
-                            {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => openTriggerDialog(task, page.id)}
-                                title="Agent trigger configured — click to edit"
-                                aria-label="Agent trigger configured — click to edit"
-                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-                              >
-                                <Bell className="h-3 w-3" />
-                                <span className="sr-only">Agent trigger configured</span>
-                              </button>
-                            )}
-                          </div>
-                        </TableCell>
-
-                        {/* Due Date */}
-                        <TableCell>
-                          <DueDatePicker
-                            currentDate={task.dueDate}
-                            onSelect={(date) => handleDueDateChange({ listPageId: page.id, taskId: task.id }, date)}
-                            disabled={!canEdit}
-                          />
-                        </TableCell>
-
-                        {/* Actions */}
-                        <TableCell>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {task.pageId && (
-                                <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                                  <FileText className="h-4 w-4 mr-2" />
-                                  Open
-                                </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
-                                <Pencil className="h-4 w-4 mr-2" />
-                                Rename
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
-                                <Zap className="h-4 w-4 mr-2" />
-                                Agent triggers…
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
-                                className="text-destructive"
-                                disabled={!canEdit}
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </SortableTaskRow>
+                            {cells}
+                          </SortableTaskRow>
+                        )}
+                      />
                     ))}
                   </TableBody>
                 </SortableContext>
@@ -1582,6 +1402,7 @@ function TaskListView({ page }: TaskListViewProps) {
         taskListTitle={data?.taskList.title ?? page.title ?? 'Task list'}
       />
     </div>
+    </TaskTreeProvider>
   );
 }
 

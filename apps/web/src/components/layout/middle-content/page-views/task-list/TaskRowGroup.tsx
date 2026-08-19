@@ -1,0 +1,473 @@
+'use client';
+
+import { useCallback, useMemo, useState } from 'react';
+import { toast } from 'sonner';
+import { TableCell, TableRow } from '@/components/ui/table';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Skeleton } from '@/components/ui/skeleton';
+import { post, del } from '@/lib/auth/auth-fetch';
+import { useTaskWriter } from '@/lib/tasks/task-write-context';
+import { taskWriteErrorMessage } from '@/lib/tasks/task-write-errors';
+import {
+  appendTaskToPages,
+  applySubTaskCountsToPages,
+  removeTaskFromPages,
+  shouldAppendOptimistically,
+  taskFromCreateResponse,
+  resolveToggleStatus,
+  blockedByOpenSubTasks,
+} from '@/lib/tasks/task-cache-core';
+import {
+  type TaskItem,
+  type TaskStatusConfig,
+  type LocatedTaskHandlers,
+  isCompletedStatus,
+} from './task-list-types';
+import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
+import {
+  canExpandNode,
+  depthIndentStyle,
+  isNodeExpanded,
+  makeNodePath,
+  resolveNodeStatusConfigs,
+  type TaskNodePath,
+} from './task-tree-core';
+import { useTaskTree } from './task-tree-context';
+import { TaskRowCells } from './TaskRowCells';
+import { TaskDocumentRow } from './TaskDocumentRow';
+import { useTaskSubTasks } from './useTaskSubTasks';
+
+/**
+ * Nested task rows, rendered as SIBLING `<tr>`s in the same `<tbody>`.
+ *
+ * Not inside the expansion cell: a table nested in a colspan cell cannot align
+ * its columns with the parent's, and it reads as a different table bolted
+ * underneath. Column alignment across levels is most of why this pattern feels
+ * like a tree at all.
+ *
+ * `<tbody>` accepts only `<tr>` children. Fragments emit no DOM, so a component
+ * returning `<>{tr}{tr}</>` is valid — a wrapper `<div>` is not, and neither is
+ * a bare text node (React tolerates one client-side, but SSR and hydration
+ * diverge). Depth is padding on the title cell's inner element, never on the
+ * `<tr>`, where padding is not rendered.
+ *
+ * The shape is component recursion rather than one flattened list because a
+ * hook cannot be called at variable depth: each EXPANDED node needs its own
+ * `useTaskSubTasks`. TaskSubTaskRows is split out from TaskRowGroup so that a
+ * COLLAPSED row mounts no hook at all — otherwise a hundred-row list would hold
+ * a hundred idle useSWRInfinite instances.
+ */
+
+/** How a row tells whoever owns its cache that its sub-task counters moved. */
+export type CountDelta = (delta: { total?: number; completed?: number }) => void;
+
+export interface TaskRowGroupProps {
+  task: TaskItem;
+  depth: number;
+  /** The page of the list this task belongs to — where its writes are addressed. */
+  listPageId: string;
+  path: TaskNodePath;
+  /** Writers bound to the cache that holds THIS row. */
+  handlers: LocatedTaskHandlers;
+  /** Vocabulary this row's status dropdown may safely offer. */
+  statusConfigs: TaskStatusConfig[];
+  /** Adjusts this row's own counters in the cache that holds it. */
+  onCountDelta?: CountDelta;
+  /**
+   * Wraps the row at depth 0, where it has to carry dnd-kit's sortable ref and
+   * the context menu. Nested rows render a plain row.
+   */
+  renderRow?: (children: React.ReactNode) => React.ReactNode;
+}
+
+export function TaskRowGroup({
+  task, depth, listPageId, path, handlers, statusConfigs, onCountDelta, renderRow,
+}: TaskRowGroupProps) {
+  const { expandedPaths, canEdit } = useTaskTree();
+  const isExpanded = isNodeExpanded(expandedPaths, path);
+  const expandable = canExpandNode(task, depth);
+  const hasSubTasks = (task.subTaskCount ?? 0) > 0;
+
+  // A leaf has no chevron and therefore nowhere to put an inline "+ sub-task"
+  // row, so the menu is the only way in. See useSubTaskBootstrap.
+  const bootstrapSubTask = useSubTaskBootstrap({
+    task, path, onCountDelta,
+    enabled: canEdit && !!task.pageId && !hasSubTasks && depth + 1 <= MAX_ADDABLE_DEPTH,
+  });
+
+  const cells = (
+    <TaskRowCells
+      task={task}
+      depth={depth}
+      listPageId={listPageId}
+      path={path}
+      isExpanded={isExpanded}
+      statusConfigs={statusConfigs}
+      handlers={handlers}
+      onAddSubTask={bootstrapSubTask}
+    />
+  );
+
+  return (
+    <>
+      {renderRow ? renderRow(cells) : (
+        <NestedTaskRow task={task} depth={depth} isExpanded={isExpanded} expandable={expandable}>
+          {cells}
+        </NestedTaskRow>
+      )}
+      {isExpanded && task.hasContent && <TaskDocumentRow task={task} depth={depth} />}
+      {isExpanded && task.pageId && hasSubTasks && (
+        <TaskSubTaskRows
+          task={task}
+          parentDepth={depth}
+          parentPath={path}
+          onParentCountDelta={onCountDelta}
+        />
+      )}
+    </>
+  );
+}
+
+/**
+ * Deepest level at which "Add sub-task" is offered. One below the expansion
+ * ceiling, so a task created through it can still be reached inline.
+ */
+const MAX_ADDABLE_DEPTH = 4;
+
+/**
+ * A nested row. Deliberately NOT sortable: cross-level drag is a re-parenting
+ * problem, not a reorder, and every expansion is collapsed before a drag begins
+ * anyway.
+ */
+function NestedTaskRow({
+  task, depth, isExpanded, expandable, children,
+}: {
+  task: TaskItem;
+  depth: number;
+  isExpanded: boolean;
+  expandable: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <TableRow
+      // `data-task-path`, not `data-task-id`: Find queries `[data-task-id]` over
+      // the top-level list only, and a nested row answering that query would
+      // hand it matches its index cannot address.
+      data-task-path={depth}
+      aria-level={depth + 1}
+      aria-expanded={expandable ? isExpanded : undefined}
+      className={task.completedAt ? 'opacity-60' : undefined}
+    >
+      {/* Empty drag-handle cell keeps nested columns aligned with the parent's. */}
+      <TableCell className="w-8 px-2" />
+      {children}
+    </TableRow>
+  );
+}
+
+function TaskSubTaskRows({
+  task, parentDepth, parentPath, onParentCountDelta,
+}: {
+  task: TaskItem;
+  parentDepth: number;
+  parentPath: TaskNodePath;
+  onParentCountDelta?: CountDelta;
+}) {
+  const tree = useTaskTree();
+  const {
+    subTasks, statusConfigs, hasMore, isLoading, isLoadingMore, loadMore, retry, error, mutatePages,
+  } = useTaskSubTasks(task);
+
+  const listPageId = task.pageId!;
+  const depth = parentDepth + 1;
+
+  // Root vocabulary when this sub-list defines every one of its slugs; its own
+  // otherwise, because PATCH validates against THIS list's configs and a slug it
+  // does not define comes back 400. New sub-lists inherit at seed time, so for
+  // anything created since that landed the two sets are identical.
+  const nodeStatusConfigs = useMemo(
+    () => resolveNodeStatusConfigs(tree.rootStatusConfigs, statusConfigs) as TaskStatusConfig[],
+    [tree.rootStatusConfigs, statusConfigs],
+  );
+
+  const { writeTaskField } = useTaskWriter({
+    mutatePages: mutatePages as never,
+    // Nothing revalidates in this cache by design, so a conflict is resolved by
+    // re-requesting the pages already loaded.
+    onRevisionConflict: retry,
+  });
+
+  const patchCounts = useCallback((childId: string, delta: { total?: number; completed?: number }) => {
+    void mutatePages(
+      (current) => applySubTaskCountsToPages(current, childId, delta),
+      { revalidate: false },
+    );
+  }, [mutatePages]);
+
+  const handlers = useMemo<LocatedTaskHandlers>(() => ({
+    onToggleComplete: async (loc, child) => {
+      if (!tree.canEdit) return;
+      const isDone = isCompletedStatus(child.status, nodeStatusConfigs);
+      if (!isDone) {
+        const blocked = blockedByOpenSubTasks(child);
+        if (blocked) {
+          toast.error(`Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`);
+          return;
+        }
+      }
+      const next = resolveToggleStatus(nodeStatusConfigs, isDone);
+      const ok = await writeTaskField({
+        loc,
+        body: { status: next },
+        optimistic: {
+          status: next,
+          completedAt: isDone ? null : new Date().toISOString(),
+        },
+        fallbackMessage: 'Failed to update status',
+      });
+      // Counters live on the PARENT row, in the cache one level up. Only the
+      // direct parent changes — the server groups them on pages.parentId, so
+      // there is no bubbling further than this.
+      if (ok) onParentCountDelta?.({ completed: isDone ? -1 : 1 });
+    },
+    onStatusChange: async (loc, status) => {
+      if (!tree.canEdit) return;
+      const child = subTasks.find((t) => t.id === loc.taskId);
+      const wasDone = child ? isCompletedStatus(child.status, nodeStatusConfigs) : false;
+      const nowDone = isCompletedStatus(status, nodeStatusConfigs);
+      const ok = await writeTaskField({
+        loc,
+        body: { status },
+        optimistic: { status, completedAt: nowDone ? new Date().toISOString() : null },
+        fallbackMessage: 'Failed to update status',
+      });
+      if (ok && wasDone !== nowDone) onParentCountDelta?.({ completed: nowDone ? 1 : -1 });
+    },
+    onPriorityChange: (loc, priority) => {
+      if (!tree.canEdit) return;
+      void writeTaskField({
+        loc,
+        body: { priority },
+        optimistic: { priority: priority as TaskItem['priority'] },
+        fallbackMessage: 'Failed to update priority',
+      });
+    },
+    onAssigneeChange: (loc, assigneeId, agentId) => {
+      if (!tree.canEdit) return;
+      void writeTaskField({
+        loc,
+        body: { assigneeId, assigneeAgentId: agentId },
+        optimistic: {},
+        fallbackMessage: 'Failed to update assignee',
+      });
+    },
+    onMultiAssigneeChange: (loc, assigneeIds) => {
+      if (!tree.canEdit) return;
+      void writeTaskField({
+        loc, body: { assigneeIds }, optimistic: {},
+        fallbackMessage: 'Failed to update assignees',
+      });
+    },
+    onDueDateChange: (loc, date) => {
+      if (!tree.canEdit) return;
+      const iso = date?.toISOString() ?? null;
+      void writeTaskField({
+        loc, body: { dueDate: iso }, optimistic: { dueDate: iso },
+        fallbackMessage: 'Failed to update due date',
+      });
+    },
+    onSaveTitle: (loc, title) => {
+      void writeTaskField({
+        loc, body: { title }, optimistic: { title },
+        fallbackMessage: 'Failed to update task',
+      });
+    },
+    onDelete: async (loc) => {
+      if (!tree.canEdit) return;
+      const child = subTasks.find((t) => t.id === loc.taskId);
+      const wasDone = child ? isCompletedStatus(child.status, nodeStatusConfigs) : false;
+      try {
+        await del(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`);
+        void mutatePages((c) => removeTaskFromPages(c, loc.taskId), { revalidate: false });
+        onParentCountDelta?.({ total: -1, completed: wasDone ? -1 : 0 });
+        toast.success('Task deleted');
+      } catch (e) {
+        toast.error(taskWriteErrorMessage(e, 'Failed to delete task'));
+        retry();
+      }
+    },
+    onNavigate: tree.onNavigate,
+    onStartEdit: tree.onStartEdit,
+    onConfigureTriggers: (child) => tree.openTriggerDialog(child, listPageId),
+  }), [
+    tree, nodeStatusConfigs, writeTaskField, subTasks, mutatePages, retry,
+    onParentCountDelta, listPageId,
+  ]);
+
+  const addCreatedChild = useCallback((created: TaskItem) => {
+    void mutatePages(
+      (current) => (shouldAppendOptimistically(current)
+        ? appendTaskToPages(current, created)
+        // A new task lands at the end of the server's ordering. With later pages
+        // still unloaded, that slot is not the end of what we have — rather than
+        // render it in the wrong place, leave the cache alone and refetch.
+        : (retry(), current)),
+      { revalidate: false },
+    );
+    onParentCountDelta?.({ total: 1 });
+  }, [mutatePages, retry, onParentCountDelta]);
+
+  return (
+    <>
+      {isLoading && (
+        <AffordanceRow depth={depth}>
+          <Skeleton className="h-6 w-48" />
+        </AffordanceRow>
+      )}
+
+      {subTasks.map((child) => (
+        <TaskRowGroup
+          key={child.id}
+          task={child}
+          depth={depth}
+          listPageId={listPageId}
+          path={makeNodePath(parentPath, child.id)}
+          handlers={handlers}
+          statusConfigs={nodeStatusConfigs}
+          onCountDelta={(delta) => patchCounts(child.id, delta)}
+        />
+      ))}
+
+      {tree.canEdit && depth <= MAX_ADDABLE_DEPTH && (
+        <NewSubTaskRow listPageId={listPageId} depth={depth} onCreated={addCreatedChild} />
+      )}
+
+      {/* An expansion that shows nothing has to say why — it was expandable
+          because a count said there was something here. */}
+      {!isLoading && (error || subTasks.length === 0) && (
+        <AffordanceRow depth={depth}>
+          <p role="status" aria-live="polite" className="text-xs text-muted-foreground italic">
+            {error
+              ? (subTasks.length > 0 ? 'Could not load the rest of the sub-tasks.' : 'Could not load sub-tasks.')
+              : 'These sub-tasks are no longer here.'}
+          </p>
+        </AffordanceRow>
+      )}
+
+      {/* Shown on `error` even with nothing more to load: a FIRST page that
+          failed leaves hasMore false, and nothing retries on its own, so a
+          missing control there would be a dead end. Which recovery to offer
+          depends on which page failed, and the difference is requests against a
+          route that writes — `retry` re-issues every loaded page, while paging
+          forward requests only the one that is missing. */}
+      {(hasMore || error) && (
+        <AffordanceRow depth={depth}>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-6 px-1 text-xs text-muted-foreground"
+            disabled={isLoadingMore}
+            onClick={error && subTasks.length === 0 ? retry : loadMore}
+          >
+            {isLoadingMore ? 'Loading…' : error ? 'Try again' : 'Load more sub-tasks'}
+          </Button>
+        </AffordanceRow>
+      )}
+    </>
+  );
+}
+
+function AffordanceRow({ depth, children }: { depth: number; children: React.ReactNode }) {
+  return (
+    <tr>
+      <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-1 border-b bg-muted/10">
+        <div style={depthIndentStyle(depth)}>{children}</div>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * The inline "+ sub-task" row. This is what removes the screen jump: creating a
+ * sub-task previously required navigating into the parent task first.
+ */
+function NewSubTaskRow({
+  listPageId, depth, onCreated,
+}: {
+  listPageId: string;
+  depth: number;
+  onCreated: (task: TaskItem) => void;
+}) {
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async () => {
+    const trimmed = title.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      const created = await post<TaskItem>(`/api/pages/${listPageId}/tasks`, { title: trimmed });
+      setTitle('');
+      // The create route omits the derived fields the list route computes, so
+      // normalize before the row goes into a cache that will read them.
+      onCreated(taskFromCreateResponse(created));
+    } catch (e) {
+      toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <tr>
+      <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-1 border-b bg-muted/10">
+        <div style={depthIndentStyle(depth)}>
+          <Input
+            placeholder="+ Add a sub-task…"
+            value={title}
+            disabled={busy}
+            onChange={(e) => setTitle(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') void submit(); }}
+            className="h-7 border-0 shadow-none focus-visible:ring-0 px-0 text-sm"
+          />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+/**
+ * "Add sub-task" for a row that has none yet.
+ *
+ * The gate chain is why this needs its own path: `canExpandNode` wants
+ * `hasContent || subTaskCount > 0` before it shows a chevron, and
+ * `shouldFetchSubTasks` wants `subTaskCount > 0` before it will fetch. A leaf
+ * satisfies neither, so there is no expansion to host an inline row. Creating
+ * through the menu bumps the count in the cache — which opens both gates — and
+ * expands the row, after which the normal inline flow takes over.
+ */
+function useSubTaskBootstrap({
+  task, path, onCountDelta, enabled,
+}: {
+  task: TaskItem;
+  path: TaskNodePath;
+  onCountDelta?: CountDelta;
+  enabled: boolean;
+}): (() => void) | undefined {
+  const { toggleExpanded, expandedPaths } = useTaskTree();
+
+  const run = useCallback(async () => {
+    if (!task.pageId) return;
+    try {
+      await post<TaskItem>(`/api/pages/${task.pageId}/tasks`, { title: 'New sub-task' });
+      onCountDelta?.({ total: 1 });
+      if (!isNodeExpanded(expandedPaths, path)) toggleExpanded(path);
+    } catch (e) {
+      toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));
+    }
+  }, [task.pageId, onCountDelta, expandedPaths, path, toggleExpanded]);
+
+  if (!enabled) return undefined;
+  return () => { void run(); };
+}

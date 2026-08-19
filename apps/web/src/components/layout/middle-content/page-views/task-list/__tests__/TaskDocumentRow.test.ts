@@ -1,6 +1,6 @@
 import { describe, it } from 'vitest';
 import { expect } from 'vitest';
-import { shouldShowPlaceholder, shouldShowSkeleton } from '../TaskRowDescription';
+import { shouldShowPlaceholder, shouldShowSkeleton } from '../TaskDocumentRow';
 import { canExpandTask } from '../task-list-types';
 
 const assert = ({ given, should, actual, expected }: {

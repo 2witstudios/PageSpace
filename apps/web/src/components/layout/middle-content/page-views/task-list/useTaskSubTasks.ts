@@ -2,6 +2,7 @@
 
 import { useCallback, useMemo } from 'react';
 import useSWRInfinite from 'swr/infinite';
+import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types';
 
@@ -142,6 +143,18 @@ export interface UseTaskSubTasksResult {
    * expansion state) — do not solve that by calling this on a timer or a socket event.
    */
   retry: () => void;
+  /**
+   * The bound swr/infinite mutate, for LOCAL WRITES ONLY — always with
+   * `revalidate: false`.
+   *
+   * This is a deliberate, narrow widening of a hook whose entire configuration
+   * says "nothing here refetches". It exists because a nested row's checkbox has
+   * to patch the cache it renders from, and that cache is this one. It is not a
+   * refresh: `retry` remains the only revalidation path, for exactly the reasons
+   * documented on it, and calling this with no arguments would re-issue every
+   * loaded page against a route that lazily writes.
+   */
+  mutatePages: SWRInfiniteKeyedMutator<TaskListData[]>;
 }
 
 export function useTaskSubTasks(
@@ -216,5 +229,6 @@ export function useTaskSubTasks(
     error: normalizedError,
     loadMore,
     retry,
+    mutatePages: mutate,
   };
 }
