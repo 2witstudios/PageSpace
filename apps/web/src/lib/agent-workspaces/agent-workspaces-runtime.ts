@@ -81,6 +81,7 @@ import { createConversationInSessionWith } from '@/lib/agent-workspaces/create-c
 import { conversationPageId } from '@pagespace/lib/conversations/conversation-page';
 import { createId } from '@paralleldrive/cuid2';
 import { admit, expel } from '@pagespace/lib/agent-workspaces/workspace-membership';
+import { resolveLiveSandboxId } from '@pagespace/lib/services/agent-workspaces/workspace-status';
 import { findWorkspaceOfChat } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import type { DbExecutor } from '@pagespace/lib/services/agent-workspaces/workspace-node-store';
 import {
@@ -1327,6 +1328,37 @@ export async function endSession(workspaceId: string): Promise<EndAgentSessionRe
 export async function listSessions(filter: AgentSessionListFilter): Promise<AgentSessionDTO[]> {
   const store = await getAgentSessionStore();
   return listAgentSessions({ filter, deps: { store } });
+}
+
+/**
+ * The sandbox this session's work actually runs on, or null when there is none.
+ *
+ * **This is not `session.sandboxId`, and the difference is the whole point of an
+ * environment.** An env-bound session is CHECK-forbidden from holding a Sprite
+ * pointer of its own (`agent_workspaces_env_no_sprite_check`), so reading that
+ * column answers `null` for its entire life no matter how live the machine it
+ * is working on. Anything that resolves a sandbox FROM THE ROW therefore has to
+ * ask which row owns the machine first — and that question is answered here,
+ * once, rather than at each call site.
+ *
+ * Two call sites need it and both were wrong without it: closing a shell
+ * (a null sandbox skips `killSession` and drops the row anyway, leaving a PTY
+ * running on a SHARED, long-lived VM that nothing points at) and the
+ * files/diff/git-blob browsing routes (a null sandbox reads as
+ * `not_started`, so the file browser denies a session whose env is running).
+ * The tool and shell-open paths never had the bug because they resolve their
+ * sandbox from `ensureAgentSessionSandbox`'s RESULT, which already routes.
+ *
+ * The DECISION is `resolveLiveSandboxId`'s, in `@pagespace/lib` beside
+ * `deriveSandboxStatus`, which answers the sibling question off the same two
+ * inputs. What lives here is only this app's half: fetching the env row.
+ */
+export async function resolveSessionLiveSandboxId(session: AgentSessionRecord): Promise<string | null> {
+  if (session.envId === null) return resolveLiveSandboxId(session, null);
+  const env = await (await getDriveEnvStore()).findById(session.envId);
+  // A vanished env is a delete racing this read, not a state — the FK cascades,
+  // so the session is on its way out too. No machine we can see is no machine.
+  return env === null ? null : resolveLiveSandboxId(session, env);
 }
 
 /**

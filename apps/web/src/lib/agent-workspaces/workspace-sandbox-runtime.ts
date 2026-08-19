@@ -28,7 +28,7 @@ import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { findSessionRecord, getSandboxHost } from './agent-workspaces-runtime';
+import { findSessionRecord, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
 
 export type ResolveSessionSandboxHandleResult =
   | { ok: true; handle: SandboxHandle }
@@ -41,11 +41,15 @@ export async function resolveSessionSandboxHandle(
 ): Promise<ResolveSessionSandboxHandleResult> {
   const session = await findSessionRecord(workspaceId);
   if (!session) return { ok: false, reason: 'not_found' };
-  if (session.sandboxId === null || session.spriteTornDownAt !== null) {
-    return { ok: false, reason: 'not_started' };
-  }
+  // WHICH row owns the machine is `resolveSessionLiveSandboxId`'s question: an
+  // env-bound session's own pointer is CHECK-forbidden to be anything but null,
+  // so reading it here would answer `not_started` for the session's whole life
+  // — the file browser, the diff panel and the git-blob viewer all denying a
+  // session whose environment is running.
+  const sandboxId = await resolveSessionLiveSandboxId(session);
+  if (sandboxId === null) return { ok: false, reason: 'not_started' };
   const host = await getSandboxHost();
-  const handle = await host.attach({ sandboxId: session.sandboxId }).catch(() => null);
+  const handle = await host.attach({ sandboxId }).catch(() => null);
   if (!handle) return { ok: false, reason: 'vanished' };
   return { ok: true, handle };
 }

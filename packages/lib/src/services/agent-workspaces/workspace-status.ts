@@ -60,6 +60,32 @@ export interface SandboxStatusColumns {
  *    true for the session: no live sandbox, and the next ensure provisions one
  *    — behaviorally identical to a session that never touched a Sprite.
  */
+/**
+ * WHICH sandbox a session's work runs on, or null when there is none — the
+ * sibling question to `deriveSandboxStatus`, answered off the same two inputs
+ * and with the same rule about which row owns the machine.
+ *
+ * Anything that resolves a handle FROM A ROW needs this rather than
+ * `row.sandboxId`: an env-bound session is CHECK-forbidden from holding a
+ * pointer of its own, so that column reads null for its whole life however live
+ * the machine it is working on. Reading it directly is a specific, quiet class
+ * of bug — the caller concludes "no sandbox" and takes its nothing-to-do branch:
+ * a shell close that skips `killSession` and drops the row anyway (leaving a PTY
+ * on a SHARED, long-lived VM), or a file browser that reports `not_started`
+ * against a running environment.
+ *
+ * `spriteTornDownAt` decides liveness for both kinds, because the pointer
+ * deliberately outlives the VM.
+ */
+export function resolveLiveSandboxId(
+  row: Pick<SandboxStatusColumns, 'sandboxId' | 'spriteTornDownAt'>,
+  /** The env's pointers when the session is env-bound; `null` otherwise — same contract as `deriveSandboxStatus`. */
+  env: DriveEnvSpritePointers | null,
+): string | null {
+  const holder = env ?? row;
+  return holder.spriteTornDownAt === null ? holder.sandboxId : null;
+}
+
 export function deriveSandboxStatus(
   row: SandboxStatusColumns,
   /**

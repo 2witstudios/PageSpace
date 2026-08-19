@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { deriveSandboxStatus } from '../workspace-status';
+import { deriveSandboxStatus, resolveLiveSandboxId } from '../workspace-status';
 
 const NOW = new Date('2026-07-28T12:00:00.000Z');
 const UNPROVISIONED = { sandboxId: null, spriteTornDownAt: null, endedAt: null };
@@ -53,5 +53,61 @@ describe('deriveSandboxStatus', () => {
       { sandboxId: 'pgs-ses-abc', spriteTornDownAt: NOW, endedAt: NOW },
     ];
     for (const row of rows) expect(deriveSandboxStatus(row, null)).not.toBe('starting');
+  });
+});
+
+/**
+ * WHICH sandbox a session's work runs on.
+ *
+ * The bug this exists to prevent is quiet rather than loud: a caller that reads
+ * `row.sandboxId` on an env-bound session gets null, concludes there is no
+ * sandbox, and takes its nothing-to-do branch — a shell close that skips
+ * `killSession` yet still drops the row (a PTY left running on a SHARED,
+ * long-lived VM with nothing pointing at it), or a file browser that reports
+ * `not_started` against a running environment.
+ */
+describe('resolveLiveSandboxId', () => {
+  const UNPROVISIONED = { sandboxId: null, spriteTornDownAt: null };
+
+  it('given an ordinary session, should answer its OWN pointer', () => {
+    expect(resolveLiveSandboxId({ sandboxId: 'pgs-ses-abc', spriteTornDownAt: null }, null)).toBe('pgs-ses-abc');
+    expect(resolveLiveSandboxId(UNPROVISIONED, null)).toBeNull();
+  });
+
+  it("given an env-bound session, should answer the ENV's pointer — never the row's permanently-null one", () => {
+    // The session's own columns are CHECK-forbidden to hold anything, so this
+    // is the ONLY way such a session ever resolves a machine.
+    expect(resolveLiveSandboxId(UNPROVISIONED, { sandboxId: 'pgs-env-abc', spriteTornDownAt: null })).toBe(
+      'pgs-env-abc',
+    );
+  });
+
+  it('given an env with no machine yet, should answer none — lazily provisioned is not provisioned', () => {
+    expect(resolveLiveSandboxId(UNPROVISIONED, { sandboxId: null, spriteTornDownAt: null })).toBeNull();
+  });
+
+  it('given a TORN-DOWN machine, should answer none for either holder — the pointer outlives the VM', () => {
+    // Checked on `spriteTornDownAt`, not on the pointer being absent: teardown
+    // deliberately LEAVES `sandboxId` in place (a reclaim needs it), so testing
+    // the pointer alone would hand callers a dead sandbox to attach to.
+    expect(resolveLiveSandboxId({ sandboxId: 'pgs-ses-abc', spriteTornDownAt: NOW }, null)).toBeNull();
+    expect(resolveLiveSandboxId(UNPROVISIONED, { sandboxId: 'pgs-env-abc', spriteTornDownAt: NOW })).toBeNull();
+  });
+
+  it('should agree with deriveSandboxStatus about whether a machine is there', () => {
+    // Two readings of one fact; they must not be able to disagree, or a session
+    // renders `running` while its file browser says `not_started`.
+    const cases: Array<[{ sandboxId: string | null; spriteTornDownAt: Date | null }, { sandboxId: string | null; spriteTornDownAt: Date | null } | null]> = [
+      [{ sandboxId: 'pgs-ses-a', spriteTornDownAt: null }, null],
+      [UNPROVISIONED, null],
+      [{ sandboxId: 'pgs-ses-a', spriteTornDownAt: NOW }, null],
+      [UNPROVISIONED, { sandboxId: 'pgs-env-a', spriteTornDownAt: null }],
+      [UNPROVISIONED, { sandboxId: null, spriteTornDownAt: null }],
+      [UNPROVISIONED, { sandboxId: 'pgs-env-a', spriteTornDownAt: NOW }],
+    ];
+    for (const [row, env] of cases) {
+      const hasMachine = resolveLiveSandboxId(row, env) !== null;
+      expect(deriveSandboxStatus({ ...row, endedAt: null }, env) === 'running').toBe(hasMachine);
+    }
   });
 });
