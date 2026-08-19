@@ -1337,6 +1337,31 @@
       "import": "./dist/content/tree-utils.js",
       "require": "./dist/content/tree-utils.js"
     },
+    "./content/anchoring/types": {
+      "types": "./dist/content/anchoring/types.d.ts",
+      "import": "./dist/content/anchoring/types.js",
+      "require": "./dist/content/anchoring/types.js"
+    },
+    "./content/anchoring/text-projection": {
+      "types": "./dist/content/anchoring/text-projection.d.ts",
+      "import": "./dist/content/anchoring/text-projection.js",
+      "require": "./dist/content/anchoring/text-projection.js"
+    },
+    "./content/anchoring/anchor": {
+      "types": "./dist/content/anchoring/anchor.d.ts",
+      "import": "./dist/content/anchoring/anchor.js",
+      "require": "./dist/content/anchoring/anchor.js"
+    },
+    "./content/anchoring/reanchor": {
+      "types": "./dist/content/anchoring/reanchor.d.ts",
+      "import": "./dist/content/anchoring/reanchor.js",
+      "require": "./dist/content/anchoring/reanchor.js"
+    },
+    "./content/anchoring/resolve": {
+      "types": "./dist/content/anchoring/resolve.d.ts",
+      "import": "./dist/content/anchoring/resolve.js",
+      "require": "./dist/content/anchoring/resolve.js"
+    },
     "./audit/audit-log": {
       "types": "./dist/audit/audit-log.d.ts",
       "import": "./dist/audit/audit-log.js",
@@ -2436,6 +2461,21 @@
       ],
       "content/tree-utils": [
         "./dist/content/tree-utils.d.ts"
+      ],
+      "content/anchoring/types": [
+        "./dist/content/anchoring/types.d.ts"
+      ],
+      "content/anchoring/text-projection": [
+        "./dist/content/anchoring/text-projection.d.ts"
+      ],
+      "content/anchoring/anchor": [
+        "./dist/content/anchoring/anchor.d.ts"
+      ],
+      "content/anchoring/reanchor": [
+        "./dist/content/anchoring/reanchor.d.ts"
+      ],
+      "content/anchoring/resolve": [
+        "./dist/content/anchoring/resolve.d.ts"
       ],
       "audit/audit-log": [
         "./dist/audit/audit-log.d.ts"
