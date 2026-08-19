@@ -280,8 +280,49 @@ describe('useDocument dirty flag integration', () => {
       });
 
       expect(fetchWithAuth).not.toHaveBeenCalled();
+      // The debounce guard's own job, distinct from the deeper guard inside
+      // saveDocument: no timer is scheduled at all, so typing during a
+      // conflict does not queue a save per keystroke that would each be
+      // refused when they fire.
+      expect(
+        useDocumentManagerStore.getState().documents.get(pageId)?.saveTimeout
+      ).toBeUndefined();
     });
 
+    it('given a conflict arrives with a debounce already queued, should drop the cleared handle', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      // A save is queued BEFORE the conflict is known.
+      act(() => {
+        result.current.saveWithDebounce('my text', 60_000);
+      });
+      const queued = useDocumentManagerStore.getState().documents.get(pageId)?.saveTimeout;
+      expect(queued).toBeDefined();
+
+      // The conflict lands, then the user types again.
+      parkConflict(pageId);
+      await act(async () => {
+        result.current.saveWithDebounce('my text, more', 0);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+      });
+
+      // The queued timer was cancelled, and the store no longer advertises a
+      // pending save that does not exist — a stale handle here makes
+      // `saveTimeout` lie to every later reader of it.
+      expect(
+        useDocumentManagerStore.getState().documents.get(pageId)?.saveTimeout
+      ).toBeUndefined();
+      expect(fetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    // NOTE: forceSave's own `canScheduleSave` check is defence in depth — the
+    // guard inside saveDocument produces the identical outcome (it returns
+    // false before markAsSaving), so removing forceSave's check does NOT turn
+    // this test red. It is kept deliberately, not because it is measured here.
     it('given a pending conflict, forceSave should not fire a PATCH', async () => {
       const pageId = 'page-123';
       useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);

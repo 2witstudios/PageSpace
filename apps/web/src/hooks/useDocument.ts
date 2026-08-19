@@ -289,7 +289,16 @@ export const useDocument = (pageId: string) => {
 
       // A parked conflict means our revision is known-stale: another PATCH
       // would 409 again and the debounce would keep re-firing.
-      if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return;
+      if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) {
+        // Drop the handle we just cleared so the store does not advertise a
+        // pending save that no longer exists. Only on this path — the normal
+        // one overwrites it below, and a second write per keystroke would
+        // re-render every subscriber for nothing.
+        if (document?.saveTimeout) {
+          useDocumentManagerStore.getState().updateDocument(pageId, { saveTimeout: undefined });
+        }
+        return;
+      }
 
       const timeout = setTimeout(() => {
         // Re-check: a conflict can be detected during the debounce window.

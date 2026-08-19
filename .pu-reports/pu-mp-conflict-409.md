@@ -360,6 +360,58 @@ existing debounce tests already cover that a scheduled timeout produces a PATCH.
 `page-views`: **430 passed, 6 skipped**, with the same single Postgres-dependent integration file
 failing for want of a database.
 
+## Round 5 — proactive critique pass (no reviewer prompted these)
+
+Two defects found by self-critique rather than by review, both consequences of earlier rounds, both
+now tested and mutation-checked.
+
+### The store advertised a save that no longer existed
+
+`saveWithDebounce` cleared the pending timer and then returned early on the conflict path **without
+nulling `saveTimeout` in the store** — so `documents.get(pageId).saveTimeout` kept a handle to a
+timer that had already been cancelled. Every later reader of that field was being lied to,
+including the round-4 reschedule assertion. It is now dropped on that path only; doing it on the
+normal path too would mean a second store write per keystroke and a re-render of every subscriber
+for nothing.
+
+### `PageSetupButton` became a dead end this PR created
+
+Converting content mode saves first. Round 3 put a guard inside `saveDocument`, so that save now
+returns `false` while a conflict is parked — and the existing message, *"Please save your changes
+before converting"*, became advice the user **cannot act on**, because the guard is precisely what
+stops them saving. It now says *"Resolve the editing conflict on this page before converting"* when
+a conflict is parked, and keeps the original wording on the genuinely-just-failed path.
+
+Writing the test for that second branch turned up something worth recording: the only reachable way
+to get `saveDocument` → `false` with **no** conflict parked is a 409 whose follow-up refetch fails
+(`decideConflictOutcome` returns an error rather than offering a resolution it cannot honour). Every
+other false return implies a parked conflict. The test uses that exact path, so it documents the
+contract rather than a hypothetical.
+
+### Round 5 mutation checks
+
+| # | Mutation | Test that went red |
+|---|---|---|
+| M21 | leave the stale `saveTimeout` handle in the store | `given a conflict arrives with a debounce already queued, should drop the cleared handle` |
+| M22 | invert `PageSetupButton`'s conflict branch | both `PageSetupButton` message tests |
+
+### One mutation that does NOT go red, stated honestly
+
+**M3 — removing `forceSave`'s own `canScheduleSave` check — survives.** This is not a coverage gap
+that can be closed by a better test; it is a fact about the code. Round 3 added the guard inside
+`saveDocument`, which returns `false` *before* `markAsSaving`, so `forceSave` with and without its
+own check produce byte-identical observable outcomes. The check is kept deliberately as defence in
+depth — removing a guard in a data-loss fix to improve a mutation score would be optimising the
+metric rather than the code — but it is not measured, and the test file now says so at the
+assertion rather than implying coverage it does not have.
+
+By contrast M2 (`saveWithDebounce`'s guard) initially survived for the same reason and **was**
+closable, because that guard has a distinct observable effect the deeper one cannot produce: it
+stops a timer being scheduled at all. The test now asserts that, and M2 is red again. The
+difference is worth stating: one guard was genuinely redundant, the other only looked it.
+
+**Battery status: 22 mutations, 21 red, 1 (M3) knowingly subsumed.**
+
 ## Deliberately not done
 
 - **No Yjs, CRDT, or collab code.** `RichEditor.tsx`'s extension list is untouched. Phases B+.

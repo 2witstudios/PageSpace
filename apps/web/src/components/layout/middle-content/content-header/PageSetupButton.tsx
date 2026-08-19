@@ -78,7 +78,16 @@ export function PageSetupButton({ pageId }: PageSetupButtonProps) {
 
         const saveResult = await saveDocument(doc.content);
         if (!saveResult) {
-          toast.error('Please save your changes before converting');
+          // A parked save conflict blocks writes until the user picks a
+          // version, so "save first" would be advice they cannot follow.
+          const blockedByConflict = useDocumentManagerStore
+            .getState()
+            .conflicts.has(pageId);
+          toast.error(
+            blockedByConflict
+              ? 'Resolve the editing conflict on this page before converting'
+              : 'Please save your changes before converting'
+          );
           return;
         }
       }
