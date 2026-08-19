@@ -22,6 +22,7 @@
  */
 import React from 'react';
 import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 import { renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import { db } from '@pagespace/db/db';
@@ -53,10 +54,6 @@ vi.mock('@/lib/websocket', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 let currentUserId = '';
-
-const assert = ({ given, should, actual, expected }: {
-  given: string; should: string; actual: unknown; expected: unknown;
-}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
 const makeWrapper = () => {
   const cache = new Map();

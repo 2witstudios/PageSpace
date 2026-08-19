@@ -12,7 +12,8 @@
  * sub-tasks-vs-document branch will do next).
  */
 import React from 'react';
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, vi, beforeEach } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 import { render, screen } from '@testing-library/react';
 import type { TaskItem } from '../task-list-types';
 import type { UseTaskSubTasksResult } from '../useTaskSubTasks';
@@ -27,10 +28,6 @@ vi.mock('@/hooks/usePageContent', () => ({
 vi.mock('next/dynamic', () => ({ default: () => function RichEditorStub() { return null; } }));
 
 import { TaskRowDescription } from '../TaskRowDescription';
-
-const assert = ({ given, should, actual, expected }: {
-  given: string; should: string; actual: unknown; expected: unknown;
-}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
 const subTask = (over: Partial<TaskItem> = {}): TaskItem => ({
   id: 'st1',

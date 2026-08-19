@@ -9,6 +9,7 @@
  */
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import { useTaskSubTasks, shouldFetchSubTasks, getSubTaskPageKey, getSubTasksHasMore } from '../useTaskSubTasks';
@@ -16,10 +17,6 @@ import type { TaskItem, TaskListData } from '../task-list-types';
 
 const { fetchWithAuth } = vi.hoisted(() => ({ fetchWithAuth: vi.fn() }));
 vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth }));
-
-const assert = ({ given, should, actual, expected }: {
-  given: string; should: string; actual: unknown; expected: unknown;
-}) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
 const makeSubTask = (id: string): TaskItem => ({
   id,
