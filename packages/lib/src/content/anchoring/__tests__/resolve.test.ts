@@ -1,23 +1,21 @@
 import { describe, expect, it } from 'vitest';
 import { createAnchor } from '../anchor';
 import { FUZZY_SIMILARITY_FLOOR, resolveAnchor, textSimilarity } from '../resolve';
-import type { AnchorResolution } from '../types';
+import {
+  DOC,
+  DUPLICATED,
+  FIRST_TARGET,
+  QUOTE,
+  QUOTE_END as END,
+  QUOTE_START as START,
+  SECOND_TARGET,
+  SEG,
+  TARGET,
+  expectPlaced,
+} from './fixtures';
 
-const DOC = 'The quick brown fox jumps over the lazy dog. The end of the tale.';
-const QUOTE = 'jumps over';
-const START = DOC.indexOf(QUOTE);
-const END = START + QUOTE.length;
 
 const ANCHOR = createAnchor(DOC, START, END, { revision: 3 });
-
-function expectPlaced(
-  resolution: AnchorResolution
-): Extract<AnchorResolution, { status: 'exact' | 'shifted' | 'fuzzy' }> {
-  if (resolution.status === 'orphaned') {
-    throw new Error('expected the anchor to be placed, got orphaned');
-  }
-  return resolution;
-}
 
 describe('resolveAnchor — the repair path, with no predecessor supplied', () => {
   it('finds the anchor at its recorded offsets in unchanged content', () => {
@@ -212,23 +210,18 @@ describe('resolveAnchor — the repair path, with no predecessor supplied', () =
 });
 
 describe('resolveAnchor with duplicated quote text', () => {
-  const SEG = 'aaaa bbbb cccc dddd eeee ffff gg';
-  const TARGET = 'TARGET';
-  const DUP = `${SEG}${TARGET}${SEG}|${SEG}${TARGET}${SEG}`;
-  const FIRST = DUP.indexOf(TARGET);
-  const SECOND = DUP.lastIndexOf(TARGET);
 
   it('prefers the occurrence nearest the positional hint', () => {
-    const secondAnchor = createAnchor(DUP, SECOND, SECOND + TARGET.length, { revision: 1 });
-    const shifted = `xx${DUP}`;
+    const secondAnchor = createAnchor(DUPLICATED, SECOND_TARGET, SECOND_TARGET + TARGET.length, { revision: 1 });
+    const shifted = `xx${DUPLICATED}`;
     const resolved = expectPlaced(resolveAnchor(shifted, secondAnchor));
 
     expect(resolved.status).toBe('shifted');
-    expect(resolved.start).toBe(SECOND + 2);
+    expect(resolved.start).toBe(SECOND_TARGET + 2);
 
-    const firstAnchor = createAnchor(DUP, FIRST, FIRST + TARGET.length, { revision: 1 });
+    const firstAnchor = createAnchor(DUPLICATED, FIRST_TARGET, FIRST_TARGET + TARGET.length, { revision: 1 });
     const resolvedFirst = expectPlaced(resolveAnchor(shifted, firstAnchor));
-    expect(resolvedFirst.start).toBe(FIRST + 2);
+    expect(resolvedFirst.start).toBe(FIRST_TARGET + 2);
   });
 
   it('measures distance to where the QUOTE lands, not where the context starts', () => {
@@ -252,8 +245,8 @@ describe('resolveAnchor with duplicated quote text', () => {
   });
 
   it('reports lower confidence when the match was ambiguous', () => {
-    const secondAnchor = createAnchor(DUP, SECOND, SECOND + TARGET.length, { revision: 1 });
-    const ambiguous = expectPlaced(resolveAnchor(`xx${DUP}`, secondAnchor));
+    const secondAnchor = createAnchor(DUPLICATED, SECOND_TARGET, SECOND_TARGET + TARGET.length, { revision: 1 });
+    const ambiguous = expectPlaced(resolveAnchor(`xx${DUPLICATED}`, secondAnchor));
 
     const uniqueDoc = `${SEG}${TARGET}${SEG}`;
     const uniqueAnchor = createAnchor(uniqueDoc, SEG.length, SEG.length + TARGET.length, {
