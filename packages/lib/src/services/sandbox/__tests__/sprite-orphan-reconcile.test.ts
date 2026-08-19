@@ -342,10 +342,14 @@ describe('reconcileOrphanSprites — agent-session rows whose teardown never con
  * `drive_envs` as a SECOND holder source.
  *
  * An env's teardown follows the same intent-before-kill contract a session's
- * does (`deleteDriveEnv`/`rebuildDriveEnv` stamp, then abort on a kill they
- * cannot confirm), which is exactly how a surviving env row comes to point at a
- * live VM nobody is retrying. What these pin is that it gets the SAME two
- * guards — not a weaker path bolted on beside them.
+ * does (`rebuildDriveEnv` stamps, then aborts on a kill it cannot confirm),
+ * which is exactly how a surviving env row comes to point at a live VM nobody is
+ * retrying. What these pin is that it gets the SAME two guards — not a weaker
+ * path bolted on beside them.
+ *
+ * `deleteDriveEnv` is not in that list: it kills after its row is gone, so a
+ * kill it could not confirm is the reclaim outbox's work rather than this
+ * source's.
  */
 describe('reconcileOrphanSprites — drive environments', () => {
   it('kills a surviving env row\'s Sprite and stamps it, rather than leaving the retry to a person', async () => {

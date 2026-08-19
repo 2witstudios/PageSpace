@@ -33,15 +33,22 @@
  *
  *     **Both Sprite-holder kinds belong to this source**, not just sessions.
  *     `drive_envs` rows carry the same three pointer columns and the same
- *     intent-before-kill contract (`deleteDriveEnv` and `rebuildDriveEnv` both
- *     stamp `teardownRequestedAt` and then abort on a kill they cannot confirm),
- *     so an env whose kill failed is a live VM its own surviving row still
- *     points at. Before envs were folded in here, the only retry was the next
- *     delete, rebuild or ensure — which is to say, a person. A holder row is a
- *     holder row: the guards below (re-read the intent, CAS on the instance)
- *     apply to it unchanged, and the ONLY thing that differs is which store the
- *     runtime dispatches to, which is why the deps below take the ROW rather
- *     than an id.
+ *     intent-before-kill contract: `rebuildDriveEnv` stamps `teardownRequestedAt`
+ *     and then aborts on a kill it cannot confirm, so an env whose kill failed is
+ *     a live VM its own surviving row still points at. Before envs were folded in
+ *     here, the only retry was the next rebuild or ensure — which is to say, a
+ *     person. A holder row is a holder row: the guards below (re-read the intent,
+ *     CAS on the instance) apply to it unchanged, and the ONLY thing that differs
+ *     is which store the runtime dispatches to, which is why the deps below take
+ *     the ROW rather than an id.
+ *
+ *     `deleteDriveEnv` is deliberately NOT a producer here, though it is the
+ *     other verb that kills an env's Sprite. It kills only AFTER its row is
+ *     gone, so it stamps no intent (there is no row left to stamp) and a kill it
+ *     could not confirm lands in (A) instead — the row's AFTER DELETE trigger
+ *     having parked the pointer on the way out. Source (A) is the stronger of
+ *     the two for that path: it retries forever with an attempt count, where the
+ *     licence this source runs on can be cleared by a concurrent `ensure`.
  *
  * **`teardownRequestedAt` IS REQUIRED for (B), and that requirement is the whole
  * safety story.** A `host.kill` is an IRREVERSIBLE DESTROY — the VM's filesystem
@@ -106,7 +113,9 @@ export type SpriteOrphanRow =
    * its machine BY DESIGN (that is what makes an environment an environment), so
    * this is a stamp too. An env that never had a session in it is not a
    * candidate and never will be — the intent stamp is the whole licence, and
-   * nothing stamps it but an explicit delete or rebuild.
+   * `rebuildDriveEnv` is the only thing that stamps it. (`deleteDriveEnv` kills
+   * after its row is gone, so its failures are the outbox's work, not this
+   * source's — see the module doc.)
    */
   | { kind: 'drive-env'; envId: string; sandboxId: string; spriteInstanceId: string | null };
 
