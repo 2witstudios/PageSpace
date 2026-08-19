@@ -185,11 +185,20 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'google_calendar_connections',
     'integration_connections',
     'zoom_connections',
+    // The mint log for app-scoped Fly deploy tokens. It records that WE issued a
+    // credential to our own build pipeline for a drive's published app — no
+    // token value is stored, and nothing in the row is authored by or about the
+    // subject.
+    'app_deploy_token_mints',
   ),
 
   ...withReason(
     SERVICE_INFRASTRUCTURE,
     'machine_sprite_reclaims',
+    // The published-app teardown outbox — the same fleet-pointer shape as
+    // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
+    // confirmed kill.
+    'app_hosting_reclaims',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',
@@ -224,6 +233,13 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'page_permissions',
     'page_share_links',
     'published_pages',
+    // The hosting deployment of a drive's published ENVIRONMENT — the drive's
+    // record, exactly as `published_pages` and `drive_envs` above it are. The
+    // row keys on `envId`: it is the Fly app an env is served from, and it
+    // carries no content of the subject's. What the subject authored lives in
+    // the env (exported under its own categories) and in `pages`; this row is
+    // infrastructure the drive owns and pays for.
+    'published_apps',
     'custom_domains',
     'global_assistant_config',
     'form_targets',

@@ -395,6 +395,33 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
    */
   agent_workspace_node_revs:
     'A per-WORKSPACE monotonic mutation counter (`rev`), issued by the SOURCE database and meaningful only against it: clients hold it as `baseRev` for optimistic concurrency, so a carried value would have the tenant compare a client\'s base against a number another database counted. Its absence is a state the read path already handles exactly — `readWorkspaceNodeSnapshots` FULL OUTER JOINs and `COALESCE(rev, 0)`s so a workspace with nodes and no rev row reads as its tree at rev 0 — and the tenant\'s first write mints rev 1, which is where a fresh workspace starts.',
+
+  /**
+   * The three published-app hosting tables are the clearest case yet of the rule
+   * stated above this object: their rows describe the SOURCE INSTANCE'S FLY
+   * ACCOUNT, not the user.
+   *
+   * A `published_apps` row is a pointer to infrastructure — `flyAppName`,
+   * `machineId`, `networkName`, `imageDigest` — that exists inside one Fly
+   * organization, reachable only with that org's token. Carried into a tenant, a
+   * row names an app the tenant's credentials get 403 on and its reaper can never
+   * stop, while the SOURCE keeps billing for the real one. Worse, the tenant's own
+   * teardown would then enqueue a reclaim for an app it does not own.
+   *
+   * This is not the "arrangement vs membership" trap the note above warns about:
+   * nothing a user would notice is being left behind. The user's CONTENT — the
+   * pages, and the environment the row keys on via `envId` — travels normally;
+   * what does not travel is the hosting deployment, which the tenant re-publishes
+   * from that same env to create a real app on its own infrastructure.
+   */
+  published_apps:
+    'A pointer to a Fly app inside the SOURCE deployment\'s Fly ORGANIZATION: `flyAppName`, `machineId`, `networkName` and `imageDigest` all name resources reachable only with that org\'s token. Carried into a tenant, the row describes an app the tenant cannot start, stop, reach or destroy (403 on every call), while the source instance keeps billing for the real one — and the tenant\'s own teardown would enqueue a reclaim against another organization\'s app. The environment it points at (`envId`) travels normally; only the hosting deployment is left behind, and re-publishing that env in the tenant creates a real app on its own infrastructure.',
+
+  app_deploy_token_mints:
+    'The audit trail of Fly deploy tokens minted for apps in the SOURCE deployment\'s Fly organization, and meaningless without them: every row points at a `published_apps` row the bundle deliberately does not carry, and at a credential scoped to an app the tenant has no access to. Fly returns no token id, so these rows exist purely so the SOURCE can answer "what did we mint and when" — a question about the source\'s own security posture, not about the user. Carrying them would import an audit history for credentials that were never issued in the destination.',
+
+  app_hosting_reclaims:
+    'The FK-FREE teardown OUTBOX: each row is an instruction to DESTROY a Fly app in the SOURCE deployment\'s organization, held until the kill is confirmed. It is the one table in the schema where carrying a row is actively dangerous rather than merely useless — an imported reclaim would have the tenant\'s drain cron repeatedly attempt to destroy an app belonging to another organization, and a row that can never be confirmed dead is never removed, so the outbox would accumulate permanently stuck entries that look exactly like the billing anomaly it exists to alert on.',
 };
 
 /** The columns emitted inline in `table`'s INSERT. */
