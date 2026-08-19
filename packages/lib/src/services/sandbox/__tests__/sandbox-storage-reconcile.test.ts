@@ -641,6 +641,47 @@ describe('reconcileSandboxStorage', () => {
     });
   });
 
+  it('does NOT count a clamp when the CHARGE throws — nothing was forgiven', async () => {
+    // The window is only actually closed once the charge landed AND the
+    // watermark moved. Counting the clamp before that would make `spanClamped`
+    // permanently non-zero for one persistently failing row, blunting the alarm.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
+      ],
+      chargeStorage: async () => {
+        throw new Error('ledger down');
+      },
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({ failed: result.failed, spanClamped: result.spanClamped }).toEqual({ failed: 1, spanClamped: 0 });
+  });
+
+  it('does NOT count a clamp when the WATERMARK write throws — the window stays open', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
+      ],
+      advanceDriveEnvWatermark: async () => {
+        throw new Error('watermark write failed');
+      },
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({
+      charged: result.charged,
+      chargedButUnadvanced: result.chargedButUnadvanced,
+      spanClamped: result.spanClamped,
+    }).toEqual({ charged: 1, chargedButUnadvanced: 1, spanClamped: 0 });
+  });
+
   it('does not clamp a window exactly AT the cap — the boundary bills in full', async () => {
     const { deps, chargeCalls } = makeDeps({ listDriveEnvSprites: async () => [driveEnv()] });
 

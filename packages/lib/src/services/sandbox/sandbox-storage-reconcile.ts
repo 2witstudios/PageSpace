@@ -582,8 +582,17 @@ function toEnvSubject(
  * Deliberately isolated rather than fatal. The two sources share a meter but no
  * invariant: every row carries its own watermark, so billing sessions while
  * `drive_envs` is unreadable is not a half-run, it is a correct run over the
- * rows that could be read — the unread ones accrue and are caught up in full on
- * the next tick, exactly as a row skipped for an unresolvable payer is. Letting
+ * rows that could be read — the unread ones accrue and are caught up on the next
+ * tick, exactly as a row skipped for an unresolvable payer is.
+ *
+ * "Caught up" is IN FULL for sessions and CAPPED for envs: `MAX_BILLABLE_SPAN_MS`
+ * applies to env subjects, so an env-source outage longer than the cap is partly
+ * forgiven rather than recovered. Worth knowing alongside `LOUD_SOURCES`, which
+ * deliberately keeps an env-source failure quiet while envs are dark: the two
+ * together mean a multi-day `drive_envs` outage produces warnings, not errors,
+ * AND truncated accrual on recovery. Both halves are intentional for a feature
+ * that bills nothing yet, and both stop being acceptable at launch — which is
+ * why they are one list and one constant, changed together. Letting
  * an env-side read error abort the tick would instead stop SESSION billing,
  * which folding envs in must never do: this PR adds a row source, and a row
  * source must not be able to take the existing meter down with it.
@@ -672,7 +681,7 @@ export async function reconcileSandboxStorage(
     // Everything up to (but NOT including) the charge itself: pure accrual
     // computation plus the owner lookup. A throw anywhere in here means
     // nothing was billed, so it counts as `failed` exactly like before.
-    let resolved: { ownerId: string; costDollars: number; gbMonths: number } | undefined;
+    let resolved: { ownerId: string; costDollars: number; gbMonths: number; clamped: boolean } | undefined;
     try {
       const rawElapsedMs = now.getTime() - subject.storageLastBilledAt.getTime();
       // Capped, never extrapolated — see MAX_BILLABLE_SPAN_MS. The watermark
@@ -766,11 +775,7 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
-      // Past the payer gate, so this row WILL be charged and its window closed —
-      // the clamp took effect. A skipped row never reaches here, which is the
-      // point: it keeps its full window and is reported by `skipped` alone.
-      if (clampBit) spanClamped += 1;
-      resolved = { ownerId, costDollars, gbMonths };
+      resolved = { ownerId, costDollars, gbMonths, clamped: clampBit };
     } catch (error) {
       failed += 1;
       loggers.ai.error(
@@ -813,6 +818,13 @@ export async function reconcileSandboxStorage(
 
     try {
       if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
+      // Counted HERE and nowhere earlier: the window is only actually closed
+      // once the charge landed AND the watermark moved. A row whose charge threw
+      // (counted `failed`) or whose advance threw (`chargedButUnadvanced`) keeps
+      // its full window — nothing was forgiven — and counting it would clamp-and
+      // -count again on every later tick, making `spanClamped` permanently
+      // non-zero and useless as the alarm its doc says it is.
+      if (resolved.clamped) spanClamped += 1;
     } catch (error) {
       // The charge already committed (counted above) — only the watermark
       // write failed, so this row's window WILL be billed again on the next

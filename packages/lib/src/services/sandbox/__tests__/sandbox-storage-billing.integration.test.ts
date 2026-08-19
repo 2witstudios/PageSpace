@@ -770,3 +770,56 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billable-span cap', () => {
   });
 });
 
+/**
+ * The watermark round-trip is UTC-SYMMETRIC, whatever the process timezone.
+ *
+ * `classifyWatermarkWrite` decides `advanced` vs `superseded` by comparing the
+ * `Date` that `RETURNING` gave back against the one we asked to write. That is
+ * only sound if the round-trip preserves the instant — and `storageLastBilledAt`
+ * is `timestamp` WITHOUT time zone, whose raw node-pg parser resolves through the
+ * PROCESS timezone (verified: `getTypeParser(1114)('2026-08-19 10:00:00')` yields
+ * `15:00Z` on an America/Chicago box). If that parser were in play, every
+ * ordinary advance west of UTC would misreport as `superseded`.
+ *
+ * It is not in play, because drizzle maps the COLUMN rather than trusting the
+ * driver: `PgTimestamp.mapToDriverValue` writes `toISOString()`, and
+ * `mapFromDriverValue` appends `+0000` for a non-tz column. Both ends are pinned
+ * to UTC by construction.
+ *
+ * That is a fact about a dependency, and dependencies change — so it is asserted
+ * here rather than trusted. A drizzle bump that altered either mapper would
+ * otherwise surface as billing counters quietly going wrong on non-UTC
+ * deployments, which is exactly the class of bug this file exists to catch.
+ */
+describe.skipIf(dbSkipExplicitlyAllowed())('watermark round-trip is timezone-independent', () => {
+  it('returns the same instant it was given, and classifies it as advanced', async () => {
+    const envId = await seedEnv({ storageLastBilledAt: new Date(NOW.getTime() - 60 * 60 * 1000) });
+
+    const outcome = await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({
+      envId,
+      billedThrough: NOW,
+    });
+
+    assert({
+      given: `a watermark advance on a box running in ${Intl.DateTimeFormat().resolvedOptions().timeZone}`,
+      should: 'read back the exact instant written and report `advanced`, not a timezone-shifted `superseded`',
+      actual: { outcome, billedAt: await readBilledAt(envId) },
+      expected: { outcome: 'advanced', billedAt: NOW },
+    });
+  });
+
+  it('still distinguishes a genuinely superseded watermark, not merely a shifted one', async () => {
+    // The other half: if the round-trip were offset, a real supersede smaller
+    // than the offset would read as `advanced`. This one is a minute ahead —
+    // far smaller than any UTC offset — so only an exact round-trip detects it.
+    const envId = await seedEnv({ storageLastBilledAt: new Date(NOW.getTime() + 60_000) });
+
+    const outcome = await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({
+      envId,
+      billedThrough: NOW,
+    });
+
+    expect(outcome).toBe('superseded');
+  });
+});
+
