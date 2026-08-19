@@ -146,11 +146,15 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     chargeStorage: async (input) => {
       chargeCalls.push(input);
     },
+    // `true` = the row was written. The real writers are monotonic and answer
+    // `false` when a provision already reset the watermark past this tick.
     advanceAgentSessionWatermark: async (input) => {
       agentSessionAdvanceCalls.push(input);
+      return true;
     },
     advanceDriveEnvWatermark: async (input) => {
       driveEnvAdvanceCalls.push(input);
+      return true;
     },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
@@ -269,6 +273,7 @@ describe('reconcileSandboxStorage', () => {
       advanceAgentSessionWatermark: async (input) => {
         if (input.workspaceId === 'boom') throw new Error('watermark write failed');
         agentSessionAdvanceCalls.push(input);
+        return true;
       },
     });
 
@@ -445,6 +450,7 @@ describe('reconcileSandboxStorage', () => {
       advanceDriveEnvWatermark: async (input) => {
         if (input.envId === 'env-wm') throw new Error('watermark write failed');
         driveEnvAdvanceCalls.push(input);
+        return true;
       },
     });
 
@@ -648,6 +654,92 @@ describe('reconcileSandboxStorage', () => {
         ],
       },
     });
+  });
+
+  it('counts a REFUSED watermark advance as superseded, not as a failure', async () => {
+    // The monotonic guard declining: a provision reset this row's watermark past
+    // the tick's `now` while the tick was running. Not a failure and not money in
+    // the dangerous direction — the row is already billed further ahead — but a
+    // guard that declines invisibly is exactly the blind spot this meter exists
+    // to remove.
+    const { deps, chargeCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-superseded' })],
+      advanceDriveEnvWatermark: async () => false,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'an env whose watermark was reset forward by a provision mid-tick',
+      should: 'count it as superseded — distinct from a failed charge and from an unadvanced one',
+      actual: {
+        charged: result.charged,
+        failed: result.failed,
+        chargedButUnadvanced: result.chargedButUnadvanced,
+        watermarkSuperseded: result.watermarkSuperseded,
+      },
+      expected: { charged: 1, failed: 0, chargedButUnadvanced: 0, watermarkSuperseded: 1 },
+    });
+    expect(chargeCalls).toHaveLength(1);
+  });
+
+  it('counts a superseded watermark on the ZERO-COST path too, where no charge is involved', async () => {
+    const { deps, chargeCalls } = makeDeps({
+      // Never measured, so it prices to $0 and takes the early-advance branch.
+      listDriveEnvSprites: async () => [driveEnv({ measuredBytes: null, measuredAt: null })],
+      advanceDriveEnvWatermark: async () => false,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({ charged: result.charged, charges: chargeCalls.length, superseded: result.watermarkSuperseded })
+      .toEqual({ charged: 0, charges: 0, superseded: 1 });
+  });
+
+  it('looks a drive owner up ONCE PER DRIVE per tick, not once per row', async () => {
+    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [
+        agentSession({ workspaceId: 's1', driveId: 'drive-a' }),
+        agentSession({ workspaceId: 's2', driveId: 'drive-a' }),
+      ],
+      listDriveEnvSprites: async () => [
+        driveEnv({ envId: 'e1', driveId: 'drive-a' }),
+        driveEnv({ envId: 'e2', driveId: 'drive-b' }),
+      ],
+      lookupDriveOwnerId: lookup,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'four rows across two drives, three of them sharing one drive',
+      should: 'issue one owner lookup per DRIVE — the row loop is serial, so each one sits on the critical path',
+      actual: { calls: lookup.mock.calls.map((call) => call[0]).sort(), charged: result.charged },
+      expected: { calls: ['drive-a', 'drive-b'], charged: 4 },
+    });
+    // Every row still gets the right payer despite the sharing.
+    expect(chargeCalls.map((call) => [call.subjectId, call.payerId])).toEqual([
+      ['s1', 'owner-of-drive-a'],
+      ['s2', 'owner-of-drive-a'],
+      ['e1', 'owner-of-drive-a'],
+      ['e2', 'owner-of-drive-b'],
+    ]);
+  });
+
+  it('caches an UNRESOLVABLE drive too — re-asking per row would not rescue it', async () => {
+    const lookup = vi.fn(async () => null);
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ envId: 'e1', driveId: 'gone' }),
+        driveEnv({ envId: 'e2', driveId: 'gone' }),
+      ],
+      lookupDriveOwnerId: lookup,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({ calls: lookup.mock.calls.length, skipped: result.skipped }).toEqual({ calls: 1, skipped: 2 });
   });
 
   it('reports no health noise when every row carries a fresh measurement', async () => {

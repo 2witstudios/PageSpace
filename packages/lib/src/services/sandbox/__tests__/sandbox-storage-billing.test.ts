@@ -231,16 +231,25 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
     mockDb.update.mockReturnValue({
       set: (values: unknown) => {
         setCalls.push(values);
-        return { where: async (w: unknown) => { whereCalls.push(w); } };
+        return {
+          where: (w: unknown) => {
+            whereCalls.push(w);
+            // One row matched: the monotonic guard let this advance through.
+            return { returning: async () => [{ id: 'session-3' }] };
+          },
+        };
       },
     });
 
-    await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
+    const wrote = await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
       workspaceId: 'session-3',
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
-    expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect({ wrote, set: setCalls }).toEqual({
+      wrote: true,
+      set: [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
+    });
     assert({
       given: "a session watermark advance",
       should:
@@ -376,16 +385,24 @@ describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
     mockDb.update.mockReturnValue({
       set: (values: unknown) => {
         setCalls.push(values);
-        return { where: async (w: unknown) => { whereCalls.push(w); } };
+        return {
+          where: (w: unknown) => {
+            whereCalls.push(w);
+            return { returning: async () => [{ id: 'env-3' }] };
+          },
+        };
       },
     });
 
-    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({
+    const wrote = await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({
       envId: 'env-3',
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
-    expect(setCalls).toEqual([{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }]);
+    expect({ wrote, set: setCalls }).toEqual({
+      wrote: true,
+      set: [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
+    });
     assert({
       given: 'an env watermark advance',
       should: 'carry the SAME monotonic guard as the session twin — one meter, one rule for how a watermark moves',
@@ -440,8 +457,8 @@ describe('reconcileSandboxStorageSerialized', () => {
       listDriveEnvSprites: vi.fn(async () => []),
       lookupDriveOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
-      advanceAgentSessionWatermark: vi.fn(async () => {}),
-      advanceDriveEnvWatermark: vi.fn(async () => {}),
+      advanceAgentSessionWatermark: vi.fn(async () => true),
+      advanceDriveEnvWatermark: vi.fn(async () => true),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };

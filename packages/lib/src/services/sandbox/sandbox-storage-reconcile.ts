@@ -271,10 +271,20 @@ export interface ReconcileSandboxStorageDeps {
     costDollars: number;
     gbMonths: number;
   }) => Promise<void>;
-  /** Persists the new watermark for an `agent_workspaces` Sprite, on the ROW ITSELF — the per-row watermark the design calls for, no separate tracking table needed. */
-  advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<void>;
-  /** The same per-row watermark write, against `drive_envs`. */
-  advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<void>;
+  /**
+   * Persists the new watermark for an `agent_workspaces` Sprite, on the ROW
+   * ITSELF — the per-row watermark the design calls for, no separate tracking
+   * table needed.
+   *
+   * Returns whether the row was written. The write is MONOTONIC (see the real
+   * implementation's `lte` guard), so `false` means a provision reset this row's
+   * watermark past this tick's `now` while the tick was running — reported as
+   * {@link ReconcileSandboxStorageResult.watermarkSuperseded} rather than
+   * silently swallowed.
+   */
+  advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<boolean>;
+  /** The same per-row watermark write, against `drive_envs`, with the same monotonic contract. */
+  advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<boolean>;
   now: () => Date;
 }
 
@@ -341,8 +351,25 @@ export interface ReconcileSandboxStorageResult {
    * tell a genuine SESSION-side measurement outage from the expected env
    * baseline. Split, each unit's number means what it always meant, and the env
    * column stops being alarming once the warm path starts refreshing it.
+   *
+   * These describe ROWS, not OUTCOMES, and the two are orthogonal on purpose. A
+   * row counted here as `live` and `stale` may also be `skipped` (its payer could
+   * not be resolved) — its measurement is ageing either way, and that fact does
+   * not become untrue because the tick declined to bill it. Do not read `live`
+   * as "billed" or expect these to partition against `charged`/`skipped`/`failed`.
    */
   measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }>;
+  /**
+   * Rows whose watermark advance was REFUSED because a provision had already
+   * reset it past this tick's `now` — a generation boundary landing mid-tick.
+   *
+   * Not a failure and not money lost in the dangerous direction: the row already
+   * claims to be billed further ahead than this tick reached, so the effect is
+   * that a bounded slice of the DEAD generation's window goes unbilled. It is
+   * counted because the alternative is a guard that declines invisibly, and this
+   * meter's whole premise is that its blind spots should be countable.
+   */
+  watermarkSuperseded: number;
   /**
    * Row sources whose LIST threw this tick — their rows were not metered at all
    * (not skipped, not billed: unread). Their accrual is untouched and is caught
@@ -370,7 +397,8 @@ interface BillableStorageSubject {
   attributionDriveId: string | undefined;
   /** Who to bill; null means UNRESOLVABLE — the caller skips the cycle rather than substituting a payer. */
   resolvePayerId: () => Promise<string | null>;
-  advanceWatermark: (billedThrough: Date) => Promise<void>;
+  /** Returns whether the row was written; `false` means a newer reset won (see the deps' contract). */
+  advanceWatermark: (billedThrough: Date) => Promise<boolean>;
   storageLastBilledAt: Date;
   measuredBytes: number | null;
   measuredAt: Date | null;
@@ -379,6 +407,7 @@ interface BillableStorageSubject {
 
 function toSessionSubject(
   session: AgentSessionStorageRow,
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
   deps: ReconcileSandboxStorageDeps,
 ): BillableStorageSubject {
   const subject: StorageSubject = { workspaceId: session.workspaceId, driveId: session.driveId, ownerId: session.ownerId };
@@ -393,8 +422,9 @@ function toSessionSubject(
     attributionDriveId: 'driveId' in target ? target.driveId : undefined,
     // `ownerId` in the target means a session with no drive at all, so only
     // the drive-lookup branch can leave this unresolved.
-    resolvePayerId: async () =>
-      'ownerId' in target ? target.ownerId : await deps.lookupDriveOwnerId(target.driveId),
+    // Already memoized per tick by the caller, so this is a method call on a
+    // closure rather than a bare deps reference — no `this` to lose.
+    resolvePayerId: async () => ('ownerId' in target ? target.ownerId : await lookupDriveOwnerId(target.driveId)),
     advanceWatermark: (billedThrough) =>
       deps.advanceAgentSessionWatermark({ workspaceId: session.workspaceId, billedThrough }),
     storageLastBilledAt: session.storageLastBilledAt,
@@ -404,7 +434,11 @@ function toSessionSubject(
   };
 }
 
-function toEnvSubject(env: DriveEnvStorageRow, deps: ReconcileSandboxStorageDeps): BillableStorageSubject {
+function toEnvSubject(
+  env: DriveEnvStorageRow,
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  deps: ReconcileSandboxStorageDeps,
+): BillableStorageSubject {
   return {
     kind: 'env',
     subjectId: env.envId,
@@ -413,17 +447,12 @@ function toEnvSubject(env: DriveEnvStorageRow, deps: ReconcileSandboxStorageDeps
     // The drive owner, with NO fallback — an env has no owner column to fall
     // back to, and inventing one would bill a machine to somebody who does not
     // own it. See `resolveEnvPayerId`.
-    // `lookupDriveOwnerId` is wrapped, not passed unbound: `resolveEnvPayerId`
-    // invokes it off its own input object, so handing over the bare reference
-    // would drop `this` for any deps implementation that is a real object rather
-    // than a literal — billing every session correctly while every env threw and
-    // counted as `failed`, every tick. The session arm above keeps `this` for
-    // free by calling it as a method; this arm has to say so.
-    resolvePayerId: () =>
-      resolveEnvPayerId({
-        driveId: env.driveId,
-        lookupDriveOwnerId: (driveId) => deps.lookupDriveOwnerId(driveId),
-      }),
+    // The memoized closure, not a bare deps reference: `resolveEnvPayerId`
+    // invokes its input off its own object, so handing over `deps.lookupDriveOwnerId`
+    // directly would drop `this` for any deps implementation that is a real
+    // object rather than a literal — billing every session correctly while every
+    // env threw and counted as `failed`, every tick.
+    resolvePayerId: () => resolveEnvPayerId({ driveId: env.driveId, lookupDriveOwnerId }),
     advanceWatermark: (billedThrough) => deps.advanceDriveEnvWatermark({ envId: env.envId, billedThrough }),
     storageLastBilledAt: env.storageLastBilledAt,
     measuredBytes: env.measuredBytes,
@@ -471,6 +500,27 @@ export async function reconcileSandboxStorage(
   // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
   // see `listSource` for why one source's failure must not stop the other's
   // money.
+  // ONE drive-owner lookup per DRIVE per tick, not per row.
+  //
+  // A drive's rows all resolve to the same owner, and a tick reads several of
+  // them — a drive with five envs and twenty sessions would otherwise issue
+  // twenty-five identical `SELECT ownerId FROM drives WHERE id = ?` round-trips,
+  // each sitting on the critical path between computing a charge and making it.
+  // Memoizing per tick is safe for the same reason `now` is captured once: a
+  // tick is a snapshot, and a drive changing owner mid-tick should not split
+  // that tick's attribution between two payers.
+  //
+  // Null is cached too — deliberately. An unresolvable drive means SKIP, and
+  // re-asking per row would neither change that answer nor rescue the rows.
+  const ownerByDrive = new Map<string, string | null>();
+  const lookupDriveOwnerIdOnce = async (driveId: string): Promise<string | null> => {
+    const cached = ownerByDrive.get(driveId);
+    if (cached !== undefined) return cached;
+    const ownerId = await deps.lookupDriveOwnerId(driveId);
+    ownerByDrive.set(driveId, ownerId);
+    return ownerId;
+  };
+
   const [sessions, envs] = await Promise.all([
     // Called through a closure, not passed unbound: a deps implementation is
     // free to be a real object whose row source reads `this`, and an unbound
@@ -479,8 +529,8 @@ export async function reconcileSandboxStorage(
     listSource('env', () => deps.listDriveEnvSprites()),
   ]);
   const subjects: BillableStorageSubject[] = [
-    ...sessions.rows.map((session) => toSessionSubject(session, deps)),
-    ...envs.rows.map((env) => toEnvSubject(env, deps)),
+    ...sessions.rows.map((session) => toSessionSubject(session, lookupDriveOwnerIdOnce, deps)),
+    ...envs.rows.map((env) => toEnvSubject(env, lookupDriveOwnerIdOnce, deps)),
   ];
   const failedSources: StorageSubjectKind[] = [];
   if (sessions.failed) failedSources.push('session');
@@ -493,6 +543,7 @@ export async function reconcileSandboxStorage(
   let chargedButUnadvanced = 0;
   let staleMeasurements = 0;
   let neverMeasured = 0;
+  let watermarkSuperseded = 0;
   let totalCostDollars = 0;
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
     session: { live: 0, neverMeasured: 0, stale: 0 },
@@ -546,7 +597,7 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
-          await subject.advanceWatermark(now);
+          if (!(await subject.advanceWatermark(now))) watermarkSuperseded += 1;
         }
         continue;
       }
@@ -612,7 +663,7 @@ export async function reconcileSandboxStorage(
     charged += 1;
 
     try {
-      await subject.advanceWatermark(now);
+      if (!(await subject.advanceWatermark(now))) watermarkSuperseded += 1;
     } catch (error) {
       // The charge already committed (counted above) — only the watermark
       // write failed, so this row's window WILL be billed again on the next
@@ -635,6 +686,7 @@ export async function reconcileSandboxStorage(
     chargedButUnadvanced,
     staleMeasurements,
     neverMeasured,
+    watermarkSuperseded,
     measurementHealth,
     failedSources,
     totalCostDollars,

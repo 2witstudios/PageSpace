@@ -168,10 +168,15 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // further ahead than this tick reached, so at worst one tick-duration of the
   // DEAD generation's window goes unbilled.
   async advanceAgentSessionWatermark({ workspaceId, billedThrough }) {
-    await db
+    const updated = await db
       .update(agentWorkspaces)
       .set({ storageLastBilledAt: billedThrough })
-      .where(and(eq(agentWorkspaces.id, workspaceId), lte(agentWorkspaces.storageLastBilledAt, billedThrough)));
+      .where(and(eq(agentWorkspaces.id, workspaceId), lte(agentWorkspaces.storageLastBilledAt, billedThrough)))
+      .returning({ id: agentWorkspaces.id });
+    // Reported, like the measurement writer's CAS: a guard that silently
+    // declines is a blind spot, and this one declines exactly when a generation
+    // boundary cut a billing window.
+    return updated.length > 0;
   },
 
   // The env row's OWN watermark, same literal per-row design and the same
@@ -182,10 +187,12 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // follows has already happened, so refusing the advance because the env was
   // torn down mid-run would re-bill that window on the next tick.
   async advanceDriveEnvWatermark({ envId, billedThrough }) {
-    await db
+    const updated = await db
       .update(driveEnvs)
       .set({ storageLastBilledAt: billedThrough })
-      .where(and(eq(driveEnvs.id, envId), lte(driveEnvs.storageLastBilledAt, billedThrough)));
+      .where(and(eq(driveEnvs.id, envId), lte(driveEnvs.storageLastBilledAt, billedThrough)))
+      .returning({ id: driveEnvs.id });
+    return updated.length > 0;
   },
 
   now: () => new Date(),

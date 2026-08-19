@@ -514,26 +514,27 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
     await db.update(driveEnvs).set({ storageLastBilledAt: resetTo }).where(eq(driveEnvs.id, envId));
 
     // The tick's advance, arriving late and carrying the older timestamp.
-    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
+    const wrote = await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
 
     assert({
       given: 'a watermark already reset forward by a provision that landed during the tick',
-      should: 'leave the newer value alone — moving it back would re-bill the span between them',
-      actual: await readBilledAt(envId),
-      expected: resetTo,
+      should:
+        'leave the newer value alone AND report the refusal — moving it back would re-bill the span, and declining invisibly would hide that a generation boundary cut a window',
+      actual: { wrote, billedAt: await readBilledAt(envId) },
+      expected: { wrote: false, billedAt: resetTo },
     });
   });
 
   it('still advances a watermark FORWARD in the ordinary case', async () => {
     const envId = await seedEnv({ storageLastBilledAt: new Date(NOW.getTime() - 60_000) });
 
-    await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
+    const wrote = await defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark({ envId, billedThrough: NOW });
 
     assert({
       given: 'a watermark older than the tick that is closing it',
-      should: 'advance normally — the guard must refuse only backwards writes',
-      actual: await readBilledAt(envId),
-      expected: NOW,
+      should: 'advance normally and report the write — the guard must refuse only backwards writes',
+      actual: { wrote, billedAt: await readBilledAt(envId) },
+      expected: { wrote: true, billedAt: NOW },
     });
   });
 
@@ -550,10 +551,11 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
       updatedAt: new Date(),
     });
 
-    await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
+    const wrote = await defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark({
       workspaceId: sessionId,
       billedThrough: NOW,
     });
+    expect(wrote).toBe(false);
 
     const [row] = await db
       .select({ at: agentWorkspaces.storageLastBilledAt })

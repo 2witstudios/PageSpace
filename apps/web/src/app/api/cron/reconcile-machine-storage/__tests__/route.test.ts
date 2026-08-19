@@ -59,6 +59,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 0,
       neverMeasured: 1,
+      watermarkSuperseded: 0,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -100,6 +101,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
           // held with no reading at all, and a persistence unit that went
           // entirely unread this tick.
           neverMeasured: 1,
+          watermarkSuperseded: 0,
           // Per-unit, because an env's baseline-only measurement saturates the
           // flat stale count and would hide a session-side outage.
           measurementHealth: {
@@ -119,6 +121,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 0,
       neverMeasured: 1,
+      watermarkSuperseded: 0,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -142,6 +145,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 0,
       neverMeasured: 1,
+      watermarkSuperseded: 0,
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         // The env LIST threw, so `listSource` yielded no rows and every env
