@@ -35,11 +35,12 @@
  * All three are throttled per session and best-effort: a billing observation
  * must never wake a paused Sprite, delay a tool call, or fail one.
  *
- * An ENV's measurements come from the same seam, bound at its own provisioner:
- * `buildEnvProvisionDeps` (apps/web `drive-envs-runtime.ts`) supplies
- * `measureStorage`, so a freshly-provisioned env is measured while its Sprite is
- * still awake. Without it an env would bill the never-measured 0 floor forever
- * while this cron kept advancing its watermark.
+ * An ENV's measurements come from the same seam, bound once at
+ * `buildEnvProvisionDeps` (`services/drive-envs/env-provision-deps.ts`) — the
+ * single path the web tier's rebuild and a session's ensure in both the web and
+ * realtime tiers all reach — so a freshly-provisioned env is measured while its
+ * Sprite is still awake. Without it an env would bill the never-measured 0 floor
+ * forever while this cron kept advancing its watermark.
  */
 
 import { eq, and, isNotNull, isNull, sql } from '@pagespace/db/operators';
