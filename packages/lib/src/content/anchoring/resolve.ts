@@ -23,6 +23,8 @@ import type { AnchorResolution, TextAnchor } from './types';
 
 // A private instance: diff-utils keeps its own and mutates Diff_Timeout during
 // a diff, and neither module should be able to perturb the other's tuning.
+// Every diff_main below is bounded by MAX_SIMILARITY_INPUT rather than by a
+// deadline; see textSimilarity for why the bound is on the input.
 // Pinned rather than left to the library defaults so the fuzzy stage stays
 // reproducible across dependency bumps.
 const dmp = new DiffMatchPatch();
@@ -48,14 +50,19 @@ const MAX_FUZZY_PATTERN = 32;
 export const FUZZY_SIMILARITY_FLOOR = 0.5;
 
 /**
- * Longest quote the fuzzy stage will score. Levenshtein via dmp is quadratic:
+ * Longest input textSimilarity will score. Levenshtein via dmp is quadratic:
  * measured on this repo's diff-match-patch, two fully dissimilar strings take
  * ~36ms at 1KB, ~558ms at 4KB and ~14s at 20KB. Nothing bounds a quote —
  * `createAnchor(text, 0, text.length, …)` is a legal call for a user selecting
- * a whole page — so the ceiling has to live here. Strategies 1 and 2 are linear
- * and still run for any size; only the last-resort approximate match is capped.
+ * a whole page — so a ceiling is required somewhere.
+ *
+ * It lives inside textSimilarity rather than at its call site because this
+ * module is a package export: an outside caller reaching for it directly would
+ * otherwise get the unbounded version, and a bound that only some callers
+ * observe is not a bound. Strategies 1 and 2 are linear and still run at any
+ * size; only the last-resort approximate match is capped.
  */
-const MAX_FUZZY_QUOTE = 1024;
+export const MAX_SIMILARITY_INPUT = 1024;
 
 /**
  * How much each strategy is trusted. `ambiguous` applies when several copies of
@@ -146,11 +153,21 @@ function searchQuote(
   };
 }
 
-/** 1 - normalised Levenshtein distance, in [0, 1]. */
+/**
+ * 1 - normalised Levenshtein distance, in [0, 1].
+ *
+ * Inputs longer than MAX_SIMILARITY_INPUT score 0 rather than being measured:
+ * too large to compare is reported as dissimilar, which is the safe direction
+ * — it lets an anchor orphan rather than claiming a match nothing verified.
+ * That is also what caps the fuzzy stage, since 0 falls below the floor.
+ */
 export function textSimilarity(a: string, b: string): number {
   const longest = Math.max(a.length, b.length);
   if (longest === 0) {
     return 1;
+  }
+  if (longest > MAX_SIMILARITY_INPUT) {
+    return 0;
   }
   const distance = dmp.diff_levenshtein(dmp.diff_main(a, b));
   return Math.max(0, 1 - distance / longest);
@@ -253,10 +270,9 @@ export function resolveAnchor(text: string, anchor: TextAnchor): AnchorResolutio
     return quoteOnly;
   }
 
-  // 3. Bounded fuzzy match, biased towards the positional hint.
-  if (exact.length > MAX_FUZZY_QUOTE) {
-    return orphaned();
-  }
+  // 3. Bounded fuzzy match, biased towards the positional hint. The size cap
+  // lives in textSimilarity, so an oversized quote scores 0 and orphans at the
+  // floor below rather than needing a second threshold to keep in step here.
   const probe = exact.length > MAX_FUZZY_PATTERN ? exact.slice(0, MAX_FUZZY_PATTERN) : exact;
   const location = dmp.match_main(text, probe, hint);
   if (location === -1) {

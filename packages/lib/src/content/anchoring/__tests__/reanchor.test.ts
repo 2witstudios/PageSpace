@@ -206,6 +206,20 @@ describe('portAnchor — forward-porting through the diff', () => {
     });
   });
 
+  it('a repaired caret never claims exact either, landing back on its own offset', () => {
+    // The caret counterpart of the range case above. The hint is 2 too far
+    // right so the caret has to be repaired against the old text, and the edit
+    // then shifts it back onto the very offset it recorded — a coincidence,
+    // not evidence, and 'exact' has to mean confidence 1 everywhere.
+    const caret = createAnchor(DOC, START, START, { revision: 3 });
+    const drifted = { ...caret, start: START + 2, end: START + 2 };
+    const ported = expectPlaced(portAnchor(drifted, DOC, `xx${DOC}`));
+
+    expect(ported.start).toBe(drifted.start);
+    expect(ported.status).toBe('shifted');
+    expect(ported.confidence).toBeLessThan(1);
+  });
+
   it('orphans when the anchor cannot be found in the old text either', () => {
     expect(portAnchor(ANCHOR, 'nothing like the anchored prose at all', DOC)).toEqual({
       status: 'orphaned',

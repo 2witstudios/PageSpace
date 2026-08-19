@@ -15,6 +15,23 @@ function readModule(name: string): string {
   return readFileSync(fileURLToPath(new URL(`../${name}.ts`, import.meta.url)), 'utf8');
 }
 
+/**
+ * Every module specifier a file depends on, in any ESM form: `import x from`,
+ * a bare side-effect `import`, `export … from`, and dynamic `import()`.
+ * Matching only the `from '…'` shape would let a side-effect or dynamic import
+ * slip a new dependency past both checks below, which is exactly the kind of
+ * thing that arrives quietly in a later edit.
+ */
+function moduleSpecifiers(src: string): string[] {
+  const patterns = [
+    /(?:^|\n)\s*(?:import|export)\b[^;'"]*\bfrom\s*['"]([^'"]+)['"]/g,
+    /(?:^|\n)\s*import\s*['"]([^'"]+)['"]/g,
+    /\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  return patterns.flatMap((pattern) => [...src.matchAll(pattern)].map((m) => m[1]));
+}
+
 describe('anchoring purity', () => {
   it.each(MODULES)('%s does no I/O and reads no ambient state', (name) => {
     const src = readModule(name);
@@ -33,9 +50,7 @@ describe('anchoring purity', () => {
 
   it.each(MODULES)('%s imports nothing beyond the anchoring core and diff-match-patch', (name) => {
     const src = readModule(name);
-    const specifiers = [...src.matchAll(/^import[^'"]*from ['"]([^'"]+)['"];?$/gm)].map((m) => m[1]);
-
-    for (const specifier of specifiers) {
+    for (const specifier of moduleSpecifiers(src)) {
       if (specifier.startsWith('.')) {
         continue;
       }
@@ -71,10 +86,34 @@ describe('anchoring determinism', () => {
     // A new module constructing its own DiffMatchPatch would inherit the
     // unpinned defaults, so the import itself is the thing to keep scarce.
     const importers = MODULES.filter((name) =>
-      [...readModule(name).matchAll(/^import[^'"]*from ['"]([^'"]+)['"];?$/gm)].some(
-        (m) => m[1] === 'diff-match-patch'
-      )
+      moduleSpecifiers(readModule(name)).includes('diff-match-patch')
     );
     expect(importers).toEqual(['resolve']);
+  });
+});
+
+describe('moduleSpecifiers', () => {
+  it('sees every ESM form a dependency can arrive through', () => {
+    const src = [
+      "import { a } from './relative';",
+      "import type { B } from 'typed-pkg';",
+      "import 'side-effect-pkg';",
+      "export { c } from 'reexport-pkg';",
+      "export * from 'star-pkg';",
+      "const d = await import('dynamic-pkg');",
+      "const e = require('legacy-pkg');",
+    ].join('\n');
+
+    expect(moduleSpecifiers(src).sort()).toEqual(
+      [
+        './relative',
+        'dynamic-pkg',
+        'legacy-pkg',
+        'reexport-pkg',
+        'side-effect-pkg',
+        'star-pkg',
+        'typed-pkg',
+      ].sort()
+    );
   });
 });

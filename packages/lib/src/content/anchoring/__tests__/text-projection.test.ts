@@ -76,6 +76,34 @@ describe('projectContent', () => {
     expect(projectContent('<div data-x = "y">quoted</div>', 'html')).toBe('quoted');
   });
 
+  it('collapses the same characters in HTML and in tiptap, and only those', () => {
+    // The two strategies have to agree character for character: a page
+    // converted between storage formats would otherwise re-project into a
+    // different coordinate system and shift every anchor on it. The regex \s
+    // is too wide for the job — EM SPACE and the line separators are content.
+    const asTiptap = (text: string) =>
+      JSON.stringify({
+        type: 'doc',
+        content: [{ type: 'paragraph', content: [{ type: 'text', text }] }],
+      });
+
+    for (const collapsible of [' ', '\t', '\n', '\u00a0']) {
+      const body = `a${collapsible}${collapsible}b`;
+      expect(projectContent(`<p>${body}</p>`, 'html')).toBe('a b');
+      expect(projectContent(asTiptap(body), 'html')).toBe('a b');
+    }
+
+    for (const kept of ['\u2003', '\u2028', '\u3000']) {
+      // Padded with ordinary spaces on purpose: a wider split would swallow the
+      // kept character into the surrounding run and collapse it away with them,
+      // which an unpadded fixture cannot detect.
+      const body = `a ${kept} b`;
+      expect(projectContent(`<p>${body}</p>`, 'html')).toBe(body);
+      expect(projectContent(asTiptap(body), 'html')).toBe(body);
+      expect(projectContent(asTiptap(body), 'html')).toContain(kept);
+    }
+  });
+
   it('projects a literal non-breaking space exactly like &nbsp;', () => {
     // convert-content-mode round-trips through Turndown and marked and can swap
     // one encoding for the other. If they projected differently, that round
@@ -86,6 +114,19 @@ describe('projectContent', () => {
     expect(entity).toBe(literal);
     expect(entity).toBe('a b c');
     expect(entity).not.toContain('\u00a0');
+  });
+
+  it('does not decode a name that only exists on the object prototype', () => {
+    // `&__proto__;` is short enough to pass the length guard, and an object
+    // lookup would resolve it to Object.prototype — not undefined, so it was
+    // accepted as a decoded value. It stringifies to '[object Object]', which
+    // contains a space, so it was then classified as whitespace and swallowed,
+    // putting every offset after it out by the length of the entity.
+    expect(projectContent('<p>a&__proto__;b</p>', 'html')).toBe('a&__proto__;b');
+    expect(projectContent('<p>a&valueOf;b</p>', 'html')).toBe('a&valueOf;b');
+    expect(projectContent('<p>a&hasOwnProperty;b</p>', 'html')).toBe('a&hasOwnProperty;b');
+    // The real entities still decode.
+    expect(projectContent('<p>a&amp;b&nbsp;c</p>', 'html')).toBe('a&b c');
   });
 
   it('leaves code points Postgres cannot store as literal text', () => {

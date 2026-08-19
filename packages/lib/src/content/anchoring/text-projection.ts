@@ -31,15 +31,25 @@ const BLOCK_TAGS: ReadonlySet<string> = new Set([
 /** Tags whose contents are code, not prose, and are dropped wholesale. */
 const RAW_TEXT_TAGS: ReadonlySet<string> = new Set(['script', 'style']);
 
-/** The named entities that actually appear in stored PageSpace HTML. */
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: '&',
-  lt: '<',
-  gt: '>',
-  quot: '"',
-  apos: "'",
-  nbsp: ' ',
-};
+/**
+ * The named entities that actually appear in stored PageSpace HTML.
+ *
+ * A Map, not an object literal: `NAMED_ENTITIES[body]` would also reach the
+ * object prototype, and `&__proto__;` is short enough to pass the length guard
+ * below. That lookup returns `Object.prototype`, which is not `undefined`, so
+ * it was accepted as a decoded value — and since it stringifies to
+ * `[object Object]`, which contains a space, it was then classified as
+ * whitespace and swallowed. Every offset after it would have been wrong. The
+ * `Record<string, string>` type hid all of this from the compiler.
+ */
+const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
+  ['amp', '&'],
+  ['lt', '<'],
+  ['gt', '>'],
+  ['quot', '"'],
+  ['apos', "'"],
+  ['nbsp', ' '],
+]);
 
 /**
  * Tiptap node types that are line boundaries even though they carry no
@@ -93,21 +103,26 @@ function createEmitter() {
 type Emitter = ReturnType<typeof createEmitter>;
 
 /**
- * U+00A0 counts, so a literal non-breaking space and the `&nbsp;` that renders
- * identically to it collapse the same way. Without that they project to
- * different characters, and `convert-content-mode` — which round-trips content
- * through Turndown and marked and can swap one encoding for the other — would
- * shift every offset after the first one it touched.
+ * The one definition of collapsible whitespace, shared by both projection
+ * strategies. They have to agree character for character: a page converted
+ * between storage formats would otherwise re-project into a different
+ * coordinate system and shift every anchor on it.
+ *
+ * U+00A0 is in the set so a literal non-breaking space and the `&nbsp;` that
+ * renders identically to it collapse the same way — `convert-content-mode`
+ * round-trips content through Turndown and marked and can swap one encoding for
+ * the other, on precisely the path that has no diff to forward-port through.
+ *
+ * Deliberately NARROWER than the regex `\s`, which also matches EM SPACE, the
+ * line separators and the rest of Unicode's space category. Those are content,
+ * not layout: CSS does not collapse them either, and folding them away would
+ * make a quote unfindable in the text it was taken from.
  */
+const COLLAPSIBLE_WHITESPACE = /^[ \t\n\r\f\u00a0]$/;
+const COLLAPSIBLE_WHITESPACE_RUN = /([ \t\n\r\f\u00a0]+)/;
+
 function isWhitespace(char: string): boolean {
-  return (
-    char === ' ' ||
-    char === '\t' ||
-    char === '\n' ||
-    char === '\r' ||
-    char === '\f' ||
-    char === '\u00a0'
-  );
+  return COLLAPSIBLE_WHITESPACE.test(char);
 }
 
 function isTagNameChar(char: string): boolean {
@@ -140,7 +155,7 @@ function decodeEntity(html: string, index: number): { value: string; length: num
     return { value: String.fromCodePoint(code), length };
   }
 
-  const named = NAMED_ENTITIES[body.toLowerCase()];
+  const named = NAMED_ENTITIES.get(body.toLowerCase());
   return named === undefined ? null : { value: named, length };
 }
 
@@ -302,12 +317,13 @@ function walkTiptapNode(node: unknown, out: Emitter): void {
 
   if (typeof record.text === 'string') {
     const value = record.text;
-    // Preserve interior spacing decisions to the emitter, which collapses runs.
-    for (const segment of value.split(/(\s+)/)) {
+    // Leave the spacing decisions to the emitter, which collapses runs. Split
+    // on the shared set rather than \s so this agrees with the HTML strategy.
+    for (const segment of value.split(COLLAPSIBLE_WHITESPACE_RUN)) {
       if (!segment) {
         continue;
       }
-      if (/^\s+$/.test(segment)) {
+      if (isWhitespace(segment[0])) {
         out.space();
       } else {
         out.text(segment);

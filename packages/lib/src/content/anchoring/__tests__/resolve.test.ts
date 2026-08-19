@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { createAnchor } from '../anchor';
-import { FUZZY_SIMILARITY_FLOOR, resolveAnchor, textSimilarity } from '../resolve';
+import {
+  FUZZY_SIMILARITY_FLOOR,
+  MAX_SIMILARITY_INPUT,
+  resolveAnchor,
+  textSimilarity,
+} from '../resolve';
 import {
   DOC,
   DUPLICATED,
@@ -306,6 +311,22 @@ describe('resolveAnchor with duplicated quote text', () => {
 });
 
 describe('textSimilarity', () => {
+  it('refuses to score inputs too large to compare, whoever calls it', () => {
+    // The module is a package export, so the bound cannot live at the call
+    // site: an outside caller reaching for this directly would otherwise get
+    // the unbounded quadratic version. Reporting 0 is the safe direction — it
+    // lets an anchor orphan rather than claim a match nothing verified.
+    const big = 'lorem ipsum dolor sit amet '.repeat(60); // > 1024 chars
+    expect(big.length).toBeGreaterThan(MAX_SIMILARITY_INPUT);
+
+    expect(textSimilarity(big, big)).toBe(0);
+    expect(textSimilarity(big, 'short')).toBe(0);
+    expect(textSimilarity('short', big)).toBe(0);
+    // Right up to the limit it still scores normally.
+    const atLimit = 'x'.repeat(MAX_SIMILARITY_INPUT);
+    expect(textSimilarity(atLimit, atLimit)).toBe(1);
+  });
+
   it('scores identical, disjoint and empty inputs sanely', () => {
     expect(textSimilarity('hello world', 'hello world')).toBe(1);
     expect(textSimilarity('', '')).toBe(1);

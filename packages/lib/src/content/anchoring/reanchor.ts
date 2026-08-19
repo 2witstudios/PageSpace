@@ -204,8 +204,13 @@ export function portAnchor(
     if (mapped === null) {
       return orphaned();
     }
+    // Same rule as the range branch below: a repaired caret (confidence < 1)
+    // can land back on its recorded offset only by coincidence, and 'exact'
+    // has to mean confidence 1 everywhere or a consumer gating on it reads a
+    // coincidence as evidence.
+    const unmoved = mapped === anchor.start && located.confidence === 1;
     return {
-      status: mapped === anchor.start ? 'exact' : 'shifted',
+      status: unmoved ? 'exact' : 'shifted',
       start: mapped,
       end: mapped,
       confidence: located.confidence,
