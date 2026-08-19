@@ -118,8 +118,9 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       const row = rows.get(envId);
       if (!row) return { ok: false, reason: 'not_found' };
       // The guard re-read INSIDE the atomic step — the fake is single-threaded,
-      // so what this models is the ordering: the count is taken here, after the
-      // teardown, not from the caller's earlier snapshot.
+      // so what this models is the ordering: the count that DECIDES is taken
+      // here, under the notional row lock, not from the caller's earlier
+      // unlocked snapshot.
       if (!force) {
         const liveSessionCount = liveSessions.get(envId) ?? 0;
         if (liveSessionCount > 0) return { ok: false, reason: 'live_sessions', liveSessionCount };
@@ -156,7 +157,13 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         sandboxId,
         spriteInstanceId,
         egressPolicyToken,
-        storageLastBilledAt: at,
+        // MONOTONIC, mirroring the real store's `GREATEST(column, <now>)`. The
+        // provision's timestamp is captured before the provider IO, so it can be
+        // older than a watermark a reconcile tick has already advanced — assigning
+        // it would drag the watermark back over billed time. A fake that assigned
+        // would let that guard be deleted with every fake-backed test still green.
+        storageLastBilledAt:
+          row.storageLastBilledAt > at ? row.storageLastBilledAt : at,
         updatedAt: at,
         ...envStampColumns(stamps),
       });
@@ -170,6 +177,18 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       if (!row) return cas?.sandboxId === undefined;
       if (cas?.sandboxId !== undefined && (row.sandboxId ?? null) !== (cas.sandboxId ?? null)) return false;
       rows.set(envId, { ...row, ...columns, updatedAt: now() });
+      return true;
+    },
+
+    async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
+      const row = rows.get(envId);
+      if (!row) return false;
+      // Both real guards, modelled: never write to a torn-down row, and CAS on
+      // the INSTANCE measured so a late measurement cannot land on the
+      // replacement generation's disk. A miss is an ANSWER (`false`), never a throw.
+      if (row.spriteTornDownAt !== null) return false;
+      if ((row.spriteInstanceId ?? null) !== (spriteInstanceId ?? null)) return false;
+      rows.set(envId, { ...row, storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt });
       return true;
     },
 

@@ -107,6 +107,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./services/drive-envs/env-provision-deps": {
+      "types": "./dist/services/drive-envs/env-provision-deps.d.ts",
+      "import": "./dist/services/drive-envs/env-provision-deps.js",
+      "require": "./dist/services/drive-envs/env-provision-deps.js"
+    },
     "./services/drive-envs/drive-envs": {
       "types": "./dist/services/drive-envs/drive-envs.d.ts",
       "import": "./dist/services/drive-envs/drive-envs.js",
@@ -606,6 +611,31 @@
       "types": "./dist/services/fly/flaps-client.d.ts",
       "import": "./dist/services/fly/flaps-client.js",
       "require": "./dist/services/fly/flaps-client.js"
+    },
+    "./services/app-hosting/build-core": {
+      "types": "./dist/services/app-hosting/build-core.d.ts",
+      "import": "./dist/services/app-hosting/build-core.js",
+      "require": "./dist/services/app-hosting/build-core.js"
+    },
+    "./services/app-hosting/image-builder": {
+      "types": "./dist/services/app-hosting/image-builder.d.ts",
+      "import": "./dist/services/app-hosting/image-builder.js",
+      "require": "./dist/services/app-hosting/image-builder.js"
+    },
+    "./services/app-hosting/build-job": {
+      "types": "./dist/services/app-hosting/build-job.d.ts",
+      "import": "./dist/services/app-hosting/build-job.js",
+      "require": "./dist/services/app-hosting/build-job.js"
+    },
+    "./services/app-hosting/build-reconciler": {
+      "types": "./dist/services/app-hosting/build-reconciler.d.ts",
+      "import": "./dist/services/app-hosting/build-reconciler.js",
+      "require": "./dist/services/app-hosting/build-reconciler.js"
+    },
+    "./services/app-hosting/build-wiring": {
+      "types": "./dist/services/app-hosting/build-wiring.d.ts",
+      "import": "./dist/services/app-hosting/build-wiring.js",
+      "require": "./dist/services/app-hosting/build-wiring.js"
     },
     "./services/sandbox/checkpoint-policy": {
       "types": "./dist/services/sandbox/checkpoint-policy.d.ts",
@@ -1336,6 +1366,31 @@
       "types": "./dist/content/tree-utils.d.ts",
       "import": "./dist/content/tree-utils.js",
       "require": "./dist/content/tree-utils.js"
+    },
+    "./content/anchoring/types": {
+      "types": "./dist/content/anchoring/types.d.ts",
+      "import": "./dist/content/anchoring/types.js",
+      "require": "./dist/content/anchoring/types.js"
+    },
+    "./content/anchoring/text-projection": {
+      "types": "./dist/content/anchoring/text-projection.d.ts",
+      "import": "./dist/content/anchoring/text-projection.js",
+      "require": "./dist/content/anchoring/text-projection.js"
+    },
+    "./content/anchoring/anchor": {
+      "types": "./dist/content/anchoring/anchor.d.ts",
+      "import": "./dist/content/anchoring/anchor.js",
+      "require": "./dist/content/anchoring/anchor.js"
+    },
+    "./content/anchoring/reanchor": {
+      "types": "./dist/content/anchoring/reanchor.d.ts",
+      "import": "./dist/content/anchoring/reanchor.js",
+      "require": "./dist/content/anchoring/reanchor.js"
+    },
+    "./content/anchoring/resolve": {
+      "types": "./dist/content/anchoring/resolve.d.ts",
+      "import": "./dist/content/anchoring/resolve.js",
+      "require": "./dist/content/anchoring/resolve.js"
     },
     "./audit/audit-log": {
       "types": "./dist/audit/audit-log.d.ts",
@@ -2107,6 +2162,21 @@
       "services/fly/flaps-client": [
         "./dist/services/fly/flaps-client.d.ts"
       ],
+      "services/app-hosting/build-core": [
+        "./dist/services/app-hosting/build-core.d.ts"
+      ],
+      "services/app-hosting/image-builder": [
+        "./dist/services/app-hosting/image-builder.d.ts"
+      ],
+      "services/app-hosting/build-job": [
+        "./dist/services/app-hosting/build-job.d.ts"
+      ],
+      "services/app-hosting/build-reconciler": [
+        "./dist/services/app-hosting/build-reconciler.d.ts"
+      ],
+      "services/app-hosting/build-wiring": [
+        "./dist/services/app-hosting/build-wiring.d.ts"
+      ],
       "services/sandbox/checkpoint-policy": [
         "./dist/services/sandbox/checkpoint-policy.d.ts"
       ],
@@ -2436,6 +2506,21 @@
       ],
       "content/tree-utils": [
         "./dist/content/tree-utils.d.ts"
+      ],
+      "content/anchoring/types": [
+        "./dist/content/anchoring/types.d.ts"
+      ],
+      "content/anchoring/text-projection": [
+        "./dist/content/anchoring/text-projection.d.ts"
+      ],
+      "content/anchoring/anchor": [
+        "./dist/content/anchoring/anchor.d.ts"
+      ],
+      "content/anchoring/reanchor": [
+        "./dist/content/anchoring/reanchor.d.ts"
+      ],
+      "content/anchoring/resolve": [
+        "./dist/content/anchoring/resolve.d.ts"
       ],
       "audit/audit-log": [
         "./dist/audit/audit-log.d.ts"

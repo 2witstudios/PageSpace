@@ -113,6 +113,19 @@ export const agentSessionDtoSchema = z.object({
   ownerId: z.string().min(1),
   /** Display label only — no uniqueness, never an address. */
   name: z.string(),
+  /**
+   * The persistent ENVIRONMENT this session runs inside, or null for the
+   * ordinary ephemeral session that owns its own Sprite.
+   *
+   * Non-null changes what `sandboxStatus` below is a reading OF: an env-bound
+   * session holds no Sprite pointer of its own (CHECK-enforced), so its status
+   * is derived from the ENV's machine — which every session in that env shares,
+   * along with its filesystem. Ending such a session therefore never stops a
+   * machine, and two sessions carrying the same `envId` are two windows onto
+   * one disk. A client that groups sessions by this field is grouping them by
+   * the filesystem they see.
+   */
+  envId: z.string().min(1).nullable(),
   sandboxStatus: sandboxStatusSchema,
   createdAt: isoTimestamp,
   lastActiveAt: isoTimestamp.nullable(),

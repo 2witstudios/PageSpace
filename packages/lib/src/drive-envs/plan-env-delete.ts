@@ -20,16 +20,22 @@
  * pointer of its own — `agent_workspaces_env_no_sprite_check` forbids it — so
  * cascading a session away can never orphan a VM, leave bytes unbilled, or hide
  * a machine from the reclaim outbox. The ONE Sprite in play is the env's own,
- * which is exactly what `teardown_then_delete` exists to kill before the row
- * (and its AFTER DELETE reclaim trigger) disappears.
+ * which is exactly what `delete_then_teardown` names: the row goes first, and
+ * the Sprite is killed after it — with the row's AFTER DELETE reclaim trigger
+ * holding the pointer in between, so the machine is reachable even though the
+ * thing that pointed at it is gone.
  *
  * The verdicts, and nothing else:
  *
  *  - `deny_live_sessions` — sessions are still live in here and the caller did
  *    not force. Reports the count so the caller can say how many.
- *  - `teardown_then_delete` — the env believes it holds a live Sprite. Kill it
- *    (CAS on the instance) BEFORE the row goes, so the kill is confirmed by the
- *    thing that asked for it rather than left to the crash net.
+ *  - `delete_then_teardown` — the env believes it holds a live Sprite, so the
+ *    row delete is not the whole job. The kill (guarded on the instance the row
+ *    records) happens AFTER the row goes, because a kill before the
+ *    authoritative live-session re-count could destroy a shared filesystem for a
+ *    delete that then gets refused. The reclaim outbox is what makes that
+ *    ordering safe rather than leaky — see `deleteDriveEnv`, which owns the
+ *    execution and the argument.
  *  - `delete_only` — nothing to kill: never provisioned, or already torn down.
  *
  * A missing row is deliberately NOT a verdict here. "There is no such env" is a
@@ -65,8 +71,18 @@ export interface PlanEnvDeleteInput {
 export type PlanEnvDeletePlan =
   /** Sessions are live and `force` was not given. The row and its Sprite are untouched. */
   | { action: 'deny_live_sessions'; liveSessionCount: number }
-  /** Kill the env's Sprite (guarded by the instance the row records), then delete the row. */
-  | { action: 'teardown_then_delete'; sandboxId: string; expectedInstanceId: string | null }
+  /**
+   * This env holds a live Sprite, so the row delete is not the whole job: the
+   * machine must be killed too, guarded by the instance the row records.
+   *
+   * The name states the ORDER, and the order is a safety property rather than a
+   * preference — the delete commits FIRST, and only then is the Sprite killed.
+   * Killing first meant a session binding between the caller's unlocked count
+   * and the kill lost the environment's shared filesystem while the locked
+   * re-count went on to refuse the delete, so the caller was told nothing had
+   * happened. See `deleteDriveEnv`.
+   */
+  | { action: 'delete_then_teardown'; sandboxId: string; expectedInstanceId: string | null }
   /** No live Sprite to kill — delete the row. */
   | { action: 'delete_only' };
 
@@ -84,7 +100,7 @@ export function planEnvDelete({ row, liveSessionCount, force }: PlanEnvDeleteInp
   // already-torn-down env back through a kill of a VM that is already gone.
   if (row.sandboxId !== null && row.spriteTornDownAt === null) {
     return {
-      action: 'teardown_then_delete',
+      action: 'delete_then_teardown',
       sandboxId: row.sandboxId,
       expectedInstanceId: row.spriteInstanceId,
     };

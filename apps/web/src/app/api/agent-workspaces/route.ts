@@ -41,7 +41,7 @@ import {
   MAX_ACTIVE_SESSIONS_PER_OWNER,
   provisionSessionSandbox,
   spawnSession,
-  toAgentSessionDTO,
+  toSessionDTOWithEnv,
   type AgentSessionListFilter,
 } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-shells-runtime';
@@ -231,6 +231,7 @@ export async function POST(request: Request) {
 
   let body: {
     driveId?: unknown;
+    envId?: unknown;
     agentPageId?: unknown;
     name?: unknown;
     firstThing?: unknown;
@@ -244,6 +245,12 @@ export async function POST(request: Request) {
   let driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
+  // The environment to run inside, when one is named. Accepted but not yet
+  // OFFERED anywhere — no UI sends it, which is what "ships dark" means here.
+  // It is NOT validated in this route: whether the env exists and belongs to
+  // `driveId` is `spawnAgentSession`'s check, made there so every future caller
+  // inherits it rather than each one re-deriving it.
+  const envId = typeof body.envId === 'string' && body.envId.length > 0 ? body.envId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
   const wantsClaim = body.firstThing === 'claim';
@@ -444,7 +451,7 @@ export async function POST(request: Request) {
     name = nextUniqueSessionName(baseLabel, existingNames).slice(0, MAX_SESSION_NAME_LENGTH);
   }
 
-  const spawned = await spawnSession({ userId: auth.userId, driveId, name });
+  const spawned = await spawnSession({ userId: auth.userId, driveId, envId, name });
   if (!spawned.ok) {
     if (spawned.reason === 'session_limit_reached') {
       // The atomic backstop caught what the pre-check above missed — a
@@ -452,6 +459,12 @@ export async function POST(request: Request) {
       return sessionQuotaExceeded(request, auth.userId, null, 'agent-sessions', {
         message: 'You have reached your active session limit — end some before starting more.',
       });
+    }
+    if (spawned.reason === 'env_not_found') {
+      // 404 covers both "no such env" and "an env in another drive" — the
+      // service collapses them deliberately, so that a caller who cannot see a
+      // drive cannot enumerate its environments through this endpoint either.
+      return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     }
     loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
     return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });
@@ -537,7 +550,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       {
-        session: toAgentSessionDTO(provisionedSession),
+        session: await toSessionDTOWithEnv(provisionedSession),
         shellId: shellSpawned.shell.shellId,
         shellName: shellSpawned.shell.name,
       },
@@ -619,7 +632,7 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json(
-      { session: toAgentSessionDTO(spawned.session), conversationId },
+      { session: await toSessionDTOWithEnv(spawned.session), conversationId },
       { status: 201 },
     );
   }
@@ -655,7 +668,7 @@ export async function POST(request: Request) {
   });
 
   return NextResponse.json(
-    { session: toAgentSessionDTO(spawned.session), conversationId },
+    { session: await toSessionDTOWithEnv(spawned.session), conversationId },
     { status: 201 },
   );
 }

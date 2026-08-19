@@ -7,6 +7,7 @@ import {
 import { createSignedState } from '@pagespace/lib/integrations/oauth/oauth-state';
 import { getClientIP, isSafeReturnUrl } from '@/lib/auth';
 import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
+import { DESKTOP_SHELLS } from '@/lib/auth/desktop-shell';
 
 // Length bounds must match verifyOAuthState's oauthStateDataSchema — otherwise
 // the server can mint a signed state it will later reject at the callback,
@@ -14,6 +15,7 @@ import { INVITE_TOKEN_MAX_LENGTH } from '@/lib/auth/oauth-state';
 const appleSigninSchema = z.object({
   returnUrl: z.string().max(2048).optional(),
   platform: z.enum(['web', 'desktop', 'ios']).optional(),
+  shell: z.enum(DESKTOP_SHELLS).optional(),
   deviceId: z.string().min(1).max(128).optional(),
   deviceName: z.string().max(255).optional(),
   inviteToken: z.string().min(1).max(INVITE_TOKEN_MAX_LENGTH).optional(),
@@ -45,7 +47,7 @@ export async function POST(req: Request) {
       return Response.json({ errors: validation.error.flatten().fieldErrors }, { status: 400 });
     }
 
-    const { returnUrl, platform, deviceId, deviceName, inviteToken } = validation.data;
+    const { returnUrl, platform, deviceId, deviceName, inviteToken, shell } = validation.data;
 
     // SECURITY: Validate returnUrl to prevent open redirect attacks
     if (!isSafeReturnUrl(returnUrl)) {
@@ -90,6 +92,7 @@ export async function POST(req: Request) {
       {
         returnUrl: returnUrl || '/dashboard',
         platform: platform || 'web',
+        ...(shell && { shell }),
         ...(deviceId && { deviceId }),
         ...(deviceName && { deviceName }),
         ...(inviteToken && { inviteToken }),

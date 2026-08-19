@@ -1,3 +1,6 @@
+// MUST stay first: it names the app, which is what decides the userData path
+// that ./store and the auth/MCP modules bind to at import time.
+import './bootstrap-identity';
 import { app, BrowserWindow } from 'electron';
 import type { Event } from 'electron';
 import { getMCPManager } from './mcp-manager';
@@ -13,6 +16,7 @@ import { setupProtocolClient, handleDeepLink } from './deep-links';
 import { registerIPCHandlers, setupMCPToolsReadyCallback } from './ipc-handlers';
 import { startMCPStatusBroadcasting, stopMCPStatusBroadcasting } from './mcp-status';
 import { setIsQuitting } from './state';
+import { APP_IDENTITY } from '../shared/current-app-identity';
 
 setupProtocolClient();
 
@@ -28,7 +32,7 @@ if (!gotTheLock) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.focus();
 
-      const url = commandLine.find((arg: string) => arg.startsWith('pagespace://'));
+      const url = commandLine.find((arg: string) => arg.startsWith(APP_IDENTITY.deepLinkPrefix));
       if (url) {
         handleDeepLink(url);
       }

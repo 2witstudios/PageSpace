@@ -25,7 +25,7 @@ import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import { admit } from '@pagespace/lib/agent-workspaces/workspace-membership';
 import { createId } from '@paralleldrive/cuid2';
-import { getAgentSessionStore, getSandboxHost } from './agent-workspaces-runtime';
+import { getAgentSessionStore, getSandboxHost, resolveSessionLiveSandboxId } from './agent-workspaces-runtime';
 import { applyWorkspaceMembershipWrite } from './workspace-node-runtime';
 
 /**
@@ -172,10 +172,16 @@ export async function killShellById(shellId: string): Promise<KillSessionShellRe
       // A shell has no Sprite pointer of its own — the OWNING session's live
       // sandbox is where its PTY (if ever launched) runs. Null when the session
       // has none (nothing to kill), including a torn-down one.
+      //
+      // Resolved through `resolveSessionLiveSandboxId` rather than off the row:
+      // an env-bound session's own pointer is permanently null, and reading it
+      // here would skip `killSession` while still dropping the shell row —
+      // leaving the PTY running on the ENVIRONMENT's shared, long-lived VM with
+      // nothing left pointing at it, and telling the caller it was killed.
       resolveSessionSandboxId: async (workspaceId) => {
         const session = await sessionStore.findById(workspaceId);
-        if (!session || session.spriteTornDownAt !== null) return null;
-        return session.sandboxId;
+        if (!session) return null;
+        return resolveSessionLiveSandboxId(session);
       },
     },
   });

@@ -12,14 +12,21 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
+    "dev:coder": "PAGESPACE_APP_VARIANT=coder electron-vite dev",
     "lint": "eslint src",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "build": "electron-vite build",
+    "build:coder": "PAGESPACE_APP_VARIANT=coder electron-vite build",
     "typecheck": "tsc --noEmit",
-    "package": "bun run build && electron-builder",
-    "package:mac": "bun run build && electron-builder --mac --publish never",
-    "package:win": "bun run build && electron-builder --win --publish never",
-    "package:linux": "bun run build && electron-builder --linux --publish never"
+    "package": "bun run build && electron-builder --config electron-builder.pagespace.json",
+    "package:mac": "bun run build && electron-builder --config electron-builder.pagespace.json --mac --publish never",
+    "package:win": "bun run build && electron-builder --config electron-builder.pagespace.json --win --publish never",
+    "package:linux": "bun run build && electron-builder --config electron-builder.pagespace.json --linux --publish never",
+    "package:coder": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --publish never",
+    "package:coder:mac": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --mac --publish never",
+    "package:coder:win": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --win --publish never",
+    "package:coder:linux": "bun run build:coder && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --config electron-builder.coder.json --linux --publish never"
   },
   "dependencies": {
     "electron-store": "^10.0.0",
@@ -31,94 +38,12 @@
   "devDependencies": {
     "@types/node": "^20.17.12",
     "@types/ws": "^8.18.1",
+    "@vitest/coverage-v8": "^2.1.0",
     "electron": "^33.3.1",
     "electron-builder": "^26.0.8",
     "electron-vite": "^4.0.1",
     "eslint": "^9.36.0",
     "typescript": "^5.8.3",
     "typescript-eslint": "^8.59.0"
-  },
-  "build": {
-    "appId": "com.pagespace.app",
-    "productName": "PageSpace",
-    "npmRebuild": false,
-    "publish": {
-      "provider": "github",
-      "owner": "2witstudios",
-      "repo": "PageSpace"
-    },
-    "directories": {
-      "output": "dist-electron",
-      "buildResources": "assets"
-    },
-    "files": [
-      "out/**/*",
-      "src/**/*.html",
-      "assets/**/*",
-      "package.json"
-    ],
-    "mac": {
-      "category": "public.app-category.productivity",
-      "target": [
-        {
-          "target": "dmg",
-          "arch": [
-            "universal"
-          ]
-        },
-        {
-          "target": "zip",
-          "arch": [
-            "universal"
-          ]
-        }
-      ],
-      "icon": "assets/icon.icns",
-      "artifactName": "${productName}.${ext}",
-      "hardenedRuntime": true,
-      "gatekeeperAssess": false,
-      "entitlements": "build/entitlements.mac.plist",
-      "entitlementsInherit": "build/entitlements.mac.inherit.plist",
-      "extendInfo": {
-        "NSMicrophoneUsageDescription": "PageSpace needs microphone access for voice mode conversations."
-      },
-      "notarize": true
-    },
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        },
-        {
-          "target": "portable",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "icon": "assets/icon.ico",
-      "artifactName": "${productName}.${ext}"
-    },
-    "linux": {
-      "publish": null,
-      "target": [
-        "AppImage",
-        "deb",
-        "rpm"
-      ],
-      "category": "Office",
-      "icon": "assets/icon.png",
-      "artifactName": "${productName}.${ext}",
-      "maintainer": "support@pagespace.ai"
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
-    }
   }
 }

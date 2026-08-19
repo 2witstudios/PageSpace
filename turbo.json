@@ -49,6 +49,10 @@
       "dependsOn": ["build"],
       "outputs": ["dist-electron/**"]
     },
+    "package:coder": {
+      "cache": false,
+      "outputs": ["dist-electron-coder/**"]
+    },
     "capture": {
       "cache": false,
       "outputs": ["output/**"]
@@ -74,6 +78,7 @@
     "GOOGLE_AI_API_KEY",
     "OPENROUTER_DEFAULT_API_KEY",
     "PAGESPACE_URL",
+    "PAGESPACE_APP_VARIANT",
     "NEXT_PUBLIC_*"
   ]
 }

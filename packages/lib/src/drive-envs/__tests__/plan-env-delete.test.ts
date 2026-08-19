@@ -20,12 +20,12 @@ describe('planEnvDelete — the live-session guard', () => {
 
   it('given live sessions and force, should proceed to teardown — force is the ONLY thing that passes the guard', () => {
     const plan = planEnvDelete({ row: liveRow(), liveSessionCount: 3, force: true });
-    expect(plan).toEqual({ action: 'teardown_then_delete', sandboxId: 'pgs-env-abc', expectedInstanceId: 'inst-1' });
+    expect(plan).toEqual({ action: 'delete_then_teardown', sandboxId: 'pgs-env-abc', expectedInstanceId: 'inst-1' });
   });
 
   it('given ZERO live sessions, should proceed without needing force', () => {
     const plan = planEnvDelete({ row: liveRow(), liveSessionCount: 0, force: false });
-    expect(plan.action).toBe('teardown_then_delete');
+    expect(plan.action).toBe('delete_then_teardown');
   });
 
   it('given the guard trips, should decide BEFORE reading any pointer — an env with no Sprite is still refused', () => {
@@ -37,14 +37,14 @@ describe('planEnvDelete — the live-session guard', () => {
 });
 
 describe('planEnvDelete — what has to die first', () => {
-  it('given a live Sprite, should teardown_then_delete carrying the CAS instance', () => {
+  it('given a live Sprite, should delete_then_teardown carrying the CAS instance', () => {
     const plan = planEnvDelete({ row: liveRow(), liveSessionCount: 0, force: false });
-    expect(plan).toEqual({ action: 'teardown_then_delete', sandboxId: 'pgs-env-abc', expectedInstanceId: 'inst-1' });
+    expect(plan).toEqual({ action: 'delete_then_teardown', sandboxId: 'pgs-env-abc', expectedInstanceId: 'inst-1' });
   });
 
   it('given a live Sprite the platform reported no instance for, should still teardown with a null CAS', () => {
     const plan = planEnvDelete({ row: liveRow({ spriteInstanceId: null }), liveSessionCount: 0, force: false });
-    expect(plan).toEqual({ action: 'teardown_then_delete', sandboxId: 'pgs-env-abc', expectedInstanceId: null });
+    expect(plan).toEqual({ action: 'delete_then_teardown', sandboxId: 'pgs-env-abc', expectedInstanceId: null });
   });
 
   it('given a never-provisioned env, should delete_only', () => {
@@ -70,6 +70,6 @@ describe('planEnvDelete — what has to die first', () => {
       liveSessionCount: 0,
       force: false,
     });
-    expect(plan.action).toBe('teardown_then_delete');
+    expect(plan.action).toBe('delete_then_teardown');
   });
 });

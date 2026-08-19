@@ -217,10 +217,17 @@ describe('DELETE /envs/[envId] — the destructive verb', () => {
     expect(await response.json()).toMatchObject({ reason: 'live_sessions', liveSessionCount: 3 });
   });
 
-  it('given an unconfirmed teardown, should answer 503 — the env survives and a retry is right', async () => {
-    vi.mocked(deleteEnv).mockResolvedValue({ ok: false, reason: 'teardown_failed', detail: 'boom' } as never);
+  it('given a kill that could not be confirmed, should still answer 200 — the env IS deleted', async () => {
+    // There is no `teardown_failed` arm any more, and that is a deliberate
+    // consequence of killing the Sprite only AFTER the row is gone: by the time
+    // a kill can fail, the delete has already committed and the reclaim outbox
+    // owns the retry. Reporting 503 here would tell the client to retry a
+    // destructive verb that already succeeded. `spriteTornDown: false` carries
+    // the nuance instead — deleted, but this request did not stop the machine.
+    vi.mocked(deleteEnv).mockResolvedValue({ ok: true, spriteTornDown: false } as never);
     const response = await deleteEnvRoute(del(), envParams);
-    expect(response.status).toBe(503);
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ deleted: true, spriteTornDown: false });
   });
 
   it('given a plain member, should refuse before any delete is attempted', async () => {

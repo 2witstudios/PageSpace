@@ -108,6 +108,26 @@ export interface EmailBroadcastJobData {
   broadcastId: string;
 }
 
+/**
+ * Build-and-deploy a published app (Fly Machines, epic Phase 2).
+ *
+ * Carries only what identifies the work; every other fact (the Fly app name, the
+ * current machine, the previous digest) is re-read from `published_apps` by the
+ * worker, so a job that waited in the queue while the app changed underneath it
+ * acts on the app's real state rather than a stale snapshot.
+ */
+export interface AppBuildJobData {
+  publishedAppId: string;
+  /** The workspace source to build. Resolved against APP_BUILD_SOURCE_ROOT. */
+  sourceRef: string;
+  /**
+   * Set only by the build reconciler: 1-based count of automatic recoveries for
+   * this app. The next pass reads the max tag back out of pgboss.job/archive to
+   * know when the attempt budget is spent.
+   */
+  reconcileAttempt?: number;
+}
+
 // Discriminated union for addJob
 export type JobDataMap = {
   'ingest-file': IngestFileJobData;
@@ -121,6 +141,8 @@ export type JobDataMap = {
   'audit-chainer': Record<string, never>;
   'email-broadcast': EmailBroadcastJobData;
   'stuck-page-reconciler': Record<string, never>;
+  'app-build': AppBuildJobData;
+  'app-build-reconciler': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;

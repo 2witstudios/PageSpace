@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { sql } from 'drizzle-orm';
 import { stampColumns, revivedAgentSessionColumns } from '../agent-workspaces-store';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
 import { NOW, OWNER_ID, makeAgentSessionStore, makeSessionRecord } from './fakes';
@@ -63,6 +64,11 @@ describe('revivedAgentSessionColumns', () => {
     spriteInstanceId: 'inst-new',
     egressPolicyToken: 'tok',
     now: NOW,
+    // An SQL EXPRESSION, because the parameter's type refuses a bare `Date` —
+    // that refusal is what stops a caller silently dropping the monotonic
+    // `GREATEST(...)` the real stores build. The shape here is irrelevant; that
+    // the helper carries it through unchanged is the point.
+    storageLastBilledAt: sql`GREATEST("storageLastBilledAt", ${NOW})`,
   };
 
   it('should record the new Sprite identity', () => {
@@ -78,8 +84,16 @@ describe('revivedAgentSessionColumns', () => {
     // Not a lifecycle stamp, which is why it lives here: billing the elapsed
     // window against the dead generation's measured size would charge for a
     // filesystem that no longer exists.
-    const columns = revivedAgentSessionColumns({ ...base, stamps: {} });
-    expect(columns.storageLastBilledAt).toEqual(NOW);
+    //
+    // The VALUE is the caller's, not `now`'s: the store passes a monotonic
+    // `GREATEST(...)` expression, because `now` is captured before the provider
+    // IO and can be stale enough to drag the watermark back over a window a
+    // reconcile tick already billed. What this helper owes is to carry that
+    // value through — the direction is proven against real SQL in
+    // `sandbox-storage-billing.integration.test.ts`.
+    const restartedAt = sql`GREATEST("storageLastBilledAt", ${new Date('2026-07-02T00:00:00.000Z')})`;
+    const columns = revivedAgentSessionColumns({ ...base, storageLastBilledAt: restartedAt, stamps: {} });
+    expect(columns.storageLastBilledAt).toBe(restartedAt);
   });
 
   it('should apply the verdict\'s stamps alongside the identity, in ONE write', () => {

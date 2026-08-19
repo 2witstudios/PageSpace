@@ -67,6 +67,7 @@ import {
   clearCustomHost,
   getActiveDomainRecords,
 } from '../custom-domain-mirror';
+import { selectPrimaryActiveDomain } from '@pagespace/lib/canvas/primary-host';
 
 // Cast helpers (same approach as publish-page.test.ts)
 type DriveRow = NonNullable<Awaited<ReturnType<typeof db.query.drives.findFirst>>>;
@@ -766,11 +767,11 @@ describe('getActiveDomainRecords', () => {
     expect(records).toHaveLength(0);
   });
 
-  it('excludes platformOwned rows even when active, so they never win primary-host selection', async () => {
+  it('excludes UN-FLAGGED platformOwned rows even when active, so an alias never wins primary-host selection', async () => {
     const createdAt = new Date('2026-01-01T00:00:00.000Z');
     mockSelect([
-      { hostname: 'pagespace.ai', status: 'active', createdAt, platformOwned: true },
-      { hostname: 'custom.example.com', status: 'active', createdAt, platformOwned: false },
+      { hostname: 'pagespace.ai', status: 'active', createdAt, platformOwned: true, isPrimary: false },
+      { hostname: 'custom.example.com', status: 'active', createdAt, platformOwned: false, isPrimary: false },
     ]);
 
     const records = await getActiveDomainRecords('drive-1');
@@ -779,8 +780,70 @@ describe('getActiveDomainRecords', () => {
     expect(records[0].hostname).toBe('custom.example.com');
   });
 
-  it('is a no-op array when the only active domain is platformOwned', async () => {
-    mockSelect([{ hostname: 'pagespace.ai', status: 'active', createdAt: new Date(), platformOwned: true }]);
+  it('is a no-op array when the only active domain is an un-flagged platformOwned alias', async () => {
+    mockSelect([
+      { hostname: 'pagespace.ai', status: 'active', createdAt: new Date(), platformOwned: true, isPrimary: false },
+    ]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(0);
+  });
+
+  it('admits a platformOwned row an admin explicitly flagged isPrimary — docs.pagespace.ai is the canonical host', async () => {
+    mockSelect([
+      {
+        hostname: 'docs.pagespace.ai',
+        status: 'active',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        platformOwned: true,
+        isPrimary: true,
+      },
+    ]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    expect(records).toHaveLength(1);
+    expect(records[0].hostname).toBe('docs.pagespace.ai');
+    expect(records[0].isPrimary).toBe(true);
+  });
+
+  it('lets a flagged platform domain beat an earlier-created ordinary domain for canonical URLs', async () => {
+    mockSelect([
+      {
+        hostname: 'ordinary.example.com',
+        status: 'active',
+        createdAt: new Date('2020-01-01T00:00:00.000Z'),
+        platformOwned: false,
+        isPrimary: false,
+      },
+      {
+        hostname: 'blog.pagespace.ai',
+        status: 'active',
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        platformOwned: true,
+        isPrimary: true,
+      },
+    ]);
+
+    const records = await getActiveDomainRecords('drive-1');
+
+    // Both survive the filter; selectPrimaryActiveDomain then prefers the
+    // explicitly-flagged one over the earliest-created default.
+    expect(records).toHaveLength(2);
+    expect(selectPrimaryActiveDomain(records)?.hostname).toBe('blog.pagespace.ai');
+  });
+
+  it('still ignores a flagged platform domain that is not yet active', async () => {
+    mockSelect([
+      {
+        hostname: 'docs.pagespace.ai',
+        status: 'provisioning',
+        createdAt: new Date(),
+        platformOwned: true,
+        isPrimary: true,
+      },
+    ]);
 
     const records = await getActiveDomainRecords('drive-1');
 

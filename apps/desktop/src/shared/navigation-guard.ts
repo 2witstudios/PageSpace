@@ -77,9 +77,6 @@ export function isTrustedSenderUrl(senderUrl: string | undefined | null, appOrig
   return isAllowedNavigation(senderUrl, appOrigin);
 }
 
-/** The app's own deep-link scheme, used by the OS deep-link handler. */
-export const APP_DEEP_LINK_SCHEME = 'pagespace:';
-
 /**
  * Outcome of evaluating a renderer-initiated navigation:
  * - `allow`        — same-origin app navigation; let it proceed.
@@ -97,11 +94,16 @@ export type NavigationDecision = 'allow' | 'deep-link' | 'open-external' | 'bloc
  * blocked. Callers must handle an unparseable app origin (fail closed) before
  * calling — with a bad origin, same-origin can never match, so an off-origin
  * value here would still be classified, not silently allowed.
+ *
+ * `deepLinkScheme` is required rather than defaulted. This shell builds more
+ * than one app, and a default meaning "pagespace:" would silently let the coder
+ * build honour PageSpace's deep links — which carry single-use auth exchange
+ * codes.
  */
 export function classifyNavigation(
   targetUrl: string,
   appOrigin: string,
-  deepLinkScheme: string = APP_DEEP_LINK_SCHEME,
+  deepLinkScheme: string,
 ): NavigationDecision {
   if (isAllowedNavigation(targetUrl, appOrigin)) return 'allow';
 
