@@ -398,6 +398,53 @@ describe('readFramesFrom — the cursor', () => {
     });
   });
 
+  it('given a row whose payload disagrees with its frameCount, stops there and truncates', async () => {
+    // The row claims two frames and carries three. Nothing in the SEQ line reveals it: the
+    // terminator that follows is laid out against `frameCount`, so a walk that trusted the
+    // count would run clean to the end, hand the follower a `finish`, and end the stream on a
+    // message that is silently three frames out of step with its own cursor.
+    table = [
+      row(0, 2),
+      { ...row(2, 2), frames: [frame(2), frame(3), frame(4)] },
+      { ...row(4, 1), frames: [{ type: 'finish' }] },
+    ];
+
+    const read = await readFramesFrom({ messageId: 'msg-1', fromSeq: 0 });
+
+    assert({
+      given: 'a row whose frames array is longer than its recorded frameCount, followed by a terminator',
+      should: 'return the good prefix only, truncate, and never deliver the terminator',
+      actual: {
+        frames: deltas(read.frames),
+        nextSeq: read.nextSeq,
+        truncated: read.truncated,
+        types: read.frames.map((f) => (f as { type: string }).type),
+      },
+      expected: {
+        frames: ['f0', 'f1'],
+        nextSeq: 2,
+        truncated: true,
+        types: ['text-delta', 'text-delta'],
+      },
+    });
+  });
+
+  it('given a row carrying FEWER frames than it claims, stops there too', async () => {
+    // The mirror case. Under-delivery is the more dangerous direction: the frames simply go
+    // missing while `nextSeq` advances past them, so the follower asks for what comes after a
+    // gap it never knew it had.
+    table = [{ ...row(0, 3), frames: [frame(0)] }, row(3, 1)];
+
+    const read = await readFramesFrom({ messageId: 'msg-1', fromSeq: 0 });
+
+    assert({
+      given: 'a row whose frames array is shorter than its recorded frameCount',
+      should: 'return nothing and tell the reader to reload rather than advance over the gap',
+      actual: { frames: read.frames.length, nextSeq: read.nextSeq, truncated: read.truncated, empty: read.empty },
+      expected: { frames: 0, nextSeq: 0, truncated: true, empty: false },
+    });
+  });
+
   it('scopes every read to the messageId asked for', async () => {
     table = [row(0, 2), { ...row(0, 2), messageId: 'msg-other' }];
 

@@ -300,7 +300,26 @@ export const readFramesFrom = async ({
       truncated = true;
       break;
     }
-    collected.push(...(row.frames as UIMessageChunk[]));
+    // The row's OWN two descriptions of itself must agree. `seq` advances by the recorded
+    // `frameCount` while the append takes every entry in `frames`, so a row where they differ
+    // shifts `collected` out of step with the seq line for the rest of the walk — the leading
+    // slice below cuts in the wrong place, `nextSeq` names a frame the reader never got, and
+    // nothing downstream can see it happened. Worse, it is INVISIBLE to the contiguity test:
+    // later rows are laid out against `frameCount`, so the walk runs to a clean completion and
+    // a surviving terminator tells the follower the stream finished rather than to reload.
+    // Stop and report truncation, exactly as for a hole.
+    const frameEntries = row.frames as UIMessageChunk[];
+    if (frameEntries.length !== row.frameCount) {
+      loggers.ai.warn('frame-log-cursor: row frame count disagrees with its payload — stopping', {
+        messageId,
+        rowSeq: row.fromSeq,
+        frameCount: row.frameCount,
+        payloadLength: frameEntries.length,
+      });
+      truncated = true;
+      break;
+    }
+    collected.push(...frameEntries);
     seq = row.fromSeq + row.frameCount;
   }
 
