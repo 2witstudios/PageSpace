@@ -182,6 +182,14 @@ export interface SpriteHolderProvisionDeps {
    * awake right after a provision, capture its used bytes onto the holder's row so
    * the storage reconcile can bill them — without ever waking a hibernating
    * Sprite. Best-effort and fire-and-forget; omitting it disables measurement.
+   *
+   * Fired ONLY on the `create` arm, and the reason is the wake rule rather than
+   * tidiness: a `du` is an exec, and an exec is the only way to wake a
+   * hibernated Sprite, so measuring is safe exactly where the VM is known to be
+   * running — right after `host.provision` booted it. `adopt` also clears the
+   * row's measurement but cannot prove its VM is awake (its evidence is a
+   * control-plane read), so it does not measure; `resume` reconnects to the SAME
+   * filesystem, so its existing measurement still describes it.
    */
   measureStorage?: (input: { holderId: string; handle: SandboxHandle }) => Promise<void>;
   now: () => Date;
@@ -552,6 +560,26 @@ export async function ensureSpriteHolderSandbox({
         if (outcome.kind === 'resumed') return { ok: true, sandboxId: outcome.sandboxId, resumed: true };
         return { ok: false, reason: 'race_lost' };
       }
+
+      // DELIBERATELY NOT MEASURED HERE, though this arm nulls the row's
+      // measurement columns and therefore leaves it billing the 0 floor.
+      //
+      // A `du` is an exec, and an exec IS the wake for a hibernated Sprite —
+      // there is no wake API (see `stream()` in `sprite-sandbox-host.ts`). The
+      // `create` arm may measure because `host.provision` has just booted the
+      // VM; here the only thing that established the Sprite exists is
+      // `probeRecordedSprite`'s `host.attach`, which is a control-plane
+      // `client.get` and says NOTHING about whether the machine is running. So
+      // measuring here could resume a paused VM and restart its runtime
+      // billing — the Phase-3 keep-awake bug that `sandbox-storage-reconcile.ts`
+      // and this seam's own contract both forbid outright.
+      //
+      // Under-billing that row until something else measures it is the accepted
+      // direction everywhere in this meter; over-billing a machine nobody asked
+      // to run is not. Repairing the cleared measurement belongs to a path that
+      // already knows the VM is awake — tracked with the other unretried
+      // measurement cases in issue #2443.
+
       return { ok: true, sandboxId: plan.sandboxId, resumed: true };
     }
 

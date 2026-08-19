@@ -33,6 +33,7 @@ import { getSandboxSessionSecret } from '../sandbox/machine-session-manager';
 import { resolveSandboxNetworkOptions } from '../sandbox/network-options';
 import { getConfiguredEgressIpTag } from '../sandbox/egress-ip';
 import { deriveDriveEnvSpriteKey } from '../../drive-envs/env-sprite-key';
+import { envStorageMeasureSeam } from './env-storage-measure';
 import {
   ensureSpriteHolderSandbox,
   type EnsureSpriteHolderSandboxResult,
@@ -59,7 +60,13 @@ export interface DriveEnvPayer {
 /** The store slice env provisioning needs — the Sprite-holder methods and nothing else. */
 export type DriveEnvProvisionStore = Pick<
   DriveEnvStore,
-  'updateSpriteIdentity' | 'applyStamps' | 'reloadSpritePointer' | 'enqueueReclaim'
+  | 'updateSpriteIdentity'
+  | 'applyStamps'
+  | 'reloadSpritePointer'
+  | 'enqueueReclaim'
+  // The measurement writer. In the slice because provisioning is the only moment
+  // an env's storage is measured at all — see `measureStorage` below.
+  | 'recordStorageMeasurement'
 >;
 
 /**
@@ -144,6 +151,26 @@ export function buildEnvProvisionDeps({
       if (isSandboxAvailable(payer.tier)) return { allowed: true };
       return { allowed: false, denial: 'not_authorized', reason: 'tier_ineligible' };
     },
+    /**
+     * Opportunistic storage measurement — the WRITE side of the meter that bills
+     * this env, and the reason an environment is not free.
+     *
+     * Wired HERE rather than in any one app's composition precisely because this
+     * module is the single path every provisioner reaches: the web tier's
+     * rebuild, and a session's ensure in both the web and realtime tiers. A copy
+     * per composition would be a copy per composition to forget, and forgetting
+     * it is silent — the storage reconcile only READS
+     * `drive_envs.storageMeasuredBytes`, so an env with no writer prices at the
+     * never-measured 0 floor forever while the cron keeps advancing its
+     * watermark. No error, no failing test, just an environment that is free.
+     *
+     * Fires on the `create` arm only, against a Sprite the provisioner has just
+     * booted. `env-storage-measure.ts` explains why `adopt` deliberately does
+     * not: a `du` is an exec, and an exec is the only way to wake a hibernated
+     * Sprite, so measuring where the VM's state is unproven would recreate the
+     * keep-awake billing bug.
+     */
+    measureStorage: envStorageMeasureSeam(store),
     now: () => new Date(),
   };
 }

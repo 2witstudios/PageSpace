@@ -16,6 +16,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import { assert } from '../../sandbox/__tests__/riteway';
 import { ensureSpriteHolderSandbox, type SpriteHolderProvisionDeps, type SpriteHolderStore } from '../agent-workspace-sprite';
 import type { SpriteHolderLifecycleRow } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { stampColumns } from '../agent-workspaces-store';
@@ -25,7 +26,15 @@ import { makeSpriteHost, NOW, SECRET, TENANT_ID, type FakeSpriteHost } from './f
 const ENV_ID = 'env-1';
 const ENV_KEY = deriveDriveEnvSpriteKey({ tenantId: TENANT_ID, envId: ENV_ID, secret: SECRET });
 
-function makeEnvRow(over: Partial<SpriteHolderLifecycleRow> = {}): SpriteHolderLifecycleRow {
+/**
+ * The provisioner's row slice, plus the billing watermark the store writes
+ * alongside the identity. `storageLastBilledAt` is not part of
+ * `SpriteHolderLifecycleRow` — the provisioner never reads it — but the store
+ * DOES write it, so the fake has to carry it to model that write.
+ */
+type FakeHolderRow = SpriteHolderLifecycleRow & { storageLastBilledAt?: Date };
+
+function makeEnvRow(over: Partial<FakeHolderRow> = {}): FakeHolderRow {
   return {
     holderId: ENV_ID,
     spriteKey: null,
@@ -42,7 +51,7 @@ function makeEnvRow(over: Partial<SpriteHolderLifecycleRow> = {}): SpriteHolderL
 
 interface FakeEnvStore {
   store: SpriteHolderStore;
-  rows: Map<string, SpriteHolderLifecycleRow>;
+  rows: Map<string, FakeHolderRow>;
   reclaims: Map<string, string | null>;
 }
 
@@ -52,7 +61,7 @@ interface FakeEnvStore {
  * production CAS would refuse makes every concurrency test agree with a bug.
  */
 function makeEnvStore(seed: SpriteHolderLifecycleRow[] = [makeEnvRow()]): FakeEnvStore {
-  const rows = new Map(seed.map((row) => [row.holderId, row]));
+  const rows = new Map<string, FakeHolderRow>(seed.map((row) => [row.holderId, row]));
   const reclaims = new Map<string, string | null>();
 
   const store: SpriteHolderStore = {
@@ -68,6 +77,15 @@ function makeEnvStore(seed: SpriteHolderLifecycleRow[] = [makeEnvRow()]): FakeEn
         sandboxId: input.sandboxId,
         spriteInstanceId: input.spriteInstanceId,
         egressPolicyToken: input.egressPolicyToken,
+        // The MONOTONIC billing-watermark reset, mirroring the real stores'
+        // `GREATEST(column, <now>)`. Modelled here rather than assigned because
+        // `now` is captured before the provider IO and can be older than a
+        // watermark a reconcile tick already advanced — a fake that assigned
+        // would let that guard be deleted with this whole suite still green.
+        storageLastBilledAt:
+          row.storageLastBilledAt !== undefined && row.storageLastBilledAt > input.now
+            ? row.storageLastBilledAt
+            : input.now,
         // Through the REAL translator, not a spread of `input.stamps`. Its
         // whole job is that an ABSENT key leaves a column alone while an
         // explicit `null` clears it, and a spread collapses the two the moment
@@ -299,5 +317,108 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     });
 
     expect(measured).toEqual([ENV_ID]);
+  });
+
+  it('does NOT measure on the ADOPT arm, even though that arm clears the measurement', async () => {
+    // The wake rule wins over the coverage gap. A `du` is an exec, and an exec is
+    // the only way to wake a hibernated Sprite — `adopt`'s evidence that the VM
+    // exists is `probeRecordedSprite`'s control-plane `attach`, which says
+    // nothing about whether it is RUNNING. Measuring here could resume a paused
+    // machine and restart its runtime billing, which is worse than the 0 floor
+    // this leaves behind: under-billing is the accepted direction in this meter,
+    // waking a VM nobody asked to run is not.
+    const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-old' });
+    const store = makeEnvStore([provisionedEnv]);
+    const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-new' } } });
+    const measured: string[] = [];
+
+    const result = await ensureSpriteHolderSandbox({
+      row: provisionedEnv,
+      intent: 'ensure',
+      deps: makeEnvDeps(
+        { store, host },
+        {
+          measureStorage: async ({ holderId }) => {
+            measured.push(holderId);
+          },
+        },
+      ),
+    });
+
+    assert({
+      given: 'an env whose Sprite was replaced under the same name, so the plan is ADOPT',
+      should: 'adopt the live instance but run NO `du` — its VM cannot be proven awake',
+      actual: { result, measured, instance: store.rows.get(ENV_ID)?.spriteInstanceId },
+      expected: {
+        result: { ok: true, sandboxId: 'pgs-env-1', resumed: true },
+        measured: [],
+        instance: 'inst-new',
+      },
+    });
+    expect(host.calls.provision).toHaveLength(0);
+  });
+
+  it('should NOT measure on a plain RESUME either — the same disk, and the same wake rule', async () => {
+    const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-1' });
+    const store = makeEnvStore([provisionedEnv]);
+    const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-1' } } });
+    const measured: string[] = [];
+
+    await ensureSpriteHolderSandbox({
+      row: provisionedEnv,
+      intent: 'ensure',
+      deps: makeEnvDeps(
+        { store, host },
+        {
+          measureStorage: async ({ holderId }) => {
+            measured.push(holderId);
+          },
+        },
+      ),
+    });
+
+    assert({
+      given: 'an env reconnecting to the SAME Sprite instance',
+      should: 'skip the measurement — resume clears nothing, so a `du` here would buy nothing and might wake it',
+      actual: measured,
+      expected: [],
+    });
+  });
+
+  it('NEVER drags a holder\'s billing watermark backwards when it provisions', async () => {
+    // The anti-double-bill guard, exercised through the fake store so it is
+    // pinned in the unit run and not only in the DB-backed suite (which is
+    // skippable locally). `ensureSpriteHolderSandbox` captures its `now` BEFORE
+    // the provider IO, so a provision can land carrying a timestamp older than a
+    // watermark a reconcile tick has already advanced — assigning it would
+    // re-bill the span between them on the next tick.
+    const alreadyBilledThrough = new Date(NOW.getTime() + 60_000);
+    const row = makeEnvRow({ storageLastBilledAt: alreadyBilledThrough });
+    const store = makeEnvStore([row]);
+    const host = makeSpriteHost();
+
+    await ensureSpriteHolderSandbox({ row, intent: 'ensure', deps: makeEnvDeps({ store, host }) });
+
+    assert({
+      given: 'a provision landing with a timestamp older than what a tick already billed through',
+      should: 'leave the later watermark alone — the reset is monotonic, never an assignment',
+      actual: store.rows.get(ENV_ID)?.storageLastBilledAt,
+      expected: alreadyBilledThrough,
+    });
+  });
+
+  it('still moves the watermark FORWARD on an ordinary provision', async () => {
+    const row = makeEnvRow({ storageLastBilledAt: new Date(NOW.getTime() - 60_000) });
+    const store = makeEnvStore([row]);
+    const host = makeSpriteHost();
+
+    await ensureSpriteHolderSandbox({ row, intent: 'ensure', deps: makeEnvDeps({ store, host }) });
+
+    assert({
+      given: 'a provision on a holder whose watermark predates it',
+      should: 'advance it — a new generation must not inherit the dead one\'s window',
+      actual: store.rows.get(ENV_ID)?.storageLastBilledAt,
+      expected: NOW,
+    });
   });
 });

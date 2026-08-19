@@ -24,6 +24,7 @@
  *    (moving a thread is a fork).
  */
 
+import type { SQL } from 'drizzle-orm';
 import { planSessionReopen, type SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { withWorkspaceLock } from './workspace-lock';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
@@ -393,13 +394,36 @@ export function revivedAgentSessionColumns(input: {
   egressPolicyToken: string | null;
   stamps: SpriteHolderRowStamps;
   now: Date;
+  /**
+   * The watermark to write — an `SQL` EXPRESSION, never a bare `Date`, and the
+   * type is the enforcement.
+   *
+   * The monotonic guarantee lives in the caller's `GREATEST(...)` because only
+   * the store has the table and `sql` in scope (this helper stays pure and free
+   * of the DB graph). That split is safe only if a caller cannot accidentally
+   * pass `now` and silently reopen the double-bill the guard closes — so the
+   * parameter refuses one. A future third caller gets a type error, not a
+   * production regression with no red test.
+   */
+  storageLastBilledAt: SQL;
 }) {
   return {
     spriteKey: input.spriteKey,
     sandboxId: input.sandboxId,
     spriteInstanceId: input.spriteInstanceId,
     egressPolicyToken: input.egressPolicyToken,
-    storageLastBilledAt: input.now,
+    // MONOTONIC, and supplied by the caller as an SQL expression rather than
+    // derived from `now` here.
+    // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
+    // IO, so by the time this write lands it can be tens of seconds stale — and a
+    // reconcile tick that charged through a LATER instant may already have
+    // advanced this column. Assigning `now` would drag the watermark backwards
+    // past what was just billed, and the next tick would re-bill the difference.
+    // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
+    // (a new generation must not inherit the old one's window) without ever
+    // moving the watermark down. The parameter's type refuses a bare `Date`, so
+    // this cannot be reopened by a caller that forgets.
+    storageLastBilledAt: input.storageLastBilledAt,
     updatedAt: input.now,
     ...stampColumns(input.stamps),
   };
@@ -626,7 +650,19 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     }) {
       const updated = await db
         .update(agentWorkspaces)
-        .set(revivedAgentSessionColumns({ spriteKey, sandboxId, spriteInstanceId, egressPolicyToken, stamps, now }))
+        .set(
+          revivedAgentSessionColumns({
+            spriteKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            stamps,
+            now,
+            // The monotonic reset, built HERE because this is where the table and
+            // `sql` are in scope — the helper stays pure and free of the DB graph.
+            storageLastBilledAt: sql`GREATEST(${agentWorkspaces.storageLastBilledAt}, ${sql.param(now, agentWorkspaces.storageLastBilledAt)})`,
+          }),
+        )
         .where(
           and(
             eq(agentWorkspaces.id, workspaceId),

@@ -281,6 +281,14 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   // measurement path — is both awake and worth measuring. Throttled per session,
   // and deliberately not awaited: a billing observation must never delay opening
   // a shell.
+  //
+  // On the CREATE arm this doubles up with the provisioning hook: that arm nulls
+  // `storageMeasuredAt` in the same write, so the throttle below reads null and
+  // always fires, and two `du` walks run concurrently on the same fresh sandbox.
+  // Pre-existing and harmless in value — both read the same empty disk, each is
+  // capped at 20s, and neither is awaited — but it is two execs where one would
+  // do. Suppressing it needs the provisioner to report whether it measured,
+  // which is a change to the shared holder core.
   void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
 
   return { ok: true, sandboxId: result.sandboxId };
