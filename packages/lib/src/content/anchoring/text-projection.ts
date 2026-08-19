@@ -92,8 +92,22 @@ function createEmitter() {
 
 type Emitter = ReturnType<typeof createEmitter>;
 
+/**
+ * U+00A0 counts, so a literal non-breaking space and the `&nbsp;` that renders
+ * identically to it collapse the same way. Without that they project to
+ * different characters, and `convert-content-mode` — which round-trips content
+ * through Turndown and marked and can swap one encoding for the other — would
+ * shift every offset after the first one it touched.
+ */
 function isWhitespace(char: string): boolean {
-  return char === ' ' || char === '\t' || char === '\n' || char === '\r' || char === '\f';
+  return (
+    char === ' ' ||
+    char === '\t' ||
+    char === '\n' ||
+    char === '\r' ||
+    char === '\f' ||
+    char === '\u00a0'
+  );
 }
 
 function isTagNameChar(char: string): boolean {
@@ -116,7 +130,11 @@ function decodeEntity(html: string, index: number): { value: string; length: num
       return null;
     }
     const code = parseInt(digits, isHex ? 16 : 10);
-    if (!Number.isFinite(code) || code < 1 || code > 0x10ffff) {
+    // NUL and lone surrogates are rejected rather than decoded: Postgres stores
+    // neither in text or jsonb, and an anchor's `exact` is headed for a jsonb
+    // column. Leaving the entity as literal text keeps the projection storable.
+    const isSurrogate = code >= 0xd800 && code <= 0xdfff;
+    if (!Number.isFinite(code) || code < 1 || code > 0x10ffff || isSurrogate) {
       return null;
     }
     return { value: String.fromCodePoint(code), length };

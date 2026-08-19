@@ -76,6 +76,29 @@ describe('projectContent', () => {
     expect(projectContent('<div data-x = "y">quoted</div>', 'html')).toBe('quoted');
   });
 
+  it('projects a literal non-breaking space exactly like &nbsp;', () => {
+    // convert-content-mode round-trips through Turndown and marked and can swap
+    // one encoding for the other. If they projected differently, that round
+    // trip would silently shift every offset after the first one it touched.
+    const entity = projectContent('<p>a&nbsp;b&nbsp;&nbsp;c</p>', 'html');
+    const literal = projectContent('<p>a\u00a0b\u00a0\u00a0c</p>', 'html');
+
+    expect(entity).toBe(literal);
+    expect(entity).toBe('a b c');
+    expect(entity).not.toContain('\u00a0');
+  });
+
+  it('leaves code points Postgres cannot store as literal text', () => {
+    // An anchor's `exact` ends up in a jsonb column, and neither NUL nor a lone
+    // surrogate survives that. Decoding them would produce a projection that
+    // cannot be persisted at all.
+    expect(projectContent('<p>a&#0;b</p>', 'html')).toBe('a&#0;b');
+    expect(projectContent('<p>a&#xD800;b</p>', 'html')).toBe('a&#xD800;b');
+    expect(projectContent('<p>a&#xDFFF;b</p>', 'html')).toBe('a&#xDFFF;b');
+    // A real astral character still decodes.
+    expect(projectContent('<p>a&#x1F600;b</p>', 'html')).toBe('a\u{1F600}b');
+  });
+
   it('drops raw-text elements whatever their case', () => {
     expect(projectContent('<p>a</p><SCRIPT>bad</SCRIPT><p>b</p>', 'html')).toBe('a\nb');
     expect(projectContent('<p>a</p><StYlE>.x{}</StYlE><p>b</p>', 'html')).toBe('a\nb');
