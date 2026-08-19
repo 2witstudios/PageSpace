@@ -122,6 +122,25 @@ describe('validateCustomDomain', () => {
     expect(validateCustomDomain('pagespace.ai', { allowPlatformDomain: true })).toEqual({ valid: true });
   });
 
+  it('accepts docs.pagespace.ai and blog.pagespace.ai when allowPlatformDomain is true', () => {
+    expect(validateCustomDomain('docs.pagespace.ai', { allowPlatformDomain: true })).toEqual({ valid: true });
+    expect(validateCustomDomain('blog.pagespace.ai', { allowPlatformDomain: true })).toEqual({ valid: true });
+  });
+
+  it('still rejects docs.pagespace.ai when allowPlatformDomain is false', () => {
+    expect(validateCustomDomain('docs.pagespace.ai').valid).toBe(false);
+    expect(validateCustomDomain('docs.pagespace.ai', { allowPlatformDomain: false }).valid).toBe(false);
+  });
+
+  it('rejects an unlisted *.pagespace.ai host even when allowPlatformDomain is true — the allowlist is exact-match', () => {
+    // The bypass must never generalize to a suffix test: any admitted
+    // *.pagespace.ai origin can read/write the non-httpOnly `ps_logged_in`
+    // cookie for every other *.pagespace.ai origin.
+    for (const host of ['help.pagespace.ai', 'app.pagespace.ai', 'docs.blog.pagespace.ai', 'xdocs.pagespace.ai']) {
+      expect(validateCustomDomain(host, { allowPlatformDomain: true }).valid).toBe(false);
+    }
+  });
+
   it('still rejects pagespace.site when allowPlatformDomain is true (not in PLATFORM_OWNED_DOMAINS)', () => {
     const result = validateCustomDomain('pagespace.site', { allowPlatformDomain: true });
     expect(result.valid).toBe(false);
