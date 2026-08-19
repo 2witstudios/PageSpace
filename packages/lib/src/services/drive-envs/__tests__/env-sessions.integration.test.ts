@@ -293,6 +293,60 @@ describe('a session inside an environment — provisioning', () => {
     expect(env!.spriteInstanceId).toBe(host.live.get(envKey)!.instanceId);
   });
 
+  it('given TWO sessions in ONE env, should SEE EACH OTHER\'S FILES — the point of a shared environment', async () => {
+    // The sandboxId matching is the mechanism; this is the thing users actually
+    // asked for. It is asserted through the same door the tooling uses —
+    // `host.attach(sandboxId)` — because `machine-fs`, `machine-diff`, the git
+    // runners and the shell bridge are ALL handle-keyed. None of them learned
+    // anything about environments, and this is why they did not have to: two
+    // sessions that resolve one sandbox resolve one disk, by construction.
+    const envId = await seedEnv();
+    const envKey = deriveDriveEnvSpriteKey({ tenantId: payerId, envId, secret: SECRET });
+    sandboxIds.add(envKey);
+    const author = await spawnInEnv(envId);
+    const reader = await spawnInEnv(envId);
+    const host = makeSpriteHost();
+
+    const authorSandbox = await ensureForSession(author, host);
+    const readerSandbox = await ensureForSession(reader, host);
+    expect(authorSandbox.ok && readerSandbox.ok).toBe(true);
+    if (!authorSandbox.ok || !readerSandbox.ok) return;
+
+    // One session writes...
+    const authorHandle = await host.host.attach({ sandboxId: authorSandbox.sandboxId });
+    await authorHandle!.writeFiles([{ path: '/home/user/notes.md', content: 'written by the first session' }]);
+
+    // ...the other reads it back, having resolved its OWN handle from its OWN
+    // session row. Nothing was threaded between them.
+    const readerHandle = await host.host.attach({ sandboxId: readerSandbox.sandboxId });
+    expect((await readerHandle!.readFile({ path: '/home/user/notes.md' }))?.toString()).toBe(
+      'written by the first session',
+    );
+  });
+
+  it('given a session in a DIFFERENT env, should NOT see those files — sharing is per environment, not global', async () => {
+    // The other half of the claim. Two envs fold two Sprite names, so they are
+    // two VMs and two disks; an env that leaked into its neighbour would be a
+    // cross-tenant filesystem read, not a convenience.
+    const [envId, otherEnvId] = [await seedEnv(), await seedEnv()];
+    for (const id of [envId, otherEnvId]) {
+      sandboxIds.add(deriveDriveEnvSpriteKey({ tenantId: payerId, envId: id, secret: SECRET }));
+    }
+    const host = makeSpriteHost();
+
+    const inside = await ensureForSession(await spawnInEnv(envId), host);
+    const outside = await ensureForSession(await spawnInEnv(otherEnvId), host);
+    expect(inside.ok && outside.ok).toBe(true);
+    if (!inside.ok || !outside.ok) return;
+    expect(inside.sandboxId).not.toBe(outside.sandboxId);
+
+    const insideHandle = await host.host.attach({ sandboxId: inside.sandboxId });
+    await insideHandle!.writeFiles([{ path: '/home/user/secret.txt', content: 'private to this env' }]);
+
+    const outsideHandle = await host.host.attach({ sandboxId: outside.sandboxId });
+    expect(await outsideHandle!.readFile({ path: '/home/user/secret.txt' })).toBeNull();
+  });
+
   it('given an env-bound session, should never mint a Sprite under the SESSION keyspace', async () => {
     // The failure this rules out is expensive and silent: a session-arm
     // provision mints a real VM under `agent-session-sprite:v2` and only THEN
