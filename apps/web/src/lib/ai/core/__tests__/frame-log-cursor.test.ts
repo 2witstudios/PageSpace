@@ -12,6 +12,9 @@ interface Row { messageId: string; fromSeq: number; frameCount: number; frames: 
 let table: Row[] = [];
 let seekError: Error | null = null;
 let rangeError: Error | null = null;
+/** Fails the metadata-shaped queries only (the emptiness probe and the index pass) — the seek
+ *  itself succeeds, which is the one combination the two knobs above cannot express. */
+let indexError: Error | null = null;
 /**
  * Every query the module issued, in order — so a case can assert on WHAT WAS FETCHED rather
  * than only on what was returned. That distinction is the entire point of the byte budget: an
@@ -44,6 +47,7 @@ vi.mock('@pagespace/db/db', () => ({
           return [{ fromSeq: highest }];
         }
         if (rangeError && isPayload) throw rangeError;
+        if (indexError && !isPayload) throw indexError;
         if (seekError && !isPayload) throw seekError;
         return rows;
       };
@@ -53,20 +57,27 @@ vi.mock('@pagespace/db/db', () => ({
         return rows;
       };
 
-      const chain = (cond: Cond) => ({
-        orderBy: () => Object.assign(
-          Promise.resolve(null).then(() => record(cond, undefined, run(cond) as unknown[])),
-          { limit: (n: number) => Promise.resolve(record(cond, n, (run(cond) as Row[]).slice(0, n))) },
-        ),
-        // BOTH handlers forwarded. `await` calls `then(resolve, reject)`, so a thenable that
-        // drops the second argument swallows every rejection and the await hangs forever —
-        // which is what a failed-read case looks like from the outside: a 5s timeout, not a
-        // failure.
-        then: (resolve: (rows: unknown) => unknown, reject?: (err: unknown) => unknown) =>
-          Promise.resolve(null)
-            .then(() => record(cond, undefined, run(cond) as unknown[]))
-            .then(resolve, reject),
-      });
+      // A query is consumed one of two ways: awaited DIRECTLY (the seek and the payload pass)
+      // or through `.limit(n)` (the emptiness probe and the index pass). Execution is deferred
+      // to whichever path consumes it — an eager base promise here would run the query a
+      // second time as an orphan, and every mocked failure would surface once as the rejection
+      // the case asserts on and once more as an unhandled one.
+      const chain = (cond: Cond) => {
+        const runRecord = (): unknown[] => record(cond, undefined, run(cond) as unknown[]);
+        return {
+          orderBy: () => ({
+            then: (resolve: (rows: unknown) => unknown, reject?: (err: unknown) => unknown) =>
+              Promise.resolve(null).then(runRecord).then(resolve, reject),
+            limit: (n: number) => Promise.resolve(record(cond, n, (run(cond) as Row[]).slice(0, n))),
+          }),
+          // BOTH handlers forwarded. `await` calls `then(resolve, reject)`, so a thenable that
+          // drops the second argument swallows every rejection and the await hangs forever —
+          // which is what a failed-read case looks like from the outside: a 5s timeout, not a
+          // failure.
+          then: (resolve: (rows: unknown) => unknown, reject?: (err: unknown) => unknown) =>
+            Promise.resolve(null).then(runRecord).then(resolve, reject),
+        };
+      };
 
       return { from: () => ({ where: (cond: Cond) => chain(cond) }) };
     },
@@ -122,6 +133,7 @@ beforeEach(() => {
   issued = [];
   seekError = null;
   rangeError = null;
+  indexError = null;
 });
 
 /** Rows the PAYLOAD query actually pulled out of the database this tick. */
@@ -340,7 +352,39 @@ describe('readFramesFrom — the cursor', () => {
     });
   });
 
-  it('given the range read fails, degrades the same way', async () => {
+  it('given the index read fails after a successful seek, reports neither frames nor emptiness', async () => {
+    table = [row(0, 2)];
+    indexError = new Error('db down');
+
+    const read = await readFramesFrom({ messageId: 'msg-1', fromSeq: 0 });
+
+    // The METADATA pass — the query that decides how much to fetch. Its failure is a quiet
+    // tick like every other failed read, and must never read as "the log was released".
+    assert({
+      given: 'a metadata read that threw after the seek succeeded',
+      should: 'answer a quiet tick, never "the log is gone"',
+      actual: { frames: read.frames.length, nextSeq: read.nextSeq, empty: read.empty, truncated: read.truncated },
+      expected: { frames: 0, nextSeq: 0, empty: false, truncated: false },
+    });
+  });
+
+  it('given the emptiness check fails, reports neither frames nor emptiness', async () => {
+    table = [];
+    indexError = new Error('db down');
+
+    const read = await readFramesFrom({ messageId: 'msg-1', fromSeq: 0 });
+
+    // The seek found no containing row, and deciding whether that means "released" or
+    // "begins after the cursor" is itself a query — its failure is a quiet tick too.
+    assert({
+      given: 'an emptiness probe that threw',
+      should: 'answer a quiet tick, never "the log is gone"',
+      actual: { frames: read.frames.length, nextSeq: read.nextSeq, empty: read.empty, truncated: read.truncated },
+      expected: { frames: 0, nextSeq: 0, empty: false, truncated: false },
+    });
+  });
+
+  it('given the payload read fails, degrades the same way', async () => {
     table = [row(0, 2)];
     rangeError = new Error('db down');
 

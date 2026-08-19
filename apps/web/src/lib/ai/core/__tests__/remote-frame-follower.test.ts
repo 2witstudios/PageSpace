@@ -37,6 +37,7 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 }));
 
 import { acquireRemoteChannel, resetRemoteFrameFollowers } from '../remote-frame-follower';
+import { STREAM_MAX_LIFETIME_MS } from '../stream-horizons';
 
 const frame = (n: number): UIMessageChunk => ({ type: 'text-delta', id: 't1', delta: `f${n}` });
 
@@ -544,5 +545,62 @@ describe('acquireRemoteChannel — following another instance\'s log', () => {
       expected: true,
     });
     b.release();
+  });
+
+  // ── THE LEAK BACKSTOPS ─────────────────────────────────────────────────────────────────────
+
+  it('evicts a follower at the stream lifetime horizon — the leak backstop', async () => {
+    mockReadFramesFrom.mockResolvedValue(read({ nextSeq: 0 }));
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+
+    // A generation can never still be running past STREAM_MAX_LIFETIME_MS — the channel
+    // registry, the abort registry and the heartbeat cap have all let go by then — so a
+    // follower still polling for one is holding a timer and a ring for a stream nobody can
+    // act on. It must end (truncated, never a clean finish) and stop touching the DB.
+    await vi.advanceTimersByTimeAsync(STREAM_MAX_LIFETIME_MS);
+    await settle();
+    const atEviction = mockReadFramesFrom.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(30_000);
+    await settle();
+
+    assert({
+      given: 'a follower whose stream never ended',
+      should: 'end truncated at the horizon and stop polling',
+      actual: {
+        end: seen.end,
+        readsAfterEviction: mockReadFramesFrom.mock.calls.length - atEviction,
+      },
+      expected: {
+        end: { reason: 'finished', aborted: false, truncated: true },
+        readsAfterEviction: 0,
+      },
+    });
+  });
+
+  it('reschedules after an unexpected tick failure rather than leaving the follower dead', async () => {
+    mockReadFramesFrom
+      .mockRejectedValueOnce(new Error('unexpected'))
+      .mockResolvedValueOnce(read({ frames: [frame(0)], nextSeq: 1 }))
+      .mockResolvedValue(read({ nextSeq: 1 }));
+
+    const { channel } = acquireRemoteChannel('msg-1');
+    const seen = watch(channel);
+    await settle();
+
+    // The rejected first tick must schedule a retry rather than strand the viewer: a
+    // fire-and-forget tick that dies leaves the follower with no timer and nothing watching
+    // it, so the reader would hang until the lifetime eviction above.
+    await nextTick();
+
+    assert({
+      given: 'a tick that rejected unexpectedly',
+      should: 'reschedule and go on following, not strand the viewer',
+      actual: { frames: seen.frames, end: seen.end },
+      expected: { frames: [frame(0)], end: null },
+    });
   });
 });

@@ -191,7 +191,7 @@ const finishFollower = (
 const schedule = (messageId: string, follower: Follower, delayMs: number): void => {
   if (follower.stopped) return;
   follower.pollTimer = setTimeout(() => {
-    void tick(messageId, follower);
+    runTick(messageId, follower);
   }, delayMs);
   follower.pollTimer.unref?.();
 };
@@ -281,6 +281,28 @@ const tick = async (messageId: string, follower: Follower): Promise<void> => {
 };
 
 /**
+ * Fire a tick without ever leaving its rejection unhandled.
+ *
+ * Every await inside `tick` is non-throwing by contract — `readFramesFrom` never throws,
+ * `readTerminalState` catches its own reads, and `channel.append` catches bad subscribers —
+ * so this is a backstop against drift, not an expected path. But it guards the failure mode
+ * with the worst silence: a rejected fire-and-forget tick is an unhandled rejection AND
+ * leaves the follower holding no timer, so its viewers would hang until the lifetime
+ * eviction. Reschedule at the poll cadence and let the next tick read the stream's real
+ * state; a persistently failing follower is still bounded by the eviction horizon.
+ */
+const runTick = (messageId: string, follower: Follower): void => {
+  tick(messageId, follower).catch((error: unknown) => {
+    if (follower.stopped) return;
+    loggers.ai.warn('remote-frame-follower: unexpected tick failure — rescheduling', {
+      messageId,
+      error: error instanceof Error ? error.message : 'unknown',
+    });
+    schedule(messageId, follower, POLL_INTERVAL_MS);
+  });
+};
+
+/**
  * Take a reference to this messageId's follower, starting one if none is running.
  *
  * The caller MUST `release()` — the SSE route does so in the same teardown that unsubscribes.
@@ -325,7 +347,7 @@ export const acquireRemoteChannel = (messageId: string): RemoteChannelHandle => 
   // First read immediately rather than after a tick: the subscriber that just arrived is
   // waiting on the reply's existing content, and 250ms of blank bubble is the one latency a
   // reader actually notices.
-  void tick(messageId, follower);
+  runTick(messageId, follower);
 
   return { channel, release: releaser(messageId, follower) };
 };

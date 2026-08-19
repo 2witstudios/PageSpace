@@ -215,13 +215,23 @@ export async function GET(
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
 
-  auditRequest(request, {
-    eventType: 'authz.access.granted',
-    resourceType: 'ai_stream',
-    resourceId: messageId,
-    details: { pageId: meta.pageId },
-    riskScore: 0,
-  });
+  // The success-path audit is synchronous up to its DB write (the async write is caught
+  // inside `audit` itself), and it is the last statement that can fail while BOTH holds are
+  // live — the subscription above and, for a followed stream, this reader's reference to
+  // the follower. An error propagating from here would strand both until the follower's
+  // eviction backstop, so release them first and let it fly.
+  try {
+    auditRequest(request, {
+      eventType: 'authz.access.granted',
+      resourceType: 'ai_stream',
+      resourceId: messageId,
+      details: { pageId: meta.pageId },
+      riskScore: 0,
+    });
+  } catch (error) {
+    detach();
+    throw error;
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {

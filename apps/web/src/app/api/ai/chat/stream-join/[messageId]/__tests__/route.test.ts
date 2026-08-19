@@ -411,6 +411,31 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       // conversation — for a request that is about to 404.
       expect(mockAcquireRemoteChannel).not.toHaveBeenCalled();
     });
+
+    it('given the success-path audit throws, releases the subscription and the follower before the error propagates', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      let followedChannel: ReturnType<typeof openStreamChannel> | null = null;
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        followedChannel = openStreamChannel({ messageId: id });
+        return { channel: followedChannel, release: mockRemoteRelease };
+      });
+      // auditRequest is synchronous up to its DB write, so its failure is a thrown error on
+      // the success path — the last point where BOTH holds (the subscription and this
+      // reader's follower reference) are live and nothing else will release them.
+      vi.mocked(auditRequest).mockImplementation((_request, event) => {
+        if (event.eventType === 'authz.access.granted') throw new Error('audit pipeline exploded');
+      });
+
+      await expect(GET(makeRequest(), makeContext(mockMessageId)))
+        .rejects.toThrow('audit pipeline exploded');
+
+      // "Dropped in EVERY exit, not only the happy one" — an exception is an exit too.
+      expect(mockRemoteRelease).toHaveBeenCalledTimes(1);
+      expect(followedChannel!.subscriberCount).toBe(0);
+      // clearAllMocks does not undo mockImplementation, and a throwing audit left behind
+      // would fail every case that runs after this one.
+      vi.mocked(auditRequest).mockReset();
+    });
   });
 
   describe('authorization', () => {
