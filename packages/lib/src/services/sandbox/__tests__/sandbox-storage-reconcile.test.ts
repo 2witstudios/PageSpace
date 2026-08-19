@@ -439,6 +439,39 @@ describe('reconcileSandboxStorage', () => {
     expect(driveEnvAdvanceCalls).toEqual([]);
   });
 
+  it('given an ENV watermark write that throws after a successful charge, counts it as chargedButUnadvanced and leaves its neighbours alone', async () => {
+    const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-wm' }), driveEnv({ envId: 'env-fine' })],
+      advanceDriveEnvWatermark: async (input) => {
+        if (input.envId === 'env-wm') throw new Error('watermark write failed');
+        driveEnvAdvanceCalls.push(input);
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: "an env whose charge committed but whose own watermark write then failed",
+      should:
+        'count the money as charged (it moved) and flag the row distinguishably from a charge failure — its window WILL be re-billed next run',
+      actual: {
+        charged: result.charged,
+        failed: result.failed,
+        chargedButUnadvanced: result.chargedButUnadvanced,
+        billed: chargeCalls.map((call) => call.subjectId),
+      },
+      expected: {
+        charged: 2,
+        failed: 0,
+        chargedButUnadvanced: 1,
+        billed: ['env-wm', 'env-fine'],
+      },
+    });
+    // The env-specific writer is per-row like the session one: one env's failed
+    // advance must not strand its neighbour's.
+    expect(driveEnvAdvanceCalls.map((call) => call.envId)).toEqual(['env-fine']);
+  });
+
   it('given a stale measurement on an idle env, still bills the last measured value and flags it stale', async () => {
     const now = new Date('2026-07-01T00:00:00.000Z');
     const { deps } = makeDeps({
