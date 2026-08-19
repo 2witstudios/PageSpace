@@ -63,8 +63,8 @@ export const taskStatusConfigs = pgTable('task_status_configs', {
  * DOCUMENT as this said until 2026-08: a task's linked page is itself a task list, which is the
  * mechanism behind nesting — GET /api/pages/[pageId]/tasks selects children by
  * `eq(pages.type, 'TASK_LIST')`, so calling it with a TASK's pageId returns that task's
- * sub-tasks. Proven against a real database in
- * apps/web/src/components/.../task-list/__tests__/useTaskSubTasks.integration.test.tsx.
+ * sub-tasks. Proven against a real database in apps/web/src/components/layout/middle-content/
+ * page-views/task-list/__tests__/useTaskSubTasks.integration.test.tsx.
  * Read titles from the linked page; do not store them on task_items.
  *
  * Assignment (legacy single-assignee fields kept for backward compatibility):

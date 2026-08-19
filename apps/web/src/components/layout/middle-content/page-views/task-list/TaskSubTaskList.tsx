@@ -97,7 +97,10 @@ export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
           loading and this expansion. (In that last case the header above has already corrected
           itself to 0 via shownCount; this explains the 0.) */}
       {!isLoading && (error || subTasks.length === 0) && (
-        <p className="px-1 text-xs text-muted-foreground italic">
+        // Announced, because this appears asynchronously: without a live region a screen
+        // reader user gets no signal that the load failed or that a "Try again" control just
+        // arrived — they are left with a count and silence.
+        <p role="status" aria-live="polite" className="px-1 text-xs text-muted-foreground italic">
           {error
             ? (subTasks.length > 0 ? 'Could not load the rest of the sub-tasks.' : 'Could not load sub-tasks.')
             : 'These sub-tasks are no longer here.'}

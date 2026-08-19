@@ -109,6 +109,10 @@ describe('useTaskSubTasks against the real route and database', () => {
     await db.insert(taskItems).values({ userId: owner.id, pageId: leafPage.id });
 
     const before = await lazyRowsFor(leafPage.id);
+    // A delta, not an absolute count: this file never resets the spy, so reading
+    // `mock.calls.length` directly would quietly stop meaning "this test issued none" the
+    // moment a case is added above it.
+    const callsBefore = fetchWithAuth.mock.calls.length;
 
     const { result } = renderHook(
       () => useTaskSubTasks({ pageId: leafPage.id, subTaskCount: 0 }),
@@ -122,7 +126,12 @@ describe('useTaskSubTasks against the real route and database', () => {
     assert({
       given: 'a leaf task expanded in the UI',
       should: 'leave the database exactly as it found it — no lazily created task list, no status configs',
-      actual: { before, after, requests: fetchWithAuth.mock.calls.length, subTasks: result.current.subTasks.length },
+      actual: {
+        before,
+        after,
+        requests: fetchWithAuth.mock.calls.length - callsBefore,
+        subTasks: result.current.subTasks.length,
+      },
       expected: {
         before: { taskLists: 0, statusConfigs: 0 },
         after: { taskLists: 0, statusConfigs: 0 },
