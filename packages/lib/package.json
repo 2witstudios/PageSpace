@@ -117,11 +117,6 @@
       "import": "./dist/services/drive-envs/drive-envs.js",
       "require": "./dist/services/drive-envs/drive-envs.js"
     },
-    "./services/drive-envs/env-storage-measure": {
-      "types": "./dist/services/drive-envs/env-storage-measure.d.ts",
-      "import": "./dist/services/drive-envs/env-storage-measure.js",
-      "require": "./dist/services/drive-envs/env-storage-measure.js"
-    },
     "./services/drive-envs/drive-envs-store": {
       "types": "./dist/services/drive-envs/drive-envs-store.d.ts",
       "import": "./dist/services/drive-envs/drive-envs-store.js",

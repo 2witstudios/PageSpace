@@ -52,17 +52,21 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  * to the same filesystem, so its existing reading still describes it.) The core
  * calls this fire-and-forget, so a failure here can never fail a provision.
  *
- * **The baseline it captures is a FLOOR, not a truth, and today it is the ONLY
+ * **The baseline it captures is a FLOOR, not a truth, and it is still the ONLY
  * writer — so read this before assuming envs are fully metered.** A
  * freshly-minted env has an empty disk by definition, and an env accumulates its
- * real footprint across the sessions that run inside it. Those sessions do not
- * exist yet (env-bound sessions are the follow-up that gives an env its ensure
- * path); until they do, an env bills its provision-time baseline, which is
- * approximately nothing. That is deliberate and it is the honest end of this
- * slice: the write side exists, is proven, and is exported as ONE function the
- * warm path wires in one line — `envStorageMeasureSeam(store)` — reusing this
- * module's throttle and CAS rather than growing a second writer with its own
- * bugs.
+ * real footprint across the sessions that run inside it. Those sessions exist
+ * now — a session carrying `envId` routes its ensure through
+ * `ensureDriveEnvSandbox`, which is why the wiring lives in
+ * `env-provision-deps.ts` and reaches every provisioner in both the web and
+ * realtime tiers. What that does NOT do is re-measure: the seam fires on the
+ * `create` arm, so a long-lived env whose sessions have since filled its disk
+ * keeps billing the footprint it had at boot. The direction is under-billing,
+ * the missing piece is a warm-path re-measure, and it is tracked in issue #2443
+ * rather than left implied. What this slice does own it owns once —
+ * `envStorageMeasureSeam(store)` is a single function wired in a single line,
+ * reusing this module's throttle and CAS rather than growing a second writer
+ * with its own bugs.
  *
  * Two consequences worth naming, because both are silent:
  *
