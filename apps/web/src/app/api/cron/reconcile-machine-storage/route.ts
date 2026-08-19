@@ -111,6 +111,7 @@ export async function GET(request: Request) {
         // than billed retroactively at today's footprint.
         spanClamped: run.spanClamped,
         billableRows: run.billableRows,
+        billingByKind: run.billingByKind,
         // Split per persistence unit: an env's baseline-only measurement makes
         // its stale count saturate by construction, which would otherwise drown
         // a genuine session-side measurement outage in the flat totals.
@@ -192,10 +193,7 @@ export async function GET(request: Request) {
     // conditions above: a tick over nothing but envs — a deployment where
     // someone rebuilt an env and has no live sessions — must not page on an
     // env-only fault, which is what `LOUD_SOURCES` prevents one block up.
-    const liveRowsProcessed = LOUD_SOURCES.reduce(
-      (total, kind) => total + run.measurementHealth[kind].live,
-      0,
-    );
+
 
     // "Nothing got billed though there was work to do", expressed against
     // `billableRows` and `charged` rather than against `processed`.
@@ -214,15 +212,23 @@ export async function GET(request: Request) {
     // is the whole condition, and it covers the skipped and failed shapes at
     // once. `> 1` because one row failing is indistinguishable from one unlucky
     // transient the meter already isolates and retries.
-    const nothingBilled = run.billableRows > 1 && run.charged === 0;
+    // Asked PER LIVE KIND, not across the tick. A cross-kind `charged > 0` is
+    // satisfied by an env charging while every session fails, and a cross-kind
+    // `billableRows` by an env being billable while no session is — both would
+    // read as healthy while a live unit billed nothing. Envs are excluded here
+    // for the same reason they are excluded from `LOUD_SOURCES`.
+    const wipedOut = LOUD_SOURCES.filter(
+      (kind) => run.billingByKind[kind].billable > 1 && run.billingByKind[kind].charged === 0,
+    );
     const wipeoutCause = run.skipped >= run.failed ? 'all_rows_skipped' : 'all_rows_failed';
 
     const alertReason =
       loudSources.length > 0
         ? `could not read row source(s): ${loudSources.join(', ')}`
-        : liveRowsProcessed > 0 && nothingBilled
-          ? `billed nothing though ${run.billableRows} rows had charges to make ` +
-            `(${run.skipped} skipped, ${run.failed} failed)`
+        : wipedOut.length > 0
+          ? `${wipedOut.join(', ')} billed nothing though ` +
+            `${wipedOut.map((kind) => run.billingByKind[kind].billable).join('/')} rows had charges to make ` +
+            `(${run.skipped} skipped, ${run.failed} failed overall)`
           : null;
 
     if (alertReason) {
@@ -246,6 +252,7 @@ export async function GET(request: Request) {
           failed: run.failed,
           skipped: run.skipped,
           billableRows: run.billableRows,
+          billingByKind: run.billingByKind,
           totalCostDollars: run.totalCostDollars,
         },
       });
@@ -271,6 +278,7 @@ export async function GET(request: Request) {
           watermarkSuperseded: run.watermarkSuperseded,
           spanClamped: run.spanClamped,
           billableRows: run.billableRows,
+          billingByKind: run.billingByKind,
           measurementHealth: run.measurementHealth,
           failedSources: run.failedSources,
           totalCostDollars: run.totalCostDollars,
@@ -292,6 +300,7 @@ export async function GET(request: Request) {
       watermarkSuperseded: run.watermarkSuperseded,
       spanClamped: run.spanClamped,
       billableRows: run.billableRows,
+      billingByKind: run.billingByKind,
       measurementHealth: run.measurementHealth,
       failedSources: run.failedSources,
       totalCostDollars: run.totalCostDollars,

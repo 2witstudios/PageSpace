@@ -935,6 +935,39 @@ describe('reconcileSandboxStorage', () => {
     expect({ calls: lookup.mock.calls.length, skipped: result.skipped }).toEqual({ calls: 1, skipped: 2 });
   });
 
+  it('attributes billable rows and charges to the RIGHT unit', async () => {
+    // The per-kind counters the cron's wipeout alert reads. A cross-kind total
+    // cannot answer "did a LIVE unit bill nothing though it had work" — an env
+    // charging satisfies it while every session fails.
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 's1' }), agentSession({ workspaceId: 's2' })],
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'e1' })],
+      // Sessions cannot resolve a payer; the env can.
+      lookupDriveOwnerId: async (driveId) => (driveId === 'drive-1' ? null : `owner-of-${driveId}`),
+    });
+
+    const result = await reconcileSandboxStorage(
+      Object.assign(deps, {
+        listDriveEnvSprites: async () => [driveEnv({ envId: 'e1', driveId: 'drive-env' })],
+      }),
+    );
+
+    assert({
+      given: 'two sessions whose payer is unresolvable beside one env that charges',
+      should: 'attribute each unit its own billable and charged counts, not a shared total',
+      actual: result.billingByKind,
+      expected: {
+        session: { billable: 2, charged: 0 },
+        env: { billable: 1, charged: 1 },
+      },
+    });
+    // The flat totals still add up — the split is detail, not a redefinition.
+    expect({ billableRows: result.billableRows, charged: result.charged }).toEqual({
+      billableRows: 3,
+      charged: 1,
+    });
+  });
+
   it('reports no health noise when every row carries a fresh measurement', async () => {
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession()],

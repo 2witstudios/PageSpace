@@ -415,6 +415,19 @@ export interface ReconcileSandboxStorageResult {
    */
   neverMeasured: number;
   /**
+   * Billing outcomes split by persistence unit: how many rows had a charge to
+   * make, and how many of those charges landed.
+   *
+   * Split for the same reason the flat totals could not answer the question that
+   * matters — "did a LIVE unit bill nothing though it had work?" — without being
+   * diluted by the other unit. A cross-kind `charged > 0` is satisfied by an env
+   * charging while every session fails, and a cross-kind `billableRows` is
+   * satisfied by an env being billable while no session is. Both readings are
+   * wrong, and both are the same mistake one level apart, so the counters the
+   * alert reads are per-kind by construction rather than guarded case by case.
+   */
+  billingByKind: Record<StorageSubjectKind, { billable: number; charged: number }>;
+  /**
    * The same two measurement signals, split by persistence unit — and the split
    * is what makes them readable at all once envs exist.
    *
@@ -719,6 +732,10 @@ export async function reconcileSandboxStorage(
     session: { live: 0, neverMeasured: 0, stale: 0 },
     env: { live: 0, neverMeasured: 0, stale: 0 },
   };
+  const billingByKind: Record<StorageSubjectKind, { billable: number; charged: number }> = {
+    session: { billable: 0, charged: 0 },
+    env: { billable: 0, charged: 0 },
+  };
 
   for (const subject of subjects) {
     const attributionDriveId = subject.attributionDriveId;
@@ -767,7 +784,10 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       // Counted BEFORE the payer lookup and before any write: a fact about the
       // ACCRUAL, not about whether the tick managed to act on it.
-      if (costDollars > 0) billableRows += 1;
+      if (costDollars > 0) {
+        billableRows += 1;
+        billingByKind[subject.kind].billable += 1;
+      }
 
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
@@ -847,6 +867,7 @@ export async function reconcileSandboxStorage(
     }
     totalCostDollars += resolved.costDollars;
     charged += 1;
+    billingByKind[subject.kind].charged += 1;
 
     try {
       if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
@@ -882,6 +903,7 @@ export async function reconcileSandboxStorage(
     watermarkSuperseded,
     spanClamped,
     billableRows,
+    billingByKind,
     measurementHealth,
     failedSources,
     totalCostDollars,

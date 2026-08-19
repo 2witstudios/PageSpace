@@ -76,6 +76,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       // Two of the three rows had a positive accrual; the never-measured one
       // priced to $0 and is not billable.
       billableRows: 2,
+      billingByKind: { session: { billable: 1, charged: 1 }, env: { billable: 1, charged: 1 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -142,6 +143,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 2,
+      billingByKind: { session: { billable: 1, charged: 1 }, env: { billable: 1, charged: 1 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -168,6 +170,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         // The env LIST threw, so `listSource` yielded no rows and every env
@@ -208,6 +211,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -244,6 +248,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 3,
+      billingByKind: { session: { billable: 3, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 3, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -278,6 +283,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       // All four HAD something to charge — that is what makes "every row failed"
       // evidence of a broken meter rather than a tick with nothing to do.
       billableRows: 4,
+      billingByKind: { session: { billable: 4, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -316,6 +322,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       spanClamped: 0,
       // Twenty sessions had charges to make; the twenty-first row is the $0 env.
       billableRows: 20,
+      billingByKind: { session: { billable: 20, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 20, neverMeasured: 0, stale: 0 },
         env: { live: 1, neverMeasured: 1, stale: 0 },
@@ -329,6 +336,40 @@ describe('/api/cron/reconcile-machine-storage', () => {
 
     expect(res.status).toBe(500);
     expect(body).toMatchObject({ success: false, error: expect.stringContaining('billed nothing') });
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('alerts when SESSIONS billed nothing even though ENVS charged — the signal is per-kind', async () => {
+    // The dilution one level up from the $0 row: a cross-kind `charged > 0` is
+    // satisfied by an env charging while every session fails, which would read
+    // as healthy while the live meter billed nothing at all.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 12,
+      charged: 2,
+      skipped: 10,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 12,
+      // Ten sessions had charges to make and none landed; the two envs did.
+      billingByKind: { session: { billable: 10, charged: 0 }, env: { billable: 2, charged: 2 } },
+      measurementHealth: {
+        session: { live: 10, neverMeasured: 0, stale: 0 },
+        env: { live: 2, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0.02,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('session') });
     expect(mockCapture).toHaveBeenCalledTimes(1);
   });
 
@@ -347,7 +388,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       neverMeasured: 0,
       watermarkSuperseded: 0,
       spanClamped: 0,
-      billableRows: 0,
+      billableRows: 4,
+      billingByKind: { session: { billable: 4, charged: 1 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -379,6 +421,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 1, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -406,6 +449,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -437,6 +481,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 3,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 3, charged: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 3, neverMeasured: 0, stale: 0 },
@@ -467,6 +512,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
+      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 3, neverMeasured: 0, stale: 0 },
