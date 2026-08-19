@@ -308,10 +308,27 @@ export const TAG_TARGETS = {
 } as const satisfies Record<PageTypeValue, readonly TargetKind[]>;
 
 export type TargetRejection =
+  /**
+   * Not a page type this build knows about. `pageType` is typed `string` here
+   * precisely because the value failed to be a PageTypeValue.
+   */
+  | { ok: false; reason: 'unknown_page_type'; pageType: string }
   /** This page type does not accept this kind of target at all. */
   | { ok: false; reason: 'kind_not_allowed'; pageType: PageTypeValue; kind: TargetKind }
   /** The payload does not match the kind it claims. */
   | { ok: false; reason: 'payload_mismatch'; kind: TargetKind; detail: string };
+
+/**
+ * The keys of TAG_TARGETS as a Set, derived so it cannot drift from the
+ * registry it guards.
+ *
+ * A Set rather than an `in` check or a bare index, because an object lookup
+ * reaches the prototype: `TAG_TARGETS['constructor']` is a function, not
+ * undefined, so a falsy guard would wave it through and the `.includes` below
+ * would throw anyway. Phase 0 shipped exactly this bug in the HTML entity
+ * table; this is the same shape in a second place.
+ */
+const KNOWN_PAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(TAG_TARGETS));
 
 export type TargetValidation = { ok: true } | TargetRejection;
 
@@ -324,6 +341,15 @@ export type TargetValidation = { ok: true } | TargetRejection;
  * exactly why it needs a test here.
  */
 export function validateTarget(pageType: PageTypeValue, target: TagTarget): TargetValidation {
+  // The parameter type is a compile-time promise, not a runtime one. This value
+  // arrives from a request body or a `pages.type` column, and the DB's PageType
+  // enum still contains MACHINE — deleted from the TS enum in the Phase 8
+  // teardown because Postgres cannot DROP VALUE. So a row that TypeScript says
+  // cannot exist does exist, and a guard that throws on it is not a guard.
+  if (!KNOWN_PAGE_TYPES.has(pageType)) {
+    return { ok: false, reason: 'unknown_page_type', pageType };
+  }
+
   const allowed: readonly TargetKind[] = TAG_TARGETS[pageType];
   if (!allowed.includes(target.kind)) {
     return { ok: false, reason: 'kind_not_allowed', pageType, kind: target.kind };

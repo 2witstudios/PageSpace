@@ -496,6 +496,33 @@ describe('validateTarget', () => {
     ).toMatchObject({ reason: 'payload_mismatch', kind: 'sheet_cell' });
   });
 
+  it('refuses an unknown page type instead of throwing', () => {
+    // The signature is a compile-time promise only. MACHINE is the concrete
+    // case: it is still a value in the DB's PageType enum, deleted from the TS
+    // enum in the Phase 8 teardown because Postgres cannot DROP VALUE — so a
+    // pages.type this function is typed to never see can arrive from a row.
+    const unknown = 'MACHINE' as PageTypeValue;
+    expect(validateTarget(unknown, { kind: 'page' })).toEqual({
+      ok: false,
+      reason: 'unknown_page_type',
+      pageType: 'MACHINE',
+    });
+  });
+
+  it('refuses an inherited Object property rather than treating it as a registry entry', () => {
+    // A bare index reaches the prototype: TAG_TARGETS['constructor'] is a
+    // function, not undefined, so a falsy guard would wave it through and the
+    // membership test would throw. Same shape as the &__proto__; entity bug in
+    // Phase 0 — hence the Set.
+    for (const inherited of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
+      expect(validateTarget(inherited as PageTypeValue, { kind: 'page' })).toEqual({
+        ok: false,
+        reason: 'unknown_page_type',
+        pageType: inherited,
+      });
+    }
+  });
+
   it('checks the page type before the payload', () => {
     // An empty id on a page type that rejects the kind outright reports the
     // rejection the user can act on, not the one they cannot.
