@@ -284,9 +284,11 @@ export interface ReconcileSandboxStorageResult {
    * {@link STALE_MEASUREMENT_MS} while the sandbox is not currently awake —
    * the cron bills the last value regardless (it never wakes a sprite), so
    * this is a health signal: a persistently-high count means measurements
-   * aren't being refreshed by real-work wakes. Excludes never-measured rows
-   * (see `skipped` is unrelated; never-measured simply bill 0 — they are
-   * counted by {@link ReconcileSandboxStorageResult.neverMeasured} instead).
+   * aren't being refreshed by real-work wakes.
+   *
+   * Excludes never-measured rows, which bill 0 and are counted by
+   * {@link ReconcileSandboxStorageResult.neverMeasured} instead. Unrelated to
+   * `skipped`, which is about an unresolvable payer, not a missing measurement.
    */
   staleMeasurements: number;
   /**
@@ -421,17 +423,19 @@ export async function reconcileSandboxStorage(
   // see `listSource` for why one source's failure must not stop the other's
   // money.
   const [sessions, envs] = await Promise.all([
-    listSource('session', deps.listAgentSessionSprites),
-    listSource('env', deps.listDriveEnvSprites),
+    // Called through a closure, not passed unbound: a deps implementation is
+    // free to be a real object whose row source reads `this`, and an unbound
+    // reference would break it in a way only production would show.
+    listSource('session', () => deps.listAgentSessionSprites()),
+    listSource('env', () => deps.listDriveEnvSprites()),
   ]);
   const subjects: BillableStorageSubject[] = [
     ...sessions.rows.map((session) => toSessionSubject(session, deps)),
     ...envs.rows.map((env) => toEnvSubject(env, deps)),
   ];
-  const failedSources: StorageSubjectKind[] = [
-    ...(sessions.failed ? (['session'] as const) : []),
-    ...(envs.failed ? (['env'] as const) : []),
-  ];
+  const failedSources: StorageSubjectKind[] = [];
+  if (sessions.failed) failedSources.push('session');
+  if (envs.failed) failedSources.push('env');
   const now = deps.now();
 
   let charged = 0;
