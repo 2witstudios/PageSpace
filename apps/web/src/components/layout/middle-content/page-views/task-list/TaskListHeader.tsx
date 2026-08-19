@@ -4,6 +4,13 @@ import { cn } from '@/lib/utils';
 import { ChevronDown, ChevronRight, BookOpen, LayoutList, Kanban } from 'lucide-react';
 import { useDocumentManagerStore, DocumentManagerState } from '@/stores/useDocumentManagerStore';
 import { SaveStatusIndicator } from '@/components/layout/middle-content/content-header/SaveStatusIndicator';
+import { Badge } from '@/components/ui/badge';
+import { Checkbox } from '@/components/ui/checkbox';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { buildStatusConfig, getStatusOrder } from './task-list-types';
+import { useSelfTask } from './useSelfTask';
 
 interface TaskListHeaderProps {
   pageId: string;
@@ -29,6 +36,7 @@ export function TaskListHeader({
   return (
     <div className="flex items-center justify-between px-4 py-2 border-b bg-background shrink-0">
       <div className="flex items-center gap-2">
+        <SelfTaskControls pageId={pageId} canEdit={canEdit} />
         {onDescriptionToggle ? (
           <button
             type="button"
@@ -93,6 +101,64 @@ export function TaskListHeader({
           <Kanban className="h-4 w-4" />
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Complete / set the status of the task you are currently looking at.
+ *
+ * Every task's linked page is itself a TASK_LIST, so opening a task renders a
+ * task list scoped to its children — the task becomes the container, and a
+ * container renders no row for itself. Before this, the round trip "open a task
+ * → finish it → go back" had no completion step at either end: the parent list
+ * refuses to complete a task with open sub-tasks, and the task's own screen,
+ * where those sub-tasks are, offered no control at all.
+ *
+ * Renders nothing when the page is not a task (a top-level list, or a task list
+ * sitting under a folder).
+ */
+function SelfTaskControls({ pageId, canEdit }: { pageId: string; canEdit: boolean }) {
+  const { task, statusConfigs, isCompleted, isAvailable, setStatus, toggleComplete } =
+    useSelfTask(pageId, canEdit);
+
+  if (!isAvailable || !task) return null;
+
+  const statusConfigMap = buildStatusConfig(statusConfigs);
+  const statusOrder = getStatusOrder(statusConfigs);
+
+  return (
+    <div className="flex items-center gap-2 pr-2 mr-1 border-r">
+      <Checkbox
+        checked={isCompleted}
+        onCheckedChange={() => void toggleComplete()}
+        disabled={!canEdit}
+        aria-label={isCompleted ? 'Reopen this task' : 'Complete this task'}
+      />
+      <Select
+        value={task.status}
+        onValueChange={(value) => void setStatus(value)}
+        disabled={!canEdit}
+      >
+        <SelectTrigger className="h-7 w-28" aria-label="Status of this task">
+          <SelectValue>
+            <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
+              {statusConfigMap[task.status]?.label || task.status}
+            </Badge>
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {statusOrder.map((slug) => {
+            const cfg = statusConfigMap[slug];
+            if (!cfg) return null;
+            return (
+              <SelectItem key={slug} value={slug}>
+                <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
+              </SelectItem>
+            );
+          })}
+        </SelectContent>
+      </Select>
     </div>
   );
 }

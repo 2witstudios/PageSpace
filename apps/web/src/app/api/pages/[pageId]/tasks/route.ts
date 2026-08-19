@@ -63,6 +63,7 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     if (existingConfigs.length === 0) {
       // Same inheritance as the create path: a legacy list left half-initialized
       // should come back with its ancestor's vocabulary, not the defaults.
+      //
       await seedInheritedTaskStatusConfigs(db, taskList.id, pageId);
     }
   }

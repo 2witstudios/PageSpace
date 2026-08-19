@@ -128,6 +128,13 @@ vi.mock('@pagespace/db/db', () => {
               };
             }),
           })),
+          // getOrCreateTaskListForPage now seeds the ancestor's status
+          // vocabulary (seedInheritedTaskStatusConfigs), whose page-tree walk
+          // reads through the TRANSACTION. With no parent row resolvable here
+          // the walk stops immediately and falls back to DEFAULT_TASK_STATUSES,
+          // which is what these fixtures assume.
+          select: vi.fn(() => makeSelectChain([])),
+          query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
         };
         return callback(tx);
       }),
@@ -288,6 +295,13 @@ describe('Task API Routes', () => {
             };
           }),
         })),
+        // getOrCreateTaskListForPage now seeds the ancestor's status vocabulary
+        // (seedInheritedTaskStatusConfigs), whose page-tree walk reads through
+        // the TRANSACTION. With no parent row resolvable here the walk stops
+        // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
+        // these fixtures assume.
+        select: vi.fn(() => makeSelectChain([])),
+        query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
       };
       return callback(tx);
     });
@@ -357,6 +371,13 @@ describe('Task API Routes', () => {
               returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
             })),
           })),
+        // getOrCreateTaskListForPage now seeds the ancestor's status vocabulary
+        // (seedInheritedTaskStatusConfigs), whose page-tree walk reads through
+        // the TRANSACTION. With no parent row resolvable here the walk stops
+        // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
+        // these fixtures assume.
+        select: vi.fn(() => makeSelectChain([])),
+        query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
         };
         return callback(tx as never);
       });
@@ -514,6 +535,11 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path (a task_lists row with no
+        // status configs) now walks the page tree to inherit its ancestor's
+        // vocabulary before seeding. That walk's first query lands here; an empty
+        // result ends it immediately and the seed falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: search-filtered ids
@@ -562,6 +588,11 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
       vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path (a task_lists row with no
+        // status configs) now walks the page tree to inherit its ancestor's
+        // vocabulary before seeding. That walk's first query lands here; an empty
+        // result ends it immediately and the seed falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // backfill existingRows
         .mockImplementationOnce(() => phase1Chain as never) // phase 1: the query under test
@@ -601,6 +632,11 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path (a task_lists row with no
+        // status configs) now walks the page tree to inherit its ancestor's
+        // vocabulary before seeding. That walk's first query lands here; an empty
+        // result ends it immediately and the seed falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows (nothing missing)
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: bounded + ordered ids
@@ -647,6 +683,11 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path (a task_lists row with no
+        // status configs) now walks the page tree to inherit its ancestor's
+        // vocabulary before seeding. That walk's first query lands here; an empty
+        // result ends it immediately and the seed falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRowsPlusOne) as never) // phase 1
@@ -683,6 +724,11 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path (a task_lists row with no
+        // status configs) now walks the page tree to inherit its ancestor's
+        // vocabulary before seeding. That walk's first query lands here; an empty
+        // result ends it immediately and the seed falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1
@@ -1191,10 +1237,14 @@ describe('Task API Routes', () => {
         .mockResolvedValueOnce({ ...mockNewTask, assignee: null, user: null, assignees: [] } as never);
       // The peer lookup that resolves the requested slot into a pages.position —
       // index 1 falls between these two peers, so the midpoint is 7.5.
-      vi.mocked(db.select).mockImplementationOnce(() => makeSelectChain([
-        { id: 'peer-a', position: 7 },
-        { id: 'peer-b', position: 8 },
-      ]) as never);
+      vi.mocked(db.select)
+        // getOrCreateTaskListForPage's repair path walks the page tree before
+        // seeding; an empty result ends the walk and falls back to the defaults.
+        .mockImplementationOnce(() => makeSelectChain([]) as never)
+        .mockImplementationOnce(() => makeSelectChain([
+          { id: 'peer-a', position: 7 },
+          { id: 'peer-b', position: 8 },
+        ]) as never);
 
       const response = await POST(createRequest({ title: 'Task', position: 1 }), { params: mockParams });
       const body = await response.json();

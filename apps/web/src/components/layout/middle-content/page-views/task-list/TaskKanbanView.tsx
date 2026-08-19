@@ -54,6 +54,7 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
+import { formatSubTaskProgress } from './task-tree-core';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -158,6 +159,7 @@ function TaskCard({
   statusConfigs,
 }: TaskCardProps) {
   const isCompleted = isCompletedStatus(task.status, statusConfigs || []);
+  const subTaskProgress = formatSubTaskProgress(task);
 
   return (
     <Card
@@ -266,6 +268,18 @@ function TaskCard({
           <Badge className={cn('text-xs px-1.5 py-0', PRIORITY_CONFIG[task.priority].color)}>
             {PRIORITY_CONFIG[task.priority].label}
           </Badge>
+
+          {/* Sub-task progress — parity with the table's rows. Without it a
+              parent card reads as a leaf, and "In Progress" on a container tells
+              you nothing about the work underneath it. */}
+          {subTaskProgress && (
+            <span
+              className="text-xs text-muted-foreground tabular-nums"
+              title={`${subTaskProgress.label} sub-tasks complete`}
+            >
+              {subTaskProgress.label}
+            </span>
+          )}
 
           {/* Assignee */}
           {(task.assignee || task.assigneeAgent) && (

@@ -1331,6 +1331,12 @@ describe('page-read-tools', () => {
             }))
           ),
           groupBy: vi.fn().mockResolvedValue([]),
+          // ensureTaskListForPage now walks the page tree to inherit its nearest
+          // ancestor task list's status vocabulary before seeding, which adds a
+          // `.where().limit()` shape. An empty result ends the walk immediately
+          // and the seed falls back to DEFAULT_TASK_STATUSES — what these cases
+          // assert.
+          limit: vi.fn().mockResolvedValue([]),
         })) as unknown as typeof mockDb.select;
 
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));

@@ -93,7 +93,13 @@ import Toolbar from '@/components/editors/Toolbar';
 import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 import { TaskRowGroup } from './TaskRowGroup';
 import { TaskTreeProvider } from './task-tree-context';
-import { makeNodePath, rootNodePath, toggleNodePath, type TaskNodePath } from './task-tree-core';
+import {
+  formatSubTaskProgress,
+  makeNodePath,
+  rootNodePath,
+  toggleNodePath,
+  type TaskNodePath,
+} from './task-tree-core';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
@@ -173,6 +179,7 @@ function MobileTaskCard({
   statusConfigs,
 }: MobileTaskCardProps) {
   const isCompleted = isCompletedStatus(task.status, statusConfigs);
+  const subTaskProgress = formatSubTaskProgress(task);
 
   return (
     <div
@@ -210,16 +217,27 @@ function MobileTaskCard({
               className="h-8"
             />
           ) : (
-            <button
-              type="button"
-              className={cn(
-                'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
-                isCompleted && 'line-through text-muted-foreground'
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className={cn(
+                  'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
+                  isCompleted && 'line-through text-muted-foreground'
+                )}
+                onClick={() => onNavigate(task)}
+              >
+                {task.title}
+              </button>
+              {/* Sub-task progress — parity with the table and kanban. */}
+              {subTaskProgress && (
+                <span
+                  className="shrink-0 text-xs text-muted-foreground tabular-nums"
+                  title={`${subTaskProgress.label} sub-tasks complete`}
+                >
+                  {subTaskProgress.label}
+                </span>
               )}
-              onClick={() => onNavigate(task)}
-            >
-              {task.title}
-            </button>
+            </div>
           )}
         </div>
         <DropdownMenu>

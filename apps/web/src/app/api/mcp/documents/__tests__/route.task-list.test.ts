@@ -81,11 +81,23 @@ vi.mock('@pagespace/db/db', () => ({
         return Promise.resolve(undefined);
       },
     }),
-    select: () => ({
-      from: () => ({
-        where: (..._args: unknown[]) => mockSelectChildPages(),
-      }),
-    }),
+    // Chainable, because ensureTaskListForPage now walks the page tree to inherit
+    // its nearest ancestor task list's status vocabulary before seeding — that
+    // walk adds `.limit()` / `.orderBy()` to the shapes this mock has to answer.
+    // Here the walk finds no resolvable parent, ends immediately, and falls back
+    // to DEFAULT_TASK_STATUSES, which is what these cases assert.
+    select: () => {
+      const chain: Record<string, unknown> = {
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(mockSelectChildPages()).then(resolve, reject),
+      };
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.innerJoin = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      return chain;
+    },
   },
 }));
 
