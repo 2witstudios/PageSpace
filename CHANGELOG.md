@@ -64,6 +64,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Editing a document at the same time as someone else no longer throws away what you typed** —
+  when a colleague or an AI agent saved the same document while you had unsaved text, PageSpace
+  used to quietly replace everything in your editor with their version and tell you your copy "has
+  been updated". Whatever you had written was gone, with no way to get it back. Your text now stays
+  exactly where it is. A banner appears saying someone else saved the document, autosaving pauses
+  so nothing is sent behind your back, and you choose: **Keep mine**, which saves your text over
+  theirs, or **Use theirs**, which loads their version and drops your unsaved changes. You can
+  expand the banner to read their version first, so the choice is not blind. Whichever you pick,
+  the save goes through cleanly instead of colliding a second time.
+
 - **Browsing a session's files now requires permission to run code, as starting a shell always
   did** — the file browser, the diff view and the "show this file at that commit" reader were
   reachable by anyone who could see the session, even though the Shell button beside them was

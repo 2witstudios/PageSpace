@@ -5,6 +5,14 @@ import { useDirtyStore } from '@/stores/useDirtyStore';
 import { toast } from 'sonner';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useSocket } from './useSocket';
+import {
+  canScheduleSave,
+  decideConflictOutcome,
+  planConflictResolution,
+  type ConflictResolutionChoice,
+  type ConflictResponseBody,
+  type RemotePageSnapshot,
+} from '@/lib/documents/conflict-resolution';
 
 export const useDocumentState = (pageId: string) => {
   const document = useDocumentManagerStore(
@@ -58,14 +66,14 @@ export const useDocumentSaving = (pageId: string) => {
   }, []);
 
   const saveDocument = useCallback(
-    async (content: string) => {
+    async (content: string, options?: { expectedRevision?: number }) => {
       try {
         const saveStartTime = Date.now();
 
         markAsSaving(pageId);
 
         const docBeforeSave = useDocumentManagerStore.getState().documents.get(pageId);
-        const expectedRevision = docBeforeSave?.revision;
+        const expectedRevision = options?.expectedRevision ?? docBeforeSave?.revision;
 
         const headers: Record<string, string> = {
           'Content-Type': 'application/json',
@@ -82,29 +90,50 @@ export const useDocumentSaving = (pageId: string) => {
 
         if (!response.ok) {
           if (response.status === 409) {
-            console.warn(
-              `[conflict] Page ${pageId}: local edits discarded. Content was:`,
-              content
-            );
-            toast.error('Document was modified elsewhere. Your local copy has been updated.', {
-              id: `conflict-${pageId}`,
-            });
+            // NEVER replace the user's buffer here. Park the server's copy
+            // beside it and let the user choose; `content` / `isDirty` and the
+            // dirty store are deliberately left exactly as they are.
+            const conflictBody: ConflictResponseBody | null = await response
+              .json()
+              .catch(() => null);
+
+            let remotePage: RemotePageSnapshot | null = null;
             try {
               const freshResponse = await fetchWithAuth(`/api/pages/${pageId}`);
               if (freshResponse.ok) {
-                const freshPage = await freshResponse.json();
-                useDocumentManagerStore.getState().updateDocument(pageId, {
-                  content: freshPage.content ?? '',
-                  revision: freshPage.revision,
-                  isDirty: false,
-                  lastSaved: Date.now(),
-                  lastUpdateTime: Date.now(),
-                });
-                useDirtyStore.getState().clearDirty(pageId);
+                remotePage = (await freshResponse.json()) as RemotePageSnapshot;
               }
             } catch {
-              // Refetch failed — user can still manually refresh
+              // Leave remotePage null — decideConflictOutcome reports an error
+              // rather than offering a resolution we cannot honour.
             }
+
+            const outcome = decideConflictOutcome({
+              conflictBody,
+              remotePage,
+              detectedAt: Date.now(),
+            });
+
+            // Cancel any debounce queued before the conflict was detected —
+            // otherwise it fires, 409s again, and the toast loops.
+            const pending = useDocumentManagerStore.getState().documents.get(pageId);
+            if (pending?.saveTimeout) {
+              clearTimeout(pending.saveTimeout);
+              useDocumentManagerStore
+                .getState()
+                .updateDocument(pageId, { saveTimeout: undefined });
+            }
+
+            if (outcome.kind === 'conflict') {
+              useDocumentManagerStore.getState().setConflict(pageId, outcome.conflict);
+              toast.error(
+                'Document was modified elsewhere. Your unsaved changes are still here — choose which version to keep.',
+                { id: `conflict-${pageId}` }
+              );
+            } else {
+              toast.error(outcome.message, { id: `conflict-${pageId}` });
+            }
+
             clearSavingState(pageId);
             return false;
           }
@@ -152,6 +181,9 @@ export const useDocument = (pageId: string) => {
   const documentState = useDocumentState(pageId);
   const saving = useDocumentSaving(pageId);
   const { setActiveDocument } = useActiveDocument();
+  const conflict = useDocumentManagerStore(
+    useCallback((state) => state.conflicts.get(pageId), [pageId])
+  );
   const [isLoading, setIsLoading] = useState(false);
 
   const initializeAndActivate = useCallback(async () => {
@@ -219,6 +251,11 @@ export const useDocument = (pageId: string) => {
     [pageId]
   );
 
+  const hasPendingConflict = useCallback(
+    () => useDocumentManagerStore.getState().conflicts.has(pageId),
+    [pageId]
+  );
+
   const saveWithDebounce = useCallback(
     (content: string, delay = 1000) => {
       const document = useDocumentManagerStore.getState().documents.get(pageId);
@@ -226,13 +263,19 @@ export const useDocument = (pageId: string) => {
         clearTimeout(document.saveTimeout);
       }
 
+      // A parked conflict means our revision is known-stale: another PATCH
+      // would 409 again and the debounce would keep re-firing.
+      if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return;
+
       const timeout = setTimeout(() => {
+        // Re-check: a conflict can be detected during the debounce window.
+        if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return;
         saving.saveDocument(content).catch(console.error);
       }, delay);
 
       useDocumentManagerStore.getState().updateDocument(pageId, { saveTimeout: timeout });
     },
-    [pageId, saving]
+    [pageId, saving, hasPendingConflict]
   );
 
   const forceSave = useCallback(async () => {
@@ -243,8 +286,56 @@ export const useDocument = (pageId: string) => {
       clearTimeout(document.saveTimeout);
     }
 
+    if (!canScheduleSave({ hasPendingConflict: hasPendingConflict() })) return false;
+
     return saving.saveDocument(document.content);
-  }, [pageId, saving]);
+  }, [pageId, saving, hasPendingConflict]);
+
+  /**
+   * Apply the user's choice from the conflict banner.
+   *
+   * `keep-mine` re-saves the local text against the revision we observed, so it
+   * cannot 409 on the same conflict; if a THIRD party has saved since, the
+   * retry 409s again and `saveDocument` re-parks a fresh conflict with the newer
+   * remote content — the local text is still never replaced.
+   *
+   * `use-theirs` adopts the server copy locally; no PATCH is needed because the
+   * server already holds it.
+   */
+  const resolveConflict = useCallback(
+    async (choice: ConflictResolutionChoice) => {
+      const state = useDocumentManagerStore.getState();
+      const conflict = state.conflicts.get(pageId);
+      if (!conflict) return false;
+
+      const localContent = state.documents.get(pageId)?.content ?? '';
+      const plan = planConflictResolution(choice, { localContent, conflict });
+
+      if (plan.action === 'adopt-remote') {
+        const now = Date.now();
+        state.updateDocument(pageId, {
+          content: plan.contentToAdopt,
+          revision: plan.revision,
+          isDirty: false,
+          lastSaved: now,
+          lastUpdateTime: now,
+        });
+        useDirtyStore.getState().clearDirty(pageId);
+        useDocumentManagerStore.getState().clearConflict(pageId);
+        return true;
+      }
+
+      // Clear first so the save is not blocked by its own conflict guard;
+      // a repeat 409 parks a fresh one.
+      state.clearConflict(pageId);
+      const saved = await saving
+        .saveDocument(plan.contentToSave, { expectedRevision: plan.expectedRevision })
+        .catch(() => false);
+
+      return saved;
+    },
+    [pageId, saving]
+  );
 
   return {
     document: documentState.document,
@@ -255,6 +346,8 @@ export const useDocument = (pageId: string) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
     clearDocument: documentState.clearDocument,
   };
 };
