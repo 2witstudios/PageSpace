@@ -85,8 +85,13 @@ export async function GET(request: Request, context: RouteContext) {
   if (!resolved.ok) {
     const error =
       resolved.reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
+    // A capability denial answers exactly as "no sandbox yet" does — the same
+    // family policy the files and diff routes follow, so no response confirms
+    // that the session is real AND has a machine worth denying access to.
+    const wireReason: ResolveSessionSandboxHandleDenial =
+      resolved.reason === 'not_authorized' ? 'not_started' : resolved.reason;
     return NextResponse.json(
-      { error, reason: resolved.reason },
+      { error, reason: wireReason },
       { status: resolved.reason === 'vanished' ? 503 : 404 },
     );
   }
