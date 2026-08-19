@@ -97,6 +97,26 @@
       "import": "./dist/agent-workspaces/plan-workspace-lifecycle.js",
       "require": "./dist/agent-workspaces/plan-workspace-lifecycle.js"
     },
+    "./drive-envs/env-contract": {
+      "types": "./dist/drive-envs/env-contract.d.ts",
+      "import": "./dist/drive-envs/env-contract.js",
+      "require": "./dist/drive-envs/env-contract.js"
+    },
+    "./drive-envs/plan-env-delete": {
+      "types": "./dist/drive-envs/plan-env-delete.d.ts",
+      "import": "./dist/drive-envs/plan-env-delete.js",
+      "require": "./dist/drive-envs/plan-env-delete.js"
+    },
+    "./services/drive-envs/drive-envs": {
+      "types": "./dist/services/drive-envs/drive-envs.d.ts",
+      "import": "./dist/services/drive-envs/drive-envs.js",
+      "require": "./dist/services/drive-envs/drive-envs.js"
+    },
+    "./services/drive-envs/drive-envs-store": {
+      "types": "./dist/services/drive-envs/drive-envs-store.d.ts",
+      "import": "./dist/services/drive-envs/drive-envs-store.js",
+      "require": "./dist/services/drive-envs/drive-envs-store.js"
+    },
     "./drive-envs/env-sprite-key": {
       "types": "./dist/drive-envs/env-sprite-key.d.ts",
       "import": "./dist/drive-envs/env-sprite-key.js",
