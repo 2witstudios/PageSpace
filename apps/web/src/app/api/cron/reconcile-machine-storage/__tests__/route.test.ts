@@ -76,7 +76,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       // Two of the three rows had a positive accrual; the never-measured one
       // priced to $0 and is not billable.
       billableRows: 2,
-      billingByKind: { session: { billable: 1, charged: 1 }, env: { billable: 1, charged: 1 } },
+      billingByKind: { session: { billable: 1, charged: 1, skipped: 0, failed: 0 }, env: { billable: 1, charged: 1, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -143,7 +143,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 2,
-      billingByKind: { session: { billable: 1, charged: 1 }, env: { billable: 1, charged: 1 } },
+      billingByKind: { session: { billable: 1, charged: 1, skipped: 0, failed: 0 }, env: { billable: 1, charged: 1, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         env: { live: 1, neverMeasured: 0, stale: 0 },
@@ -170,7 +170,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 1, stale: 0 },
         // The env LIST threw, so `listSource` yielded no rows and every env
@@ -211,7 +211,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -248,7 +248,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 3,
-      billingByKind: { session: { billable: 3, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 3, charged: 0, skipped: 3, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 3, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -283,7 +283,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       // All four HAD something to charge — that is what makes "every row failed"
       // evidence of a broken meter rather than a tick with nothing to do.
       billableRows: 4,
-      billingByKind: { session: { billable: 4, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 4, charged: 0, skipped: 0, failed: 4 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -322,7 +322,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       spanClamped: 0,
       // Twenty sessions had charges to make; the twenty-first row is the $0 env.
       billableRows: 20,
-      billingByKind: { session: { billable: 20, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 20, charged: 0, skipped: 20, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 20, neverMeasured: 0, stale: 0 },
         env: { live: 1, neverMeasured: 1, stale: 0 },
@@ -356,7 +356,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       spanClamped: 0,
       billableRows: 12,
       // Ten sessions had charges to make and none landed; the two envs did.
-      billingByKind: { session: { billable: 10, charged: 0 }, env: { billable: 2, charged: 2 } },
+      billingByKind: { session: { billable: 10, charged: 0, skipped: 10, failed: 0 }, env: { billable: 2, charged: 2, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 10, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -371,6 +371,42 @@ describe('/api/cron/reconcile-machine-storage', () => {
     expect(res.status).toBe(500);
     expect(body).toMatchObject({ success: false, error: expect.stringContaining('session') });
     expect(mockCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it('names the wipeout cause from the WIPED-OUT kind, not the tick-wide totals', async () => {
+    // Three sessions failing on the charge path beside forty envs skipped for an
+    // unresolvable payer. The alert fires on the session wipeout; labelling it
+    // from tick-wide totals would file a charge-path fault in the payer-lookup
+    // bucket, in the one block whose whole purpose is precision.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 43,
+      charged: 0,
+      skipped: 40,
+      failed: 3,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 43,
+      billingByKind: {
+        session: { billable: 3, charged: 0, skipped: 0, failed: 3 },
+        env: { billable: 40, charged: 0, skipped: 40, failed: 0 },
+      },
+      measurementHealth: {
+        session: { live: 3, neverMeasured: 0, stale: 0 },
+        env: { live: 40, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+
+    expect(res.status).toBe(500);
+    expect(mockCapture.mock.calls[0][1].fingerprint).toEqual(['storage-reconcile-all-rows-failed']);
+    expect(mockCapture.mock.calls[0][1].tags.reason).toBe('all_rows_failed');
   });
 
   it('given SOME rows failed but others billed, should NOT alert — a partial failure is already counted', async () => {
@@ -389,7 +425,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 4,
-      billingByKind: { session: { billable: 4, charged: 1 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 4, charged: 1, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 2, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 0 },
@@ -421,7 +457,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 1, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -449,7 +485,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -481,7 +517,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 3,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 3, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 3, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 3, neverMeasured: 0, stale: 0 },
@@ -512,7 +548,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       watermarkSuperseded: 0,
       spanClamped: 0,
       billableRows: 0,
-      billingByKind: { session: { billable: 0, charged: 0 }, env: { billable: 0, charged: 0 } },
+      billingByKind: { session: { billable: 0, charged: 0, skipped: 0, failed: 0 }, env: { billable: 0, charged: 0, skipped: 0, failed: 0 } },
       measurementHealth: {
         session: { live: 0, neverMeasured: 0, stale: 0 },
         env: { live: 3, neverMeasured: 0, stale: 0 },

@@ -47,11 +47,22 @@
  * is a plain column update) — deliberately charge-before-advance so a crash
  * before charging never loses a window. The flip side: if the process dies
  * BETWEEN the two (rare — no I/O happens in between), that row's window is
- * billed again on the next run. That is the ONE over-bill path left in this
+ * billed again on the next run. That is the largest over-bill path left in this
  * meter, it predates drive environments, and closing it properly needs an
  * idempotency key on the charge (or a durable billed-interval record) rather
  * than anything reachable from here — tracked in issue #2445.
- * `chargedButUnadvanced` counts it meanwhile. That crash is the ONLY way to reach a
+ * `chargedButUnadvanced` counts it meanwhile.
+ *
+ * It is not quite the only one, and saying "only" would stop the next reader
+ * looking. A provision landing mid-tick is the bounded mirror: this tick read
+ * the row's measured bytes for generation G1, the provision nulls them and
+ * resets the watermark to its own instant P, and the tick then charges its whole
+ * window at G1's footprint — so the slice from P onward is billed against a disk
+ * that is already empty. Bounded by one tick's duration, and the exact
+ * counterpart of the `superseded` case the watermark guard DOES catch (there the
+ * provision won the write; here it won the read). Left alone deliberately: the
+ * fix is the same idempotency work, and a mid-tick re-read would cost a query
+ * per row to close a window measured in minutes. That crash is the ONLY way to reach a
  * double-bill, and only because the watermark writers are MONOTONIC: `now` is
  * captured once for the whole tick, so a provision landing mid-tick resets a
  * row's watermark forward, and an unguarded advance would drag it back over
@@ -426,7 +437,10 @@ export interface ReconcileSandboxStorageResult {
    * wrong, and both are the same mistake one level apart, so the counters the
    * alert reads are per-kind by construction rather than guarded case by case.
    */
-  billingByKind: Record<StorageSubjectKind, { billable: number; charged: number }>;
+  billingByKind: Record<
+    StorageSubjectKind,
+    { billable: number; charged: number; skipped: number; failed: number }
+  >;
   /**
    * The same two measurement signals, split by persistence unit — and the split
    * is what makes them readable at all once envs exist.
@@ -730,9 +744,12 @@ export async function reconcileSandboxStorage(
     session: { live: 0, neverMeasured: 0, stale: 0 },
     env: { live: 0, neverMeasured: 0, stale: 0 },
   };
-  const billingByKind: Record<StorageSubjectKind, { billable: number; charged: number }> = {
-    session: { billable: 0, charged: 0 },
-    env: { billable: 0, charged: 0 },
+  const billingByKind: Record<
+    StorageSubjectKind,
+    { billable: number; charged: number; skipped: number; failed: number }
+  > = {
+    session: { billable: 0, charged: 0, skipped: 0, failed: 0 },
+    env: { billable: 0, charged: 0, skipped: 0, failed: 0 },
   };
 
   for (const subject of subjects) {
@@ -813,18 +830,25 @@ export async function reconcileSandboxStorage(
         // watermark untouched so this window keeps accruing until it either
         // resolves on a later run or the row itself is torn down/deleted.
         //
-        // The accrual it keeps is BOUNDED by `MAX_BILLABLE_SPAN_MS`: a row that
-        // stays unresolvable for weeks and then resolves is billed a day, not
-        // weeks-at-today's-footprint. Freezing the watermark is what makes the
-        // skip lossless for short outages; the cap is what stops a long one
-        // becoming a retroactive over-bill.
+        // For an ENV the accrual it keeps is bounded by `MAX_BILLABLE_SPAN_MS`,
+        // so a row that stays unresolvable for weeks and then resolves is billed
+        // a day rather than weeks-at-today's-footprint. For a SESSION it is NOT:
+        // the cap is env-only (see `CLAMPED_SUBJECT_KINDS`, and the constant's
+        // own doc on why forgiving revenue on the live meter is a decision this
+        // PR does not make), so a session whose drive lookup stays null through
+        // an ownership migration keeps its whole frozen window and is billed all
+        // of it at today's footprint when the lookup resolves. That is the live
+        // half of the exposure the cap closes for envs, and it is why extending
+        // the cap is a follow-up rather than a nicety.
         skipped += 1;
+        billingByKind[subject.kind].skipped += 1;
         continue;
       }
 
       resolved = { ownerId, costDollars, gbMonths, clamped };
     } catch (error) {
       failed += 1;
+      billingByKind[subject.kind].failed += 1;
       loggers.ai.error(
         'Sandbox storage reconcile failed for subject',
         error instanceof Error ? error : new Error(String(error)),
@@ -853,6 +877,7 @@ export async function reconcileSandboxStorage(
       // other subject in this run from being billed. Nothing was moved, so
       // this is a genuine failure — the accrual is retried next run.
       failed += 1;
+      billingByKind[subject.kind].failed += 1;
       loggers.ai.error(
         'Sandbox storage reconcile: chargeStorage failed for subject',
         error instanceof Error ? error : new Error(String(error)),
@@ -864,14 +889,15 @@ export async function reconcileSandboxStorage(
     billingByKind[subject.kind].charged += 1;
 
     try {
-      if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
-      // Counted HERE and nowhere earlier: the window is only actually closed
-      // once the charge landed AND the watermark moved. A row whose charge threw
-      // (counted `failed`) or whose advance threw (`chargedButUnadvanced`) keeps
-      // its full window — nothing was forgiven — and counting it would clamp-and
-      // -count again on every later tick, making `spanClamped` permanently
-      // non-zero and useless as the alarm its doc says it is.
-      if (resolved.clamped) spanClamped += 1;
+      // The window is only actually closed once the charge landed AND the
+      // watermark MOVED — so the clamp is counted on `advanced` and on nothing
+      // else. `superseded` means a provision already carried the row past this
+      // tick (its window was never ours to shorten) and `row_gone` means the row
+      // no longer exists; counting either would send an operator investigating a
+      // forgiven window after one that was not, or after a row that is gone.
+      const advance = await subject.advanceWatermark(now);
+      if (advance === 'superseded') watermarkSuperseded += 1;
+      if (advance === 'advanced' && resolved.clamped) spanClamped += 1;
     } catch (error) {
       // The charge already committed (counted above) — only the watermark
       // write failed, so this row's window WILL be billed again on the next
@@ -891,8 +917,9 @@ export async function reconcileSandboxStorage(
   // drift between exactly these two is what produced the alert's last two
   // defects. Summing makes "the flat total is the sum of the parts" true by
   // construction instead of by discipline.
-  const sumByKind = (pick: (of: { billable: number; charged: number }) => number) =>
-    pick(billingByKind.session) + pick(billingByKind.env);
+  const sumByKind = (
+    pick: (of: { billable: number; charged: number; skipped: number; failed: number }) => number,
+  ) => pick(billingByKind.session) + pick(billingByKind.env);
 
   return {
     processed: subjects.length,

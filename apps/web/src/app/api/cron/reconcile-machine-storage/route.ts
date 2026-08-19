@@ -220,7 +220,15 @@ export async function GET(request: Request) {
     const wipedOut = LOUD_SOURCES.filter(
       (kind) => run.billingByKind[kind].billable > 1 && run.billingByKind[kind].charged === 0,
     );
-    const wipeoutCause = run.skipped >= run.failed ? 'all_rows_skipped' : 'all_rows_failed';
+    // Named from the WIPED-OUT kinds' own counters, not the tick-wide totals.
+    // Otherwise the fingerprint contradicts the condition that produced it: three
+    // sessions failing on the charge path beside forty envs skipped for an
+    // unresolvable payer would fire correctly on the session wipeout and then
+    // label it `all_rows_skipped`, filing a charge-path fault in the
+    // payer-lookup bucket — in the one block whose whole purpose is precision.
+    const wipedOutSkipped = wipedOut.reduce((total, kind) => total + run.billingByKind[kind].skipped, 0);
+    const wipedOutFailed = wipedOut.reduce((total, kind) => total + run.billingByKind[kind].failed, 0);
+    const wipeoutCause = wipedOutSkipped >= wipedOutFailed ? 'all_rows_skipped' : 'all_rows_failed';
 
     const alertReason =
       loudSources.length > 0
@@ -228,7 +236,7 @@ export async function GET(request: Request) {
         : wipedOut.length > 0
           ? `${wipedOut.join(', ')} billed nothing though ` +
             `${wipedOut.map((kind) => run.billingByKind[kind].billable).join('/')} rows had charges to make ` +
-            `(${run.skipped} skipped, ${run.failed} failed overall)`
+            `(${wipedOutSkipped} skipped, ${wipedOutFailed} failed)`
           : null;
 
     if (alertReason) {

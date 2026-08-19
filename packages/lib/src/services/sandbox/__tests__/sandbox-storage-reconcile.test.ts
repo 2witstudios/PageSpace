@@ -957,8 +957,8 @@ describe('reconcileSandboxStorage', () => {
       should: 'attribute each unit its own billable and charged counts, not a shared total',
       actual: result.billingByKind,
       expected: {
-        session: { billable: 2, charged: 0 },
-        env: { billable: 1, charged: 1 },
+        session: { billable: 2, charged: 0, skipped: 2, failed: 0 },
+        env: { billable: 1, charged: 1, skipped: 0, failed: 0 },
       },
     });
     // The flat totals still add up — the split is detail, not a redefinition.
@@ -966,6 +966,36 @@ describe('reconcileSandboxStorage', () => {
       billableRows: 3,
       charged: 1,
     });
+  });
+
+  it('does NOT count a clamp when the watermark was SUPERSEDED or the row is GONE', async () => {
+    // `spanClamped` promises the cap forgave revenue on a row whose window
+    // actually closed. A superseded write means a provision already carried the
+    // row past this tick — its window was never ours to shorten — and `row_gone`
+    // means the row no longer exists. Counting either sends an operator after a
+    // forgiveness that did not happen.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const frozen = { storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) };
+
+    for (const [outcome, label] of [
+      ['superseded', 'a provision that already moved it past this tick'],
+      ['row_gone', 'a row deleted mid-tick'],
+    ] as const) {
+      const { deps } = makeDeps({
+        listDriveEnvSprites: async () => [driveEnv(frozen)],
+        advanceDriveEnvWatermark: async () => outcome,
+        now: () => now,
+      });
+
+      const result = await reconcileSandboxStorage(deps);
+
+      assert({
+        given: `a clamped window whose watermark write reported ${label}`,
+        should: 'charge the row but report NO clamp — its window did not close here',
+        actual: { charged: result.charged, spanClamped: result.spanClamped },
+        expected: { charged: 1, spanClamped: 0 },
+      });
+    }
   });
 
   it('reports no health noise when every row carries a fresh measurement', async () => {
