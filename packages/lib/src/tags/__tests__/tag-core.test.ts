@@ -39,6 +39,36 @@ const COMBINING_ACUTE = U(0x0301);
 const E_ACUTE = U(0x00e9);
 const FAMILY = U(0x1f468) + ZWJ + U(0x1f469) + ZWJ + U(0x1f467);
 
+/**
+ * The invisible code points the module keeps ON PURPOSE, as ranges.
+ *
+ * One definition, two obligations, and they are asserted separately because
+ * they drifted apart once: every one of these must survive a strip (it is
+ * meaningful next to another character), and every one must ALSO be refused as
+ * a whole name (a chip that renders blank is unusable). Hand-writing either
+ * list is how U+180B-180D and U+180F ended up satisfying the first and not the
+ * second.
+ */
+const KEPT_CODE_POINT_RANGES: ReadonlyArray<readonly [number, number]> = [
+  [0x200c, 0x200c], // ZWNJ — required orthography in Persian and Indic scripts
+  [0x200d, 0x200d], // ZWJ — joins the family emoji into one glyph
+  [0x180b, 0x180d], // Mongolian free variation selectors
+  [0x180f, 0x180f],
+  [0xfe00, 0xfe0f], // variation selectors
+  [0xe0100, 0xe01ef], // variation selectors supplement
+  [0xe0020, 0xe007f], // tag characters — the subdivision flags
+  [0x115f, 0x1160], // Hangul fillers — blank renderers
+  [0x3164, 0x3164],
+  [0xffa0, 0xffa0],
+];
+
+const KEPT_ON_PURPOSE = (cp: number): boolean =>
+  KEPT_CODE_POINT_RANGES.some(([from, to]) => cp >= from && cp <= to);
+
+const EVERY_KEPT_CODE_POINT: readonly number[] = KEPT_CODE_POINT_RANGES.flatMap(([from, to]) =>
+  Array.from({ length: to - from + 1 }, (_unused, offset) => from + offset)
+);
+
 function expectOk(raw: string): { name: string; key: string } {
   const result = normalizeTagName(raw);
   expect(result.ok, `expected ${JSON.stringify(raw)} to normalize`).toBe(true);
@@ -184,20 +214,6 @@ describe('normalizeTagName — invisible characters', () => {
     // engine's ICU build. A TEST may, and should: if a future runtime knows
     // about ignorables this build does not, that is a new dedupe hole, and a
     // loud CI failure is exactly how one would want to hear about it.
-    const KEPT_ON_PURPOSE = (cp: number): boolean =>
-      cp === 0x200c || // ZWNJ — required orthography in Persian and Indic scripts
-      cp === 0x200d || // ZWJ — joins the family emoji into one glyph
-      (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
-      (cp >= 0xe0100 && cp <= 0xe01ef) || // variation selectors supplement
-      (cp >= 0x180b && cp <= 0x180d) || // Mongolian free variation selectors
-      cp === 0x180f ||
-      (cp >= 0xe0020 && cp <= 0xe007f) || // tag characters — subdivision flags
-      // Blank renderers: kept here, refused as a whole name by NOTHING_VISIBLE.
-      cp === 0x115f ||
-      cp === 0x1160 ||
-      cp === 0x3164 ||
-      cp === 0xffa0;
-
     const ignorable = /\p{Default_Ignorable_Code_Point}/u;
     const leaked: string[] = [];
 
@@ -218,17 +234,33 @@ describe('normalizeTagName — invisible characters', () => {
     expect(leaked).toEqual([]);
   });
 
+  it('keeps every code point on the keep-list when it sits beside real text', () => {
+    // The other half of the keep-list's contract, derived from the same source
+    // as the blank-name assertion below. These are kept precisely because they
+    // are meaningful NEXT TO another character, so a strip that swallowed one
+    // would break real orthography — Persian, Indic, the emoji sequences and
+    // the subdivision flags all depend on it.
+    for (const cp of EVERY_KEPT_CODE_POINT) {
+      const name = 'a' + U(cp) + 'b';
+      expect(expectOk(name).name, `U+${cp.toString(16)}`).toBe(name);
+    }
+  });
+
   it('refuses a name that renders as nothing, however many code points it has', () => {
     // Neither stripped nor collapsed, and each a different code point — so
     // several distinct blank tags could coexist, and nobody could retype,
     // search for, or tell them apart. The Hangul fillers and the Braille blank
     // are the classic version of this trick.
-    for (const cp of [0x200c, 0x200d, 0xfe0f, 0xfe0e, 0xe0100, 0xe01ef, 0x3164, 0x2800, 0x115f, 0x1160, 0xffa0, 0xe0061]) {
+    // Derived from the keep-list, not restated: every code point the strip
+    // deliberately preserves must still be refused as a name on its own.
+    for (const cp of EVERY_KEPT_CODE_POINT) {
       expect(normalizeTagName(U(cp)), `U+${cp.toString(16)}`).toEqual({
         ok: false,
         reason: 'empty',
       });
     }
+    // Plus the Braille blank, which is not kept for adjacency but renders blank.
+    expect(normalizeTagName(U(0x2800))).toEqual({ ok: false, reason: 'empty' });
     // One visible character is enough to make it a name again.
     expect(expectOk('a' + U(0x200d) + 'b').name).toBe('a' + U(0x200d) + 'b');
     expect(expectOk(U(0x2800) + 'x').name).toBe(U(0x2800) + 'x');
@@ -728,7 +760,9 @@ describe('tag-core purity and determinism', () => {
     const literals = [...src].filter((char) => {
       const cp = char.codePointAt(0) ?? 0;
       return (
-        (cp < 0x20 && char !== '\n') ||
+        // \r is excluded alongside \n: a CRLF checkout, or core.autocrlf=true,
+        // would otherwise fail this on line endings rather than on a tag name.
+        (cp < 0x20 && char !== '\n' && char !== '\r') ||
         cp === 0x7f ||
         cp === 0x00ad ||
         cp === 0x200b ||
