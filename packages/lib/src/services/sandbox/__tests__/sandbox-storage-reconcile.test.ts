@@ -682,6 +682,33 @@ describe('reconcileSandboxStorage', () => {
     }).toEqual({ charged: 1, chargedButUnadvanced: 1, spanClamped: 0 });
   });
 
+  it('does NOT count a clamp on a row that priced to $0 — nothing was forgiven', async () => {
+    // The common shape today: envs meter ~$0, so a long-frozen env that gets
+    // rebuilt arrives never-measured with a huge raw span. Capped or uncapped it
+    // owes nothing, so reporting a forgiven window would send an operator
+    // investigating revenue loss after money that never existed.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps, driveEnvAdvanceCalls } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({
+          storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000),
+          measuredBytes: null,
+          measuredAt: null,
+        }),
+      ],
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a never-measured env whose window has been frozen for forty days',
+      should: 'advance its watermark but report NO clamp — a $0 row loses nothing by being capped',
+      actual: { charged: result.charged, spanClamped: result.spanClamped, advanced: driveEnvAdvanceCalls.length },
+      expected: { charged: 0, spanClamped: 0, advanced: 1 },
+    });
+  });
+
   it('does not clamp a window exactly AT the cap — the boundary bills in full', async () => {
     const { deps, chargeCalls } = makeDeps({ listDriveEnvSprites: async () => [driveEnv()] });
 

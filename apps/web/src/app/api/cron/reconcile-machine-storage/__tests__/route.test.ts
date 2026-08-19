@@ -228,7 +228,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
     });
   });
 
-  it('given EVERY row was SKIPPED for an unresolvable payer, should alert — the third silence', async () => {
+  it('given every BILLABLE row was SKIPPED for an unresolvable payer, should alert — the third silence', async () => {
     // Most reachable for envs, since `resolveEnvPayerId` has no owner fallback:
     // any persistent fault resolving `drives.ownerId` returns null for every row,
     // leaving charged 0, failed 0, and — without this — a green cron forever.
@@ -243,7 +243,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
       neverMeasured: 0,
       watermarkSuperseded: 0,
       spanClamped: 0,
-      billableRows: 0,
+      billableRows: 3,
       measurementHealth: {
         session: { live: 3, neverMeasured: 0, stale: 0 },
         env: { live: 0, neverMeasured: 0, stale: 0 },
@@ -260,7 +260,7 @@ describe('/api/cron/reconcile-machine-storage', () => {
     expect(mockCapture.mock.calls[0][1].fingerprint).toEqual(['storage-reconcile-all-rows-skipped']);
   });
 
-  it('given EVERY row failed to bill, should alert and fail — a total wipeout is not a success', async () => {
+  it('given every BILLABLE row failed, should alert and fail — a total wipeout is not a success', async () => {
     // The same silence one level down from an unreadable source: a persistent
     // fault reading `drives` makes the payer lookup throw for every subject, so
     // nothing is charged and, without this, the cron reports success forever.
@@ -290,11 +290,46 @@ describe('/api/cron/reconcile-machine-storage', () => {
     const body = await res.json();
 
     expect(res.status).toBe(500);
-    expect(body).toMatchObject({ success: false, error: expect.stringContaining('every row failed') });
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('billed nothing') });
     expect(mockCapture).toHaveBeenCalledTimes(1);
     // Fingerprinted distinctly from an unreadable source — the two faults have
     // different causes and need separate issues, not one bucket.
     expect(mockCapture.mock.calls[0][1].fingerprint).toEqual(['storage-reconcile-all-rows-failed']);
+  });
+
+  it('still alerts when a NON-BILLABLE row is mixed in — the counter must not be diluted by $0 rows', async () => {
+    // The defect this guards: comparing an outcome counter against `processed`
+    // looked right and was not. A row pricing to $0 lands in NONE of
+    // charged/skipped/failed, only in `processed` — and envs meter ~$0 by
+    // construction — so ONE unmeasured env beside twenty unbilled sessions made
+    // `skipped === processed` false and the whole block silent.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 21,
+      charged: 0,
+      skipped: 20,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 1,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      // Twenty sessions had charges to make; the twenty-first row is the $0 env.
+      billableRows: 20,
+      measurementHealth: {
+        session: { live: 20, neverMeasured: 0, stale: 0 },
+        env: { live: 1, neverMeasured: 1, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, error: expect.stringContaining('billed nothing') });
+    expect(mockCapture).toHaveBeenCalledTimes(1);
   });
 
   it('given SOME rows failed but others billed, should NOT alert — a partial failure is already counted', async () => {

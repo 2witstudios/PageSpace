@@ -466,10 +466,13 @@ export interface ReconcileSandboxStorageResult {
    * capped — the excess forgiven rather than billed retroactively at today's
    * footprint.
    *
-   * Counted only where the cap actually TOOK EFFECT — a row that is then skipped
-   * for an unresolvable payer keeps its whole window and is reported by `skipped`
-   * alone, so one permanently unresolvable drive cannot make this non-zero on
-   * every tick forever and blunt it as a signal.
+   * Counted only where the cap actually FORGAVE REVENUE: the row had a positive
+   * accrual, its charge landed, and its watermark moved. A row that is then
+   * skipped keeps its whole window (reported by `skipped`), a row whose charge or
+   * advance throws keeps it too, and a row pricing to $0 loses nothing by being
+   * capped — none of them count here. Otherwise one unresolvable drive, or the
+   * ordinary $0 env, would make this non-zero on every tick forever and blunt it
+   * as a signal.
    *
    * Expected to be ZERO in steady state. A non-zero value means a row's window
    * really was closed short: the cron was down longer than the cap, or that row
@@ -768,9 +771,12 @@ export async function reconcileSandboxStorage(
 
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
-          // The window closes here, so a clamp on this row really did forgive
-          // its excess.
-          if (clamped) spanClamped += 1;
+          // Deliberately NOT counting the clamp here. This row prices to $0
+          // capped or uncapped, so nothing was forgiven — counting it would
+          // report a shortened window to an operator investigating revenue loss
+          // and send them looking for money that never existed. And it is the
+          // COMMON shape today: envs meter ~$0, so a long-frozen env that gets
+          // rebuilt arrives here never-measured with a huge raw span.
           if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
         }
         continue;

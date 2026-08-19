@@ -189,25 +189,41 @@ export async function GET(request: Request) {
     // failed to bill" when nothing was billable and the only loss is an advance
     // that self-heals next tick.
     // The wipeout conditions carry the SAME dark/live rule as the source
-    // conditions above, and applying it only there was the gap: a tick over
-    // nothing but envs — a deployment where someone rebuilt an env and has no
-    // live sessions — could otherwise page on an env-only fault, which is
-    // precisely what `LOUD_SOURCES` exists to prevent one block up. So a wipeout
-    // only counts when a LIVE unit was among the rows it wiped out.
+    // conditions above: a tick over nothing but envs — a deployment where
+    // someone rebuilt an env and has no live sessions — must not page on an
+    // env-only fault, which is what `LOUD_SOURCES` prevents one block up.
     const liveRowsProcessed = LOUD_SOURCES.reduce(
       (total, kind) => total + run.measurementHealth[kind].live,
       0,
     );
-    const wipeoutIsLive = liveRowsProcessed > 0;
+
+    // "Nothing got billed though there was work to do", expressed against
+    // `billableRows` and `charged` rather than against `processed`.
+    //
+    // Comparing an outcome counter to `processed` looked right and was not: a row
+    // whose window prices to $0 takes the zero-cost branch and lands in NONE of
+    // `charged`/`skipped`/`failed`, only in `processed`. Envs meter ~$0 today by
+    // construction and a never-measured session bills the 0 floor, so a single
+    // such row made `skipped === processed` permanently false — twenty live
+    // sessions could go unbilled tick after tick beside one unmeasured env and
+    // this block would stay silent, which is precisely the silence it exists to
+    // break.
+    //
+    // Every BILLABLE row ends as exactly one of charged / skipped / failed, so
+    // "more than one row had something to charge and none of them were charged"
+    // is the whole condition, and it covers the skipped and failed shapes at
+    // once. `> 1` because one row failing is indistinguishable from one unlucky
+    // transient the meter already isolates and retries.
+    const nothingBilled = run.billableRows > 1 && run.charged === 0;
+    const wipeoutCause = run.skipped >= run.failed ? 'all_rows_skipped' : 'all_rows_failed';
 
     const alertReason =
       loudSources.length > 0
         ? `could not read row source(s): ${loudSources.join(', ')}`
-        : wipeoutIsLive && run.processed > 1 && run.skipped === run.processed
-          ? `every row was skipped for an unresolvable payer (${run.skipped} of ${run.processed})`
-          : wipeoutIsLive && run.processed > 1 && run.failed === run.processed && run.billableRows > 0
-            ? `every row failed to bill (${run.failed} of ${run.processed})`
-            : null;
+        : liveRowsProcessed > 0 && nothingBilled
+          ? `billed nothing though ${run.billableRows} rows had charges to make ` +
+            `(${run.skipped} skipped, ${run.failed} failed)`
+          : null;
 
     if (alertReason) {
       // Fingerprinted on the CAUSE, never the message: the message carries
@@ -218,17 +234,10 @@ export async function GET(request: Request) {
         fingerprint:
           loudSources.length > 0
             ? ['storage-reconcile-source-unreadable', ...loudSources]
-            : run.skipped === run.processed
-              ? ['storage-reconcile-all-rows-skipped']
-              : ['storage-reconcile-all-rows-failed'],
+            : [`storage-reconcile-${wipeoutCause.replace(/_/g, '-')}`],
         tags: {
           check: 'storage_reconcile',
-          reason:
-            loudSources.length > 0
-              ? 'source_unreadable'
-              : run.skipped === run.processed
-                ? 'all_rows_skipped'
-                : 'all_rows_failed',
+          reason: loudSources.length > 0 ? 'source_unreadable' : wipeoutCause,
           failedSources: run.failedSources.join(','),
         },
         extra: {
