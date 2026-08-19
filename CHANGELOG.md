@@ -77,12 +77,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
   permits running code if you need those panes back.
 
-- **Deleting an environment no longer destroys its filesystem when the delete is refused** — if
-  somebody opened a session inside an environment at the moment you deleted it, the delete was
-  correctly refused ("sessions are still running in this environment") but the environment's machine
-  had already been stopped, taking the shared files with it. A refused delete now changes nothing at
-  all, and the machine is only stopped once the environment is actually gone.
-
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a
   hang.
