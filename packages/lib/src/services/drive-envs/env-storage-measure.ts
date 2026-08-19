@@ -72,12 +72,22 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  *    reconcile advances its watermark anyway (deliberately: freezing it would
  *    let a later measurement retroactively over-bill the frozen span), each
  *    skipped window is discarded for good rather than deferred. The direction of
- *    that error is always UNDER-billing, never over: the `create` arm nulls the
- *    measurement columns in the same write (`reviveStamps` through
- *    `envStampColumns`), so a failed measurement leaves a NULL row rather than
- *    the dead generation's footprint. `adopt` nulls them too and deliberately
- *    does NOT re-measure — it cannot prove its VM is awake — so an adopted env
- *    also sits at the 0 floor until something else measures it.
+ *    that error is UNDER-billing: the `create` arm nulls the measurement columns
+ *    in the same write (`reviveStamps` through `envStampColumns`), so a failed
+ *    measurement leaves a NULL row rather than the dead generation's footprint.
+ *    `adopt` nulls them too and deliberately does NOT re-measure — it cannot
+ *    prove its VM is awake — so an adopted env also sits at the 0 floor until
+ *    something else measures it.
+ *
+ *    ONE window runs the other way, and it is worth naming rather than claiming
+ *    the direction is universal. The store's CAS is `eqOrIsNull` on the
+ *    instance, so when a dead generation AND its replacement both report a NULL
+ *    `spriteInstanceId` (the driver could not name either), an in-flight
+ *    fire-and-forget `du` from the old disk can still match the new row and
+ *    persist the old footprint against it — an over-bill until the next
+ *    measurement corrects it. `eq` instead of `eqOrIsNull` would close it and
+ *    open a worse one: a null-instance sandbox would then never be measured at
+ *    all. This mirrors the session store exactly and is not specific to envs.
  *    Every one of those paths LOGS with the env's id, and the reconcile counts
  *    the aggregate as `neverMeasured`, so the failure is observable both per-env
  *    and in the meter's own health output — but observability is not repair.

@@ -196,7 +196,13 @@ export function makeAgentSessionStore(
         sandboxId: input.sandboxId,
         spriteInstanceId: input.spriteInstanceId,
         egressPolicyToken: input.egressPolicyToken,
-        storageLastBilledAt: input.now,
+        // MONOTONIC, mirroring the real store's `GREATEST(column, <now>)`. The
+        // provision's timestamp is captured before the provider IO, so it can be
+        // older than a watermark a reconcile tick has already advanced — assigning
+        // it would drag the watermark back over billed time. A fake that assigned
+        // would let that guard be deleted with every fake-backed test still green.
+        storageLastBilledAt:
+          row.storageLastBilledAt > input.now ? row.storageLastBilledAt : input.now,
         updatedAt: input.now,
         ...stampColumns(input.stamps),
       });

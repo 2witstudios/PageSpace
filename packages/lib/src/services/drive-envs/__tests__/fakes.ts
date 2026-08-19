@@ -156,7 +156,13 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         sandboxId,
         spriteInstanceId,
         egressPolicyToken,
-        storageLastBilledAt: at,
+        // MONOTONIC, mirroring the real store's `GREATEST(column, <now>)`. The
+        // provision's timestamp is captured before the provider IO, so it can be
+        // older than a watermark a reconcile tick has already advanced — assigning
+        // it would drag the watermark back over billed time. A fake that assigned
+        // would let that guard be deleted with every fake-backed test still green.
+        storageLastBilledAt:
+          row.storageLastBilledAt > at ? row.storageLastBilledAt : at,
         updatedAt: at,
         ...envStampColumns(stamps),
       });
