@@ -50,6 +50,7 @@ import {
   signAgentDispatch,
 } from '@pagespace/lib/auth/agent-dispatch-payload';
 import { deriveSandboxStatus } from '@pagespace/lib/services/agent-workspaces/workspace-status';
+import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import {
   checkAccessForSubject,
   checkSessionAccess,
@@ -367,8 +368,14 @@ async function listWorkspaceWorkers({
     listShells(workspaceId),
   ]);
 
+  // An env-bound session reads its sandbox off the ENV's row (its own Sprite
+  // columns are CHECK-forbidden to hold anything), so resolve the env before
+  // classifying — otherwise `list_sessions` reports every live environment as
+  // 'none' and an agent concludes it has no machine.
+  const env = row?.envId ? await (await getDriveEnvStore()).findById(row.envId) : null;
+
   return {
-    sandbox: row ? deriveSandboxStatus(row) : 'none',
+    sandbox: row ? deriveSandboxStatus(row, env) : 'none',
     workers: workerRows.map((worker) => ({
       sessionId: worker.conversationId,
       name:

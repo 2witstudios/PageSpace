@@ -71,7 +71,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   createConversationInSession: (...args: unknown[]) => mockCreateConversationInSession(...args),
   endSession: (...args: unknown[]) => mockEndSession(...args),
   spawnSession: (...args: unknown[]) => mockSpawnSession(...args),
-  toAgentSessionDTO: (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
+  toSessionDTOWithEnv: async (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   claimConversationInSession: (...args: unknown[]) => mockClaimConversationInSession(...args),
@@ -290,7 +290,7 @@ describe('POST /api/agent-workspaces — spawn', () => {
     const body = await response.json();
     expect(body.session).toEqual({ workspaceId: 'ses-new', dto: true });
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', name: 'api refactor' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null, name: 'api refactor' });
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: 'agent-1', workspaceId: 'ses-new', userId: 'user-1' }),
     );
@@ -303,7 +303,7 @@ describe('POST /api/agent-workspaces — spawn', () => {
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, name: 'Global Assistant' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, envId: null, name: 'Global Assistant' });
     // The first conversation is an assistant thread: no agent page.
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: null, workspaceId: 'ses-new' }),
@@ -320,7 +320,7 @@ describe('POST /api/agent-workspaces — spawn', () => {
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(typeof body.conversationId).toBe('string');
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', name: 'Global Assistant' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null, name: 'Global Assistant' });
     expect(mockCreateConversationInSession).toHaveBeenCalledWith(
       expect.objectContaining({ agentPageId: null, workspaceId: 'ses-new' }),
     );
@@ -540,7 +540,7 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(response.status).toBe(201);
     const body = await response.json();
     expect(body).toEqual({ session: { workspaceId: 'ses-new', dto: true }, conversationId: 'conv-1' });
-    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', name: 'Agent' });
+    expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null, name: 'Agent' });
     expect(mockClaimConversationInSession).toHaveBeenCalledWith({
       conversationId: 'conv-1',
       userId: 'user-1',
@@ -877,6 +877,29 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     const response = await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
     expect(response.status).toBe(429);
     expect(mockSpawnSession).not.toHaveBeenCalled();
+  });
+
+  it('passes an envId straight through, unvalidated — the service owns that check so every caller inherits it', async () => {
+    // Ships dark: nothing SENDS this yet. Validating the env here instead would
+    // put "does it exist, is it this drive's" in a route rather than in
+    // `spawnAgentSession`, where the realtime tier and the tools would each
+    // need their own copy of it.
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', envId: 'env-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-1' }));
+  });
+
+  it('404s when the env does not exist, or belongs to another drive — one answer for both', async () => {
+    // The service collapses the two deliberately, so a caller who cannot see a
+    // drive cannot enumerate its environments through spawn errors either.
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_not_found' });
+    const response = await spawn({ driveId: 'drive-1', envId: 'env-elsewhere' });
+    expect(response.status).toBe(404);
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {

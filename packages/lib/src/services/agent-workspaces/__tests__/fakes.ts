@@ -19,7 +19,11 @@ import type {
   SandboxStreamSessionInfo,
 } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
-import type { AgentSessionRecord, AgentSessionStore } from '../agent-workspaces-store';
+import type {
+  AgentSessionRecord,
+  AgentSessionStore,
+  DriveEnvSpritePointers,
+} from '../agent-workspaces-store';
 import { stampColumns } from '../agent-workspaces-store';
 import { planSessionReopen } from '../../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../../agent-workspaces/session-contract';
@@ -66,6 +70,12 @@ export interface FakeAgentSessionStore {
   calls: { create: number; updateSpriteIdentity: number };
   /** conversationId → workspaceId, modelling the chat-bound node that IS membership. */
   conversationBindings: Map<string, string>;
+  /**
+   * envId → the env row's Sprite pointers, modelling what the real `list()`
+   * LEFT JOINs off `drive_envs`. An `envId` with no entry here models an env
+   * that vanished under the query — the same null the join yields.
+   */
+  envSprites: Map<string, DriveEnvSpritePointers>;
 }
 
 export function makeAgentSessionStore(
@@ -78,6 +88,7 @@ export function makeAgentSessionStore(
   const reclaims = new Map<string, string | null>();
   const calls = { create: 0, updateSpriteIdentity: 0 };
   const conversationBindings = new Map<string, string>();
+  const envSprites = new Map<string, DriveEnvSpritePointers>();
   let minted = 0;
 
   const store: AgentSessionStore = {
@@ -101,6 +112,7 @@ export function makeAgentSessionStore(
         ownerId: input.ownerId,
         driveId: input.driveId,
         name: input.name,
+        envId: input.envId,
         storageLastBilledAt: input.now,
         createdAt: input.now,
         updatedAt: input.now,
@@ -109,7 +121,7 @@ export function makeAgentSessionStore(
       return row;
     },
 
-    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+    async createIfUnderLimit({ ownerId, driveId, name, envId, now, maxActive }) {
       const activeCount = [...rows.values()].filter((row) => row.ownerId === ownerId && row.endedAt === null).length;
       if (activeCount >= maxActive) return { ok: false, reason: 'limit_reached' };
       calls.create += 1;
@@ -119,6 +131,7 @@ export function makeAgentSessionStore(
         ownerId,
         driveId,
         name,
+        envId,
         storageLastBilledAt: now,
         createdAt: now,
         updatedAt: now,
@@ -156,7 +169,10 @@ export function makeAgentSessionStore(
           if (aAt !== bAt) return bAt - aAt;
           return b.createdAt.getTime() - a.createdAt.getTime();
         })
-        .slice(0, MAX_ACTIVE_WORKSPACES_PER_OWNER);
+        .slice(0, MAX_ACTIVE_WORKSPACES_PER_OWNER)
+        // The real store's LEFT JOIN, modelled: an env-bound row carries its
+        // env's pointers, an ordinary row carries null.
+        .map((row) => ({ ...row, env: row.envId === null ? null : (envSprites.get(row.envId) ?? null) }));
     },
 
     async countActive(ownerId) {
@@ -263,13 +279,21 @@ export function makeAgentSessionStore(
     },
   };
 
-  return { store, rows, reclaims, calls, conversationBindings };
+  return { store, rows, reclaims, calls, conversationBindings, envSprites };
 }
 
 export interface FakeSpriteHost {
   host: SandboxHost;
   /** Live VMs by NAME. A name is reused across re-creates, which is exactly why instances exist. */
   live: Map<string, { instanceId: string | null; egressPolicyToken?: string }>;
+  /**
+   * One filesystem per sandbox NAME — the fake's model of the platform contract
+   * the whole environment design rests on: provisioning a name that already
+   * exists hands back that VM AND its disk. Survives a re-create under the same
+   * name for the same reason a real Sprite's does; a kill drops it, because
+   * that is what destroying a VM means.
+   */
+  disks: Map<string, Map<string, Buffer>>;
   calls: {
     provision: Array<{ name: string; appliedEgressToken?: string | null }>;
     kill: Array<{ sandboxId: string; expectedInstanceId?: string | null }>;
@@ -277,7 +301,21 @@ export interface FakeSpriteHost {
   };
 }
 
-export function makeHandle(sandboxId: string, instanceId: string | null, egressPolicyToken?: string): SandboxHandle {
+export function makeHandle(
+  sandboxId: string,
+  instanceId: string | null,
+  egressPolicyToken?: string,
+  /**
+   * The SANDBOX's filesystem — passed in rather than owned, because a disk
+   * belongs to the VM and not to a handle. Two handles onto one `sandboxId`
+   * therefore read and write the SAME files, which is the whole property that
+   * makes an environment shared: the fs/diff/git tooling is handle-keyed, so
+   * "do two sessions see each other's files" is decided entirely by whether
+   * they resolved the same sandbox. Omitted (an isolated scratch disk) for the
+   * callers that never touch files.
+   */
+  disk: Map<string, Buffer> = new Map(),
+): SandboxHandle {
   const unusedStream: SandboxStream = {
     write: () => {},
     resize: () => {},
@@ -291,8 +329,21 @@ export function makeHandle(sandboxId: string, instanceId: string | null, egressP
     spriteInstanceId: instanceId,
     egressPolicyToken,
     exec: async () => ({ stdout: '', stderr: '', exitCode: 0 }),
-    writeFiles: async () => {},
-    readFile: async () => null,
+    // Both directions COPY. A real handle's bytes cross a wire, so neither side
+    // can hand the caller a reference into the VM's disk — and a fake that did
+    // would be more permissive than the thing it models: a caller mutating the
+    // buffer it read would silently rewrite the file, and the next read would
+    // agree with it, so a test could pass against a bug that cannot exist in
+    // production.
+    writeFiles: async (files) => {
+      for (const file of files) {
+        disk.set(file.path, Buffer.from(file.content as string | Uint8Array));
+      }
+    },
+    readFile: async ({ path }) => {
+      const content = disk.get(path);
+      return content === undefined ? null : Buffer.from(content);
+    },
     stream: async () => unusedStream,
     listStreams: async (): Promise<SandboxStreamSessionInfo[]> => [],
     killSession: async () => {},
@@ -323,6 +374,15 @@ export function makeSpriteHost(
   const live = new Map<string, { instanceId: string | null; egressPolicyToken?: string }>(
     Object.entries(options.seed ?? {}),
   );
+  const disks = new Map<string, Map<string, Buffer>>();
+  /** The disk for this NAME, minted on first touch — one per VM, not per handle. */
+  const diskFor = (name: string): Map<string, Buffer> => {
+    const existing = disks.get(name);
+    if (existing) return existing;
+    const fresh = new Map<string, Buffer>();
+    disks.set(name, fresh);
+    return fresh;
+  };
   const calls: FakeSpriteHost['calls'] = { provision: [], kill: [], attach: [] };
   let attempts = 0;
 
@@ -333,12 +393,12 @@ export function makeSpriteHost(
       attempts += 1;
       const existing = live.get(name);
       if (existing && !options.nextInstanceId) {
-        return makeHandle(name, existing.instanceId, existing.egressPolicyToken);
+        return makeHandle(name, existing.instanceId, existing.egressPolicyToken, diskFor(name));
       }
       const instanceId = options.nextInstanceId ? options.nextInstanceId(name, attempts) : `inst-${name}`;
       const egressPolicyToken = options.egressTokenFor?.(name) ?? existing?.egressPolicyToken;
       live.set(name, { instanceId, egressPolicyToken });
-      return makeHandle(name, instanceId, egressPolicyToken);
+      return makeHandle(name, instanceId, egressPolicyToken, diskFor(name));
     },
 
     async attach({ sandboxId }) {
@@ -346,7 +406,7 @@ export function makeSpriteHost(
       if (options.attachError) throw options.attachError;
       const existing = live.get(sandboxId);
       if (!existing) return null;
-      return makeHandle(sandboxId, existing.instanceId, existing.egressPolicyToken);
+      return makeHandle(sandboxId, existing.instanceId, existing.egressPolicyToken, diskFor(sandboxId));
     },
 
     async kill({ sandboxId, expectedInstanceId }) {
@@ -364,10 +424,14 @@ export function makeSpriteHost(
         throw new SandboxSpriteReplacedError(sandboxId, expectedInstanceId, existing.instanceId);
       }
       live.delete(sandboxId);
+      // A destroyed VM takes its filesystem with it. Modelled, because
+      // "rebuild gives you a fresh disk under the same name" is a claim this
+      // epic makes and a fake that kept the files would agree with a bug.
+      disks.delete(sandboxId);
     },
   };
 
-  return { host, live, calls };
+  return { host, live, calls, disks };
 }
 
 export function makeShellRecord(over: Partial<SessionShellRecord> = {}): SessionShellRecord {

@@ -24,6 +24,7 @@ import {
   buildSessionReadActorCtx,
   resolveSessionActorContext,
   resolveSessionSandboxHandle,
+  type ResolveSessionSandboxHandleDenial,
 } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
@@ -80,12 +81,24 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'repoPath escapes the sandbox root' }, { status: 400 });
   }
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
   if (!resolved.ok) {
+    // Record the one denial that describes a PERSON rather than the sandbox:
+    // a member the drive downgraded is the actor closest to succeeding here,
+    // and without this they would be the only one not audited — a non-member's
+    // attempt at the same endpoint is recorded by the access check above.
+    if (resolved.reason === 'not_authorized') {
+      auditSessionAccessDenial(request, auth.userId, workspaceId, resolved.reason, ROUTE);
+    }
     const error =
       resolved.reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
+    // A capability denial answers exactly as "no sandbox yet" does — the same
+    // family policy the files and diff routes follow, so no response confirms
+    // that the session is real AND has a machine worth denying access to.
+    const wireReason: ResolveSessionSandboxHandleDenial =
+      resolved.reason === 'not_authorized' ? 'not_started' : resolved.reason;
     return NextResponse.json(
-      { error, reason: resolved.reason },
+      { error, reason: wireReason },
       { status: resolved.reason === 'vanished' ? 503 : 404 },
     );
   }

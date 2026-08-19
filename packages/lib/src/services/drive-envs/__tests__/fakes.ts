@@ -118,8 +118,9 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       const row = rows.get(envId);
       if (!row) return { ok: false, reason: 'not_found' };
       // The guard re-read INSIDE the atomic step — the fake is single-threaded,
-      // so what this models is the ordering: the count is taken here, after the
-      // teardown, not from the caller's earlier snapshot.
+      // so what this models is the ordering: the count that DECIDES is taken
+      // here, under the notional row lock, not from the caller's earlier
+      // unlocked snapshot.
       if (!force) {
         const liveSessionCount = liveSessions.get(envId) ?? 0;
         if (liveSessionCount > 0) return { ok: false, reason: 'live_sessions', liveSessionCount };

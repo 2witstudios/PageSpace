@@ -47,7 +47,10 @@ import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import { resolvePathWithinSync } from '@pagespace/lib/security/path-validator';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
-import { resolveSessionSandboxHandle } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
+import {
+  resolveSessionSandboxHandle,
+  type ResolveSessionSandboxHandleDenial,
+} from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 
 const AUTH_OPTIONS_READ = { allow: ['session'] as const, requireCSRF: false };
 const AUTH_OPTIONS_WRITE = { allow: ['session'] as const, requireCSRF: true };
@@ -165,16 +168,43 @@ async function requireSandboxPathsWithinScope(
   );
 }
 
-const RESOLVE_DENIAL_STATUS: Record<'not_found' | 'not_started' | 'vanished', number> = {
+const RESOLVE_DENIAL_STATUS: Record<ResolveSessionSandboxHandleDenial, number> = {
   not_found: 404,
   not_started: 404,
   vanished: 503,
+  // The family policy above, applied to the capability gate too: a requester
+  // who may see this session but may not spend its compute is told exactly
+  // what a stranger is told. A 403 here would confirm the session is real AND
+  // that it has a machine worth denying them.
+  not_authorized: 404,
 };
 
-function resolveDenialResponse(reason: 'not_found' | 'not_started' | 'vanished'): NextResponse {
+/**
+ * Turn a resolver denial into a response — and RECORD the one that is a
+ * denial rather than a state.
+ *
+ * `not_authorized` is the only reason here that describes a person rather than
+ * a machine, and it is the one the audit trail most needs: a member downgraded
+ * to view-only, hammering writes against a drive's shared environment disk, is
+ * the actor closest to succeeding. Without this they are the only such actor
+ * NOT recorded — a non-member's attempt at the same endpoint is audited by
+ * `authorize` above. The others (`not_found`, `not_started`, `vanished`) are
+ * facts about the sandbox and say nothing about who asked.
+ */
+function resolveDenialResponse(
+  reason: ResolveSessionSandboxHandleDenial,
+  audit: { request: Request; userId: string; workspaceId: string },
+): NextResponse {
+  if (reason === 'not_authorized') {
+    auditSessionAccessDenial(audit.request, audit.userId, audit.workspaceId, reason, ROUTE);
+  }
   const error =
     reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
-  return NextResponse.json({ error, reason }, { status: RESOLVE_DENIAL_STATUS[reason] });
+  // `not_authorized` is reported as `not_started` on the wire for the same
+  // reason it answers 404 — the client learns nothing it could not have
+  // guessed, and the distinction stays available to the server.
+  const wireReason = reason === 'not_authorized' ? 'not_started' : reason;
+  return NextResponse.json({ error, reason: wireReason }, { status: RESOLVE_DENIAL_STATUS[reason] });
 }
 
 const ROUTE = 'agent-workspaces/[workspaceId]/files';
@@ -273,8 +303,8 @@ export async function GET(request: Request, context: RouteContext) {
   if (!confined.ok) return confined.error;
   const path = confined.value;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;
@@ -358,8 +388,8 @@ export async function POST(request: Request, context: RouteContext) {
   if (!kind.ok) return kind.error;
 
   if (kind.value === 'directory') {
-    const resolved = await resolveSessionSandboxHandle(workspaceId);
-    if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+    const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+    if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
     const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
     if (escape) return escape;
     const result = await createMachineDirectory({ handle: resolved.handle, path });
@@ -378,8 +408,8 @@ export async function POST(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'overwrite must be a boolean' }, { status: 400 });
   }
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;
   const result = await writeMachineFile({
@@ -424,8 +454,8 @@ export async function PATCH(request: Request, context: RouteContext) {
   const toPath = confineScopedPath(scope.value, rawToPath.value, 'toPath', { forbidRoot: true });
   if (!toPath.ok) return toPath.error;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [
     { field: 'fromPath', path: fromPath.value },
@@ -468,8 +498,8 @@ export async function DELETE(request: Request, context: RouteContext) {
   if (!confinedPath.ok) return confinedPath.error;
   const path = confinedPath.value;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
-  if (!resolved.ok) return resolveDenialResponse(resolved.reason);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
+  if (!resolved.ok) return resolveDenialResponse(resolved.reason, { request, userId: auth.userId, workspaceId });
 
   const escape = await requireSandboxPathsWithinScope(resolved.handle, scope.value, [{ field: 'path', path }]);
   if (escape) return escape;

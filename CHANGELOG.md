@@ -64,6 +64,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Browsing a session's files now requires permission to run code, as starting a shell always
+  did** — the file browser, the diff view and the "show this file at that commit" reader were
+  reachable by anyone who could see the session, even though the Shell button beside them was
+  already greyed out for those same people. They read AND wrote through the session's machine, so
+  the browser was a way around a control the interface was already showing as locked. They now
+  answer exactly as they do for a session with no machine yet, which is also what they answer for a
+  session you cannot see — no response distinguishes "not allowed" from "not there".
+
+  If your role in a drive does not let you run code, you will notice the file, diff and history
+  panes of a session go quiet where they previously loaded. That is the intended state and matches
+  what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
+  permits running code if you need those panes back.
+
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a
   hang.
