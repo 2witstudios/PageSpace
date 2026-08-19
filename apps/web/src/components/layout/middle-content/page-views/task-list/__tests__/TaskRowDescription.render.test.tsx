@@ -115,6 +115,29 @@ describe('TaskRowDescription sub-task rows', () => {
     });
   });
 
+  it('offers a way back when a later page failed', () => {
+    // Rows already on screen, plus a standing error: nothing retries on its own, so the
+    // control has to say that pressing it is the way back — and it must not be disabled.
+    useTaskSubTasks.mockReturnValue(hookResult({
+      subTasks: [subTask()],
+      hasMore: true,
+      error: new Error('network went away'),
+    }));
+    render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);
+
+    const button = screen.getByRole('button');
+    assert({
+      given: 'a failed later page with rows already shown',
+      should: 'say only the rest failed, and offer an enabled retry rather than a stuck spinner',
+      actual: {
+        message: !!screen.getByText('Could not load the rest of the sub-tasks.'),
+        label: button.textContent,
+        disabled: (button as HTMLButtonElement).disabled,
+      },
+      expected: { message: true, label: 'Try again', disabled: false },
+    });
+  });
+
   it('stays quiet when the fetch succeeded', () => {
     useTaskSubTasks.mockReturnValue(hookResult({ subTasks: [subTask()] }));
     render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);

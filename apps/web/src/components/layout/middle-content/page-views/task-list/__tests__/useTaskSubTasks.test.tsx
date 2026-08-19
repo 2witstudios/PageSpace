@@ -275,6 +275,80 @@ describe('useTaskSubTasks', () => {
     });
   });
 
+  it('does not report loading-more when a later page failed', async () => {
+    // The failure mode this guards: page 2 rejects, SWR keeps page 1, `hasMore` still reads
+    // true from it, and `pages` can never reach the bumped `size` because nothing retries.
+    // Reporting "loading more" there disables the control that retries it — under an error
+    // message saying it failed.
+    fetchWithAuth
+      .mockResolvedValueOnce(respond(makeBody([makeSubTask('a')], true)))
+      .mockRejectedValueOnce(new Error('network went away'));
+
+    const { result } = renderHook(
+      () => useTaskSubTasks({ pageId: 'parent-page', subTaskCount: 2 }),
+      { wrapper: makeWrapper() },
+    );
+    await waitFor(() => expect(result.current.subTasks).toHaveLength(1));
+    await act(async () => { result.current.loadMore(); });
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    // Long enough that SWR's own retry would have fired if it were still enabled.
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert({
+      given: 'a second page that rejected',
+      should: 'surface the error, keep the rows it did load, and leave the retry control usable',
+      actual: {
+        isLoadingMore: result.current.isLoadingMore,
+        subTasks: result.current.subTasks.length,
+        hasMore: result.current.hasMore,
+        message: result.current.error?.message,
+      },
+      expected: {
+        isLoadingMore: false,
+        subTasks: 1,
+        hasMore: true,
+        message: 'network went away',
+      },
+    });
+  });
+
+  it('retries the failed page when the control is used again', async () => {
+    fetchWithAuth
+      .mockResolvedValueOnce(respond(makeBody([makeSubTask('a')], true)))
+      .mockRejectedValueOnce(new Error('network went away'))
+      .mockResolvedValueOnce(respond(makeBody([makeSubTask('b')], false)));
+
+    const { result } = renderHook(
+      () => useTaskSubTasks({ pageId: 'parent-page', subTaskCount: 2 }),
+      { wrapper: makeWrapper() },
+    );
+    await waitFor(() => expect(result.current.subTasks).toHaveLength(1));
+    await act(async () => { result.current.loadMore(); });
+    await waitFor(() => expect(result.current.error).toBeDefined());
+
+    await act(async () => { result.current.loadMore(); });
+    await waitFor(() => expect(result.current.subTasks).toHaveLength(2));
+
+    assert({
+      given: 'a retry after a failed second page',
+      should: 'fetch the page that failed rather than skipping past it, and clear the error',
+      actual: {
+        ids: result.current.subTasks.map((t) => t.id),
+        urls: fetchWithAuth.mock.calls.map((c) => c[0]),
+        error: result.current.error,
+      },
+      expected: {
+        ids: ['a', 'b'],
+        urls: [
+          '/api/pages/parent-page/tasks?limit=100&offset=0',
+          '/api/pages/parent-page/tasks?limit=100&offset=100',
+          '/api/pages/parent-page/tasks?limit=100&offset=100',
+        ],
+        error: undefined,
+      },
+    });
+  });
+
   it('pages through a long sub-task list on demand', async () => {
     fetchWithAuth
       .mockResolvedValueOnce(respond(makeBody([makeSubTask('a')], true)))

@@ -115,6 +115,13 @@ export function useTaskSubTasks(
       revalidateOnReconnect: false,
       revalidateIfStale: false,
       revalidateFirstPage: false,
+      // SWR retries failed fetches on its own by default (5 attempts, exponential backoff).
+      // That fights the rest of this config: every other automatic request is off precisely
+      // because a request here can lazily write, and a silent background retry also makes
+      // `error` a value that appears and disappears on a timer — impossible for a caller to
+      // render honestly, and impossible for a test to observe without racing it. Failure is
+      // therefore terminal and visible, and the "Load more" control becomes the retry.
+      shouldRetryOnError: false,
     },
   );
 
@@ -145,12 +152,19 @@ export function useTaskSubTasks(
     isLoading: gateOpen && isLoading,
     // A "Load more" click bumps `size` past 1 before the new page resolves into
     // `pages`. `size > 1` keeps the initial load out of this — that one is `isLoading`.
-    // The `hasMore` term is what stops this latching on: once the loaded pages end in
-    // hasMore: false, the key function returns null for every further index, so `pages`
-    // can never catch up to an inflated `size` and a bare length comparison would report
-    // "loading more" forever. While a page really is in flight, the last LOADED page still
-    // says hasMore, so this stays true exactly as long as it should.
-    isLoadingMore: gateOpen && size > 1 && hasMore && (pages === undefined || pages.length < size),
+    //
+    // The other two terms both exist to stop this latching on, because `pages` catching up
+    // to `size` is not the only way a load ends:
+    //   - `hasMore`: once the loaded pages end in hasMore: false, the key function returns
+    //     null for every further index, so `pages` can never reach an inflated `size`.
+    //   - `!normalizedError`: a later page that REJECTS also leaves `pages` short forever —
+    //     retries are off, so nothing is in flight — while `hasMore` still reads true from
+    //     the last page that did load. Reporting "loading more" there would disable the very
+    //     control that retries it, under an error message saying it failed.
+    // While a page genuinely is in flight, neither term fires: the last LOADED page still
+    // says hasMore and no error is standing.
+    isLoadingMore: gateOpen && size > 1 && hasMore && !normalizedError
+      && (pages === undefined || pages.length < size),
     error: normalizedError,
     loadMore,
   };

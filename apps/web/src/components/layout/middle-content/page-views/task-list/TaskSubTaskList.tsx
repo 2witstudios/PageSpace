@@ -82,12 +82,15 @@ export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
       )}
 
       {/* The count above has already told the user this task has N sub-tasks, so an empty list
-          under it reads as "there are none" — the one thing that is definitely not true. Both
-          ways of getting there say what actually happened: the fetch failed, or the children
-          went away between the parent list loading and this expansion. */}
+          under it reads as "there are none" — the one thing that is definitely not true. Each
+          way of getting there says which one it was: the fetch failed outright, a later page
+          failed after some rows were already shown, or the children went away between the
+          parent list loading and this expansion. */}
       {!isLoading && (error || subTasks.length === 0) && (
         <p className="px-1 text-xs text-muted-foreground italic">
-          {error ? 'Could not load sub-tasks.' : 'These sub-tasks are no longer here.'}
+          {error
+            ? (subTasks.length > 0 ? 'Could not load the rest of the sub-tasks.' : 'Could not load sub-tasks.')
+            : 'These sub-tasks are no longer here.'}
         </p>
       )}
 
@@ -99,7 +102,9 @@ export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
           disabled={isLoadingMore}
           onClick={loadMore}
         >
-          {isLoadingMore ? 'Loading…' : 'Load more sub-tasks'}
+          {/* After a failure this is the retry: nothing retries on its own (see the hook's
+              shouldRetryOnError), so the label has to say that this is the way back. */}
+          {isLoadingMore ? 'Loading…' : error ? 'Try again' : 'Load more sub-tasks'}
         </Button>
       )}
     </div>
