@@ -164,6 +164,27 @@ const MEDIAL_SIGMA = '\u03c3';
  * property membership moves with the engine's ICU build, which the whole module
  * is built to avoid.
  */
+/**
+ * Renders as nothing on its own AND contributes nothing beside other text: the
+ * Hangul fillers and the Braille blank cell.
+ *
+ * Folded out of the KEY but kept in the NAME. Keeping them in the key is the
+ * dedupe hole INVISIBLE_FORMATTING's docstring calls "the more damaging half":
+ * `admin` and `admin<U+FFA0>` both render as `admin`, so two rows survive
+ * UNIQUE (driveId, normalizedKey), filtering by the visible tag finds half the
+ * content, and the lookalike cannot be reproduced by typing.
+ *
+ * Deliberately NOT the joiners or the variation selectors, which also render as
+ * nothing alone but change how their NEIGHBOURS render — folding those would
+ * make the family emoji key the same as three separate people.
+ *
+ * The cost, stated: a Braille tag mixing blank cells with real ones keys the
+ * same as one without them. Two Braille strings differing only in blank cells
+ * are near-indistinguishable on screen anyway, so collapsing them is the same
+ * trade made everywhere else here.
+ */
+const BLANK_IN_KEY = /[\u115f\u1160\u3164\uffa0\u2800]/g;
+
 const NOTHING_VISIBLE =
   /^[\u180b-\u180d\u180f\u200c\u200d\u115f\u1160\u3164\uffa0\u2800\ufe00-\ufe0f\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]*$/u;
 
@@ -262,7 +283,13 @@ function collapse(value: string): string {
  *   case folding does; one `replace` buys it.
  */
 export function tagKey(name: string): string {
-  const folded = name.normalize('NFKC').toLowerCase().replace(FINAL_SIGMA, MEDIAL_SIGMA);
+  // Strips the invisibles again even though a normalized name has none left.
+  // It is idempotent there, and it stops the obvious next-phase use — keying a
+  // raw search string to find an existing tag — from silently producing a key
+  // no stored row can carry, where one pasted zero-width space misses the row
+  // and drives a duplicate insert.
+  const stripped = name.replace(INVISIBLE_FORMATTING, '').replace(BLANK_IN_KEY, '');
+  const folded = stripped.normalize('NFKC').toLowerCase().replace(FINAL_SIGMA, MEDIAL_SIGMA);
   return collapse(folded.normalize('NFKC'));
 }
 
@@ -450,6 +477,41 @@ export function validateTarget(pageType: string, target: TagTarget): TargetValid
     };
   }
 
+  // `target` gets the same treatment as `pageType` above: it arrives from a
+  // request body, so a missing payload must be a rejection rather than a
+  // TypeError from the guard the service and the database are meant to agree on.
+  if ((target.kind === 'text' || target.kind === 'sheet_cell') && !target.anchor) {
+    return {
+      ok: false,
+      reason: 'payload_mismatch',
+      kind: target.kind,
+      detail: 'anchor is missing',
+    };
+  }
+
+  if (target.kind === 'text') {
+    const { anchor } = target;
+    // An anchor with no quote AND no context on either side cannot be located
+    // by anything: resolveAnchor orphans exactly this shape, so a tag stored
+    // with it is orphaned from birth. A caret WITH context is legitimate.
+    if (anchor.exact.length === 0 && anchor.prefix.length === 0 && anchor.suffix.length === 0) {
+      return {
+        ok: false,
+        reason: 'payload_mismatch',
+        kind: target.kind,
+        detail: 'anchor has neither a quote nor any context',
+      };
+    }
+    if (!(anchor.start >= 0) || !(anchor.end >= anchor.start)) {
+      return {
+        ok: false,
+        reason: 'payload_mismatch',
+        kind: target.kind,
+        detail: `anchor range is not ascending: ${anchor.start}..${anchor.end}`,
+      };
+    }
+  }
+
   if (target.kind === 'sheet_cell') {
     // Both halves of the natural key, not just one. A sheet cell is identified
     // by (sheet name, A1 address), so an anchor missing either half points at
@@ -464,12 +526,20 @@ export function validateTarget(pageType: string, target: TagTarget): TargetValid
         detail: 'sheet name is empty',
       };
     }
-    if (!isValidCellAddress(target.anchor.address)) {
+    // Canonical form, not merely a form isValidCellAddress tolerates. That
+    // helper trims and upper-cases before testing, so 'aa10' and ' A1 ' pass —
+    // but the payload is stored verbatim while sheet storage keys cells by the
+    // UPPERCASED address (sheets/io.ts), so a tag on 'aa10' would validate and
+    // then never match cells['AA10']. Requiring the canonical form is what
+    // actually makes the guard and the storage agree; the service upper-cases
+    // before calling, since a pure function cannot do it for the caller.
+    const { address } = target.anchor;
+    if (!isValidCellAddress(address) || address !== address.trim().toUpperCase()) {
       return {
         ok: false,
         reason: 'payload_mismatch',
         kind: target.kind,
-        detail: `not an A1 cell address: ${JSON.stringify(target.anchor.address)}`,
+        detail: `not a canonical A1 cell address: ${JSON.stringify(address)}`,
       };
     }
   }

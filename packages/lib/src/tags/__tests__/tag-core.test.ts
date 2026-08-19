@@ -266,6 +266,25 @@ describe('normalizeTagName — invisible characters', () => {
     expect(expectOk(U(0x2800) + 'x').name).toBe(U(0x2800) + 'x');
   });
 
+  it('folds blank renderers out of the KEY while keeping them in the name', () => {
+    // The dedupe hole the strip docstring calls the more damaging half:
+    // `admin` and `admin<U+FFA0>` both render as `admin`, so keying them apart
+    // leaves two rows under UNIQUE (driveId, normalizedKey), and filtering by
+    // the visible tag finds half the content.
+    for (const cp of [0x115f, 0x1160, 0x3164, 0xffa0, 0x2800]) {
+      const decorated = 'admin' + U(cp);
+      expect(expectOk(decorated).key, `U+${cp.toString(16)}`).toBe(expectOk('admin').key);
+      // Still preserved in the display name — these are real characters.
+      expect(expectOk(decorated).name).toBe(decorated);
+    }
+
+    // NOT the joiners or selectors: those change how their neighbours render,
+    // so folding them would key the family emoji as three separate people.
+    const family = U(0x1f468) + ZWJ + U(0x1f469) + ZWJ + U(0x1f467);
+    const apart = U(0x1f468) + U(0x1f469) + U(0x1f467);
+    expect(expectOk(family).key).not.toBe(expectOk(apart).key);
+  });
+
   it('KEEPS the joiners, which are meaning rather than noise', () => {
     // Stripping ZWJ turns one family into three separate people.
     const family = expectOk(FAMILY);
@@ -461,7 +480,11 @@ describe('normalizeTagName — length', () => {
       if (cp >= 0xd800 && cp <= 0xdfff) {
         continue;
       }
-      const expanded = [...U(cp).normalize('NFKC').toLowerCase()].length;
+      // Measured through tagKey itself, not a hand-copied prefix of it: the
+      // trailing NFKC is the pass the docstring calls load-bearing, and a
+      // future Unicode whose lowercase form re-expands under it would leave a
+      // partial measurement green while the constant understated the ceiling.
+      const expanded = [...tagKey(U(cp))].length;
       if (expanded > worstExpansion) {
         worstExpansion = expanded;
         worstCodePoint = cp;
@@ -523,6 +546,15 @@ describe('tagKey and idempotency', () => {
       const { name, key } = expectOk(raw);
       expect(tagKey(name), `tagKey mismatch for ${JSON.stringify(raw)}`).toBe(key);
     }
+  });
+
+  it('is safe on a raw string, not only on an already-normalized name', () => {
+    // The obvious next-phase use is keying a search box's contents to find an
+    // existing tag. One pasted zero-width space would otherwise produce a key
+    // no stored row can carry — missing the row and driving a duplicate insert.
+    expect(tagKey('de' + ZWSP + 'sign')).toBe(tagKey('design'));
+    expect(tagKey('admin' + U(0xffa0))).toBe(tagKey('admin'));
+    expect(tagKey('  Design   System  ')).toBe(expectOk('Design System').key);
   });
 
   it('is idempotent — re-normalizing a name changes nothing', () => {
@@ -674,9 +706,19 @@ describe('validateTarget', () => {
     expect(
       validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'banana' } })
     ).toMatchObject({ reason: 'payload_mismatch', kind: 'sheet_cell' });
-    // A real address is accepted, in either case.
+    // The canonical form is accepted; forms isValidCellAddress merely tolerates
+    // are not. That helper trims and upper-cases before testing, but the payload
+    // is stored verbatim while sheet storage keys cells by the UPPERCASED
+    // address — so a tag on 'aa10' would validate and then never match
+    // cells['AA10'].
     expect(validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'B12' } })).toEqual({ ok: true });
-    expect(validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'aa10' } })).toEqual({ ok: true });
+    expect(validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: 'AA10' } })).toEqual({ ok: true });
+    for (const tolerated of ['aa10', ' A1 ', 'a1']) {
+      expect(
+        validateTarget('SHEET', { kind: 'sheet_cell', anchor: { v: 1, sheet: 'S', address: tolerated } }),
+        tolerated
+      ).toMatchObject({ reason: 'payload_mismatch' });
+    }
   });
 
   it('refuses an unknown page type instead of throwing', () => {
@@ -716,6 +758,51 @@ describe('validateTarget', () => {
         pageType: inherited,
       });
     }
+  });
+
+  it('rejects a missing anchor instead of throwing on it', () => {
+    // `target` arrives from a request body just as `pageType` does. Hardening
+    // one and trusting the other turns a malformed payload into a 500 from the
+    // function documented as the guard the service and the database agree on.
+    for (const kind of ['text', 'sheet_cell'] as const) {
+      const pageType = kind === 'text' ? 'DOCUMENT' : 'SHEET';
+      const malformed = { kind } as unknown as TagTarget;
+      expect(() => validateTarget(pageType, malformed)).not.toThrow();
+      expect(validateTarget(pageType, malformed)).toMatchObject({
+        reason: 'payload_mismatch',
+        detail: 'anchor is missing',
+      });
+    }
+  });
+
+  it('rejects a text anchor that nothing could ever resolve', () => {
+    // No quote and no context on either side is the one shape resolveAnchor
+    // orphans outright, so a tag stored with it is orphaned from birth. A caret
+    // WITH context is legitimate and must still pass.
+    const unresolvable: TextAnchor = {
+      v: 1,
+      exact: '',
+      prefix: '',
+      suffix: '',
+      start: 0,
+      end: 0,
+      revision: 0,
+      textHash: '',
+    };
+    expect(validateTarget('DOCUMENT', { kind: 'text', anchor: unresolvable })).toMatchObject({
+      reason: 'payload_mismatch',
+    });
+    expect(
+      validateTarget('DOCUMENT', { kind: 'text', anchor: { ...unresolvable, prefix: 'before' } })
+    ).toEqual({ ok: true });
+
+    // And a range that does not ascend is not a range.
+    expect(
+      validateTarget('DOCUMENT', { kind: 'text', anchor: { ...anchor, start: 5, end: 2 } })
+    ).toMatchObject({ reason: 'payload_mismatch' });
+    expect(
+      validateTarget('DOCUMENT', { kind: 'text', anchor: { ...anchor, start: -1, end: 4 } })
+    ).toMatchObject({ reason: 'payload_mismatch' });
   });
 
   it('checks the page type before the payload', () => {
