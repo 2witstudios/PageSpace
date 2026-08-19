@@ -35,7 +35,9 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: (...args: unknown[]) => mockIsSheetType(...args),
-  parseSheetContent: vi.fn(),
+  // The route refuses to write when existing content cannot be read, so it
+  // parses through the ok/failure API rather than the lossy one.
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
@@ -281,7 +283,10 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
       });
 
       const sheetModule = await import('@pagespace/lib/sheets/sheet');
-      (sheetModule.parseSheetContent as ReturnType<typeof vi.fn>).mockReturnValue({ cells: {}, rowCount: 1, columnCount: 1 });
+      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        sheet: { cells: {}, rowCount: 1, columnCount: 1 },
+      });
       (sheetModule.updateSheetCells as ReturnType<typeof vi.fn>).mockReturnValue({ cells: {}, rowCount: 1, columnCount: 1 });
       (sheetModule.serializeSheetContent as ReturnType<typeof vi.fn>).mockReturnValue('[cells]\nA1 = "2"');
 

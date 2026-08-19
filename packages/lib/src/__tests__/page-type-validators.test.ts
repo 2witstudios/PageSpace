@@ -8,6 +8,33 @@ import {
 } from '../content/page-type-validators'
 import { PageType } from '../utils/enums'
 
+/**
+ * Genuinely valid SheetDoc content.
+ *
+ * These tests previously used `'#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'`,
+ * which carries the magic prefix but is malformed TOML (`cells=` has no
+ * value). It only passed because the validator trusted the prefix without
+ * parsing the body — the same gap that let newline-corrupted content reach
+ * storage and read back as an empty sheet. The intent of the assertions is
+ * unchanged; the fixture now matches what it claims to be.
+ */
+const VALID_SHEETDOC_CONTENT = [
+  '#%PAGESPACE_SHEETDOC v1',
+  '',
+  '[[sheets]]',
+  'name = "Sheet1"',
+  'order = 0',
+  '',
+  '[sheets.meta]',
+  'row_count = 10',
+  'column_count = 10',
+  '',
+  '[sheets.cells.A1]',
+  'value = "hello"',
+  'type = "string"',
+  '',
+].join('\n')
+
 describe('page-type-validators', () => {
   describe('validatePageCreation', () => {
     it('validates valid DOCUMENT creation', () => {
@@ -119,7 +146,7 @@ describe('page-type-validators', () => {
     it('validates valid SHEET creation', () => {
       const result = validatePageCreation(PageType.SHEET, {
         title: 'Test Sheet',
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)
@@ -230,7 +257,7 @@ describe('page-type-validators', () => {
 
     it('validates valid sheet content for SHEET', () => {
       const result = validatePageUpdate(PageType.SHEET, {
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)
@@ -443,7 +470,7 @@ describe('page-type-validators', () => {
     it('accepts SHEET with valid SheetDoc content', () => {
       const result = validatePageCreation(PageType.SHEET, {
         title: 'Sheet Test',
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)

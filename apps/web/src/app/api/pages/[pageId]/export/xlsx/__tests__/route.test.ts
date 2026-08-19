@@ -48,6 +48,19 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
   parseSheetContent: vi.fn(),
   sanitizeSheetData: vi.fn((data: unknown) => data),
   evaluateSheet: vi.fn(),
+  // The route resolves each cell's underlying value and number format so the
+  // workbook carries real numbers; these are pure helpers, so the real
+  // implementations are the right thing to use here.
+  encodeCellAddress: (row: number, column: number) => {
+    let letters = '';
+    let remaining = column;
+    do {
+      letters = String.fromCharCode(65 + (remaining % 26)) + letters;
+      remaining = Math.floor(remaining / 26) - 1;
+    } while (remaining >= 0);
+    return `${letters}${row + 1}`;
+  },
+  numberFormatToExcelCode: () => undefined,
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -122,6 +135,12 @@ const mockEvaluation = {
     ['John', '30'],
   ],
   errors: {},
+  byAddress: {
+    A1: { value: 'Name', display: 'Name' },
+    B1: { value: 'Age', display: 'Age' },
+    A2: { value: 'John', display: 'John' },
+    B2: { value: 30, display: '30' },
+  },
 };
 
 describe('GET /api/pages/[pageId]/export/xlsx', () => {
@@ -234,7 +253,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         mockEvaluation.display,
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: expect.any(Array) })
       );
     });
 
@@ -344,6 +364,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [['10', '20', '30']],
         errors: {},
+        byAddress: {},
       } as never);
 
       await GET(createRequest(), { params: mockParams });
@@ -351,7 +372,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         [['10', '20', '30']],
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: expect.any(Array) })
       );
     });
 
@@ -365,6 +387,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: [],
         errors: {},
+        byAddress: {},
       } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
@@ -373,7 +396,8 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       expect(generateExcel).toHaveBeenCalledWith(
         [],
         'Test Sheet',
-        'Test Sheet'
+        'Test Sheet',
+        expect.objectContaining({ values: [] })
       );
     });
 
@@ -385,6 +409,7 @@ describe('GET /api/pages/[pageId]/export/xlsx', () => {
       vi.mocked(evaluateSheet).mockReturnValue({
         display: largeDisplay,
         errors: {},
+        byAddress: {},
       } as never);
       vi.mocked(generateExcel).mockReturnValue(Buffer.alloc(100000) as never);
 

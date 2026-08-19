@@ -190,7 +190,7 @@ How to read it:
 
 1. **Guessing Excel functions.** VLOOKUP, XLOOKUP, INDEX, MATCH, SUMIF, SUMIFS, COUNTIF, AVERAGEIF, TEXT, DATE, DATEDIF, EOMONTH, TEXTJOIN, SPLIT, PROPER, MEDIAN, STDEV, PRODUCT, ROUNDUP, ROUNDDOWN, TRUNC, EXP, LN, LOG, ARRAYFORMULA — none exist. Only the table above is real. For conditional aggregation, add a helper column of \`IF(...)\` values and SUM it.
 2. **Unbounded ranges.** \`=SUM(A:A)\` is a parse error. Always use bounded ranges like \`A2:A50\`.
-3. **Newlines in cell values.** Never put a line break inside a cell value — the stored TOML cannot represent it, and a sheet whose serialization fails to parse comes back **empty** (silent data loss). Keep every cell single-line.
+3. **Newlines in cell values.** A line break inside a cell value is stored correctly and survives a round trip. The grid renders it on one line unless the cell is set to wrap, so prefer single-line values for readability — but a multi-line value is safe, not destructive.
 4. **Leading \`=\` on literal text.** Any value starting with \`=\` becomes a formula; there is no apostrophe-escape. Don't start plain-text values with \`=\`.
 5. **Text in numeric ranges.** One non-numeric string inside \`SUM\`'s range errors the whole formula (AVERAGE skips it instead). Keep data columns clean; don't mix "N/A" into number columns — leave the cell empty.
 6. **FIND/SEARCH on a miss is an error**, not -1 or blank. Wrap in \`IFERROR\` if absence is expected.

@@ -13,7 +13,7 @@ import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
-import { parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
+import { parseSheetContentSafe, serializeSheetContent, updateSheetCells, isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -1515,11 +1515,18 @@ export const pageWriteTools = {
           throw new Error(`Invalid cell addresses: ${examples}. Use A1-style format (e.g., A1, B2, AA100).`);
         }
 
-        // Parse the existing sheet content
-        const sheetData = parseSheetContent(page.content);
+        // Parse the existing sheet content. A parse failure must abort: writing
+        // the empty sheet the unsafe parse returns would replace the whole
+        // spreadsheet with just the cells in this call.
+        const parsedSheet = parseSheetContentSafe(page.content);
+        if (!parsedSheet.ok) {
+          throw new Error(
+            `This sheet's stored content could not be read (${parsedSheet.reason}), so it cannot be edited without losing data. It needs repair first.`
+          );
+        }
 
         // Apply the cell updates
-        const updatedSheet = updateSheetCells(sheetData, cells);
+        const updatedSheet = updateSheetCells(parsedSheet.sheet, cells);
 
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });

@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import type { Socket } from 'socket.io-client';
-import { parseSheetContent, sanitizeSheetData, type SheetData } from '@pagespace/lib/sheets/sheet';
+import { parseSheetContentSafe, sanitizeSheetData, type SheetData } from '@pagespace/lib/sheets/sheet';
 import { useDocument } from '@/hooks/useDocument';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { PageEventPayload } from '@/lib/websocket';
@@ -25,7 +25,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   const {
     document: documentState,
     initializeAndActivate,
-    updateContent,
+    updateContent: baseUpdateContent,
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
@@ -33,6 +33,10 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     resolveConflict,
     isResolvingConflict,
   } = useDocument(pageId);
+
+  // Non-null when the stored content could not be parsed; the view uses this to
+  // disable editing rather than overwrite content it failed to read.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Keep forceSave/isDirty/content in refs so the empty-dep listeners below never
   // re-subscribe and always see the latest values.
@@ -53,13 +57,48 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     initializeAndActivate();
   }, [initializeAndActivate, pageId]);
 
-  // Reset history whenever content is (re)loaded from the server so undo cannot
+  // Content this hook has already reconciled — either loaded from the server or
+  // echoed back from a local edit. Used to tell those two apart below.
+  const knownContentRef = useRef<string | null>(null);
+
+  // Record locally-originated content before it round-trips through the store,
+  // so the reset effect can recognise the echo and leave history alone.
+  const updateContent = useCallback(
+    (content: string) => {
+      knownContentRef.current = content;
+      baseUpdateContent(content);
+    },
+    [baseUpdateContent]
+  );
+
+  // Reset history when content is (re)loaded from the server, so undo cannot
   // walk back into stale state.
+  //
+  // This deliberately keys on the content string rather than on `documentState`.
+  // `documentState` is a fresh object on every store write, so depending on it
+  // fired this effect after every local keystroke and cleared the undo stack —
+  // undo was dead in practice. Comparing content means only genuinely new,
+  // server-originated content resets history.
   useEffect(() => {
-    if (documentState) {
-      resetHistory(sanitizeSheetData(parseSheetContent(documentState.content)));
+    const content = documentState?.content;
+    if (content === undefined || content === knownContentRef.current) {
+      return;
     }
-  }, [documentState, resetHistory]);
+
+    knownContentRef.current = content;
+
+    const parsed = parseSheetContentSafe(content);
+    if (!parsed.ok) {
+      // The content exists but cannot be read. Do NOT hand an empty sheet to
+      // the editor: it would autosave that empty sheet straight over the user's
+      // data. Surface the failure and let the view disable editing.
+      setLoadError(parsed.message);
+      return;
+    }
+
+    setLoadError(null);
+    resetHistory(sanitizeSheetData(parsed.sheet));
+  }, [documentState?.content, resetHistory]);
 
   // Socket updates — uses refs to avoid re-subscribing on every content change.
   useEffect(() => {
@@ -120,6 +159,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
 
   return {
     documentState,
+    loadError,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,

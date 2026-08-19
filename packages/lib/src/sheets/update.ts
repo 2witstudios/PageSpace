@@ -4,7 +4,7 @@
  */
 
 import { PageType } from '../utils/enums';
-import type { SheetData, SheetCellUpdate } from './types';
+import type { CellFormat, SheetData, SheetCellUpdate } from './types';
 import { cellRegex, decodeCellAddress } from './address';
 
 /**
@@ -43,7 +43,33 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     rowCount: Math.max(1, sheet.rowCount),
     columnCount: Math.max(1, sheet.columnCount),
     cells: sanitizedCells,
+    formats: sanitizeFormats(sheet.formats),
   };
+}
+
+/**
+ * Drop format entries whose address is not a valid A1 reference.
+ *
+ * Entries that are merely *outside* the current row/column count are kept on
+ * purpose: a sheet that temporarily shrinks — or one whose formatting was
+ * applied ahead of its data — must not lose its styling, and the grid simply
+ * ignores formats it cannot show.
+ */
+function sanitizeFormats(
+  formats: Record<string, CellFormat> | undefined
+): Record<string, CellFormat> | undefined {
+  if (!formats) return undefined;
+
+  const sanitized: Record<string, CellFormat> = {};
+
+  for (const [key, format] of Object.entries(formats)) {
+    const normalized = key.toUpperCase();
+    if (!cellRegex.test(normalized)) continue;
+    if (!format || typeof format !== 'object') continue;
+    sanitized[normalized] = format;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 /**

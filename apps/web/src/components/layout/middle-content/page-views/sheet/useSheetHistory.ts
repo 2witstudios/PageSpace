@@ -3,6 +3,28 @@ import type { SheetData } from '@pagespace/lib/sheets/sheet';
 
 const MAX_HISTORY_SIZE = 50;
 
+/**
+ * Whether two sheet states are equivalent for undo purposes.
+ *
+ * Every field that is persisted must be compared here. Anything omitted
+ * becomes a change the editor silently drops from memory while still saving it
+ * — the worst of both worlds, because the next edit then writes the stale
+ * state back over it.
+ */
+const isSameSheetState = (a: SheetData, b: SheetData): boolean =>
+  a.rowCount === b.rowCount &&
+  a.columnCount === b.columnCount &&
+  a.frozenRows === b.frozenRows &&
+  a.frozenColumns === b.frozenColumns &&
+  a.sheetName === b.sheetName &&
+  JSON.stringify(a.cells) === JSON.stringify(b.cells) &&
+  JSON.stringify(a.formats) === JSON.stringify(b.formats) &&
+  JSON.stringify(a.columnFormats) === JSON.stringify(b.columnFormats) &&
+  JSON.stringify(a.columnWidths) === JSON.stringify(b.columnWidths) &&
+  JSON.stringify(a.rowHeights) === JSON.stringify(b.rowHeights) &&
+  JSON.stringify(a.ranges) === JSON.stringify(b.ranges) &&
+  JSON.stringify(a.extraSheets) === JSON.stringify(b.extraSheets);
+
 interface HistoryState {
   past: SheetData[];
   present: SheetData;
@@ -51,12 +73,15 @@ export function useSheetHistory(initialSheet: SheetData): UseSheetHistoryReturn 
       setHistory((prev) => {
         const newPresent = typeof updater === 'function' ? updater(prev.present) : updater;
 
-        // If the sheet hasn't actually changed, don't add to history
-        if (
-          JSON.stringify(newPresent.cells) === JSON.stringify(prev.present.cells) &&
-          newPresent.rowCount === prev.present.rowCount &&
-          newPresent.columnCount === prev.present.columnCount
-        ) {
+        // If the sheet hasn't actually changed, don't add to history.
+        //
+        // This must consider presentation as well as values: a sheet carries
+        // formats, column widths, row heights and frozen panes beside its
+        // cells, and comparing only `cells` would treat "make A1 bold" as a
+        // no-op — discarding it from state while it had already been sent to
+        // the server, so the next edit would serialize the stale state and
+        // delete the formatting again.
+        if (isSameSheetState(newPresent, prev.present)) {
           return prev;
         }
 

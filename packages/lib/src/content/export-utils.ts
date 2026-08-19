@@ -77,16 +77,77 @@ export function generateCSV(data: string[][]): string {
 }
 
 /**
+ * The underlying values and formats behind the displayed grid, so an export
+ * can carry real numbers and number formats instead of formatted text.
+ */
+export interface TypedSheetExport {
+  /** Row-major computed values, parallel to the `data` passed to generateExcel. */
+  values: (number | string | boolean | null | undefined)[][];
+  /** Excel number-format codes (`z`), parallel to `values`. */
+  numberFormats?: (string | undefined)[][];
+  /** Column widths in px, by column index; converted to Excel character units. */
+  columnWidths?: (number | undefined)[];
+}
+
+/*
+ * Note: frozen panes are deliberately not exported. `xlsx@0.18.5` (the
+ * community build) ignores a `!freeze` worksheet property — it writes no
+ * `<pane>` element — so setting it would be dead code implying a feature that
+ * does not survive the round trip.
+ */
+
+/** Excel measures column width in characters; the grid measures it in pixels. */
+const pxToExcelWidth = (px: number): number => Math.max(1, Math.round((px - 5) / 7));
+
+function applyTypedCells(
+  worksheet: XLSX.WorkSheet,
+  typed: TypedSheetExport
+): void {
+  typed.values.forEach((row, rowIndex) => {
+    row.forEach((value, columnIndex) => {
+      if (value === null || value === undefined || value === '') {
+        return;
+      }
+
+      const address = XLSX.utils.encode_cell({ r: rowIndex, c: columnIndex });
+      const cell = worksheet[address] as XLSX.CellObject | undefined;
+      if (!cell) {
+        return;
+      }
+
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        cell.t = 'n';
+        cell.v = value;
+      } else if (typeof value === 'boolean') {
+        cell.t = 'b';
+        cell.v = value;
+      } else {
+        // Leave text as text — but keep the displayed string, which may be
+        // formatted, as what the user sees.
+        return;
+      }
+
+      const numberFormat = typed.numberFormats?.[rowIndex]?.[columnIndex];
+      if (numberFormat) {
+        cell.z = numberFormat;
+      }
+    });
+  });
+}
+
+/**
  * Generates an Excel (.xlsx) buffer from a 2D array of cell values
  * @param data - 2D array of cell display values
  * @param sheetName - Name of the worksheet (default: 'Sheet1')
  * @param title - Workbook title
+ * @param typed - Optional underlying values/formats, so numbers export as numbers
  * @returns Buffer containing the Excel data
  */
 export function generateExcel(
   data: string[][],
   sheetName: string = 'Sheet1',
-  title?: string
+  title?: string,
+  typed?: TypedSheetExport
 ): Buffer {
   try {
     // Create a new workbook
@@ -104,6 +165,13 @@ export function generateExcel(
     // Create worksheet from 2D array
     const worksheet = XLSX.utils.aoa_to_sheet(data);
 
+    // Replace the string cells with real typed ones where we know the
+    // underlying value. Exporting every number as text is what makes an
+    // exported sheet unusable in Excel: nothing sums, sorts or charts.
+    if (typed) {
+      applyTypedCells(worksheet, typed);
+    }
+
     // Auto-size columns based on content
     const maxColumnWidths: number[] = [];
     data.forEach(row => {
@@ -115,10 +183,15 @@ export function generateExcel(
       });
     });
 
-    // Set column widths (with a max of 50 characters)
-    worksheet['!cols'] = maxColumnWidths.map(width => ({
-      wch: Math.min(width + 2, 50)
-    }));
+    // Set column widths (with a max of 50 characters). An explicit width set in
+    // the sheet wins over the auto-size guess.
+    worksheet['!cols'] = maxColumnWidths.map((width, columnIndex) => {
+      const explicit = typed?.columnWidths?.[columnIndex];
+      if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+        return { wch: pxToExcelWidth(explicit) };
+      }
+      return { wch: Math.min(width + 2, 50) };
+    });
 
     // Add worksheet to workbook
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
