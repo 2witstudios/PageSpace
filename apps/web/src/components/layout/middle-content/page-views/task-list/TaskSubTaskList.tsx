@@ -90,11 +90,12 @@ export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
         </ul>
       )}
 
-      {/* The count above has already told the user this task has N sub-tasks, so an empty list
-          under it reads as "there are none" — the one thing that is definitely not true. Each
-          way of getting there says which one it was: the fetch failed outright, a later page
-          failed after some rows were already shown, or the children went away between the
-          parent list loading and this expansion. */}
+      {/* An expanded row that shows nothing has to say why — it was expandable precisely
+          because a count said there was something here. Each way of arriving at an empty or
+          short list says which one it was: the fetch failed outright, a later page failed after
+          some rows were already shown, or the children went away between the parent list
+          loading and this expansion. (In that last case the header above has already corrected
+          itself to 0 via shownCount; this explains the 0.) */}
       {!isLoading && (error || subTasks.length === 0) && (
         <p className="px-1 text-xs text-muted-foreground italic">
           {error

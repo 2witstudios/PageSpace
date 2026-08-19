@@ -28,9 +28,14 @@ import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types
 /**
  * Must stay <= the GET route's MAX_LIMIT (query-spec.ts, 200) or the server silently clamps
  * the page down while `offset` keeps advancing by this number — which skips rows rather than
- * failing. It happens to equal TaskListView's own TASKS_PAGE_SIZE, but nothing requires that:
- * they are page sizes for two different lists, and coupling them would be a coupling this
- * code does not actually have.
+ * failing.
+ *
+ * It equals TaskListView's own TASKS_PAGE_SIZE, and nothing requires it to: these are page
+ * sizes for two different lists and either can change alone. But do not read "independent" as
+ * "unrelated" — while the two are equal, the two hooks build the SAME request URL for the same
+ * page, which is what made their SWR keys collide before SUB_TASKS_CACHE_NAMESPACE existed.
+ * The namespace holds either way; this is only here so the next reader does not conclude from
+ * "independent" that the URLs can never coincide.
  */
 export const SUB_TASKS_PAGE_SIZE = 100;
 
