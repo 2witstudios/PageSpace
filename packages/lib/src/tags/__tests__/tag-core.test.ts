@@ -173,6 +173,51 @@ describe('normalizeTagName — invisible characters', () => {
     }
   });
 
+  it('accounts for EVERY default-ignorable code point, not the ones I remembered', () => {
+    // Three review rounds each found a different missing code point (U+2060,
+    // U+E0001, and the deprecated format block), which is the signature of a
+    // list maintained by memory. So this sweeps the whole class and fails on
+    // anything unaccounted for: strip it, or justify keeping it here.
+    //
+    // The module itself may not use a Unicode property escape — its output has
+    // to be identical on every runtime, and property membership tracks the
+    // engine's ICU build. A TEST may, and should: if a future runtime knows
+    // about ignorables this build does not, that is a new dedupe hole, and a
+    // loud CI failure is exactly how one would want to hear about it.
+    const KEPT_ON_PURPOSE = (cp: number): boolean =>
+      cp === 0x200c || // ZWNJ — required orthography in Persian and Indic scripts
+      cp === 0x200d || // ZWJ — joins the family emoji into one glyph
+      (cp >= 0xfe00 && cp <= 0xfe0f) || // variation selectors
+      (cp >= 0xe0100 && cp <= 0xe01ef) || // variation selectors supplement
+      (cp >= 0x180b && cp <= 0x180d) || // Mongolian free variation selectors
+      cp === 0x180f ||
+      (cp >= 0xe0020 && cp <= 0xe007f) || // tag characters — subdivision flags
+      // Blank renderers: kept here, refused as a whole name by NOTHING_VISIBLE.
+      cp === 0x115f ||
+      cp === 0x1160 ||
+      cp === 0x3164 ||
+      cp === 0xffa0;
+
+    const ignorable = /\p{Default_Ignorable_Code_Point}/u;
+    const leaked: string[] = [];
+
+    for (let cp = 0; cp < 0x110000; cp += 1) {
+      if (cp >= 0xd800 && cp <= 0xdfff) {
+        continue;
+      }
+      const char = U(cp);
+      if (!ignorable.test(char) || KEPT_ON_PURPOSE(cp)) {
+        continue;
+      }
+      const result = normalizeTagName('a' + char + 'b');
+      if (result.ok && result.name !== 'ab') {
+        leaked.push(`U+${cp.toString(16).toUpperCase()}`);
+      }
+    }
+
+    expect(leaked).toEqual([]);
+  });
+
   it('refuses a name that renders as nothing, however many code points it has', () => {
     // Neither stripped nor collapsed, and each a different code point — so
     // several distinct blank tags could coexist, and nobody could retype,

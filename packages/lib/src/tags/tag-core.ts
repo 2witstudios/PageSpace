@@ -102,18 +102,26 @@ export type TagNameResult = { ok: true; name: string; key: string } | TagNameRej
  * musical format controls are all equally unrenderable and equally usable to
  * mint a duplicate tag that looks identical in every chip and autocomplete.
  *
- * U+E0001 and the unassigned block behind it are stripped rather than merely
- * treated as blank. Counting them blank would refuse a name made only of them
- * while still letting `a<U+E0001>b` key differently from `ab` — the dedupe hole
- * left open. The real tag characters at U+E0020-E007F stay, since they are what
- * encode the subdivision flags.
+ * The set is derived rather than remembered. Three review rounds each found a
+ * different missing code point, which is a sign the list was being maintained
+ * by memory — so it is now the WHOLE Default_Ignorable class minus an explicit,
+ * justified keep-list, and a test sweeps every code point in that class and
+ * fails on anything unaccounted for. Deprecated format characters, the Khmer
+ * inherent vowels, the shorthand format controls and the unassigned ignorable
+ * blocks all arrived that way.
+ *
+ * Stripped rather than merely treated as blank, because blank-counting refuses
+ * a name made ONLY of them while still letting `a<U+E0001>b` key differently
+ * from `ab` — which leaves the dedupe hole, the more damaging half. The real
+ * tag characters at U+E0020-E007F stay, since they encode the subdivision
+ * flags.
  *
  * Enumerated literally rather than by Unicode property: a property escape's
  * membership tracks the engine's ICU build, which would make the key depend on
  * which runtime computed it.
  */
 const INVISIBLE_FORMATTING =
-  /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0001}-\u{e001f}]/gu;
+  /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2065\u206a-\u206f\u17b4-\u17b5\u2066-\u2069\ufeff\ufff0-\ufffb\u{1bca0}-\u{1bca3}\u{1d173}-\u{1d17a}\u{e0000}-\u{e001f}\u{e0080}-\u{e00ff}\u{e01f0}-\u{e0fff}]/gu;
 
 /**
  * Whitespace collapsed to a single space. Deliberately WIDER than
