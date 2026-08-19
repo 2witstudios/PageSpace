@@ -11,6 +11,7 @@ import {
   TAG_TARGETS,
   type TagTarget,
   type TargetKind,
+  isTaggablePageType,
   normalizeTagName,
   tagKey,
   validateTarget,
@@ -167,7 +168,7 @@ describe('normalizeTagName — invisible characters', () => {
     // chip, and Phase 2 is about to bake that key into a unique index.
     expect(expectOk('de' + U(0x2060) + 'sign').key).toBe(expectOk('design').key);
 
-    for (const cp of [0x2060, 0x2061, 0x2064, 0x034f, 0x180e, 0xfff9, 0x1d173]) {
+    for (const cp of [0x2060, 0x2061, 0x2064, 0x034f, 0x180e, 0xfff9, 0x1d173, 0xe0001, 0xe001f]) {
       expect(expectOk('a' + U(cp) + 'b').name, `U+${cp.toString(16)}`).toBe('ab');
     }
   });
@@ -200,6 +201,17 @@ describe('normalizeTagName — invisible characters', () => {
     const without = expectOk(U(0x0645, 0x06cc, 0x0631, 0x0648, 0x062f));
     expect(withZwnj.name).toContain(ZWNJ);
     expect(withZwnj.key).not.toBe(without.key);
+  });
+
+  it('keeps the tag characters that encode a subdivision flag', () => {
+    // The strip list reaches into the tag block to remove the deprecated
+    // U+E0001 and the unassigned range behind it. Widening it by one more
+    // range would swallow U+E0020-E007F and turn Scotland into a bare black
+    // flag, so the boundary needs a test rather than care.
+    const scotland =
+      U(0x1f3f4) + U(0xe0067, 0xe0062, 0xe0073, 0xe0063, 0xe0074) + U(0xe007f);
+    expect(expectOk(scotland).name).toBe(scotland);
+    expect(expectOk(scotland).key).toBe(scotland);
   });
 
   it('keeps a variation selector, which decides emoji versus text presentation', () => {
@@ -570,12 +582,24 @@ describe('validateTarget', () => {
     // case: it is still a value in the DB's PageType enum, deleted from the TS
     // enum in the Phase 8 teardown because Postgres cannot DROP VALUE — so a
     // pages.type this function is typed to never see can arrive from a row.
-    const unknown = 'MACHINE' as PageTypeValue;
-    expect(validateTarget(unknown, { kind: 'page' })).toEqual({
+    expect(validateTarget('MACHINE', { kind: 'page' })).toEqual({
       ok: false,
       reason: 'unknown_page_type',
       pageType: 'MACHINE',
     });
+  });
+
+  it('takes a string at the boundary, so no caller needs a cast to be checked', () => {
+    // A narrower parameter would force every real caller — a request handler, a
+    // row reader — to write `as PageTypeValue` just to reach the check that
+    // exists to make that cast unnecessary. The predicate is exported so the
+    // service can narrow with the same set rather than a second hand-rolled one.
+    expect(isTaggablePageType('DOCUMENT')).toBe(true);
+    expect(isTaggablePageType('MACHINE')).toBe(false);
+    expect(isTaggablePageType('constructor')).toBe(false);
+    for (const pageType of PAGE_TYPE_VALUES) {
+      expect(isTaggablePageType(pageType), pageType).toBe(true);
+    }
   });
 
   it('refuses an inherited Object property rather than treating it as a registry entry', () => {
@@ -584,7 +608,7 @@ describe('validateTarget', () => {
     // membership test would throw. Same shape as the &__proto__; entity bug in
     // Phase 0 — hence the Set.
     for (const inherited of ['constructor', 'toString', 'hasOwnProperty', '__proto__']) {
-      expect(validateTarget(inherited as PageTypeValue, { kind: 'page' })).toEqual({
+      expect(validateTarget(inherited, { kind: 'page' })).toEqual({
         ok: false,
         reason: 'unknown_page_type',
         pageType: inherited,

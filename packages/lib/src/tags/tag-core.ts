@@ -102,12 +102,18 @@ export type TagNameResult = { ok: true; name: string; key: string } | TagNameRej
  * musical format controls are all equally unrenderable and equally usable to
  * mint a duplicate tag that looks identical in every chip and autocomplete.
  *
+ * U+E0001 and the unassigned block behind it are stripped rather than merely
+ * treated as blank. Counting them blank would refuse a name made only of them
+ * while still letting `a<U+E0001>b` key differently from `ab` — the dedupe hole
+ * left open. The real tag characters at U+E0020-E007F stay, since they are what
+ * encode the subdivision flags.
+ *
  * Enumerated literally rather than by Unicode property: a property escape's
  * membership tracks the engine's ICU build, which would make the key depend on
  * which runtime computed it.
  */
 const INVISIBLE_FORMATTING =
-  /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb\u{1d173}-\u{1d17a}]/gu;
+  /[\u00ad\u034f\u061c\u180e\u200b\u200e\u200f\u202a-\u202e\u2060-\u2064\u2066-\u2069\ufeff\ufff9-\ufffb\u{1d173}-\u{1d17a}\u{e0001}-\u{e001f}]/gu;
 
 /**
  * Whitespace collapsed to a single space. Deliberately WIDER than
@@ -377,6 +383,17 @@ export type TargetRejection =
  */
 const KNOWN_PAGE_TYPES: ReadonlySet<string> = new Set(Object.keys(TAG_TARGETS));
 
+/**
+ * Whether `value` is a page type this build can tag, narrowing it if so.
+ *
+ * Exported because the service layer needs the same narrowing before it can
+ * index TAG_TARGETS itself, and a second hand-rolled check would be free to
+ * disagree with this one.
+ */
+export function isTaggablePageType(value: string): value is PageTypeValue {
+  return KNOWN_PAGE_TYPES.has(value);
+}
+
 export type TargetValidation = { ok: true } | TargetRejection;
 
 /**
@@ -387,13 +404,14 @@ export type TargetValidation = { ok: true } | TargetRejection;
  * page-type compatibility is a rule the database never sees. That asymmetry is
  * exactly why it needs a test here.
  */
-export function validateTarget(pageType: PageTypeValue, target: TagTarget): TargetValidation {
-  // The parameter type is a compile-time promise, not a runtime one. This value
-  // arrives from a request body or a `pages.type` column, and the DB's PageType
-  // enum still contains MACHINE — deleted from the TS enum in the Phase 8
-  // teardown because Postgres cannot DROP VALUE. So a row that TypeScript says
-  // cannot exist does exist, and a guard that throws on it is not a guard.
-  if (!KNOWN_PAGE_TYPES.has(pageType)) {
+export function validateTarget(pageType: string, target: TagTarget): TargetValidation {
+  // `string`, not PageTypeValue, on purpose. This is the runtime boundary: the
+  // value arrives from a request body or a `pages.type` column, and the DB's
+  // PageType enum still contains MACHINE — deleted from the TS enum in the
+  // Phase 8 teardown because Postgres cannot DROP VALUE. A narrower parameter
+  // would force every real caller to write `as PageTypeValue` to reach this
+  // function at all, which is the cast this check exists to make unnecessary.
+  if (!isTaggablePageType(pageType)) {
     return { ok: false, reason: 'unknown_page_type', pageType };
   }
 
