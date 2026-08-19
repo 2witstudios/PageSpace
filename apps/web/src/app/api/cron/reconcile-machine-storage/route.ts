@@ -138,6 +138,7 @@ export async function GET(request: Request) {
     // to Sentry are the only trace. So the work is done and reported in full,
     // and THEN this alerts and fails — see the module doc on why the alert, not
     // the status code, is what actually reaches a human here.
+
     // WHICH failures are allowed to redden a LIVE billing cron.
     //
     // The rule is that a dark feature must not page anyone. Envs ship dark and
@@ -174,48 +175,20 @@ export async function GET(request: Request) {
       });
     }
 
-    // A tick where every row was SKIPPED is the third silence, and for envs it is
-    // the most reachable of the three: `resolveEnvPayerId` has no owner fallback,
-    // so any persistent fault resolving `drives.ownerId` — a regression, replica
-    // lag, an ownership migration in flight — returns null for every row. That
-    // leaves `charged: 0`, `failed: 0`, `skipped === processed`, and without this
-    // the endpoint reports success forever while metering nothing.
+    // The SECOND loud condition: a live unit that had charges to make and made
+    // none of them.
     //
-    // The wipeout condition also requires that there was WORK TO DO, which only
-    // `billableRows` can answer: if every row failed then `charged` is zero by
-    // definition, so no outcome counter distinguishes a broken meter from a tick
-    // over rows that all priced to $0 — and envs meter ~$0 today by
-    // construction, so that is the common case. Without this guard a transient
-    // watermark-write error on the zero-cost path pages someone with "every row
-    // failed to bill" when nothing was billable and the only loss is an advance
-    // that self-heals next tick.
-    // The wipeout conditions carry the SAME dark/live rule as the source
-    // conditions above: a tick over nothing but envs — a deployment where
-    // someone rebuilt an env and has no live sessions — must not page on an
-    // env-only fault, which is what `LOUD_SOURCES` prevents one block up.
-
-
-    // "Nothing got billed though there was work to do", expressed against
-    // `billableRows` and `charged` rather than against `processed`.
+    // Asked PER LIVE KIND and against `billingByKind`, and both halves are
+    // scars. Comparing against `processed` failed because a row pricing to $0
+    // lands in none of charged/skipped/failed — envs meter ~$0 by construction,
+    // so ONE unmeasured env silenced twenty unbilled sessions. Comparing
+    // cross-kind totals failed because an env charging satisfies `charged > 0`
+    // while every session fails. Asking each live kind about its own billable
+    // rows leaves nothing to dilute.
     //
-    // Comparing an outcome counter to `processed` looked right and was not: a row
-    // whose window prices to $0 takes the zero-cost branch and lands in NONE of
-    // `charged`/`skipped`/`failed`, only in `processed`. Envs meter ~$0 today by
-    // construction and a never-measured session bills the 0 floor, so a single
-    // such row made `skipped === processed` permanently false — twenty live
-    // sessions could go unbilled tick after tick beside one unmeasured env and
-    // this block would stay silent, which is precisely the silence it exists to
-    // break.
-    //
-    // Every BILLABLE row ends as exactly one of charged / skipped / failed, so
-    // "more than one row had something to charge and none of them were charged"
-    // is the whole condition, and it covers the skipped and failed shapes at
-    // once. `> 1` because one row failing is indistinguishable from one unlucky
-    // transient the meter already isolates and retries.
-    // Asked PER LIVE KIND, not across the tick. A cross-kind `charged > 0` is
-    // satisfied by an env charging while every session fails, and a cross-kind
-    // `billableRows` by an env being billable while no session is — both would
-    // read as healthy while a live unit billed nothing. Envs are excluded here
+    // `> 1` because one row failing is indistinguishable from one unlucky
+    // transient the meter already isolates and retries; on a one-row deployment
+    // the per-row counters, not this alert, are the signal. Envs are excluded
     // for the same reason they are excluded from `LOUD_SOURCES`.
     const wipedOut = LOUD_SOURCES.filter(
       (kind) => run.billingByKind[kind].billable > 1 && run.billingByKind[kind].charged === 0,

@@ -481,6 +481,11 @@ export interface ReconcileSandboxStorageResult {
    * Rows that had something to charge this tick — a positive accrual, before any
    * attempt to resolve a payer or move money.
    *
+   * Every row counted here goes on to be exactly one of `charged`, `skipped` or
+   * `failed` in the same record. Rows that never became billable — a pricing
+   * throw, or a $0 row whose watermark advance failed — are counted in the FLAT
+   * `failed` only, never here, so that invariant actually holds.
+   *
    * The answer to "was there work to do?", which no combination of the outcome
    * counters can give: if every row failed, `charged` is zero BY DEFINITION, so
    * a caller asking "did this tick bill nothing though it should have?" cannot
@@ -732,11 +737,9 @@ export async function reconcileSandboxStorage(
   if (envs.failed) failedSources.push('env');
   const now = deps.now();
 
-  let skipped = 0;
-  let failed = 0;
+
   let chargedButUnadvanced = 0;
-  let staleMeasurements = 0;
-  let neverMeasured = 0;
+
   let watermarkSuperseded = 0;
   let spanClamped = 0;
   let totalCostDollars = 0;
@@ -752,8 +755,19 @@ export async function reconcileSandboxStorage(
     env: { billable: 0, charged: 0, skipped: 0, failed: 0 },
   };
 
+  // Failures on rows we never established were BILLABLE — a pricing throw, or
+  // the watermark advance on a row whose window priced to $0. They belong in the
+  // flat `failed` total (nothing was billed for them either) but NOT in
+  // `billingByKind`, whose contract is about rows that had a charge to make. A
+  // $0 row's advance failing must not read as "a billable row failed to charge",
+  // because the alert picks its cause label from exactly that comparison.
+  let unbillableFailed = 0;
+
   for (const subject of subjects) {
     const attributionDriveId = subject.attributionDriveId;
+    // Set the moment this row is known to owe something. Until then a failure
+    // cannot be attributed to the billing record.
+    let knownBillable = false;
 
     // Everything up to (but NOT including) the charge itself: pure accrual
     // computation plus the owner lookup. A throw anywhere in here means
@@ -775,13 +789,8 @@ export async function reconcileSandboxStorage(
       // i.e. under the bucket that says we know the footprint. Both writers set
       // the two columns together today, so this is unreachable; sharing the
       // predicate is what keeps it that way.
-      if (lastMeasuredGB === null || subject.measuredAt === null) {
-        neverMeasured += 1;
-        health.neverMeasured += 1;
-      } else if (stale) {
-        staleMeasurements += 1;
-        health.stale += 1;
-      }
+      if (lastMeasuredGB === null || subject.measuredAt === null) health.neverMeasured += 1;
+      else if (stale) health.stale += 1;
       // Nothing to charge this window (zero elapsed, a never-measured 0 floor,
       // or a footprint so tiny its per-window cost rounds to $0). ALWAYS advance
       // the watermark to now when real time elapsed — for measured and
@@ -799,7 +808,10 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       // Counted BEFORE the payer lookup and before any write: a fact about the
       // ACCRUAL, not about whether the tick managed to act on it.
-      if (costDollars > 0) billingByKind[subject.kind].billable += 1;
+      if (costDollars > 0) {
+        billingByKind[subject.kind].billable += 1;
+        knownBillable = true;
+      }
 
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
@@ -840,15 +852,14 @@ export async function reconcileSandboxStorage(
         // of it at today's footprint when the lookup resolves. That is the live
         // half of the exposure the cap closes for envs, and it is why extending
         // the cap is a follow-up rather than a nicety.
-        skipped += 1;
         billingByKind[subject.kind].skipped += 1;
         continue;
       }
 
       resolved = { ownerId, costDollars, gbMonths, clamped };
     } catch (error) {
-      failed += 1;
-      billingByKind[subject.kind].failed += 1;
+      if (knownBillable) billingByKind[subject.kind].failed += 1;
+      else unbillableFailed += 1;
       loggers.ai.error(
         'Sandbox storage reconcile failed for subject',
         error instanceof Error ? error : new Error(String(error)),
@@ -876,7 +887,6 @@ export async function reconcileSandboxStorage(
       // Isolated per-row: one subject's charge failure must not drop every
       // other subject in this run from being billed. Nothing was moved, so
       // this is a genuine failure — the accrual is retried next run.
-      failed += 1;
       billingByKind[subject.kind].failed += 1;
       loggers.ai.error(
         'Sandbox storage reconcile: chargeStorage failed for subject',
@@ -912,26 +922,29 @@ export async function reconcileSandboxStorage(
     }
   }
 
-  // DERIVED from the per-kind record rather than accumulated alongside it.
-  // Two counters incremented in parallel are two counters that can drift, and
-  // drift between exactly these two is what produced the alert's last two
-  // defects. Summing makes "the flat total is the sum of the parts" true by
-  // construction instead of by discipline.
-  const sumByKind = (
+  // EVERY flat total is DERIVED from a per-kind record rather than accumulated
+  // alongside one. Two counters incremented in parallel are two counters that
+  // can drift, and drift between exactly such a pair produced the alert's last
+  // two defects — so the loop now touches only the per-kind records, and "the
+  // flat total is the sum of the parts" is true by construction rather than by
+  // discipline at six separate increment sites.
+  const sumBilling = (
     pick: (of: { billable: number; charged: number; skipped: number; failed: number }) => number,
   ) => pick(billingByKind.session) + pick(billingByKind.env);
+  const sumHealth = (pick: (of: { live: number; neverMeasured: number; stale: number }) => number) =>
+    pick(measurementHealth.session) + pick(measurementHealth.env);
 
   return {
     processed: subjects.length,
-    charged: sumByKind((of) => of.charged),
-    skipped,
-    failed,
+    charged: sumBilling((of) => of.charged),
+    skipped: sumBilling((of) => of.skipped),
+    failed: sumBilling((of) => of.failed) + unbillableFailed,
     chargedButUnadvanced,
-    staleMeasurements,
-    neverMeasured,
+    staleMeasurements: sumHealth((of) => of.stale),
+    neverMeasured: sumHealth((of) => of.neverMeasured),
     watermarkSuperseded,
     spanClamped,
-    billableRows: sumByKind((of) => of.billable),
+    billableRows: sumBilling((of) => of.billable),
     billingByKind,
     measurementHealth,
     failedSources,

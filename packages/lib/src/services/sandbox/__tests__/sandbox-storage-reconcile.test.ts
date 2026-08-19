@@ -998,6 +998,49 @@ describe('reconcileSandboxStorage', () => {
     }
   });
 
+  it('keeps a $0 row\'s watermark failure OUT of the billing record — it was never billable', async () => {
+    // The invariant `billingByKind` asserts: every row counted `billable` ends as
+    // exactly one of charged / skipped / failed. A never-measured row owes
+    // nothing, so its watermark advance failing must not read as "a billable row
+    // failed to charge" — the alert picks its CAUSE LABEL from exactly that
+    // comparison, and would file a payer-lookup fault in the charge-path bucket.
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => [
+        // Two billable sessions whose payer cannot be resolved.
+        agentSession({ workspaceId: 's1' }),
+        agentSession({ workspaceId: 's2' }),
+        // Three never-measured rows whose watermark write then throws.
+        agentSession({ workspaceId: 'z1', measuredBytes: null, measuredAt: null }),
+        agentSession({ workspaceId: 'z2', measuredBytes: null, measuredAt: null }),
+        agentSession({ workspaceId: 'z3', measuredBytes: null, measuredAt: null }),
+      ],
+      lookupDriveOwnerId: async () => null,
+      advanceAgentSessionWatermark: async () => {
+        throw new Error('transient db error');
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'two billable rows skipped beside three $0 rows whose watermark write failed',
+      should:
+        'record only the billable rows in billingByKind, so the wipeout reads as SKIPPED rather than FAILED',
+      actual: {
+        billing: result.billingByKind.session,
+        failedTotal: result.failed,
+        skippedTotal: result.skipped,
+      },
+      expected: {
+        billing: { billable: 2, charged: 0, skipped: 2, failed: 0 },
+        // The three $0 failures still count in the FLAT total — nothing was
+        // billed for them either — they just are not billing-record failures.
+        failedTotal: 3,
+        skippedTotal: 2,
+      },
+    });
+  });
+
   it('reports no health noise when every row carries a fresh measurement', async () => {
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession()],
