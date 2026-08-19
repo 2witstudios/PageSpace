@@ -496,6 +496,7 @@
         "src/services/validated-service-token.ts",
         "src/sheets/io.ts",
         "src/sheets/sheet.ts",
+        "src/tags/tag-core.ts",
         "src/types.ts",
         "src/utils/api-utils.ts",
         "src/utils/enums.ts",

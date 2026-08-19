@@ -992,6 +992,11 @@
       "import": "./dist/sheets/sheet.js",
       "require": "./dist/sheets/sheet.js"
     },
+    "./tags/tag-core": {
+      "types": "./dist/tags/tag-core.d.ts",
+      "import": "./dist/tags/tag-core.js",
+      "require": "./dist/tags/tag-core.js"
+    },
     "./utils/environment": {
       "types": "./dist/utils/environment.d.ts",
       "import": "./dist/utils/environment.js",
@@ -2305,6 +2310,9 @@
       ],
       "sheets/sheet": [
         "./dist/sheets/sheet.d.ts"
+      ],
+      "tags/tag-core": [
+        "./dist/tags/tag-core.d.ts"
       ],
       "utils/environment": [
         "./dist/utils/environment.d.ts"
