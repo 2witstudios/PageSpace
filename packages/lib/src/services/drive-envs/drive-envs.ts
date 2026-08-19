@@ -493,10 +493,16 @@ export async function deleteDriveEnv({
     return { ok: false, reason: 'live_sessions', liveSessionCount: deleted.liveSessionCount };
   }
 
-  // Step 3. The row is gone and the AFTER DELETE trigger has already parked this
-  // pointer in the reclaim outbox, so the VM is guaranteed to be reclaimed with
-  // or without us. Kill it now anyway: promptness is worth a network call, and
-  // failure here costs a cron tick rather than a leak.
+  // Step 3. The row is gone, so this kill can no longer reach a live session.
+  // Reclamation is guaranteed either way: the row was deleted while it still
+  // read live, so the AFTER DELETE trigger parked the pointer in the outbox for
+  // the cron to drain. (The one interleaving where it did NOT — a rebuild
+  // confirming a teardown between this function's read and the delete — is the
+  // case where there is nothing left to reclaim, because that rebuild already
+  // killed the VM. The kill below is instance-guarded, so it cannot touch the
+  // replacement it minted.) Killing here is therefore an optimisation on the
+  // outbox: promptness is worth a network call, and a failure costs a cron tick
+  // rather than a leak.
   if (plan.action !== 'delete_then_teardown') return { ok: true, spriteTornDown: false };
   const spriteTornDown = await killDeletedEnvSprite({
     envId,
