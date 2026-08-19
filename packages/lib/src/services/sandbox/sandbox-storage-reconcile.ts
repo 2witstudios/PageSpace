@@ -88,6 +88,14 @@
  * audit only), so its payer is the drive owner or nobody — see
  * `resolveEnvPayerId`, and the skip-on-unresolvable rule below.
  *
+ * **`reconcileSandboxStorage` NEVER THROWS**, and `reconcileSandboxStorageSerialized`
+ * relies on that to tell an advisory-lock connection error apart from a failure
+ * of the work itself. Every per-row failure is already isolated in its own
+ * try/catch; folding in a second row source made the LIST calls the last
+ * remaining escape hatch, and `listSource` closes it — before this, a throw from
+ * `listAgentSessionSprites` propagated out of here and blurred exactly that
+ * distinction.
+ *
  * **Coverage, stated honestly.** The "never wake to measure" rule means this
  * bills what real-work wakes have persisted, and an env's only writer today is
  * its provision-time baseline (`env-storage-measure.ts`) — env-bound sessions,
@@ -305,6 +313,20 @@ export interface ReconcileSandboxStorageResult {
    */
   neverMeasured: number;
   /**
+   * The same two measurement signals, split by persistence unit — and the split
+   * is what makes them readable at all once envs exist.
+   *
+   * An env's ONLY measurement writer is its provision-time baseline, and its
+   * only `lastActiveAt` writer is that same provision, so 24h after it is
+   * created every live env reads as not-awake with an ageing measurement, and
+   * `staleMeasurements` saturates at the env count by construction. Reported
+   * flat, that would drown the signal it exists for: an operator could no longer
+   * tell a genuine SESSION-side measurement outage from the expected env
+   * baseline. Split, each unit's number means what it always meant, and the env
+   * column stops being alarming once the warm path starts refreshing it.
+   */
+  measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }>;
+  /**
    * Row sources whose LIST threw this tick — their rows were not metered at all
    * (not skipped, not billed: unread). Their accrual is untouched and is caught
    * up in full on the next tick. Named rather than counted so an operator can
@@ -374,7 +396,17 @@ function toEnvSubject(env: DriveEnvStorageRow, deps: ReconcileSandboxStorageDeps
     // The drive owner, with NO fallback — an env has no owner column to fall
     // back to, and inventing one would bill a machine to somebody who does not
     // own it. See `resolveEnvPayerId`.
-    resolvePayerId: () => resolveEnvPayerId({ driveId: env.driveId, lookupDriveOwnerId: deps.lookupDriveOwnerId }),
+    // `lookupDriveOwnerId` is wrapped, not passed unbound: `resolveEnvPayerId`
+    // invokes it off its own input object, so handing over the bare reference
+    // would drop `this` for any deps implementation that is a real object rather
+    // than a literal — billing every session correctly while every env threw and
+    // counted as `failed`, every tick. The session arm above keeps `this` for
+    // free by calling it as a method; this arm has to say so.
+    resolvePayerId: () =>
+      resolveEnvPayerId({
+        driveId: env.driveId,
+        lookupDriveOwnerId: (driveId) => deps.lookupDriveOwnerId(driveId),
+      }),
     advanceWatermark: (billedThrough) => deps.advanceDriveEnvWatermark({ envId: env.envId, billedThrough }),
     storageLastBilledAt: env.storageLastBilledAt,
     measuredBytes: env.measuredBytes,
@@ -445,6 +477,10 @@ export async function reconcileSandboxStorage(
   let staleMeasurements = 0;
   let neverMeasured = 0;
   let totalCostDollars = 0;
+  const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
+    session: { live: 0, neverMeasured: 0, stale: 0 },
+    env: { live: 0, neverMeasured: 0, stale: 0 },
+  };
 
   for (const subject of subjects) {
     const attributionDriveId = subject.attributionDriveId;
@@ -464,8 +500,15 @@ export async function reconcileSandboxStorage(
       // at all, billing the 0 floor while its watermark advances: not stale in
       // the refresh sense, and therefore invisible in the stale count, which is
       // precisely why it needs its own.
-      if (lastMeasuredGB === null) neverMeasured += 1;
-      else if (stale) staleMeasurements += 1;
+      const health = measurementHealth[subject.kind];
+      health.live += 1;
+      if (lastMeasuredGB === null) {
+        neverMeasured += 1;
+        health.neverMeasured += 1;
+      } else if (stale) {
+        staleMeasurements += 1;
+        health.stale += 1;
+      }
       const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
       const costDollars = calculateMachineStorageCostDollars(gbMonths);
 
@@ -575,6 +618,7 @@ export async function reconcileSandboxStorage(
     chargedButUnadvanced,
     staleMeasurements,
     neverMeasured,
+    measurementHealth,
     failedSources,
     totalCostDollars,
   };

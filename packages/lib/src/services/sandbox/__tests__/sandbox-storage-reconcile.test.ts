@@ -494,6 +494,54 @@ describe('reconcileSandboxStorage', () => {
   // without anybody noticing.
   // -------------------------------------------------------------------------
 
+  it('NEVER THROWS, whatever any dep does — the property the advisory-lock wrapper depends on', async () => {
+    // Every dep that can fail, failing at once. `reconcileSandboxStorageSerialized`
+    // distinguishes "the lock connection broke" from "the work failed" by relying
+    // on this function not throwing, so a leak here would be misread as a lock
+    // error and swallowed by the cron's catch.
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => {
+        throw new Error('sessions down');
+      },
+      listDriveEnvSprites: async () => {
+        throw new Error('envs down');
+      },
+      lookupDriveOwnerId: async () => {
+        throw new Error('lookup down');
+      },
+      chargeStorage: async () => {
+        throw new Error('ledger down');
+      },
+      advanceAgentSessionWatermark: async () => {
+        throw new Error('write down');
+      },
+      advanceDriveEnvWatermark: async () => {
+        throw new Error('write down');
+      },
+    });
+
+    await expect(reconcileSandboxStorage(deps)).resolves.toMatchObject({ processed: 0, charged: 0 });
+  });
+
+  it('NEVER THROWS when a row-level dep fails either — the failure is reported, not raised', async () => {
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession()],
+      listDriveEnvSprites: async () => [driveEnv()],
+      lookupDriveOwnerId: async () => {
+        throw new Error('lookup down');
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a payer lookup that throws for every row',
+      should: 'report both rows as failed rather than raising out of the reconcile',
+      actual: { processed: result.processed, failed: result.failed, charged: result.charged },
+      expected: { processed: 2, failed: 2, charged: 0 },
+    });
+  });
+
   it('counts a live row with NO measurement as neverMeasured, distinctly from a stale one', async () => {
     const now = new Date('2026-07-01T00:00:00.000Z');
     const { deps } = makeDeps({
@@ -518,6 +566,90 @@ describe('reconcileSandboxStorage', () => {
     });
   });
 
+  it('splits the measurement health per persistence unit, so an env baseline cannot drown a session outage', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const ageing = {
+      measuredAt: new Date(now.getTime() - STALE_MEASUREMENT_MS - 1),
+      lastActiveAt: new Date(now.getTime() - 60 * 60 * 1000),
+    };
+    const { deps } = makeDeps({
+      // The state EVERY env sits in 24h after provisioning today: measured once
+      // at create, `lastActiveAt` never written since, so permanently "stale".
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-1', ...ageing }), driveEnv({ envId: 'env-2', ...ageing })],
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-fresh' })],
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'two envs billing on ageing baselines beside one freshly-measured session',
+      should:
+        "attribute the staleness to ENVS alone, so the session column still reads zero and an operator can see a session-side outage when one happens",
+      actual: result.measurementHealth,
+      expected: {
+        session: { live: 1, neverMeasured: 0, stale: 0 },
+        env: { live: 2, neverMeasured: 0, stale: 2 },
+      },
+    });
+    // The flat totals still hold — the split is additive detail, not a redefinition.
+    expect(result).toMatchObject({ staleMeasurements: 2, neverMeasured: 0 });
+  });
+
+  it('counts a never-measured row under its own unit too', async () => {
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ measuredBytes: null, measuredAt: null })],
+      listDriveEnvSprites: async () => [driveEnv({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result.measurementHealth).toEqual({
+      session: { live: 1, neverMeasured: 1, stale: 0 },
+      env: { live: 1, neverMeasured: 1, stale: 0 },
+    });
+  });
+
+  it("resolves an env's payer through a deps lookup that reads `this`", async () => {
+    // A deps implementation is free to be a real object (or a class) whose
+    // methods read `this`, not just the object literal we happen to ship. So the
+    // lookup here is a SHORTHAND METHOD that reaches for `this.now` — modules are
+    // strict, so if the reconcile hands this function to `resolveEnvPayerId` as a
+    // bare unbound reference, `this` is undefined and it throws. An arrow
+    // function closing over an outer object would NOT catch that, which is the
+    // trap this test exists to avoid.
+    // BOTH arms are routed through it: the drive-scoped session arm and the env
+    // arm each reach the lookup by a different route, so each needs its own proof.
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-this', driveId: 'drive-s' })],
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-this', driveId: 'drive-e' })],
+      lookupDriveOwnerId(this: ReconcileSandboxStorageDeps, driveId: string): Promise<string | null> {
+        return Promise.resolve(`owner-of-${driveId}-at-${this.now().toISOString()}`);
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a deps lookup that is a method reading `this`',
+      should:
+        'resolve BOTH payers — an unbound reference on either arm would throw for every row that arm owns',
+      actual: {
+        charged: result.charged,
+        failed: result.failed,
+        payers: chargeCalls.map((call) => [call.subjectId, call.payerId]),
+      },
+      expected: {
+        charged: 2,
+        failed: 0,
+        payers: [
+          ['session-this', 'owner-of-drive-s-at-2026-07-01T00:00:00.000Z'],
+          ['env-this', 'owner-of-drive-e-at-2026-07-01T00:00:00.000Z'],
+        ],
+      },
+    });
+  });
+
   it('reports no health noise when every row carries a fresh measurement', async () => {
     const { deps } = makeDeps({
       listAgentSessionSprites: async () => [agentSession()],
@@ -527,6 +659,10 @@ describe('reconcileSandboxStorage', () => {
     const result = await reconcileSandboxStorage(deps);
 
     expect(result).toMatchObject({ neverMeasured: 0, staleMeasurements: 0, failedSources: [] });
+    expect(result.measurementHealth).toEqual({
+      session: { live: 1, neverMeasured: 0, stale: 0 },
+      env: { live: 1, neverMeasured: 0, stale: 0 },
+    });
   });
 
   it('given the ENV source throws, still bills every SESSION and names the unread source', async () => {

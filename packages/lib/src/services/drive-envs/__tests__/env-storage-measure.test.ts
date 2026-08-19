@@ -9,17 +9,30 @@
  *
  * The failure this guards is silent by construction: an env with no measurement
  * writer bills the never-measured 0 floor forever while the storage reconcile
- * keeps advancing its watermark. Nothing throws, nothing logs, and the only
- * symptom is revenue that never arrives — so it is pinned here rather than left
- * to whichever composition currently holds the provisioning deps.
+ * keeps advancing its watermark. Nothing throws — the provisioner swallows this
+ * seam by design, because a billing observation must never fail a provision —
+ * and the only symptom is revenue that never arrives. So two things are pinned
+ * here rather than left to whichever composition currently holds the deps: that
+ * the bytes land on the right row, and that every path which fails to produce
+ * them SAYS SO, naming the env.
  */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+
+const { mockError, mockWarn } = vi.hoisted(() => ({ mockError: vi.fn(), mockWarn: vi.fn() }));
+vi.mock('../../../logging/logger-config', () => ({
+  loggers: { ai: { error: mockError, warn: mockWarn } },
+}));
 import { assert } from '../../sandbox/__tests__/riteway';
 import { envStorageMeasureSeam, type EnvStorageMeasureStore } from '../env-storage-measure';
 import type { SandboxHandle } from '../../sandbox/sandbox-host';
 
 type Measurement = Parameters<EnvStorageMeasureStore['recordStorageMeasurement']>[0];
+
+beforeEach(() => {
+  mockError.mockClear();
+  mockWarn.mockClear();
+});
 
 function makeStore(): { store: EnvStorageMeasureStore; writes: Measurement[] } {
   const writes: Measurement[] = [];
@@ -119,5 +132,54 @@ describe('envStorageMeasureSeam', () => {
     await envStorageMeasureSeam(store)({ holderId: 'env-42', handle: makeHandle({ stdout: 'not a size\n' }) as never });
 
     expect(writes).toEqual([]);
+  });
+
+  // -------------------------------------------------------------------------
+  // Every failure path must SAY SO. The provisioner swallows this seam's
+  // rejection under a comment claiming "the seam already logs"; a silent seam
+  // makes that comment false, and for an env — whose only measurement writer
+  // this is — a lost reading means billing the 0 floor indefinitely.
+  // -------------------------------------------------------------------------
+
+  it('LOGS, naming the env, when the measurement produces no reading', async () => {
+    const { store } = makeStore();
+
+    await envStorageMeasureSeam(store)({ holderId: 'env-42', handle: makeHandle({ throws: true }) as never });
+
+    assert({
+      given: 'a sandbox whose exec throws, so no reading is produced',
+      should: "warn once and name the env, so the failure is traceable to a row rather than only an aggregate count",
+      actual: { calls: mockWarn.mock.calls.length, meta: mockWarn.mock.calls[0]?.[1] },
+      expected: { calls: 1, meta: { envId: 'env-42' } },
+    });
+  });
+
+  it('LOGS an error, naming the env, when the PERSIST itself rejects', async () => {
+    const store: EnvStorageMeasureStore = {
+      recordStorageMeasurement: async () => {
+        throw new Error('db blip');
+      },
+    };
+
+    // Still resolves: a billing observation must never fail a provision.
+    await expect(
+      envStorageMeasureSeam(store)({ holderId: 'env-99', handle: makeHandle() as never }),
+    ).resolves.toBeUndefined();
+
+    assert({
+      given: 'a healthy sandbox whose measurement write rejects',
+      should: 'log an ERROR naming the env — the one failure that leaves a NULL row behind a perfectly healthy Sprite',
+      actual: { calls: mockError.mock.calls.length, meta: mockError.mock.calls[0]?.[2] },
+      expected: { calls: 1, meta: { envId: 'env-99' } },
+    });
+  });
+
+  it('stays SILENT on the happy path — a log per provision would be noise, not signal', async () => {
+    const { store, writes } = makeStore();
+
+    await envStorageMeasureSeam(store)({ holderId: 'env-42', handle: makeHandle() as never });
+
+    expect({ writes: writes.length, errors: mockError.mock.calls.length, warns: mockWarn.mock.calls.length })
+      .toEqual({ writes: 1, errors: 0, warns: 0 });
   });
 });

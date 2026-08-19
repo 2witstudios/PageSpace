@@ -28,6 +28,7 @@
  */
 
 import { refreshSessionStorageMeasurement } from '../sandbox/sandbox-storage-measure';
+import { loggers } from '../../logging/logger-config';
 import type { SpriteHolderProvisionDeps } from '../agent-workspaces/agent-workspace-sprite';
 import type { DriveEnvStore } from './drive-envs-store';
 
@@ -61,11 +62,12 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  *
  * Two consequences worth naming, because both are silent:
  *
- *  - A single failed `du` here (an exec throw, a timeout, unparseable output)
- *    leaves `storageMeasuredBytes` NULL with nothing to retry it, so that env
- *    bills the 0 floor indefinitely. The reconcile counts exactly this as
- *    `neverMeasured` — a live row with no reading at all — so it is observable
- *    rather than merely unfortunate.
+ *  - A single failed `du` here (an exec throw, a timeout, unparseable output),
+ *    or a persist that rejects, leaves `storageMeasuredBytes` NULL with nothing
+ *    to retry it, so that env bills the 0 floor indefinitely. Every one of those
+ *    paths LOGS with the env's id, and the reconcile counts the aggregate as
+ *    `neverMeasured` — a live row with no reading at all — so the failure is
+ *    observable both per-env and in the meter's own health output.
  *  - A measurement is never REDUCED by this path; it only ever writes what it
  *    read. Shrink correction likewise waits on the warm path.
  */
@@ -73,25 +75,58 @@ export function envStorageMeasureSeam(
   store: EnvStorageMeasureStore,
 ): NonNullable<SpriteHolderProvisionDeps['measureStorage']> {
   return async ({ holderId, handle }) => {
-    await refreshSessionStorageMeasurement({
-      handle,
-      // The holder-neutral seam still names its subject `workspaceId`; here it
-      // addresses a `drive_envs` row, which is what `persist` below writes to.
-      workspaceId: holderId,
-      // The generation just minted — the CAS target for the write. Taken from
-      // the HANDLE, never from a row read: this is the VM the `du` actually ran
-      // on, and a row re-read could already describe its replacement.
-      spriteInstanceId: handle.spriteInstanceId ?? null,
-      // NULL, not the row's value: this only fires on the `create` arm, where the
-      // same operation resets the measurement columns (a new Sprite generation is
-      // an empty filesystem). Passing the pre-provision timestamp would let the
-      // throttle skip the baseline measurement of an env rebuilt inside the
-      // window, leaving the row describing a disk that no longer exists with no
-      // other trigger to fix it.
-      lastMeasuredAt: null,
-      now: new Date(),
-      persist: ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) =>
-        store.recordStorageMeasurement({ envId: workspaceId, spriteInstanceId, measuredBytes, measuredAt }),
-    });
+    // Every failure below is LOGGED here, and that is load-bearing rather than
+    // tidy. The provisioner swallows this seam's rejection with a `.catch()`
+    // whose comment reads "the seam already logs" — so a seam that stays silent
+    // makes that comment false and the failure invisible. And silence costs more
+    // for an env than for a session: a session has other measurement writers
+    // that self-correct on its next real work, while this is an env's ONLY
+    // writer, so a lost measurement here means that env bills the 0 floor
+    // indefinitely. The reconcile's `neverMeasured` shows the aggregate; this
+    // names the env.
+    let result: { measured: boolean } | undefined;
+    try {
+      result = await refreshSessionStorageMeasurement({
+        handle,
+        // The holder-neutral seam still names its subject `workspaceId`; here it
+        // addresses a `drive_envs` row, which is what `persist` below writes to.
+        workspaceId: holderId,
+        // The generation just minted — the CAS target for the write. Taken from
+        // the HANDLE, never from a row read: this is the VM the `du` actually ran
+        // on, and a row re-read could already describe its replacement.
+        spriteInstanceId: handle.spriteInstanceId ?? null,
+        // NULL, not the row's value: this only fires on the `create` arm, where the
+        // same operation resets the measurement columns (a new Sprite generation is
+        // an empty filesystem). Passing the pre-provision timestamp would let the
+        // throttle skip the baseline measurement of an env rebuilt inside the
+        // window, leaving the row describing a disk that no longer exists with no
+        // other trigger to fix it.
+        lastMeasuredAt: null,
+        now: new Date(),
+        persist: ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) =>
+          store.recordStorageMeasurement({ envId: workspaceId, spriteInstanceId, measuredBytes, measuredAt }),
+      });
+    } catch (error) {
+      // The PERSIST rejected (a DB blip mid-provision). `refreshSessionStorageMeasurement`
+      // swallows exec/parse failures itself and returns `measured: false`; only
+      // the write can escape it, and it is the one failure that leaves the row
+      // NULL with a perfectly healthy sandbox.
+      loggers.ai.error(
+        'Env storage measurement could not be persisted — this env has no baseline and will bill the 0 floor until it is measured',
+        error instanceof Error ? error : new Error(String(error)),
+        { envId: holderId },
+      );
+      return;
+    }
+
+    if (!result.measured) {
+      // Not an exception: the `du` failed, timed out, or printed something
+      // unparseable, and the helper declined to persist a guess. Correct, and
+      // still worth naming — for an env it means the same NULL row.
+      loggers.ai.warn(
+        'Env storage measurement produced no reading — this env has no baseline and will bill the 0 floor until it is measured',
+        { envId: holderId },
+      );
+    }
   };
 }

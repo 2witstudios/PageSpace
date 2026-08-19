@@ -220,7 +220,8 @@ export async function reconcileSandboxStorageSerialized(
     // and the next scheduled tick retries. `withAdvisoryLock` resolving this outcome
     // instead of throwing (leaf 5.6/5.7) only removes the AMBIGUITY for callers that
     // need to distinguish it from `fn` throwing — this caller's `fn`
-    // (`reconcileSandboxStorage`) already documents that it never throws, so there is
+    // (`reconcileSandboxStorage`) already documents that it never throws — including
+    // its row-source LISTs, which `listSource` isolates — so there is
     // no such ambiguity here, and the choice to keep propagating is now explicit at the
     // type level rather than implicit in an uncaught rejection.
     throw locked.error;

@@ -53,6 +53,10 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 1,
       neverMeasured: 2,
+      measurementHealth: {
+        session: { live: 2, neverMeasured: 0, stale: 1 },
+        env: { live: 1, neverMeasured: 2, stale: 0 },
+      },
       failedSources: ['env'],
       totalCostDollars: 0.001234,
     });
@@ -90,6 +94,12 @@ describe('/api/cron/reconcile-machine-storage', () => {
           // held with no reading at all, and a persistence unit that went
           // entirely unread this tick.
           neverMeasured: 2,
+          // Per-unit, because an env's baseline-only measurement saturates the
+          // flat stale count and would hide a session-side outage.
+          measurementHealth: {
+            session: { live: 2, neverMeasured: 0, stale: 1 },
+            env: { live: 1, neverMeasured: 2, stale: 0 },
+          },
           failedSources: ['env'],
         }),
       }),
@@ -103,6 +113,10 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 1,
       neverMeasured: 2,
+      measurementHealth: {
+        session: { live: 2, neverMeasured: 0, stale: 1 },
+        env: { live: 1, neverMeasured: 2, stale: 0 },
+      },
       failedSources: ['env'],
     });
   });
