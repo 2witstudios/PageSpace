@@ -11,7 +11,12 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn((...parts) => ({ op: 'and', parts })),
   isNull: vi.fn((a) => ({ op: 'isNull', a })),
   isNotNull: vi.fn((a) => ({ op: 'isNotNull', a })),
-  lte: vi.fn((a, b) => ({ op: 'lte', a, b })),
+  // The monotonic SET expression. Its shape is not what these tests pin — the
+  // real SQL is covered by the integration suite — so a marker object suffices.
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ...params: unknown[]) => ({ op: 'sql', strings: [...strings], params }),
+    { param: (value: unknown) => ({ op: 'param', value }) },
+  ),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'pages.id', driveId: 'pages.driveId' },
@@ -234,8 +239,11 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
         return {
           where: (w: unknown) => {
             whereCalls.push(w);
-            // One row matched: the monotonic guard let this advance through.
-            return { returning: async () => [{ id: 'session-3' }] };
+            // The row came back carrying exactly the value we asked for, which is
+            // how the writer reads "advanced" rather than "superseded".
+            return {
+              returning: async () => [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
+            };
           },
         };
       },
@@ -246,24 +254,13 @@ describe('defaultReconcileSandboxStorageDeps.advanceAgentSessionWatermark', () =
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
-    expect({ wrote, set: setCalls }).toEqual({
-      wrote: true,
-      set: [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
-    });
+    expect(wrote).toBe('advanced');
     assert({
-      given: "a session watermark advance",
+      given: 'a session watermark advance',
       should:
-        'key on the row AND refuse to move backwards — `now` is captured once per tick, so a provision landing mid-tick resets the watermark forward and an unguarded write would drag it back and re-bill the difference',
+        'key on the row alone — the monotonicity lives in the SET expression (`GREATEST`), so one statement can tell "the guard declined" apart from "the row is gone"',
       actual: whereCalls,
-      expected: [
-        {
-          op: 'and',
-          parts: [
-            { op: 'eq', a: 'agent_workspaces.id', b: 'session-3' },
-            { op: 'lte', a: 'agent_workspaces.storageLastBilledAt', b: new Date('2026-07-01T00:00:00.000Z') },
-          ],
-        },
-      ],
+      expected: [{ op: 'eq', a: 'agent_workspaces.id', b: 'session-3' }],
     });
   });
 });
@@ -388,7 +385,9 @@ describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
         return {
           where: (w: unknown) => {
             whereCalls.push(w);
-            return { returning: async () => [{ id: 'env-3' }] };
+            return {
+              returning: async () => [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
+            };
           },
         };
       },
@@ -399,23 +398,12 @@ describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
-    expect({ wrote, set: setCalls }).toEqual({
-      wrote: true,
-      set: [{ storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z') }],
-    });
+    expect(wrote).toBe('advanced');
     assert({
       given: 'an env watermark advance',
-      should: 'carry the SAME monotonic guard as the session twin — one meter, one rule for how a watermark moves',
+      should: 'key on the row alone, exactly like the session twin — one meter, one rule for how a watermark moves',
       actual: whereCalls,
-      expected: [
-        {
-          op: 'and',
-          parts: [
-            { op: 'eq', a: 'drive_envs.id', b: 'env-3' },
-            { op: 'lte', a: 'drive_envs.storageLastBilledAt', b: new Date('2026-07-01T00:00:00.000Z') },
-          ],
-        },
-      ],
+      expected: [{ op: 'eq', a: 'drive_envs.id', b: 'env-3' }],
     });
   });
 });
@@ -457,8 +445,8 @@ describe('reconcileSandboxStorageSerialized', () => {
       listDriveEnvSprites: vi.fn(async () => []),
       lookupDriveOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
-      advanceAgentSessionWatermark: vi.fn(async () => true),
-      advanceDriveEnvWatermark: vi.fn(async () => true),
+      advanceAgentSessionWatermark: vi.fn(async () => 'advanced' as const),
+      advanceDriveEnvWatermark: vi.fn(async () => 'advanced' as const),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };

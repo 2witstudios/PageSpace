@@ -63,6 +63,9 @@ describe('revivedAgentSessionColumns', () => {
     spriteInstanceId: 'inst-new',
     egressPolicyToken: 'tok',
     now: NOW,
+    // The store passes a monotonic `GREATEST(...)` expression here; a plain Date
+    // is the pure-function form these assertions exercise.
+    storageLastBilledAt: new Date('2026-07-01T00:00:00.000Z'),
   };
 
   it('should record the new Sprite identity', () => {
@@ -78,8 +81,16 @@ describe('revivedAgentSessionColumns', () => {
     // Not a lifecycle stamp, which is why it lives here: billing the elapsed
     // window against the dead generation's measured size would charge for a
     // filesystem that no longer exists.
-    const columns = revivedAgentSessionColumns({ ...base, stamps: {} });
-    expect(columns.storageLastBilledAt).toEqual(NOW);
+    //
+    // The VALUE is the caller's, not `now`'s: the store passes a monotonic
+    // `GREATEST(...)` expression, because `now` is captured before the provider
+    // IO and can be stale enough to drag the watermark back over a window a
+    // reconcile tick already billed. What this helper owes is to carry that
+    // value through — the direction is proven against real SQL in
+    // `sandbox-storage-billing.integration.test.ts`.
+    const restartedAt = new Date('2026-07-02T00:00:00.000Z');
+    const columns = revivedAgentSessionColumns({ ...base, storageLastBilledAt: restartedAt, stamps: {} });
+    expect(columns.storageLastBilledAt).toEqual(restartedAt);
   });
 
   it('should apply the verdict\'s stamps alongside the identity, in ONE write', () => {

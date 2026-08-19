@@ -456,6 +456,8 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
     assert({
       given: 'a torn-down env, dormant for 40 days, being provisioned again',
       should: "reset its billing watermark to now, so the dormant span can never be billed retroactively",
+      // `updateSpriteIdentity` reports its identity CAS (a boolean), not a
+      // watermark verdict — the watermark is one column of that same write.
       actual: { wrote, billedAt: await readBilledAt(envId) },
       expected: { wrote: true, billedAt: NOW },
     });
@@ -521,7 +523,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
       should:
         'leave the newer value alone AND report the refusal — moving it back would re-bill the span, and declining invisibly would hide that a generation boundary cut a window',
       actual: { wrote, billedAt: await readBilledAt(envId) },
-      expected: { wrote: false, billedAt: resetTo },
+      expected: { wrote: 'superseded', billedAt: resetTo },
     });
   });
 
@@ -534,7 +536,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
       given: 'a watermark older than the tick that is closing it',
       should: 'advance normally and report the write — the guard must refuse only backwards writes',
       actual: { wrote, billedAt: await readBilledAt(envId) },
-      expected: { wrote: true, billedAt: NOW },
+      expected: { wrote: 'advanced', billedAt: NOW },
     });
   });
 
@@ -555,7 +557,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
       workspaceId: sessionId,
       billedThrough: NOW,
     });
-    expect(wrote).toBe(false);
+    expect(wrote).toBe('superseded');
 
     const [row] = await db
       .select({ at: agentWorkspaces.storageLastBilledAt })
@@ -564,6 +566,72 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing watermark across dormanc
     expect(row?.at).toEqual(new Date(NOW.getTime() + 30_000));
 
     await db.delete(agentWorkspaces).where(eq(agentWorkspaces.id, sessionId));
+  });
+
+
+  it('REFUSES to let a PROVISION drag the watermark backwards either — the guard is two-sided', async () => {
+    // The second double-bill path, and the subtler one. `ensureSpriteHolderSandbox`
+    // captures its `now` BEFORE the provider IO, so the timestamp a provision
+    // writes can be tens of seconds stale by the time the write lands. If a
+    // reconcile tick charged through a LATER instant in that gap, a plain
+    // assignment would drag the watermark back past what was just billed and the
+    // next tick would re-bill the difference. `GREATEST` on the provision side
+    // closes it — the guard has to be on BOTH writers, not just the reconcile's.
+    const provisionCapturedAt = new Date(NOW.getTime() - 45_000);
+    // `sandboxId: null` so the identity CAS (`previousSandboxId: null`) MATCHES —
+    // otherwise the whole write is refused and this test would pass without ever
+    // exercising the watermark column.
+    const envId = await seedEnv({ sandboxId: null, spriteTornDownAt: new Date(NOW.getTime() - 60_000) });
+    // The tick got there first and billed through NOW.
+    await db.update(driveEnvs).set({ storageLastBilledAt: NOW }).where(eq(driveEnvs.id, envId));
+
+    // The provision's write lands late, carrying its stale pre-IO timestamp.
+    await store.updateSpriteIdentity({
+      envId,
+      previousSandboxId: null,
+      spriteKey: 'env-key',
+      sandboxId: 'pgs-env-late',
+      spriteInstanceId: 'gen-new',
+      egressPolicyToken: null,
+      stamps: { lastActiveAt: NOW, teardownRequestedAt: null, spriteTornDownAt: null },
+      now: provisionCapturedAt,
+    });
+    // Proves the write LANDED — without this the test would also pass on a
+    // refused identity CAS, which writes nothing at all.
+    expect((await db.select({ id: driveEnvs.spriteInstanceId }).from(driveEnvs).where(eq(driveEnvs.id, envId)))[0]?.id)
+      .toBe('gen-new');
+
+    assert({
+      given: 'a provision whose pre-IO timestamp is older than what a tick already billed through',
+      should: 'keep the billed-through value — assigning the stale one would re-bill the gap next tick',
+      actual: await readBilledAt(envId),
+      expected: NOW,
+    });
+  });
+
+  it('still lets a provision push the watermark FORWARD, which is the reset\'s whole purpose', async () => {
+    const envId = await seedEnv({
+      sandboxId: null,
+      storageLastBilledAt: new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000),
+    });
+
+    await store.updateSpriteIdentity({
+      envId,
+      previousSandboxId: null,
+      spriteKey: 'env-key',
+      sandboxId: 'pgs-env-fwd',
+      spriteInstanceId: 'gen-new',
+      egressPolicyToken: null,
+      stamps: { lastActiveAt: NOW, teardownRequestedAt: null, spriteTornDownAt: null },
+      now: NOW,
+    });
+
+    assert({
+      given: 'a provision on a row whose watermark is older than the provision',
+      should: 'advance it — a new generation must not inherit the dead one\'s window',
+      actual: await readBilledAt(envId),
+      expected: NOW,
+    });
   });
 
 });

@@ -233,6 +233,13 @@ export interface DriveEnvStorageRow {
 /** WHICH kind of row a charge is for. The meter is one; the persistence units it meters are two. */
 export type StorageSubjectKind = 'session' | 'env';
 
+/**
+ * What a watermark write actually did. Three outcomes, because collapsing the
+ * last two would report a deleted row as a superseded one — and since envs meter
+ * ~$0 today, a delete is by far the likelier of the two.
+ */
+export type WatermarkWriteOutcome = 'advanced' | 'superseded' | 'row_gone';
+
 export interface ReconcileSandboxStorageDeps {
   /**
    * Every LIVE `agent_workspaces` Sprite to meter. Never wakes a sprite: reads
@@ -276,15 +283,15 @@ export interface ReconcileSandboxStorageDeps {
    * ITSELF — the per-row watermark the design calls for, no separate tracking
    * table needed.
    *
-   * Returns whether the row was written. The write is MONOTONIC (see the real
-   * implementation's `lte` guard), so `false` means a provision reset this row's
-   * watermark past this tick's `now` while the tick was running — reported as
-   * {@link ReconcileSandboxStorageResult.watermarkSuperseded} rather than
-   * silently swallowed.
+   * The write is MONOTONIC — it never moves a watermark backwards — and it says
+   * which of the three things happened, so a `superseded` guard-decline is not
+   * confused with a row that was simply deleted mid-tick. `superseded` is
+   * reported as {@link ReconcileSandboxStorageResult.watermarkSuperseded} rather
+   * than silently swallowed.
    */
-  advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<boolean>;
+  advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
   /** The same per-row watermark write, against `drive_envs`, with the same monotonic contract. */
-  advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<boolean>;
+  advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
   now: () => Date;
 }
 
@@ -368,6 +375,11 @@ export interface ReconcileSandboxStorageResult {
    * that a bounded slice of the DEAD generation's window goes unbilled. It is
    * counted because the alternative is a guard that declines invisibly, and this
    * meter's whole premise is that its blind spots should be countable.
+   *
+   * Excludes rows that were simply DELETED mid-tick — those report `row_gone`,
+   * which is ordinary and says nothing about generations. Reporting a delete
+   * under this name would be worse than not counting at all: envs meter ~$0
+   * today, so a delete is by far the likelier way a write finds no row.
    */
   watermarkSuperseded: number;
   /**
@@ -397,8 +409,8 @@ interface BillableStorageSubject {
   attributionDriveId: string | undefined;
   /** Who to bill; null means UNRESOLVABLE — the caller skips the cycle rather than substituting a payer. */
   resolvePayerId: () => Promise<string | null>;
-  /** Returns whether the row was written; `false` means a newer reset won (see the deps' contract). */
-  advanceWatermark: (billedThrough: Date) => Promise<boolean>;
+  /** Reports which of the three things the monotonic write did (see the deps' contract). */
+  advanceWatermark: (billedThrough: Date) => Promise<WatermarkWriteOutcome>;
   storageLastBilledAt: Date;
   measuredBytes: number | null;
   measuredAt: Date | null;
@@ -597,7 +609,7 @@ export async function reconcileSandboxStorage(
       // A back-to-back rerun (elapsedMs === 0) advances nothing, a pure no-op.
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
-          if (!(await subject.advanceWatermark(now))) watermarkSuperseded += 1;
+          if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
         }
         continue;
       }
@@ -663,7 +675,7 @@ export async function reconcileSandboxStorage(
     charged += 1;
 
     try {
-      if (!(await subject.advanceWatermark(now))) watermarkSuperseded += 1;
+      if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
     } catch (error) {
       // The charge already committed (counted above) — only the watermark
       // write failed, so this row's window WILL be billed again on the next

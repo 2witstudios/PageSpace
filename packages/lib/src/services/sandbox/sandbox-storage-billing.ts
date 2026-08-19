@@ -43,7 +43,7 @@
  * while this cron kept advancing its watermark.
  */
 
-import { eq, and, isNotNull, isNull, lte } from '@pagespace/db/operators';
+import { eq, and, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
@@ -56,6 +56,30 @@ import {
   type ReconcileSandboxStorageDeps,
   type ReconcileSandboxStorageResult,
 } from './sandbox-storage-reconcile';
+
+/**
+ * Read a watermark write's outcome off the value the UPDATE returned.
+ *
+ * ONE statement answers all three cases, which is why the monotonicity lives in
+ * `GREATEST` rather than in a `WHERE ... <= ...` predicate. A predicate would
+ * have collapsed "the guard declined" and "the row is gone" into the same empty
+ * result — and since envs meter ~$0 today, a deleted env is by far the likelier
+ * of the two, so an operator would have been told a generation boundary cut a
+ * billing window when nothing of the sort happened.
+ *
+ *  - no row back → `row_gone`: the row was deleted mid-tick (a drive delete
+ *    cascades its envs). Ordinary, and nothing to report.
+ *  - the value we asked for → `advanced`: the window closed as planned.
+ *  - a LATER value → `superseded`: a provision reset this row's watermark past
+ *    this tick's `now` while the tick ran, and `GREATEST` correctly kept it.
+ */
+function classifyWatermarkWrite(
+  written: Date | null | undefined,
+  billedThrough: Date,
+): 'advanced' | 'superseded' | 'row_gone' {
+  if (!written) return 'row_gone';
+  return written.getTime() > billedThrough.getTime() ? 'superseded' : 'advanced';
+}
 
 export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   async listAgentSessionSprites() {
@@ -168,15 +192,12 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // further ahead than this tick reached, so at worst one tick-duration of the
   // DEAD generation's window goes unbilled.
   async advanceAgentSessionWatermark({ workspaceId, billedThrough }) {
-    const updated = await db
+    const [row] = await db
       .update(agentWorkspaces)
-      .set({ storageLastBilledAt: billedThrough })
-      .where(and(eq(agentWorkspaces.id, workspaceId), lte(agentWorkspaces.storageLastBilledAt, billedThrough)))
-      .returning({ id: agentWorkspaces.id });
-    // Reported, like the measurement writer's CAS: a guard that silently
-    // declines is a blind spot, and this one declines exactly when a generation
-    // boundary cut a billing window.
-    return updated.length > 0;
+      .set({ storageLastBilledAt: sql`GREATEST(${agentWorkspaces.storageLastBilledAt}, ${sql.param(billedThrough, agentWorkspaces.storageLastBilledAt)})` })
+      .where(eq(agentWorkspaces.id, workspaceId))
+      .returning({ storageLastBilledAt: agentWorkspaces.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
   },
 
   // The env row's OWN watermark, same literal per-row design and the same
@@ -187,12 +208,12 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   // follows has already happened, so refusing the advance because the env was
   // torn down mid-run would re-bill that window on the next tick.
   async advanceDriveEnvWatermark({ envId, billedThrough }) {
-    const updated = await db
+    const [row] = await db
       .update(driveEnvs)
-      .set({ storageLastBilledAt: billedThrough })
-      .where(and(eq(driveEnvs.id, envId), lte(driveEnvs.storageLastBilledAt, billedThrough)))
-      .returning({ id: driveEnvs.id });
-    return updated.length > 0;
+      .set({ storageLastBilledAt: sql`GREATEST(${driveEnvs.storageLastBilledAt}, ${sql.param(billedThrough, driveEnvs.storageLastBilledAt)})` })
+      .where(eq(driveEnvs.id, envId))
+      .returning({ storageLastBilledAt: driveEnvs.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
   },
 
   now: () => new Date(),

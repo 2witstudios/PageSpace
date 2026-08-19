@@ -33,6 +33,7 @@
  * today's constants, not about the query.
  */
 
+import type { SQL } from 'drizzle-orm';
 import type { SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 
@@ -358,13 +359,25 @@ export function revivedDriveEnvColumns(input: {
   egressPolicyToken: string | null;
   stamps: SpriteHolderRowStamps;
   now: Date;
+  /** The watermark to write — see the column comment below for why this is not just `now`. */
+  storageLastBilledAt: Date | SQL;
 }) {
   return {
     spriteKey: input.spriteKey,
     sandboxId: input.sandboxId,
     spriteInstanceId: input.spriteInstanceId,
     egressPolicyToken: input.egressPolicyToken,
-    storageLastBilledAt: input.now,
+    // MONOTONIC, and supplied by the caller rather than derived from `now`.
+    // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
+    // IO, so by the time this write lands it can be tens of seconds stale — and a
+    // reconcile tick that charged through a LATER instant may already have
+    // advanced this column. Assigning `now` would drag the watermark backwards
+    // past what was just billed, and the next tick would re-bill the difference.
+    // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
+    // (a new generation must not inherit the old one's window) without ever
+    // moving the watermark down. A plain `Date` is accepted for tests and for any
+    // caller that has already proven the direction.
+    storageLastBilledAt: input.storageLastBilledAt,
     updatedAt: input.now,
     ...envStampColumns(input.stamps),
   };
@@ -549,7 +562,19 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     }) {
       const updated = await db
         .update(driveEnvs)
-        .set(revivedDriveEnvColumns({ spriteKey, sandboxId, spriteInstanceId, egressPolicyToken, stamps, now: at }))
+        .set(
+          revivedDriveEnvColumns({
+            spriteKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            stamps,
+            now: at,
+            // The monotonic reset, built HERE because this is where the table and
+            // `sql` are in scope — the helper stays pure and free of the DB graph.
+            storageLastBilledAt: sql`GREATEST(${driveEnvs.storageLastBilledAt}, ${sql.param(at, driveEnvs.storageLastBilledAt)})`,
+          }),
+        )
         .where(
           and(
             eq(driveEnvs.id, envId),

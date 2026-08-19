@@ -150,11 +150,11 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     // `false` when a provision already reset the watermark past this tick.
     advanceAgentSessionWatermark: async (input) => {
       agentSessionAdvanceCalls.push(input);
-      return true;
+      return 'advanced';
     },
     advanceDriveEnvWatermark: async (input) => {
       driveEnvAdvanceCalls.push(input);
-      return true;
+      return 'advanced';
     },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
@@ -273,7 +273,7 @@ describe('reconcileSandboxStorage', () => {
       advanceAgentSessionWatermark: async (input) => {
         if (input.workspaceId === 'boom') throw new Error('watermark write failed');
         agentSessionAdvanceCalls.push(input);
-        return true;
+        return 'advanced';
       },
     });
 
@@ -450,7 +450,7 @@ describe('reconcileSandboxStorage', () => {
       advanceDriveEnvWatermark: async (input) => {
         if (input.envId === 'env-wm') throw new Error('watermark write failed');
         driveEnvAdvanceCalls.push(input);
-        return true;
+        return 'advanced';
       },
     });
 
@@ -664,7 +664,7 @@ describe('reconcileSandboxStorage', () => {
     // to remove.
     const { deps, chargeCalls } = makeDeps({
       listDriveEnvSprites: async () => [driveEnv({ envId: 'env-superseded' })],
-      advanceDriveEnvWatermark: async () => false,
+      advanceDriveEnvWatermark: async () => 'superseded',
     });
 
     const result = await reconcileSandboxStorage(deps);
@@ -687,13 +687,34 @@ describe('reconcileSandboxStorage', () => {
     const { deps, chargeCalls } = makeDeps({
       // Never measured, so it prices to $0 and takes the early-advance branch.
       listDriveEnvSprites: async () => [driveEnv({ measuredBytes: null, measuredAt: null })],
-      advanceDriveEnvWatermark: async () => false,
+      advanceDriveEnvWatermark: async () => 'superseded',
     });
 
     const result = await reconcileSandboxStorage(deps);
 
     expect({ charged: result.charged, charges: chargeCalls.length, superseded: result.watermarkSuperseded })
       .toEqual({ charged: 0, charges: 0, superseded: 1 });
+  });
+
+  it('does NOT count a row DELETED mid-tick as superseded — that would name a cause that never happened', async () => {
+    // `row_gone` and `superseded` both mean "the write found nothing to move",
+    // and collapsing them would be actively misleading: envs meter ~$0 today, so
+    // a delete (a drive delete cascades its envs) is by far the likelier of the
+    // two, and the operator would be told a generation boundary cut a billing
+    // window when nothing of the sort happened.
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-deleted' })],
+      advanceDriveEnvWatermark: async () => 'row_gone',
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'an env row deleted between the listing and its watermark write',
+      should: 'still count the charge, and report NO superseded watermark',
+      actual: { charged: result.charged, failed: result.failed, watermarkSuperseded: result.watermarkSuperseded },
+      expected: { charged: 1, failed: 0, watermarkSuperseded: 0 },
+    });
   });
 
   it('looks a drive owner up ONCE PER DRIVE per tick, not once per row', async () => {
