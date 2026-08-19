@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo } from 'react';
+import { useCallback, useMemo } from 'react';
 import useSWRInfinite from 'swr/infinite';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types';
@@ -17,9 +17,11 @@ import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types
  */
 
 /**
- * Matches TASKS_PAGE_SIZE in TaskListView and DEFAULT_LIMIT in the GET route's
- * query-spec.ts. Must stay <= that route's MAX_LIMIT (200) or every page beyond
- * the first would be silently clamped down server-side and `offset` would skip rows.
+ * Must stay <= the GET route's MAX_LIMIT (query-spec.ts, 200) or the server silently clamps
+ * the page down while `offset` keeps advancing by this number — which skips rows rather than
+ * failing. It happens to equal TaskListView's own TASKS_PAGE_SIZE, but nothing requires that:
+ * they are page sizes for two different lists, and coupling them would be a coupling this
+ * code does not actually have.
  */
 export const SUB_TASKS_PAGE_SIZE = 100;
 
@@ -117,9 +119,16 @@ export function useTaskSubTasks(
   );
 
   const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
-  const statusConfigs = pages?.[0]?.statusConfigs ?? [];
+  // Memoized for the same reason as subTasks: `?? []` mints a new array every render, and a
+  // caller that puts this in a dependency array (a nested renderer resolving status labels is
+  // the obvious one) would re-run on every parent render forever.
+  const statusConfigs = useMemo(() => pages?.[0]?.statusConfigs ?? [], [pages]);
 
   const hasMore = getSubTasksHasMore(pages);
+  // Stable identity, so a memoized row that takes this as a prop is not re-rendered by every
+  // parent render. Functional `setSize` because two clicks in the same tick both read the same
+  // stale `size` otherwise, and the second writes the value the first already wrote.
+  const loadMore = useCallback(() => setSize((currentSize) => currentSize + 1), [setSize]);
   // SWR types its error as `any`, so asserting `as Error` here would be a claim this code
   // cannot make — a fetcher can reject with anything. Normalize instead, so a caller reading
   // `.message` always gets a string rather than `undefined` from a thrown non-Error.
@@ -143,8 +152,6 @@ export function useTaskSubTasks(
     // says hasMore, so this stays true exactly as long as it should.
     isLoadingMore: gateOpen && size > 1 && hasMore && (pages === undefined || pages.length < size),
     error: normalizedError,
-    // Functional form: two clicks in the same tick both read the same stale `size` otherwise,
-    // and the second overwrites the first with the same value instead of advancing a page.
-    loadMore: () => setSize((currentSize) => currentSize + 1),
+    loadMore,
   };
 }

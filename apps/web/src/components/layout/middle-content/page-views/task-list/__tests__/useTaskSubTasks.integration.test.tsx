@@ -132,6 +132,40 @@ describe('useTaskSubTasks against the real route and database', () => {
     });
   });
 
+  it('creates no rows for a task WITH children while it is collapsed', async () => {
+    if (!dbAvailable) return;
+
+    // The other door to the same hazard. `enabled: false` is how a row that stays mounted
+    // while collapsed (what recursive expansion state will need) says "not now" — and a task
+    // with children passes the subTaskCount gate, so `enabled` is the only thing standing
+    // between a collapsed row and the route's lazy writes.
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const parentPage = await factories.createPage(drive.id, { parentId: listPage.id, type: 'TASK_LIST' });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: parentPage.id });
+    const child = await factories.createPage(drive.id, { parentId: parentPage.id, type: 'TASK_LIST' });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: child.id });
+
+    const callsBefore = fetchWithAuth.mock.calls.length;
+    renderHook(
+      () => useTaskSubTasks({ pageId: parentPage.id, subTaskCount: 1 }, { enabled: false }),
+      { wrapper: makeWrapper() },
+    );
+    await new Promise((r) => setTimeout(r, 50));
+
+    assert({
+      given: 'a task that genuinely has sub-tasks, mounted but not expanded',
+      should: 'leave the database untouched — the gate is not the only thing holding the line',
+      actual: {
+        rows: await lazyRowsFor(parentPage.id),
+        requests: fetchWithAuth.mock.calls.length - callsBefore,
+      },
+      expected: { rows: { taskLists: 0, statusConfigs: 0 }, requests: 0 },
+    });
+  });
+
   it('resolves sub-tasks for a parent task from the existing route', async () => {
     if (!dbAvailable) return;
 
