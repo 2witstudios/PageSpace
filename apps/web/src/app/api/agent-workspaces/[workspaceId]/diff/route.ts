@@ -33,6 +33,7 @@ import {
   buildSessionReadActorCtx,
   resolveSessionActorContext,
   resolveSessionSandboxHandle,
+  type ResolveSessionSandboxHandleDenial,
 } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
@@ -54,10 +55,13 @@ const DENIAL_STATUS: Record<string, number> = {
   merge_base_failed: 502,
 };
 
-const RESOLVE_DENIAL_STATUS: Record<'not_found' | 'not_started' | 'vanished', number> = {
+const RESOLVE_DENIAL_STATUS: Record<ResolveSessionSandboxHandleDenial, number> = {
   not_found: 404,
   not_started: 404,
   vanished: 503,
+  // Same answer a stranger gets: a 403 would confirm both that the session is
+  // real and that it has a machine worth denying access to.
+  not_authorized: 404,
 };
 
 export async function GET(request: Request, context: RouteContext) {
@@ -118,11 +122,14 @@ export async function GET(request: Request, context: RouteContext) {
   }
   const status = rawStatus !== null && isMachineDiffFileStatus(rawStatus) ? rawStatus : undefined;
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
   if (!resolved.ok) {
     const error =
       resolved.reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
-    return NextResponse.json({ error, reason: resolved.reason }, { status: RESOLVE_DENIAL_STATUS[resolved.reason] });
+    // A capability denial answers exactly as "no sandbox yet" does — the family
+    // policy this surface follows, so a 403 never confirms the session is real.
+    const wireReason = resolved.reason === 'not_authorized' ? 'not_started' : resolved.reason;
+    return NextResponse.json({ error, reason: wireReason }, { status: RESOLVE_DENIAL_STATUS[resolved.reason] });
   }
 
   const actor = await resolveSessionActorContext(auth.userId);

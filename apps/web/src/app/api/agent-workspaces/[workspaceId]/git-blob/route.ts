@@ -24,6 +24,7 @@ import {
   buildSessionReadActorCtx,
   resolveSessionActorContext,
   resolveSessionSandboxHandle,
+  type ResolveSessionSandboxHandleDenial,
 } from '@/lib/agent-workspaces/workspace-sandbox-runtime';
 import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
 
@@ -80,7 +81,7 @@ export async function GET(request: Request, context: RouteContext) {
     return NextResponse.json({ error: 'repoPath escapes the sandbox root' }, { status: 400 });
   }
 
-  const resolved = await resolveSessionSandboxHandle(workspaceId);
+  const resolved = await resolveSessionSandboxHandle(workspaceId, auth.userId);
   if (!resolved.ok) {
     const error =
       resolved.reason === 'vanished' ? 'This session\'s sandbox is unavailable' : 'This session has no sandbox yet';
