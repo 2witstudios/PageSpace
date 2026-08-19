@@ -53,9 +53,13 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 1,
       neverMeasured: 2,
+      // Internally consistent, because an inconsistent fixture is a weak guard:
+      // `live` sums to `processed`, and the per-unit `neverMeasured`/`stale`
+      // sum to the flat totals — `neverMeasured` can never exceed `live`, since
+      // both are incremented on the same row in the same branch.
       measurementHealth: {
-        session: { live: 2, neverMeasured: 0, stale: 1 },
-        env: { live: 1, neverMeasured: 2, stale: 0 },
+        session: { live: 2, neverMeasured: 1, stale: 1 },
+        env: { live: 1, neverMeasured: 1, stale: 0 },
       },
       failedSources: ['env'],
       totalCostDollars: 0.001234,
@@ -97,8 +101,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
           // Per-unit, because an env's baseline-only measurement saturates the
           // flat stale count and would hide a session-side outage.
           measurementHealth: {
-            session: { live: 2, neverMeasured: 0, stale: 1 },
-            env: { live: 1, neverMeasured: 2, stale: 0 },
+            session: { live: 2, neverMeasured: 1, stale: 1 },
+            env: { live: 1, neverMeasured: 1, stale: 0 },
           },
           failedSources: ['env'],
         }),
@@ -113,9 +117,13 @@ describe('/api/cron/reconcile-machine-storage', () => {
       chargedButUnadvanced: 0,
       staleMeasurements: 1,
       neverMeasured: 2,
+      // Internally consistent, because an inconsistent fixture is a weak guard:
+      // `live` sums to `processed`, and the per-unit `neverMeasured`/`stale`
+      // sum to the flat totals — `neverMeasured` can never exceed `live`, since
+      // both are incremented on the same row in the same branch.
       measurementHealth: {
-        session: { live: 2, neverMeasured: 0, stale: 1 },
-        env: { live: 1, neverMeasured: 2, stale: 0 },
+        session: { live: 2, neverMeasured: 1, stale: 1 },
+        env: { live: 1, neverMeasured: 1, stale: 0 },
       },
       failedSources: ['env'],
     });

@@ -63,11 +63,19 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  * Two consequences worth naming, because both are silent:
  *
  *  - A single failed `du` here (an exec throw, a timeout, unparseable output),
- *    or a persist that rejects, leaves `storageMeasuredBytes` NULL with nothing
- *    to retry it, so that env bills the 0 floor indefinitely. Every one of those
- *    paths LOGS with the env's id, and the reconcile counts the aggregate as
- *    `neverMeasured` — a live row with no reading at all — so the failure is
- *    observable both per-env and in the meter's own health output.
+ *    or a persist that rejects, leaves `storageMeasuredBytes` NULL with NOTHING
+ *    TO RETRY IT, so that env bills the 0 floor indefinitely — and because the
+ *    reconcile advances its watermark anyway (deliberately: freezing it would
+ *    let a later measurement retroactively over-bill the frozen span), each
+ *    skipped window is discarded for good rather than deferred. On a REBUILD the
+ *    same failure runs the other way: `revivedDriveEnvColumns` does not clear the
+ *    measurement columns, so a failed baseline on the fresh empty disk leaves the
+ *    env billing the DEAD generation's footprint. Every one of those paths LOGS
+ *    with the env's id, and the reconcile counts the aggregate as
+ *    `neverMeasured`, so the failure is observable both per-env and in the
+ *    meter's own health output — but observability is not repair. The retry
+ *    belongs on the resume arm and/or the warm path, which is the env ensure
+ *    path's to own: tracked in issue #2443.
  *  - A measurement is never REDUCED by this path; it only ever writes what it
  *    read. Shrink correction likewise waits on the warm path.
  */

@@ -104,7 +104,9 @@
  * one: the payer, the attribution, the watermark and the idempotence are all
  * exercised, and the number they multiply is small until the warm path lands.
  * `neverMeasured` counts live rows in exactly that state, so the gap is a metric
- * an operator can watch rather than a silence.
+ * an operator can watch rather than a silence — and because this loop advances
+ * the watermark for a 0-floor row anyway, a measurement that never lands is
+ * discarded rather than deferred. Retrying a failed baseline is issue #2443.
  */
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
