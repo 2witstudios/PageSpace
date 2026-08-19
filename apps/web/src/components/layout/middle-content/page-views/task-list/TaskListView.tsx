@@ -25,6 +25,7 @@ import { useTaskListPageFilter } from './useTaskListPageFilter';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import type { TaskEventPayload } from '@/lib/websocket/socket-utils';
 import {
   Table,
   TableBody,
@@ -110,6 +111,7 @@ import {
   canExpandTask,
 } from './task-list-types';
 import { resolveToggleStatus, blockedByOpenSubTasks } from '@/lib/tasks/task-cache-core';
+import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-context';
 
 interface TaskListViewProps {
   page: TreePage;
@@ -637,6 +639,36 @@ function TaskListView({ page }: TaskListViewProps) {
   const tasksRef = useRef(data?.tasks);
   useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
 
+  // Latest loaded pages, for optimistic writes. Handlers are recreated on every
+  // render but a write can resolve several renders later, so the writer reads
+  // the cache through this getter rather than a snapshot it closed over.
+  const taskPagesRef = useRef(taskPages);
+  useEffect(() => { taskPagesRef.current = taskPages; }, [taskPages]);
+  const getTaskPages = useCallback(() => taskPagesRef.current, []);
+
+  // View-wide: the log of writes this tab made (so its own socket echoes can be
+  // told apart from everyone else's — including the same account in another
+  // tab), plus the deferred-revalidation flag.
+  const writeMachinery = useTaskWriteMachinery(user?.id, mutateTasks);
+
+  /**
+   * Task field writes that show their result before the network answers.
+   *
+   * This is what makes the checkbox feel instant. Previously every handler
+   * awaited a PATCH — which itself awaits two outbound realtime HTTP posts —
+   * and then called mutateTasks(), a revalidate-ALL that refetches every loaded
+   * page; the socket echo then fired a second one. The row did not change until
+   * all of that finished, and if any edit session was open anywhere in the app
+   * the SWR `isPaused` gate made the post-write mutate a silent no-op, so the
+   * checkbox never moved at all.
+   */
+  const { writeTaskField } = useTaskWriter({
+    mutatePages: mutateTaskPages,
+    getPages: getTaskPages,
+    onRevisionConflict: mutateTasks,
+    machinery: writeMachinery,
+  });
+
   // Connect to socket store when user is available
   useEffect(() => {
     if (!user) return;
@@ -658,8 +690,11 @@ function TaskListView({ page }: TaskListViewProps) {
       mutateTasks();
     };
 
-    const handleTaskUpdated = () => {
-      mutateTasks();
+    // A task update is only worth a full revalidate-all if somebody ELSE made it.
+    // Our own write already patched the cache; refetching on the echo would undo
+    // the whole point of the optimistic update.
+    const handleTaskUpdated = (payload: TaskEventPayload) => {
+      if (writeMachinery.shouldRevalidateForEvent(payload)) mutateTasks();
     };
 
     const handleTaskDeleted = () => {
@@ -694,7 +729,7 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:tasks_reordered', handleTasksReordered);
       socket.off('page:moved', handlePageMoved);
     };
-  }, [socket, connectionStatus, page.id, mutateTasks]);
+  }, [socket, connectionStatus, page.id, mutateTasks, writeMachinery]);
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
@@ -776,25 +811,29 @@ function TaskListView({ page }: TaskListViewProps) {
   // Update task status
   const handleStatusChange = async (loc: TaskLocation, newStatus: string) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { status: newStatus });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update status');
-    }
+    // completedAt is guessed only so the row's strikethrough and checkbox move
+    // together with the status; the server's real stamp replaces it on resolve.
+    const movesToDone = isCompletedStatus(newStatus, statusConfigs);
+    await writeTaskField({
+      loc,
+      body: { status: newStatus },
+      optimistic: {
+        status: newStatus,
+        completedAt: movesToDone ? new Date().toISOString() : null,
+      },
+      fallbackMessage: 'Failed to update status',
+    });
   };
 
   // Update task priority
   const handlePriorityChange = async (loc: TaskLocation, newPriority: string) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { priority: newPriority });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update priority');
-    }
+    await writeTaskField({
+      loc,
+      body: { priority: newPriority },
+      optimistic: { priority: newPriority as TaskItem['priority'] },
+      fallbackMessage: 'Failed to update priority',
+    });
   };
 
   // Toggle task completion - uses group-based detection
@@ -823,12 +862,12 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Shared function to save task title
   const handleSaveTaskTitle = async (loc: TaskLocation, title: string) => {
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { title });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update task');
-    }
+    await writeTaskField({
+      loc,
+      body: { title },
+      optimistic: { title },
+      fallbackMessage: 'Failed to update task',
+    });
   };
 
   // Save edited title (wraps shared function with state cleanup)
@@ -855,45 +894,42 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Update task assignee (user or agent) - legacy single assignee
+  // Update task assignee (user or agent) - legacy single assignee.
+  // No optimistic patch: the row renders the hydrated `assignees` relation, which
+  // this request does not supply, so there is nothing honest to show early. The
+  // server response reconciles it.
   const handleAssigneeChange = async (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, {
-        assigneeId,
-        assigneeAgentId: agentId,
-      });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update assignee');
-    }
+    await writeTaskField({
+      loc,
+      body: { assigneeId, assigneeAgentId: agentId },
+      optimistic: {},
+      fallbackMessage: 'Failed to update assignee',
+    });
   };
 
-  // Update task assignees (multiple)
+  // Update task assignees (multiple). Same reasoning as the single-assignee
+  // handler: ids in, hydrated relations out, so the optimistic patch is empty.
   const handleMultiAssigneeChange = async (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, { assigneeIds });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update assignees');
-    }
+    await writeTaskField({
+      loc,
+      body: { assigneeIds },
+      optimistic: {},
+      fallbackMessage: 'Failed to update assignees',
+    });
   };
 
   // Update task due date
   const handleDueDateChange = async (loc: TaskLocation, dueDate: Date | null) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, {
-        dueDate: dueDate?.toISOString() || null,
-      });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update due date');
-    }
+    const iso = dueDate?.toISOString() ?? null;
+    await writeTaskField({
+      loc,
+      body: { dueDate: iso },
+      optimistic: { dueDate: iso },
+      fallbackMessage: 'Failed to update due date',
+    });
   };
 
   // Collapse every expanded row the moment a drag begins — see the onDragStart

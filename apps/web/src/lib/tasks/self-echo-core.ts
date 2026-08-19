@@ -72,6 +72,18 @@ export const recordSelfWrite = (
   return [...withoutInFlight, write];
 };
 
+/**
+ * Forget an unresolved write, for when the request failed.
+ *
+ * Without this a failed PATCH leaves a permanent in-flight record, and every
+ * inbound event for that task is classified `self-in-flight` and dropped for
+ * the rest of the TTL — the list would go quiet after any write error.
+ */
+export const dropInFlightSelfWrite = (
+  records: readonly SelfWrite[],
+  taskId: string,
+): SelfWrite[] => records.filter((r) => !(r.taskId === taskId && r.updatedAt === null));
+
 /** Is there an unresolved write from this tab for the given task? */
 export const hasInFlightSelfWrite = (
   records: readonly SelfWrite[],
