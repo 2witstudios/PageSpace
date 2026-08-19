@@ -497,7 +497,7 @@ export async function deleteDriveEnv({
   // pointer in the reclaim outbox, so the VM is guaranteed to be reclaimed with
   // or without us. Kill it now anyway: promptness is worth a network call, and
   // failure here costs a cron tick rather than a leak.
-  if (plan.action !== 'teardown_then_delete') return { ok: true, spriteTornDown: false };
+  if (plan.action !== 'delete_then_teardown') return { ok: true, spriteTornDown: false };
   const spriteTornDown = await killDeletedEnvSprite({
     envId,
     sandboxId: plan.sandboxId,
