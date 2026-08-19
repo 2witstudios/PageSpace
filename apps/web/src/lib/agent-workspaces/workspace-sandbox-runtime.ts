@@ -41,6 +41,16 @@ export async function resolveSessionSandboxHandle(
 ): Promise<ResolveSessionSandboxHandleResult> {
   const session = await findSessionRecord(workspaceId);
   if (!session) return { ok: false, reason: 'not_found' };
+  // An ENDED session may not touch a filesystem, and for an env-bound one that
+  // has to be said out loud. An ordinary ended session is refused by the
+  // pointer check below anyway — ending it stamps `spriteTornDownAt` — but
+  // ending an env session deliberately kills nothing, so its environment is
+  // still running and `resolveSessionLiveSandboxId` still answers with the
+  // machine's address (which is correct: `killSessionShellById` needs it to
+  // reach the PTYs that session left behind). Without this line the files,
+  // diff and git-blob routes would keep READING AND WRITING a drive's shared
+  // disk under a session the API itself reports as `'ended'`.
+  if (session.endedAt !== null) return { ok: false, reason: 'not_started' };
   // WHICH row owns the machine is `resolveSessionLiveSandboxId`'s question: an
   // env-bound session's own pointer is CHECK-forbidden to be anything but null,
   // so reading it here would answer `not_started` for the session's whole life

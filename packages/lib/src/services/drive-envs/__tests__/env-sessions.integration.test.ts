@@ -420,6 +420,36 @@ describe('a session inside an environment — ending it', () => {
     expect(env!.teardownRequestedAt).toBeNull();
     expect(await ensureForSession(b, host)).toEqual({ ok: true, sandboxId: envKey, resumed: true });
   });
+
+  it('given an ENDED env session that ensures again, should REVIVE it rather than hand a usable sandbox to an invisible row', async () => {
+    // Ending an env session kills nothing, so the machine is still there and the
+    // next ensure succeeds. Without a revive the row would stay `endedAt` while
+    // its tools worked — missing from every listing, reported `'ended'`, and
+    // refused the filesystem. Usable-and-invisible is worse than refused.
+    const envId = await seedEnv();
+    const envKey = deriveDriveEnvSpriteKey({ tenantId: payerId, envId, secret: SECRET });
+    sandboxIds.add(envKey);
+    const session = await spawnInEnv(envId);
+    const host = makeSpriteHost();
+    await ensureForSession(session, host);
+    await endAgentSession({
+      workspaceId: session.id,
+      deps: { store: sessionStore, host: host.host, now: () => new Date() },
+    });
+    expect((await sessionStore.findById(session.id))!.endedAt).not.toBeNull();
+
+    const fresh = await sessionStore.findById(session.id);
+    expect(await ensureForSession(fresh!, host)).toEqual({ ok: true, sandboxId: envKey, resumed: true });
+
+    const revived = await sessionStore.findById(session.id);
+    expect(revived!.endedAt).toBeNull();
+    expect(revived!.lastActiveAt).not.toBeNull();
+    // The CHECK still holds: reviving stamps lifecycle, never a Sprite pointer.
+    expect(revived!.sandboxId).toBeNull();
+    expect(revived!.spriteKey).toBeNull();
+    // ...and it is listed again.
+    expect((await sessionStore.list({ driveId })).map((row) => row.id)).toContain(session.id);
+  });
 });
 
 describe('a session inside an environment — deleting the environment', () => {

@@ -1073,6 +1073,72 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
     expect(ceilingChecks).toBe(0);
   });
 
+  it('given an ENDED env session, should REVIVE its row — a usable session must not stay invisible', async () => {
+    // The env arm hands back a sandbox without touching the session's row, so
+    // without an explicit revive an ended session would work while still
+    // reading as ended: absent from every listing, reported `'ended'` by the
+    // API, and refused the filesystem — with its tools functioning throughout.
+    const ended = makeSessionRecord({ envId: ENV_ID, endedAt: NOW, teardownRequestedAt: NOW });
+    const store = makeAgentSessionStore([ended]);
+    const host = makeSpriteHost();
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(ended),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => ({ ok: true, sandboxId: ENV_SANDBOX, resumed: true }),
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    const revived = store.rows.get(ended.id)!;
+    expect(revived.endedAt).toBeNull();
+    expect(revived.teardownRequestedAt).toBeNull();
+    expect(revived.lastActiveAt).toEqual(NOW);
+    // ...and STILL no Sprite columns, which the database forbids on this row.
+    expect(revived.sandboxId).toBeNull();
+    expect(revived.spriteKey).toBeNull();
+    expect(revived.spriteInstanceId).toBeNull();
+  });
+
+  it('should stamp lastActiveAt on an ordinary env ensure, so the listing can order it', async () => {
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => ({ ok: true, sandboxId: ENV_SANDBOX, resumed: true }),
+      }),
+    });
+
+    expect(store.rows.get(envRow.id)!.lastActiveAt).toEqual(NOW);
+  });
+
+  it('given the env provision FAILED, should leave the session row alone', async () => {
+    // Nothing was provisioned, so nothing is live — stamping a row as active
+    // because a failed call happened to touch it is how a dead session ends up
+    // sorting to the top of a listing.
+    const ended = makeSessionRecord({ envId: ENV_ID, endedAt: NOW });
+    const store = makeAgentSessionStore([ended]);
+    const host = makeSpriteHost();
+
+    await ensureAgentSessionSandbox({
+      row: toSpriteRow(ended),
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => ({ ok: false, reason: 'provision_failed', detail: 'env_not_found' }),
+      }),
+    });
+
+    expect(store.rows.get(ended.id)!.endedAt).toEqual(NOW);
+    expect(store.rows.get(ended.id)!.lastActiveAt).toBeNull();
+  });
+
   it('given an ORDINARY session, should never consult the env seam', async () => {
     const store = makeAgentSessionStore([makeSessionRecord()]);
     const host = makeSpriteHost();

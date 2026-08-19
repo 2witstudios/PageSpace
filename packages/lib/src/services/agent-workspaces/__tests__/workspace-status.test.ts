@@ -94,6 +94,20 @@ describe('resolveLiveSandboxId', () => {
     expect(resolveLiveSandboxId(UNPROVISIONED, { sandboxId: 'pgs-env-abc', spriteTornDownAt: NOW })).toBeNull();
   });
 
+  it('given an ENDED session, should still answer WHERE the machine is — cleanup needs the address', () => {
+    // Deliberately not gated on `endedAt`. Ending an env session kills nothing
+    // (that is what an environment IS), so the PTYs it left behind are still
+    // running there and `killSessionShellById` must be able to reach them.
+    // "May it still USE the machine" is a separate question, asked separately
+    // by `resolveSessionSandboxHandle`, which refuses an ended session.
+    expect(resolveLiveSandboxId(UNPROVISIONED, { sandboxId: 'pgs-env-abc', spriteTornDownAt: null })).toBe(
+      'pgs-env-abc',
+    );
+    // An ended ORDINARY session answers null without needing the check, because
+    // ending one stamps `spriteTornDownAt` — the two kinds agree by themselves.
+    expect(resolveLiveSandboxId({ sandboxId: 'pgs-ses-abc', spriteTornDownAt: NOW }, null)).toBeNull();
+  });
+
   it('should agree with deriveSandboxStatus about whether a machine is there', () => {
     // Two readings of one fact; they must not be able to disagree, or a session
     // renders `running` while its file browser says `not_started`.

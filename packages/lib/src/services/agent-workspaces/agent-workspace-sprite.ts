@@ -683,6 +683,52 @@ function envIntentForSessionIntent(intent: SpriteHolderProvisionIntent): SpriteH
 }
 
 /**
+ * Stamp an env-bound session's row as live, after its ENVIRONMENT has been
+ * provisioned.
+ *
+ * The env arm returns a sandbox without going anywhere near
+ * `ensureSpriteHolderSandbox`, which is correct — the machine belongs to the
+ * env's row — but it meant the SESSION's row was never written at all, and the
+ * row carries lifecycle facts the env's cannot:
+ *
+ *  - **`endedAt`.** A torn-down ordinary session revives on `ensure` (that is
+ *    what `reviveStamps` is for, and why the row is kept). Without this, an
+ *    ended env session would be handed a working sandbox while still reading as
+ *    ended — absent from every listing, reported as `'ended'` by the API, and
+ *    refused the filesystem by `resolveSessionSandboxHandle`, all while its
+ *    tools worked. A session that is usable and invisible is worse than one
+ *    that is simply refused.
+ *  - **`lastActiveAt`.** The listing orders on it, so an env session that never
+ *    stamped it sorts below every ephemeral one forever, however recently it
+ *    was used.
+ *  - **`teardownRequestedAt`.** Cleared for the same reason the shared planner
+ *    clears it: a row that is live again must not keep an intent to kill.
+ *
+ * What it deliberately does NOT write is any Sprite or storage column. Those
+ * are CHECK-forbidden on this row (`agent_workspaces_env_no_sprite_check`) and
+ * belong to the env, so this stamps the session's own lifecycle and nothing
+ * else.
+ *
+ * Best-effort and unguarded by a CAS: every field is idempotent, and a session
+ * whose stamp lost a race to a concurrent `end` is simply ended — which the
+ * next ensure revives, exactly as it would for an ordinary session.
+ */
+async function reviveEnvBoundSession({
+  row,
+  deps,
+  now,
+}: {
+  row: AgentSessionSpriteRow;
+  deps: Pick<AgentSessionSpriteDeps, 'store'>;
+  now: Date;
+}): Promise<void> {
+  await deps.store.applyStamps({
+    workspaceId: row.workspaceId,
+    stamps: { lastActiveAt: now, endedAt: null, teardownRequestedAt: null },
+  });
+}
+
+/**
  * Ensure THIS SESSION's sandbox exists — the entry point web and realtime call.
  *
  * A wrapper, not an implementation: it names the session's flavor of each seam
@@ -732,7 +778,12 @@ export async function ensureAgentSessionSandbox({
   deps: AgentSessionSpriteDeps;
 }): Promise<EnsureAgentSessionSandboxResult> {
   if (row.envId !== null) {
-    return deps.ensureEnvSandbox({ envId: row.envId, intent: envIntentForSessionIntent(intent) });
+    const provisioned = await deps.ensureEnvSandbox({
+      envId: row.envId,
+      intent: envIntentForSessionIntent(intent),
+    });
+    if (provisioned.ok) await reviveEnvBoundSession({ row, deps, now: deps.now() });
+    return provisioned;
   }
   const { measureSessionStorage } = deps;
   return ensureSpriteHolderSandbox({
