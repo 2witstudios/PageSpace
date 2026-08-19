@@ -18,7 +18,6 @@ import type { convertToModelMessages } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
 import { resolveMessageId } from '@/lib/ai/streams/resolveMessageId';
-import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import { readAgentDispatchDepth } from '@/lib/ai/core/agent-dispatch-depth';
 import { buildLocationTurnPrompt } from '@/lib/ai/core/location-prompt';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
@@ -998,7 +997,7 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
       pageTree: pageTreePrompt,
       conversationType: conversation.type,
       conversationContextId: conversation.contextId,
-      includeAskUser: canUseAskUser({ role: auth.role }),
+      includeAskUser: true,
       drivePromptSection,
       agentAwareness: agentAwarenessPrompt,
       nonCoreToolNames: nonCoreToolNamesPrompt,
@@ -1135,11 +1134,8 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
     // Interactive ask_user tool (execute-less, pauses the turn for user input).
     // Injected here like finish — deliberately NOT in filteredAllTools/nonCoreTools,
     // so it never enters the tool_search catalog or the execute_tool dispatch map
-    // (execute_tool would crash on an execute-less tool, and the catalog is
-    // visible to non-admins).
-    if (canUseAskUser({ role: auth.role })) {
-      finalTools = { ...finalTools, ...askUserTools } as ToolSet;
-    }
+    // (execute_tool would crash on an execute-less tool).
+    finalTools = { ...finalTools, ...askUserTools } as ToolSet;
 
     // Sanitize, compact, and elide via the unified seam.
     // finalSystemPrompt + finalTools are now known — pass for accurate token budgeting.
