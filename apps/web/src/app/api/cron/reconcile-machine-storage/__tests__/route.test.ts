@@ -252,6 +252,35 @@ describe('/api/cron/reconcile-machine-storage', () => {
     expect(mockCapture).not.toHaveBeenCalled();
   });
 
+  it('given a SINGLE row that failed, should NOT alert — one row cannot distinguish a fault from a transient', async () => {
+    // The meter already isolates and retries a per-row failure. With one row
+    // there is nothing to corroborate a shared cause, so alerting would page
+    // someone for ordinary noise — and on a deployment with one live billable
+    // row that would be most ticks.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 1,
+      charged: 0,
+      skipped: 0,
+      failed: 1,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      measurementHealth: {
+        session: { live: 1, neverMeasured: 0, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
   it('given a tick with NO rows at all, should NOT alert — an idle meter is not a broken one', async () => {
     mockReconcile.mockResolvedValue({
       outcome: 'reconciled',

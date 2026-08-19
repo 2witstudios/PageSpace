@@ -134,13 +134,21 @@ export async function GET(request: Request) {
     // every subject, so `failed === processed`, nothing is charged, and without
     // this the cron reports success on every tick forever.
     //
-    // `chargedButUnadvanced` is deliberately NOT an alert condition: it is the
-    // documented crash-window residual, bounded to one re-billed window, and it
-    // is already counted, logged and audited.
+    // The wipeout condition needs MORE THAN ONE row to have agreed, and that is
+    // not a tuning knob — it is the smallest claim the data supports. A single
+    // row failing is indistinguishable from one unlucky transient, which the
+    // meter already isolates per row and retries next tick; two or more failing
+    // together is what makes a shared cause the likely reading. On a deployment
+    // with one live billable row (today's reality — envs ship dark) the per-row
+    // counters, not this alert, are the signal.
+    //
+    // `chargedButUnadvanced` is deliberately NOT an alert condition either: it is
+    // the documented crash-window residual, bounded to one re-billed window, and
+    // already counted, logged and audited.
     const alertReason =
       run.failedSources.length > 0
         ? `could not read row source(s): ${run.failedSources.join(', ')}`
-        : run.processed > 0 && run.failed === run.processed
+        : run.processed > 1 && run.failed === run.processed
           ? `every row failed to bill (${run.failed} of ${run.processed})`
           : null;
 

@@ -244,6 +244,14 @@ function buildEnvProvisionDeps({
      * line so it cannot be lost in a refactor of this composition — dropping it
      * would leave every env billing the never-measured 0 floor forever while the
      * cron advanced its watermark, with no error and no failing test anywhere.
+     *
+     * One consequence of living HERE specifically: `rebuildEnv` is a Next.js
+     * route handler, so this fire-and-forget `du` (capped at 20s) races the
+     * response. A container drain or deploy landing in that window kills the
+     * exec, the row keeps its NULL baseline, and — since this is an env's only
+     * writer today — nothing retries it. The session equivalent runs in the
+     * long-lived `apps/realtime` process and has no such exposure. Another route
+     * into the same gap, tracked with the rest in issue #2443.
      */
     measureStorage: envStorageMeasureSeam(store),
     now: () => new Date(),
