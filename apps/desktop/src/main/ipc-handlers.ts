@@ -1,7 +1,7 @@
 import * as os from 'node:os';
 import { app, ipcMain, session, shell } from 'electron';
 import { store } from './store';
-import { getAppUrl } from './app-url';
+import { getAppOrigin, getStartUrl } from './app-url';
 import { mainWindow, setCachedSession } from './state';
 import { reloadMainWindow } from './window';
 import { getMCPManager } from './mcp-manager';
@@ -29,17 +29,13 @@ const storeAsAny = store as any;
  * cannot abuse the preload bridge. Fails closed when the sender URL is unknown.
  */
 function isTrustedSender(event: Electron.IpcMainInvokeEvent): boolean {
-  let appOrigin: string;
-  try {
-    appOrigin = new URL(getAppUrl()).origin;
-  } catch {
-    return false;
-  }
+  const appOrigin = getAppOrigin();
+  if (!appOrigin) return false;
   return isTrustedSenderUrl(event.senderFrame?.url, appOrigin);
 }
 
 export function registerIPCHandlers(): void {
-  ipcMain.handle('get-app-url', () => getAppUrl());
+  ipcMain.handle('get-app-url', () => getStartUrl());
 
   ipcMain.handle('set-app-url', (event, url: string) => {
     if (!isTrustedSender(event)) {
@@ -50,12 +46,7 @@ export function registerIPCHandlers(): void {
     // renderer persist an arbitrary origin that the shell would load on the
     // next launch. The currently-configured origin is included so an
     // env-configured deployment keeps working.
-    let allowlist: readonly string[] = ALLOWED_APP_ORIGINS;
-    try {
-      allowlist = [...ALLOWED_APP_ORIGINS, new URL(getAppUrl()).origin];
-    } catch {
-      // fall back to the static allowlist
-    }
+    const allowlist: readonly string[] = [...ALLOWED_APP_ORIGINS, getAppOrigin()];
     if (typeof url !== 'string' || !isAllowedAppUrl(url, allowlist)) {
       console.warn('[IPC] Blocked set-app-url for non-allowlisted URL:', url);
       return false;
@@ -129,15 +120,15 @@ export function registerIPCHandlers(): void {
 
     // Also set the session cookie on the BrowserWindow's session
     // so subsequent page loads/fetches include the cookie
-    const appUrl = new URL(getAppUrl());
+    const appOrigin = getAppOrigin();
     try {
       await session.defaultSession.cookies.set({
-        url: appUrl.origin,
+        url: appOrigin,
         name: 'session',
         value: sessionData.sessionToken,
         path: '/',
         httpOnly: true,
-        secure: appUrl.protocol === 'https:',
+        secure: appOrigin.startsWith('https:'),
         sameSite: 'strict' as const,
         expirationDate: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
       });
@@ -194,7 +185,7 @@ export function registerIPCHandlers(): void {
 
   const isAppOriginMatch = (parsed: URL): boolean => {
     try {
-      const appUrl = new URL(getAppUrl());
+      const appUrl = new URL(getAppOrigin());
       if (parsed.hostname !== appUrl.hostname) return false;
       if (parsed.port !== appUrl.port) return false;
       const isLocal =

@@ -32,7 +32,6 @@ import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { askUserTools, ASK_USER_TOOL_NAME } from '@/lib/ai/tools/ask-user-tools';
-import { canUseAskUser } from '@/lib/ai/core/ask-user-gating';
 import {
   extractClientAskUserResults,
   applyAskUserResultsToPageMessage,
@@ -1489,10 +1488,8 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
     // directly callable and never routed through tool_search/execute_tool.
     // allowedToolNames was captured pre-exposure; push so the inline-instructions
     // ASK_USER section is emitted.
-    if (canUseAskUser(user)) {
-      filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
-      allowedToolNames.push(ASK_USER_TOOL_NAME);
-    }
+    filteredTools = { ...filteredTools, ...askUserTools } as ToolSet;
+    allowedToolNames.push(ASK_USER_TOOL_NAME);
 
     // Guard against a stale read_page tool-result (image bytes delivered on an
     // earlier turn when the model had vision) being re-embedded as an image when

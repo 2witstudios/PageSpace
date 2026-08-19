@@ -260,6 +260,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Expanding a task now lists its sub-tasks instead of just counting them** — the drop-down under
+  a task used to say "3 sub-tasks" as plain text and leave you to go find them: open the task, look
+  at its children, come back out, and do it again for every level of a nested tree. The sub-tasks
+  are now listed there, each one a link straight to it, with completed ones ticked and struck
+  through, and a "Load more" for a task with a long list. Tasks with nothing beneath them are
+  untouched — nothing is fetched for them at all.
 - **Voice mode is now audio-native, and the old hands-free mic in the chat box is gone** — talking
   to an assistant used to mean recording a clip, having it transcribed into text, and having the
   reply read back to you. Everything about how you said it — pace, hesitation, the moment you cut
