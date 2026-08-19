@@ -275,16 +275,19 @@ describe('normalizeTagName — invisible characters', () => {
     expect(expectOk(U(0x2800) + 'x').name).toBe(U(0x2800) + 'x');
   });
 
-  it('folds blank renderers out of the KEY while keeping them in the name', () => {
-    // The dedupe hole the strip docstring calls the more damaging half:
-    // `admin` and `admin<U+FFA0>` both render as `admin`, so keying them apart
-    // leaves two rows under UNIQUE (driveId, normalizedKey), and filtering by
-    // the visible tag finds half the content.
+  it('folds a space-like blank to a SPACE in the key, closing both lookalike holes', () => {
+    // These occupy a character's width and render as a gap, so getting the fold
+    // wrong opens a hole in one direction or the other:
+    //   keeping them splits `admin` from `admin<U+FFA0>`  (identical on screen)
+    //   deleting them splits `a b` from `a<U+3164>b`      (also identical)
+    // Folding to a space closes both — the trailing one trims, the interior one
+    // collapses into the ordinary space it already looks like.
     for (const cp of [0x115f, 0x1160, 0x3164, 0xffa0, 0x2800]) {
-      const decorated = 'admin' + U(cp);
-      expect(expectOk(decorated).key, `U+${cp.toString(16)}`).toBe(expectOk('admin').key);
+      const label = `U+${cp.toString(16)}`;
+      expect(expectOk('admin' + U(cp)).key, `${label} trailing`).toBe(expectOk('admin').key);
+      expect(expectOk('a' + U(cp) + 'b').key, `${label} interior`).toBe(expectOk('a b').key);
       // Still preserved in the display name — these are real characters.
-      expect(expectOk(decorated).name).toBe(decorated);
+      expect(expectOk('a' + U(cp) + 'b').name).toBe('a' + U(cp) + 'b');
     }
 
     // NOT the joiners or selectors: those change how their neighbours render,

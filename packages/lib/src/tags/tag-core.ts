@@ -172,23 +172,25 @@ const MEDIAL_SIGMA = '\u03c3';
  * is built to avoid.
  */
 /**
- * Renders as nothing on its own AND contributes nothing beside other text: the
- * Hangul fillers and the Braille blank cell.
+ * Blank but SPACE-LIKE: the Hangul fillers and the Braille blank cell occupy a
+ * character's width and render as a gap, unlike the zero-width family above.
  *
- * Folded out of the KEY but kept in the NAME. Keeping them in the key is the
- * dedupe hole INVISIBLE_FORMATTING's docstring calls "the more damaging half":
- * `admin` and `admin<U+FFA0>` both render as `admin`, so two rows survive
- * UNIQUE (driveId, normalizedKey), filtering by the visible tag finds half the
- * content, and the lookalike cannot be reproduced by typing.
+ * Folded to a space in the KEY, kept verbatim in the NAME. Both halves of that
+ * matter, and getting either wrong opens a dedupe hole in one direction:
  *
- * Deliberately NOT the joiners or the variation selectors, which also render as
+ *   - Keeping them as themselves splits `admin` from `admin<U+FFA0>`, which
+ *     render identically. That is the hole INVISIBLE_FORMATTING's docstring
+ *     calls "the more damaging half".
+ *   - Deleting them outright splits `a b` from `a<U+3164>b`, which ALSO render
+ *     identically — the same hole mirrored, and the one an earlier version of
+ *     this constant introduced while closing the first.
+ *
+ * Folding to a space closes both: the trailing case trims away, and the
+ * interior case collapses into the ordinary space it looks like.
+ *
+ * Deliberately NOT the joiners or the variation selectors, which render as
  * nothing alone but change how their NEIGHBOURS render — folding those would
- * make the family emoji key the same as three separate people.
- *
- * The cost, stated: a Braille tag mixing blank cells with real ones keys the
- * same as one without them. Two Braille strings differing only in blank cells
- * are near-indistinguishable on screen anyway, so collapsing them is the same
- * trade made everywhere else here.
+ * key the family emoji the same as three separate people.
  */
 const BLANK_IN_KEY = /[\u115f\u1160\u3164\uffa0\u2800]/g;
 
@@ -295,7 +297,7 @@ export function tagKey(name: string): string {
   // raw search string to find an existing tag — from silently producing a key
   // no stored row can carry, where one pasted zero-width space misses the row
   // and drives a duplicate insert.
-  const stripped = name.replace(INVISIBLE_FORMATTING, '').replace(BLANK_IN_KEY, '');
+  const stripped = name.replace(INVISIBLE_FORMATTING, '').replace(BLANK_IN_KEY, ' ');
   const folded = stripped.normalize('NFKC').toLowerCase().replace(FINAL_SIGMA, MEDIAL_SIGMA);
   return collapse(folded.normalize('NFKC'));
 }
