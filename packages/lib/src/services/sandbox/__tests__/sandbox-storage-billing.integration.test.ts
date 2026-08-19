@@ -69,6 +69,21 @@ function realDepsCapturingCharges(over: Partial<ReconcileSandboxStorageDeps> = {
       // No agent sessions in this file: the session source is covered by its own
       // suites, and an empty list keeps every assertion below about envs.
       listAgentSessionSprites: async () => [],
+      // The REAL query — still production SQL, so the live-Sprite predicate is
+      // genuinely under test — narrowed afterwards to this suite's drive.
+      //
+      // The narrowing is not tidiness. `advanceDriveEnvWatermark` below is also
+      // the real one, so an unfiltered listing would ADVANCE THE BILLING
+      // WATERMARK of every live env another suite has seeded in a shared CI
+      // database — corrupting their state, not merely making this file's counts
+      // flaky. Filtering by drive keeps the predicate honest (the
+      // never-provisioned and torn-down envs this file seeds are in the SAME
+      // drive, so a broken predicate still surfaces them) while making the
+      // blast radius exactly this suite's fixtures.
+      listDriveEnvSprites: async () =>
+        (await defaultReconcileSandboxStorageDeps.listDriveEnvSprites()).filter(
+          (row) => row.driveId === driveId,
+        ),
       chargeStorage: async (input) => {
         charges.push(input);
       },
@@ -203,7 +218,9 @@ describe('environment persistence billing — real table, real attribution', () 
     // The stale read the skip rule exists for, reproduced exactly: the row source
     // ran first (real SQL, real row), and the drive is gone by the time the payer
     // is resolved — at which point `drives.ownerId` is genuinely unknowable.
-    const snapshot = await defaultReconcileSandboxStorageDeps.listDriveEnvSprites();
+    const snapshot = (await defaultReconcileSandboxStorageDeps.listDriveEnvSprites()).filter(
+      (row) => row.driveId === driveId,
+    );
     await db.delete(drives).where(eq(drives.id, driveId));
     const { deps, charges } = realDepsCapturingCharges({ listDriveEnvSprites: async () => snapshot });
 
