@@ -148,6 +148,13 @@ const MEDIAL_SIGMA = '\u03c3';
  * Matches a value in which nothing renders — including the empty string, which
  * is why this subsumes a length check rather than sitting beside one.
  *
+ * A plain space is in the class, and it is load-bearing rather than tidy. The
+ * name is collapsed and trimmed before this runs, so U+0020 is the only
+ * whitespace that can still be present — and without it, one blank renderer is
+ * refused while two separated by a space are not. That name is non-empty, its
+ * key folds to nothing, and every such tag then collides on the empty key under
+ * UNIQUE (driveId, normalizedKey): one row occupies it and blocks the rest.
+ *
  * Every code point INVISIBLE_FORMATTING keeps must appear here, and a test
  * derives its cases from that keep-list rather than restating it — the two
  * drifted apart once already, over the Mongolian free variation selectors.
@@ -186,7 +193,7 @@ const MEDIAL_SIGMA = '\u03c3';
 const BLANK_IN_KEY = /[\u115f\u1160\u3164\uffa0\u2800]/g;
 
 const NOTHING_VISIBLE =
-  /^[\u180b-\u180d\u180f\u200c\u200d\u115f\u1160\u3164\uffa0\u2800\ufe00-\ufe0f\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]*$/u;
+  /^[ \u180b-\u180d\u180f\u200c\u200d\u115f\u1160\u3164\uffa0\u2800\ufe00-\ufe0f\u{e0020}-\u{e007f}\u{e0100}-\u{e01ef}]*$/u;
 
 /** The collapsible characters that are also C0/C1 — whitespace, not damage. */
 const COLLAPSIBLE_CONTROLS = new Set([0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x85]);

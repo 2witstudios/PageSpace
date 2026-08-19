@@ -261,6 +261,15 @@ describe('normalizeTagName — invisible characters', () => {
     }
     // Plus the Braille blank, which is not kept for adjacency but renders blank.
     expect(normalizeTagName(U(0x2800))).toEqual({ ok: false, reason: 'empty' });
+    // Two blank renderers separated by a SPACE is the case that bites: each is
+    // refused alone, but the space is not itself a blank renderer, so without
+    // it in the class the name passes while its key folds to nothing. Every
+    // such tag then collides on the empty key under the unique index Phase 2
+    // adds — one row occupies it and blocks the rest.
+    expect(normalizeTagName(U(0x3164) + ' ' + U(0xffa0))).toEqual({ ok: false, reason: 'empty' });
+    expect(normalizeTagName(U(0x2800) + ' ' + U(0x2800))).toEqual({ ok: false, reason: 'empty' });
+    expect(normalizeTagName(U(0x200d) + ' ' + U(0xfe0f))).toEqual({ ok: false, reason: 'empty' });
+
     // One visible character is enough to make it a name again.
     expect(expectOk('a' + U(0x200d) + 'b').name).toBe('a' + U(0x200d) + 'b');
     expect(expectOk(U(0x2800) + 'x').name).toBe(U(0x2800) + 'x');
@@ -589,6 +598,44 @@ describe('tagKey and idempotency', () => {
 
     expect(upper.key).toBe(lower.key);
     expect(upper.key).toBe(U(0x1e96));
+  });
+
+  it('never turns an accepted name into an empty key', () => {
+    // A standing property rather than a list of cases. An empty key is uniquely
+    // damaging: UNIQUE (driveId, normalizedKey) lets exactly one row hold it,
+    // so every tag that folds to nothing collides with every other one. This
+    // regressed once already, when the blank renderers began folding out of the
+    // key and a name of two of them separated by a space still passed.
+    const parts = [
+      'a',
+      'A',
+      ' ',
+      U(0x3164),
+      U(0xffa0),
+      U(0x2800),
+      U(0x115f),
+      U(0x200d),
+      U(0x200c),
+      U(0xfe0f),
+      U(0x3000),
+      U(0x2003),
+      U(0x00a0),
+      U(0x2060),
+      U(0x200b),
+      U(0x00b4),
+      U(0x2121),
+    ];
+
+    for (const first of parts) {
+      for (const second of parts) {
+        for (const third of parts) {
+          const result = normalizeTagName(first + second + third);
+          if (result.ok) {
+            expect(result.key, JSON.stringify(first + second + third)).not.toBe('');
+          }
+        }
+      }
+    }
   });
 
   it('produces a key that is itself NFKC-stable', () => {
