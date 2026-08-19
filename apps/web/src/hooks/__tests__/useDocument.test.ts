@@ -376,6 +376,25 @@ describe('useDocument dirty flag integration', () => {
       expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
     });
 
+    it('given no local document record, should refuse to resolve rather than save an empty document', async () => {
+      const pageId = 'page-123';
+      parkConflict(pageId);
+      // Conflict parked but the document record is gone from the store.
+      expect(useDocumentManagerStore.getState().documents.has(pageId)).toBe(false);
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      let resolved: boolean | undefined;
+      await act(async () => {
+        resolved = await result.current.resolveConflict('keep-mine');
+      });
+
+      expect(resolved).toBe(false);
+      expect(fetchWithAuth).not.toHaveBeenCalled();
+      // The conflict stays parked — nothing was silently overwritten.
+      expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(true);
+    });
+
     it('given no pending conflict, resolveConflict should be a no-op', async () => {
       const pageId = 'page-123';
       useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);

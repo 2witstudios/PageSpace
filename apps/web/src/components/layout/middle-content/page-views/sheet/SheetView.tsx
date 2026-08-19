@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
@@ -842,6 +843,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   return (
     <div className="flex h-full flex-col">
+      <DocumentConflictGate pageId={page.id} previewMode="plain" />
       <SheetFormulaBar
         isRange={selection.type === 'range'}
         selectionAddress={selectionAddress}

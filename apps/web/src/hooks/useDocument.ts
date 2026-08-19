@@ -9,6 +9,7 @@ import {
   canScheduleSave,
   decideConflictOutcome,
   planConflictResolution,
+  readContent,
   type ConflictResolutionChoice,
   type ConflictResponseBody,
   type RemotePageSnapshot,
@@ -185,6 +186,7 @@ export const useDocument = (pageId: string) => {
     useCallback((state) => state.conflicts.get(pageId), [pageId])
   );
   const [isLoading, setIsLoading] = useState(false);
+  const [isResolvingConflict, setIsResolvingConflict] = useState(false);
 
   const initializeAndActivate = useCallback(async () => {
     setIsLoading(true);
@@ -308,8 +310,18 @@ export const useDocument = (pageId: string) => {
       const conflict = state.conflicts.get(pageId);
       if (!conflict) return false;
 
-      const localContent = state.documents.get(pageId)?.content ?? '';
-      const plan = planConflictResolution(choice, { localContent, conflict });
+      // Mirror of the remote-side guard in decideConflictOutcome: "no local
+      // record" must never become "save an empty document over their work".
+      const local = readContent(state.documents.get(pageId)?.content);
+      if (!local.present) {
+        toast.error(
+          'Your local copy of this document is no longer loaded, so it cannot be compared. Reopen the page to see the current version.',
+          { id: `conflict-${pageId}` }
+        );
+        return false;
+      }
+
+      const plan = planConflictResolution(choice, { localContent: local.content, conflict });
 
       if (plan.action === 'adopt-remote') {
         const now = Date.now();
@@ -321,18 +333,21 @@ export const useDocument = (pageId: string) => {
           lastUpdateTime: now,
         });
         useDirtyStore.getState().clearDirty(pageId);
-        useDocumentManagerStore.getState().clearConflict(pageId);
+        state.clearConflict(pageId);
         return true;
       }
 
       // Clear first so the save is not blocked by its own conflict guard;
       // a repeat 409 parks a fresh one.
       state.clearConflict(pageId);
-      const saved = await saving
-        .saveDocument(plan.contentToSave, { expectedRevision: plan.expectedRevision })
-        .catch(() => false);
-
-      return saved;
+      setIsResolvingConflict(true);
+      try {
+        return await saving
+          .saveDocument(plan.contentToSave, { expectedRevision: plan.expectedRevision })
+          .catch(() => false);
+      } finally {
+        setIsResolvingConflict(false);
+      }
     },
     [pageId, saving]
   );
@@ -348,6 +363,7 @@ export const useDocument = (pageId: string) => {
     forceSave,
     conflict,
     resolveConflict,
+    isResolvingConflict,
     clearDocument: documentState.clearDocument,
   };
 };

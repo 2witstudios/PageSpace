@@ -9,6 +9,7 @@ import { CanvasFrame } from '@/components/canvas/CanvasFrame';
 import { ErrorBoundary } from '@/components/ai/shared';
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useSocket } from '@/hooks/useSocket';
@@ -237,6 +238,7 @@ const CanvasPageView = ({ pageId }: CanvasPageViewProps) => {
 
   return (
     <div ref={containerRef} className="h-full flex flex-col relative">
+      <DocumentConflictGate pageId={pageId} previewMode="plain" />
       <div className="relative flex flex-wrap items-center border-b">
         <button
           className={`px-4 py-2 ${activeTab === 'view' ? 'border-b-2 border-blue-500' : ''}`}

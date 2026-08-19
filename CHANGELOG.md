@@ -71,8 +71,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   exactly where it is. A banner appears saying someone else saved the document, autosaving pauses
   so nothing is sent behind your back, and you choose: **Keep mine**, which saves your text over
   theirs, or **Use theirs**, which loads their version and drops your unsaved changes. You can
-  expand the banner to read their version first, so the choice is not blind. Whichever you pick,
-  the save goes through cleanly instead of colliding a second time.
+  expand the banner to read their version first, so the choice is not blind. Use theirs simply
+  loads their version and saves nothing; and if someone saves again while you are still deciding,
+  Keep mine re-prompts you with that newer version instead of failing.
 
 - **Browsing a session's files now requires permission to run code, as starting a shell always
   did** — the file browser, the diff view and the "show this file at that commit" reader were

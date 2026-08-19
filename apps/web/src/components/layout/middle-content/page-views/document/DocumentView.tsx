@@ -18,8 +18,7 @@ import { useFindStore } from '@/stores/useFindStore';
 import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
-import DocumentConflictBanner from './DocumentConflictBanner';
-import type { ConflictResolutionChoice } from '@/lib/documents/conflict-resolution';
+import DocumentConflictGate from './DocumentConflictGate';
 
 interface DocumentViewProps {
   pageId: string;
@@ -53,23 +52,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
-    conflict,
-    resolveConflict,
   } = useDocument(pageId);
-
-  const [isResolvingConflict, setIsResolvingConflict] = useState(false);
-
-  const handleResolveConflict = useCallback(
-    async (choice: ConflictResolutionChoice) => {
-      setIsResolvingConflict(true);
-      try {
-        await resolveConflict(choice);
-      } finally {
-        setIsResolvingConflict(false);
-      }
-    },
-    [resolveConflict]
-  );
 
   // Track editor focus state for pull-to-refresh
   useEffect(() => {
@@ -351,14 +334,10 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
 
       {/* Save conflict — persistent until the user picks a side. The local
           buffer is untouched and autosave is paused while this is shown. */}
-      {conflict && (
-        <DocumentConflictBanner
-          conflict={conflict}
-          contentMode={documentState?.contentMode || 'html'}
-          onResolve={handleResolveConflict}
-          isResolving={isResolvingConflict}
-        />
-      )}
+      <DocumentConflictGate
+        pageId={pageId}
+        previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
+      />
 
       {/* Read-only indicator */}
       {isReadOnly && (

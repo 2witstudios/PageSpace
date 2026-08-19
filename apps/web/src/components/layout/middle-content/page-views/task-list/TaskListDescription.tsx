@@ -4,6 +4,7 @@ import { useEffect, useRef, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { type Editor } from '@tiptap/react';
 import { useDocument } from '@/hooks/useDocument';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { useDocumentManagerStore } from '@/stores/useDocumentManagerStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 
@@ -73,6 +74,7 @@ export function TaskListDescriptionContent({
 
   return (
     <div className={className}>
+      <DocumentConflictGate pageId={pageId} />
       <RichEditor
         value={content}
         onChange={handleChange}

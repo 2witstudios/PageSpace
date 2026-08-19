@@ -107,6 +107,100 @@ two call sites actually consult it, so that is where the mutation-check is aimed
 Worktree setup done before gates meant anything: `bun install`, then `@pagespace/db` and
 `@pagespace/lib` dist builds (`apps/web` imports lib from dist).
 
+## Round 2 — review response (CodeRabbit + a 4-angle cleanup pass)
+
+### Absent vs empty content — fixed at the root, both directions
+
+CodeRabbit caught `remotePage.content ?? ''`: an ABSENT content field became an empty remote
+document, so "Use theirs" would replace the user's text with nothing — data loss through the exact
+door this PR closes. A sweep for the same question asked elsewhere found the mirror image in
+`resolveConflict`: `state.documents.get(pageId)?.content ?? ''` would let "Keep mine" save an
+EMPTY document over the other person's work if the local record were missing.
+
+`?? ''` cannot express the distinction, and it was now being asked twice, so the fix is a single
+narrowing primitive rather than two remembered guards:
+
+```ts
+export type ContentRead = { present: true; content: string } | { present: false };
+export function readContent(content: string | null | undefined): ContentRead
+```
+
+`undefined` → absent, `null` → an empty document (unchanged, still offerable). The remote side
+returns an `error` outcome; the local side refuses to resolve, leaves the conflict parked, and
+says so. Mutation M11 (delete the `undefined` branch) turns all three levels red at once.
+
+### The regression I introduced, and fixed
+
+The altitude review found it and it is the most important item in this round. `useDocument` has
+**five** production consumers — `DocumentView`, `CodePageView`, `CanvasPageView`,
+`TaskListDescription`, `useSheetPersistence`/`SheetView` — and all five route writes through the
+guarded `saveWithDebounce`/`forceSave`. But the banner was rendered only by `DocumentView`. On the
+other four surfaces a 409 would park a conflict, pause autosave, and offer **no way to resolve
+it** — saving silently dead for the rest of the session, with edits surviving in memory only until
+reload. That is worse than the bug this PR fixes.
+
+Fix: `DocumentConflictGate` — renders nothing until a conflict exists for its `pageId`, so a view
+mounts it unconditionally in one line. All five views now do. `isResolvingConflict` moved into
+`useDocument` so the gate is self-contained (previously local state in `DocumentView`).
+
+### Other review findings applied
+
+- `DOMPurify.sanitize` with default config replaced by the app's shared `sanitizeHtmlAllowlist`
+  — the banner was the only `dangerouslySetInnerHTML` site in `apps/web` not using it, and the
+  default profile keeps `style`/`form`/arbitrary attributes the allowlist strips. Caveat: the
+  allowlist has no `img`, so images in the other version show as absent in the preview pane. An
+  acceptable trade for one consistent sanitization policy.
+- Hand-rolled disclosure replaced with the repo's Radix `Collapsible` (correct trigger/content
+  ARIA association, which the hand-rolled `aria-expanded` lacked).
+- Sanitization is now deferred until the disclosure is actually opened — it was running eagerly on
+  the frame the 409 landed, mid-typing, for a pane most users never open.
+- `contentMode` prop became `previewMode: 'rich' | 'plain'`, so code/canvas/sheet can show their
+  JSON verbatim rather than through an HTML renderer.
+- Dropped a dead `export type { DocumentConflict }` re-export from the store; made `resolveConflict`
+  use one `state` handle consistently.
+
+### Review findings deliberately NOT applied
+
+- **Inline `canScheduleSave` / `planConflictResolution` away** (raised by three of four angles).
+  Both are named in the task spec as required exports of the pure module. `canScheduleSave` is
+  genuinely a tautology in isolation — which is why its mutation-checks are aimed at the two call
+  sites, not at the predicate. Left as specified rather than quietly redesigning the brief.
+- **Move `conflicts` onto `DocumentState`** so it resets with `upsertDocument`. Rejected on
+  inspection: clearing a conflict on remount would silently resume autosave against the freshly
+  fetched revision, overwriting the other person's text with no prompt — "Keep mine" by default.
+  Keeping the conflict parked is the protective behaviour. (`clearDocument` clears both maps and
+  has no production callers today; that is harmless defensive code.)
+- **Park a conflict from the socket handler** (`DocumentView`'s `handleContentUpdate` drops remote
+  changes while dirty). Correct that the machinery generalizes, but it is a behaviour change beyond
+  the 409 write path this task scopes.
+- **Route the conflict refetch through SWR** (CodeRabbit). Rejected and answered on the PR thread.
+  `CLAUDE.md` requires editors to register with `useEditingStore` specifically to prevent SWR
+  clobbering. Also the premise is factually wrong: `PagePaneView.tsx:66` keys on
+  `encodeURIComponent(pageId)` while `WorkflowForm.tsx:68` keys on the raw id — different cache
+  entries, so there is no single "shared key". And `PagePaneView` already holds a live
+  `useSWR<TreePage>` on that key while rendering `DocumentView` beneath it, passing down only
+  `id`/`driveId`; no content crosses today, which is exactly why nothing clobbers.
+
+### Round 2 mutation checks
+
+| # | Mutation | Test that went red |
+|---|---|---|
+| M11 | `readContent` conflates absent with empty (the bug, at its root) | primitive + remote-decision + local-guard tests, all three |
+| M12 | local side falls back to `''` again | `given no local document record, should refuse to resolve` |
+| M13 | gate renders the banner with no conflict parked | both `DocumentConflictGate` tests |
+| M14 | banner renders remote content unsanitized | `should render it sanitized` |
+
+### Round 2 gates
+
+`bunx tsc --noEmit` in `apps/web` exits 0; `bun run typecheck` 17/17; `bun run lint` 15/15.
+Tests across `src/lib/documents`, the hook, and all of `page-views`: **424 passed, 1 file failed** —
+`useTaskSubTasks.integration.test.tsx`, which needs a migrated Postgres this worktree does not have
+and prints its own opt-out instructions. Unrelated to this change.
+
+Twice during this work `bun run typecheck` exited non-zero with a flood of TS6053 `.next/types not
+found` and **no diagnostics**, then passed on an immediate rerun. It looks like `web#typecheck`
+racing `web#build` in the same turbo graph. Worth knowing before someone bisects a phantom CI flake.
+
 ## Deliberately not done
 
 - **No Yjs, CRDT, or collab code.** `RichEditor.tsx`'s extension list is untouched. Phases B+.

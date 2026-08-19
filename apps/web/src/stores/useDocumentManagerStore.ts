@@ -1,8 +1,6 @@
 import { create } from 'zustand';
 import type { DocumentConflict } from '@/lib/documents/conflict-resolution';
 
-export type { DocumentConflict };
-
 export interface DocumentState {
   id: string;
   content: string;

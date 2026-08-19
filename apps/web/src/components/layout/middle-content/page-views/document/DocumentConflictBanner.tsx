@@ -1,8 +1,13 @@
 "use client";
 
 import React, { useMemo, useState } from 'react';
-import DOMPurify from 'dompurify';
 import { Button } from '@/components/ui/button';
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/components/ui/collapsible';
+import { sanitizeHtmlAllowlist } from '@/components/ai/shared/chat/tool-calls/content-utils';
 import type {
   ConflictResolutionChoice,
   DocumentConflict,
@@ -10,7 +15,12 @@ import type {
 
 interface DocumentConflictBannerProps {
   conflict: DocumentConflict;
-  contentMode?: 'html' | 'markdown';
+  /**
+   * How to show the parked copy. 'rich' renders sanitized HTML (prose
+   * documents); 'plain' shows it verbatim in a <pre> (markdown, code, sheet
+   * JSON, canvas JSON — anything where markup is the content, not formatting).
+   */
+  previewMode?: 'rich' | 'plain';
   onResolve: (choice: ConflictResolutionChoice) => void;
   isResolving?: boolean;
 }
@@ -29,16 +39,22 @@ interface DocumentConflictBannerProps {
  */
 const DocumentConflictBanner = ({
   conflict,
-  contentMode = 'html',
+  previewMode = 'rich',
   onResolve,
   isResolving = false,
 }: DocumentConflictBannerProps) => {
   const [showRemote, setShowRemote] = useState(false);
 
-  // The parked copy is another user's content — sanitize before rendering it.
+  // The parked copy is another user's content, so it goes through the app's
+  // shared allowlist sanitizer. Deferred until the disclosure is actually
+  // opened — most users resolve without ever looking, and parsing a large
+  // document synchronously on the frame the 409 lands is a needless hitch.
   const sanitizedRemote = useMemo(
-    () => (contentMode === 'markdown' ? null : DOMPurify.sanitize(conflict.remoteContent)),
-    [conflict.remoteContent, contentMode]
+    () =>
+      showRemote && previewMode === 'rich'
+        ? sanitizeHtmlAllowlist(conflict.remoteContent)
+        : '',
+    [showRemote, previewMode, conflict.remoteContent]
   );
 
   return (
@@ -80,35 +96,31 @@ const DocumentConflictBanner = ({
           </div>
         </div>
 
-        <div>
-          <button
-            type="button"
-            className="text-sm underline text-amber-900 dark:text-amber-100"
-            aria-expanded={showRemote}
-            onClick={() => setShowRemote((shown) => !shown)}
-          >
+        <Collapsible open={showRemote} onOpenChange={setShowRemote}>
+          <CollapsibleTrigger className="text-sm underline text-amber-900 dark:text-amber-100">
             {showRemote ? 'Hide their version' : 'View their version'}
-          </button>
-          {showRemote && (
+          </CollapsibleTrigger>
+          <CollapsibleContent>
             <div
               data-testid="document-conflict-remote-preview"
               className="mt-2 max-h-64 overflow-auto rounded border border-amber-200 dark:border-amber-800 bg-background/60 p-3 text-sm"
             >
-              {sanitizedRemote === null ? (
+              {previewMode === 'plain' ? (
                 <pre className="whitespace-pre-wrap break-words font-mono text-xs">
                   {conflict.remoteContent}
                 </pre>
               ) : (
                 <div
                   className="prose prose-sm dark:prose-invert max-w-none"
-                  // Sanitized immediately above; this is another user's saved
-                  // page content, rendered read-only for comparison.
+                  // Sanitized through the shared allowlist immediately above;
+                  // this is another user's saved page content, rendered
+                  // read-only for comparison.
                   dangerouslySetInnerHTML={{ __html: sanitizedRemote }}
                 />
               )}
             </div>
-          )}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       </div>
     </div>
   );

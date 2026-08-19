@@ -3,8 +3,27 @@ import {
   decideConflictOutcome,
   planConflictResolution,
   canScheduleSave,
+  readContent,
   type DocumentConflict,
 } from '../conflict-resolution';
+
+describe('readContent', () => {
+  it('given undefined, should report the content as absent', () => {
+    expect(readContent(undefined)).toEqual({ present: false });
+  });
+
+  it('given null, should report an explicitly empty document', () => {
+    expect(readContent(null)).toEqual({ present: true, content: '' });
+  });
+
+  it('given a string, should report it present', () => {
+    expect(readContent('text')).toEqual({ present: true, content: 'text' });
+  });
+
+  it('given an empty string, should report it present rather than absent', () => {
+    expect(readContent('')).toEqual({ present: true, content: '' });
+  });
+});
 
 describe('decideConflictOutcome', () => {
   it('given a refetched remote page with a revision, should park it as a conflict', () => {
@@ -31,6 +50,19 @@ describe('decideConflictOutcome', () => {
       kind: 'conflict',
       conflict: { remoteContent: '', remoteRevision: 9, detectedAt: 5 },
     });
+  });
+
+  it('given a remote page with an absent content field, should error rather than offer an empty document', () => {
+    // Coercing absent content to '' would let "Use theirs" wipe the local text.
+    const outcome = decideConflictOutcome({
+      conflictBody: { currentRevision: 4 },
+      remotePage: { revision: 4 },
+      detectedAt: 1000,
+    });
+
+    expect(outcome.kind).toBe('error');
+    if (outcome.kind !== 'error') throw new Error('expected error');
+    expect(outcome.message).toContain('still here');
   });
 
   it('given a remote page without a revision, should fall back to currentRevision from the 409 body', () => {

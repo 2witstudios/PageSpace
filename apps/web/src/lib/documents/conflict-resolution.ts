@@ -27,6 +27,23 @@ export interface RemotePageSnapshot {
   revision?: number;
 }
 
+/**
+ * The result of reading a content field that may be absent OR explicitly empty.
+ *
+ * These two are NOT the same and conflating them is destructive in both
+ * directions: an absent REMOTE content coerced to '' lets "Use theirs" wipe the
+ * user's text, and an absent LOCAL content coerced to '' lets "Keep mine" save
+ * an empty document over someone else's work. `?? ''` cannot express the
+ * difference, so it is banned at these boundaries — use `readContent`.
+ */
+export type ContentRead = { present: true; content: string } | { present: false };
+
+/** `null` means an empty document. `undefined` means we do not have it. */
+export function readContent(content: string | null | undefined): ContentRead {
+  if (content === undefined) return { present: false };
+  return { present: true, content: content ?? '' };
+}
+
 export type ConflictDecision =
   | { kind: 'conflict'; conflict: DocumentConflict }
   | { kind: 'error'; message: string };
@@ -57,6 +74,15 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
     };
   }
 
+  const remote = readContent(remotePage.content);
+  if (!remote.present) {
+    return {
+      kind: 'error',
+      message:
+        'Document was modified elsewhere and the current version could not be read. Your changes are still here — try saving again.',
+    };
+  }
+
   const remoteRevision = remotePage.revision ?? conflictBody?.currentRevision;
 
   if (remoteRevision === undefined) {
@@ -70,7 +96,7 @@ export function decideConflictOutcome(input: ConflictDecisionInput): ConflictDec
   return {
     kind: 'conflict',
     conflict: {
-      remoteContent: remotePage.content ?? '',
+      remoteContent: remote.content,
       remoteRevision,
       detectedAt,
     },

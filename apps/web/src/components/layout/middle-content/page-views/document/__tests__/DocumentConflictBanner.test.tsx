@@ -55,11 +55,11 @@ describe('DocumentConflictBanner', () => {
     expect(preview.querySelector('script')).toBeNull();
   });
 
-  it('given markdown content mode, should show the other version as plain text', () => {
+  it('given plain preview mode, should show the other version verbatim', () => {
     render(
       <DocumentConflictBanner
         conflict={{ ...conflict, remoteContent: '# their heading' }}
-        contentMode="markdown"
+        previewMode="plain"
         onResolve={vi.fn()}
       />
     );
