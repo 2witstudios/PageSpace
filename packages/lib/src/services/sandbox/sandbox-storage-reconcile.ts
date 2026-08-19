@@ -87,6 +87,16 @@
  * structural one: an env has NO owner column to fall back to (`createdBy` is
  * audit only), so its payer is the drive owner or nobody — see
  * `resolveEnvPayerId`, and the skip-on-unresolvable rule below.
+ *
+ * **Coverage, stated honestly.** The "never wake to measure" rule means this
+ * bills what real-work wakes have persisted, and an env's only writer today is
+ * its provision-time baseline (`env-storage-measure.ts`) — env-bound sessions,
+ * which are what would refresh it, are a follow-up. So envs currently meter
+ * near-zero by construction, and that is a coverage gap rather than a pricing
+ * one: the payer, the attribution, the watermark and the idempotence are all
+ * exercised, and the number they multiply is small until the warm path lands.
+ * `neverMeasured` counts live rows in exactly that state, so the gap is a metric
+ * an operator can watch rather than a silence.
  */
 
 import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pricing';
@@ -275,9 +285,30 @@ export interface ReconcileSandboxStorageResult {
    * the cron bills the last value regardless (it never wakes a sprite), so
    * this is a health signal: a persistently-high count means measurements
    * aren't being refreshed by real-work wakes. Excludes never-measured rows
-   * (see `skipped` is unrelated; never-measured simply bill 0).
+   * (see `skipped` is unrelated; never-measured simply bill 0 — they are
+   * counted by {@link ReconcileSandboxStorageResult.neverMeasured} instead).
    */
   staleMeasurements: number;
+  /**
+   * LIVE rows with no measurement at all, billing the 0 floor while their
+   * watermark advances — storage the platform is holding and not charging for.
+   *
+   * Separated from `staleMeasurements` because it is the more serious signal and
+   * the stale count structurally cannot contain it (a row with no reading cannot
+   * have an ageing one). It matters most for ENVS: a session has three
+   * measurement writers, so a dropped one self-corrects on the next real work,
+   * whereas an env's baseline is written once at provision and a single failed
+   * `du` there leaves the row NULL with nothing to retry it. A count that stays
+   * above zero across ticks means exactly that has happened.
+   */
+  neverMeasured: number;
+  /**
+   * Row sources whose LIST threw this tick — their rows were not metered at all
+   * (not skipped, not billed: unread). Their accrual is untouched and is caught
+   * up in full on the next tick. Named rather than counted so an operator can
+   * see WHICH persistence unit went unbilled.
+   */
+  failedSources: StorageSubjectKind[];
   /** Total money actually moved this run — accumulated the moment `chargeStorage` succeeds, never gated on the watermark advance that follows it. */
   totalCostDollars: number;
 }
@@ -350,15 +381,56 @@ function toEnvSubject(env: DriveEnvStorageRow, deps: ReconcileSandboxStorageDeps
   };
 }
 
+/**
+ * Read one row source, converting a LIST failure into an empty tick for THAT
+ * source alone.
+ *
+ * Deliberately isolated rather than fatal. The two sources share a meter but no
+ * invariant: every row carries its own watermark, so billing sessions while
+ * `drive_envs` is unreadable is not a half-run, it is a correct run over the
+ * rows that could be read — the unread ones accrue and are caught up in full on
+ * the next tick, exactly as a row skipped for an unresolvable payer is. Letting
+ * an env-side read error abort the tick would instead stop SESSION billing,
+ * which folding envs in must never do: this PR adds a row source, and a row
+ * source must not be able to take the existing meter down with it.
+ *
+ * Named in the result (`failedSources`) and logged, because a source that is
+ * silently contributing nothing looks exactly like a source with no rows.
+ */
+async function listSource<T>(
+  kind: StorageSubjectKind,
+  load: () => Promise<T[]>,
+): Promise<{ rows: T[]; failed: boolean }> {
+  try {
+    return { rows: await load(), failed: false };
+  } catch (error) {
+    loggers.ai.error(
+      `Sandbox storage reconcile: could not list the ${kind} row source — its rows are unmetered this tick and accrue for the next`,
+      error instanceof Error ? error : new Error(String(error)),
+      { subjectKind: kind },
+    );
+    return { rows: [], failed: true };
+  }
+}
+
 export async function reconcileSandboxStorage(
   deps: ReconcileSandboxStorageDeps,
 ): Promise<ReconcileSandboxStorageResult> {
-  // Both sources are read BEFORE any charging, so one source failing to list
-  // aborts the run before money moves rather than half-billing it.
-  const [sessions, envs] = await Promise.all([deps.listAgentSessionSprites(), deps.listDriveEnvSprites()]);
+  // Both sources are read BEFORE any charging (so the whole tick is planned
+  // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
+  // see `listSource` for why one source's failure must not stop the other's
+  // money.
+  const [sessions, envs] = await Promise.all([
+    listSource('session', deps.listAgentSessionSprites),
+    listSource('env', deps.listDriveEnvSprites),
+  ]);
   const subjects: BillableStorageSubject[] = [
-    ...sessions.map((session) => toSessionSubject(session, deps)),
-    ...envs.map((env) => toEnvSubject(env, deps)),
+    ...sessions.rows.map((session) => toSessionSubject(session, deps)),
+    ...envs.rows.map((env) => toEnvSubject(env, deps)),
+  ];
+  const failedSources: StorageSubjectKind[] = [
+    ...(sessions.failed ? (['session'] as const) : []),
+    ...(envs.failed ? (['env'] as const) : []),
   ];
   const now = deps.now();
 
@@ -367,6 +439,7 @@ export async function reconcileSandboxStorage(
   let failed = 0;
   let chargedButUnadvanced = 0;
   let staleMeasurements = 0;
+  let neverMeasured = 0;
   let totalCostDollars = 0;
 
   for (const subject of subjects) {
@@ -381,9 +454,14 @@ export async function reconcileSandboxStorage(
       const lastMeasuredGB = subject.measuredBytes === null ? null : bytesToGB(subject.measuredBytes);
       const awake = now.getTime() - subject.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
       const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: subject.measuredAt, awake, now });
-      // Health signal (measured-but-stale only; never-measured rows bill 0 and
-      // aren't "stale" in the refresh sense).
-      if (stale && lastMeasuredGB !== null) staleMeasurements += 1;
+      // Two DISTINCT health signals, and conflating them would hide the worse
+      // one. `staleMeasurements` is measured-but-ageing — a footprint we know,
+      // billing on an old reading. `neverMeasured` is a live row with NO reading
+      // at all, billing the 0 floor while its watermark advances: not stale in
+      // the refresh sense, and therefore invisible in the stale count, which is
+      // precisely why it needs its own.
+      if (lastMeasuredGB === null) neverMeasured += 1;
+      else if (stale) staleMeasurements += 1;
       const gbMonths = computeElapsedGbMonths({ measuredGB: gb, elapsedMs });
       const costDollars = calculateMachineStorageCostDollars(gbMonths);
 
@@ -485,5 +563,15 @@ export async function reconcileSandboxStorage(
     }
   }
 
-  return { processed: subjects.length, charged, skipped, failed, chargedButUnadvanced, staleMeasurements, totalCostDollars };
+  return {
+    processed: subjects.length,
+    charged,
+    skipped,
+    failed,
+    chargedButUnadvanced,
+    staleMeasurements,
+    neverMeasured,
+    failedSources,
+    totalCostDollars,
+  };
 }

@@ -61,7 +61,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, total $${run.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, neverMeasured ${run.neverMeasured}, failedSources [${run.failedSources.join(', ')}], total $${run.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -75,6 +75,12 @@ export async function GET(request: Request) {
         failed: run.failed,
         chargedButUnadvanced: run.chargedButUnadvanced,
         staleMeasurements: run.staleMeasurements,
+        // A non-zero `neverMeasured` that persists across runs is storage being
+        // held and not charged for — the one failure this meter cannot see any
+        // other way. `failedSources` names a persistence unit that went entirely
+        // unread this tick.
+        neverMeasured: run.neverMeasured,
+        failedSources: run.failedSources,
         totalCostDollars: run.totalCostDollars,
       },
     });
@@ -87,6 +93,8 @@ export async function GET(request: Request) {
       failed: run.failed,
       chargedButUnadvanced: run.chargedButUnadvanced,
       staleMeasurements: run.staleMeasurements,
+      neverMeasured: run.neverMeasured,
+      failedSources: run.failedSources,
       totalCostDollars: run.totalCostDollars,
       timestamp: new Date().toISOString(),
     });

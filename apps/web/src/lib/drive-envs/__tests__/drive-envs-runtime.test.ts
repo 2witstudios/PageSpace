@@ -234,19 +234,20 @@ describe('rebuildEnv wiring', () => {
 /**
  * The measurement seam — the WRITE side of the meter that bills this env.
  *
- * An env is the billed persistence unit, and the storage reconcile only READS
- * `drive_envs.storageMeasuredBytes`. Wire nothing here and every env prices at
- * the never-measured 0 floor forever while the cron keeps advancing its
- * watermark: the env runs free, silently, with no error anywhere. So the
- * assertions below are about the seam EXISTING and landing on the ENV's row —
- * not about `du`, which has its own suite.
+ * WHAT a measurement does (the `du`, the parse, the CAS target, the
+ * never-persist-a-guess rule) is `envStorageMeasureSeam`'s, pinned by its own
+ * suite in `@pagespace/lib`. What is asserted HERE is the only thing this
+ * composition owns: that the seam is wired at all, and that it is wired to THIS
+ * env store. Wire nothing and every env prices at the never-measured 0 floor
+ * forever while the storage reconcile advances its watermark — no error, no
+ * failing test, just an environment that is silently free.
  */
 describe('rebuildEnv wiring — storage measurement', () => {
   /** An already-awake sandbox handle reporting a 2GB tree, the one input measurement needs. */
-  function fakeHandle(spriteInstanceId: string | null = 'inst-1') {
+  function fakeHandle() {
     return {
       sandboxId: 'pgs-env-probe',
-      spriteInstanceId,
+      spriteInstanceId: 'inst-1',
       exec: vi.fn(async () => ({ exitCode: 0, stdout: '2000000000\t/workspace\n', stderr: '' })),
     };
   }
@@ -257,32 +258,15 @@ describe('rebuildEnv wiring — storage measurement', () => {
     expect(typeof lastProvisionCall().deps.measureStorage).toBe('function');
   });
 
-  it("should persist the measured bytes onto the ENV's own row, CASed on the measured instance", async () => {
+  it("should wire it to THIS env's store, so the bytes land on the env row", async () => {
     await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
-    const handle = fakeHandle();
 
     await lastProvisionCall().deps.measureStorage?.({
       holderId: ENV_ID,
-      handle: handle as never,
+      handle: fakeHandle() as never,
     });
 
     expect(recordStorageMeasurement).toHaveBeenCalledTimes(1);
-    const written = recordStorageMeasurement.mock.calls[0]?.[0];
-    expect({
-      envId: written?.envId,
-      spriteInstanceId: written?.spriteInstanceId,
-      measuredBytes: written?.measuredBytes,
-    }).toEqual({ envId: ENV_ID, spriteInstanceId: 'inst-1', measuredBytes: 2_000_000_000 });
-  });
-
-  it("should take the CAS instance from the HANDLE, never from the row — the du ran on that VM", async () => {
-    await rebuildEnv({ envId: ENV_ID, requesterId: REQUESTER_ID });
-
-    await lastProvisionCall().deps.measureStorage?.({
-      holderId: ENV_ID,
-      handle: fakeHandle('freshly-minted-instance') as never,
-    });
-
-    expect(recordStorageMeasurement.mock.calls[0]?.[0].spriteInstanceId).toBe('freshly-minted-instance');
+    expect(recordStorageMeasurement.mock.calls[0]?.[0].envId).toBe(ENV_ID);
   });
 });

@@ -455,4 +455,109 @@ describe('reconcileSandboxStorage', () => {
 
     expect(result).toMatchObject({ charged: 1, staleMeasurements: 1 });
   });
+
+  // -------------------------------------------------------------------------
+  // Health signals and source isolation — the two ways this meter can go quiet
+  // without anybody noticing.
+  // -------------------------------------------------------------------------
+
+  it('counts a live row with NO measurement as neverMeasured, distinctly from a stale one', async () => {
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ envId: 'env-never', measuredBytes: null, measuredAt: null }),
+        driveEnv({
+          envId: 'env-stale',
+          measuredAt: new Date(now.getTime() - STALE_MEASUREMENT_MS - 1),
+          lastActiveAt: new Date(now.getTime() - 60 * 60 * 1000),
+        }),
+      ],
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'one env that has never been measured and one billing on an ageing measurement',
+      should: 'count them SEPARATELY — a row with no reading cannot have an ageing one, and it is the worse signal',
+      actual: { neverMeasured: result.neverMeasured, staleMeasurements: result.staleMeasurements },
+      expected: { neverMeasured: 1, staleMeasurements: 1 },
+    });
+  });
+
+  it('reports no health noise when every row carries a fresh measurement', async () => {
+    const { deps } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession()],
+      listDriveEnvSprites: async () => [driveEnv()],
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result).toMatchObject({ neverMeasured: 0, staleMeasurements: 0, failedSources: [] });
+  });
+
+  it('given the ENV source throws, still bills every SESSION and names the unread source', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a' })],
+      listDriveEnvSprites: async () => {
+        throw new Error('drive_envs unreadable');
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a drive_envs read that fails while the session source is healthy',
+      should: 'bill the sessions anyway — folding envs in must never be able to stop the existing meter',
+      actual: {
+        charged: result.charged,
+        processed: result.processed,
+        failedSources: result.failedSources,
+        billed: chargeCalls.map((call) => call.subjectId),
+      },
+      expected: { charged: 1, processed: 1, failedSources: ['env'], billed: ['session-a'] },
+    });
+    expect(agentSessionAdvanceCalls.map((call) => call.workspaceId)).toEqual(['session-a']);
+  });
+
+  it('given the SESSION source throws, still bills every ENV — the isolation runs both ways', async () => {
+    const { deps, chargeCalls, driveEnvAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => {
+        throw new Error('agent_workspaces unreadable');
+      },
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-a' })],
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(result).toMatchObject({ charged: 1, processed: 1, failedSources: ['session'] });
+    expect(chargeCalls.map((call) => call.subjectId)).toEqual(['env-a']);
+    expect(driveEnvAdvanceCalls.map((call) => call.envId)).toEqual(['env-a']);
+  });
+
+  it('given BOTH sources throw, is a clean no-op that names both — nothing billed, nothing advanced', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => {
+        throw new Error('down');
+      },
+      listDriveEnvSprites: async () => {
+        throw new Error('down');
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'both row sources failing to list',
+      should: 'move no money and leave every watermark untouched, so the whole tick is caught up next run',
+      actual: {
+        result: { processed: result.processed, charged: result.charged, failedSources: result.failedSources },
+        writes: chargeCalls.length + agentSessionAdvanceCalls.length + driveEnvAdvanceCalls.length,
+      },
+      expected: {
+        result: { processed: 0, charged: 0, failedSources: ['session', 'env'] },
+        writes: 0,
+      },
+    });
+  });
 });

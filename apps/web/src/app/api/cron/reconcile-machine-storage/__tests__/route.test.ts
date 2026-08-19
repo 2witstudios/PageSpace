@@ -52,6 +52,8 @@ describe('/api/cron/reconcile-machine-storage', () => {
       failed: 0,
       chargedButUnadvanced: 0,
       staleMeasurements: 1,
+      neverMeasured: 2,
+      failedSources: ['env'],
       totalCostDollars: 0.001234,
     });
   });
@@ -77,10 +79,32 @@ describe('/api/cron/reconcile-machine-storage', () => {
         eventType: 'data.write',
         resourceType: 'cron_job',
         resourceId: 'reconcile_machine_storage',
-        details: expect.objectContaining({ processed: 3, charged: 2, skipped: 1, failed: 0, chargedButUnadvanced: 0, staleMeasurements: 1 }),
+        details: expect.objectContaining({
+          processed: 3,
+          charged: 2,
+          skipped: 1,
+          failed: 0,
+          chargedButUnadvanced: 0,
+          staleMeasurements: 1,
+          // The two signals that make an under-billing meter visible: storage
+          // held with no reading at all, and a persistence unit that went
+          // entirely unread this tick.
+          neverMeasured: 2,
+          failedSources: ['env'],
+        }),
       }),
     );
-    expect(body).toMatchObject({ success: true, processed: 3, charged: 2, skipped: 1, failed: 0, chargedButUnadvanced: 0, staleMeasurements: 1 });
+    expect(body).toMatchObject({
+      success: true,
+      processed: 3,
+      charged: 2,
+      skipped: 1,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 1,
+      neverMeasured: 2,
+      failedSources: ['env'],
+    });
   });
 
   it('given the advisory lock is held by another run, should no-op WITHOUT auditing and report lock_busy', async () => {
