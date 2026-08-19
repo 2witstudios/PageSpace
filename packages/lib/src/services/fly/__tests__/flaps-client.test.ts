@@ -10,6 +10,7 @@ import {
   createDeployToken,
   createMachine,
   deleteApp,
+  execMachine,
   getMachine,
   releaseLease,
   listMachineEvents,
@@ -347,6 +348,59 @@ describe('waitForMachineState — the long poll must outlive the default timeout
     });
 
     expect(timeouts).toEqual([FLAPS_TIMEOUT_MS]);
+  });
+});
+
+describe('execMachine — the deploy health check', () => {
+  it('given a command and a timeout, should post both and bound the request by the timeout', async () => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, _init?: RequestInit) =>
+      json({ exit_code: 0, stdout: 'ok', stderr: '' }),
+    );
+    const { transport: recording, timeouts } = timeoutRecordingTransport(
+      fetchImpl as unknown as typeof fetch,
+    );
+
+    const result = await execMachine(recording, 'pgs-app-abc', 'm1', ['/bin/sh', '-c', 'true'], 30);
+
+    expect(String(fetchImpl.mock.calls[0][0])).toContain('/machines/m1/exec');
+    expect(bodyOfCall(fetchImpl, 0)).toEqual({ command: ['/bin/sh', '-c', 'true'], timeout: 30 });
+    // Fly holds the command for its own timeout; a 10s bound would abort a healthy probe.
+    expect(timeouts).toEqual([waitRequestTimeoutMs(30)]);
+    expect(result).toEqual({ exitCode: 0, stdout: 'ok', stderr: '' });
+  });
+
+  it('given a failing command, should surface the non-zero exit code rather than throwing', async () => {
+    const fetchImpl = vi.fn(async () => json({ exit_code: 7, stderr: 'connection refused' }));
+    const result = await execMachine(
+      transport(fetchImpl as unknown as typeof fetch),
+      'pgs-app-abc',
+      'm1',
+      ['/probe'],
+    );
+    expect(result).toEqual({ exitCode: 7, stdout: '', stderr: 'connection refused' });
+  });
+
+  it('given a response with no exit code, should report -1 rather than a passing 0', async () => {
+    const fetchImpl = vi.fn(async () => json({ stdout: '' }));
+    const result = await execMachine(
+      transport(fetchImpl as unknown as typeof fetch),
+      'pgs-app-abc',
+      'm1',
+      ['/probe'],
+    );
+    // A missing code must never read as success — the health check's whole job is
+    // to withhold promotion when it cannot prove the app is serving.
+    expect(result.exitCode).toBe(-1);
+  });
+
+  it('given an ambiguous transport failure, should NOT retry — a health probe that ran three times is unreadable', async () => {
+    const fetchImpl = vi.fn(async () => {
+      throw new Error('socket hang up');
+    });
+    await expect(
+      execMachine(transport(fetchImpl as unknown as typeof fetch), 'pgs-app-abc', 'm1', ['/probe']),
+    ).rejects.toBeInstanceOf(FlapsError);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 

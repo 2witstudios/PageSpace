@@ -12,6 +12,7 @@ import type {
   PullVerifyJobData,
   AccountErasureJobData,
   EmailBroadcastJobData,
+  AppBuildJobData,
   TextExtractResult,
   IngestResult,
 } from '../types';
@@ -91,6 +92,8 @@ export class QueueManager {
       await this.boss.createQueue('audit-chainer');
       await this.boss.createQueue('email-broadcast');
       await this.boss.createQueue('stuck-page-reconciler');
+      await this.boss.createQueue('app-build');
+      await this.boss.createQueue('app-build-reconciler');
       console.log('PgBoss queues created/verified');
     } catch (err) {
       console.warn('Queue creation warning:', err instanceof Error ? err.message : err);
@@ -312,6 +315,39 @@ export class QueueManager {
     // Every 5 minutes — minutes-scale detection is plenty for a gap that
     // previously went unnoticed for weeks, and each run is a few indexed reads.
     await this.boss.schedule('stuck-page-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
+
+    // Published-app build & deploy (Fly Machines, epic Phase 2). The worker
+    // returns an OUTCOME rather than throwing for the expected failures — a
+    // broken user Dockerfile is recorded on the app row, not retried three
+    // times — so a throw reaching pg-boss here means something unexpected went
+    // wrong and a retry is the right response.
+    const { runAppBuild, runAppBuildReconcilerPass } = await import('./app-build-worker');
+    await this.boss.work('app-build',
+      async ([job]) => {
+        loggers.processor.info(`Processing app-build job: ${job.id}`);
+        return await runAppBuild(job.data as AppBuildJobData);
+      }
+    );
+
+    // Build/deploy reconciler: recovers apps stuck in 'building'/'deploying'
+    // past the staleness horizon, whose worker died without throwing (SIGKILL,
+    // OOM, a host that went away) and whose job therefore expired silently.
+    // retryLimit 0 so passes never stack; the claim's durable lease is what
+    // stops two processors recovering the same app.
+    await this.boss.work('app-build-reconciler',
+      async () => {
+        await runAppBuildReconcilerPass((data) =>
+          // singletonKey collapses racing recoveries for one app into a single
+          // queued build; a duplicate rejection surfaces as an enqueue error
+          // the reconciler counts and logs.
+          this.addJob('app-build', data, { singletonKey: `app-build:${data.publishedAppId}` }),
+        );
+      }
+    );
+
+    // Every 5 minutes, like the page reconciler. Each pass is one indexed,
+    // skip-locked claim that returns nothing at all unless something is stuck.
+    await this.boss.schedule('app-build-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
   }
 
   async addJob<Q extends QueueName>(
@@ -344,12 +380,23 @@ export class QueueManager {
     // inter-send delay plus provider round-trips. The trade-off is crash
     // recovery: a SIGKILLed worker's job waits out this expiration before
     // retrying, which is acceptable for a queue this infrequent.
+    //
+    // app-build has the same expiration problem for a different reason: a build
+    // is minutes of Docker plus a machine create and a health check, and
+    // pg-boss's 15-minute default would fail a still-running build and dispatch
+    // a retry that builds and deploys the SAME app concurrently with it — two
+    // blue/green swaps racing over one machine. 45 minutes dwarfs the 15-minute
+    // build timeout plus the deploy. Two retries, a minute apart, because most
+    // real build failures are recorded as an outcome on the app row rather than
+    // thrown; a throw here is infrastructure, which is worth one more go.
     const retryPolicy: Pick<
       PgBoss.SendOptions,
       'retryLimit' | 'retryDelay' | 'retryBackoff' | 'expireInSeconds'
     > =
       queue === 'email-broadcast'
         ? { retryLimit: 10, retryDelay: 60, retryBackoff: true, expireInSeconds: 6 * 60 * 60 }
+        : queue === 'app-build'
+        ? { retryLimit: 2, retryDelay: 60, expireInSeconds: 45 * 60 }
         : { retryLimit: 3, retryDelay: 5 };
 
     // Caller options win over the per-queue defaults (a caller that passes
@@ -392,7 +439,7 @@ export class QueueManager {
   }
 
   getQueueStatus(): Record<QueueName, QueueStats> {
-    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast', 'stuck-page-reconciler'];
+    const queues: QueueName[] = ['ingest-file', 'pull-verify', 'image-optimize', 'text-extract', 'ocr-process', 'video-process', 'siem-delivery', 'account-erasure', 'audit-chainer', 'email-broadcast', 'stuck-page-reconciler', 'app-build', 'app-build-reconciler'];
     const perQueue = this.cachedStates?.queues ?? {};
 
     const status = {} as Record<QueueName, QueueStats>;

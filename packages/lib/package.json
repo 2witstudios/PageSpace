@@ -607,6 +607,31 @@
       "import": "./dist/services/fly/flaps-client.js",
       "require": "./dist/services/fly/flaps-client.js"
     },
+    "./services/app-hosting/build-core": {
+      "types": "./dist/services/app-hosting/build-core.d.ts",
+      "import": "./dist/services/app-hosting/build-core.js",
+      "require": "./dist/services/app-hosting/build-core.js"
+    },
+    "./services/app-hosting/image-builder": {
+      "types": "./dist/services/app-hosting/image-builder.d.ts",
+      "import": "./dist/services/app-hosting/image-builder.js",
+      "require": "./dist/services/app-hosting/image-builder.js"
+    },
+    "./services/app-hosting/build-job": {
+      "types": "./dist/services/app-hosting/build-job.d.ts",
+      "import": "./dist/services/app-hosting/build-job.js",
+      "require": "./dist/services/app-hosting/build-job.js"
+    },
+    "./services/app-hosting/build-reconciler": {
+      "types": "./dist/services/app-hosting/build-reconciler.d.ts",
+      "import": "./dist/services/app-hosting/build-reconciler.js",
+      "require": "./dist/services/app-hosting/build-reconciler.js"
+    },
+    "./services/app-hosting/build-wiring": {
+      "types": "./dist/services/app-hosting/build-wiring.d.ts",
+      "import": "./dist/services/app-hosting/build-wiring.js",
+      "require": "./dist/services/app-hosting/build-wiring.js"
+    },
     "./services/sandbox/checkpoint-policy": {
       "types": "./dist/services/sandbox/checkpoint-policy.d.ts",
       "import": "./dist/services/sandbox/checkpoint-policy.js",
@@ -2131,6 +2156,21 @@
       ],
       "services/fly/flaps-client": [
         "./dist/services/fly/flaps-client.d.ts"
+      ],
+      "services/app-hosting/build-core": [
+        "./dist/services/app-hosting/build-core.d.ts"
+      ],
+      "services/app-hosting/image-builder": [
+        "./dist/services/app-hosting/image-builder.d.ts"
+      ],
+      "services/app-hosting/build-job": [
+        "./dist/services/app-hosting/build-job.d.ts"
+      ],
+      "services/app-hosting/build-reconciler": [
+        "./dist/services/app-hosting/build-reconciler.d.ts"
+      ],
+      "services/app-hosting/build-wiring": [
+        "./dist/services/app-hosting/build-wiring.d.ts"
       ],
       "services/sandbox/checkpoint-policy": [
         "./dist/services/sandbox/checkpoint-policy.d.ts"

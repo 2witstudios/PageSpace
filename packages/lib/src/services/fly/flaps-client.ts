@@ -521,6 +521,54 @@ export async function waitForMachineState(
   assertOk(status, body, path);
 }
 
+/** What running a command inside a machine produced. */
+export interface MachineExecResult {
+  /** Fly's `exit_code`. 0 is the only success; a missing code is reported as -1. */
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+}
+
+/**
+ * Run a command INSIDE a machine and collect its exit code and output.
+ *
+ * This is the deploy health check: a new machine reaching `state=started` means
+ * Fly started the VM, NOT that the app inside it is serving. A blue/green swap
+ * that destroys the old machine on `started` alone will happily replace a working
+ * app with one that crash-loops on its first request, and the only evidence is a
+ * 502 to the user. Asking the machine itself is the difference.
+ *
+ * NOT RETRIED on an ambiguous failure. The command is the caller's and may not be
+ * idempotent, and a health probe that silently ran three times is a probe whose
+ * result nobody can reason about — a lost response is reported as a failed check,
+ * which fails the deploy CLOSED and keeps the old machine serving. That is the
+ * correct bias for a call whose whole job is to withhold promotion.
+ *
+ * `timeoutSeconds` is Fly's own bound on the command; the request is given that
+ * window plus the usual budget for the answer, the same arithmetic `/wait` uses.
+ */
+export async function execMachine(
+  transport: FlapsTransport,
+  appName: string,
+  machineId: string,
+  command: string[],
+  timeoutSeconds = 30,
+): Promise<MachineExecResult> {
+  const path = `/v1/apps/${encodeURIComponent(appName)}/machines/${encodeURIComponent(machineId)}/exec`;
+  const { status, body } = await flapsRequest(transport, 'POST', path, {
+    body: { command, timeout: timeoutSeconds },
+    timeoutMs: waitRequestTimeoutMs(timeoutSeconds),
+    idempotent: false,
+  });
+  assertOk(status, body, path);
+  const result = (body ?? {}) as { exit_code?: unknown; stdout?: unknown; stderr?: unknown };
+  return {
+    exitCode: typeof result.exit_code === 'number' ? result.exit_code : -1,
+    stdout: typeof result.stdout === 'string' ? result.stdout : '',
+    stderr: typeof result.stderr === 'string' ? result.stderr : '',
+  };
+}
+
 /**
  * A machine's event log, returned RAW and unfiltered.
  *

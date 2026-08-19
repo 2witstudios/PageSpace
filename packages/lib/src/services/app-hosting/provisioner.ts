@@ -394,11 +394,23 @@ export async function claimPublishedAppsForWork({
   statuses,
   limit,
   leaseMs = PUBLISHED_APP_CLAIM_LEASE_MS,
+  staleForMs,
   deps = defaultProvisionerDeps,
 }: {
   statuses: PublishedAppStatus[];
   limit: number;
   leaseMs?: number;
+  /**
+   * Only claim rows that have sat in their status at least this long.
+   *
+   * MUST BE EVALUATED IN THIS QUERY, and cannot be a filter the caller applies to
+   * the returned rows: claiming WRITES `claimedAt`, which bumps `updatedAt` (the
+   * ordering column, `$onUpdate`), so the very act of claiming destroys the age
+   * signal a caller would filter on. The build reconciler's entire premise — "this
+   * app has been building for twenty minutes, its worker is dead" — depends on the
+   * age being read before the claim rewrites it.
+   */
+  staleForMs?: number;
   deps?: ProvisionerDeps;
 }): Promise<PublishedAppClaim> {
   const token = createId();
@@ -417,6 +429,14 @@ export async function claimPublishedAppsForWork({
             isNull(publishedApps.claimedAt),
             lt(publishedApps.claimedAt, sql`${dbNow()} - make_interval(secs => ${leaseMs / 1000})`),
           ),
+          ...(staleForMs === undefined
+            ? []
+            : [
+                lt(
+                  publishedApps.updatedAt,
+                  sql`${dbNow()} - make_interval(secs => ${staleForMs / 1000})`,
+                ),
+              ]),
         ),
       )
       .orderBy(publishedApps.updatedAt)
@@ -477,6 +497,11 @@ export type TransitionResult =
 export interface TransitionPatch {
   machineId?: string | null;
   imageDigest?: string | null;
+  /**
+   * Travels with `imageDigest` and never alone — a size attributed to the wrong
+   * digest is worse than an absent one.
+   */
+  imageSizeBytes?: number | null;
   lastError?: string | null;
 }
 
@@ -646,6 +671,46 @@ async function settleMint(
       error: error instanceof Error ? error.message : 'unknown database error',
     });
   }
+}
+
+/**
+ * Load one published app by id. Returns null when hosting is disabled, so a
+ * background worker reading this row is dark too.
+ */
+export async function getPublishedApp(
+  publishedAppId: string,
+  deps: ProvisionerDeps = defaultProvisionerDeps,
+): Promise<PublishedApp | null> {
+  if (!deps.isEnabled()) return null;
+  const [row] = await db
+    .select()
+    .from(publishedApps)
+    .where(eq(publishedApps.id, publishedAppId))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Record why work could not proceed, WITHOUT moving the status.
+ *
+ * Status-free on purpose. The writer is a build the worker could not even attempt
+ * (no Docker builder on the host): that is our infrastructure failing, not the
+ * user's app, and marking their app `failed` would both misattribute the fault and
+ * cost them the automatic retry — `failed` re-enters the pipeline only through an
+ * explicit provisioning retry. The row stays `building`, the reason is legible,
+ * and the reconciler stays responsible for it.
+ */
+export async function annotatePublishedApp(
+  publishedAppId: string,
+  fields: { lastError?: string | null },
+  deps: ProvisionerDeps = defaultProvisionerDeps,
+): Promise<void> {
+  if (!deps.isEnabled()) return;
+  if (Object.keys(fields).length === 0) return;
+  await db
+    .update(publishedApps)
+    .set(fields)
+    .where(eq(publishedApps.id, publishedAppId));
 }
 
 /**
