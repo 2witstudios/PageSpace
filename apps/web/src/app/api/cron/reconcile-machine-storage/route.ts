@@ -188,12 +188,24 @@ export async function GET(request: Request) {
     // watermark-write error on the zero-cost path pages someone with "every row
     // failed to bill" when nothing was billable and the only loss is an advance
     // that self-heals next tick.
+    // The wipeout conditions carry the SAME dark/live rule as the source
+    // conditions above, and applying it only there was the gap: a tick over
+    // nothing but envs — a deployment where someone rebuilt an env and has no
+    // live sessions — could otherwise page on an env-only fault, which is
+    // precisely what `LOUD_SOURCES` exists to prevent one block up. So a wipeout
+    // only counts when a LIVE unit was among the rows it wiped out.
+    const liveRowsProcessed = LOUD_SOURCES.reduce(
+      (total, kind) => total + run.measurementHealth[kind].live,
+      0,
+    );
+    const wipeoutIsLive = liveRowsProcessed > 0;
+
     const alertReason =
       loudSources.length > 0
         ? `could not read row source(s): ${loudSources.join(', ')}`
-        : run.processed > 1 && run.skipped === run.processed
+        : wipeoutIsLive && run.processed > 1 && run.skipped === run.processed
           ? `every row was skipped for an unresolvable payer (${run.skipped} of ${run.processed})`
-          : run.processed > 1 && run.failed === run.processed && run.billableRows > 0
+          : wipeoutIsLive && run.processed > 1 && run.failed === run.processed && run.billableRows > 0
             ? `every row failed to bill (${run.failed} of ${run.processed})`
             : null;
 

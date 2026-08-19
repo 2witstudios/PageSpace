@@ -385,6 +385,37 @@ describe('/api/cron/reconcile-machine-storage', () => {
     expect(mockCapture).not.toHaveBeenCalled();
   });
 
+  it('given an ENV-ONLY wipeout, should NOT alert — the dark/live rule applies to wipeouts too', async () => {
+    // A deployment where someone rebuilt an env and has no live sessions. An
+    // env-only fault reddening this cron is exactly what the dark/live split
+    // exists to prevent, and applying that split only to row-source failures
+    // left this door open.
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 3,
+      charged: 0,
+      skipped: 3,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      spanClamped: 0,
+      billableRows: 3,
+      measurementHealth: {
+        session: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 3, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: [],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+
+    expect(res.status).toBe(200);
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
   it('given every row failed but NOTHING was billable, should NOT alert — no work was lost', async () => {
     // Today's common shape: envs meter ~$0 by construction, so a transient
     // watermark-write error on the zero-cost path would otherwise page someone

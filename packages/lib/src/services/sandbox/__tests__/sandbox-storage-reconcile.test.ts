@@ -589,6 +589,58 @@ describe('reconcileSandboxStorage', () => {
     });
   });
 
+  it('does NOT clamp a SESSION — forgiving revenue on the live meter is not this PR\'s call', async () => {
+    // The cap is a revenue-forgiveness policy, not a bug fix: a reconcile outage
+    // longer than the cap bills less than the storage actually held. Sessions are
+    // a live billing feature, so that trade wants its own sign-off rather than
+    // arriving on a dark feature's coattails. Envs bill nothing today, so capping
+    // them changes no invoice.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const fortyDays = 40 * 24 * 60 * 60 * 1000;
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [
+        agentSession({ storageLastBilledAt: new Date(now.getTime() - fortyDays) }),
+      ],
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a SESSION whose watermark has been frozen for forty days',
+      should: 'bill the whole span exactly as it does on master — unclamped, uncounted',
+      actual: {
+        spanClamped: result.spanClamped,
+        gbMonths: Number(chargeCalls[0]?.gbMonths.toFixed(6)),
+      },
+      expected: {
+        spanClamped: 0,
+        gbMonths: Number((fortyDays / MS_PER_STORAGE_MONTH).toFixed(6)),
+      },
+    });
+  });
+
+  it('does NOT count a clamp on a row it then SKIPS — that row keeps its whole window', async () => {
+    // `skipped` already reports the row. Counting the clamp here too would make
+    // `spanClamped` permanently non-zero for one unresolvable drive and blunt it
+    // as the alarm its doc says it is.
+    const now = new Date('2026-07-01T00:00:00.000Z');
+    const { deps } = makeDeps({
+      listDriveEnvSprites: async () => [
+        driveEnv({ storageLastBilledAt: new Date(now.getTime() - 40 * 24 * 60 * 60 * 1000) }),
+      ],
+      lookupDriveOwnerId: async () => null,
+      now: () => now,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect({ skipped: result.skipped, spanClamped: result.spanClamped }).toEqual({
+      skipped: 1,
+      spanClamped: 0,
+    });
+  });
+
   it('does not clamp a window exactly AT the cap — the boundary bills in full', async () => {
     const { deps, chargeCalls } = makeDeps({ listDriveEnvSprites: async () => [driveEnv()] });
 

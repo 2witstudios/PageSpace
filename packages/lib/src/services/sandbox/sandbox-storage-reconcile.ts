@@ -165,8 +165,27 @@ export const RECENTLY_ACTIVE_MS = 5 * 60 * 1000;
  * charge. A day covers any outage that is not itself an incident someone is
  * already handling, and bounds the worst case to one day's accrual. Tightening
  * it is this one constant.
+ *
+ * **Applied to ENV subjects only, deliberately.** This is a revenue-FORGIVENESS
+ * policy, not a bug fix: a reconcile outage longer than the cap now bills less
+ * than the storage actually held. Sessions are a live, billing feature, so
+ * changing what they charge is a product decision that wants its own sign-off —
+ * not something to carry in on a dark feature's coattails. Envs bill nothing
+ * today, so capping them changes no invoice.
+ *
+ * Sessions have the SAME retroactive-over-bill exposure through the same skip
+ * path (`storageBillingTarget` → drive lookup → null). Extending the cap to them
+ * is `CLAMPED_SUBJECT_KINDS` plus a decision, and is the right follow-up once
+ * someone owns the forgiveness trade.
  */
 export const MAX_BILLABLE_SPAN_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Which persistence units the cap applies to. See `MAX_BILLABLE_SPAN_MS` — envs
+ * only, because forgiving revenue on a LIVE meter is a product decision this PR
+ * deliberately does not make.
+ */
+const CLAMPED_SUBJECT_KINDS: readonly StorageSubjectKind[] = ['env'];
 
 /** Pure: bytes → DECIMAL gigabytes (÷1e9), matching how the platform expresses its allocation ("100 GB") and its per-GB-month rate — NOT binary GiB. Invalid or non-positive input floors to 0. */
 export function bytesToGB(bytes: number): number {
@@ -447,10 +466,17 @@ export interface ReconcileSandboxStorageResult {
    * capped — the excess forgiven rather than billed retroactively at today's
    * footprint.
    *
-   * Expected to be ZERO in steady state. A non-zero value means some row's
-   * watermark had been frozen for over a day: either the cron itself was down
-   * that long, or that row kept being `skipped` for an unresolvable payer. Both
-   * are worth knowing, and neither is visible any other way.
+   * Counted only where the cap actually TOOK EFFECT — a row that is then skipped
+   * for an unresolvable payer keeps its whole window and is reported by `skipped`
+   * alone, so one permanently unresolvable drive cannot make this non-zero on
+   * every tick forever and blunt it as a signal.
+   *
+   * Expected to be ZERO in steady state. A non-zero value means a row's window
+   * really was closed short: the cron was down longer than the cap, or that row
+   * had been skipped for a long stretch and has now resolved.
+   *
+   * ENV rows only — see `MAX_BILLABLE_SPAN_MS` on why the cap is not applied to
+   * the live session meter.
    */
   spanClamped: number;
   /**
@@ -652,8 +678,13 @@ export async function reconcileSandboxStorage(
       // Capped, never extrapolated — see MAX_BILLABLE_SPAN_MS. The watermark
       // still advances to `now` below, so the excess is forgiven once rather
       // than accumulating into an ever-larger retroactive charge.
-      const elapsedMs = Math.min(rawElapsedMs, MAX_BILLABLE_SPAN_MS);
-      if (rawElapsedMs > MAX_BILLABLE_SPAN_MS) spanClamped += 1;
+      const clampable = CLAMPED_SUBJECT_KINDS.includes(subject.kind);
+      const elapsedMs = clampable ? Math.min(rawElapsedMs, MAX_BILLABLE_SPAN_MS) : rawElapsedMs;
+      // Whether the cap BIT. Counted below only where it actually took effect —
+      // a row that goes on to be SKIPPED keeps its whole window, so counting it
+      // here would make `spanClamped` permanently non-zero for one unresolvable
+      // drive and double-report what `skipped` already says.
+      const clampBit = clampable && rawElapsedMs > MAX_BILLABLE_SPAN_MS;
       const lastMeasuredGB = subject.measuredBytes === null ? null : bytesToGB(subject.measuredBytes);
       const awake = now.getTime() - subject.lastActiveAt.getTime() < RECENTLY_ACTIVE_MS;
       const { gb, stale } = pickBillableGB({ lastMeasuredGB, lastMeasuredAt: subject.measuredAt, awake, now });
@@ -702,6 +733,9 @@ export async function reconcileSandboxStorage(
 
       if (costDollars <= 0) {
         if (elapsedMs > 0) {
+          // The window closes here, so a clamp on this row really did forgive
+          // its excess.
+          if (clampBit) spanClamped += 1;
           if ((await subject.advanceWatermark(now)) === 'superseded') watermarkSuperseded += 1;
         }
         continue;
@@ -732,6 +766,10 @@ export async function reconcileSandboxStorage(
         continue;
       }
 
+      // Past the payer gate, so this row WILL be charged and its window closed —
+      // the clamp took effect. A skipped row never reaches here, which is the
+      // point: it keeps its full window and is reported by `skipped` alone.
+      if (clampBit) spanClamped += 1;
       resolved = { ownerId, costDollars, gbMonths };
     } catch (error) {
       failed += 1;
