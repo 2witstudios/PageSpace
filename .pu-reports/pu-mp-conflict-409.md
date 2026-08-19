@@ -301,6 +301,65 @@ Two of the CodeRabbit findings on this PR were real defects (absent-content coer
 race), one was a correct factual catch (the changelog claim), and one was rejected on verified
 grounds (SWR). Worth weighting accordingly rather than treating the bot as noise.
 
+## Round 4 — two consequences of the round-3 fix
+
+Both accepted; both are follow-on effects of closing the guard properly, which is normal for a
+change of this shape.
+
+### A. Edits made during the retry were stranded
+
+With the guard correctly closed for the whole retry, `saveWithDebounce` returns early **without
+creating a timeout**. So text typed while the retry was in flight became dirty with nothing
+scheduled for it, and clearing the conflict on success scheduled nothing either — it sat unsaved
+until the next keystroke, blur or manual save.
+
+After a successful retry, if the document is still dirty, `resolveConflict` now schedules a save
+for the current content (`saveWithDebounce` added to its deps). Note the document IS still dirty in
+exactly this case: `saveDocument` only calls `markAsSaved` when the saved content still matches the
+buffer, which a mid-retry edit makes false.
+
+### B. Two views on one page could both resolve
+
+Round 3 moved the Gate to props but left `isResolvingConflict` as per-instance `useState` — so I
+had only half-addressed the earlier design note. With the centre panel and an agent pane
+(`PagePaneView`) both showing a page — a combination we know occurs — each held its own boolean:
+one banner's buttons disabled, the other's live. Two clicks meant two PATCHes with the same
+`expectedRevision`; the server takes one and 409s the other, parking a spurious conflict on the
+conflict that was just resolved.
+
+Fixed at the root, with no new lock abstraction: `resolvingConflicts: Set<pageId>` on
+`useDocumentManagerStore`. One flag per page, shared by every mount. `resolveConflict` returns
+early if a resolution is already in flight (the actual serialization), and every Gate's buttons
+disable together (the UI consequence). Cleared in `clearDocument`/`clearAllDocuments` alongside
+`conflicts`.
+
+### A flaky test I wrote and then removed
+
+My first version of the round-4 reschedule test asserted the second PATCH actually fired, which
+depended on the real 1000 ms debounce landing inside a `waitFor` window — it passed, then failed 3
+runs in a row, then passed. Two separate causes: a `waitFor` timeout equal to vitest's default 5 s
+test timeout (so the test died before `waitFor` could report), and genuine timing sensitivity after
+that was raised.
+
+It now asserts the **scheduling** instead — after resolution the document is still dirty AND
+`saveTimeout` is defined — which is precisely what Thread A said was missing ("nothing ever
+schedules it") and carries no timing dependence. Verified stable across 5 consecutive runs. The
+existing debounce tests already cover that a scheduled timeout produces a PATCH.
+
+### Round 4 mutation checks
+
+| # | Mutation | Test that went red |
+|---|---|---|
+| M18 | drop the reschedule of edits made during the retry | `given an edit made while the retry is in flight, should schedule it once the conflict clears` |
+| M19 | drop the serialization guard so both banners can resolve | `given two views on the same page, should let only one resolution PATCH go out` |
+| M20 | make the resolving flag per-instance again (invisible to other views) | same two-views test |
+
+### Round 4 gates
+
+`bunx tsc --noEmit` exits 0; `bun run lint` 15/15; `src/lib/documents` + the hook + all of
+`page-views`: **430 passed, 6 skipped**, with the same single Postgres-dependent integration file
+failing for want of a database.
+
 ## Deliberately not done
 
 - **No Yjs, CRDT, or collab code.** `RichEditor.tsx`'s extension list is untouched. Phases B+.

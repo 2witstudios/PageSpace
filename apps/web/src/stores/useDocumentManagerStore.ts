@@ -22,6 +22,14 @@ export interface DocumentManagerState {
    * buffer is still the user's own text and autosave is paused for that page.
    */
   conflicts: Map<string, DocumentConflict>;
+  /**
+   * Pages with a conflict resolution currently in flight. Store-level, not
+   * per-hook state: a page can be mounted by more than one view at once (the
+   * centre panel and an agent pane via PagePaneView), and each would otherwise
+   * hold its own boolean — leaving one banner's buttons live while the other's
+   * are disabled, so two resolutions could fire the same expectedRevision.
+   */
+  resolvingConflicts: Set<string>;
 
   upsertDocument: (pageId: string, content: string, contentMode: 'html' | 'markdown', revision?: number) => void;
   updateDocument: (pageId: string, updates: Partial<DocumentState>) => void;
@@ -34,6 +42,7 @@ export interface DocumentManagerState {
   clearAllDocuments: () => void;
   setConflict: (pageId: string, conflict: DocumentConflict) => void;
   clearConflict: (pageId: string) => void;
+  setResolvingConflict: (pageId: string, resolving: boolean) => void;
 }
 
 export const useDocumentManagerStore = create<DocumentManagerState>((set, get) => ({
@@ -41,6 +50,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
   activeDocumentId: null,
   savingDocuments: new Set(),
   conflicts: new Map(),
+  resolvingConflicts: new Set(),
 
   upsertDocument: (pageId, content, contentMode, revision) => {
     const state = get();
@@ -122,10 +132,14 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
     const newConflicts = new Map(state.conflicts);
     newConflicts.delete(pageId);
 
+    const newResolving = new Set(state.resolvingConflicts);
+    newResolving.delete(pageId);
+
     set({
       documents: newDocuments,
       savingDocuments: newSaving,
       conflicts: newConflicts,
+      resolvingConflicts: newResolving,
       activeDocumentId: state.activeDocumentId === pageId ? null : state.activeDocumentId,
     });
   },
@@ -136,6 +150,7 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
       activeDocumentId: null,
       savingDocuments: new Set(),
       conflicts: new Map(),
+      resolvingConflicts: new Set(),
     });
   },
 
@@ -143,6 +158,15 @@ export const useDocumentManagerStore = create<DocumentManagerState>((set, get) =
     const newConflicts = new Map(get().conflicts);
     newConflicts.set(pageId, conflict);
     set({ conflicts: newConflicts });
+  },
+
+  setResolvingConflict: (pageId, resolving) => {
+    const state = get();
+    if (state.resolvingConflicts.has(pageId) === resolving) return;
+    const next = new Set(state.resolvingConflicts);
+    if (resolving) next.add(pageId);
+    else next.delete(pageId);
+    set({ resolvingConflicts: next });
   },
 
   clearConflict: (pageId) => {

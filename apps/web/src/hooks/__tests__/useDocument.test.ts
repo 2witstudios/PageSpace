@@ -28,6 +28,7 @@ describe('useDocument dirty flag integration', () => {
       activeDocumentId: null,
       savingDocuments: new Set(),
       conflicts: new Map(),
+      resolvingConflicts: new Set(),
     });
     useDirtyStore.setState({ dirtyFlags: {} });
     vi.clearAllMocks();
@@ -434,6 +435,104 @@ describe('useDocument dirty flag integration', () => {
 
       expect(saved).toBe(false);
       expect(fetchWithAuth).not.toHaveBeenCalled();
+    });
+
+    it('given an edit made while the retry is in flight, should schedule it once the conflict clears', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+      parkConflict(pageId);
+
+      let releaseRetry: (value: Response) => void = () => {};
+      vi.mocked(fetchWithAuth).mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          releaseRetry = resolve;
+        })
+      );
+
+      const { result } = renderHook(() => useDocument(pageId));
+
+      let resolution: Promise<boolean> | undefined;
+      act(() => {
+        resolution = result.current.resolveConflict('keep-mine');
+      });
+
+      // The user keeps typing while the retry is open. The autosave guard is
+      // correctly closed, so nothing is scheduled for this text — that is the
+      // window in which an edit could be stranded.
+      act(() => {
+        result.current.updateContent('my text, typed during the retry');
+      });
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+      expect(
+        useDocumentManagerStore.getState().documents.get(pageId)?.saveTimeout
+      ).toBeUndefined();
+
+      await act(async () => {
+        releaseRetry({
+          ok: true,
+          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+        } as Response);
+        await resolution;
+      });
+
+      // Resolution done, and the mid-retry edit is no longer stranded: it is
+      // still dirty AND a save is now scheduled for it. Asserted on the
+      // scheduling rather than on the fired request, so the real 1000ms
+      // debounce cannot make this test timing-dependent.
+      const doc = useDocumentManagerStore.getState().documents.get(pageId);
+      expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
+      expect(doc?.content).toBe('my text, typed during the retry');
+      expect(doc?.isDirty).toBe(true);
+      expect(doc?.saveTimeout).toBeDefined();
+
+      clearTimeout(doc?.saveTimeout);
+    });
+
+    it('given two views on the same page, should let only one resolution PATCH go out', async () => {
+      const pageId = 'page-123';
+      useDocumentManagerStore.getState().upsertDocument(pageId, 'my text', 'html', 3);
+      useDocumentManagerStore.getState().updateDocument(pageId, { isDirty: true });
+      parkConflict(pageId);
+
+      let releaseRetry: (value: Response) => void = () => {};
+      vi.mocked(fetchWithAuth).mockReturnValueOnce(
+        new Promise<Response>((resolve) => {
+          releaseRetry = resolve;
+        })
+      );
+
+      // Two independent mounts of the same page — the centre panel and an
+      // agent pane both showing it.
+      const viewA = renderHook(() => useDocument(pageId));
+      const viewB = renderHook(() => useDocument(pageId));
+
+      let firstClick: Promise<boolean> | undefined;
+      act(() => {
+        firstClick = viewA.result.current.resolveConflict('keep-mine');
+      });
+
+      // The other view's banner is disabled too, because the flag is shared.
+      expect(viewB.result.current.isResolvingConflict).toBe(true);
+
+      let secondClick: boolean | undefined;
+      await act(async () => {
+        secondClick = await viewB.result.current.resolveConflict('keep-mine');
+      });
+
+      expect(secondClick).toBe(false);
+      expect(fetchWithAuth).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        releaseRetry({
+          ok: true,
+          json: () => Promise.resolve({ content: 'my text', revision: 12 }),
+        } as Response);
+        await firstClick;
+      });
+
+      expect(useDocumentManagerStore.getState().conflicts.has(pageId)).toBe(false);
+      expect(viewA.result.current.isResolvingConflict).toBe(false);
     });
 
     it('given a resolution save that fails, should leave the conflict parked for another try', async () => {

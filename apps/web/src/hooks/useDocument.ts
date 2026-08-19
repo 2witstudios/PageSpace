@@ -205,7 +205,10 @@ export const useDocument = (pageId: string) => {
     useCallback((state) => state.conflicts.get(pageId), [pageId])
   );
   const [isLoading, setIsLoading] = useState(false);
-  const [isResolvingConflict, setIsResolvingConflict] = useState(false);
+  // Store-level, so every view mounting this page shares one resolution state.
+  const isResolvingConflict = useDocumentManagerStore(
+    useCallback((state) => state.resolvingConflicts.has(pageId), [pageId])
+  );
 
   const initializeAndActivate = useCallback(async () => {
     setIsLoading(true);
@@ -329,6 +332,12 @@ export const useDocument = (pageId: string) => {
       const conflict = state.conflicts.get(pageId);
       if (!conflict) return false;
 
+      // Serialize: a page can be open in more than one view, each rendering its
+      // own banner. Without this, two clicks send two PATCHes with the same
+      // expectedRevision — the server takes one and 409s the other, parking a
+      // spurious conflict on the conflict that was just resolved.
+      if (state.resolvingConflicts.has(pageId)) return false;
+
       // Mirror of the remote-side guard in decideConflictOutcome: "no local
       // record" must never become "save an empty document over their work".
       const local = readContent(state.documents.get(pageId)?.content);
@@ -361,7 +370,7 @@ export const useDocument = (pageId: string) => {
       // cleared only once the retry has actually succeeded; a repeat 409 leaves
       // the fresher snapshot `saveDocument` just parked in its place, and any
       // other failure leaves the banner up so the user can try again.
-      setIsResolvingConflict(true);
+      state.setResolvingConflict(pageId, true);
       try {
         const saved = await saving
           .saveDocument(plan.contentToSave, {
@@ -372,14 +381,22 @@ export const useDocument = (pageId: string) => {
 
         if (saved) {
           useDocumentManagerStore.getState().clearConflict(pageId);
+
+          // Edits made DURING the retry were blocked by the (correctly closed)
+          // autosave guard, so nothing is scheduled for them. Without this they
+          // sit unsaved until the next keystroke, blur or manual save.
+          const afterSave = useDocumentManagerStore.getState().documents.get(pageId);
+          if (afterSave?.isDirty) {
+            saveWithDebounce(afterSave.content);
+          }
         }
 
         return saved;
       } finally {
-        setIsResolvingConflict(false);
+        useDocumentManagerStore.getState().setResolvingConflict(pageId, false);
       }
     },
-    [pageId, saving]
+    [pageId, saving, saveWithDebounce]
   );
 
   return {
