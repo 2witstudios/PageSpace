@@ -48,6 +48,101 @@ export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): 
 }
 
 /**
+ * How far up the page tree the status-vocabulary walk will look. Task nesting is
+ * capped in the UI well below this; the bound exists so a pathological chain
+ * cannot turn a lazy list init into an unbounded query loop.
+ */
+export const STATUS_INHERITANCE_MAX_DEPTH = 10
+
+/**
+ * The status vocabulary a NEW sub-list should be born with: its nearest ancestor
+ * task list's, falling back to the defaults.
+ *
+ * Status configs are per-task-list and `task_items.status` is validated against
+ * the configs of the list named in the write's URL. So on a list whose owner
+ * renamed or added statuses, seeding a sub-list with DEFAULT_TASK_STATUSES puts a
+ * different vocabulary one level down — and any UI that renders the root's
+ * statuses on a nested row produces a slug the sub-list does not define, which
+ * PATCH rejects with a 400.
+ *
+ * Inheriting at seed time makes the two sides identical, so nested rows can show
+ * the root vocabulary and every option in the dropdown is one the server accepts.
+ * Crucially it does this WITHOUT weakening validation: normalizeStatusForList and
+ * the POST/PATCH slug checks keep enforcing "a task's status is always a slug its
+ * own list defines" exactly as before.
+ *
+ * Returns rows in ancestor position order, or DEFAULT_TASK_STATUSES when no
+ * ancestor list has a vocabulary to inherit.
+ */
+export async function resolveInheritedStatusSeed(
+  tx: Tx,
+  forPageId: string,
+): Promise<{ name: string; slug: string; color: string; group: 'todo' | 'in_progress' | 'done'; position: number }[]> {
+  let cursor: string = forPageId
+  for (let depth = 0; depth < STATUS_INHERITANCE_MAX_DEPTH; depth++) {
+    const [row] = await tx
+      .select({ parentId: pages.parentId })
+      .from(pages)
+      .where(eq(pages.id, cursor))
+      .limit(1)
+    const parentId = row?.parentId ?? null
+    if (!parentId) break
+
+    const [parentPage] = await tx
+      .select({ type: pages.type })
+      .from(pages)
+      .where(eq(pages.id, parentId))
+      .limit(1)
+    // Stop at the first non-task ancestor: a task list nested under a folder
+    // inherits nothing, which is correct — it is a root list, not a sub-list.
+    if (parentPage?.type !== TASK_LIST_TYPE) break
+
+    const ancestorList = await tx.query.taskLists.findFirst({
+      where: eq(taskLists.pageId, parentId),
+    })
+    if (ancestorList) {
+      const configs = await tx
+        .select({
+          name: taskStatusConfigs.name,
+          slug: taskStatusConfigs.slug,
+          color: taskStatusConfigs.color,
+          group: taskStatusConfigs.group,
+          position: taskStatusConfigs.position,
+        })
+        .from(taskStatusConfigs)
+        .where(eq(taskStatusConfigs.taskListId, ancestorList.id))
+        .orderBy(asc(taskStatusConfigs.position))
+        .limit(STATUS_CONFIG_REMAP_LIMIT)
+      if (configs.length > 0) return configs
+    }
+
+    cursor = parentId
+  }
+
+  return DEFAULT_TASK_STATUSES.map(s => ({ ...s }))
+}
+
+/**
+ * Seed a new `task_lists` row's vocabulary, inherited from its nearest ancestor
+ * task list. Swallows a unique-constraint violation on `(taskListId, slug)` for
+ * the same reason seedDefaultTaskStatusConfigs does — a concurrent caller may
+ * have seeded it a moment earlier, and the caller only needed them to exist.
+ */
+export async function seedInheritedTaskStatusConfigs(
+  tx: Tx,
+  taskListId: string,
+  forPageId: string,
+): Promise<void> {
+  const seed = await resolveInheritedStatusSeed(tx, forPageId)
+  try {
+    await tx.insert(taskStatusConfigs).values(seed.map(s => ({ taskListId, ...s })))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : ''
+    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+  }
+}
+
+/**
  * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
  * seeded. Idempotent — a no-op if the `task_lists` row already exists. Callers that
  * separately look up `task_status_configs` for display (the MCP documents `read` route,
@@ -81,7 +176,7 @@ export async function ensureTaskListForPage(
     }).returning()
     taskList = created
 
-    await seedDefaultTaskStatusConfigs(tx, created.id)
+    await seedInheritedTaskStatusConfigs(tx, created.id, pageId)
   }
 
   return taskList

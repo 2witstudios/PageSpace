@@ -1,0 +1,216 @@
+/**
+ * Status vocabulary inheritance, proven against a real Postgres.
+ *
+ * The hazard this closes: status configs are per-task-list, and PATCH validates
+ * a submitted slug against the configs of the list named in its URL
+ * (`tasks/[taskId]/route.ts`). A sub-list used to be born with the four
+ * DEFAULT_TASK_STATUSES regardless of what its parent's vocabulary was — so on
+ * any list whose owner renamed or added statuses, rendering the root's statuses
+ * on a nested row produced a slug the sub-list did not define, and the write
+ * came back `400 Invalid status`.
+ *
+ * The fix is inheritance at SEED time, not a UI convention: a new sub-list is
+ * created with its nearest ancestor task list's vocabulary. That leaves every
+ * existing validation rule untouched — which is the point, since
+ * normalizeStatusForList exists specifically to guarantee "a task's status is
+ * always a slug its own list defines".
+ *
+ * Only a real database can show this. The evidence is the rows the lazy-init
+ * path actually wrote, and then a PATCH with an inherited slug coming back 200.
+ *
+ * Requires DATABASE_URL → a running Postgres with migrations applied
+ * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable.
+ */
+import { describe, it, beforeAll, vi } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
+import { db } from '@pagespace/db/db';
+import { eq, asc } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
+import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
+import { factories } from '@pagespace/db/test/factories';
+import { requireDb } from '@pagespace/db/test/require-db';
+
+let currentUserId = '';
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(async () => ({ userId: currentUserId })),
+  isAuthError: vi.fn(() => false),
+  checkMCPPageScope: vi.fn(async () => null),
+  canPrincipalViewPage: vi.fn(async () => true),
+  canPrincipalEditPage: vi.fn(async () => true),
+}));
+vi.mock('@/lib/websocket', () => ({
+  broadcastTaskEvent: vi.fn(),
+  broadcastPageEvent: vi.fn(),
+  createPageEventPayload: vi.fn(() => ({})),
+}));
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+/** The custom vocabulary a root list's owner might define. */
+const CUSTOM_STATUSES = [
+  { slug: 'icebox', name: 'Icebox', color: 'bg-slate-100', group: 'todo' as const, position: 0 },
+  { slug: 'building', name: 'Building', color: 'bg-amber-100', group: 'in_progress' as const, position: 1 },
+  { slug: 'shipped', name: 'Shipped', color: 'bg-green-100', group: 'done' as const, position: 2 },
+];
+
+let dbAvailable = false;
+let listTasksRoute: typeof import('../route');
+let taskItemRoute: typeof import('../[taskId]/route');
+
+async function slugsFor(pageId: string): Promise<string[]> {
+  const list = await db.query.taskLists.findFirst({ where: eq(taskLists.pageId, pageId) });
+  if (!list) return [];
+  const configs = await db
+    .select({ slug: taskStatusConfigs.slug })
+    .from(taskStatusConfigs)
+    .where(eq(taskStatusConfigs.taskListId, list.id))
+    .orderBy(asc(taskStatusConfigs.position))
+    .limit(50);
+  return configs.map((c) => c.slug);
+}
+
+/**
+ * Build a root list with a CUSTOM vocabulary and one task under it, then drive
+ * the GET route against that task's own page — the exact call an expanded row
+ * makes, and the one that lazily creates the sub-list.
+ */
+async function seedCustomisedTree() {
+  const owner = await factories.createUser();
+  currentUserId = owner.id;
+  const drive = await factories.createDrive(owner.id);
+  const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+
+  const [rootList] = await db.insert(taskLists).values({
+    userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+  }).returning();
+  await db.insert(taskStatusConfigs).values(
+    CUSTOM_STATUSES.map((s) => ({ taskListId: rootList.id, ...s })),
+  );
+
+  const taskPage = await factories.createPage(drive.id, {
+    parentId: listPage.id, type: 'TASK_LIST', title: 'Parent task',
+  });
+  const [task] = await db.insert(taskItems)
+    .values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' })
+    .returning();
+
+  return { owner, drive, listPage, taskPage, task };
+}
+
+const getTasks = (pageId: string) =>
+  listTasksRoute.GET(
+    new Request(`http://localhost/api/pages/${pageId}/tasks`),
+    { params: Promise.resolve({ pageId }) },
+  );
+
+describe('sub-list status vocabulary inheritance', () => {
+  beforeAll(async () => {
+    try {
+      await db.select().from(pages).limit(1);
+      dbAvailable = true;
+    } catch (error) {
+      requireDb('status-inheritance.integration.test.ts', error);
+      dbAvailable = false;
+      return;
+    }
+    listTasksRoute = await import('../route');
+    taskItemRoute = await import('../[taskId]/route');
+  });
+
+  it('seeds a new sub-list with its ancestor vocabulary, not the defaults', async () => {
+    if (!dbAvailable) return;
+    const { taskPage } = await seedCustomisedTree();
+
+    assert({
+      given: 'no sub-list yet for a task under a list with customised statuses',
+      should: 'have nothing seeded before the first read',
+      actual: await slugsFor(taskPage.id),
+      expected: [],
+    });
+
+    // The lazy-init path: expanding this task calls the list route with the
+    // TASK's own pageId, which creates its sub-list.
+    await getTasks(taskPage.id);
+
+    assert({
+      given: 'a sub-list created under a list with customised statuses',
+      should: "inherit the ancestor's slugs rather than the four defaults",
+      actual: await slugsFor(taskPage.id),
+      expected: ['icebox', 'building', 'shipped'],
+    });
+  });
+
+  it('accepts an inherited slug on PATCH — the 400 this exists to prevent', async () => {
+    if (!dbAvailable) return;
+    const { owner, drive, taskPage } = await seedCustomisedTree();
+
+    // A sub-task under that task. Reading the parent creates the sub-list.
+    const subPage = await factories.createPage(drive.id, {
+      parentId: taskPage.id, type: 'TASK_LIST', title: 'Sub-task',
+    });
+    const [subTask] = await db.insert(taskItems)
+      .values({ userId: owner.id, pageId: subPage.id, status: 'icebox' })
+      .returning();
+    await getTasks(taskPage.id);
+
+    // Exactly what a nested status dropdown showing the ROOT vocabulary submits.
+    const res = await taskItemRoute.PATCH(
+      new Request(`http://localhost/api/pages/${taskPage.id}/tasks/${subTask.id}`, {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'shipped' }),
+      }),
+      { params: Promise.resolve({ pageId: taskPage.id, taskId: subTask.id }) },
+    );
+    const body = await res.json();
+
+    assert({
+      given: 'a nested row submitting a status inherited from the root list',
+      should: 'be accepted, and be recorded as complete because the slug is a done-group one',
+      actual: { status: res.status, taskStatus: body?.status, completed: !!body?.completedAt },
+      expected: { status: 200, taskStatus: 'shipped', completed: true },
+    });
+  });
+
+  it('still seeds the defaults for a list with no task-list ancestor', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    // A root list sits under the drive or a folder — it is nobody's sub-list, so
+    // there is nothing to inherit and the defaults are correct.
+    const folder = await factories.createPage(drive.id, { type: 'FOLDER' });
+    const listPage = await factories.createPage(drive.id, {
+      parentId: folder.id, type: 'TASK_LIST',
+    });
+
+    await getTasks(listPage.id);
+
+    assert({
+      given: 'a task list whose parent is a folder',
+      should: 'seed the four built-in statuses',
+      actual: await slugsFor(listPage.id),
+      expected: ['pending', 'in_progress', 'blocked', 'completed'],
+    });
+  });
+
+  it('inherits through more than one level', async () => {
+    if (!dbAvailable) return;
+    const { owner, drive, taskPage } = await seedCustomisedTree();
+
+    // Grandchild: its parent task has no task_lists row of its own yet, so the
+    // walk has to keep going up rather than stop at the first ancestor it sees.
+    const childPage = await factories.createPage(drive.id, {
+      parentId: taskPage.id, type: 'TASK_LIST', title: 'Child',
+    });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: childPage.id, status: 'icebox' });
+
+    await getTasks(childPage.id);
+
+    assert({
+      given: 'a task two levels below the customised root, with no list in between',
+      should: 'still inherit the root vocabulary',
+      actual: await slugsFor(childPage.id),
+      expected: ['icebox', 'building', 'shipped'],
+    });
+  });
+});

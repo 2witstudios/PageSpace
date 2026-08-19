@@ -6,7 +6,6 @@ import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskStatusConfigs, taskAssignees } from '@pagespace/db/schema/tasks';
 import { taskTriggers } from '@pagespace/db/schema/task-triggers';
 import { createTaskTriggerWorkflow, type TaskTriggerWorkflowResult } from '@/lib/workflows/task-trigger-helpers';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalViewPage, canPrincipalEditPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -14,7 +13,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
-import { backfillMissingTaskItems } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
@@ -46,13 +45,11 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
         status: 'pending',
       }).returning();
 
-      // Create default status configs
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: created.id,
-          ...s,
-        }))
-      );
+      // Inherit the nearest ancestor task list's vocabulary rather than always
+      // seeding the four defaults. A sub-list born with a different status set
+      // from its parent is what makes a nested status dropdown produce slugs the
+      // PATCH route rejects — see seedInheritedTaskStatusConfigs.
+      await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
 
       return created;
     });
@@ -64,20 +61,9 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
     });
 
     if (existingConfigs.length === 0) {
-      try {
-        await db.insert(taskStatusConfigs).values(
-          DEFAULT_TASK_STATUSES.map(s => ({
-            taskListId: taskList!.id,
-            ...s,
-          }))
-        );
-      } catch (error) {
-        // Swallow duplicate key errors from concurrent requests
-        const message = error instanceof Error ? error.message : '';
-        if (!message.includes('unique') && !message.includes('duplicate')) {
-          throw error;
-        }
-      }
+      // Same inheritance as the create path: a legacy list left half-initialized
+      // should come back with its ancestor's vocabulary, not the defaults.
+      await seedInheritedTaskStatusConfigs(db, taskList.id, pageId);
     }
   }
 
