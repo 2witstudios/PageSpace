@@ -4,6 +4,42 @@ Board: Multiplayer Documents (Yjs CRDT), Phase A, task `jc5su9gmeohiyo3ulzu7o143
 Client-side only. No server code touched; the 409 contract in
 `apps/web/src/app/api/pages/[pageId]/route.ts` is unchanged.
 
+## Why this PR touches four files outside the document view
+
+A reviewer opening this diff sees `CanvasPageView`, `CodePageView`, `SheetView` and
+`TaskListDescription` changed in a PR titled "409 conflict fix". That is not scope creep — it is a
+dependency, and omitting it would ship a worse bug than the one being fixed.
+
+`useDocument` has **five** production consumers, and every one of them writes through the same
+`saveWithDebounce` / `forceSave` this PR now guards:
+
+| Consumer | File |
+|---|---|
+| Document | `page-views/document/DocumentView.tsx:58` |
+| Code | `page-views/code/CodePageView.tsx:95` |
+| Canvas | `page-views/canvas/CanvasPageView.tsx:88` |
+| Task list | `page-views/task-list/TaskListDescription.tsx:33` |
+| Sheet | `page-views/sheet/hooks/useSheetPersistence.ts:32` (rendered by `SheetView.tsx`) |
+
+The conflict guard lives in the **hook**, so all five stop autosaving the moment a conflict is
+parked. The resolution UI originally lived only in `DocumentView`. That asymmetry means a 409 on a
+Canvas or Sheet page would park a conflict, silently block every subsequent save, flash one toast,
+and leave the user editing a document that never saves again — with nothing on screen to explain it
+and no way to clear it. Edits would survive in memory until reload, then vanish. Strictly worse than
+the original bug, which at least lost the buffer once and visibly.
+
+So the guard and its release valve have to sit at the same altitude. `DocumentConflictGate`
+(`page-views/document/DocumentConflictGate.tsx`) renders `null` until a conflict exists for its
+`pageId`, which lets a view mount it unconditionally in one line. Each of the four extra files
+gains exactly one line plus an import. Extracting the gate rather than copying the banner four
+times keeps the four views free of conflict logic, and a CRDT deletes all five call sites equally.
+
+**Mutation-checked (M13):** deleting the `if (!conflict) return null;` early return from the gate
+turns both `DocumentConflictGate` tests red — the "renders nothing so views can mount it
+unconditionally" case and the "surfaces the resolve UI" case. That is the assertion holding the
+whole arrangement up: without it, mounting the gate in four unrelated views would render a banner
+on every page.
+
 ## The bug
 
 `useDocument.ts`'s 409 handler refetched the server's copy and wrote it straight over
