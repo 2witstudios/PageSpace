@@ -450,6 +450,34 @@ describe('a session inside an environment — ending it', () => {
     // ...and it is listed again.
     expect((await sessionStore.list({ driveId })).map((row) => row.id)).toContain(session.id);
   });
+
+  it('given an END that lands mid-provision, should NOT erase it — the guard, against real SQL', async () => {
+    // The fake honours the CAS, but `cas.endedAt` becomes `endedAt IS NULL` in
+    // a real WHERE clause via `eqOrIsNull`, and that is the version that runs in
+    // production. Modelled by handing `ensure` the row as it was BEFORE the end
+    // (live) while the database already carries the end — exactly the interleave
+    // a concurrent `endAgentSession` produces.
+    const envId = await seedEnv();
+    const envKey = deriveDriveEnvSpriteKey({ tenantId: payerId, envId, secret: SECRET });
+    sandboxIds.add(envKey);
+    const session = await spawnInEnv(envId);
+    const host = makeSpriteHost();
+    const liveSnapshot = await sessionStore.findById(session.id);
+
+    await endAgentSession({
+      workspaceId: session.id,
+      deps: { store: sessionStore, host: host.host, now: () => new Date() },
+    });
+    const endedAt = (await sessionStore.findById(session.id))!.endedAt;
+    expect(endedAt).not.toBeNull();
+
+    // The in-flight ensure, still holding the pre-end snapshot.
+    expect((await ensureForSession(liveSnapshot!, host)).ok).toBe(true);
+
+    // The end stands: the user's most recent word is not erased by a stamp
+    // computed before they said it.
+    expect((await sessionStore.findById(session.id))!.endedAt).toEqual(endedAt);
+  });
 });
 
 describe('a session inside an environment — deleting the environment', () => {
