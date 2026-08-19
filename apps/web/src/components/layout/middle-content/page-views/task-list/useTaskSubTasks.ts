@@ -12,8 +12,17 @@ import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types
  * are its sub-tasks, already enriched with status/priority/assignees/dueDate,
  * `activeTriggerCount`, `hasContent` and their own `subTaskCount`. No new endpoint.
  *
- * The schema comment on `taskItems` in packages/db/src/schema/tasks.ts calling the
- * linked page a DOCUMENT is stale; do not trust it over the route's own filter.
+ * The comment on `taskItems` in packages/db/src/schema/tasks.ts used to call that linked page a
+ * DOCUMENT; this branch corrected it. If you find it saying DOCUMENT again, the route's own
+ * filter is the authority.
+ *
+ * KNOWN COST OF THE GATE BELOW: `subTaskCount` is computed by joining task_items to child
+ * pages, so a TASK_LIST child that has no task_items row yet counts as zero. A task whose
+ * children are ALL in that state reads as a leaf here and will not expand, where an unguarded
+ * fetch would have hit the route's own backfillMissingTaskItems and healed them. That is
+ * accepted rather than overlooked: the alternative is fetching for every leaf, which is the
+ * write amplification this gate exists to stop. Opening the task's own page still runs the
+ * backfill, after which the count is right and the row expands.
  */
 
 /**
@@ -46,22 +55,42 @@ export const shouldFetchSubTasks = (task: SubTaskGateInput): boolean =>
   !!task.pageId && (task.subTaskCount ?? 0) > 0;
 
 /**
+ * The cache namespace. Not decoration: TaskListView pages the SAME route with the SAME page
+ * size, so its page-0 key for a list page is byte-identical to this hook's page-0 key for a
+ * task whose linked page IS that page — which happens as soon as someone opens a task's own
+ * page and later expands that task from its parent list. Sharing a plain URL key would hand
+ * both hooks one swr/infinite cache entry, including its page-count: the expansion would mount
+ * at whatever size the full-page view had grown to and render hundreds of rows inside one
+ * table cell, and TaskListView's 5-minute refreshInterval would refetch the very key this hook
+ * promises never to refetch — re-running the route's lazy writes on a timer.
+ *
+ * SWR keys on the serialized key, so prefixing scopes the cache while leaving the request URL
+ * exactly as it was.
+ */
+export const SUB_TASKS_CACHE_NAMESPACE = 'task-sub-tasks';
+
+export type SubTaskPageKey = readonly [namespace: string, url: string];
+
+/**
  * Built outside the hook so the gate is testable on its own and so the key is a
  * pure function of (task, enabled, pageIndex) — SWR caches per key, which is what
  * makes collapse → re-expand of the same task a cache hit rather than a refetch.
  */
 export const getSubTaskPageKey = (task: SubTaskGateInput, enabled: boolean) =>
-  (pageIndex: number, previousPageData: TaskListData | null): string | null => {
+  (pageIndex: number, previousPageData: TaskListData | null): SubTaskPageKey | null => {
     if (!enabled || !shouldFetchSubTasks(task)) return null;
     if (previousPageData && !previousPageData.hasMore) return null;
-    return `/api/pages/${task.pageId}/tasks?limit=${SUB_TASKS_PAGE_SIZE}&offset=${pageIndex * SUB_TASKS_PAGE_SIZE}`;
+    return [
+      SUB_TASKS_CACHE_NAMESPACE,
+      `/api/pages/${task.pageId}/tasks?limit=${SUB_TASKS_PAGE_SIZE}&offset=${pageIndex * SUB_TASKS_PAGE_SIZE}`,
+    ] as const;
   };
 
 /** Only the most recently loaded page's `hasMore` is current; earlier ones are stale bounds. */
 export const getSubTasksHasMore = (pages: TaskListData[] | undefined): boolean =>
   !!pages && pages.length > 0 && pages[pages.length - 1].hasMore;
 
-const fetcher = async (url: string): Promise<TaskListData> => {
+const fetcher = async ([, url]: SubTaskPageKey): Promise<TaskListData> => {
   const res = await fetchWithAuth(url);
   if (!res.ok) throw new Error('Failed to fetch sub-tasks');
   return res.json();
@@ -95,6 +124,19 @@ export interface UseTaskSubTasksResult {
   isLoadingMore: boolean;
   error: Error | undefined;
   loadMore: () => void;
+  /**
+   * Re-request the pages already asked for, clearing `error`. This is the ONLY revalidation
+   * path the hook offers, and it exists because nothing retries on its own (see
+   * shouldRetryOnError below) — without it a first page that fails is a dead end, since
+   * `hasMore` is false at that point and "Load more" is not even on screen.
+   *
+   * Deliberately not a general refresh: it is meant to be wired to a user pressing "try
+   * again" after a visible failure, which is the same class of explicit action as Load more.
+   * Sub-task rows going stale when something changes elsewhere is a different problem with a
+   * different answer (subscribing to the sub-list's own events, which belongs with recursive
+   * expansion state) — do not solve that by calling this on a timer or a socket event.
+   */
+  retry: () => void;
 }
 
 export function useTaskSubTasks(
@@ -103,7 +145,7 @@ export function useTaskSubTasks(
 ): UseTaskSubTasksResult {
   const gateOpen = enabled && shouldFetchSubTasks(task);
 
-  const { data: pages, error, isLoading, size, setSize } = useSWRInfinite<TaskListData>(
+  const { data: pages, error, isLoading, size, setSize, mutate } = useSWRInfinite<TaskListData>(
     getSubTaskPageKey(task, enabled),
     fetcher,
     {
@@ -136,6 +178,7 @@ export function useTaskSubTasks(
   // parent render. Functional `setSize` because two clicks in the same tick both read the same
   // stale `size` otherwise, and the second writes the value the first already wrote.
   const loadMore = useCallback(() => setSize((currentSize) => currentSize + 1), [setSize]);
+  const retry = useCallback(() => { void mutate(); }, [mutate]);
   // SWR types its error as `any`, so asserting `as Error` here would be a claim this code
   // cannot make — a fetcher can reject with anything. Normalize instead, so a caller reading
   // `.message` always gets a string rather than `undefined` from a thrown non-Error.
@@ -167,5 +210,6 @@ export function useTaskSubTasks(
       && (pages === undefined || pages.length < size),
     error: normalizedError,
     loadMore,
+    retry,
   };
 }

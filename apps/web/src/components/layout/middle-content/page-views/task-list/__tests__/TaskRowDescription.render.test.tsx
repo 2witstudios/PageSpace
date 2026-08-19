@@ -56,6 +56,7 @@ const hookResult = (over: Partial<UseTaskSubTasksResult> = {}): UseTaskSubTasksR
   isLoadingMore: false,
   error: undefined,
   loadMore: vi.fn(),
+  retry: vi.fn(),
   ...over,
 });
 
@@ -135,6 +136,77 @@ describe('TaskRowDescription sub-task rows', () => {
         disabled: (button as HTMLButtonElement).disabled,
       },
       expected: { message: true, label: 'Try again', disabled: false },
+    });
+  });
+
+  it('offers a way back when the FIRST page failed and there is no Load more', () => {
+    const retry = vi.fn();
+    useTaskSubTasks.mockReturnValue(hookResult({
+      subTasks: [],
+      hasMore: false,
+      error: new Error('network went away'),
+      retry,
+    }));
+    render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);
+
+    screen.getByRole('button', { name: 'Try again' }).click();
+
+    assert({
+      given: 'a failed first page, where hasMore is false and Load more would never render',
+      should: 'still offer a control, and wire it to retry rather than to paging forward',
+      actual: { retried: retry.mock.calls.length },
+      expected: { retried: 1 },
+    });
+  });
+
+  it('reports what is actually in the list once it is complete', () => {
+    // subTaskCount rode in on the parent list's response, which revalidates; this list does
+    // not. When the list is settled and complete it is the fresher of the two, so the header
+    // must not outrank the rows under it.
+    useTaskSubTasks.mockReturnValue(hookResult({ subTasks: [subTask(), subTask({ id: 'st2' })] }));
+    render(<TaskRowDescription task={{ ...parentTask(), subTaskCount: 5 }} driveId="drive-1" />);
+
+    assert({
+      given: 'a stale parent count of 5 over a complete list of 2',
+      should: 'report 2, not 5',
+      actual: { two: !!screen.getByText('2 sub-tasks'), five: screen.queryByText('5 sub-tasks') },
+      expected: { two: true, five: null },
+    });
+  });
+
+  it('keeps reporting the total while the list is still partial', () => {
+    useTaskSubTasks.mockReturnValue(hookResult({ subTasks: [subTask()], hasMore: true }));
+    render(<TaskRowDescription task={{ ...parentTask(), subTaskCount: 5 }} driveId="drive-1" />);
+
+    assert({
+      given: 'one page loaded of a longer list',
+      should: 'still report the total, because the rows are deliberately partial',
+      actual: !!screen.getByText('5 sub-tasks'),
+      expected: true,
+    });
+  });
+
+  it('re-requests only the missing page when a later page failed', () => {
+    // retry() is SWR revalidate-all: using it here would re-issue every loaded page against a
+    // route that writes. Paging forward asks only for the one that is missing.
+    const retry = vi.fn();
+    const loadMore = vi.fn();
+    useTaskSubTasks.mockReturnValue(hookResult({
+      subTasks: [subTask()],
+      hasMore: true,
+      error: new Error('network went away'),
+      retry,
+      loadMore,
+    }));
+    render(<TaskRowDescription task={parentTask()} driveId="drive-1" />);
+
+    screen.getByRole('button', { name: 'Try again' }).click();
+
+    assert({
+      given: 'a failure that arrived after some rows had already loaded',
+      should: 'page forward rather than revalidate every page already fetched',
+      actual: { loadMore: loadMore.mock.calls.length, retry: retry.mock.calls.length },
+      expected: { loadMore: 1, retry: 0 },
     });
   });
 

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from '@/hooks/__tests__/riteway';
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
-import { useTaskSubTasks, shouldFetchSubTasks, getSubTaskPageKey, getSubTasksHasMore } from '../useTaskSubTasks';
+import { useTaskSubTasks, shouldFetchSubTasks, getSubTaskPageKey, getSubTasksHasMore, SUB_TASKS_CACHE_NAMESPACE } from '../useTaskSubTasks';
 import type { TaskItem, TaskListData } from '../task-list-types';
 
 const { fetchWithAuth } = vi.hoisted(() => ({ fetchWithAuth: vi.fn() }));
@@ -100,7 +100,7 @@ describe('getSubTaskPageKey', () => {
       given: 'a task with sub-tasks, first page',
       should: 'key on GET /api/pages/{task.pageId}/tasks with limit and offset 0',
       actual: getSubTaskPageKey({ pageId: 'task-page', subTaskCount: 2 }, true)(0, null),
-      expected: '/api/pages/task-page/tasks?limit=100&offset=0',
+      expected: [SUB_TASKS_CACHE_NAMESPACE, '/api/pages/task-page/tasks?limit=100&offset=0'],
     });
   });
 
@@ -109,7 +109,7 @@ describe('getSubTaskPageKey', () => {
       given: 'page index 2 after a page that reported hasMore',
       should: 'offset by two full pages',
       actual: getSubTaskPageKey({ pageId: 'task-page', subTaskCount: 300 }, true)(2, makeBody([], true)),
-      expected: '/api/pages/task-page/tasks?limit=100&offset=200',
+      expected: [SUB_TASKS_CACHE_NAMESPACE, '/api/pages/task-page/tasks?limit=100&offset=200'],
     });
   });
 
@@ -119,6 +119,25 @@ describe('getSubTaskPageKey', () => {
       should: 'return a null key so SWR requests nothing further',
       actual: getSubTaskPageKey({ pageId: 'task-page', subTaskCount: 2 }, true)(1, makeBody([], false)),
       expected: null,
+    });
+  });
+
+  it('cannot share a cache entry with the full-page task list for the same page', () => {
+    // TaskListView pages this same route with the same page size, so its page-0 key for a
+    // list page is byte-identical to this hook's page-0 key for a task whose linked page IS
+    // that page. Sharing one swr/infinite entry would hand the expansion the full-page view's
+    // page count and let its refreshInterval refetch a key this hook promises not to refetch.
+    const key = getSubTaskPageKey({ pageId: 'page-1', subTaskCount: 2 }, true)(0, null);
+    const taskListViewKey = '/api/pages/page-1/tasks?limit=100&offset=0';
+
+    assert({
+      given: "a task whose linked page is the page TaskListView itself is showing",
+      should: 'be namespaced away from that view key while requesting the identical URL',
+      actual: {
+        collides: JSON.stringify(key) === JSON.stringify(taskListViewKey),
+        requestsSameUrl: key?.[1] === taskListViewKey,
+      },
+      expected: { collides: false, requestsSameUrl: true },
     });
   });
 
@@ -308,6 +327,52 @@ describe('useTaskSubTasks', () => {
         subTasks: 1,
         hasMore: true,
         message: 'network went away',
+      },
+    });
+  });
+
+  it('recovers from a first page that failed', async () => {
+    // The case that has no "Load more" to press: page 1 of 1 fails, so hasMore is false and
+    // nothing retries on its own. Without `retry` this state is terminal.
+    fetchWithAuth
+      .mockRejectedValueOnce(new Error('network went away'))
+      .mockResolvedValueOnce(respond(makeBody([makeSubTask('a')], false)));
+
+    const { result } = renderHook(
+      () => useTaskSubTasks({ pageId: 'parent-page', subTaskCount: 1 }),
+      { wrapper: makeWrapper() },
+    );
+    await waitFor(() => expect(result.current.error).toBeDefined());
+
+    assert({
+      given: 'a first page that rejected',
+      should: 'be a dead end but for retry — no rows, nothing more to load, not loading',
+      actual: {
+        subTasks: result.current.subTasks.length,
+        hasMore: result.current.hasMore,
+        isLoading: result.current.isLoading,
+      },
+      expected: { subTasks: 0, hasMore: false, isLoading: false },
+    });
+
+    await act(async () => { result.current.retry(); });
+    await waitFor(() => expect(result.current.subTasks).toHaveLength(1));
+
+    assert({
+      given: 'retry after a failed first page',
+      should: 'request the same page again and clear the error',
+      actual: {
+        ids: result.current.subTasks.map((t) => t.id),
+        urls: fetchWithAuth.mock.calls.map((c) => c[0]),
+        error: result.current.error,
+      },
+      expected: {
+        ids: ['a'],
+        urls: [
+          '/api/pages/parent-page/tasks?limit=100&offset=0',
+          '/api/pages/parent-page/tasks?limit=100&offset=0',
+        ],
+        error: undefined,
       },
     });
   });

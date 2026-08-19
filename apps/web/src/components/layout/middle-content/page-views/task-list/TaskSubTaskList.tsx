@@ -33,16 +33,25 @@ export const subTaskHref = (driveId: string, pageId: string | null | undefined):
 export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
   // Gated on task.subTaskCount inside the hook: a leaf task issues no request at all, which
   // also keeps the route from lazily creating a task_list + 4 status configs for it.
-  const { subTasks, hasMore, isLoading, isLoadingMore, loadMore, error } = useTaskSubTasks(task);
+  const { subTasks, hasMore, isLoading, isLoadingMore, loadMore, retry, error } = useTaskSubTasks(task);
 
   const subTaskCount = task.subTaskCount ?? 0;
   if (subTaskCount === 0) return null;
+
+  // `task.subTaskCount` rode in on the PARENT list's response, which does revalidate (socket
+  // events, 5-minute interval) while this list does not. So the two can drift — someone adds a
+  // sub-task and the header says 4 over a list of 3, indefinitely and silently. Once this list
+  // is settled and complete, it is the fresher of the two: report what is actually here rather
+  // than a count that outranks the rows under it. While paging, the total is still the honest
+  // number, because the rows are deliberately partial.
+  const listIsComplete = !isLoading && !error && !hasMore;
+  const shownCount = listIsComplete ? subTasks.length : subTaskCount;
 
   return (
     <div className="space-y-1">
       <div className="flex items-center gap-1.5 text-xs text-muted-foreground px-1">
         <LayoutList className="h-3 w-3" />
-        <span>{subTaskCount} sub-task{subTaskCount !== 1 ? 's' : ''}</span>
+        <span>{shownCount} sub-task{shownCount !== 1 ? 's' : ''}</span>
       </div>
 
       {isLoading ? (
@@ -94,16 +103,23 @@ export function TaskSubTaskList({ task, driveId }: TaskSubTaskListProps) {
         </p>
       )}
 
-      {hasMore && (
+      {/* Shown on `error` even when there is nothing more to load: a FIRST page that failed
+          leaves hasMore false, and since nothing retries on its own (see the hook's
+          shouldRetryOnError) a missing control there would be a dead end.
+
+          Which recovery to use depends on WHICH page failed, and the difference is requests
+          against a route that writes. `retry` is SWR's revalidate-all, so with pages already
+          loaded it would re-issue every one of them. Paging forward re-requests only the page
+          that is missing. So: retry when nothing loaded (there is nothing else to re-request),
+          page forward when the failure came after some rows arrived. */}
+      {(hasMore || error) && (
         <Button
           variant="ghost"
           size="sm"
           className="h-6 px-1 text-xs text-muted-foreground"
           disabled={isLoadingMore}
-          onClick={loadMore}
+          onClick={error && subTasks.length === 0 ? retry : loadMore}
         >
-          {/* After a failure this is the retry: nothing retries on its own (see the hook's
-              shouldRetryOnError), so the label has to say that this is the way back. */}
           {isLoadingMore ? 'Loading…' : error ? 'Try again' : 'Load more sub-tasks'}
         </Button>
       )}
