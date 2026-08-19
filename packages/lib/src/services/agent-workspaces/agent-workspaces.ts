@@ -184,6 +184,26 @@ const MAX_END_ATTEMPTS = 5;
  * Never gated on authorization: the planner decides `end` before it looks at
  * `canRun`, because an actor who has just LOST the right to a session must still
  * be able to release its compute, and so must every automated cleanup path.
+ *
+ * **An ENV-BOUND session ends without killing anything, and what that means for
+ * its SHELLS is deliberately still open.** Such a row holds no Sprite pointer
+ * (CHECK-enforced), so the planner takes the `no_sandbox` arm and stamps
+ * `endedAt` — the environment and its filesystem survive, which is the entire
+ * point of an environment. The consequence is that any PTY the session opened
+ * is still RUNNING on that shared machine afterwards, where an ordinary
+ * session's processes die with the VM its teardown destroys.
+ *
+ * That is not obviously wrong: a persistent environment is the one place where
+ * "close the window, leave the build running" is a reasonable thing to want,
+ * and killing a teammate's long job because someone closed a session would be
+ * its own bug. It is also not obviously right, because nothing surfaces those
+ * shells once the session stops being listed — they stay reachable by id
+ * (`killSessionShellById` resolves the env's machine) but nothing shows the id.
+ *
+ * Whoever builds the environment UI owns this decision: either end stops the
+ * session's own processes, or the environment grows a surface that lists what
+ * is running inside it. Deciding it here, with no way to see either, would be
+ * guessing.
  */
 export async function endAgentSession({
   workspaceId,
