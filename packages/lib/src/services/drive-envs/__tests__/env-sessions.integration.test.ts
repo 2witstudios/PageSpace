@@ -127,9 +127,9 @@ async function ensureForSession(row: AgentSessionRecord, host: FakeSpriteHost) {
   });
 }
 
-async function seedEnv(name = `env-${createId().slice(0, 8)}`): Promise<string> {
+async function seedEnv(name = `env-${createId().slice(0, 8)}`, inDrive = driveId): Promise<string> {
   const created = await envStore.createIfUnderLimit({
-    driveId,
+    driveId: inDrive,
     name,
     createdBy: payerId,
     payerId,
@@ -140,18 +140,25 @@ async function seedEnv(name = `env-${createId().slice(0, 8)}`): Promise<string> 
   return created.env.id;
 }
 
-async function spawnInEnv(envId: string | null): Promise<AgentSessionRecord> {
-  const spawned = await spawnAgentSession({
+/** The spawn, with its result union intact — for the cases where refusal IS the assertion. */
+async function trySpawn(input: { envId: string | null; driveId?: string | null }) {
+  return spawnAgentSession({
     ownerId: payerId,
-    driveId,
-    envId,
+    driveId: input.driveId === undefined ? driveId : input.driveId,
+    envId: input.envId,
     deps: {
       store: sessionStore,
       now: () => new Date(),
       maxActiveSessions: 1_000,
+      // The REAL store, so the drive-agreement check reads a real row rather
+      // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
     },
   });
+}
+
+async function spawnInEnv(envId: string | null): Promise<AgentSessionRecord> {
+  const spawned = await trySpawn({ envId });
   if (!spawned.ok) throw new Error(`spawn refused: ${spawned.reason}`);
   return spawned.session;
 }
@@ -194,6 +201,31 @@ afterAll(async () => {
   await wipe();
   await db.delete(drives).where(inArray(drives.id, [driveId, otherDriveId]));
   await db.delete(users).where(eq(users.id, payerId));
+});
+
+describe('binding a session to an environment', () => {
+  it("given an env in ANOTHER drive, should refuse — against real rows, not a fixture", async () => {
+    // The drive-agreement check is what stops a member from routing work into
+    // a drive's shared filesystem through an authorization path that only ever
+    // looked at THEIR drive. Both drives here are real and both envs exist, so
+    // what is under test is the comparison rather than a lookup returning null.
+    const foreignEnvId = await seedEnv(`foreign-${createId().slice(0, 8)}`, otherDriveId);
+
+    expect(await trySpawn({ envId: foreignEnvId })).toEqual({ ok: false, reason: 'env_not_found' });
+    expect(await sessionStore.list({ driveId })).toEqual([]);
+  });
+
+  it('given a GLOBAL-assistant spawn, should refuse an env — no session may hold an env without a drive', async () => {
+    // `drive_envs.driveId` is NOT NULL, so this falls out of the same
+    // comparison with no branch of its own — and the database forbids the row
+    // outright via `agent_workspaces_env_needs_drive_check`.
+    const envId = await seedEnv();
+    expect(await trySpawn({ envId, driveId: null })).toEqual({ ok: false, reason: 'env_not_found' });
+  });
+
+  it('given a vanished env, should refuse rather than mint a row pointing at nothing', async () => {
+    expect(await trySpawn({ envId: createId() })).toEqual({ ok: false, reason: 'env_not_found' });
+  });
 });
 
 describe('a session inside an environment — provisioning', () => {

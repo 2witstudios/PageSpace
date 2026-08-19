@@ -35,12 +35,18 @@ vi.mock('./../agent-workspaces-runtime', () => ({
   }),
 }));
 
-const mockEnvStampSpriteTornDown = vi.fn();
-const mockEnvFindById = vi.fn(async () => null as unknown);
+// Typed FROM the real store, so a change to either method's shape fails this
+// file's typecheck rather than leaving an obsolete call shape passing.
+type DriveEnvStore = Awaited<
+  ReturnType<typeof import('@pagespace/lib/services/drive-envs/drive-envs-store').createDbDriveEnvStore>
+>;
+type DriveEnvRecord = NonNullable<Awaited<ReturnType<DriveEnvStore['findById']>>>;
+const mockEnvStampSpriteTornDown = vi.fn<DriveEnvStore['stampSpriteTornDown']>();
+const mockEnvFindById = vi.fn<DriveEnvStore['findById']>();
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   getDriveEnvStore: async () => ({
-    stampSpriteTornDown: (...args: unknown[]) => mockEnvStampSpriteTornDown(...args),
-    findById: (...args: unknown[]) => mockEnvFindById(...(args as [])),
+    stampSpriteTornDown: mockEnvStampSpriteTornDown,
+    findById: mockEnvFindById,
   }),
 }));
 
@@ -173,8 +179,31 @@ describe('chaseReclaimInstance', () => {
 describe('isTeardownStillRequested', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  /** A whole `drive_envs` row — the shape `findById` really answers with. */
+  function envRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecord {
+    return {
+      id: 'env-1',
+      driveId: 'drive-1',
+      name: 'staging',
+      createdBy: null,
+      spriteKey: null,
+      sandboxId: 'pgs-env-1',
+      spriteInstanceId: 'i-1',
+      egressPolicyToken: null,
+      teardownRequestedAt: null,
+      spriteTornDownAt: null,
+      storageLastBilledAt: new Date(),
+      storageMeasuredBytes: null,
+      storageMeasuredAt: null,
+      lastActiveAt: null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      ...over,
+    };
+  }
+
   it('given a drive-env row, should re-read the ENV row rather than look for a session that does not exist', async () => {
-    mockEnvFindById.mockResolvedValueOnce({ teardownRequestedAt: new Date(), spriteTornDownAt: null });
+    mockEnvFindById.mockResolvedValueOnce(envRecord({ teardownRequestedAt: new Date() }));
     expect(
       await deps.isTeardownStillRequested({
         kind: 'drive-env',
@@ -189,7 +218,7 @@ describe('isTeardownStillRequested', () => {
     // A session opening in this environment re-provisions it and clears the
     // intent. Destroying that filesystem is the one irreversible mistake here —
     // and it is SHARED, so worse for an env than for a session.
-    mockEnvFindById.mockResolvedValueOnce({ teardownRequestedAt: null, spriteTornDownAt: null });
+    mockEnvFindById.mockResolvedValueOnce(envRecord({ teardownRequestedAt: null }));
     expect(
       await deps.isTeardownStillRequested({
         kind: 'drive-env',

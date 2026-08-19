@@ -347,11 +347,12 @@ async function teardownEnvSprite({
     // moved on to that replacement).
     if (!(error instanceof SandboxSpriteReplacedError)) {
       // A real failure: the VM may still be running. Reported rather than
-      // swallowed, because for a SURVIVING env row nothing retries this on its
-      // own (see the doc above) — the next delete, rebuild or ensure does. And
-      // the caller must NOT go on to delete the row: the row is what still
-      // points at the VM, and deleting it would hand the reclaim job to the
-      // AFTER DELETE trigger while we believe the kill is retryable here.
+      // swallowed, because the caller has a decision to make — and because the
+      // orphan reconciler's retry (see the doc above) is a floor under this
+      // path, not a reason to stay quiet about a kill that just failed. The
+      // caller must NOT go on to delete the row: the row is what still points
+      // at the VM, and deleting it would hand the reclaim job to the AFTER
+      // DELETE trigger while we believe the kill is retryable here.
       return { ok: false, detail: error instanceof Error ? error.message : String(error) };
     }
   }

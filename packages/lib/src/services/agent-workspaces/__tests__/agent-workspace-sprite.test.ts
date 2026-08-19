@@ -957,10 +957,6 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
   const ENV_SANDBOX = 'pgs-env-abc';
   const envRow = makeSessionRecord({ envId: ENV_ID });
 
-  function envDeps(over: Partial<AgentSessionSpriteDeps> = {}) {
-    return over;
-  }
-
   it('should provision the ENV and hand back the ENV\'s sandbox — never the session\'s own', async () => {
     const store = makeAgentSessionStore([envRow]);
     const host = makeSpriteHost();
@@ -970,12 +966,12 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
       row: toSpriteRow(envRow),
       intent: 'ensure',
       actor,
-      deps: makeDeps({ store, host }, envDeps({
+      deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async (input) => {
           seen.push(input);
           return { ok: true, sandboxId: ENV_SANDBOX, resumed: false };
         },
-      })),
+      }),
     });
 
     expect(result).toEqual({ ok: true, sandboxId: ENV_SANDBOX, resumed: false });
@@ -998,13 +994,13 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
         row: toSpriteRow(envRow),
         intent: 'ensure',
         actor,
-        deps: makeDeps({ store, host }, envDeps({ ensureEnvSandbox })),
+        deps: makeDeps({ store, host }, { ensureEnvSandbox }),
       }),
       ensureAgentSessionSandbox({
         row: toSpriteRow(second),
         intent: 'ensure',
         actor,
-        deps: makeDeps({ store, host }, envDeps({ ensureEnvSandbox })),
+        deps: makeDeps({ store, host }, { ensureEnvSandbox }),
       }),
     ]);
 
@@ -1024,12 +1020,12 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
       row: toSpriteRow(envRow),
       intent: 'reprovision',
       actor,
-      deps: makeDeps({ store, host }, envDeps({
+      deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async ({ intent }) => {
           seen.push(intent);
           return { ok: true, sandboxId: ENV_SANDBOX, resumed: true };
         },
-      })),
+      }),
     });
 
     expect(seen).toEqual(['attach']);
@@ -1044,12 +1040,12 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
       row: toSpriteRow(envRow),
       intent: 'attach',
       actor,
-      deps: makeDeps({ store, host }, envDeps({
+      deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async ({ intent }) => {
           seen.push(intent);
           return { ok: false, reason: 'denied', denial: 'sandbox_not_provisioned' };
         },
-      })),
+      }),
     });
 
     expect(seen).toEqual(['attach']);
@@ -1065,13 +1061,13 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
       row: toSpriteRow(envRow),
       intent: 'ensure',
       actor,
-      deps: makeDeps({ store, host }, envDeps({
+      deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async () => ({ ok: true, sandboxId: ENV_SANDBOX, resumed: false }),
         checkConcurrency: async () => {
           ceilingChecks += 1;
           return { allowed: true };
         },
-      })),
+      }),
     });
 
     expect(ceilingChecks).toBe(0);
@@ -1086,12 +1082,12 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
       row: toSpriteRow(makeSessionRecord()),
       intent: 'ensure',
       actor,
-      deps: makeDeps({ store, host }, envDeps({
+      deps: makeDeps({ store, host }, {
         ensureEnvSandbox: async () => {
           envCalls += 1;
           return { ok: true, sandboxId: ENV_SANDBOX, resumed: false };
         },
-      })),
+      }),
     });
 
     expect(envCalls).toBe(0);
