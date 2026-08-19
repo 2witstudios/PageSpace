@@ -2,6 +2,7 @@ import {
   defaultReconcileSandboxStorageDeps,
   reconcileSandboxStorageSerialized,
 } from '@pagespace/lib/services/sandbox/sandbox-storage-billing';
+import * as Sentry from '@sentry/nextjs';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { NextResponse } from 'next/server';
@@ -24,10 +25,19 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * lock standing between a rolling deploy and a double-bill.
  *
  * A row source that cannot be READ is isolated inside the reconcile — one
- * unreadable unit must never stop the other's billing — but it still FAILS this
- * endpoint (500, after the work that succeeded is reported), because a source
- * failing every tick would otherwise be a permanently green cron quietly
- * metering nothing.
+ * unreadable unit must never stop the other's billing — but it still raises a
+ * SENTRY alert and fails this endpoint (500, after the work that succeeded is
+ * reported), because a source failing every tick would otherwise be a
+ * permanently green cron quietly metering nothing.
+ *
+ * The Sentry call is the part that actually alerts, and it is not belt-and-braces:
+ * the docker cron invokes this through `cron-curl`, which runs `curl -sS`
+ * WITHOUT `-f`, so curl exits 0 on an HTTP 500 and the crontab's `|| echo`
+ * fallback never fires — the 500's body just lands in the log looking like any
+ * other tick. The status code is still the honest answer for any caller that
+ * checks one (a manual trigger, an HTTP monitor), but on its own it would be
+ * decorative here. Same shape, and the same reasoning, as
+ * `verify-db-backup-freshness`.
  *
  * Path kept as `reconcile-machine-storage` (Phase 8 teardown renamed the
  * body, not the cron path or its advisory-lock key — both are external
@@ -103,20 +113,60 @@ export async function GET(request: Request) {
     // though it billed everything it could see.
     //
     // Before envs were folded in, a row-source failure propagated out of the
-    // reconcile and landed in the catch below as a 500 — which is what a
-    // scheduler and its monitoring actually notice. `listSource` deliberately
-    // stopped that from aborting the tick (an env-side read error must never
-    // stop SESSION billing), but reporting the result as a green 200 would
-    // trade one silence for another: a deployment where `drive_envs` is
-    // unmigrated or unreadable would fail on EVERY tick, the "accrues and is
-    // caught up next tick" promise would never come true, and the only trace
-    // would be a logger this repo does not route to Sentry. So the work is
-    // done and reported in full, and THEN the tick is failed.
+    // reconcile and landed in the catch below as a 500. `listSource`
+    // deliberately stopped that from aborting the tick (an env-side read error
+    // must never stop SESSION billing), but reporting the result as a green 200
+    // would trade one silence for another: a deployment where `drive_envs` is
+    // unmigrated or unreadable fails on EVERY tick, so "it accrues and is caught
+    // up next tick" never comes true, and the loggers this repo does not route
+    // to Sentry are the only trace. So the work is done and reported in full,
+    // and THEN this alerts and fails — see the module doc on why the alert, not
+    // the status code, is what actually reaches a human here.
     if (run.failedSources.length > 0) {
+      // Fingerprinted on the SOURCES, never the message: the message would carry
+      // changing counts and open a fresh issue per tick, burying a fault that
+      // recurs hourly in noise.
+      Sentry.captureException(
+        new Error(`Storage reconcile could not read row source(s): ${run.failedSources.join(', ')}`),
+        {
+          level: 'error',
+          fingerprint: ['storage-reconcile-source-unreadable', ...run.failedSources],
+          tags: { check: 'storage_reconcile', failedSources: run.failedSources.join(',') },
+          extra: {
+            processed: run.processed,
+            charged: run.charged,
+            totalCostDollars: run.totalCostDollars,
+          },
+        },
+      );
+      // `flush` resolves false when the queue did not drain OR when no client is
+      // initialised — and that second case is the dangerous one, because then
+      // `captureException` was a no-op too and this alert vanished silently. The
+      // logger is a deliberately separate channel so a Sentry outage still leaves
+      // evidence, and `alertDelivered` rides in the body so an HTTP monitor can
+      // see the answer without Sentry being involved at all.
+      let alertDelivered = false;
+      try {
+        alertDelivered = await Sentry.flush(2000);
+      } catch (flushError) {
+        loggers.system.error(
+          '[Cron] Storage reconcile: Sentry.flush threw — the unreadable-source alert was almost certainly not delivered',
+          flushError as Error,
+        );
+      }
+      if (!alertDelivered) {
+        loggers.system.error(
+          '[Cron] Storage reconcile: a row source was unreadable and the Sentry alert did NOT confirm delivery — ' +
+            'either the transport is failing or no client is initialised, in which case captureException was a no-op. ' +
+            'Check SENTRY_DSN and the transport.',
+        );
+      }
+
       return NextResponse.json(
         {
           success: false,
           error: `storage reconcile could not read row source(s): ${run.failedSources.join(', ')}`,
+          alertDelivered,
           processed: run.processed,
           charged: run.charged,
           skipped: run.skipped,

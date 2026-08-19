@@ -23,6 +23,12 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
   audit: mockAudit,
 }));
 
+const { mockCapture, mockFlush } = vi.hoisted(() => ({
+  mockCapture: vi.fn(),
+  mockFlush: vi.fn(async () => true),
+}));
+vi.mock('@sentry/nextjs', () => ({ captureException: mockCapture, flush: mockFlush }));
+
 vi.mock('next/server', () => ({
   NextResponse: {
     json: (body: unknown, init?: ResponseInit) =>
@@ -43,6 +49,7 @@ function makeRequest(): Request {
 describe('/api/cron/reconcile-machine-storage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockFlush.mockResolvedValue(true);
     vi.mocked(validateSignedCronRequest).mockReturnValue(null);
     // A run the reconcile could ACTUALLY produce, because a fixture pinned
     // against an impossible state is a weak guard. Two live sessions and one
@@ -168,9 +175,56 @@ describe('/api/cron/reconcile-machine-storage', () => {
       charged: 1,
       totalCostDollars: 0.001234,
       failedSources: ['env'],
+      alertDelivered: true,
     });
     // Still audited: the charges happened and the audit trail must show them.
     expect(mockAudit).toHaveBeenCalledTimes(1);
+    // And ALERTED. This is the part that reaches a human: the docker cron runs
+    // `curl -sS` without `-f`, so it exits 0 on a 500 and the status code alone
+    // would be decorative.
+    expect(mockCapture).toHaveBeenCalledTimes(1);
+    expect(mockCapture.mock.calls[0][1]).toMatchObject({
+      level: 'error',
+      // Fingerprinted on the SOURCES, not the message — a message carrying
+      // changing counts would open a fresh issue every hour.
+      fingerprint: ['storage-reconcile-source-unreadable', 'env'],
+    });
+  });
+
+  it('given the Sentry queue does not drain, should say so rather than claim the alert landed', async () => {
+    // `flush` resolves false when no client is initialised — and then
+    // `captureException` was a no-op too, so the alert vanished. Reporting
+    // success there would rebuild the exact silence this branch exists to close.
+    mockFlush.mockResolvedValue(false);
+    mockReconcile.mockResolvedValue({
+      outcome: 'reconciled',
+      processed: 0,
+      charged: 0,
+      skipped: 0,
+      failed: 0,
+      chargedButUnadvanced: 0,
+      staleMeasurements: 0,
+      neverMeasured: 0,
+      watermarkSuperseded: 0,
+      measurementHealth: {
+        session: { live: 0, neverMeasured: 0, stale: 0 },
+        env: { live: 0, neverMeasured: 0, stale: 0 },
+      },
+      failedSources: ['env'],
+      totalCostDollars: 0,
+    });
+
+    const res = await GET(makeRequest());
+    const body = await res.json();
+
+    expect(res.status).toBe(500);
+    expect(body).toMatchObject({ success: false, alertDelivered: false });
+  });
+
+  it('given a healthy tick, should raise NO alert — an hourly false alarm is worse than none', async () => {
+    await GET(makeRequest());
+
+    expect(mockCapture).not.toHaveBeenCalled();
   });
 
   it('given the advisory lock is held by another run, should no-op WITHOUT auditing and report lock_busy', async () => {
