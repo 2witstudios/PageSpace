@@ -398,6 +398,8 @@ describe('defaultReconcileSandboxStorageDeps.advanceDriveEnvWatermark', () => {
       billedThrough: new Date('2026-07-01T00:00:00.000Z'),
     });
 
+    expect(setCalls).toHaveLength(1);
+    expect(Object.keys(setCalls[0] as object)).toEqual(['storageLastBilledAt']);
     expect(wrote).toBe('advanced');
     assert({
       given: 'an env watermark advance',

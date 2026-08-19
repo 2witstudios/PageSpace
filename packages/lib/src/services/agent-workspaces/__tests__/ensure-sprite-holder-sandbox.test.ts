@@ -302,14 +302,14 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
     expect(measured).toEqual([ENV_ID]);
   });
 
-  it('should ALSO measure on the ADOPT arm — the other arm that clears the row\'s measurement', async () => {
-    // A replacement VM answered to this env's deterministic name. `adopt` nulls
-    // `storageMeasuredBytes`/`storageMeasuredAt` (a different disk, so the old
-    // reading describes storage that no longer exists) — so an adopt that did
-    // not re-measure would leave the env with NO reading at all, billing the
-    // never-measured 0 floor while the reconcile advanced its watermark. A
-    // session survives that by accident, via its bash/git writers; an env has
-    // exactly one other writer, on the arm not taken.
+  it('does NOT measure on the ADOPT arm, even though that arm clears the measurement', async () => {
+    // The wake rule wins over the coverage gap. A `du` is an exec, and an exec is
+    // the only way to wake a hibernated Sprite — `adopt`'s evidence that the VM
+    // exists is `probeRecordedSprite`'s control-plane `attach`, which says
+    // nothing about whether it is RUNNING. Measuring here could resume a paused
+    // machine and restart its runtime billing, which is worse than the 0 floor
+    // this leaves behind: under-billing is the accepted direction in this meter,
+    // waking a VM nobody asked to run is not.
     const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-old' });
     const store = makeEnvStore([provisionedEnv]);
     const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-new' } } });
@@ -330,19 +330,18 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
 
     assert({
       given: 'an env whose Sprite was replaced under the same name, so the plan is ADOPT',
-      should: 'adopt the live instance AND re-measure, because the adopt stamps just cleared the old reading',
+      should: 'adopt the live instance but run NO `du` — its VM cannot be proven awake',
       actual: { result, measured, instance: store.rows.get(ENV_ID)?.spriteInstanceId },
       expected: {
         result: { ok: true, sandboxId: 'pgs-env-1', resumed: true },
-        measured: [ENV_ID],
+        measured: [],
         instance: 'inst-new',
       },
     });
-    // Nothing was minted — adoption reconnects, it does not provision.
     expect(host.calls.provision).toHaveLength(0);
   });
 
-  it('should NOT measure on a plain RESUME — the same disk, so its existing reading still describes it', async () => {
+  it('should NOT measure on a plain RESUME either — the same disk, and the same wake rule', async () => {
     const provisionedEnv = makeEnvRow({ spriteKey: 'env-key', sandboxId: 'pgs-env-1', spriteInstanceId: 'inst-1' });
     const store = makeEnvStore([provisionedEnv]);
     const host = makeSpriteHost({ seed: { 'pgs-env-1': { instanceId: 'inst-1' } } });
@@ -363,7 +362,7 @@ describe('ensureSpriteHolderSandbox — a non-session holder', () => {
 
     assert({
       given: 'an env reconnecting to the SAME Sprite instance',
-      should: 'skip the measurement — resume clears nothing, so a `du` here would buy nothing',
+      should: 'skip the measurement — resume clears nothing, so a `du` here would buy nothing and might wake it',
       actual: measured,
       expected: [],
     });

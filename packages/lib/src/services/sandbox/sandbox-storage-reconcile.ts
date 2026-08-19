@@ -607,7 +607,13 @@ export async function reconcileSandboxStorage(
       // precisely why it needs its own.
       const health = measurementHealth[subject.kind];
       health.live += 1;
-      if (lastMeasuredGB === null) {
+      // Keyed off the SAME predicate `pickBillableGB` bills on — either column
+      // null means no usable reading, and a row with bytes but no timestamp
+      // would otherwise bill the 0 floor while being reported as merely "stale",
+      // i.e. under the bucket that says we know the footprint. Both writers set
+      // the two columns together today, so this is unreachable; sharing the
+      // predicate is what keeps it that way.
+      if (lastMeasuredGB === null || subject.measuredAt === null) {
         neverMeasured += 1;
         health.neverMeasured += 1;
       } else if (stale) {

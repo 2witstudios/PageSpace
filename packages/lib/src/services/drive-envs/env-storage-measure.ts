@@ -43,12 +43,14 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
 /**
  * Build the `measureStorage` dep for an ENV's provisioning.
  *
- * Fired by `ensureSpriteHolderSandbox` on the two arms that CLEAR the row's
- * measurement — `create` and `adopt` — against a Sprite that is already awake,
- * never by waking a hibernating one, which would recreate the keep-awake billing
- * bug the reconcile exists to avoid. (`resume` reconnects to the same
- * filesystem, so its existing reading still describes it.) The core calls this
- * fire-and-forget, so a failure here can never fail a provision.
+ * Fired by `ensureSpriteHolderSandbox` on the `create` arm ONLY — against a
+ * Sprite the provisioner has just booted, so it is known to be running. That is
+ * the whole constraint: a `du` is an exec, and an exec is the only way to wake a
+ * hibernated Sprite, so measuring anywhere the VM's state is unproven would
+ * recreate the keep-awake billing bug the reconcile exists to avoid. (`adopt`
+ * clears the measurement but cannot prove its VM is awake; `resume` reconnects
+ * to the same filesystem, so its existing reading still describes it.) The core
+ * calls this fire-and-forget, so a failure here can never fail a provision.
  *
  * **The baseline it captures is a FLOOR, not a truth, and today it is the ONLY
  * writer — so read this before assuming envs are fully metered.** A
@@ -70,10 +72,12 @@ export type EnvStorageMeasureStore = Pick<DriveEnvStore, 'recordStorageMeasureme
  *    reconcile advances its watermark anyway (deliberately: freezing it would
  *    let a later measurement retroactively over-bill the frozen span), each
  *    skipped window is discarded for good rather than deferred. The direction of
- *    that error is always UNDER-billing, never over: both arms that fire this
- *    seam (`create` and `adopt`) null the measurement columns in the same write,
- *    via `reviveStamps`/`adopt`'s stamps through `envStampColumns`, so a failed
- *    measurement leaves a NULL row rather than the dead generation's footprint.
+ *    that error is always UNDER-billing, never over: the `create` arm nulls the
+ *    measurement columns in the same write (`reviveStamps` through
+ *    `envStampColumns`), so a failed measurement leaves a NULL row rather than
+ *    the dead generation's footprint. `adopt` nulls them too and deliberately
+ *    does NOT re-measure — it cannot prove its VM is awake — so an adopted env
+ *    also sits at the 0 floor until something else measures it.
  *    Every one of those paths LOGS with the env's id, and the reconcile counts
  *    the aggregate as `neverMeasured`, so the failure is observable both per-env
  *    and in the meter's own health output — but observability is not repair.
@@ -110,12 +114,11 @@ export function envStorageMeasureSeam(
         // the HANDLE, never from a row read: this is the VM the `du` actually ran
         // on, and a row re-read could already describe its replacement.
         spriteInstanceId: handle.spriteInstanceId ?? null,
-        // NULL, not the row's value: this fires only on the two arms that RESET
-        // the measurement columns in the same write — `create` (a new Sprite
-        // generation is an empty filesystem) and `adopt` (a replacement VM is a
-        // different disk). Passing the pre-provision timestamp would let the
-        // throttle skip the baseline measurement of an env rebuilt or replaced
-        // inside the window, leaving the row NULL with no other trigger to fix it.
+        // NULL, not the row's value: this fires only on the `create` arm, whose
+        // own stamps reset the measurement columns (a new Sprite generation is an
+        // empty filesystem). Passing the pre-provision timestamp would let the
+        // throttle skip the baseline measurement of an env rebuilt inside the
+        // window, leaving the row NULL with no other trigger to fix it.
         lastMeasuredAt: null,
         now: new Date(),
         persist: async ({ workspaceId, spriteInstanceId, measuredBytes, measuredAt }) => {
@@ -153,9 +156,8 @@ export function envStorageMeasureSeam(
 
     if (!persisted) {
       // The store's CAS refused: the row was torn down, or its Sprite generation
-      // moved while the `du` ran (it may take up to the measure timeout, and on
-      // the adopt arm the attached handle's instance can already differ from the
-      // one just written to the row). Correct of the store to refuse — those
+      // moved while the `du` ran (it may take up to the measure timeout).
+      // Correct of the store to refuse — those
       // bytes describe a disk this row no longer points at — but for an ENV the
       // consequence is the same NULL row with no second writer, so it is named
       // rather than swallowed. Without this the module's promise that every
