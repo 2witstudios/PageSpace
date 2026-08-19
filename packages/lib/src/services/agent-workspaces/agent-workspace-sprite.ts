@@ -709,9 +709,19 @@ function envIntentForSessionIntent(intent: SpriteHolderProvisionIntent): SpriteH
  * belong to the env, so this stamps the session's own lifecycle and nothing
  * else.
  *
- * Best-effort and unguarded by a CAS: every field is idempotent, and a session
- * whose stamp lost a race to a concurrent `end` is simply ended — which the
- * next ensure revives, exactly as it would for an ordinary session.
+ * **The CAS mirrors the ordinary session's two arms rather than inventing a
+ * third rule.** Which guard applies is decided by the row we read:
+ *
+ *  - **It was NOT ended** — the ordinary `resume` case. Guarded on `endedAt`
+ *    still being null, because these stamps were computed assuming the session
+ *    was live and a concurrent `end` that landed in between must not be
+ *    silently erased (review #2261/1, which is the same hazard on the session
+ *    arm). A refusal is not a failure: the sandbox handed back is unaffected,
+ *    only the freshness touch is skipped.
+ *  - **It WAS ended** — the ordinary `create` case, a deliberate revive. Ending
+ *    is what the user last asked for, but ensuring is what they are asking for
+ *    now, and the session is retained precisely so it can come back. Unguarded,
+ *    exactly as the create arm's identity write is.
  */
 async function reviveEnvBoundSession({
   row,
@@ -725,6 +735,7 @@ async function reviveEnvBoundSession({
   await deps.store.applyStamps({
     workspaceId: row.workspaceId,
     stamps: { lastActiveAt: now, endedAt: null, teardownRequestedAt: null },
+    ...(row.endedAt === null ? { cas: { endedAt: null } } : {}),
   });
 }
 

@@ -1118,6 +1118,32 @@ describe('ensureAgentSessionSandbox — inside an environment', () => {
     expect(store.rows.get(envRow.id)!.lastActiveAt).toEqual(NOW);
   });
 
+  it('given a concurrent END on a LIVE session, should not silently erase it', async () => {
+    // Same hazard the session arm's resume guards (review #2261/1): these stamps
+    // were computed for a session that was live when we read it, so an `end`
+    // that landed while the env provisioned is the user's most recent word and
+    // must stand. The sandbox handed back is unaffected — only the freshness
+    // touch is skipped.
+    const store = makeAgentSessionStore([envRow]);
+    const host = makeSpriteHost();
+
+    const result = await ensureAgentSessionSandbox({
+      row: toSpriteRow(envRow), // read while live...
+      intent: 'ensure',
+      actor,
+      deps: makeDeps({ store, host }, {
+        ensureEnvSandbox: async () => {
+          // ...and ended while the env was being provisioned.
+          store.rows.get(envRow.id)!.endedAt = NOW;
+          return { ok: true, sandboxId: ENV_SANDBOX, resumed: true };
+        },
+      }),
+    });
+
+    expect(result.ok).toBe(true);
+    expect(store.rows.get(envRow.id)!.endedAt).toEqual(NOW);
+  });
+
   it('given the env provision FAILED, should leave the session row alone', async () => {
     // Nothing was provisioned, so nothing is live — stamping a row as active
     // because a failed call happened to touch it is how a dead session ends up
