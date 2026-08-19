@@ -544,6 +544,17 @@ const ENV_DELETE_KILL_WAIT_MS = 5_000;
  * stays an honest answer rather than an assumed one. A timeout answers `false`,
  * which is exactly right: we do not know that we stopped it.
  *
+ * **"Never throws" is structural here, not a promise about the host.** Everything
+ * this function does happens AFTER the row delete has committed, so anything it
+ * lets escape converts a delete that succeeded into a 500 for the caller — the
+ * precise failure the post-commit ordering exists to prevent. `SandboxHost.kill`
+ * returns a promise, but it is an interface: an implementation that is not
+ * `async` could throw synchronously, before the rejection handler is ever
+ * attached. The logging could throw too. So the whole body is guarded and the
+ * guard ANSWERS rather than propagates — the contract does not depend on every
+ * present and future `SandboxHost` remembering to be `async`, nor on a logger
+ * behaving.
+ *
  * **The timeout does not cancel the underlying call, and does not need to.**
  * `SandboxHost.kill` takes no `AbortSignal`, so the provider request runs on
  * after we stop waiting — which is harmless here in a way it would not be for an
@@ -574,20 +585,22 @@ async function killDeletedEnvSprite({
 }): Promise<boolean> {
   const TIMED_OUT = Symbol('timed_out');
   const setTimeoutFn = deps.setTimeoutFn ?? ((fn, ms) => setTimeout(fn, ms));
-
-  // Observed exactly once, here, no matter which branch of the race wins — so a
-  // late rejection can never escape as an unhandled rejection.
-  const kill = deps.host
-    .kill({ sandboxId, expectedInstanceId })
-    .then(() => ({ ok: true as const }))
-    .catch((error: unknown) => ({ ok: false as const, error }));
-
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
-    timer = setTimeoutFn(() => resolve(TIMED_OUT), ENV_DELETE_KILL_WAIT_MS);
-  });
 
   try {
+    // `.catch` observes the promise exactly once, immediately, so a rejection
+    // arriving long after the deadline won cannot surface as an unhandled
+    // rejection. A SYNCHRONOUS throw (a non-`async` host) never reaches it and is
+    // caught by the block below instead — which is why that block exists.
+    const kill = deps.host
+      .kill({ sandboxId, expectedInstanceId })
+      .then(() => ({ ok: true as const }))
+      .catch((error: unknown) => ({ ok: false as const, error }));
+
+    const deadline = new Promise<typeof TIMED_OUT>((resolve) => {
+      timer = setTimeoutFn(() => resolve(TIMED_OUT), ENV_DELETE_KILL_WAIT_MS);
+    });
+
     const outcome = await Promise.race([kill, deadline]);
 
     if (outcome === TIMED_OUT) {
@@ -605,6 +618,18 @@ async function killDeletedEnvSprite({
     loggers.ai.error(
       'Drive environment sprite kill failed after the row was deleted; reclaim outbox will retry',
       outcome.error instanceof Error ? outcome.error : new Error(String(outcome.error)),
+      { envId, sandboxId },
+    );
+    return false;
+  } catch (error) {
+    // Nothing above SHOULD reach here — the kill's own rejection is handled, and
+    // the rest is logging. It exists because this runs after the commit, where
+    // "should not" is not a good enough reason to let an exception turn a delete
+    // that succeeded into a 500. Answering `false` is accurate: we did not
+    // confirm the machine stopped, and the outbox will.
+    loggers.ai.error(
+      'Drive environment sprite cleanup threw after the row was deleted; the env IS deleted and the reclaim outbox will retry',
+      error instanceof Error ? error : new Error(String(error)),
       { envId, sandboxId },
     );
     return false;

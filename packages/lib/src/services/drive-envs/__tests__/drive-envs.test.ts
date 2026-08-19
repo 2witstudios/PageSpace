@@ -258,6 +258,26 @@ describe('deleteDriveEnv', () => {
     expect(store.calls.requestTeardown).toBe(0);
   });
 
+  it('given a host that throws SYNCHRONOUSLY, should still answer the delete rather than 500 it', async () => {
+    // Everything after the commit runs on a delete that has already succeeded, so
+    // anything it lets escape turns that success into a 500 — the exact failure
+    // the post-commit ordering exists to prevent. `SandboxHost.kill` returns a
+    // promise, but it is an INTERFACE: a non-`async` implementation can throw
+    // before any rejection handler is attached. The contract must not depend on
+    // every future host remembering to be `async`.
+    const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);
+    const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+    host.host.kill = (() => {
+      throw new Error('control plane client blew up before returning a promise');
+    }) as typeof host.host.kill;
+
+    const result = await deleteDriveEnv({ envId: ENV_ID, force: false, deps: makeDeleteDeps(store, host) });
+
+    expect(result).toEqual({ ok: true, spriteTornDown: false });
+    expect(store.rows.has(ENV_ID)).toBe(false);
+    expect(store.reclaims.get(SANDBOX_ID)).toBe('inst-1');
+  });
+
   it('given a kill that never answers, should still answer the delete and leave the VM to the outbox', async () => {
     // The delete has COMMITTED by the time the kill runs, so a control plane that
     // stops answering must not hold the request open: every millisecond after the
