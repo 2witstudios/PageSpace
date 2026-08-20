@@ -16,6 +16,8 @@ import {
   startSelfWrite,
   settleSelfWrite,
   hasAnyInFlightSelfWrite,
+  isSoleInFlightWriteForTask,
+  isNewestWriteForTask,
   classifyTaskEcho,
   deferredEchoesNeedRevalidation,
   type SelfWrite,
@@ -56,6 +58,15 @@ export interface TaskWriteMachinery {
   noteSelfWriteStart: (taskId: string) => number;
   /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
   noteSelfWriteSettled: (writeId: number, updatedAt: string | null) => void;
+  /**
+   * May a failed write undo itself from what it displaced?
+   *
+   * Only when it is the sole write this tab has open on that task — see
+   * isSoleInFlightWriteForTask. Ask at paint time AND again at failure time:
+   * the first call rules out a write that was already open, the second rules
+   * out one that started since.
+   */
+  ownsTaskExclusively: (writeId: number, taskId: string) => boolean;
   /**
    * Register a cache to refresh when a deferred echo turns out to be foreign.
    *
@@ -154,6 +165,12 @@ export function useTaskWriteMachinery(
     );
   }, []);
 
+  const ownsTaskExclusively = useCallback((writeId: number, taskId: string): boolean => {
+    const records = selfWritesRef.current;
+    return isSoleInFlightWriteForTask(records, taskId, writeId)
+      && isNewestWriteForTask(records, taskId, writeId);
+  }, []);
+
   const flushDeferredRevalidate = useCallback((): void => {
     if (deferredEchoesRef.current.length === 0) return;
     // Not while ANY write is still open. The queue is view-wide, so an unrelated
@@ -201,12 +218,13 @@ export function useTaskWriteMachinery(
       currentUserId,
       noteSelfWriteStart,
       noteSelfWriteSettled,
+      ownsTaskExclusively,
       registerCacheRefresher,
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
-    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, registerCacheRefresher,
-     flushDeferredRevalidate, shouldRevalidateForEvent],
+    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, ownsTaskExclusively,
+     registerCacheRefresher, flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
 
@@ -284,7 +302,8 @@ export function useTaskWriter(params: {
   refreshOwnCache?: () => void;
 }): TaskWriter {
   const {
-    noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate, registerCacheRefresher,
+    noteSelfWriteStart, noteSelfWriteSettled, ownsTaskExclusively,
+    flushDeferredRevalidate, registerCacheRefresher,
   } = params.machinery;
   const { mutatePages, onRevisionConflict, refreshOwnCache } = params;
 
@@ -300,13 +319,18 @@ export function useTaskWriter(params: {
     // What the paint is about to overwrite, captured from the live cache so a
     // failure can be undone locally. Read inside the updater because that is
     // the only place SWR hands us the current value.
+    //
+    // Only trustworthy when this is the sole write open on the row: otherwise
+    // what we are about to displace is another write's unconfirmed paint, and
+    // restoring it would invent a state the server never agreed to.
     let inverse: TaskFieldPatch | null = null;
+    const soleWriteAtPaint = ownsTaskExclusively(writeId, loc.taskId);
     try {
       // Paint first, synchronously, so the row changes in this tick — and so
       // the next write composes on top of this one instead of on a snapshot
       // taken before it. Awaited only to keep the two mutates ordered.
       await mutatePages((current) => {
-        inverse = invertTaskPatch(current, loc.taskId, optimistic);
+        inverse = soleWriteAtPaint ? invertTaskPatch(current, loc.taskId, optimistic) : null;
         return applyTaskPatchToPages(current, loc.taskId, optimistic);
       }, { revalidate: false });
       const updated = await patch<TaskItem>(
@@ -337,10 +361,15 @@ export function useTaskWriter(params: {
       // revalidation while that holds — so with any editor open anywhere in the
       // app, the request is never issued and a fabricated completion would sit
       // on screen until the 5-minute interval, which is gated the same way.
-      // The local revert is conditional (see revertTaskPatch), so it cannot
-      // stomp a newer value; the refetch behind it reconciles when it can.
+      // The local revert is conditional twice over — the row must still hold
+      // exactly what this write painted (revertTaskPatch), and no other write
+      // on it may have been open at any point (ownsTaskExclusively, asked again
+      // here for writes that started after the paint). Where either fails there
+      // is no honest local answer, and the refetch is the only repair.
       await mutatePages(
-        (current) => revertTaskPatch(current, loc.taskId, optimistic, inverse),
+        (current) => (ownsTaskExclusively(writeId, loc.taskId)
+          ? revertTaskPatch(current, loc.taskId, optimistic, inverse)
+          : current),
         { revalidate: false },
       );
       void mutatePages();
@@ -351,8 +380,8 @@ export function useTaskWriter(params: {
       // After the cache write has committed, never from inside the updater.
       flushDeferredRevalidate();
     }
-  }, [mutatePages, onRevisionConflict, noteSelfWriteStart,
-      noteSelfWriteSettled, flushDeferredRevalidate]);
+  }, [mutatePages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled,
+      ownsTaskExclusively, flushDeferredRevalidate]);
 
   return { writeTaskField };
 }

@@ -7,6 +7,8 @@ import {
   pruneSelfWrites,
   hasInFlightSelfWrite,
   hasAnyInFlightSelfWrite,
+  isSoleInFlightWriteForTask,
+  isNewestWriteForTask,
   SELF_WRITE_TTL_MS,
   MAX_SELF_WRITES,
   type SelfWrite,
@@ -346,6 +348,59 @@ describe('classifyTaskEcho', () => {
         NOW,
       ),
       expected: 'foreign',
+    });
+  });
+});
+
+describe('deciding whether a failed write may undo itself', () => {
+  const rec = (writeId: number, taskId: string, updatedAt: string | null = null): SelfWrite =>
+    ({ writeId, taskId, updatedAt, at: NOW });
+
+  it('is sole when nothing else on that task is recorded', () => {
+    assert({
+      given: 'one write on task-1, and another on a different task',
+      should: 'still count as sole for task-1',
+      actual: isSoleInFlightWriteForTask([rec(1, 'task-1'), rec(2, 'task-2')], 'task-1', 1),
+      expected: true,
+    });
+  });
+
+  it('is NOT sole while another write on the same task is recorded', () => {
+    // The one that matters: write 2's paint displaces write 1's unconfirmed
+    // guess, so an inverse taken there is not a server value and must not be
+    // restored.
+    assert({
+      given: 'two writes on the same task',
+      should: 'refuse both of them',
+      actual: [
+        isSoleInFlightWriteForTask([rec(1, 'task-1'), rec(2, 'task-1')], 'task-1', 1),
+        isSoleInFlightWriteForTask([rec(1, 'task-1'), rec(2, 'task-1')], 'task-1', 2),
+      ],
+      expected: [false, false],
+    });
+  });
+
+  it('counts a settled record too, not only an in-flight one', () => {
+    // A write that already SUCCEEDED keeps its stamped record, and it is
+    // exactly that write whose value a later revert would clobber.
+    assert({
+      given: 'an earlier write on the same task that has already settled',
+      should: 'still refuse',
+      actual: isSoleInFlightWriteForTask([rec(1, 'task-1', 'stamp'), rec(2, 'task-1')], 'task-1', 2),
+      expected: false,
+    });
+  });
+
+  it('is newest only when no higher write id exists for the task', () => {
+    const records = [rec(1, 'task-1'), rec(2, 'task-1'), rec(9, 'task-2')];
+    assert({
+      given: 'writes 1 and 2 on task-1',
+      should: 'call 2 the newest and 1 not, ignoring the other task',
+      actual: [
+        isNewestWriteForTask(records, 'task-1', 2),
+        isNewestWriteForTask(records, 'task-1', 1),
+      ],
+      expected: [true, false],
     });
   });
 });

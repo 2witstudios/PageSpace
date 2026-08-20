@@ -15,6 +15,8 @@ import {
   taskFromCreateResponse,
   blockedStatusTransition,
   subTasksBlockedMessage,
+  invertTaskPatch,
+  revertTaskPatch,
   type CreateTaskResponse,
 } from '../task-cache-core';
 
@@ -509,6 +511,96 @@ describe('taskFromCreateResponse', () => {
       should: 'preserve them',
       actual: [created.title, created.status, created.id],
       expected: ['Fresh', 'doing', 'new'],
+    });
+  });
+});
+
+describe('invertTaskPatch', () => {
+  it('reads back exactly the keys the patch would set', () => {
+    const pages = [page([task({ id: 't1', status: 'doing', completedAt: 'was', title: 'Old' })])];
+    assert({
+      given: 'a patch touching status and completedAt but not title',
+      should: 'return those two current values and nothing else',
+      actual: invertTaskPatch(pages, 't1', { status: 'completed', completedAt: 'guess' }),
+      expected: { status: 'doing', completedAt: 'was' },
+    });
+  });
+
+  it('reports nothing to undo when the task is not in these pages', () => {
+    // Not the same as an empty patch: null is what tells the caller there is no
+    // trustworthy prior state, which is why revertTaskPatch treats it as a stop.
+    assert({
+      given: 'a task id absent from the cache',
+      should: 'return null',
+      actual: invertTaskPatch([page([task({ id: 'other' })])], 't1', { status: 'x' }),
+      expected: null,
+    });
+  });
+
+  it('looks across every loaded page, not just the first', () => {
+    const pages = [page([task({ id: 'a' })]), page([task({ id: 't1', status: 'doing' })])];
+    assert({
+      given: 'a task on the second page',
+      should: 'still find its current value',
+      actual: invertTaskPatch(pages, 't1', { status: 'completed' }),
+      expected: { status: 'doing' },
+    });
+  });
+});
+
+describe('revertTaskPatch', () => {
+  const applied = { status: 'completed', completedAt: 'guess' };
+  const inverse = { status: 'pending', completedAt: null };
+
+  it('restores the row when it still holds exactly what was painted', () => {
+    const pages = [page([task({ id: 't1', status: 'completed', completedAt: 'guess' })])];
+    const out = revertTaskPatch(pages, 't1', applied, inverse);
+    assert({
+      given: 'a row untouched since the paint',
+      should: 'put both fields back',
+      actual: [out?.[0].tasks[0].status, out?.[0].tasks[0].completedAt],
+      expected: ['pending', null],
+    });
+  });
+
+  it('restores NOTHING when any painted field has moved on', () => {
+    // The half-revert this rules out: status matches the guess and reverts
+    // while the server's completedAt does not and stays, leaving an open row
+    // carrying a completion date — and undoing a real completion made
+    // elsewhere.
+    const pages = [page([task({ id: 't1', status: 'completed', completedAt: 'server-stamp' })])];
+    const out = revertTaskPatch(pages, 't1', applied, inverse);
+    assert({
+      given: 'a row whose completedAt changed since the paint',
+      should: 'leave the whole row alone',
+      actual: [out?.[0].tasks[0].status, out?.[0].tasks[0].completedAt],
+      expected: ['completed', 'server-stamp'],
+    });
+  });
+
+  it('does nothing without an inverse, or without the task', () => {
+    const pages = [page([task({ id: 't1', status: 'completed', completedAt: 'guess' })])];
+    assert({
+      given: 'a null inverse, and a task that is not there',
+      should: 'return the pages by reference in both cases',
+      actual: [
+        revertTaskPatch(pages, 't1', applied, null) === pages,
+        revertTaskPatch(pages, 'nope', applied, inverse) === pages,
+      ],
+      expected: [true, true],
+    });
+  });
+
+  it('does nothing for an empty patch', () => {
+    // Assignee writes pass `optimistic: {}` — there is nothing to compare, so
+    // "every field still matches" is vacuously true and would restore the
+    // whole inverse over whatever is there.
+    const pages = [page([task({ id: 't1', status: 'completed' })])];
+    assert({
+      given: 'a write that painted no fields',
+      should: 'leave the row untouched',
+      actual: revertTaskPatch(pages, 't1', {}, inverse) === pages,
+      expected: true,
     });
   });
 });

@@ -118,6 +118,33 @@ export const hasInFlightSelfWrite = (
 ): boolean => records.some((r) => r.taskId === taskId && r.updatedAt === null);
 
 /**
+ * Is this write the only one this tab has open on its task?
+ *
+ * Asked at PAINT time, and the answer decides whether a later failure may undo
+ * itself locally. The undo restores what the paint displaced — and if another
+ * write on the same row was already open, what it displaced was that write's
+ * own unconfirmed paint, not anything the server ever said. Restoring it
+ * fabricates a state the server has now rejected twice: double-click a
+ * checkbox with the network down and the row ends up completed, with a
+ * client-invented timestamp, permanently.
+ */
+export const isSoleInFlightWriteForTask = (
+  records: readonly SelfWrite[],
+  taskId: string,
+  writeId: number,
+): boolean => !records.some((r) => r.taskId === taskId && r.writeId !== writeId);
+
+/**
+ * Is no LATER write open on this task? Asked at failure time, for the writes
+ * that started after the paint and so are invisible to the check above.
+ */
+export const isNewestWriteForTask = (
+  records: readonly SelfWrite[],
+  taskId: string,
+  writeId: number,
+): boolean => !records.some((r) => r.taskId === taskId && r.writeId > writeId);
+
+/**
  * Classify an inbound event.
  *
  * - `foreign` — revalidate as before. Includes the same user in another tab,

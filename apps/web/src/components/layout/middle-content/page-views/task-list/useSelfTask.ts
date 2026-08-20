@@ -11,6 +11,7 @@ import {
   subTasksBlockedMessage,
 } from '@/lib/tasks/task-cache-core';
 import { taskWriteErrorMessage } from '@/lib/tasks/task-write-errors';
+import type { TaskFieldPatch } from '@/lib/tasks/task-cache-core';
 import { isCompletedStatus, type TaskStatusConfig } from './task-list-types';
 import type { TaskWriteMachinery } from '@/lib/tasks/task-write-machinery';
 
@@ -117,8 +118,15 @@ export function useSelfTask(
       status,
       completedAt: isCompletedStatus(status, statusConfigs) ? new Date().toISOString() : null,
     };
-    // What the paint displaces, so a failure can be undone without the server.
-    let previous: { status: string; completedAt: string | null } | null = null;
+    // The undo, and the two conditions that make it honest, are the writer's —
+    // reimplemented here once, and the copy was weaker than the original: it
+    // compared `status` alone but restored `completedAt` too, so it could
+    // overwrite a server stamp with null. One rule, one implementation.
+    const soleWriteAtPaint = machinery.ownsTaskExclusively(writeId, task.id);
+    // A holder rather than a plain `let`: the assignment happens inside the
+    // paint updater, which TypeScript's flow analysis cannot see, so a bare
+    // binding narrows to `null` at every read below.
+    const captured: { previous: TaskFieldPatch | null } = { previous: null };
     try {
       // Two synchronous mutates around the request rather than SWR's
       // optimisticData + async updater — see the header of
@@ -127,7 +135,9 @@ export function useSelfTask(
       // checkbox.
       await mutate((current) => {
         const before = (current ?? (data as SelfTaskResponse))?.task;
-        previous = before ? { status: before.status, completedAt: before.completedAt } : null;
+        captured.previous = soleWriteAtPaint && before
+          ? { status: before.status, completedAt: before.completedAt }
+          : null;
         return applyStatus(current, painted);
       }, { revalidate: false });
       const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
@@ -138,14 +148,19 @@ export function useSelfTask(
     } catch (e) {
       machinery.noteSelfWriteSettled(writeId, null);
       // Undo locally, then reconcile — see task-write-machinery's catch for why
-      // a refetch alone is not an undo. Restored only if the paint is still
-      // what is showing, so a newer value is never stomped.
-      const undo = previous;
-      await mutate((current) => (
-        undo && current?.task?.status === painted.status
-          ? applyStatus(current, undo)
-          : current
-      ), { revalidate: false });
+      // a refetch alone is not an undo, and for what the two conditions rule
+      // out. Whole-patch: if any painted field moved on, this write no longer
+      // owns the row.
+      const undo = captured.previous;
+      await mutate((current) => {
+        const row = current?.task;
+        if (!undo || !row || !machinery.ownsTaskExclusively(writeId, task.id)) return current;
+        const stillOurs = row.status === painted.status
+          && row.completedAt === painted.completedAt;
+        return stillOurs
+          ? applyStatus(current, { status: undo.status ?? row.status, completedAt: undo.completedAt ?? null })
+          : current;
+      }, { revalidate: false });
       void mutate();
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {

@@ -124,13 +124,16 @@ export const invertTaskPatch = (
 };
 
 /**
- * Undo an optimistic patch — but only where it is still the thing on screen.
+ * Undo an optimistic patch — but only if it is still, in full, what is on
+ * screen.
  *
- * A field that changed again since (a second write on the same row, a socket
- * echo, a refetch that landed) is left alone: restoring the value this write
- * displaced would then revert somebody else's newer, correct value. That
- * caution is the whole reason this is a conditional revert and not a plain
- * `applyTaskPatchToPages(pages, id, inverse)`.
+ * All or nothing, deliberately. Deciding per field produces states that never
+ * existed anywhere: complete a task, have the write 403, and meanwhile let a
+ * foreign refetch land the same completion with the SERVER's timestamp — then
+ * `status` still matches the guess and reverts, while `completedAt` does not
+ * and stays. The row ends up open with a completion date, and somebody else's
+ * legitimate completion has been silently undone. If any field moved on, this
+ * write no longer owns the row and reverting any part of it is a guess.
  */
 export const revertTaskPatch = (
   pages: TaskListData[] | undefined,
@@ -141,14 +144,10 @@ export const revertTaskPatch = (
   if (!inverse) return pages;
   const task = pages?.flatMap((page) => page.tasks).find((t) => t.id === taskId);
   if (!task) return pages;
-  const restorable: TaskFieldPatch = {};
-  for (const key of Object.keys(applied) as (keyof TaskFieldPatch)[]) {
-    if (task[key as keyof TaskItem] === applied[key]) {
-      (restorable as Record<string, unknown>)[key] = inverse[key];
-    }
-  }
-  if (Object.keys(restorable).length === 0) return pages;
-  return applyTaskPatchToPages(pages, taskId, restorable);
+  const keys = Object.keys(applied) as (keyof TaskFieldPatch)[];
+  if (keys.length === 0) return pages;
+  const stillOurs = keys.every((key) => task[key as keyof TaskItem] === applied[key]);
+  return stillOurs ? applyTaskPatchToPages(pages, taskId, inverse) : pages;
 };
 
 /**
