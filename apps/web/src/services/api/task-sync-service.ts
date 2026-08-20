@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, asc, inArray, isNotNull } from '@pagespace/db/operators'
+import { eq, and, asc, inArray, notInArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { taskTriggers } from '@pagespace/db/schema/task-triggers'
@@ -162,36 +162,62 @@ export async function seedInheritedTaskStatusConfigs(
 /**
  * Bring a list's EXISTING task rows into the vocabulary just seeded for it.
  *
- * Only matters on the repair path, and it is the price of inheriting there.
- * The old behaviour seeded DEFAULT_TASK_STATUSES, which always defines
- * 'pending' — the schema default for `task_items.status`, and therefore exactly
- * what a legacy row carries. Seeding the ancestor's vocabulary instead leaves
- * those rows holding a slug their own list does not define, which is the
- * invariant normalizeStatusForList exists to protect and which PATCH enforces
- * with a 400. Nothing else would ever fix them: backfillMissingTaskItems only
- * visits pages that have no row at all.
+ * Only matters on the repair path, and it is the price of inheriting there. The
+ * old behaviour seeded DEFAULT_TASK_STATUSES, which always defines 'pending' —
+ * the schema default for `task_items.status`, and therefore exactly what a
+ * legacy row carries. Seeding the ancestor's vocabulary instead leaves those
+ * rows holding a slug their own list does not define, which is the invariant
+ * normalizeStatusForList exists to protect and which PATCH enforces with a 400.
  *
- * Bounded by the same cap as the remap: a list past it is not silently
- * half-converted, it simply keeps the rows this pass did not reach, and the
- * next read repairs the rest.
+ * Two set-based UPDATEs rather than a read-then-loop, and that shape is
+ * load-bearing rather than a micro-optimisation. This runs ONCE per list — every
+ * caller reaches it only while the vocabulary is empty, so the pass that writes
+ * the configs is the only pass there will ever be. A row-at-a-time repair had to
+ * be bounded, and any row past the bound would have kept an undefined slug
+ * permanently: PATCH 400s on it, the badge renders the raw slug, and no later
+ * read would come back for it. There is no second chance to be partial with.
+ *
+ * Trashed pages included, deliberately. Skipping them costs nothing today and
+ * hands back a broken row the moment one is restored.
+ *
+ * A row whose slug the new vocabulary DOES define is untouched — `notInArray`
+ * says so — which keeps the same promise normalizeStatusForList makes: a defined
+ * slug is never rewritten, even when its group disagrees with completedAt.
  */
 async function conformExistingTasksToVocabulary(
   tx: Tx,
   taskListId: string,
   listPageId: string,
 ): Promise<void> {
-  const rows = await tx
-    .select({
-      id: taskItems.id,
-      status: taskItems.status,
-      completedAt: taskItems.completedAt,
-    })
-    .from(taskItems)
-    .innerJoin(pages, eq(pages.id, taskItems.pageId))
-    .where(and(eq(pages.parentId, listPageId), eq(pages.isTrashed, false)))
-    .limit(STATUS_CONFIG_REMAP_LIMIT)
-  for (const item of rows) {
-    await normalizeStatusForList(tx, { item, taskListId })
+  // Read back rather than trusting what was just inserted: the seed is ON
+  // CONFLICT DO NOTHING, so a concurrent seeder may have written the row that
+  // actually landed, and conforming tasks to slugs that lost the race would be
+  // worse than not conforming them at all.
+  const configs = await tx.query.taskStatusConfigs.findMany({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+    limit: STATUS_CONFIG_REMAP_LIMIT,
+  })
+  if (configs.length === 0) return
+
+  const slugs = configs.map((config) => config.slug)
+  const membersOfThisList = tx
+    .select({ id: pages.id })
+    .from(pages)
+    .where(eq(pages.parentId, listPageId))
+
+  for (const [isCompleted, completionFilter] of [
+    [false, isNull(taskItems.completedAt)],
+    [true, isNotNull(taskItems.completedAt)],
+  ] as const) {
+    await tx
+      .update(taskItems)
+      .set({ status: pickReplacementStatus(configs, isCompleted).slug })
+      .where(and(
+        inArray(taskItems.pageId, membersOfThisList),
+        notInArray(taskItems.status, slugs),
+        completionFilter,
+      ))
   }
 }
 
@@ -314,17 +340,34 @@ async function normalizeStatusForList(
   // Never land on the wrong side of the done boundary. (The per-group deletion guard in
   // the statuses route means a list with any configs keeps at least one of each group,
   // so the final `?? configs[...]` arms are defence rather than live paths.)
-  const replacement = item.completedAt
-    ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
-    : (configs.find((config) => config.group === 'todo')
-        ?? configs.find((config) => config.group !== 'done')
-        ?? configs[0])
+  const replacement = pickReplacementStatus(configs, item.completedAt !== null)
 
   await tx
     .update(taskItems)
     .set({ status: replacement.slug })
     .where(eq(taskItems.id, item.id))
 }
+
+/**
+ * Which slug a task should land on when its own is not in its list's vocabulary.
+ *
+ * Never lands on the wrong side of the done boundary: a row with a completion
+ * time stays complete, one without stays actionable. (The per-group deletion
+ * guard in the statuses route means a list with any configs keeps at least one
+ * of each group, so the final fallbacks are defence rather than live paths.)
+ *
+ * Shared by the row-at-a-time repair and the set-based sweep below, because two
+ * copies of this rule is exactly how they would come to disagree about which
+ * side of that boundary a row belongs on.
+ */
+export const pickReplacementStatus = <T extends { slug: string; group: string }>(
+  configs: readonly T[],
+  isCompleted: boolean,
+): T => (isCompleted
+  ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
+  : (configs.find((config) => config.group === 'todo')
+      ?? configs.find((config) => config.group !== 'done')
+      ?? configs[0]))
 
 /**
  * The slug a brand-new task should start in for THIS list. Defaults to 'pending' only

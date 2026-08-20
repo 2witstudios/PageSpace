@@ -13,7 +13,6 @@ import {
   appendTaskToPages,
   applySubTaskCountsToPages,
   removeTaskFromPages,
-  shouldAppendOptimistically,
   taskFromCreateResponse,
   resolveToggleStatus,
   blockedByOpenSubTasks,
@@ -160,6 +159,14 @@ export function TaskRowGroup({
     </>
   );
 }
+
+/**
+ * How many extra pages the reveal walk will request. Bounded because the walk
+ * exists to surface ONE created row: an unbounded one pages a very long
+ * sub-list all the way out, and past this the row is a single "Load more" away
+ * with a button already saying so.
+ */
+const MAX_REVEAL_PAGES = 5;
 
 /**
  * A nested row. Deliberately NOT sortable: cross-level drag is a re-parenting
@@ -370,31 +377,50 @@ function TaskSubTaskRows({
    * the user to type it again. Only reachable on a sub-list past its first page
    * of 100, where the inline add row sits directly above "Load more".
    */
-  const [revealCreated, setRevealCreated] = useState(false);
+  const [revealCreated, setRevealCreated] = useState(0);
   useEffect(() => {
-    if (!revealCreated) return;
-    if (!hasMore) { setRevealCreated(false); return; }
-    if (!isLoadingMore) loadMore();
-  }, [revealCreated, hasMore, isLoadingMore, loadMore]);
+    if (revealCreated === 0) return;
+    // Stop on anything that means "no more progress will be made". Without the
+    // error arm this spins: a failed page leaves `isLoadingMore` false (the hook
+    // forces it so) while `hasMore` still reads true off the last page that DID
+    // load, so the effect re-fires and re-requests, at ~20 req/s, against a
+    // route that lazily WRITES — the exact opposite of the hook's
+    // shouldRetryOnError: false.
+    if (!hasMore || error) { setRevealCreated(0); return; }
+    // And a bound even when everything succeeds: the new task is at the end of
+    // the ordering, so an unbounded walk would page a 2,000-sub-task list all
+    // the way out — twenty sequential requests and two thousand rows — because
+    // somebody added one item. Past this, the row is one "Load more" away and
+    // the button says so, which is a better answer than a stampede.
+    if (revealCreated > MAX_REVEAL_PAGES) { setRevealCreated(0); return; }
+    if (!isLoadingMore) {
+      setRevealCreated((n) => n + 1);
+      loadMore();
+    }
+  }, [revealCreated, hasMore, error, isLoadingMore, loadMore]);
 
   const addCreatedChild = useCallback((created: TaskItem) => {
-    void mutatePages(
-      (current) => (shouldAppendOptimistically(current)
-        ? appendTaskToPages(current, created)
-        // Later pages are still unloaded, so the end of the server's ordering
-        // is not the end of what we have. Refresh what we hold and then walk
-        // the window out to the task rather than render it in a slot it does
-        // not occupy.
-        : (retry(), setRevealCreated(true), current)),
-      { revalidate: false },
-    );
+    // Decided out here rather than inside the updater. `hasMore` false means the
+    // last loaded page IS the last page, which is exactly the question
+    // shouldAppendOptimistically asks of the pages array — and an SWR updater is
+    // contractually pure, so calling retry() and setState from inside one meant
+    // re-entering mutate on the key that mutate was already running against.
+    if (hasMore) {
+      // Later pages are still unloaded, so the end of the server's ordering is
+      // not the end of what we have. Refresh what we hold, then walk the window
+      // out to the new task rather than render it in a slot it does not occupy.
+      retry();
+      setRevealCreated(1);
+    } else {
+      void mutatePages((current) => appendTaskToPages(current, created), { revalidate: false });
+    }
     // Not always `{ total: 1 }`. POST seeds the status from the list's own
     // vocabulary, and a list with no open status resolves to a done one — which
     // the server then stamps complete. Counting that as an open sub-task leaves
     // the parent reading n/(n+1) forever: the guard refuses to complete it, and
     // this cache has no revalidation trigger to correct the number.
     onParentCountDelta?.({ total: 1, completed: created.completedAt ? 1 : 0 });
-  }, [mutatePages, retry, onParentCountDelta]);
+  }, [hasMore, mutatePages, retry, onParentCountDelta]);
 
   return (
     <>
@@ -427,8 +453,11 @@ function TaskSubTaskRows({
       )}
 
       {/* An expansion that shows nothing has to say why — it was expandable
-          because a count said there was something here. */}
-      {!isLoading && (error || subTasks.length === 0) && (
+          because a count said there was something here. Gated on that count:
+          a row is also expandable for having a DESCRIPTION, and telling someone
+          their sub-tasks are "no longer here" when they never had any is a
+          statement about nothing. */}
+      {!isLoading && (error || (subTasks.length === 0 && (task.subTaskCount ?? 0) > 0)) && (
         <AffordanceRow depth={childDepth}>
           <p role="status" aria-live="polite" className="text-xs text-muted-foreground italic">
             {error

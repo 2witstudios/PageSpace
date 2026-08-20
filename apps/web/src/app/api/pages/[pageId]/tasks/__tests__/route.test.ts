@@ -586,9 +586,6 @@ describe('Task API Routes', () => {
         // vocabulary before seeding. That walk's first query lands here; an empty
         // result ends it immediately and the seed falls back to the defaults.
         .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
-        // Then the sweep that brings any rows already in the list into the
-        // vocabulary just seeded — empty here, so it is a no-op.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // conform existing rows
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: search-filtered ids
@@ -642,9 +639,6 @@ describe('Task API Routes', () => {
         // vocabulary before seeding. That walk's first query lands here; an empty
         // result ends it immediately and the seed falls back to the defaults.
         .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
-        // Then the sweep that brings any rows already in the list into the
-        // vocabulary just seeded — empty here, so it is a no-op.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // conform existing rows
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // backfill existingRows
         .mockImplementationOnce(() => phase1Chain as never) // phase 1: the query under test
@@ -689,9 +683,6 @@ describe('Task API Routes', () => {
         // vocabulary before seeding. That walk's first query lands here; an empty
         // result ends it immediately and the seed falls back to the defaults.
         .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
-        // Then the sweep that brings any rows already in the list into the
-        // vocabulary just seeded — empty here, so it is a no-op.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // conform existing rows
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows (nothing missing)
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: bounded + ordered ids
@@ -743,9 +734,6 @@ describe('Task API Routes', () => {
         // vocabulary before seeding. That walk's first query lands here; an empty
         // result ends it immediately and the seed falls back to the defaults.
         .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
-        // Then the sweep that brings any rows already in the list into the
-        // vocabulary just seeded — empty here, so it is a no-op.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // conform existing rows
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRowsPlusOne) as never) // phase 1
@@ -787,9 +775,6 @@ describe('Task API Routes', () => {
         // vocabulary before seeding. That walk's first query lands here; an empty
         // result ends it immediately and the seed falls back to the defaults.
         .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
-        // Then the sweep that brings any rows already in the list into the
-        // vocabulary just seeded — empty here, so it is a no-op.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // conform existing rows
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1
@@ -1320,9 +1305,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.select)
         // getOrCreateTaskListForPage's repair path walks the page tree before
         // seeding; an empty result ends the walk and falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never)
-        // Then the sweep that conforms any rows already in the list to the
-        // vocabulary just seeded — empty here, so it is a no-op.
         .mockImplementationOnce(() => makeSelectChain([]) as never)
         .mockImplementationOnce(() => makeSelectChain([
           { id: 'peer-a', position: 7 },

@@ -318,13 +318,16 @@ describe('nested rows in the DOM', () => {
     );
 
     assert({
-      given: 'an expanded row whose sub-tasks are all gone',
-      should: 'still offer the inline add row, and still fetch nothing',
+      given: 'an expanded row with a description and no sub-tasks',
+      should: 'offer the add row, fetch nothing, and not claim sub-tasks went missing',
       actual: {
         addRow: !!screen.queryByPlaceholderText('+ Add a sub-task…'),
         fetches: fetchWithAuth.mock.calls.length,
+        // A row is expandable for having a DESCRIPTION too. Saying "no longer
+        // here" about sub-tasks that never existed is a statement about nothing.
+        vanished: !!screen.queryByText('These sub-tasks are no longer here.'),
       },
-      expected: { addRow: true, fetches: 0 },
+      expected: { addRow: true, fetches: 0, vanished: false },
     });
   });
 });
@@ -388,6 +391,37 @@ describe('nested writes', () => {
       should: 'end up rendering it',
       actual: !!screen.queryByText('Fresh'),
       expected: true,
+    });
+  });
+
+  it('bounds the reveal walk instead of paging a long sub-list all the way out', async () => {
+    // The walk asks for the next page until the tail is loaded, and the tail of
+    // a 2,000-sub-task list is twenty requests and two thousand rows away —
+    // spent because somebody added one item, against a route that lazily
+    // WRITES. Past the bound the row is one "Load more" away and the button
+    // already says so.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child' })], true));
+    postMock.mockResolvedValue(task({ id: 'new', title: 'Fresh' }));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+    await screen.findByText('child');
+
+    await userEvent.type(screen.getByPlaceholderText('+ Add a sub-task…'), 'Fresh{Enter}');
+    await waitFor(() => expect(fetchWithAuth.mock.calls.length).toBeGreaterThan(2));
+    // Long enough that an unbounded walk would still be going — with the bound
+    // removed this test does not fail, it HANGS, which is what the walk does.
+    await new Promise((r) => setTimeout(r, 400));
+    const settled = fetchWithAuth.mock.calls.length;
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert({
+      given: 'a sub-list that always reports another page',
+      should: 'stop after a bounded number of pages rather than walk to the end',
+      actual: {
+        stopped: fetchWithAuth.mock.calls.length === settled,
+        // 1 initial + 1 retry + at most MAX_REVEAL_PAGES walk pages.
+        withinBound: settled <= 8,
+      },
+      expected: { stopped: true, withinBound: true },
     });
   });
 

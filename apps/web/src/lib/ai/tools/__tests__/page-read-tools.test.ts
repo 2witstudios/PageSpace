@@ -11,6 +11,10 @@ vi.mock('@pagespace/db/db', () => ({
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
     insert: vi.fn(),
+    // The repair path seeds the ancestor's vocabulary and then conforms any
+    // rows already in the list to it — two set-based UPDATEs that match nothing
+    // in these fixtures, but still have to be callable.
+    update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
@@ -30,6 +34,7 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn(),
   isNotNull: vi.fn(),
   inArray: vi.fn(),
+  notInArray: vi.fn(),
   sql: vi.fn(),
   count: vi.fn(),
   max: vi.fn(),

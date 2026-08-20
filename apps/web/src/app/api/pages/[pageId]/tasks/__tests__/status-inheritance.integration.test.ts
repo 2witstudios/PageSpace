@@ -368,16 +368,85 @@ describe('sub-list status vocabulary inheritance', () => {
     await db.insert(taskItems).values({
       userId: owner.id, pageId: legacyChild.id, status: 'pending',
     });
+    // A row already on a slug the inherited vocabulary DOES define, and on the
+    // wrong side of its own completedAt. It must be left exactly as it is: the
+    // group disagreeing with completedAt is a state the product already
+    // tolerates (a status can be regrouped in place), and "repairing" it here
+    // would either reverse a deliberate regroup or fabricate a completion time.
+    const alreadyValid = await factories.createPage(drive.id, {
+      parentId: taskPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({
+      userId: owner.id, pageId: alreadyValid.id, status: 'shipped', completedAt: null,
+    });
 
     await getTasks(taskPage.id);
 
     const [row] = await db.select({ status: taskItems.status })
       .from(taskItems).where(eq(taskItems.pageId, legacyChild.id)).limit(1);
+    const [untouched] = await db.select({ status: taskItems.status })
+      .from(taskItems).where(eq(taskItems.pageId, alreadyValid.id)).limit(1);
     assert({
-      given: "a pre-existing task on a slug the inherited vocabulary does not define",
-      should: "move it to that vocabulary's open status",
-      actual: { status: row?.status, slugs: await slugsFor(taskPage.id) },
-      expected: { status: 'icebox', slugs: ['icebox', 'building', 'shipped'] },
+      given: "a pre-existing task on an undefined slug, beside one already on a defined slug",
+      should: "move the first and leave the second alone",
+      actual: {
+        moved: row?.status,
+        untouched: untouched?.status,
+        slugs: await slugsFor(taskPage.id),
+      },
+      expected: {
+        moved: 'icebox',
+        untouched: 'shipped',
+        slugs: ['icebox', 'building', 'shipped'],
+      },
+    });
+  });
+
+  it('conforms every row, past any per-pass bound, and keeps each side of the done line', async () => {
+    // The sweep runs exactly ONCE per list: every caller reaches it only while
+    // the vocabulary is empty, and the pass that writes the configs is the only
+    // pass there will ever be. So a bounded, row-at-a-time repair would leave
+    // anything past the bound holding an undefined slug forever — PATCH 400s on
+    // it and the badge renders the raw slug. 250 rows is past the 200 the
+    // row-at-a-time version was capped at.
+    if (!dbAvailable) return;
+    const { owner, drive, taskPage } = await seedCustomisedTree();
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
+    });
+    const children = await Promise.all(
+      Array.from({ length: 250 }, () => factories.createPage(drive.id, {
+        parentId: taskPage.id, type: 'TASK_LIST',
+      })),
+    );
+    await db.insert(taskItems).values(children.map((child, i) => ({
+      userId: owner.id,
+      pageId: child.id,
+      status: 'pending',
+      // Half already finished: a completed row must land on a DONE slug, not be
+      // swept to the open one along with everything else.
+      completedAt: i % 2 === 0 ? new Date() : null,
+    })));
+
+    await getTasks(taskPage.id);
+
+    const rows = await db
+      .select({ status: taskItems.status, completedAt: taskItems.completedAt })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(eq(pages.parentId, taskPage.id))
+      .limit(500);
+    const openRows = rows.filter((r) => r.completedAt === null);
+    const doneRows = rows.filter((r) => r.completedAt !== null);
+    assert({
+      given: '250 legacy rows on a slug the inherited vocabulary does not define',
+      should: 'move all of them, open to the open slug and complete to the done one',
+      actual: {
+        total: rows.length,
+        openSlugs: [...new Set(openRows.map((r) => r.status))],
+        doneSlugs: [...new Set(doneRows.map((r) => r.status))],
+      },
+      expected: { total: 250, openSlugs: ['icebox'], doneSlugs: ['shipped'] },
     });
   });
 
