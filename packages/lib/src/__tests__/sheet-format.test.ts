@@ -18,6 +18,7 @@ import {
   moveCellMetadata,
   numberFormatToExcelCode,
   parseCellFormat,
+  resolveCellFormat,
   parseSheetContent,
   sanitizeSheetData,
   serializeSheetContent,
@@ -165,6 +166,41 @@ describe('format validation', () => {
     // Semicolons separate declarations and are expected; braces, angle brackets
     // and quotes would mean something escaped the allow-list.
     expect(css).not.toMatch(/[{}<>"']/);
+  });
+
+  it('does not throw on a stored __proto__ key', () => {
+    // `FIELD_SCHEMAS[key]` on an object literal resolves `__proto__` through
+    // the prototype chain to a non-schema, which threw inside every load and
+    // every save of a document carrying such a key.
+    const hostile = JSON.parse('{"bold":true,"__proto__":{"polluted":"yes"},"constructor":{"x":1}}');
+
+    expect(() => parseCellFormat(hostile)).not.toThrow();
+    expect(parseCellFormat(hostile)).toEqual({ bold: true });
+  });
+
+  it('cannot reach Object.prototype through a stored format', () => {
+    const hostile = JSON.parse('{"bold":true,"__proto__":{"polluted":"yes"}}');
+
+    let sheet = createEmptySheet();
+    sheet = setCellFormats(sheet, ['A1'], parseCellFormat(hostile)!);
+    resolveCellFormat(parseCellFormat(hostile), { align: 'right' });
+
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+    expect(sheet.formats?.A1).toEqual({ bold: true });
+  });
+
+  it('keeps an unknown field out of the rendered CSS', () => {
+    // Unknown fields are preserved for forward compatibility, so they must be
+    // inert at every render boundary.
+    const format = parseCellFormat({
+      bold: true,
+      evilKey: '"><script>alert(1)</script>',
+      color: '#001122',
+    });
+
+    expect(format).toHaveProperty('evilKey');
+    expect(cellFormatToInlineCss(format)).toBe('font-weight:600;color:#001122');
+    expect(Object.keys(cellFormatToStyle(format))).toEqual(['fontWeight', 'color']);
   });
 
   it('treats an empty format as absent', () => {

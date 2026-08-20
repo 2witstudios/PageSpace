@@ -87,22 +87,36 @@ export const cellFormatSchema: z.ZodType<CellFormat> = z.object({
   fontFamily: z.enum(['sans', 'mono']).optional(),
 });
 
-/** Per-field schemas, so one bad field does not condemn the whole format. */
-const FIELD_SCHEMAS: Record<string, z.ZodTypeAny> = {
-  number: numberFormatSchema,
-  bold: z.boolean(),
-  italic: z.boolean(),
-  underline: z.boolean(),
-  strike: z.boolean(),
-  align: z.enum(['left', 'center', 'right']),
-  valign: z.enum(['top', 'middle', 'bottom']),
-  wrap: z.boolean(),
-  color: hexColorSchema,
-  background: hexColorSchema,
-  borders: bordersSchema,
-  fontSize: z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE),
-  fontFamily: z.enum(['sans', 'mono']),
-};
+/**
+ * Per-field schemas, so one bad field does not condemn the whole format.
+ *
+ * A `Map`, not an object literal: a stored key of `__proto__` or `constructor`
+ * resolves through an object's prototype chain to something truthy that is not
+ * a schema, and the lookup below would then throw on every load and every save
+ * of a document carrying such a key.
+ */
+const FIELD_SCHEMAS = new Map<string, z.ZodTypeAny>([
+  ['number', numberFormatSchema],
+  ['bold', z.boolean()],
+  ['italic', z.boolean()],
+  ['underline', z.boolean()],
+  ['strike', z.boolean()],
+  ['align', z.enum(['left', 'center', 'right'])],
+  ['valign', z.enum(['top', 'middle', 'bottom'])],
+  ['wrap', z.boolean()],
+  ['color', hexColorSchema],
+  ['background', hexColorSchema],
+  ['borders', bordersSchema],
+  ['fontSize', z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE)],
+  ['fontFamily', z.enum(['sans', 'mono'])],
+]);
+
+/**
+ * Keys never carried through, whatever a stored document says. Passing these
+ * on would let a crafted sheet reach `Object.prototype` through the spreads in
+ * `resolveCellFormat` and `setCellFormats`.
+ */
+const FORBIDDEN_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
 
 /**
  * Sanitize a stored format field by field.
@@ -130,8 +144,9 @@ export function parseCellFormat(value: unknown): CellFormat | undefined {
 
   for (const [key, fieldValue] of Object.entries(value as Record<string, unknown>)) {
     if (fieldValue === undefined) continue;
+    if (FORBIDDEN_KEYS.has(key)) continue;
 
-    const schema = FIELD_SCHEMAS[key];
+    const schema = FIELD_SCHEMAS.get(key);
     if (!schema) {
       // Unknown to this build — carry it through untouched.
       sanitized[key] = fieldValue;
