@@ -95,7 +95,7 @@ export const cellFormatSchema: z.ZodType<CellFormat> = z.object({
  * a schema, and the lookup below would then throw on every load and every save
  * of a document carrying such a key.
  */
-const FIELD_SCHEMAS = new Map<string, z.ZodTypeAny>([
+const FIELD_SCHEMAS = new Map<string, z.ZodType>([
   ['number', numberFormatSchema],
   ['bold', z.boolean()],
   ['italic', z.boolean()],
