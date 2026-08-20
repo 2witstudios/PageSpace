@@ -125,8 +125,14 @@ function sanitizeKeyedNumbers(
   for (const [key, value] of Object.entries(values)) {
     const normalized = key.toUpperCase();
     if (!keyPattern.test(normalized)) continue;
-    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) continue;
-    sanitized[normalized] = Math.round(value);
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+
+    // Round FIRST: guarding the raw value let 0.4 through, which then stored
+    // as 0 and was dropped by the next save — a width that survives one save
+    // and vanishes on the following one.
+    const rounded = Math.round(value);
+    if (rounded <= 0) continue;
+    sanitized[normalized] = rounded;
   }
 
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;

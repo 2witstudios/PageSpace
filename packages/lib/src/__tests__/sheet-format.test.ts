@@ -304,6 +304,45 @@ describe('format operations', () => {
     expect(sheet.frozenColumns).toBe(2);
   });
 
+  it('does not let a normalized key destroy its collision partner', () => {
+    // `A1` and `a1` normalize to the same address. Without a guard the loser
+    // is decided by iteration order and its formatting is gone.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      formats: { A1: { bold: true }, a1: { italic: true } } as Record<string, CellFormat>,
+    };
+
+    const moved = moveCellMetadata(sheet, new Map());
+
+    expect(Object.keys(moved.formats ?? {})).toEqual(['A1']);
+    expect(moved.formats?.A1).toEqual({ bold: true });
+    // The map changed, so the version must say so.
+    expect(moved.version).toBe(sheet.version + 1);
+  });
+
+  it('bumps the version whenever the format map actually changes', () => {
+    const withLowercase: SheetData = {
+      ...createEmptySheet(),
+      formats: { a1: { bold: true } } as Record<string, CellFormat>,
+    };
+    // A key rewritten by normalization is a change even with an empty map.
+    expect(moveCellMetadata(withLowercase, new Map()).version).toBe(withLowercase.version + 1);
+
+    let unchanged = createEmptySheet();
+    unchanged = setCellFormats(unchanged, ['A1'], { bold: true });
+    expect(moveCellMetadata(unchanged, new Map()).version).toBe(unchanged.version);
+  });
+
+  it('bumps the version when a format is dropped for an unmappable target', () => {
+    let sheet = createEmptySheet();
+    sheet = setCellFormats(sheet, ['A1'], { bold: true });
+
+    const moved = moveCellMetadata(sheet, new Map([['A1', 'not-an-address']]));
+
+    expect(moved.formats).toBeUndefined();
+    expect(moved.version).toBe(sheet.version + 1);
+  });
+
   it('shifts column widths and formats when a column is inserted', () => {
     let sheet = createEmptySheet();
     sheet = setColumnWidth(sheet, 0, 100);
@@ -436,12 +475,17 @@ describe('review findings', () => {
     expect(sanitized.rowHeights).toEqual({ '1': 30 });
   });
 
-  it('bounds a dimension at the point of use, not in storage', () => {
-    expect(clampColumnWidth(10)).toBe(MIN_COLUMN_WIDTH);
-    expect(clampColumnWidth(999999)).toBe(MAX_COLUMN_WIDTH);
-    expect(clampColumnWidth(180)).toBe(180);
-    expect(clampRowHeight(8)).toBe(MIN_ROW_HEIGHT);
-    expect(clampRowHeight(500000)).toBe(MAX_ROW_HEIGHT);
+  it('keeps a fractional width from vanishing on the following save', () => {
+    // Guarding the raw value let 0.4 through, which stored as 0 and was then
+    // dropped by the next save — stable only after two round trips.
+    const first = sanitizeSheetData({
+      ...createEmptySheet(),
+      columnWidths: { A: 0.4, B: 30.6 },
+    });
+    const second = sanitizeSheetData(first);
+
+    expect(first.columnWidths).toEqual({ B: 31 });
+    expect(second.columnWidths).toEqual(first.columnWidths);
   });
 
   it('moveCellMetadata lets a relocated format win a collision', () => {

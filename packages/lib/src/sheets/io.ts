@@ -1019,6 +1019,11 @@ function formatTomlValue(value: unknown): string {
     const parts = value.map((item) => formatTomlValue(item));
     return `[${parts.join(', ')}]`;
   }
+  // Before `isObject`: a Date IS an object, and `Object.entries(date)` is
+  // empty, so a TOML datetime would serialize as `{}` and be destroyed.
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? formatTomlString('') : value.toISOString();
+  }
   if (isObject(value)) {
     return formatInlineTable(value as Record<string, unknown>);
   }

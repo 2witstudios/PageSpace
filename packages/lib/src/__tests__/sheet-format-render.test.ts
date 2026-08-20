@@ -242,8 +242,28 @@ describe('xlsx export', () => {
     const buffer = generateExcel(evaluation.display, 'Sheet1', 'Bounded', typed);
     const cols = XLSX.read(buffer, { type: 'buffer', cellStyles: true }).Sheets.Sheet1['!cols'];
 
-    // MAX_COLUMN_WIDTH (2000px) -> (2000-5)/7 characters.
-    expect(cols?.[0]?.wch).toBe(285);
+    // Bounded by Excel's own 255-character maximum column width. The raw
+    // conversion of MAX_COLUMN_WIDTH (2000px) would be 285, which is out of
+    // spec even though SheetJS writes it without complaint.
+    expect(cols?.[0]?.wch).toBe(255);
+  });
+
+  it('exports a deliberately narrow column as authored', () => {
+    // Storage keeps a gutter narrower than the editor's minimum, so the export
+    // must not quietly widen it back — that would be the same overreach as
+    // rewriting it on save, just moved one layer out.
+    const sheet = createEmptySheet(2, 2);
+    sheet.cells.A1 = 'x';
+
+    const typed = typedExportFor(sheet);
+    typed.columnWidths = [10, undefined];
+
+    const evaluation = evaluateSheet(sheet);
+    const buffer = generateExcel(evaluation.display, 'Sheet1', 'Narrow', typed);
+    const cols = XLSX.read(buffer, { type: 'buffer', cellStyles: true }).Sheets.Sheet1['!cols'];
+
+    // (10 - 5) / 7 rounds to 1, the narrowest Excel accepts.
+    expect(cols?.[0]?.wch).toBe(1);
   });
 
   it('still works without the typed payload', () => {

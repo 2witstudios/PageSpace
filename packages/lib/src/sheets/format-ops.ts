@@ -22,6 +22,9 @@ const normalizeAddress = (address: string): string | null => {
 
 const columnLettersOf = (address: string): string => address.replace(/\d+$/, '');
 
+/** Keys that would touch a prototype rather than a property if assigned. */
+const FORBIDDEN_ADDRESSES = new Set(['__proto__', 'constructor', 'prototype']);
+
 /** Column letters for a 0-based column index ("A", "AB"). */
 export const columnKeyFromIndex = (index: number): string =>
   columnLettersOf(encodeCellAddress(0, index));
@@ -243,7 +246,10 @@ export function moveCellMetadata(
     ([address, format]) => [normalizeAddress(address) ?? address, format] as const
   );
 
-  let changed = false;
+  // Normalizing a stored key rewrites the map even when nothing moved, so the
+  // version must reflect that too — otherwise a changed sheet reports itself
+  // unchanged.
+  let changed = entries.some(([address], index) => address !== Object.keys(sheet.formats!)[index]);
 
   for (const [address, format] of entries) {
     if (!addressMap.has(address)) continue;
@@ -255,7 +261,11 @@ export function moveCellMetadata(
     }
 
     const normalized = normalizeAddress(target);
-    if (!normalized) continue;
+    if (!normalized) {
+      // The target is not an address, so this format is being discarded.
+      changed = true;
+      continue;
+    }
 
     // Two entries can map to the SAME target — a delete that collapses rows
     // does exactly that. Last-writer-wins would make the survivor depend on
@@ -269,8 +279,25 @@ export function moveCellMetadata(
 
   for (const [address, format] of entries) {
     if (addressMap.has(address)) continue;
-    if (relocated.has(address)) continue;
+
+    // Normalizing source keys can make two stored entries collide (`A1` and
+    // `a1`). Without this guard the loser is destroyed by iteration order —
+    // the same last-writer-wins the relocation pass above exists to prevent.
+    if (relocated.has(address)) {
+      changed = true;
+      continue;
+    }
+
+    // `formats[address] = …` with `address === '__proto__'` would set the
+    // returned object's prototype rather than a key. Unreachable today because
+    // `sanitizeFormats` rejects non-A1 keys, but this function is public.
+    if (FORBIDDEN_ADDRESSES.has(address)) {
+      changed = true;
+      continue;
+    }
+
     formats[address] = format;
+    relocated.add(address);
   }
 
   // Bump only on a real change. Bumping for an empty map — while the

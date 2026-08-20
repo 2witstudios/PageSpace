@@ -1,6 +1,6 @@
 import HTMLtoDOCX from 'html-to-docx';
 import * as XLSX from 'xlsx';
-import { clampColumnWidth } from '../sheets/format-ops';
+import { MAX_COLUMN_WIDTH } from '../sheets/format-ops';
 
 /**
  * Generates a DOCX buffer from HTML content
@@ -97,13 +97,21 @@ export interface TypedSheetExport {
  * does not survive the round trip.
  */
 
+/** Excel's own maximum column width, in characters. */
+const EXCEL_MAX_COLUMN_CHARS = 255;
+
 /**
  * Excel measures column width in characters; the grid measures it in pixels.
- * Stored widths are kept exactly as authored, so the bound is applied here at
- * the point of use rather than by rewriting the document.
+ *
+ * Only an upper bound is applied. Clamping up to the editor's minimum would
+ * contradict keeping storage faithful — a sheet may legitimately carry a
+ * narrower gutter than the editor lets you drag to, and rewriting it on export
+ * is the same overreach as rewriting it on save.
  */
-const pxToExcelWidth = (px: number): number =>
-  Math.max(1, Math.round((clampColumnWidth(px) - 5) / 7));
+const pxToExcelWidth = (px: number): number => {
+  const bounded = Math.min(px, MAX_COLUMN_WIDTH);
+  return Math.min(EXCEL_MAX_COLUMN_CHARS, Math.max(1, Math.round((bounded - 5) / 7)));
+};
 
 function applyTypedCells(
   worksheet: XLSX.WorkSheet,
