@@ -434,18 +434,27 @@ function NewSubTaskRow({
   const [busy, setBusy] = useState(false);
 
   /**
-   * An unsent title is unsaved content, so it registers like any other editor.
+   * Registered for the SUBMIT window only, deliberately not per keystroke.
    *
-   * `isAnyEditing` gates SWR revalidation for the task list, and a background
-   * refresh landing mid-sentence would re-render this row from server data and
-   * take the text with it. The id is per-instance because several of these
-   * exist at once — one per expanded node — and a shared key would have the
-   * first to finish end the session for all of them.
+   * The usual reason to register — SWR clobbering the editor — does not apply
+   * here: `title` is local state, not derived from any cache, and the sub-task
+   * cache this row lives in has every revalidation trigger switched off
+   * (useTaskSubTasks), so there is no background refresh to lose it to.
+   *
+   * What registering DOES do is global: `isAnyEditing` pauses the root list's
+   * SWR, disables its "Load More" with "Finish editing to load more", and
+   * defers auth refresh — for every other surface too. Holding that from the
+   * first typed character, on a box three rows down, costs more than it
+   * protects. The in-flight create is worth covering, because an auth refresh
+   * landing mid-request is a real way to lose it, and that window is short.
+   *
+   * The id is per-instance: several of these exist at once, one per expanded
+   * node, and a shared key would have the first to finish end them all.
    */
   const instanceId = useId();
   useEditingSession(
     `new-subtask-${listPageId}-${instanceId}`,
-    title.trim().length > 0 || busy,
+    busy,
     'form',
     { componentName: 'NewSubTaskRow', pageId: listPageId },
   );

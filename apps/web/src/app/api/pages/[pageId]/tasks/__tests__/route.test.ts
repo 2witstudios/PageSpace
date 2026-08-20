@@ -70,6 +70,9 @@ const capturedInserts: Record<string, unknown>[] = [];
 vi.mock('@pagespace/db/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({
+      // Status-config seeding is ON CONFLICT DO NOTHING (a catch inside a
+      // transaction would abort it — see seedDefaultTaskStatusConfigs).
+      onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
       returning: vi.fn(),
     })),
   }));
@@ -120,6 +123,9 @@ vi.mock('@pagespace/db/db', () => {
             values: vi.fn((values: Record<string, unknown>) => {
               capturedInserts.push(values);
               return {
+                // Status-config seeding is ON CONFLICT DO NOTHING; see
+                // seedDefaultTaskStatusConfigs for why it cannot be a try/catch.
+                onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockImplementation(() => {
                   insertCallCount++;
                   // First insert is for pages, second is for taskItems
@@ -284,6 +290,7 @@ describe('Task API Routes', () => {
     // Re-set up db.insert to default chain
     vi.mocked(db.insert).mockReturnValue({
       values: vi.fn(() => ({
+        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
         returning: vi.fn(),
       })),
     } as never);
@@ -298,6 +305,9 @@ describe('Task API Routes', () => {
           values: vi.fn((values: Record<string, unknown>) => {
             capturedInserts.push(values);
             return {
+              // Status-config seeding is ON CONFLICT DO NOTHING; see
+              // seedDefaultTaskStatusConfigs for why it cannot be a try/catch.
+              onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
               returning: vi.fn().mockImplementation(() => {
                 insertCallCount++;
                 return Promise.resolve(insertCallCount === 1 ? transactionPageResult : transactionTaskResult);
@@ -388,6 +398,7 @@ describe('Task API Routes', () => {
         const tx = {
           insert: vi.fn(() => ({
             values: vi.fn(() => ({
+              onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
               returning: vi.fn().mockResolvedValue([mockInsertedTaskList]),
             })),
           })),
@@ -505,26 +516,28 @@ describe('Task API Routes', () => {
       expect(db.insert).toHaveBeenCalledTimes(1);
     });
 
-    it('swallows duplicate key errors during status config migration', async () => {
+    it('seeds the migration path through ON CONFLICT DO NOTHING', async () => {
+      // This runs on the connection, but the same insert is used inside
+      // db.transaction elsewhere, where catching a 23505 would abort the
+      // transaction and hand the caller a task_lists row that never committed.
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
-
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
       vi.mocked(db.query.taskStatusConfigs.findMany)
-        .mockResolvedValueOnce([] as never)  // existingConfigs check returns empty
-        .mockResolvedValueOnce([] as never); // statusConfigs for response
+        .mockResolvedValueOnce([] as never)
+        .mockResolvedValueOnce([] as never);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
-      // Simulate duplicate key error
+      const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValueOnce(new Error('unique constraint violation')),
+        values: vi.fn(() => ({ onConflictDoNothing })),
       } as never);
 
       const response = await GET(createRequest(), { params: mockParams });
 
-      // Should not throw - error is swallowed
       expect(response.status).toBe(200);
+      expect(onConflictDoNothing).toHaveBeenCalled();
     });
 
     it('rethrows non-duplicate errors during status config migration', async () => {
@@ -539,7 +552,9 @@ describe('Task API Routes', () => {
 
       // Simulate a real error (not duplicate key)
       vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn().mockRejectedValueOnce(new Error('connection refused')),
+        values: vi.fn(() => ({
+          onConflictDoNothing: vi.fn().mockRejectedValueOnce(new Error('connection refused')),
+        })),
       } as never);
 
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');
@@ -1207,6 +1222,8 @@ describe('Task API Routes', () => {
               insertCallCount++;
               if (insertCallCount === 2) capturedTaskInsert = vals;
               return {
+                // Status-config seeding uses ON CONFLICT DO NOTHING.
+                onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
               };
             }),
@@ -1263,6 +1280,7 @@ describe('Task API Routes', () => {
               if (insertCallCount === 1) capturedPageInsert = vals;
               if (insertCallCount === 2) capturedTaskInsert = vals;
               return {
+                onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
               };
             }),
@@ -1329,6 +1347,8 @@ describe('Task API Routes', () => {
               insertCallCount++;
               if (insertCallCount === 1) capturedPageInsert = vals;
               return {
+                // Status-config seeding uses ON CONFLICT DO NOTHING.
+                onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
               };
             }),
@@ -1513,6 +1533,8 @@ describe('Task API Routes', () => {
               insertCallCount++;
               if (insertCallCount === 1) capturedPageInsert = vals;
               return {
+                // Status-config seeding uses ON CONFLICT DO NOTHING.
+                onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockResolvedValue(insertCallCount === 1 ? transactionPageResult : transactionTaskResult),
               };
             }),

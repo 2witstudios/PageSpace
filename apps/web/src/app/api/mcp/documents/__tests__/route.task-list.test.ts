@@ -78,7 +78,10 @@ vi.mock('@pagespace/db/db', () => ({
           return { returning: (...args: unknown[]) => mockInsertReturning(...args) };
         }
         mockInsertStatusConfigValues(vals);
-        return Promise.resolve(undefined);
+        // Seeding goes through ON CONFLICT DO NOTHING (see
+        // seedDefaultTaskStatusConfigs — catching 23505 inside a transaction
+        // would abort it), so the values builder must offer that.
+        return { onConflictDoNothing: () => Promise.resolve(undefined) };
       },
     }),
     // Chainable, because ensureTaskListForPage now walks the page tree to inherit

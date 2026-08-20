@@ -13,7 +13,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
-import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus, resolveSeedCompletedAt } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
@@ -509,6 +509,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     // isCompletedStatus, and rendered by the dropdown's raw-slug fallback with
     // no matching option. addTaskItemUnderParent already resolves it this way.
     const seedStatus = status || await resolveSeedStatus(tx, taskList.id);
+    // A resolved default can itself be a done-group slug: resolveSeedStatus
+    // falls back to the first config by position, and a vocabulary with no
+    // open status leaves that in the done group. Without stamping completedAt
+    // the row reads as complete to isCompletedStatus while the parent's
+    // subTaskCompletedCount — which counts `completedAt IS NOT NULL` — does not
+    // see it, and the two drift apart.
+    const seedCompletedAt = status
+      ? initialCompletedAt
+      : await resolveSeedCompletedAt(tx, taskList.id, seedStatus);
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       id: newTaskPageId,
@@ -530,7 +539,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,
       dueDate: parsedDueDate,
-      completedAt: initialCompletedAt,
+      completedAt: seedCompletedAt,
       metadata: {
         createdAt: new Date().toISOString(),
         note,

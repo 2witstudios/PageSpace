@@ -81,8 +81,15 @@ export const settleSelfWrite = (
   now: number,
 ): SelfWrite[] => {
   const pruned = pruneSelfWrites(records, now);
-  if (updatedAt === null) return pruned.filter((r) => r.writeId !== writeId);
-  return pruned.map((r) => (r.writeId === writeId ? { ...r, updatedAt } : r));
+  if (updatedAt !== null) {
+    return pruned.map((r) => (r.writeId === writeId ? { ...r, updatedAt } : r));
+  }
+  // Only an UNRESOLVED record is dropped. A write can settle twice — stamped
+  // inside the cache updater, then again from the catch if anything after the
+  // PATCH rejects — and erasing the stamp there would leave a write that really
+  // reached the server unrecognisable, so its own echo would read as foreign
+  // and cost a full revalidation.
+  return pruned.filter((r) => !(r.writeId === writeId && r.updatedAt === null));
 };
 
 /**

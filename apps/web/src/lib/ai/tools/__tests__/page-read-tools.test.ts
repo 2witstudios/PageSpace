@@ -1307,7 +1307,7 @@ describe('page-read-tools', () => {
         // legacy-backfill insert this triggers when statusConfigs is empty
         // (see the dedicated backfill test below, which overrides this).
         mockDb.insert = vi.fn(() => ({
-          values: () => Promise.resolve(undefined),
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
         })) as unknown as typeof mockDb.insert;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
@@ -1467,7 +1467,8 @@ describe('page-read-tools', () => {
               return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
             }
             statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
-            return Promise.resolve(undefined);
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
           },
         })) as unknown as typeof mockDb.insert;
 
@@ -1508,7 +1509,8 @@ describe('page-read-tools', () => {
         mockDb.insert = vi.fn(() => ({
           values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
             statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
-            return Promise.resolve(undefined);
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
           },
         })) as unknown as typeof mockDb.insert;
 

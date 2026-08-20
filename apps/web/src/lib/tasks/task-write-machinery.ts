@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useRef } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { toast } from 'sonner';
 import { patch } from '@/lib/auth/auth-fetch';
@@ -44,6 +44,9 @@ import { taskWriteErrorMessage, isRevisionConflict } from './task-write-errors';
  */
 type MutatePages = SWRInfiniteKeyedMutator<TaskListData[]>;
 
+/** Cap on queued-but-unclassified echoes; see where it is applied. */
+const MAX_DEFERRED_ECHOES = 200;
+
 export interface TaskWriteMachinery {
   /** Current user id, for telling our own socket events from everyone else's. */
   currentUserId: string | null | undefined;
@@ -52,9 +55,17 @@ export interface TaskWriteMachinery {
   /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
   noteSelfWriteSettled: (writeId: number, updatedAt: string | null) => void;
   /**
+   * Register a cache to refresh when a deferred echo turns out to be foreign.
+   *
+   * The queue is view-wide but each writer owns a different cache, and only one
+   * writer's `finally` performs the flush — so a per-writer callback would miss
+   * every other cache. Whoever flushes refreshes them all. Returns an
+   * unregister function.
+   */
+  registerCacheRefresher: (refresh: () => void) => () => void;
+  /**
    * Run the revalidation an echo deferred, if one is pending and no write is
-   * still open. Returns whether it actually revalidated, so a caller bound to
-   * its own cache can refresh that too.
+   * still open. Refreshes the view and every registered cache.
    *
    * Separate from noteSelfWriteSettled, and called only AFTER the cache write
    * has committed. Revalidating from inside SWR's updater starts a refetch that
@@ -63,7 +74,7 @@ export interface TaskWriteMachinery {
    * the exact data loss the deferral exists to prevent. The same applies across
    * writes, hence the in-flight check: see hasAnyInFlightSelfWrite.
    */
-  flushDeferredRevalidate: () => boolean;
+  flushDeferredRevalidate: () => void;
   /**
    * Classify an inbound task event. Returns true when the caller should
    * revalidate; false when the event was this tab's own echo (already applied,
@@ -99,6 +110,13 @@ export function useTaskWriteMachinery(
    */
   const deferredEchoesRef = useRef<InboundTaskEvent[]>([]);
   const nextWriteIdRef = useRef(0);
+  const cacheRefreshersRef = useRef(new Set<() => void>());
+
+  const registerCacheRefresher = useCallback((refresh: () => void) => {
+    const set = cacheRefreshersRef.current;
+    set.add(refresh);
+    return () => { set.delete(refresh); };
+  }, []);
 
   const noteSelfWriteStart = useCallback((taskId: string) => {
     const now = Date.now();
@@ -113,15 +131,15 @@ export function useTaskWriteMachinery(
     );
   }, []);
 
-  const flushDeferredRevalidate = useCallback((): boolean => {
-    if (deferredEchoesRef.current.length === 0) return false;
+  const flushDeferredRevalidate = useCallback((): void => {
+    if (deferredEchoesRef.current.length === 0) return;
     // Not while ANY write is still open. The queue is view-wide, so an unrelated
     // write settling would otherwise start the refetch while this one is still
     // inside its updater — and its commit would then overwrite the foreign
     // change the refetch just fetched. The queue survives, so whichever write
     // settles last performs the flush.
     const now = Date.now();
-    if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return false;
+    if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return;
 
     const queued = deferredEchoesRef.current;
     deferredEchoesRef.current = [];
@@ -129,10 +147,12 @@ export function useTaskWriteMachinery(
     // been ours needs nothing; only one still unaccounted for is a real
     // concurrent edit worth refetching for.
     if (!deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now)) {
-      return false;
+      return;
     }
     revalidateAll();
-    return true;
+    // Every open node's cache, not just the writer that happened to flush:
+    // the echo could have belonged to any of them.
+    for (const refresh of cacheRefreshersRef.current) refresh();
   }, [revalidateAll, currentUserId]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
@@ -141,7 +161,10 @@ export function useTaskWriteMachinery(
     if (verdict === 'self-in-flight') {
       // We cannot tell our own echo from a foreign edit that raced it YET.
       // Queue the event and ask again once our write has a stamp to compare.
-      deferredEchoesRef.current = [...deferredEchoesRef.current, event];
+      // Bounded like the write log: a write that never settles (a hung fetch)
+      // means nothing drains this, and a chatty room would grow it without end.
+      deferredEchoesRef.current =
+        [...deferredEchoesRef.current, event].slice(-MAX_DEFERRED_ECHOES);
       return false;
     }
     return true;
@@ -152,11 +175,12 @@ export function useTaskWriteMachinery(
       currentUserId,
       noteSelfWriteStart,
       noteSelfWriteSettled,
+      registerCacheRefresher,
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
-    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate,
-     shouldRevalidateForEvent],
+    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, registerCacheRefresher,
+     flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
 
@@ -200,12 +224,21 @@ export function useTaskWriter(params: {
    * patches a per-node cache that has every automatic revalidation turned off,
    * so without this a foreign edit that raced a nested write is dropped for
    * good rather than deferred, which is the opposite of what the deferral
-   * promises. Omitted at the root, where the two are the same cache.
+   * promises. Registered with the machinery rather than called here, because
+   * the writer that performs the flush is not necessarily the one whose cache
+   * the echo belonged to. Omitted at the root, where the two are one cache.
    */
   refreshOwnCache?: () => void;
 }): TaskWriter {
-  const { noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate } = params.machinery;
+  const {
+    noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate, registerCacheRefresher,
+  } = params.machinery;
   const { mutatePages, onRevisionConflict, refreshOwnCache } = params;
+
+  useEffect(() => {
+    if (!refreshOwnCache) return;
+    return registerCacheRefresher(refreshOwnCache);
+  }, [registerCacheRefresher, refreshOwnCache]);
 
   const writeTaskField = useCallback(async ({
     loc, body, optimistic, fallbackMessage,
@@ -244,9 +277,9 @@ export function useTaskWriter(params: {
       return false;
     } finally {
       // After the cache write has committed, never from inside the updater.
-      if (flushDeferredRevalidate()) refreshOwnCache?.();
+      flushDeferredRevalidate();
     }
-  }, [mutatePages, onRevisionConflict, refreshOwnCache, noteSelfWriteStart,
+  }, [mutatePages, onRevisionConflict, noteSelfWriteStart,
       noteSelfWriteSettled, flushDeferredRevalidate]);
 
   return { writeTaskField };

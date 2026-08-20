@@ -58,6 +58,22 @@ describe('startSelfWrite / settleSelfWrite', () => {
     });
   });
 
+  it('keeps a stamped record when the same write settles again as a failure', () => {
+    // A write settles twice: stamped inside the cache updater, then again from
+    // the catch if anything AFTER the PATCH rejects. Dropping it on that second
+    // call would leave a write that really reached the server unrecognisable,
+    // so its own echo would read as foreign and cost a full revalidation.
+    let log = startSelfWrite([], { writeId: 1, taskId: 'task-1', at: NOW }, NOW);
+    log = settleSelfWrite(log, 1, STAMP, NOW);
+    log = settleSelfWrite(log, 1, null, NOW);
+    assert({
+      given: 'a stamped write settled a second time as failed',
+      should: 'keep the stamp so its echo is still recognised',
+      actual: log.map((r) => [r.writeId, r.updatedAt]),
+      expected: [[1, STAMP]],
+    });
+  });
+
   it('settles only the write named, leaving a sibling on the SAME task open', () => {
     // The bug this keys on: two writes to one task overlap easily (a
     // double-clicked checkbox is complete-then-reopen). Keying the records on

@@ -138,9 +138,16 @@ export interface UseTaskSubTasksResult {
    *
    * Deliberately not a general refresh: it is meant to be wired to a user pressing "try
    * again" after a visible failure, which is the same class of explicit action as Load more.
-   * Sub-task rows going stale when something changes elsewhere is a different problem with a
-   * different answer (subscribing to the sub-list's own events, which belongs with recursive
-   * expansion state) — do not solve that by calling this on a timer or a socket event.
+   * Do NOT call it on a timer, and do not reach for it to keep rows generally fresh.
+   *
+   * ONE socket-driven caller is allowed, and it is narrow enough to state exactly: the write
+   * machinery's deferred-echo flush (lib/tasks/task-write-machinery.ts). That fires only after
+   * an event arrived DURING one of this tab's own writes and then failed to match any write
+   * this tab made — i.e. a genuine concurrent edit, at most once per write, never on an
+   * ordinary echo. Its lazy-write cost is nil here for the reason the gate exists: this node is
+   * already expanded, so its task_lists row and configs were created by the fetch that
+   * populated it. The hazard the gate guards — fetching for a LEAF and creating rows for a task
+   * with no children — cannot arise from a refresh of pages already loaded.
    */
   retry: () => void;
   /**

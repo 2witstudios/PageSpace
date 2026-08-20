@@ -53,9 +53,12 @@ export const DEPTH_INDENT_PX = 20;
  *
  * A page tree is acyclic, so today the same task id genuinely cannot appear at
  * two depths at once. The path is still the right key: it stays correct if a
- * future filtered or searched view renders the same subtree in two places, it
- * gives React an unambiguous `key`, and it makes a subtree addressable by
- * prefix if collapsing one ever needs to be more than "clear everything".
+ * future filtered or searched view renders the same subtree in two places, and
+ * it gives React an unambiguous `key`.
+ *
+ * Note what collapsing does NOT do: `toggleNodePath` removes one path, so a
+ * collapsed node keeps its descendants' paths in the set and re-expanding
+ * restores the shape it had. Nothing prunes a subtree today.
  */
 export type TaskNodePath = string;
 

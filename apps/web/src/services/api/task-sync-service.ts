@@ -32,36 +32,27 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 }
 
 /**
- * Is this a `(taskListId, slug)` unique-constraint violation?
+ * Seed the default `task_status_configs` for a `task_lists` row.
  *
- * The `.cause` arm is the one that fires in production: drizzle 0.45 rethrows
- * pg errors as DrizzleQueryError, whose own message is "Failed query: insert
- * into…" with the driver error — and its SQLSTATE — hanging off `cause`. A
- * message test alone therefore never matches a real conflict, only a
- * hand-rolled one, which is why the message arm is kept as a fallback rather
- * than relied on.
- */
-function isUniqueViolation(err: unknown): boolean {
-  const code = (err as { cause?: { code?: unknown } })?.cause?.code
-  if (code === '23505') return true
-  const message = err instanceof Error ? err.message : ''
-  return message.includes('unique') || message.includes('duplicate')
-}
-
-/**
- * Seed the default `task_status_configs` for a `task_lists` row. Tolerates a
- * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may
- * have seeded the same list a moment earlier; the caller only needed the
- * configs to exist.
+ * Conflict tolerance is `onConflictDoNothing`, NOT a try/catch, and the
+ * difference matters more than it looks. A concurrent caller may have seeded
+ * the same list a moment earlier and we only need the rows to exist — but
+ * catching that is unsafe here: every caller runs inside `db.transaction`, and
+ * a raised constraint violation aborts the whole transaction. Swallowing it
+ * lets the callback return normally, whereupon Postgres turns the COMMIT into a
+ * ROLLBACK and the caller is handed a `task_lists` row that does not exist.
+ * Anything reading that phantom list — `resolveSeedStatus`, for one — then sees
+ * no configs and falls back to a slug the real list may not define.
+ *
+ * (The catch that stood here briefly could not match a real conflict at all,
+ * because drizzle wraps pg errors and puts the SQLSTATE on `.cause` — so it
+ * rethrew, which was accidentally the safe outcome. Making the match work
+ * without moving off the catch would have introduced the abort.)
  */
 export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
-  try {
-    await tx.insert(taskStatusConfigs).values(
-      DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s }))
-    )
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err
-  }
+  await tx.insert(taskStatusConfigs)
+    .values(DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s })))
+    .onConflictDoNothing()
 }
 
 /**
@@ -150,11 +141,9 @@ export async function seedInheritedTaskStatusConfigs(
   forPageId: string,
 ): Promise<void> {
   const seed = await resolveInheritedStatusSeed(tx, forPageId)
-  try {
-    await tx.insert(taskStatusConfigs).values(seed.map(s => ({ taskListId, ...s })))
-  } catch (err) {
-    if (!isUniqueViolation(err)) throw err
-  }
+  await tx.insert(taskStatusConfigs)
+    .values(seed.map(s => ({ taskListId, ...s })))
+    .onConflictDoNothing()
 }
 
 /**
@@ -294,6 +283,32 @@ async function normalizeStatusForList(
  * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
  * status its own list does not define.
  */
+/**
+ * Should a task created with this resolved status be stamped complete?
+ *
+ * `resolveSeedStatus` falls back to the list's first config by position, and on
+ * a vocabulary with no open status that is a done-group slug. A row carrying a
+ * done status with a null `completedAt` reads as complete to isCompletedStatus
+ * while the parent's `subTaskCompletedCount` — which counts
+ * `completedAt IS NOT NULL` — does not count it, so the two disagree.
+ */
+export async function resolveSeedCompletedAt(
+  tx: Tx,
+  taskListId: string,
+  seedStatus: string,
+): Promise<Date | null> {
+  const config = await tx.query.taskStatusConfigs.findFirst({
+    where: and(
+      eq(taskStatusConfigs.taskListId, taskListId),
+      eq(taskStatusConfigs.slug, seedStatus),
+    ),
+  })
+  if (config) return config.group === 'done' ? new Date() : null
+  // No configs at all: the built-in vocabulary applies, where only 'completed'
+  // is done.
+  return seedStatus === 'completed' ? new Date() : null
+}
+
 export async function resolveSeedStatus(
   tx: Tx,
   taskListId: string,

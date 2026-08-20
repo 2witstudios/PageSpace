@@ -388,6 +388,60 @@ describe('echo suppression', () => {
     });
   });
 
+  it('refreshes EVERY registered cache, not just the writer that flushed', async () => {
+    // The queue is view-wide but each node owns a different cache, and only one
+    // writer's `finally` performs the flush. A per-writer callback would leave
+    // the cache the echo actually belonged to untouched — the foreign edit
+    // dropped rather than deferred, which is what the deferral exists to stop.
+    let resolveA: (v: TaskItem) => void = () => {};
+    let resolveB: (v: TaskItem) => void = () => {};
+    patchMock
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveA = r; }))
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveB = r; }));
+    const revalidateAll = vi.fn();
+    const refreshA = vi.fn();
+    const refreshB = vi.fn();
+    const { mutate: mutateA } = makeMutate(pages([task({ id: 't1' })]));
+    const { mutate: mutateB } = makeMutate(pages([task({ id: 't2' })]));
+    const view = renderHook(() => {
+      const machinery = useTaskWriteMachinery('user-me', revalidateAll);
+      return {
+        machinery,
+        a: useTaskWriter({ mutatePages: mutateA as never, machinery, refreshOwnCache: refreshA }),
+        b: useTaskWriter({ mutatePages: mutateB as never, machinery, refreshOwnCache: refreshB }),
+      };
+    });
+
+    let pa: Promise<boolean>; let pb: Promise<boolean>;
+    await act(async () => {
+      pa = view.result.current.a.writeTaskField({
+        loc: { listPageId: 'nodeA', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      pb = view.result.current.b.writeTaskField({
+        loc: { listPageId: 'nodeB', taskId: 't2' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      await Promise.resolve();
+    });
+
+    // A foreign echo for node A's row, deferred while both writes are open.
+    view.result.current.machinery.shouldRevalidateForEvent(echo('someone-else'));
+
+    // B settles LAST, so B performs the flush — A's cache must still refresh.
+    await act(async () => { resolveA(task({ id: 't1', updatedAt: 'sa' })); await pa!; });
+    await act(async () => { resolveB(task({ id: 't2', updatedAt: 'sb' })); await pb!; });
+
+    assert({
+      given: 'a foreign echo deferred across two nodes, the other one flushing',
+      should: 'refresh the view and both caches',
+      actual: [revalidateAll.mock.calls.length, refreshA.mock.calls.length, refreshB.mock.calls.length],
+      expected: [1, 1, 1],
+    });
+  });
+
   it("also refreshes the writer's own cache when a foreign echo survives", async () => {
     // A nested writer's cache has every automatic revalidation off, so the
     // machinery refreshing the ROOT list is not enough — without this the

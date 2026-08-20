@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { assert } from '@/hooks/__tests__/riteway';
 
 // Schema tables are opaque markers in these tests; the mock tx ignores them.
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', driveId: 'pages.driveId', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
@@ -229,35 +230,27 @@ describe('seedDefaultTaskStatusConfigs', () => {
     ]);
   });
 
-  it('swallows a unique-constraint violation (concurrent caller already seeded this list)', async () => {
-    const { taskStatusConfigInserts } = makeTx();
-    const tx = {
-      insert: vi.fn(() => ({
-        values: () => Promise.reject(new Error('duplicate key value violates unique constraint "task_status_configs_task_list_slug"')),
-      })),
-    };
-    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
-    expect(taskStatusConfigInserts).toHaveLength(0);
+  it('delegates conflict tolerance to Postgres rather than catching it', async () => {
+    // Not a style preference. Every caller runs inside db.transaction, and a
+    // raised 23505 aborts the whole transaction — so catching it lets the
+    // callback return normally while Postgres turns the COMMIT into a ROLLBACK,
+    // handing the caller a task_lists row that does not exist. ON CONFLICT DO
+    // NOTHING never raises, so the transaction stays valid.
+    const onConflictDoNothing = vi.fn(() => Promise.resolve());
+    const tx = { insert: vi.fn(() => ({ values: () => ({ onConflictDoNothing }) })) };
+    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
+    assert({
+      given: 'a seed insert',
+      should: 'be issued as ON CONFLICT DO NOTHING',
+      actual: onConflictDoNothing.mock.calls.length,
+      expected: 1,
+    });
   });
 
-  it('swallows the DrizzleQueryError shape a real conflict actually arrives as', async () => {
-    // The production shape: drizzle wraps the pg error, so its own message is
-    // "Failed query: insert into…" and the SQLSTATE is on `cause`. A check that
-    // only looked at the message would rethrow here and take down the caller.
-    const wrapped = Object.assign(
-      new Error('Failed query: insert into "task_status_configs" ...'),
-      { cause: Object.assign(new Error('duplicate key value'), { code: '23505' }) },
-    );
-    const tx = {
-      insert: vi.fn(() => ({ values: () => Promise.reject(wrapped) })),
-    };
-    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
-  });
-
-  it('rethrows an unrelated error', async () => {
+  it('still propagates an unrelated failure', async () => {
     const tx = {
       insert: vi.fn(() => ({
-        values: () => Promise.reject(new Error('connection reset')),
+        values: () => ({ onConflictDoNothing: () => Promise.reject(new Error('connection reset')) }),
       })),
     };
     await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).rejects.toThrow('connection reset');

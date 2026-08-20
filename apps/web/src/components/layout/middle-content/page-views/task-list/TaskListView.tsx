@@ -657,7 +657,7 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // View-wide: the log of writes this tab made (so its own socket echoes can be
   // told apart from everyone else's — including the same account in another
-  // tab), plus the deferred-revalidation flag.
+  // tab), plus the queue of echoes that arrived too early to classify.
   const writeMachinery = useTaskWriteMachinery(user?.id, mutateTasks);
 
   /**
@@ -807,6 +807,9 @@ function TaskListView({ page }: TaskListViewProps) {
       });
       if (!title) setNewTaskTitle('');
       mutateTasks();
+      // A new row here is a new sub-task OF this page, so the header's guard
+      // needs to see it — same reason completion refreshes it.
+      refreshSelfTask();
     } catch {
       toast.error('Failed to create task');
     }
@@ -895,6 +898,9 @@ function TaskListView({ page }: TaskListViewProps) {
     try {
       await del(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`);
       mutateTasks();
+      // Deleting the last open sub-task unblocks this page's own task just as
+      // completing it would; without this the header keeps refusing.
+      refreshSelfTask();
       toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete task');

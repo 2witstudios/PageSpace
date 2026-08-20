@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect } from 'react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
@@ -80,6 +80,11 @@ export function useSelfTask(
     { revalidateOnFocus: true, shouldRetryOnError: false },
   );
 
+  // This key is its own cache, so a deferred foreign echo has to reach it —
+  // whichever writer ends up performing the flush.
+  const refresh = useCallback(() => { void mutate(); }, [mutate]);
+  useEffect(() => machinery.registerCacheRefresher(refresh), [machinery, refresh]);
+
   const task = data?.task ?? null;
   const statusConfigs = data?.statusConfigs ?? [];
   const listPageId = data?.listPageId ?? null;
@@ -130,9 +135,7 @@ export function useSelfTask(
       machinery.noteSelfWriteSettled(writeId, null);
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {
-      // Refresh this header's own row too when a foreign echo survived: the
-      // machinery's revalidation covers the list, not this key.
-      if (machinery.flushDeferredRevalidate()) void mutate();
+      machinery.flushDeferredRevalidate();
     }
   }, [task, listPageId, canEdit, data, statusConfigs, mutate, machinery]);
 
