@@ -7,6 +7,12 @@ import { PageType } from '../utils/enums';
 import type { CellFormat, SheetData, SheetCellUpdate } from './types';
 import { cellRegex, decodeCellAddress } from './address';
 import { parseCellFormat } from './format';
+import {
+  MAX_COLUMN_WIDTH,
+  MAX_ROW_HEIGHT,
+  MIN_COLUMN_WIDTH,
+  MIN_ROW_HEIGHT,
+} from './format-ops';
 
 /**
  * Clone cells record
@@ -46,8 +52,13 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     cells: sanitizedCells,
     formats: sanitizeFormats(sheet.formats),
     columnFormats: sanitizeKeyedFormats(sheet.columnFormats, columnKeyRegex),
-    columnWidths: sanitizeKeyedNumbers(sheet.columnWidths, columnKeyRegex),
-    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex),
+    columnWidths: sanitizeKeyedNumbers(
+      sheet.columnWidths,
+      columnKeyRegex,
+      MIN_COLUMN_WIDTH,
+      MAX_COLUMN_WIDTH
+    ),
+    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT),
   };
 }
 
@@ -103,10 +114,18 @@ function sanitizeKeyedFormats(
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
-/** Per-column/row size maps; these reach the serializer unchecked otherwise. */
+/**
+ * Per-column/row size maps; these reach the serializer unchecked otherwise.
+ *
+ * Clamped to the same bounds the setters enforce. Loaded content never goes
+ * through `setColumnWidth`/`setRowHeight`, so without this a stored negative
+ * or absurd size reaches the grid and the XLSX export intact.
+ */
 function sanitizeKeyedNumbers(
   values: Record<string, number> | undefined,
-  keyPattern: RegExp
+  keyPattern: RegExp,
+  min: number,
+  max: number
 ): Record<string, number> | undefined {
   if (!values) return undefined;
 
@@ -116,7 +135,7 @@ function sanitizeKeyedNumbers(
     const normalized = key.toUpperCase();
     if (!keyPattern.test(normalized)) continue;
     if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-    sanitized[normalized] = Math.round(value);
+    sanitized[normalized] = Math.min(max, Math.max(min, Math.round(value)));
   }
 
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;

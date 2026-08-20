@@ -350,6 +350,22 @@ describe('review findings', () => {
     expect(sanitized.rowHeights).toEqual({ '1': 30 });
   });
 
+  it('clamps stored dimensions that bypassed the setters', () => {
+    // Loaded content never goes through setColumnWidth/setRowHeight, so a
+    // negative or absurd stored size would otherwise reach the grid and the
+    // XLSX export intact.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      columnWidths: { A: -500, B: 999999, C: 180 },
+      rowHeights: { '1': -20, '2': 500000, '3': 32 },
+    };
+
+    const sanitized = sanitizeSheetData(sheet);
+
+    expect(sanitized.columnWidths).toEqual({ A: 24, B: 2000, C: 180 });
+    expect(sanitized.rowHeights).toEqual({ '1': 16, '2': 1000, '3': 32 });
+  });
+
   it('moveCellMetadata lets a relocated format win a collision', () => {
     // A structural edit maps only the cells that moved. Without explicit
     // handling, a moved A1 -> A5 and a stationary A5 both write key A5 and
