@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  addressesInRange,
   applyNumberFormat,
   cellFormatSchema,
   cellFormatToInlineCss,
@@ -518,6 +519,62 @@ describe('review findings', () => {
 
     const moved = moveCellMetadata(sheet, new Map([['A1', 'A2']]));
     expect(moved.version).toBe(before + 1);
+  });
+});
+
+describe('addressesInRange', () => {
+  // Zero callers today; this is what a formatting toolbar will use to apply a
+  // format across a selection, so an off-by-one here misformats every range.
+
+  it('returns a single cell for a degenerate range', () => {
+    expect(addressesInRange({ row: 0, column: 0 }, { row: 0, column: 0 })).toEqual(['A1']);
+  });
+
+  it('walks a rectangle row-major and includes both corners', () => {
+    expect(addressesInRange({ row: 0, column: 0 }, { row: 1, column: 2 })).toEqual([
+      'A1', 'B1', 'C1',
+      'A2', 'B2', 'C2',
+    ]);
+  });
+
+  it('does not care which corner is given first', () => {
+    const forward = addressesInRange({ row: 0, column: 0 }, { row: 2, column: 1 });
+
+    for (const [start, end] of [
+      [{ row: 2, column: 1 }, { row: 0, column: 0 }],
+      [{ row: 0, column: 1 }, { row: 2, column: 0 }],
+      [{ row: 2, column: 0 }, { row: 0, column: 1 }],
+    ] as const) {
+      expect(addressesInRange(start, end)).toEqual(forward);
+    }
+  });
+
+  it('spans multi-letter columns correctly', () => {
+    // Z -> AA is where a naive letter increment breaks.
+    expect(addressesInRange({ row: 0, column: 25 }, { row: 0, column: 27 })).toEqual([
+      'Z1',
+      'AA1',
+      'AB1',
+    ]);
+  });
+
+  it('produces exactly rows x columns addresses, all unique', () => {
+    const addresses = addressesInRange({ row: 3, column: 2 }, { row: 9, column: 6 });
+
+    expect(addresses).toHaveLength(7 * 5);
+    expect(new Set(addresses).size).toBe(addresses.length);
+  });
+
+  it('feeds setCellFormats so a whole selection is formatted', () => {
+    // The end-to-end shape the toolbar will use.
+    let sheet = createEmptySheet();
+    sheet = setCellFormats(
+      sheet,
+      addressesInRange({ row: 0, column: 0 }, { row: 1, column: 1 }),
+      { bold: true }
+    );
+
+    expect(Object.keys(sheet.formats ?? {}).sort()).toEqual(['A1', 'A2', 'B1', 'B2']);
   });
 });
 
