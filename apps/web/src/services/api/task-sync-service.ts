@@ -262,11 +262,15 @@ export async function ensureTaskListForPage(
 }
 
 /**
- * Upper bound on the status vocabulary scanned when remapping. Lists carry 4 defaults
- * and a handful of custom statuses; the cap exists to satisfy the unbounded-findMany
- * rule, and overshooting it could only cost a remap to a different valid slug.
+ * Upper bound on the status VOCABULARY read in one go. Lists carry 4 defaults and a
+ * handful of custom statuses; the cap exists to satisfy the unbounded-findMany rule,
+ * and overshooting it could only cost a remap to a different valid slug.
+ *
+ * Deliberately never applied to task ROWS — a list can hold thousands, and the sweep
+ * that conforms them runs once and only once. Exported so the two agent read paths,
+ * which re-read the vocabulary after repairing it, bound it the same way.
  */
-const STATUS_CONFIG_REMAP_LIMIT = 200
+export const STATUS_CONFIG_REMAP_LIMIT = 200
 
 /**
  * Postgres caps a statement at 65535 bind parameters. The cascade binds one inArray per

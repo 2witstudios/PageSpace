@@ -5,6 +5,7 @@ import useSWRInfinite from 'swr/infinite';
 import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types';
+import { shouldAppendOptimistically } from '@/lib/tasks/task-cache-core';
 
 /**
  * Sub-tasks come from the SAME route the top-level list uses — called with the
@@ -126,6 +127,17 @@ export interface UseTaskSubTasksResult {
    */
   statusConfigs: TaskStatusConfig[];
   hasMore: boolean;
+  /**
+   * Whether a newly created task can be appended straight into this cache.
+   *
+   * NOT the negation of `hasMore`, and the difference is the whole reason this
+   * is exported rather than derived by the caller: with no pages loaded at all
+   * — a first page that failed, or one still in flight — `hasMore` is false
+   * while there is nothing to append TO, and `appendTaskToPages` silently
+   * returns the empty cache unchanged. A caller reading `!hasMore` drops the
+   * task on the floor in exactly the case it most needs to refetch.
+   */
+  canAppendCreated: boolean;
   isLoading: boolean;
   isLoadingMore: boolean;
   error: Error | undefined;
@@ -222,6 +234,7 @@ export function useTaskSubTasks(
     subTasks,
     statusConfigs,
     hasMore,
+    canAppendCreated: shouldAppendOptimistically(pages),
     // With the gate shut there is no key, so SWR reports neither loading nor data —
     // report "not loading" rather than leaving a caller spinning forever.
     isLoading: gateOpen && isLoading,

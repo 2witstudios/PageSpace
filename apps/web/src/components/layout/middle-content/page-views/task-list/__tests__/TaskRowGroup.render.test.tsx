@@ -425,6 +425,29 @@ describe('nested writes', () => {
     });
   });
 
+  it('still surfaces a sub-task created after the first page failed', async () => {
+    // No pages loaded at all, so there is nothing to append TO. `hasMore` reads
+    // false here — the last loaded page is the one that never arrived — which
+    // makes it exactly the wrong question: appending no-ops, the input clears,
+    // the badge goes up and the row is nowhere.
+    fetchWithAuth
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValue(subTaskResponse([task({ id: 'new', title: 'Fresh' })]));
+    postMock.mockResolvedValue(task({ id: 'new', title: 'Fresh' }));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+    await screen.findByText('Could not load sub-tasks.');
+
+    await userEvent.type(screen.getByPlaceholderText('+ Add a sub-task…'), 'Fresh{Enter}');
+
+    await waitFor(() => expect(screen.queryByText('Fresh')).not.toBeNull(), { timeout: 3000 });
+    assert({
+      given: 'a sub-task created while the cache holds no pages',
+      should: 'refetch so the row appears rather than silently drop it',
+      actual: !!screen.queryByText('Fresh'),
+      expected: true,
+    });
+  });
+
   it('offers no inline add row without edit permission', async () => {
     fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child' })]));
     render(

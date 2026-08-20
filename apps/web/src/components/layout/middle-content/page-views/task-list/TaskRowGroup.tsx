@@ -217,7 +217,8 @@ function TaskSubTaskRows({
 }) {
   const tree = useTaskTree();
   const {
-    subTasks, statusConfigs, hasMore, isLoading, isLoadingMore, loadMore, retry, error, mutatePages,
+    subTasks, statusConfigs, hasMore, canAppendCreated,
+    isLoading, isLoadingMore, loadMore, retry, error, mutatePages,
   } = useTaskSubTasks(task);
 
   const listPageId = task.pageId!;
@@ -400,12 +401,15 @@ function TaskSubTaskRows({
   }, [revealCreated, hasMore, error, isLoadingMore, loadMore]);
 
   const addCreatedChild = useCallback((created: TaskItem) => {
-    // Decided out here rather than inside the updater. `hasMore` false means the
-    // last loaded page IS the last page, which is exactly the question
-    // shouldAppendOptimistically asks of the pages array — and an SWR updater is
-    // contractually pure, so calling retry() and setState from inside one meant
-    // re-entering mutate on the key that mutate was already running against.
-    if (hasMore) {
+    // Decided out here rather than inside the updater, which is contractually
+    // pure and was being made to call retry() and setState — re-entering mutate
+    // on the key mutate was already running against.
+    //
+    // `canAppendCreated`, not `!hasMore`. They differ exactly where it matters:
+    // with no pages loaded at all — a first page that failed, or one still in
+    // flight — `hasMore` is false while there is nothing to append TO, and the
+    // append silently no-ops. That is the case that most needs the refetch.
+    if (!canAppendCreated) {
       // Later pages are still unloaded, so the end of the server's ordering is
       // not the end of what we have. Refresh what we hold, then walk the window
       // out to the new task rather than render it in a slot it does not occupy.
@@ -420,7 +424,7 @@ function TaskSubTaskRows({
     // the parent reading n/(n+1) forever: the guard refuses to complete it, and
     // this cache has no revalidation trigger to correct the number.
     onParentCountDelta?.({ total: 1, completed: created.completedAt ? 1 : 0 });
-  }, [hasMore, mutatePages, retry, onParentCountDelta]);
+  }, [canAppendCreated, mutatePages, retry, onParentCountDelta]);
 
   return (
     <>

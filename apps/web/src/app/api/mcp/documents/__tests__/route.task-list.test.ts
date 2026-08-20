@@ -65,8 +65,8 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   PageRevisionMismatchError: class extends Error {},
 }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     query: {
       pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
@@ -102,8 +102,15 @@ vi.mock('@pagespace/db/db', () => ({
       chain.limit = () => chain;
       return chain;
     },
-  },
-}));
+    // The vocabulary sweep issues two set-based UPDATEs after seeding; they
+    // match nothing in these fixtures but still have to be callable.
+    update: () => ({ set: () => ({ where: () => Promise.resolve(undefined) }) }),
+  };
+  // The repair runs in ONE transaction now — a half-applied one is permanent,
+  // since it only ever fires while the vocabulary is empty.
+  dbMock.transaction = (cb: (tx: unknown) => unknown) => cb(dbMock);
+  return { db: dbMock };
+});
 
 // ensureTaskListForPage is real (not mocked) — it's the fix under test, exercised
 // against the mocked `db` above so we can assert the status configs actually persist.

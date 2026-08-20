@@ -272,6 +272,15 @@ export async function PATCH(
     [updatedTask] = await db.transaction(async (tx) => {
       // Update the task (only if there are field-level updates)
       let task: typeof taskItems.$inferSelect = existingTask;
+      // A title-only edit touches the linked PAGE, not this row — but the row's
+      // `updatedAt` is what the broadcast carries, and clients tell their own
+      // echo from a foreign one by matching that stamp. Leaving it untouched
+      // makes two tabs renaming the same task within the echo TTL broadcast the
+      // SAME stamp, so the second tab reads the first's edit as its own and
+      // drops it. A renamed task IS a changed task; stamp it.
+      if (trimmedTitle !== undefined) {
+        updates.updatedAt = new Date();
+      }
       if (Object.keys(updates).length > 0) {
         [task] = await tx.update(taskItems)
           .set(updates)

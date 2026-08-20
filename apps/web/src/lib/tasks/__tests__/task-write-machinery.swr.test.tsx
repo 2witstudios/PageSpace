@@ -284,6 +284,55 @@ describe('task writes against real SWR', () => {
     });
   });
 
+  it('still undoes a failure that follows an earlier SUCCESSFUL write on the same row', async () => {
+    // Sequential, not overlapping: tick the checkbox, let it succeed, then
+    // change the status and have that one 403. The first write's record lives
+    // the full 30s echo TTL, and treating any record as disqualifying meant one
+    // success disabled the undo for that row for the rest of it — the second
+    // write's fabricated value just stayed, permanently on a paused cache.
+    const settlers: { resolve: (v: unknown) => void; reject: (e: unknown) => void }[] = [];
+    patchMock.mockImplementation(() => new Promise((resolve, reject) => {
+      settlers.push({ resolve, reject });
+    }));
+    const { result } = renderHook(useHarness, { wrapper: pausedWrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    paused = true;
+
+    let first: Promise<boolean> | undefined;
+    await act(async () => {
+      first = result.current.writer.writeTaskField({
+        loc: { listPageId: 'p', taskId: 't1' }, body: { status: 'completed' },
+        optimistic: { status: 'completed' }, fallbackMessage: 'x',
+      });
+    });
+    await act(async () => {
+      settlers[0].resolve({ status: 'completed', completedAt: 'server-stamp', updatedAt: 'a' });
+      await first;
+    });
+
+    let second: Promise<boolean> | undefined;
+    await act(async () => {
+      second = result.current.writer.writeTaskField({
+        loc: { listPageId: 'p', taskId: 't1' }, body: { status: 'blocked' },
+        optimistic: { status: 'blocked' }, fallbackMessage: 'x',
+      });
+    });
+    await act(async () => {
+      settlers[1].reject(Object.assign(new Error('no'), { status: 403, body: {} }));
+      await second;
+    });
+
+    assert({
+      given: 'a failed write following an earlier successful one on the same row',
+      should: 'put the row back to what the server last confirmed',
+      actual: {
+        status: result.current.data?.[0].tasks[0].status,
+        completedAt: result.current.data?.[0].tasks[0].completedAt,
+      },
+      expected: { status: 'completed', completedAt: 'server-stamp' },
+    });
+  });
+
   it('does not revert over a LATER write that succeeded', async () => {
     // The all-or-nothing check is not sufficient on its own. Two status writes
     // send the same slug; the second succeeds and reconciles, leaving `status`

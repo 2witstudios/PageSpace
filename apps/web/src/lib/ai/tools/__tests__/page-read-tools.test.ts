@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     selectDistinct: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -23,8 +23,13 @@ vi.mock('@pagespace/db/db', () => ({
       taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
       channelMessages: { findMany: vi.fn() },
     },
-  },
-}));
+  };
+  // The repair runs in one transaction now: a half-applied repair is permanent,
+  // because it only ever fires while the vocabulary is empty. The tx is the same
+  // surface as `db` here.
+  dbMock.transaction = vi.fn(async (cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   ne: vi.fn(),
@@ -1535,6 +1540,45 @@ describe('page-read-tools', () => {
           should: 'link each row to the existing task_lists id',
           actual: statusConfigInserts.every(c => c.taskListId === 'list-1'),
           expected: true,
+        });
+        assert({
+          given: 'a repair that both writes configs and rewrites task statuses',
+          should: 'run as one transaction, since a half-applied repair is permanent',
+          // It fires only while the vocabulary is empty, so once the configs
+          // commit there is no later read that would come back and finish the
+          // job. Structural, but the alternative is unobservable through a mock.
+          actual: (mockDb.transaction as unknown as { mock: { calls: unknown[] } }).mock.calls.length,
+          expected: 1,
+        });
+      });
+
+      it('reports the vocabulary it just seeded, not the one it read before seeding', async () => {
+        // statusConfigs is read BEFORE the repair. Without a re-read the same
+        // response that seeds icebox/shipped tells the agent the statuses are
+        // the four built-ins — and the agent then writes a status the list does
+        // not define, which PATCH rejects.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+        const seeded = [
+          { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+          { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+        ];
+        vi.mocked(mockDb.query.taskStatusConfigs.findMany)
+          .mockResolvedValueOnce([] as never)
+          .mockResolvedValue(seeded as never);
+        mockDb.insert = vi.fn(() => ({
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses?: Array<{ slug: string }> };
+
+        assert({
+          given: 'a read that repaired the vocabulary on its way through',
+          should: 'return the seeded slugs rather than the built-in fallback',
+          actual: result.availableStatuses?.map(s => s.slug),
+          expected: ['icebox', 'shipped'],
         });
       });
 

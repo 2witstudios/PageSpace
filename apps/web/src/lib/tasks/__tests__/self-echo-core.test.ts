@@ -8,6 +8,7 @@ import {
   hasInFlightSelfWrite,
   hasAnyInFlightSelfWrite,
   isSoleInFlightWriteForTask,
+  isNewestWriteForTask,
   SELF_WRITE_TTL_MS,
   MAX_SELF_WRITES,
   type SelfWrite,
@@ -379,14 +380,34 @@ describe('deciding whether a failed write may undo itself', () => {
     });
   });
 
-  it('counts a settled record too, not only an in-flight one', () => {
-    // A write that already SUCCEEDED keeps its stamped record, and it is
-    // exactly that write whose value a later revert would clobber.
+  it('ignores a record that already settled', () => {
+    // A settled write reconciled the server's own values into the cache before
+    // settling, so what a later paint displaces there IS a server value.
+    // Counting it would disable the undo for the rest of the TTL after any one
+    // successful write — including for plainly sequential later writes.
     assert({
       given: 'an earlier write on the same task that has already settled',
-      should: 'still refuse',
+      should: 'let the later one capture its inverse',
       actual: isSoleInFlightWriteForTask([rec(1, 'task-1', 'stamp'), rec(2, 'task-1')], 'task-1', 2),
-      expected: false,
+      expected: true,
+    });
+  });
+
+  it('is not newest once a later write exists, settled or not', () => {
+    // The other half, over a different set — and NOT implied by the first.
+    // Two status writes can send the same slug, so after the later one commits
+    // the server's values the field comparison still matches and the earlier
+    // one's stale failure would revert the row underneath it.
+    const later = [rec(1, 'task-1'), rec(2, 'task-1', 'stamp'), rec(9, 'task-2')];
+    assert({
+      given: 'a later write on the same task, already settled',
+      should: 'strip the earlier one of ownership while leaving the other task alone',
+      actual: [
+        isNewestWriteForTask(later, 'task-1', 1),
+        isNewestWriteForTask(later, 'task-1', 2),
+        isNewestWriteForTask(later, 'task-2', 9),
+      ],
+      expected: [false, true, true],
     });
   });
 });

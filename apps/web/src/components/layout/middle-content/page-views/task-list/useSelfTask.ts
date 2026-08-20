@@ -122,7 +122,7 @@ export function useSelfTask(
     // reimplemented here once, and the copy was weaker than the original: it
     // compared `status` alone but restored `completedAt` too, so it could
     // overwrite a server stamp with null. One rule, one implementation.
-    const soleWriteAtPaint = machinery.ownsTaskExclusively(writeId, task.id);
+    const soleWriteAtPaint = machinery.canCaptureInverse(writeId, task.id);
     // A holder rather than a plain `let`: the assignment happens inside the
     // paint updater, which TypeScript's flow analysis cannot see, so a bare
     // binding narrows to `null` at every read below.
@@ -143,8 +143,9 @@ export function useSelfTask(
       const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
         `/api/pages/${listPageId}/tasks/${task.id}`, { status },
       );
-      machinery.noteSelfWriteSettled(writeId, updated.updatedAt);
+      // Settled after the reconcile lands, not before — see the writer.
       await mutate((current) => applyStatus(current, updated), { revalidate: false });
+      machinery.noteSelfWriteSettled(writeId, updated.updatedAt);
     } catch (e) {
       machinery.noteSelfWriteSettled(writeId, null);
       // Undo locally, then reconcile — see task-write-machinery's catch for why
@@ -154,7 +155,7 @@ export function useSelfTask(
       const undo = captured.previous;
       await mutate((current) => {
         const row = current?.task;
-        if (!undo || !row || !machinery.ownsTaskExclusively(writeId, task.id)) return current;
+        if (!undo || !row || !machinery.stillOwnsTask(writeId, task.id)) return current;
         const stillOurs = row.status === painted.status
           && row.completedAt === painted.completedAt;
         return stillOurs

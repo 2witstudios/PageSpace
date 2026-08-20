@@ -118,18 +118,22 @@ export const hasInFlightSelfWrite = (
 ): boolean => records.some((r) => r.taskId === taskId && r.updatedAt === null);
 
 /**
- * Is this write the only one this tab has recorded against its task?
+ * Is this write the only UNRESOLVED one this tab has on its task?
  *
  * The answer decides whether a failure may undo itself locally. The undo
  * restores what the paint displaced — and if another write on the same row was
- * already open, what it displaced was that write's own unconfirmed paint, not
+ * still open, what it displaced was that write's own unconfirmed paint, not
  * anything the server ever said. Restoring it fabricates a state the server has
  * now rejected twice: double-click a checkbox with the network down and the row
  * ends up completed, with a client-invented timestamp, permanently.
  *
- * Counts SETTLED records too, not just in-flight ones — a write that already
- * succeeded keeps its stamped record, and it is exactly that write's committed
- * value a later revert would clobber.
+ * A SETTLED record does not count, and that is the point. Its write reconciled
+ * the server's own values into the cache before settling, so what a later paint
+ * displaces there IS a server value and is safe to restore. Counting settled
+ * records instead — which this did — meant one successful write disabled the
+ * undo for every write on that row for the rest of the TTL, including plainly
+ * sequential ones: tick a checkbox, wait, change the status, have that 403, and
+ * the fabricated value stayed.
  *
  * Must be asked at PAINT time as well as at failure time, and the paint-time
  * answer is the one that matters: settleSelfWrite drops a failed write's record
@@ -140,7 +144,28 @@ export const isSoleInFlightWriteForTask = (
   records: readonly SelfWrite[],
   taskId: string,
   writeId: number,
-): boolean => !records.some((r) => r.taskId === taskId && r.writeId !== writeId);
+): boolean => !records.some(
+  (r) => r.taskId === taskId && r.writeId !== writeId && r.updatedAt === null,
+);
+
+/**
+ * Has no LATER write on this task been started?
+ *
+ * The failure-time half of the undo rule, and NOT implied by the paint-time
+ * half — the two ask about different sets, which is why an earlier version that
+ * ANDed them on one snapshot could delete this one without changing a test.
+ *
+ * Here a settled record does count, and must: two status writes can send the
+ * same slug, so once the later one has committed the server's values the field
+ * comparison still matches, and the earlier one's stale failure would revert the
+ * row to its pre-write value while the server holds the new one. The later
+ * write owns the row now, whether or not it has finished.
+ */
+export const isNewestWriteForTask = (
+  records: readonly SelfWrite[],
+  taskId: string,
+  writeId: number,
+): boolean => !records.some((r) => r.taskId === taskId && r.writeId > writeId);
 
 /**
  * Classify an inbound event.
