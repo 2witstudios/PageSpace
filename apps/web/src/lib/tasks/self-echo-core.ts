@@ -76,10 +76,12 @@ export const startSelfWrite = (
  *
  * Removal is unconditional, including for a write that had already been stamped
  * — a settle-as-failed after a settle-as-succeeded means the cache write threw
- * AFTER the server accepted it, and `rollbackOnError` has just reverted the row
- * to its pre-write value. The server's echo carries the committed state, so it
- * is the thing that repairs the display: suppressing it as "ours" would leave
- * the stale value on screen until the next focus revalidation.
+ * AFTER the server accepted it, so the row on screen no longer reflects what was
+ * committed. The server's echo carries the committed state and is therefore the
+ * thing that repairs the display: suppressing it as "ours" would leave the stale
+ * value there until the next focus revalidation. (An earlier version of this
+ * note credited SWR's `rollbackOnError` for the revert; that path is gone — see
+ * task-write-machinery's catch, which reverts explicitly.)
  */
 export const settleSelfWrite = (
   records: readonly SelfWrite[],
@@ -139,6 +141,12 @@ export const hasInFlightSelfWrite = (
  * answer is the one that matters: settleSelfWrite drops a failed write's record
  * outright, so by the time the revert runs the log has already forgotten that
  * the competing write ever existed.
+ *
+ * Bounded by the same TTL as everything else here. A request still pending after
+ * SELF_WRITE_TTL_MS has had its record pruned, so a failure that late can revert
+ * over a newer confirmed value — accepted, because the alternative is a record
+ * that suppresses real edits forever, and the refetch behind the revert repairs
+ * it on any cache that is not paused.
  */
 export const isSoleInFlightWriteForTask = (
   records: readonly SelfWrite[],

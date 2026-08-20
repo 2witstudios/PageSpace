@@ -399,7 +399,7 @@ export const pageReadTools = {
 
           // Get all non-trashed tasks ordered by pages.position — the single ordering
           // rail users reorder against (#2143). Title lives on the linked page too.
-          const tasks = await db
+          const readTasks = () => db
             .select({
               id: taskItems.id,
               title: pages.title,
@@ -418,6 +418,7 @@ export const pageReadTools = {
               eq(pages.isTrashed, false),
             ))
             .orderBy(asc(pages.position), asc(taskItems.id));
+          let tasks = await readTasks();
 
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the
@@ -438,7 +439,11 @@ export const pageReadTools = {
           // four built-ins onto a list whose ancestor defines its own, and every
           // later PATCH against an inherited slug 400s.
           //
-          // In ONE transaction. The seed inserts the configs and then conforms
+          // In ONE transaction — this repair, specifically. The create-path seed
+          // inside ensureTaskListForPage above is not wrapped, and does not need
+          // to be: a list being created has no rows to conform.
+          //
+          // Here the seed inserts the configs and then conforms
           // any rows already in the list to them, and this repair only ever
           // runs while the vocabulary is empty — so a half-applied repair is a
           // permanent one: the configs commit, the rows keep slugs the list no
@@ -451,8 +456,12 @@ export const pageReadTools = {
             try {
               await db.transaction((tx) =>
                 seedInheritedTaskStatusConfigs(tx, taskList.id, page.id));
-              // Re-read: the response would otherwise tell the caller the four
-              // built-ins while the list it just seeded defines something else.
+              // Re-read BOTH. The repair writes twice — it seeds the vocabulary
+              // and then conforms the rows to it — and everything above was read
+              // before either. Re-reading only the configs would report statuses
+              // the repair has just moved, on slugs absent from the vocabulary
+              // named in the same response, which an agent then echoes back into
+              // a 400.
               statusConfigs = await db.query.taskStatusConfigs.findMany({
                 where: eq(taskStatusConfigs.taskListId, taskList.id),
                 orderBy: [asc(taskStatusConfigs.position)],
@@ -460,6 +469,7 @@ export const pageReadTools = {
                 // of statuses, and the same cap the seeding path applies.
                 limit: STATUS_CONFIG_REMAP_LIMIT,
               });
+              tasks = await readTasks();
             } catch (error) {
               pageReadLogger.error('Failed to backfill inherited task status configs', error as Error);
             }

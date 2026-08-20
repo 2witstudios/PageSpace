@@ -348,6 +348,11 @@ export function useTaskWriter(params: {
       // undo rule precisely because its server values are in the cache — mark it
       // resolved first and a write painting in the gap between would capture the
       // optimistic guess and call it a server value.
+      //
+      // The trade, stated: a write painting DURING this window sees this one as
+      // still open and so captures no inverse at all, losing its own local undo
+      // if it later fails. That is the conservative side — no fabrication, only
+      // a fallback to the refetch — which is why it is the one to be on.
       await mutatePages(
         (current) => applyTaskPatchToPages(current, loc.taskId, {
           status: updated?.status,

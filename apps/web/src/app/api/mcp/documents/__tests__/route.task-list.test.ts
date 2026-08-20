@@ -65,6 +65,7 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   PageRevisionMismatchError: class extends Error {},
 }));
 
+const mockTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => {
   const dbMock: Record<string, unknown> = {
     query: {
@@ -108,7 +109,7 @@ vi.mock('@pagespace/db/db', () => {
   };
   // The repair runs in ONE transaction now — a half-applied one is permanent,
   // since it only ever fires while the vocabulary is empty.
-  dbMock.transaction = (cb: (tx: unknown) => unknown) => cb(dbMock);
+  dbMock.transaction = mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(dbMock));
   return { db: dbMock };
 });
 
@@ -131,6 +132,10 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+  // The vocabulary sweep's two set-based UPDATEs.
+  notInArray: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -139,7 +144,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId' },
+  taskItems: { pageId: 'taskItems.pageId', status: 'taskItems.status', completedAt: 'taskItems.completedAt' },
   taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
@@ -318,6 +323,38 @@ describe('MCP Documents API — TASK_LIST read', () => {
     const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
     expect(inserted).toHaveLength(4);
     expect(inserted.every((c: { taskListId: string }) => c.taskListId === EXISTING_TASK_LIST.id)).toBe(true);
+  });
+
+  it('reports the vocabulary and the rows the repair just wrote, in one transaction', async () => {
+    // Everything above the repair is read BEFORE it, and the repair writes
+    // twice: it seeds the vocabulary and then conforms the rows to it. Report
+    // either half stale and the response names statuses it also says do not
+    // exist — which an agent echoes straight back into a 400.
+    //
+    // And in ONE transaction: the repair only ever fires while the vocabulary
+    // is empty, so a half-applied one is permanent.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+        { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+      ]);
+    mockFetchEnrichedTasks
+      .mockResolvedValueOnce([{ id: 't1', title: 'T', status: 'pending', priority: 'medium' }])
+      .mockResolvedValue([{ id: 't1', title: 'T', status: 'icebox', priority: 'medium' }]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+    const data = await response.json();
+
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual(['icebox', 'shipped']);
+    expect(data.tasks.map((t: { status: string }) => t.status)).toEqual(['icebox']);
+    expect(mockFetchEnrichedTasks).toHaveBeenCalledTimes(2);
+    // One transaction, not three autocommits: the repair writes the configs and
+    // then rewrites the rows, and it only ever fires while the vocabulary is
+    // empty — so a half-applied repair is a permanent one.
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
   });
 
   it('still returns 200 with the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {

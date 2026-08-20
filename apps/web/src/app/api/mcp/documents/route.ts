@@ -261,7 +261,7 @@ export async function POST(req: NextRequest) {
             await backfillMissingTaskItems(db, { parentId: pageId, childPageIds, userId });
           }
 
-          // eslint-disable-next-line prefer-const -- statusConfigs is re-read after the repair below
+          // Both are re-read after the repair below, which writes twice.
           let [tasks, statusConfigs] = await Promise.all([
             fetchEnrichedTasks(pageId),
             // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
@@ -281,7 +281,11 @@ export async function POST(req: NextRequest) {
           // four built-ins onto a list whose ancestor defines its own, and every
           // later PATCH against an inherited slug 400s.
           //
-          // In ONE transaction. The seed inserts the configs and then conforms
+          // In ONE transaction — this repair, specifically. The create-path seed
+          // inside ensureTaskListForPage above is not wrapped, and does not need
+          // to be: a list being created has no rows to conform.
+          //
+          // Here the seed inserts the configs and then conforms
           // any rows already in the list to them, and this repair only ever
           // runs while the vocabulary is empty — so a half-applied repair is a
           // permanent one: the configs commit, the rows keep slugs the list no
@@ -294,15 +298,20 @@ export async function POST(req: NextRequest) {
             try {
               await db.transaction((tx) =>
                 seedInheritedTaskStatusConfigs(tx, taskList.id, pageId));
-              // Re-read: the response would otherwise tell the caller the four
-              // built-ins while the list it just seeded defines something else.
-              statusConfigs = await db.query.taskStatusConfigs.findMany({
-                where: eq(taskStatusConfigs.taskListId, taskList.id),
-                orderBy: [asc(taskStatusConfigs.position)],
-                // Bounded, unlike the read above it: a vocabulary is a handful
-                // of statuses, and the same cap the seeding path applies.
-                limit: STATUS_CONFIG_REMAP_LIMIT,
-              });
+              // Re-read BOTH. The repair seeds the vocabulary and then conforms
+              // the rows to it, and everything above was read before either.
+              // Reporting the new vocabulary beside the old statuses would name
+              // slugs the response itself says do not exist.
+              [tasks, statusConfigs] = await Promise.all([
+                fetchEnrichedTasks(pageId),
+                db.query.taskStatusConfigs.findMany({
+                  where: eq(taskStatusConfigs.taskListId, taskList.id),
+                  orderBy: [asc(taskStatusConfigs.position)],
+                  // Bounded, unlike the read above it: a vocabulary is a handful
+                  // of statuses, and the same cap the seeding path applies.
+                  limit: STATUS_CONFIG_REMAP_LIMIT,
+                }),
+              ]);
             } catch (error) {
               loggers.api.error('Failed to backfill inherited task status configs', error as Error);
             }
