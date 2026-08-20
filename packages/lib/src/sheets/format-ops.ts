@@ -242,14 +242,16 @@ export function moveCellMetadata(
   // Source keys are normalized before lookup so a lowercase stored address
   // still matches an uppercase map entry — otherwise the move is silently
   // ignored and the stale key survives alongside its relocated twin.
-  const entries = Object.entries(sheet.formats).map(
+  const storedEntries = Object.entries(sheet.formats);
+  const entries = storedEntries.map(
     ([address, format]) => [normalizeAddress(address) ?? address, format] as const
   );
 
   // Normalizing a stored key rewrites the map even when nothing moved, so the
   // version must reflect that too — otherwise a changed sheet reports itself
-  // unchanged.
-  let changed = entries.some(([address], index) => address !== Object.keys(sheet.formats!)[index]);
+  // unchanged. Compared against the same array the entries came from, rather
+  // than re-deriving the keys per element.
+  let changed = entries.some(([address], index) => address !== storedEntries[index][0]);
 
   for (const [address, format] of entries) {
     if (!addressMap.has(address)) continue;
