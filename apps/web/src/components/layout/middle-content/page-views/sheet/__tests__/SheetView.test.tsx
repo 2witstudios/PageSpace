@@ -81,14 +81,19 @@ vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a)
 
 import SheetView from '../SheetView';
 
-const page = {
-  id: 'page-1',
-  title: 'Budget',
-  driveId: 'drive-1',
-  parentId: null,
-  type: 'SHEET',
-  content: '',
-} as never;
+type SheetViewProps = React.ComponentProps<typeof SheetView>;
+type TestPage = SheetViewProps['page'];
+
+/** A minimal TreePage; SheetView reads only these fields. */
+const makePage = (content: string): TestPage =>
+  ({
+    id: 'page-1',
+    title: 'Budget',
+    driveId: 'drive-1',
+    parentId: null,
+    type: 'SHEET',
+    content,
+  }) as unknown as TestPage;
 
 const contentWith = (cells: Record<string, string>) => {
   const sheet = createEmptySheet();
@@ -105,14 +110,14 @@ describe('SheetView', () => {
   });
 
   it('renders the grid without crashing', () => {
-    render(<SheetView page={{ ...page, content: contentWith({ A1: 'hello' }) }} />);
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getByRole('grid')).toBeTruthy();
     expect(screen.getByText('hello')).toBeTruthy();
   });
 
   it('shows no load-failure banner when the sheet reads fine', () => {
-    render(<SheetView page={{ ...page, content: contentWith({ A1: 'hello' }) }} />);
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.queryByRole('alert')).toBeNull();
   });
@@ -122,7 +127,7 @@ describe('SheetView', () => {
     // straight over content we merely failed to parse.
     loadError.current = 'Key without value at row 3';
 
-    render(<SheetView page={{ ...page, content: 'broken' }} />);
+    render(<SheetView page={makePage('broken')} />);
 
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('could not be loaded');
@@ -134,7 +139,7 @@ describe('SheetView', () => {
     // did parse, and be able to select and copy it.
     loadError.current = 'unparseable';
 
-    render(<SheetView page={{ ...page, content: 'broken' }} />);
+    render(<SheetView page={makePage('broken')} />);
 
     expect(screen.getByRole('grid')).toBeTruthy();
   });
@@ -148,7 +153,7 @@ describe('SheetView', () => {
     // asserting only that cells exist passes even with selection blocked.
     lacksEditPermission.current = true;
 
-    render(<SheetView page={{ ...page, content: contentWith({ A1: 'hello' }) }} />);
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(cellAt('A1').getAttribute('aria-selected')).toBe('true');
 
@@ -161,7 +166,7 @@ describe('SheetView', () => {
   it('lets a view-only user drag out a range', () => {
     lacksEditPermission.current = true;
 
-    render(<SheetView page={{ ...page, content: contentWith({ A1: 'hello' }) }} />);
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     fireEvent.mouseDown(cellAt('A1'));
     fireEvent.mouseEnter(cellAt('B2'));
@@ -176,7 +181,7 @@ describe('SheetView', () => {
   it('marks cells read-only for a view-only user', () => {
     lacksEditPermission.current = true;
 
-    render(<SheetView page={{ ...page, content: contentWith({ A1: 'hello' }) }} />);
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
   });
@@ -188,7 +193,7 @@ describe('SheetView', () => {
     const content = serializeSheetContent(sheet);
     documentState.current = { content, isDirty: false };
 
-    render(<SheetView page={{ ...page, content }} />);
+    render(<SheetView page={makePage(content)} />);
 
     expect(screen.getByText('$1,234.50')).toBeTruthy();
   });
