@@ -22,6 +22,17 @@ export class StreamJoinError extends Error {
  *   data: {"seq": <n>, "chunk": <UIMessageChunk>}   — one raw SDK frame, in seq order
  *   data: {"done": true, "aborted": <bool>}          — end sentinel
  *   data: {"done": true, "resumeFromSeq": <n>}       — cursor too old; reseed from n
+ *   data: {"done": true, "aborted": <bool>, "reload": true}
+ *                                                    — what you have is INCOMPLETE and there is
+ *                                                      no seq to resume from. Reload the durable
+ *                                                      message.
+ *
+ * `reload` and `resumeFromSeq` are deliberately different answers and must not be collapsed.
+ * `resumeFromSeq` says "ask again from here" — the content exists, this connection just cannot
+ * serve it from the cursor given. `reload` says the SOURCE cannot serve the rest at all: a
+ * cross-instance follower found the durable frame log released (the stream ended and retention
+ * deleted it) or holed. There is nowhere to resume from, and the durably-persisted message is
+ * the only complete copy.
  *
  * The frames are the SDK's own `UIMessageChunk`s, and they are folded here by the SAME
  * reduction the server uses, so a joiner's view is the SDK's view rather than a re-derivation.
@@ -38,7 +49,7 @@ export async function consumeStreamJoin(
   signal: AbortSignal,
   onParts: (parts: UIMessagePart[], seq: number) => void,
   fromSeq = 0,
-): Promise<{ aborted: boolean; resumeFromSeq?: number }> {
+): Promise<{ aborted: boolean; resumeFromSeq?: number; reload?: boolean }> {
   let response: Response;
   try {
     response = await fetch(
@@ -99,6 +110,7 @@ export async function consumeStreamJoin(
             return {
               aborted: (parsed.aborted as boolean | undefined) ?? false,
               resumeFromSeq: parsed.resumeFromSeq as number | undefined,
+              reload: parsed.reload === true,
             };
           }
           const chunk = parsed.chunk as UIMessageChunk | undefined;

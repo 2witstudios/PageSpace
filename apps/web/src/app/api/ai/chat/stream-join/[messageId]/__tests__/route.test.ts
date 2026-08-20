@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { NextResponse } from 'next/server';
 import { StreamChannelRegistry } from '@/lib/ai/core/stream-channel-registry';
+import { openStreamChannel } from '@/lib/ai/core/stream-channel';
 import type { SessionAuthResult, AuthError } from '@/lib/auth';
 
 // Fresh registry per test — module-level let, updated in beforeEach
@@ -38,6 +39,19 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
  * the registry answers, or nothing does. The cross-instance cases opt in.
  */
 const mockSessionRow = vi.fn<() => Promise<unknown[]>>();
+
+/**
+ * The remote follower, mocked at its module boundary.
+ *
+ * The route's job is to acquire one, hand its channel to the SAME subscribe/SSE code a local
+ * channel goes through, and release it on every teardown path. The follower's own polling and
+ * terminal classification live in `remote-frame-follower.test.ts`.
+ */
+const mockRemoteRelease = vi.fn();
+const mockAcquireRemoteChannel = vi.fn();
+vi.mock('@/lib/ai/core/remote-frame-follower', () => ({
+  acquireRemoteChannel: (messageId: string) => mockAcquireRemoteChannel(messageId),
+}));
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
@@ -127,6 +141,13 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
     mockCanSubscribeToStream.mockResolvedValue(true);
     vi.mocked(canUserViewPage).mockResolvedValue(true);
     mockSessionRow.mockResolvedValue([]);
+    // Default: a follower that yields an already-finished, empty channel, so a case that does
+    // not care about the remote path still terminates promptly.
+    mockAcquireRemoteChannel.mockImplementation((id: string) => {
+      const channel = openStreamChannel({ messageId: id });
+      channel.finish(false);
+      return { channel, release: mockRemoteRelease };
+    });
   });
 
   describe('authentication', () => {
@@ -257,6 +278,163 @@ describe('GET /api/ai/chat/stream-join/[messageId]', () => {
       await GET(makeRequest(), makeContext(mockMessageId));
 
       expect(mockSessionRow).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * SERVING a remote stream.
+   *
+   * The route body is deliberately NOT forked here: a follower tails the durable frame log and
+   * presents it as an ordinary `StreamChannel`, so the SSE framing, the ping, the recheck, the
+   * teardown and the overflow semantics below are one code path for both sources. These cases
+   * pin that the follower is wired in and released, not the follower's own behaviour
+   * (`remote-frame-follower.test.ts` covers that).
+   */
+  describe('serving a remote stream through the follower', () => {
+    const remoteRow = () => [{
+      channelId: mockPageId,
+      userId: mockUserId,
+      displayName: mockDisplayName,
+      conversationId: mockConversationId,
+      browserSessionId: mockBrowserSessionId,
+      status: 'streaming',
+    }];
+
+    it('given a remote stream, serves its frames instead of 404ing', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.append(textChunk('from the durable log') as never);
+        channel.finish(false);
+        return { channel, release: mockRemoteRelease };
+      });
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+      const body = await readSSEBody(response);
+
+      expect(response.status).toBe(200);
+      expect(body).toContain(`data: ${JSON.stringify({ seq: 0, chunk: textChunk('from the durable log') })}\n\n`);
+    });
+
+    it('labels the response with where the frames came from', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      // An N=2 smoke test has no other way to PROVE it exercised the follower rather than
+      // getting lucky with the load balancer; in production the remote share should sit near
+      // (N-1)/N.
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('remote');
+    });
+
+    it('labels a locally-owned join as local', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('local');
+    });
+
+    it('labels a terminal join as terminal, and follows it rather than 404ing', async () => {
+      // Frames are deleted on the terminal write, so a terminal row is exactly the case where
+      // the follower's honest-answer logic is needed — not a case to short-circuit.
+      mockSessionRow.mockResolvedValue([{ ...remoteRow()[0], status: 'complete' }]);
+
+      const response = await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get('X-Stream-Join-Source')).toBe('terminal');
+    });
+
+    it('given a truncated end, tells the client to RELOAD rather than sending a bare done', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.append(textChunk('a prefix') as never);
+        channel.finish(false, { truncated: true });
+        return { channel, release: mockRemoteRelease };
+      });
+
+      const body = await readSSEBody(await GET(makeRequest(), makeContext(mockMessageId)));
+
+      // A bare `done` would leave a short reply on screen looking whole. `reload` is a different
+      // answer from `resumeFromSeq`: there is no seq to resume from, only a durable message to
+      // re-read.
+      expect(body).toContain('data: {"done":true,"aborted":false,"reload":true}\n\n');
+    });
+
+    it('releases the follower reference when the stream ends', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        const channel = openStreamChannel({ messageId: id });
+        channel.finish(false);
+        return { channel, release: mockRemoteRelease };
+      });
+
+      await readSSEBody(await GET(makeRequest(), makeContext(mockMessageId)));
+
+      // A leaked reference keeps a poller hitting Postgres for a reader that has already gone.
+      expect(mockRemoteRelease).toHaveBeenCalled();
+    });
+
+    it('releases the follower reference when the client disconnects', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      const controller = new AbortController();
+      mockAcquireRemoteChannel.mockImplementation((id: string) => ({
+        channel: openStreamChannel({ messageId: id }),
+        release: mockRemoteRelease,
+      }));
+
+      const response = await GET(makeRequest(controller.signal), makeContext(mockMessageId));
+      const reader = response.body!.getReader();
+      controller.abort();
+      await reader.read().catch(() => undefined);
+
+      expect(mockRemoteRelease).toHaveBeenCalled();
+    });
+
+    it('never acquires a follower for a locally-owned stream', async () => {
+      testRegistry.open(mockMessageId, mockMeta);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      expect(mockAcquireRemoteChannel).not.toHaveBeenCalled();
+    });
+
+    it('never acquires a follower for a caller who may not subscribe', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      mockCanSubscribeToStream.mockResolvedValue(false);
+
+      await GET(makeRequest(), makeContext(mockMessageId));
+
+      // Acquiring first would start a poller — and a DB read loop over another member's private
+      // conversation — for a request that is about to 404.
+      expect(mockAcquireRemoteChannel).not.toHaveBeenCalled();
+    });
+
+    it('given the success-path audit throws, releases the subscription and the follower before the error propagates', async () => {
+      mockSessionRow.mockResolvedValue(remoteRow());
+      let followedChannel: ReturnType<typeof openStreamChannel> | null = null;
+      mockAcquireRemoteChannel.mockImplementation((id: string) => {
+        followedChannel = openStreamChannel({ messageId: id });
+        return { channel: followedChannel, release: mockRemoteRelease };
+      });
+      // auditRequest is synchronous up to its DB write, so its failure is a thrown error on
+      // the success path — the last point where BOTH holds (the subscription and this
+      // reader's follower reference) are live and nothing else will release them.
+      vi.mocked(auditRequest).mockImplementation((_request, event) => {
+        if (event.eventType === 'authz.access.granted') throw new Error('audit pipeline exploded');
+      });
+
+      await expect(GET(makeRequest(), makeContext(mockMessageId)))
+        .rejects.toThrow('audit pipeline exploded');
+
+      // "Dropped in EVERY exit, not only the happy one" — an exception is an exit too.
+      expect(mockRemoteRelease).toHaveBeenCalledTimes(1);
+      expect(followedChannel!.subscriberCount).toBe(0);
+      // clearAllMocks does not undo mockImplementation, and a throwing audit left behind
+      // would fail every case that runs after this one.
+      vi.mocked(auditRequest).mockReset();
     });
   });
 
