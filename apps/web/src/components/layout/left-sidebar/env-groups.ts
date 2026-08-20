@@ -34,7 +34,8 @@ export interface EnvGroup<T> {
   sessions: T[];
 }
 
-export interface EnvPartition<T> {
+/** Not exported — nothing outside this module names it; callers infer it from `partitionSessionsByEnv`. */
+interface EnvPartition<T> {
   envGroups: EnvGroup<T>[];
   /** The drive's ordinary ephemeral sessions — each owns its own sandbox. */
   looseSessions: T[];

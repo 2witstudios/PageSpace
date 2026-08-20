@@ -513,8 +513,11 @@ function SessionList({
           // live — beside "New session", which is the act it sits next to
           // everywhere else too. Global mode has no single drive to create one
           // in, so it keeps just the two it had.
+          // `!trashedDriveIds.has` for the same reason the group-header path
+          // checks `isLiveDrive`: a drive on its way to deletion must not be
+          // offered new infrastructure inside it.
           onNewEnvironment={
-            driveId && manageableDriveIds.has(driveId)
+            driveId && !trashedDriveIds.has(driveId) && manageableDriveIds.has(driveId)
               ? () =>
                   setNewEnvTarget({
                     driveId,
@@ -732,7 +735,7 @@ function DriveGroupRows({
   canManage: boolean;
   showEnvironments: boolean;
 }) {
-  const { envs, mutate: refreshEnvs } = useDriveEnvs(driveId, { enabled: showEnvironments });
+  const { envs, error: envsError, mutate: refreshEnvs } = useDriveEnvs(driveId, { enabled: showEnvironments });
 
   // With environments off (the Assistant bucket, a trashed drive, an active
   // search) this hands back every session as loose, which is exactly the flat
@@ -744,6 +747,29 @@ function DriveGroupRows({
 
   return (
     <>
+      {/* A FAILED LISTING SAYS SO. Without this the drive reads as one that
+          simply has no environments, and any env-bound session in it falls
+          through to an orphan group — a correct mechanism reached for the wrong
+          reason, and one the user cannot act on because nothing told them a
+          read failed. The retry is the affordance; the sessions below still
+          render, because a drive's sessions do not depend on this request. */}
+      {showEnvironments && envsError != null && (
+        <div className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-muted-foreground">
+          <span className="truncate">Could not load environments</span>
+          <button
+            type="button"
+            /* "Try again", not "Retry": the sidebar already has a Retry for the
+               SESSIONS listing, and when both requests fail the two sit feet
+               apart. Distinct words are the difference between one control and
+               two identical ones the user has to guess between. */
+            aria-label="Try again loading environments"
+            className="shrink-0 underline hover:text-foreground"
+            onClick={refreshEnvs}
+          >
+            Try again
+          </button>
+        </div>
+      )}
       {envGroups.map((group) => (
         <DriveEnvRow
           key={group.envId}
@@ -822,8 +848,13 @@ function DriveEnvRow({
   const [deleting, setDeleting] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
 
-  const displayName = group.envName ?? group.envId;
   const isOrphan = group.envName === null;
+  // An orphan has no name to show and its id is not one: a raw CUID is not a
+  // thing a user has ever seen or could recognise, and printing it would read
+  // as the environment's name rather than as the absence of one. What we
+  // actually know is that a session claims an environment this drive's listing
+  // did not return — so say that, and keep the id out of the interface.
+  const displayName = group.envName ?? 'Unavailable environment';
   const envPath = `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(group.envId)}`;
 
   const renameEnv = useCallback(

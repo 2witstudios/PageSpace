@@ -205,9 +205,19 @@ interface EnvFixture {
  * Default empty, so every pre-environments test in this file keeps describing a
  * drive that has none and its flat session list is unchanged.
  */
-const respondWithSessions = (sessions: SessionFixture[], envs: EnvFixture[] = []) => {
+const respondWithSessions = (
+  sessions: SessionFixture[],
+  envs: EnvFixture[] = [],
+  /**
+   * Fails the ENVIRONMENTS endpoint only, leaving the sessions listing healthy.
+   * A function so a test can flip it between renders (fail, then retry and
+   * succeed) without rebuilding the whole implementation.
+   */
+  envsFail: () => boolean = () => false,
+) => {
   mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
     if (typeof url === 'string' && url.includes('/envs')) {
+      if (envsFail()) return { ok: false, status: 500, json: async () => ({}) };
       return {
         ok: true,
         status: 200,
@@ -1929,6 +1939,163 @@ describe('AgentsSidebar', () => {
       await waitFor(() => expect(screen.getByText('renamed-elsewhere')).toBeDefined());
 
       expect((screen.getByLabelText('Name') as HTMLInputElement).value).toBe('half-typed');
+    });
+
+    /**
+     * THE SPAWN PALETTE'S ENVIRONMENT STEP.
+     *
+     * Every other spawn test in this file runs against a drive with NO
+     * environments, which is exactly why the loading race below survived
+     * review: `envs` is `[]` while the listing is in flight and `[]` when the
+     * drive genuinely has none, and only a fixture WITH environments can tell
+     * the two apart.
+     */
+    test('offers "in <env name>" targets with the ephemeral default leading, and carries the chosen envId into the POST', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [
+        { id: 'env-1', name: 'staging', status: 'running' },
+        { id: 'env-2', name: 'dev', status: 'none' },
+      ]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // The environment step, not the name step: the drive has environments.
+      expect(await screen.findByText('in staging')).toBeDefined();
+      expect(screen.getByText('in dev')).toBeDefined();
+      // The ephemeral default leads — it is what every session was before
+      // environments existed and what most still should be.
+      const options = screen.getAllByRole('option').map((el) => el.textContent ?? '');
+      expect(options[0]).toContain('New sandbox');
+
+      await user.click(screen.getByText('in staging'));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      await user.type(nameInput, 'work in staging');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: 'work in staging',
+        }),
+      );
+    });
+
+    test('choosing the ephemeral default from the environment step posts envId null', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New sandbox'));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: null,
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    test('WAITS for the environments listing rather than treating an in-flight fetch as "this drive has none"', async () => {
+      const user = userEvent.setup();
+      // The listing never settles while the user picks. `envs` is `[]`
+      // throughout — indistinguishable from an environment-less drive to any
+      // step machine that reads only `.length`, which is the bug: the palette
+      // would jump to the name step and spawn `envId: null` into a drive that
+      // HAS environments.
+      let releaseEnvs: (() => void) | null = null;
+      const envsLanded = new Promise<void>((resolve) => {
+        releaseEnvs = resolve;
+      });
+      mockFetchWithAuth.mockImplementation(async (url: string) => {
+        if (typeof url === 'string' && url.includes('/envs')) {
+          await envsLanded;
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              envs: [{ id: 'env-1', name: 'staging', status: 'running', driveId: 'drive-1', createdAt: '2026-08-01T00:00:00.000Z' }],
+            }),
+          };
+        }
+        return { ok: true, status: 200, json: async () => ({ sessions: [] }) };
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // Held, not advanced: no name form to type a name into and spawn from.
+      expect(await screen.findByText(/Looking for environments/i)).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+
+      await act(async () => {
+        releaseEnvs!();
+        await envsLanded;
+      });
+
+      // Once the answer arrives the real question is asked.
+      expect(await screen.findByText('in staging')).toBeDefined();
+      expect(mockPost).not.toHaveBeenCalled();
+    });
+
+    test('a failed environments listing says so and offers a way back, instead of passing the drive off as having none', async () => {
+      const user = userEvent.setup();
+      // ONLY the envs endpoint fails. The sessions listing is fine, which is
+      // the case that matters: without a notice the drive is indistinguishable
+      // from one that simply has no environments, and the env-bound session
+      // below silently becomes an orphan for a reason nobody can see.
+      let envsShouldFail = true;
+      respondWithSessions(
+        [envSession('ses-env', 'env-1', 'inside staging')],
+        [{ id: 'env-1', name: 'staging', status: 'running' }],
+        () => envsShouldFail,
+      );
+      renderSidebar();
+
+      expect(await screen.findByText('Could not load environments')).toBeDefined();
+      // The session is still shown — a drive's sessions do not depend on this
+      // request — but under a group that admits it does not know the name.
+      expect(screen.getByText('Unavailable environment')).toBeDefined();
+      expect(screen.getByText('inside staging')).toBeDefined();
+
+      envsShouldFail = false;
+      await user.click(screen.getByLabelText('Try again loading environments'));
+
+      expect(await screen.findByText('staging')).toBeDefined();
+      expect(screen.queryByText('Could not load environments')).toBeNull();
+      expect(screen.queryByText('Unavailable environment')).toBeNull();
+    });
+
+    test('an orphan group never prints the raw env id — an id is not a name a user could recognise', async () => {
+      respondWithSessions([envSession('ses-env', 'env-missing-xyz', 'inside something')], []);
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-missing-xyz');
+      expect(within(envRow).getByText('Unavailable environment')).toBeDefined();
+      expect(screen.queryByText('env-missing-xyz')).toBeNull();
     });
 
     test('an active search flattens the list — a matching env-bound session shows, its environment steps aside', async () => {

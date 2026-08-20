@@ -157,7 +157,11 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // environments to offer). Shares its SWR key with the sidebar's environment
   // rows, so an environment created there is offered here without a second
   // request.
-  const { envs: paletteEnvs } = useDriveEnvs(spawnTarget?.driveId ?? null);
+  // `isLoading` is consumed, not discarded, and that is load-bearing rather
+  // than tidy: `envs` is `[]` BOTH while the listing is in flight and when the
+  // drive genuinely has none, so a step decision that reads only `.length`
+  // cannot tell "no environments" from "not answered yet". See `step` below.
+  const { envs: paletteEnvs, isLoading: paletteEnvsLoading } = useDriveEnvs(spawnTarget?.driveId ?? null);
 
   const paletteAgents = useMemo(
     () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
@@ -180,6 +184,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       driveName={spawnTarget?.driveName ?? null}
       agents={paletteAgents}
       envs={paletteEnvs}
+      envsLoading={paletteEnvsLoading}
       canRunSandbox={canRunSandbox}
       pick={spawnPick}
       spawning={spawning}
@@ -212,6 +217,7 @@ function SpawnSessionPalette({
   driveName,
   agents,
   envs,
+  envsLoading,
   canRunSandbox,
   pick,
   spawning,
@@ -226,8 +232,16 @@ function SpawnSessionPalette({
   /**
    * The drive's environments. EMPTY IS THE COMMON CASE and it removes the step
    * entirely — a drive that has never made one never sees a question about it.
+   *
+   * Always read together with `envsLoading`: an empty array on its own does not
+   * mean "this drive has none".
    */
   envs: DriveEnvDTO[];
+  /**
+   * Whether that listing is still in flight. The step machine WAITS on this
+   * rather than treating a not-yet-arrived listing as an answer — see `step`.
+   */
+  envsLoading: boolean;
   /**
    * Whether the requester can actually run this drive's sandbox (the
    * actor-aware server verdict: kill switch + the payer's tier + the
@@ -256,34 +270,72 @@ function SpawnSessionPalette({
     if (open) setName('');
   }, [open, pick]);
 
-  // WHICH OF THE THREE STEPS IS ON SCREEN, decided in one place rather than by
-  // three ternaries that could disagree. The environment step exists only when
-  // there is something to choose between: no environments in the drive means
+  // WHICH OF THE FOUR STEPS IS ON SCREEN, decided in one place rather than by
+  // ternaries that could disagree. The environment step exists only when there
+  // is something to choose between: no environments in the drive means
   // `pick.envId` is never asked for and the flow is the original two steps.
-  const step: 'target' | 'env' | 'name' =
-    pick === null ? 'target' : pick.envId === undefined && envs.length > 0 ? 'env' : 'name';
+  //
+  // `'pending'` is the step that stops a race, and it is not cosmetic. The
+  // listing is `[]` while it is still in flight, so a step machine reading only
+  // `envs.length` treats "not answered yet" as "this drive has none" — and the
+  // two failure modes that follows are both silent. A fast pick lands straight
+  // on the name step and spawns with `envId: null`, quietly ephemeral in a
+  // drive that HAS environments; or the listing arrives while the user is
+  // already typing a name, the step recomputes to `'env'`, and the name form is
+  // replaced mid-keystroke (with `setName('')` wiping what they wrote). Both
+  // are likeliest from a cold cache — opening the palette from a header that
+  // never rendered the sidebar's environment rows and so never warmed the key.
+  //
+  // Waiting is therefore the only honest answer while the question is open. It
+  // costs a beat exactly once per drive, and never once the SWR key is warm.
+  const step: 'target' | 'pending' | 'env' | 'name' =
+    pick === null
+      ? 'target'
+      : pick.envId !== undefined
+        ? 'name'
+        : envsLoading
+          ? 'pending'
+          : envs.length > 0
+            ? 'env'
+            : 'name';
   const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
 
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={step === 'target' ? 'New session' : step === 'env' ? 'Where should it run?' : 'Name your session'}
+      title={
+        step === 'target'
+          ? 'New session'
+          : step === 'env' || step === 'pending'
+            ? 'Where should it run?'
+            : 'Name your session'
+      }
       description={
         step === 'name'
           ? chosenEnv
             ? `In ${chosenEnv.name} · leave blank to use "${pick?.label ?? 'this session'}"`
             : `Leave blank to use "${pick?.label ?? 'this session'}"`
-          : step === 'env'
-            ? 'A session in an environment shares that environment’s files, and they stay there when the session ends.'
-            : driveName
-              ? `Choose an agent to start a session with in ${driveName}`
-              : 'Choose an agent to start a session with'
+          : step === 'pending'
+            ? 'Checking this drive for environments…'
+            : step === 'env'
+              ? 'A session in an environment shares that environment’s files, and they stay there when the session ends.'
+              : driveName
+                ? `Choose an agent to start a session with in ${driveName}`
+                : 'Choose an agent to start a session with'
       }
       showCloseButton={false}
       className="max-w-[420px]"
     >
-      {step === 'env' ? (
+      {step === 'pending' ? (
+        /* Deliberately inert — no input to focus and nothing selectable. The
+           question ("where should it run?") is already on screen; only its
+           options are missing, so this holds the user's place rather than
+           showing them a form that is about to be replaced. */
+        <div className="p-4 text-sm text-muted-foreground" role="status">
+          Looking for environments in this drive…
+        </div>
+      ) : step === 'env' ? (
         <>
           <CommandInput placeholder="Search environments…" autoFocus />
           <CommandList>
