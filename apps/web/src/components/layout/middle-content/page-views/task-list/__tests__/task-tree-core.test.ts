@@ -10,6 +10,8 @@ import {
   resolveNodeStatusConfigs,
   formatSubTaskProgress,
   MAX_TASK_DEPTH,
+  MAX_ADDABLE_DEPTH,
+  canAddSubTaskAt,
   DEPTH_INDENT_PX,
 } from '../task-tree-core';
 
@@ -123,6 +125,36 @@ describe('canExpandNode', () => {
         canExpandNode(t, MAX_TASK_DEPTH + 1),
       ],
       expected: [true, false, false],
+    });
+  });
+});
+
+describe('canAddSubTaskAt', () => {
+  it('permits creation up to the ceiling and refuses past it', () => {
+    // One rule, phrased in terms of the CREATED task's depth. The two callers
+    // hold different depths — a row knows its own, a child list knows its
+    // children's — and comparing their raw expressions reads like an
+    // off-by-one, which is exactly how this got queried in review.
+    assert({
+      given: 'depths below, at, and above the addable ceiling',
+      should: 'permit only up to and including the ceiling',
+      actual: [
+        canAddSubTaskAt(MAX_ADDABLE_DEPTH - 1),
+        canAddSubTaskAt(MAX_ADDABLE_DEPTH),
+        canAddSubTaskAt(MAX_ADDABLE_DEPTH + 1),
+      ],
+      expected: [true, true, false],
+    });
+  });
+
+  it('leaves anything it permits still expandable', () => {
+    // The point of the ceiling: a task created at the deepest addable level has
+    // to be reachable inline, so it must sit below the expansion limit.
+    assert({
+      given: 'the deepest depth at which a task may be created',
+      should: 'still be a depth that can expand',
+      actual: canAddSubTaskAt(MAX_ADDABLE_DEPTH) && MAX_ADDABLE_DEPTH < MAX_TASK_DEPTH,
+      expected: true,
     });
   });
 });

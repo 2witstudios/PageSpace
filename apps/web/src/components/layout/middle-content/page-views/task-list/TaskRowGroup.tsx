@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useId, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { TableCell, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -28,6 +28,7 @@ import {
 } from './task-list-types';
 import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 import {
+  canAddSubTaskAt,
   canExpandNode,
   depthIndentStyle,
   isNodeExpanded,
@@ -36,6 +37,7 @@ import {
   type TaskNodePath,
 } from './task-tree-core';
 import { useTaskTree } from './task-tree-context';
+import { useEditingSession } from '@/stores/useEditingSession';
 import { TaskRowCells } from './TaskRowCells';
 import { TaskDocumentRow } from './TaskDocumentRow';
 import { useTaskSubTasks } from './useTaskSubTasks';
@@ -103,7 +105,8 @@ export function TaskRowGroup({
   // row, so the menu is the only way in. See useSubTaskBootstrap.
   const bootstrapSubTask = useSubTaskBootstrap({
     task, path, onCountDelta,
-    enabled: canEdit && !!task.pageId && !hasSubTasks && depth + 1 <= MAX_ADDABLE_DEPTH,
+    // The menu creates a child one level below this row.
+    enabled: canEdit && !!task.pageId && !hasSubTasks && canAddSubTaskAt(depth + 1),
   });
 
   const cells = (
@@ -141,12 +144,6 @@ export function TaskRowGroup({
     </>
   );
 }
-
-/**
- * Deepest level at which "Add sub-task" is offered. One below the expansion
- * ceiling, so a task created through it can still be reached inline.
- */
-const MAX_ADDABLE_DEPTH = 4;
 
 /**
  * A nested row. Deliberately NOT sortable: cross-level drag is a re-parenting
@@ -194,7 +191,8 @@ function TaskSubTaskRows({
   } = useTaskSubTasks(task);
 
   const listPageId = task.pageId!;
-  const depth = parentDepth + 1;
+  /** Depth of the CHILDREN listed here — and of anything the inline row creates. */
+  const childDepth = parentDepth + 1;
 
   // Root vocabulary when this sub-list defines every one of its slugs; its own
   // otherwise, because PATCH validates against THIS list's configs and a slug it
@@ -354,7 +352,7 @@ function TaskSubTaskRows({
   return (
     <>
       {isLoading && (
-        <AffordanceRow depth={depth}>
+        <AffordanceRow depth={childDepth}>
           <Skeleton className="h-6 w-48" />
         </AffordanceRow>
       )}
@@ -363,7 +361,7 @@ function TaskSubTaskRows({
         <TaskRowGroup
           key={child.id}
           task={child}
-          depth={depth}
+          depth={childDepth}
           listPageId={listPageId}
           path={makeNodePath(parentPath, child.id)}
           handlers={handlers}
@@ -372,14 +370,14 @@ function TaskSubTaskRows({
         />
       ))}
 
-      {tree.canEdit && depth <= MAX_ADDABLE_DEPTH && (
-        <NewSubTaskRow listPageId={listPageId} depth={depth} onCreated={addCreatedChild} />
+      {tree.canEdit && canAddSubTaskAt(childDepth) && (
+        <NewSubTaskRow listPageId={listPageId} depth={childDepth} onCreated={addCreatedChild} />
       )}
 
       {/* An expansion that shows nothing has to say why — it was expandable
           because a count said there was something here. */}
       {!isLoading && (error || subTasks.length === 0) && (
-        <AffordanceRow depth={depth}>
+        <AffordanceRow depth={childDepth}>
           <p role="status" aria-live="polite" className="text-xs text-muted-foreground italic">
             {error
               ? (subTasks.length > 0 ? 'Could not load the rest of the sub-tasks.' : 'Could not load sub-tasks.')
@@ -395,7 +393,7 @@ function TaskSubTaskRows({
           route that writes — `retry` re-issues every loaded page, while paging
           forward requests only the one that is missing. */}
       {(hasMore || error) && (
-        <AffordanceRow depth={depth}>
+        <AffordanceRow depth={childDepth}>
           <Button
             variant="ghost"
             size="sm"
@@ -434,6 +432,23 @@ function NewSubTaskRow({
 }) {
   const [title, setTitle] = useState('');
   const [busy, setBusy] = useState(false);
+
+  /**
+   * An unsent title is unsaved content, so it registers like any other editor.
+   *
+   * `isAnyEditing` gates SWR revalidation for the task list, and a background
+   * refresh landing mid-sentence would re-render this row from server data and
+   * take the text with it. The id is per-instance because several of these
+   * exist at once — one per expanded node — and a shared key would have the
+   * first to finish end the session for all of them.
+   */
+  const instanceId = useId();
+  useEditingSession(
+    `new-subtask-${listPageId}-${instanceId}`,
+    title.trim().length > 0 || busy,
+    'form',
+    { componentName: 'NewSubTaskRow', pageId: listPageId },
+  );
 
   const submit = async () => {
     const trimmed = title.trim();

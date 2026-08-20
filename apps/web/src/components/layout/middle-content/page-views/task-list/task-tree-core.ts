@@ -27,6 +27,23 @@ export { TASK_TABLE_COLUMN_COUNT } from './table-columns';
  */
 export const MAX_TASK_DEPTH = 5;
 
+/**
+ * Deepest level at which a task may be CREATED. One below the expansion
+ * ceiling, so anything created is still reachable inline.
+ */
+export const MAX_ADDABLE_DEPTH = 4;
+
+/**
+ * May a task be created at this depth?
+ *
+ * Expressed once, in terms of the depth of the task being CREATED, because the
+ * two call sites naturally hold different depths — a row knows its own, while
+ * the child list knows its children's — and comparing the two raw expressions
+ * side by side reads like an off-by-one even when it isn't.
+ */
+export const canAddSubTaskAt = (createdDepth: number): boolean =>
+  createdDepth <= MAX_ADDABLE_DEPTH;
+
 /** Pixels of indent added per level of nesting. */
 export const DEPTH_INDENT_PX = 20;
 
