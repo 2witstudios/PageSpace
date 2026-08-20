@@ -29,6 +29,9 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Keep forceSave/isDirty/content in refs so the empty-dep listeners below never
@@ -122,5 +125,8 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
     saveWithDebounce,
     forceSave,
     forceSaveNow,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   };
 };

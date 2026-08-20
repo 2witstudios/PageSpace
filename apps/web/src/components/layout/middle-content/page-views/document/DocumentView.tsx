@@ -18,6 +18,7 @@ import { useFindStore } from '@/stores/useFindStore';
 import { dispatchFind, getPluginMatches } from '@/lib/editor/find-plugin';
 import { PullToRefresh } from '@/components/ui/pull-to-refresh';
 import { CustomScrollArea } from '@/components/ui/custom-scroll-area';
+import DocumentConflictGate from './DocumentConflictGate';
 
 interface DocumentViewProps {
   pageId: string;
@@ -51,6 +52,9 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSave,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useDocument(pageId);
 
   // Track editor focus state for pull-to-refresh
@@ -330,6 +334,15 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
           </motion.div>
         )}
       </AnimatePresence>
+
+      {/* Save conflict — persistent until the user picks a side. The local
+          buffer is untouched and autosave is paused while this is shown. */}
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode={documentState?.contentMode === 'markdown' ? 'plain' : 'rich'}
+      />
 
       {/* Read-only indicator */}
       {isReadOnly && (
