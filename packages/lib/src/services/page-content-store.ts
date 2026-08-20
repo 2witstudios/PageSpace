@@ -6,13 +6,15 @@ import {
   GetObjectCommand,
   HeadObjectCommand,
   DeleteObjectCommand,
+  CopyObjectCommand,
 } from '@aws-sdk/client-s3';
 import { getTableColumns, getTableName, is } from 'drizzle-orm';
 import { PgTable } from 'drizzle-orm/pg-core';
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { eq, sql } from '@pagespace/db/operators';
 import * as dbSchema from '@pagespace/db/schema';
 import { decideBlobReclaim, type BlobRetainReason } from './page-content-reclaim';
+import { CONTENT_REF_LOCK_CLASS, contentRefLockId } from './page-content-lock';
 import { hashWithPrefix } from '../utils/hash-utils';
 import {
   compress,
@@ -91,6 +93,19 @@ function assertContentRef(ref: string): void {
   }
 }
 
+/** Anything that can run a statement — the db singleton or a transaction. */
+type Executor = Pick<typeof db, 'execute' | 'select'>;
+
+/**
+ * Hold the reclaim lock for `ref` until `tx` commits. See page-content-lock.ts
+ * for why write and reclaim must serialise on it.
+ */
+async function lockContentRef(tx: Executor, ref: string): Promise<void> {
+  await tx.execute(
+    sql`SELECT pg_advisory_xact_lock(${CONTENT_REF_LOCK_CLASS}, ${contentRefLockId(ref)})`
+  );
+}
+
 function getS3Key(ref: string): string {
   assertContentRef(ref);
   return `${CONTENT_SUBDIR}/${ref.slice(0, 2)}/${ref}`;
@@ -143,17 +158,42 @@ export async function writePageContent(
     storedSize = originalSize;
   }
 
-  // Content-addressable: skip upload if already stored
-  try {
-    await s3().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
-  } catch {
-    await s3().send(new PutObjectCommand({
+  // Serialised against reclaim for this ref, so the object cannot be deleted
+  // between the existence check and this function returning the ref to a caller
+  // that is about to persist it.
+  await db.transaction(async (tx) => {
+    await lockContentRef(tx, ref);
+
+    let exists = true;
+    try {
+      await s3().send(new HeadObjectCommand({ Bucket: bucket, Key: key }));
+    } catch {
+      exists = false;
+    }
+
+    if (!exists) {
+      await s3().send(new PutObjectCommand({
+        Bucket: bucket,
+        Key: key,
+        Body: Buffer.from(dataToStore, 'utf8'),
+        ContentType: 'text/plain; charset=utf-8',
+      }));
+      return;
+    }
+
+    // Content-addressable: the bytes are already right, so this copies the
+    // object onto itself purely to move its LastModified forward. That is what
+    // makes the reclaim age floor mean "nothing has written this blob recently"
+    // rather than "this blob was created recently" — without it, a dedupe hit
+    // on an old blob returns a ref the reclaimer still considers fair game.
+    await s3().send(new CopyObjectCommand({
       Bucket: bucket,
       Key: key,
-      Body: Buffer.from(dataToStore, 'utf8'),
+      CopySource: `${bucket}/${key}`,
+      MetadataDirective: 'REPLACE',
       ContentType: 'text/plain; charset=utf-8',
     }));
-  }
+  });
 
   return { ref, size: originalSize, compressed, storedSize, compressionRatio };
 }
@@ -252,12 +292,12 @@ export const CONTENT_REF_TABLE_NAMES: string[] = [
  * already settles. (An index on those columns is worth adding in the change
  * that first calls this on a real workload.)
  */
-export async function pageContentIsReferenced(ref: string): Promise<boolean> {
+export async function pageContentIsReferenced(ref: string, executor: Executor = db): Promise<boolean> {
   assertContentRef(ref);
 
   for (const table of CONTENT_REF_SOURCES) {
     const column = getTableColumns(table).contentRef;
-    const rows = await db.select({ contentRef: column }).from(table).where(eq(column, ref)).limit(1);
+    const rows = await executor.select({ contentRef: column }).from(table).where(eq(column, ref)).limit(1);
     if (rows.length > 0) return true;
   }
   return false;
@@ -307,35 +347,41 @@ export async function deletePageContent(
 ): Promise<DeletePageContentResult> {
   assertContentRef(ref);
 
-  // Settle the cheap, decisive question first: a referenced blob is kept
-  // whatever its age, so there is no reason to go ask storage about it.
-  if (await pageContentIsReferenced(ref)) {
-    return { ref, deleted: false, reason: 'still-referenced' };
-  }
+  return db.transaction(async (tx) => {
+    // Everything below runs under the ref's lock: a concurrent writer cannot
+    // observe this object and skip its upload while we are deciding to delete
+    // it, and cannot refresh it after we have read its age.
+    await lockContentRef(tx, ref);
 
-  const stored = await statContentObject(ref);
-  if (!stored) {
-    return { ref, deleted: false, reason: 'not-stored' };
-  }
+    // Settle the cheap, decisive question first: a referenced blob is kept
+    // whatever its age, so there is no reason to go ask storage about it.
+    if (await pageContentIsReferenced(ref, tx)) {
+      return { ref, deleted: false, reason: 'still-referenced' } as const;
+    }
 
-  const now = options?.now ?? new Date();
-  const decision = decideBlobReclaim({
-    hasReferences: false,
-    blobAgeMs: stored.lastModified ? now.getTime() - stored.lastModified.getTime() : null,
-    minAgeMs: options?.minAgeMs ?? RECLAIM_MIN_AGE_MS,
+    const stored = await statContentObject(ref);
+    if (!stored) {
+      return { ref, deleted: false, reason: 'not-stored' } as const;
+    }
+
+    const now = options?.now ?? new Date();
+    const decision = decideBlobReclaim({
+      blobAgeMs: stored.lastModified ? now.getTime() - stored.lastModified.getTime() : null,
+      minAgeMs: options?.minAgeMs ?? RECLAIM_MIN_AGE_MS,
+    });
+
+    if (decision.action === 'retain') {
+      return { ref, deleted: false, reason: decision.reason } as const;
+    }
+
+    if (stored.location === 's3') {
+      await s3().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: getS3Key(ref) }));
+    } else {
+      await fs.unlink(contentFilesystemPath(ref));
+    }
+
+    return { ref, deleted: true } as const;
   });
-
-  if (decision.action === 'retain') {
-    return { ref, deleted: false, reason: decision.reason };
-  }
-
-  if (stored.location === 's3') {
-    await s3().send(new DeleteObjectCommand({ Bucket: getBucket(), Key: getS3Key(ref) }));
-  } else {
-    await fs.unlink(contentFilesystemPath(ref));
-  }
-
-  return { ref, deleted: true };
 }
 
 export { COMPRESSION_THRESHOLD_BYTES };

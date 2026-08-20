@@ -7,6 +7,7 @@ vi.mock('@aws-sdk/client-s3', () => ({
   HeadObjectCommand: vi.fn((params) => ({ __type: 'head', ...params })),
   PutObjectCommand: vi.fn((params) => ({ __type: 'put', ...params })),
   DeleteObjectCommand: vi.fn((params) => ({ __type: 'delete', ...params })),
+  CopyObjectCommand: vi.fn((params) => ({ __type: 'copy', ...params })),
 }));
 
 const mockStat = vi.fn();
@@ -25,19 +26,36 @@ vi.mock('fs', () => ({
  * connection), so this stands in for "some table still points at the blob".
  */
 let referenced = false;
-vi.mock('@pagespace/db/db', () => ({
-  db: {
-    select: () => ({
-      from: () => ({
-        where: () => ({
-          limit: async () => (referenced ? [{ contentRef: 'a'.repeat(64) }] : []),
-        }),
+/**
+ * `deletePageContent` runs everything inside `db.transaction`, taking the ref's
+ * advisory lock on the transaction handle before it reads references. The mock
+ * therefore has to hand the callback a `tx` that can do both: `execute` for the
+ * lock, `select` for the reference probe. Recording the lock statements lets a
+ * test assert the lock is actually taken rather than merely assumed.
+ */
+const { mockExecute } = vi.hoisted(() => ({ mockExecute: vi.fn(async () => undefined) }));
+vi.mock('@pagespace/db/db', () => {
+  const select = () => ({
+    from: () => ({
+      where: () => ({
+        limit: async () => (referenced ? [{ contentRef: 'a'.repeat(64) }] : []),
       }),
     }),
-  },
-}));
+  });
+  const tx = { select, execute: mockExecute };
+  return {
+    db: {
+      select,
+      transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
+    },
+  };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
+  sql: Object.assign(
+    (strings: TemplateStringsArray, ...values: unknown[]) => ({ strings, values }),
+    { param: (v: unknown) => v }
+  ),
 }));
 
 import { deletePageContent, RECLAIM_MIN_AGE_MS } from '../page-content-store';
@@ -74,6 +92,22 @@ describe('deletePageContent', () => {
     referenced = false;
     mockStat.mockRejectedValue(new Error('ENOENT'));
     mockUnlink.mockResolvedValue(undefined);
+  });
+
+  it('takes the ref lock before it reads references or storage', async () => {
+    // The lock is the whole defence against the dedupe race: a writer that
+    // finds this object already present skips its upload and hands the ref to a
+    // caller that has not yet committed a row for it. Without serialising, the
+    // reclaimer sees zero references, deletes, and that caller commits a ref
+    // pointing at nothing. Removing the lock must fail here.
+    referenced = false;
+    s3HasObject(OLD);
+
+    await deletePageContent(VALID_REF, { now: NOW });
+
+    expect(mockExecute).toHaveBeenCalledTimes(1);
+    const [statement] = mockExecute.mock.calls[0] as [{ strings: TemplateStringsArray }];
+    expect(statement.strings.join('')).toContain('pg_advisory_xact_lock');
   });
 
   it('given two pages share the ref and one is deleted, keeps the blob', async () => {

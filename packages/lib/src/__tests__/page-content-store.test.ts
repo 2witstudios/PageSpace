@@ -10,6 +10,15 @@ import {
 // In-memory S3 store for tests
 const store = new Map<string, Uint8Array>();
 
+// writePageContent runs its dedupe check under the ref's advisory lock inside a
+// transaction; the handle only needs to be able to execute that statement.
+vi.mock('@pagespace/db/db', () => ({
+  db: {
+    transaction: async (fn: (tx: { execute: () => Promise<void> }) => Promise<unknown>) =>
+      fn({ execute: async () => undefined }),
+  },
+}));
+
 vi.mock('@aws-sdk/client-s3', () => {
   class S3Client {
     async send(command: { _tag: string; input: Record<string, unknown> }) {
@@ -23,6 +32,11 @@ vi.mock('@aws-sdk/client-s3', () => {
       if (command._tag === 'HeadObjectCommand') {
         if (!store.has(Key)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
         return { ContentLength: store.get(Key)!.byteLength };
+      }
+
+      if (command._tag === 'CopyObjectCommand') {
+        // Dedupe hit: bytes unchanged, the copy only moves LastModified.
+        return {};
       }
 
       if (command._tag === 'PutObjectCommand') {
@@ -58,6 +72,8 @@ vi.mock('@aws-sdk/client-s3', () => {
     HeadObjectCommand: makeCommand('HeadObjectCommand'),
     PutObjectCommand: makeCommand('PutObjectCommand'),
     GetObjectCommand: makeCommand('GetObjectCommand'),
+    CopyObjectCommand: makeCommand('CopyObjectCommand'),
+    DeleteObjectCommand: makeCommand('DeleteObjectCommand'),
   };
 });
 

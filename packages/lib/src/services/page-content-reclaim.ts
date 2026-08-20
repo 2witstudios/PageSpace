@@ -1,29 +1,22 @@
 /**
- * Whether a content-addressed blob may be reclaimed.
+ * Whether a content-addressed blob is old enough to reclaim.
  *
- * `getS3Key` shards by hash prefix and carries no tenant scoping, so one stored
- * object is shared by every page — in every drive, of every tenant — whose
- * content hashes to the same value. Deleting on "my page went away" would take
- * somebody else's content with it. Reclaim is therefore refcounted: the object
- * goes only when the last row referencing it is gone.
+ * This is the second of the two questions reclaim asks. The first — is anything
+ * still referencing it — is settled in `page-content-store.ts`, because a
+ * referenced blob is kept whatever its age and there is no reason to go ask
+ * storage about it. What is left here is the age judgement.
  *
- * The age floor closes the other half of the problem. `writePageContent` is a
- * HEAD-then-PUT: a concurrent writer that finds the object already present
- * skips the upload and stores the ref. If a reclaim ran between that HEAD and
- * the writer's row insert, the new ref would point at nothing. A blob younger
- * than the floor is never reclaimed, which bounds that window to something no
- * request comes close to.
+ * The floor exists because a writer whose content already exists skips the
+ * upload, so the object it hands back can be older than the reference about to
+ * be written for it. Both sides take a per-ref lock (see page-content-lock.ts)
+ * and the writer touches the object it reuses, which together make "recently
+ * written" a property the reclaimer can actually observe. The floor then covers
+ * the remaining gap: the writer's caller committing its `contentRef` row.
  *
  * Unknown age fails closed: not being able to date an object is not evidence
  * that it is old.
  */
-
 export interface BlobReclaimEvidence {
-  /**
-   * Whether any row still references the blob at decision time. The caller
-   * deletes its own rows first, so its own reference is already gone.
-   */
-  hasReferences: boolean;
   /** Age of the stored object in ms, or null when it could not be determined. */
   blobAgeMs: number | null;
   /** Blobs younger than this are never reclaimed. */
@@ -42,9 +35,6 @@ export type BlobReclaimDecision =
   | { action: 'retain'; reason: BlobRetainReason };
 
 export function decideBlobReclaim(evidence: BlobReclaimEvidence): BlobReclaimDecision {
-  if (evidence.hasReferences) {
-    return { action: 'retain', reason: 'still-referenced' };
-  }
   if (evidence.blobAgeMs === null) {
     return { action: 'retain', reason: 'age-unknown' };
   }
