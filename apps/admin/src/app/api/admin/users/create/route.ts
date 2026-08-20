@@ -8,7 +8,7 @@ import { getOnPremUserDefaults } from '@pagespace/lib/onprem-defaults';
 import { generateOnPremSetupLink } from '@pagespace/lib/auth/onprem-setup-link';
 import { userEmailMatch, prepareUserWrite } from '@pagespace/lib/auth/user-repository';
 import { withAdminAuth } from '@/lib/auth/auth';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
 const createUserSchema = z.object({

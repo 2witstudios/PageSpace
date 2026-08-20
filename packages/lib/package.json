@@ -37,6 +37,26 @@
       "import": "./dist/commands/starter-skill-installer.js",
       "require": "./dist/commands/starter-skill-installer.js"
     },
+    "./onboarding/drive-setup": {
+      "types": "./dist/onboarding/drive-setup.d.ts",
+      "import": "./dist/onboarding/drive-setup.js",
+      "require": "./dist/onboarding/drive-setup.js"
+    },
+    "./onboarding/home-drive": {
+      "types": "./dist/onboarding/home-drive.d.ts",
+      "import": "./dist/onboarding/home-drive.js",
+      "require": "./dist/onboarding/home-drive.js"
+    },
+    "./onboarding/seed-decision": {
+      "types": "./dist/onboarding/seed-decision.d.ts",
+      "import": "./dist/onboarding/seed-decision.js",
+      "require": "./dist/onboarding/seed-decision.js"
+    },
+    "./onboarding/onboarding-faq": {
+      "types": "./dist/onboarding/onboarding-faq.d.ts",
+      "import": "./dist/onboarding/onboarding-faq.js",
+      "require": "./dist/onboarding/onboarding-faq.js"
+    },
     "./db/bounded-query": {
       "types": "./dist/db/bounded-query.d.ts",
       "import": "./dist/db/bounded-query.js",

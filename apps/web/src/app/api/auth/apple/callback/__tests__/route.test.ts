@@ -100,7 +100,7 @@ vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
   trackAuthEvent: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
@@ -156,7 +156,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-utils';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import {
   consumeAnyInviteIfPresent,

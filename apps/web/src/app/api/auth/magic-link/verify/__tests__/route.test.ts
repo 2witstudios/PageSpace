@@ -97,7 +97,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'new-drive-id', created: false }),
 }));
 
@@ -137,7 +137,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { consumeAnyInviteIfPresent } from '@/lib/auth/native-invite-acceptance';
 import { resetFailedLoginAttempts } from '@pagespace/lib/auth/account-lockout';
 import { isOnPrem } from '@pagespace/lib/deployment-mode';

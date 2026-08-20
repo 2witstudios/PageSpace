@@ -102,7 +102,7 @@ vi.mock('@/lib/auth', () => ({
 vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
 vi.mock('@/lib/auth/native-invite-acceptance', () => ({

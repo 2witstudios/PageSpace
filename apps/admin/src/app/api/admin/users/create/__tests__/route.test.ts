@@ -58,7 +58,7 @@ vi.mock('@/lib/auth/auth', () => ({
     (req: Request) => handler({ id: 'admin-1' }, req),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(undefined),
 }));
 

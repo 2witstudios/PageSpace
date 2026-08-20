@@ -133,7 +133,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue({ driveId: 'drive-123', created: true }),
 }));
 
@@ -158,7 +158,7 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';

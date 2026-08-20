@@ -19,32 +19,32 @@ vi.mock('@pagespace/db/schema/core', () => ({
   drives: { ownerId: 'ownerId', kind: 'kind', slug: 'slug' },
   pages: { driveId: 'driveId' },
 }));
-vi.mock('@pagespace/lib/services/drive-guards', () => ({
+vi.mock('../../services/drive-guards', () => ({
   HOME_DRIVE_NAME: 'Home',
   resolveUniqueSlug: vi.fn(),
 }));
 // Stub the subdomain allocator so the test doesn't pull drive-service's transitive
 // DB-schema imports (mcpTokens, driveMembers, …) into this unit test's mock surface.
-vi.mock('@pagespace/lib/services/drive-service', () => ({
+vi.mock('../../services/drive-service', () => ({
   allocatePublishSubdomain: vi.fn().mockResolvedValue('home'),
 }));
 vi.mock('@paralleldrive/cuid2', () => ({
   createId: vi.fn().mockReturnValue('cuid-folder-1'),
 }));
-vi.mock('@/lib/onboarding/drive-setup', () => ({
+vi.mock('../drive-setup', () => ({
   populateUserDrive: vi.fn(),
 }));
 // Same reason as drive-setup above: the installer's own DB access is covered by
 // its unit tests (packages/lib/.../starter-skill-installer.test.ts); here we only
 // care that provisioning calls it, on both branches.
-vi.mock('@pagespace/lib/commands/starter-skill-installer', () => ({
+vi.mock('../../commands/starter-skill-installer', () => ({
   installStarterSkills: vi.fn().mockResolvedValue({ installed: [], skipped: [], alreadyInstalled: false }),
 }));
 
 // Same treatment, same reason: memory-page provisioning has its own behaviour
 // and its own coverage. Here we only care that provisioning calls it, so the
 // real implementation is not driven against this file's transaction stub.
-vi.mock('@pagespace/lib/memory/memory-pages', () => ({
+vi.mock('../../memory/memory-pages', () => ({
   provisionMemoryPages: vi.fn().mockResolvedValue({
     folderId: 'memory-folder',
     bioPageId: 'bio-page',
@@ -56,9 +56,10 @@ vi.mock('@pagespace/lib/memory/memory-pages', () => ({
 import { db } from '@pagespace/db/db';
 import { sql } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
-import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards';
-import { populateUserDrive } from '@/lib/onboarding/drive-setup';
-import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer';
+import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../../services/drive-guards';
+import { populateUserDrive } from '../drive-setup';
+import { installStarterSkills } from '../../commands/starter-skill-installer';
+import { provisionMemoryPages } from '../../memory/memory-pages';
 import {
   provisionHomeDriveIfNeeded,
   type ProvisionHomeDriveResult,
@@ -119,7 +120,7 @@ describe('provisionHomeDriveIfNeeded', () => {
   test('given new user (no owned drives), inserts Home with kind=HOME, seeds Getting Started folder, calls populateUserDrive, returns created:true', async () => {
     const tx = makeTx([]); // no owned drives = new user
     const driveValues = (tx.insert as ReturnType<typeof vi.fn>).mock.results; // will be populated on call
-    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     const result: ProvisionHomeDriveResult = await provisionHomeDriveIfNeeded('user-new');
@@ -149,7 +150,7 @@ describe('provisionHomeDriveIfNeeded', () => {
 
   test('new user drive insert values include name=HOME_DRIVE_NAME, kind=HOME, ownerId', async () => {
     const tx = makeTx([]);
-    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     await provisionHomeDriveIfNeeded('user-new');
@@ -169,7 +170,7 @@ describe('provisionHomeDriveIfNeeded', () => {
 
   test('new user folder insert is titled "Getting Started", type FOLDER, under drive root', async () => {
     const tx = makeTx([]);
-    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     await provisionHomeDriveIfNeeded('user-new');
@@ -214,7 +215,7 @@ describe('provisionHomeDriveIfNeeded', () => {
 
   test('given new user, starter skills are installed into the new Home drive', async () => {
     const tx = makeTx();
-    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     await provisionHomeDriveIfNeeded('user-new');
@@ -224,11 +225,42 @@ describe('provisionHomeDriveIfNeeded', () => {
     expect(installStarterSkills).toHaveBeenCalledWith('user-new', 'drive-new', tx);
   });
 
+  test('given new user, memory pages are provisioned into the new Home drive', async () => {
+    const tx = makeTx();
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    await provisionHomeDriveIfNeeded('user-new');
+
+    // Same tx as the drive insert, for the same reason as starter skills: a Home
+    // drive that exists without its memory pages leaves the personalization cron
+    // with nowhere to write, and the settings screen with nothing to link to.
+    expect(provisionMemoryPages).toHaveBeenCalledWith('user-new', 'drive-new', tx);
+  });
+
+  test('given an existing user reached lazily, memory pages are still provisioned', async () => {
+    // Owning a non-HOME drive is what puts production on the LAZY branch.
+    // Calling makeTx() bare would report zero owned drives and quietly re-test
+    // the new-user path instead.
+    const tx = makeTx([{ id: 'other-drive-1', kind: 'STANDARD', slug: 'my-drive' }]);
+    vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
+
+    const result: ProvisionHomeDriveResult = await provisionHomeDriveIfNeeded('user-existing');
+
+    // `created: false` is what proves the lazy branch ran: the new-user branch
+    // returns true after seeding tutorial content.
+    expect(result.created).toBe(false);
+
+    // Both branches, like starter skills. An account that predates the feature
+    // reaches Home through the lazy path and must not be left without pages.
+    expect(provisionMemoryPages).toHaveBeenCalledWith('user-existing', 'drive-new', tx);
+  });
+
   test('given slug "home" taken, resolveUniqueSlug result is used as the drive slug', async () => {
     vi.mocked(resolveUniqueSlug).mockReturnValue('home-2');
 
     const tx = makeTx([{ id: 'some-drive', kind: 'STANDARD', slug: 'home' }]);
-    vi.mocked(populateUserDrive).mockResolvedValue(undefined);
+    vi.mocked(populateUserDrive).mockResolvedValue({ seeded: true });
     vi.mocked(db.transaction).mockImplementation((async (cb: (t: typeof tx) => unknown) => cb(tx)) as never);
 
     await provisionHomeDriveIfNeeded('user-slug');

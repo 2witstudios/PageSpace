@@ -111,7 +111,7 @@ vi.mock('@paralleldrive/cuid2', () => ({
   init: vi.fn(() => vi.fn(() => 'test-cuid')),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn(),
 }));
 
@@ -126,7 +126,7 @@ import { sessionService } from '@pagespace/lib/auth/session-service';
 import { generateCSRFToken } from '@pagespace/lib/auth/csrf-utils';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 
 // Test fixtures

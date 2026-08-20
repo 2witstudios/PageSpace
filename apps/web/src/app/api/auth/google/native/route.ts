@@ -9,7 +9,7 @@ import { validateOrCreateDeviceToken } from '@pagespace/lib/auth/device-auth-uti
 import { maskEmail } from '@pagespace/lib/audit/mask-email';
 import { trackAuthEvent } from '@pagespace/lib/monitoring/activity-tracker';
 import { z } from 'zod/v4';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { getClientIP, isSafeReturnUrl, revokeSessionsForLogin } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveGoogleAvatarImage } from '@/lib/auth/google-avatar';

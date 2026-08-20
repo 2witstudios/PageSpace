@@ -1,31 +1,78 @@
 import { db } from '@pagespace/db/db'
-import { pages } from '@pagespace/db/schema/core'
+import { and, eq, isNull, sql } from '@pagespace/db/operators'
+import { drives, pages } from '@pagespace/db/schema/core'
 import { taskItems, taskLists } from '@pagespace/db/schema/tasks';
 import { createId } from '@paralleldrive/cuid2';
 import { getAboutPageSpaceAgentSystemPrompt, getReferenceSeedTemplate, type SeedNodeTemplate, type SeedTaskTemplate } from './onboarding-faq';
 import { buildBudgetSheetContent } from './faq/content-page-types';
 import { PLANNING_ASSISTANT_SYSTEM_PROMPT } from './faq/example-agent-prompts';
-import { DEFAULT_PROVIDER, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-config';
+import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '../ai/model-defaults';
+import { decideDriveSeeding } from './seed-decision';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
 type DbClient = TransactionType | DatabaseType;
 
+export interface PopulateUserDriveResult {
+  /** False when the scope was already seeded and this call did nothing. */
+  seeded: boolean;
+}
+
 /**
- * Populates a new user's drive with starter content.
+ * Populates a new user's drive with starter content — the single seeder for
+ * every entry point (web signup, admin user creation, Home provisioning).
+ *
  * Each page type is a first-class item at the root so users immediately
  * see what PageSpace can do. Two general-purpose agents are included.
  *
  * Pass `options.rootParentId` to nest all top-level seed pages under a
  * specific parent (e.g. a "Getting Started" folder). Children that already
  * supply an explicit parentId are unaffected.
+ *
+ * Idempotent and race-safe: the whole seed runs in one transaction that first
+ * takes a row lock on the drive, so a concurrent seeder for the same drive
+ * waits and then finds the scope populated and returns `{ seeded: false }`.
+ * Re-running against a seeded scope is a no-op, not a second copy.
  */
 export async function populateUserDrive(
   userId: string,
   driveId: string,
   client: DbClient = db,
   options?: { rootParentId?: string }
-): Promise<void> {
+): Promise<PopulateUserDriveResult> {
+  return client.transaction((tx: TransactionType) =>
+    seedDriveInTransaction(userId, driveId, tx, options)
+  );
+}
+
+async function seedDriveInTransaction(
+  userId: string,
+  driveId: string,
+  client: TransactionType,
+  options?: { rootParentId?: string }
+): Promise<PopulateUserDriveResult> {
+  // Serialises concurrent seeders for the same drive. Whoever loses the race
+  // blocks here, then reads the scope the winner just filled.
+  await client.execute(
+    sql`SELECT 1 FROM ${drives} WHERE ${drives.id} = ${driveId} FOR UPDATE`
+  );
+
+  const rootParentId = options?.rootParentId;
+  const existing = await client
+    .select({ id: pages.id })
+    .from(pages)
+    .where(
+      and(
+        eq(pages.driveId, driveId),
+        rootParentId ? eq(pages.parentId, rootParentId) : isNull(pages.parentId)
+      )
+    )
+    .limit(1);
+
+  if (decideDriveSeeding({ existingPageCount: existing.length }).action === 'skip') {
+    return { seeded: false };
+  }
+
   const now = new Date();
 
   const basePage = {
@@ -372,8 +419,8 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
     content: '',
     systemPrompt: getAboutPageSpaceAgentSystemPrompt(),
     agentDefinition: 'Onboarding guide that teaches PageSpace using the reference knowledge base.',
-    aiProvider: DEFAULT_PROVIDER,
-    aiModel: DEFAULT_MODEL,
+    aiProvider: DEFAULT_AI_PROVIDER,
+    aiModel: DEFAULT_AI_MODEL,
     enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
     includePageTree: true,
     pageTreeScope: 'drive',
@@ -389,8 +436,8 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
     content: '',
     systemPrompt: PLANNING_ASSISTANT_SYSTEM_PROMPT,
     agentDefinition: 'Helps plan workspace structure, organize projects, and break down ideas into actionable steps.',
-    aiProvider: DEFAULT_PROVIDER,
-    aiModel: DEFAULT_MODEL,
+    aiProvider: DEFAULT_AI_PROVIDER,
+    aiModel: DEFAULT_AI_MODEL,
     enabledTools: ['read_page', 'list_pages', 'glob_search', 'regex_search'],
     includePageTree: true,
     pageTreeScope: 'drive',
@@ -400,4 +447,6 @@ Edit this page. Add your own headings, lists, and notes. Documents support rich 
   // 10. Reference (Folder + consolidated guides)
   const referenceTemplate = getReferenceSeedTemplate();
   await seedNode({ node: referenceTemplate, position: 10 });
+
+  return { seeded: true };
 }
