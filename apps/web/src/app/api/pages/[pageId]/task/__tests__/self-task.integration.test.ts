@@ -24,12 +24,18 @@ import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
 
 let currentUserId = '';
+/**
+ * Overridable so the permission branch is reachable. Mocking the module with a
+ * hardcoded `true` leaves the 403 path in this route unexercised — which is how
+ * a permission check quietly becomes decorative.
+ */
+let canView = true;
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(async () => ({ userId: currentUserId })),
   isAuthError: vi.fn(() => false),
   checkMCPPageScope: vi.fn(async () => null),
-  canPrincipalViewPage: vi.fn(async () => true),
+  canPrincipalViewPage: vi.fn(async () => canView),
   canPrincipalEditPage: vi.fn(async () => true),
 }));
 
@@ -157,6 +163,35 @@ describe('GET /api/pages/[pageId]/task', () => {
       actual: [body.task?.subTaskCount, body.task?.subTaskCompletedCount],
       expected: [2, 1],
     });
+  });
+
+  it('refuses without view permission, and reads nothing', async () => {
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const taskPage = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id });
+
+    canView = false;
+    try {
+      const res = await route.GET(
+        new Request(`http://localhost/api/pages/${taskPage.id}/task`),
+        { params: Promise.resolve({ pageId: taskPage.id }) },
+      );
+      const body = await res.json();
+      assert({
+        given: 'a viewer without permission on the page',
+        should: 'return 403 and no task data',
+        actual: { status: res.status, task: body?.task, listPageId: body?.listPageId },
+        expected: { status: 403, task: undefined, listPageId: undefined },
+      });
+    } finally {
+      canView = true;
+    }
   });
 
   it('returns no task for a list that is not itself a task', async () => {

@@ -35,10 +35,10 @@ export const DEPTH_INDENT_PX = 20;
  * per level. Not a bare task id.
  *
  * A page tree is acyclic, so today the same task id genuinely cannot appear at
- * two depths at once. The path is still the right key: it makes "collapse this
- * node's whole subtree" a prefix operation rather than a graph walk, it stays
- * correct if a future filtered or searched view renders the same subtree in two
- * places, and it gives React an unambiguous `key`.
+ * two depths at once. The path is still the right key: it stays correct if a
+ * future filtered or searched view renders the same subtree in two places, it
+ * gives React an unambiguous `key`, and it makes a subtree addressable by
+ * prefix if collapsing one ever needs to be more than "clear everything".
  */
 export type TaskNodePath = string;
 
@@ -62,26 +62,6 @@ export const toggleNodePath = (
   const next = new Set(expanded);
   if (next.has(path)) next.delete(path);
   else next.add(path);
-  return next;
-};
-
-/**
- * Remove `path` and everything beneath it.
- *
- * The separator in the prefix test is load-bearing: matching on `path` alone
- * would make collapsing `…/abc` also collapse the unrelated sibling `…/abcdef`,
- * because one id is a string prefix of the other.
- */
-export const collapseSubtree = (
-  expanded: ReadonlySet<TaskNodePath>,
-  path: TaskNodePath,
-): Set<TaskNodePath> => {
-  const prefix = `${path}${PATH_SEPARATOR}`;
-  const next = new Set<TaskNodePath>();
-  for (const p of expanded) {
-    if (p === path || p.startsWith(prefix)) continue;
-    next.add(p);
-  }
   return next;
 };
 
@@ -146,53 +126,4 @@ export const formatSubTaskProgress = (
   if (total <= 0) return null;
   const completed = Math.min(Math.max(task.subTaskCompletedCount ?? 0, 0), total);
   return { label: `${completed}/${total}`, ratio: completed / total };
-};
-
-/**
- * A node in render order, as the recursion would emit it.
- *
- * NOTE: this is the model for keyboard navigation, Find, and `aria-posinset`
- * — it is NOT what drives rendering. Producing it requires `childrenByPath`,
- * which means lifting every expanded node's loaded children into the parent
- * view. That lift is deferred; until it happens nothing calls this in the app,
- * and nested rows carry `data-task-path` rather than `data-task-id` so Find
- * cannot half-match them against a top-level-only index.
- */
-export interface FlatTaskNode {
-  task: TaskItem;
-  depth: number;
-  listPageId: string;
-  path: TaskNodePath;
-}
-
-export const flattenTaskTree = (params: {
-  listPageId: string;
-  tasks: readonly TaskItem[];
-  expanded: ReadonlySet<TaskNodePath>;
-  childrenByPath: ReadonlyMap<TaskNodePath, readonly TaskItem[]>;
-  maxDepth?: number;
-}): FlatTaskNode[] => {
-  const { listPageId, tasks, expanded, childrenByPath, maxDepth = MAX_TASK_DEPTH } = params;
-  const out: FlatTaskNode[] = [];
-
-  const walk = (
-    nodes: readonly TaskItem[],
-    parentPath: TaskNodePath,
-    ownerPageId: string,
-    depth: number,
-  ): void => {
-    for (const task of nodes) {
-      const path = makeNodePath(parentPath, task.id);
-      out.push({ task, depth, listPageId: ownerPageId, path });
-      if (depth + 1 > maxDepth) continue;
-      if (!isNodeExpanded(expanded, path)) continue;
-      if (!task.pageId) continue;
-      const children = childrenByPath.get(path);
-      if (!children || children.length === 0) continue;
-      walk(children, path, task.pageId, depth + 1);
-    }
-  };
-
-  walk(tasks, rootNodePath(listPageId), listPageId, 0);
-  return out;
 };

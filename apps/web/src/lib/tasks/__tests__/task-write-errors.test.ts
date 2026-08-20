@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
   taskWriteErrorMessage,
-  isSubtasksBlocked,
   isRevisionConflict,
 } from '../task-write-errors';
 
@@ -80,26 +79,6 @@ describe('taskWriteErrorMessage', () => {
       should: 'use the caller fallback',
       actual: taskWriteErrorMessage(new Error('network'), 'Failed to update status'),
       expected: 'Failed to update status',
-    });
-  });
-});
-
-describe('isSubtasksBlocked', () => {
-  it('recognises the guard payload', () => {
-    assert({
-      given: 'a 422 with code SUBTASKS_INCOMPLETE',
-      should: 'be recognised',
-      actual: isSubtasksBlocked(apiError(422, { code: 'SUBTASKS_INCOMPLETE' })),
-      expected: true,
-    });
-  });
-
-  it('does not match a 422 from something else', () => {
-    assert({
-      given: 'a 422 with a different code',
-      should: 'not be recognised as the sub-task guard',
-      actual: isSubtasksBlocked(apiError(422, { code: 'SOMETHING_ELSE' })),
-      expected: false,
     });
   });
 });

@@ -30,11 +30,6 @@ const bodyError = (body: unknown): string | null => {
   return typeof message === 'string' && message.length > 0 ? message : null;
 };
 
-export const isSubtasksBlocked = (error: unknown): boolean =>
-  hasStatus(error) && error.status === 422
-  && typeof error.body === 'object' && error.body !== null
-  && (error.body as { code?: unknown }).code === 'SUBTASKS_INCOMPLETE';
-
 /**
  * A revision conflict on a title write means our view of the page is behind;
  * a rollback would restore data that is already wrong, so callers revalidate

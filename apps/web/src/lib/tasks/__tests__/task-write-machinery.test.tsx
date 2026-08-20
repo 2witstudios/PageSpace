@@ -64,17 +64,26 @@ const makeMutate = (initial: TaskListData[]) => {
       ? (rawOptimistic as (c?: TaskListData[]) => TaskListData[])(current)
       : rawOptimistic as TaskListData[] | undefined;
     calls.push({ ...opts, optimisticData } as never);
+    const before = current;
     if (optimisticData) current = optimisticData;
     if (typeof data === 'function') {
-      const out = await (data as (c?: TaskListData[]) => Promise<TaskListData[] | undefined>)(current);
-      results.push(out);
-      // The commit: SWR writes the updater's return value into the cache here.
-      if (out) { current = out; commitAt = nextTick(); }
-      return out;
+      try {
+        const out = await (data as (c?: TaskListData[]) => Promise<TaskListData[] | undefined>)(current);
+        results.push(out);
+        // The commit: SWR writes the updater's return value into the cache here.
+        if (out) { current = out; commitAt = nextTick(); }
+        return out;
+      } catch (e) {
+        // SWR restores the pre-optimistic value when rollbackOnError is set.
+        // Modelling it is what lets a test assert the ROLLBACK rather than just
+        // the presence of the option.
+        if (opts?.rollbackOnError) current = before;
+        throw e;
+      }
     }
     return undefined;
   });
-  return { mutate, calls, results, committedAt: () => commitAt };
+  return { mutate, calls, results, committedAt: () => commitAt, cache: () => current };
 };
 
 // Two distinct spies on purpose: the machinery's view-wide `revalidateAll` and
@@ -86,7 +95,7 @@ const setup = (
   revalidateAll = vi.fn(),
   onRevisionConflict = vi.fn(),
 ) => {
-  const { mutate, calls, results, committedAt } = makeMutate(initial);
+  const { mutate, calls, results, committedAt, cache } = makeMutate(initial);
   let revalidatedAt: number | null = null;
   const trackedRevalidateAll = () => { revalidatedAt = nextTick(); revalidateAll(); };
   const view = renderHook(() => {
@@ -96,7 +105,7 @@ const setup = (
   });
   return {
     view, mutate, calls, results, revalidateAll, onRevisionConflict,
-    committedAt, revalidatedAt: () => revalidatedAt,
+    committedAt, cache, revalidatedAt: () => revalidatedAt,
   };
 };
 
@@ -182,6 +191,28 @@ describe('writeTaskField', () => {
       should: 'store the server value',
       actual: results[0]?.[0].tasks[0].completedAt,
       expected: 'server-stamp',
+    });
+  });
+
+  it('rolls the optimistic patch back when the write fails', async () => {
+    // Previously only the rollbackOnError OPTION was asserted; nothing checked
+    // that the row actually reverts, so a change that stopped passing it — or
+    // passed it somewhere ineffective — would not have been caught.
+    patchMock.mockRejectedValue(Object.assign(new Error('x'), { status: 500, body: {} }));
+    const { view, cache } = setup(pages([task({ id: 't1', status: 'pending' })]));
+    await act(async () => {
+      await view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't1' },
+        body: { status: 'completed' },
+        optimistic: { status: 'completed', completedAt: 'guess' },
+        fallbackMessage: 'Failed to update status',
+      });
+    });
+    assert({
+      given: 'an optimistic completion whose write then failed',
+      should: 'leave the row exactly as it was',
+      actual: [cache()?.[0].tasks[0].status, cache()?.[0].tasks[0].completedAt],
+      expected: ['pending', null],
     });
   });
 

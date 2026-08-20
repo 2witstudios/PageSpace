@@ -135,19 +135,6 @@ export const removeTaskFromPages = (
   return changed ? next : pages;
 };
 
-/** Find a task across loaded pages. */
-export const findTaskInPages = (
-  pages: TaskListData[] | undefined,
-  taskId: string,
-): TaskItem | undefined => {
-  if (!pages) return undefined;
-  for (const page of pages) {
-    const found = page.tasks.find((t) => t.id === taskId);
-    if (found) return found;
-  }
-  return undefined;
-};
-
 /**
  * Which slug a completion toggle should land on, given a list's vocabulary.
  *

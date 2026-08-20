@@ -122,7 +122,10 @@ export function TaskRowGroup({
   return (
     <>
       {renderRow ? renderRow(cells, { expandable, isExpanded }) : (
-        <NestedTaskRow task={task} depth={depth} isExpanded={isExpanded} expandable={expandable}>
+        <NestedTaskRow
+          task={task} depth={depth} path={path}
+          isExpanded={isExpanded} expandable={expandable}
+        >
           {cells}
         </NestedTaskRow>
       )}
@@ -151,10 +154,11 @@ const MAX_ADDABLE_DEPTH = 4;
  * anyway.
  */
 function NestedTaskRow({
-  task, depth, isExpanded, expandable, children,
+  task, depth, path, isExpanded, expandable, children,
 }: {
   task: TaskItem;
   depth: number;
+  path: TaskNodePath;
   isExpanded: boolean;
   expandable: boolean;
   children: React.ReactNode;
@@ -164,7 +168,7 @@ function NestedTaskRow({
       // `data-task-path`, not `data-task-id`: Find queries `[data-task-id]` over
       // the top-level list only, and a nested row answering that query would
       // hand it matches its index cannot address.
-      data-task-path={depth}
+      data-task-path={path}
       aria-level={depth + 1}
       aria-expanded={expandable ? isExpanded : undefined}
       className={task.completedAt ? 'opacity-60' : undefined}
@@ -243,6 +247,12 @@ function TaskSubTaskRows({
       // Counters live on the PARENT row, in the cache one level up. Only the
       // direct parent changes — the server groups them on pages.parentId, so
       // there is no bubbling further than this.
+      //
+      // The delta is derived from the status GROUP while the server counts
+      // `completedAt IS NOT NULL`. Those agree because PATCH stamps completedAt
+      // on exactly the done-group transitions (tasks/[taskId]/route.ts) — a real
+      // coupling, not a coincidence, and the reason a status change that stops
+      // stamping would silently drift these numbers.
       if (ok) onParentCountDelta?.({ completed: isDone ? -1 : 1 });
     },
     onStatusChange: async (loc, child, status) => {

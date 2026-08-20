@@ -5,12 +5,10 @@ import {
   makeNodePath,
   isNodeExpanded,
   toggleNodePath,
-  collapseSubtree,
   canExpandNode,
   depthIndentStyle,
   resolveNodeStatusConfigs,
   formatSubTaskProgress,
-  flattenTaskTree,
   MAX_TASK_DEPTH,
   DEPTH_INDENT_PX,
 } from '../task-tree-core';
@@ -73,41 +71,6 @@ describe('node paths', () => {
       should: 'return a set without it',
       actual: isNodeExpanded(toggleNodePath(new Set(['root/a']), 'root/a'), 'root/a'),
       expected: false,
-    });
-  });
-});
-
-describe('collapseSubtree', () => {
-  it('removes the node and everything below it', () => {
-    const expanded = new Set(['root', 'root/a', 'root/a/b', 'root/a/b/c', 'root/z']);
-    assert({
-      given: 'an expanded set with a three-level subtree under root/a',
-      should: 'drop root/a and all its descendants, keeping unrelated paths',
-      actual: [...collapseSubtree(expanded, 'root/a')].sort(),
-      expected: ['root', 'root/z'],
-    });
-  });
-
-  it('does not collapse a sibling whose id merely starts with the same characters', () => {
-    // The separator in the prefix test is the whole point: without it, `root/abc`
-    // would also match `root/abcdef` and silently collapse an unrelated subtree.
-    const expanded = new Set(['root/abc', 'root/abc/x', 'root/abcdef', 'root/abcdef/y']);
-    assert({
-      given: 'a sibling path that is a string prefix-extension of the collapsed one',
-      should: 'leave the sibling and its descendants expanded',
-      actual: [...collapseSubtree(expanded, 'root/abc')].sort(),
-      expected: ['root/abcdef', 'root/abcdef/y'],
-    });
-  });
-
-  it('does not mutate the input set', () => {
-    const input = new Set(['root/a', 'root/a/b']);
-    collapseSubtree(input, 'root/a');
-    assert({
-      given: 'an input set',
-      should: 'be unchanged after collapsing',
-      actual: input.size,
-      expected: 2,
     });
   });
 });
@@ -256,73 +219,3 @@ describe('formatSubTaskProgress', () => {
   });
 });
 
-describe('flattenTaskTree', () => {
-  const a = task({ id: 'a', subTaskCount: 2 });
-  const a1 = task({ id: 'a1' });
-  const a2 = task({ id: 'a2' });
-  const b = task({ id: 'b' });
-
-  it('emits children immediately after their parent, before the next sibling', () => {
-    const flat = flattenTaskTree({
-      listPageId: 'root',
-      tasks: [a, b],
-      expanded: new Set(['root/a']),
-      childrenByPath: new Map([['root/a', [a1, a2]]]),
-    });
-    assert({
-      given: 'an expanded first task with two children and a following sibling',
-      should: 'emit parent, its children, then the sibling',
-      actual: flat.map((n) => `${n.task.id}@${n.depth}`),
-      expected: ['a@0', 'a1@1', 'a2@1', 'b@0'],
-    });
-  });
-
-  it('attributes children to the parent task page, not the root list page', () => {
-    const flat = flattenTaskTree({
-      listPageId: 'root',
-      tasks: [a],
-      expanded: new Set(['root/a']),
-      childrenByPath: new Map([['root/a', [a1]]]),
-    });
-    assert({
-      given: 'a nested child',
-      should: 'carry its parent task page as the list it writes to',
-      actual: flat.map((n) => n.listPageId),
-      expected: ['root', 'page-a'],
-    });
-  });
-
-  it('omits children of a collapsed node', () => {
-    const flat = flattenTaskTree({
-      listPageId: 'root',
-      tasks: [a],
-      expanded: new Set(),
-      childrenByPath: new Map([['root/a', [a1]]]),
-    });
-    assert({
-      given: 'a collapsed parent with loaded children',
-      should: 'emit only the parent',
-      actual: flat.map((n) => n.task.id),
-      expected: ['a'],
-    });
-  });
-
-  it('stops at the depth ceiling', () => {
-    const flat = flattenTaskTree({
-      listPageId: 'root',
-      tasks: [a],
-      expanded: new Set(['root/a', 'root/a/a1']),
-      childrenByPath: new Map([
-        ['root/a', [a1]],
-        ['root/a/a1', [a2]],
-      ]),
-      maxDepth: 1,
-    });
-    assert({
-      given: 'a two-level expansion under maxDepth 1',
-      should: 'emit only the first level of children',
-      actual: flat.map((n) => n.task.id),
-      expected: ['a', 'a1'],
-    });
-  });
-});

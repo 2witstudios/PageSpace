@@ -240,6 +240,20 @@ describe('seedDefaultTaskStatusConfigs', () => {
     expect(taskStatusConfigInserts).toHaveLength(0);
   });
 
+  it('swallows the DrizzleQueryError shape a real conflict actually arrives as', async () => {
+    // The production shape: drizzle wraps the pg error, so its own message is
+    // "Failed query: insert into…" and the SQLSTATE is on `cause`. A check that
+    // only looked at the message would rethrow here and take down the caller.
+    const wrapped = Object.assign(
+      new Error('Failed query: insert into "task_status_configs" ...'),
+      { cause: Object.assign(new Error('duplicate key value'), { code: '23505' }) },
+    );
+    const tx = {
+      insert: vi.fn(() => ({ values: () => Promise.reject(wrapped) })),
+    };
+    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).resolves.toBeUndefined();
+  });
+
   it('rethrows an unrelated error', async () => {
     const tx = {
       insert: vi.fn(() => ({

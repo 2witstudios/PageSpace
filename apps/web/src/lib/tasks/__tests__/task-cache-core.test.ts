@@ -9,7 +9,6 @@ import {
   applySubTaskCountsToPages,
   appendTaskToPages,
   removeTaskFromPages,
-  findTaskInPages,
   shouldAppendOptimistically,
   resolveToggleStatus,
   blockedByOpenSubTasks,
@@ -268,27 +267,6 @@ describe('removeTaskFromPages', () => {
       should: 'drop it and keep its page-mates',
       actual: next?.[1].tasks.map((t) => t.id),
       expected: ['c'],
-    });
-  });
-});
-
-describe('findTaskInPages', () => {
-  it('searches every loaded page', () => {
-    const pages = [page([task({ id: 'a' })], true), page([task({ id: 'b' })])];
-    assert({
-      given: 'a task on the second page',
-      should: 'find it',
-      actual: findTaskInPages(pages, 'b')?.id,
-      expected: 'b',
-    });
-  });
-
-  it('is undefined for an unknown id', () => {
-    assert({
-      given: 'an id not in the cache',
-      should: 'return undefined',
-      actual: findTaskInPages([page([task({ id: 'a' })])], 'z'),
-      expected: undefined,
     });
   });
 });

@@ -32,9 +32,27 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 }
 
 /**
- * Seed the default `task_status_configs` for a `task_lists` row. Swallows a
- * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may have
- * seeded the same list a moment earlier; the caller only needed the configs to exist.
+ * Is this a `(taskListId, slug)` unique-constraint violation?
+ *
+ * The `.cause` arm is the one that fires in production: drizzle 0.45 rethrows
+ * pg errors as DrizzleQueryError, whose own message is "Failed query: insert
+ * into…" with the driver error — and its SQLSTATE — hanging off `cause`. A
+ * message test alone therefore never matches a real conflict, only a
+ * hand-rolled one, which is why the message arm is kept as a fallback rather
+ * than relied on.
+ */
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as { cause?: { code?: unknown } })?.cause?.code
+  if (code === '23505') return true
+  const message = err instanceof Error ? err.message : ''
+  return message.includes('unique') || message.includes('duplicate')
+}
+
+/**
+ * Seed the default `task_status_configs` for a `task_lists` row. Tolerates a
+ * unique-constraint violation on `(taskListId, slug)` — a concurrent caller may
+ * have seeded the same list a moment earlier; the caller only needed the
+ * configs to exist.
  */
 export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
   try {
@@ -42,8 +60,7 @@ export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): 
       DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s }))
     )
   } catch (err) {
-    const message = err instanceof Error ? err.message : ''
-    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+    if (!isUniqueViolation(err)) throw err
   }
 }
 
@@ -124,9 +141,8 @@ export async function resolveInheritedStatusSeed(
 
 /**
  * Seed a new `task_lists` row's vocabulary, inherited from its nearest ancestor
- * task list. Swallows a unique-constraint violation on `(taskListId, slug)` for
- * the same reason seedDefaultTaskStatusConfigs does — a concurrent caller may
- * have seeded it a moment earlier, and the caller only needed them to exist.
+ * task list. Conflict-tolerant for the same reason, and by the same means, as
+ * seedDefaultTaskStatusConfigs.
  */
 export async function seedInheritedTaskStatusConfigs(
   tx: Tx,
@@ -137,8 +153,7 @@ export async function seedInheritedTaskStatusConfigs(
   try {
     await tx.insert(taskStatusConfigs).values(seed.map(s => ({ taskListId, ...s })))
   } catch (err) {
-    const message = err instanceof Error ? err.message : ''
-    if (!message.includes('unique') && !message.includes('duplicate')) throw err
+    if (!isUniqueViolation(err)) throw err
   }
 }
 
