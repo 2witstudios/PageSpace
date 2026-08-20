@@ -13,6 +13,7 @@ import { applyTaskPatchToPages, type TaskFieldPatch } from './task-cache-core';
 import {
   recordSelfWrite,
   dropInFlightSelfWrite,
+  hasAnyInFlightSelfWrite,
   classifyTaskEcho,
   type SelfWrite,
   type InboundTaskEvent,
@@ -49,13 +50,15 @@ export interface TaskWriteMachinery {
   /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
   noteSelfWriteSettled: (taskId: string, updatedAt: string | null) => void;
   /**
-   * Run the revalidation an echo deferred, if one is pending.
+   * Run the revalidation an echo deferred, if one is pending and no write is
+   * still open.
    *
    * Separate from noteSelfWriteSettled, and called only AFTER the cache write
    * has committed. Revalidating from inside SWR's updater starts a refetch that
    * can land before the updater's return value is committed — and that commit
    * would then overwrite the foreign change the refetch just fetched, which is
-   * the exact data loss the deferral exists to prevent.
+   * the exact data loss the deferral exists to prevent. The same applies across
+   * writes, hence the in-flight check: see hasAnyInFlightSelfWrite.
    */
   flushDeferredRevalidate: () => void;
   /**
@@ -103,6 +106,12 @@ export function useTaskWriteMachinery(
 
   const flushDeferredRevalidate = useCallback(() => {
     if (!deferredRevalidateRef.current) return;
+    // Not while ANY write is still open. The flag is view-wide, so an unrelated
+    // write settling would otherwise start the refetch while this one is still
+    // inside its updater — and its commit would then overwrite the foreign
+    // change the refetch just fetched. The flag stays set, so whichever write
+    // settles last performs the flush.
+    if (hasAnyInFlightSelfWrite(selfWritesRef.current, Date.now())) return;
     deferredRevalidateRef.current = false;
     revalidateAll();
   }, [revalidateAll]);

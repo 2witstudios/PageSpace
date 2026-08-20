@@ -84,6 +84,23 @@ export const dropInFlightSelfWrite = (
   taskId: string,
 ): SelfWrite[] => records.filter((r) => !(r.taskId === taskId && r.updatedAt === null));
 
+/**
+ * Is ANY write from this tab still unresolved?
+ *
+ * The deferred revalidation is view-wide, so it must not run while any write is
+ * still inside its cache updater — not just the one that happened to settle.
+ * Otherwise write B settling flushes the revalidation while write A is mid-flight,
+ * the refetch lands first, and A's commit overwrites the foreign change it
+ * fetched. That is the same race the deferral exists to prevent, one level out.
+ *
+ * Prunes first, so a write abandoned mid-flight (an unmount, say) stops blocking
+ * revalidation once its TTL expires rather than silencing the view forever.
+ */
+export const hasAnyInFlightSelfWrite = (
+  records: readonly SelfWrite[],
+  now: number,
+): boolean => pruneSelfWrites(records, now).some((r) => r.updatedAt === null);
+
 /** Is there an unresolved write from this tab for the given task? */
 export const hasInFlightSelfWrite = (
   records: readonly SelfWrite[],

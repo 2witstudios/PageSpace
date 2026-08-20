@@ -321,6 +321,57 @@ describe('echo suppression', () => {
     });
   });
 
+  it('waits for a concurrent write before flushing the deferred revalidation', async () => {
+    // The flag is view-wide. Write A takes a deferred echo and stays open while
+    // write B settles: if B's flush ran, the refetch could land before A commits
+    // and A would overwrite the foreign change it fetched.
+    let resolveA: (v: TaskItem) => void = () => {};
+    let resolveB: (v: TaskItem) => void = () => {};
+    patchMock
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveA = r; }))
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveB = r; }));
+    const revalidateAll = vi.fn();
+    const { view } = setup(pages([task({ id: 't1' }), task({ id: 't2' })]), revalidateAll);
+
+    let pendingA: Promise<boolean>; let pendingB: Promise<boolean>;
+    await act(async () => {
+      pendingA = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      pendingB = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't2' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      await Promise.resolve();
+    });
+
+    // An echo for A arrives while both are open.
+    view.result.current.machinery.shouldRevalidateForEvent(echo('who-knows'));
+
+    // B finishes first. A is still open, so nothing may be revalidated yet.
+    await act(async () => {
+      resolveB(task({ id: 't2', updatedAt: 'stamp-b' }));
+      await pendingB!;
+    });
+    const afterB = revalidateAll.mock.calls.length;
+
+    // A finishes: now the last open write is gone and the flush runs, once.
+    await act(async () => {
+      resolveA(task({ id: 't1', updatedAt: 'stamp-a' }));
+      await pendingA!;
+    });
+
+    assert({
+      given: 'a deferred echo while two writes are open, the unrelated one settling first',
+      should: 'hold the revalidation until the last write settles, then run it once',
+      actual: [afterB, revalidateAll.mock.calls.length],
+      expected: [0, 1],
+    });
+  });
+
   it('stops suppressing after a failed write', async () => {
     // A failed write must not leave an in-flight record behind, or every later
     // event for that task is read as our echo and dropped for the whole TTL.

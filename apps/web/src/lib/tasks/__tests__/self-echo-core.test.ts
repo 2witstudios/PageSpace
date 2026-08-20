@@ -4,6 +4,7 @@ import {
   classifyTaskEcho,
   pruneSelfWrites,
   hasInFlightSelfWrite,
+  hasAnyInFlightSelfWrite,
   SELF_WRITE_TTL_MS,
   MAX_SELF_WRITES,
   type SelfWrite,
@@ -113,6 +114,44 @@ describe('hasInFlightSelfWrite', () => {
         hasInFlightSelfWrite(records, 'resolved'),
       ],
       expected: [true, false],
+    });
+  });
+});
+
+describe('hasAnyInFlightSelfWrite', () => {
+  it('is true while any write is unresolved, regardless of which task', () => {
+    // The deferred revalidation is view-wide, so it must wait on EVERY open
+    // write — not just the one that happened to settle.
+    const records: SelfWrite[] = [
+      { taskId: 'a', updatedAt: STAMP, at: NOW },
+      { taskId: 'b', updatedAt: null, at: NOW },
+    ];
+    assert({
+      given: 'one settled write and one still open, on different tasks',
+      should: 'report an in-flight write',
+      actual: hasAnyInFlightSelfWrite(records, NOW),
+      expected: true,
+    });
+  });
+
+  it('is false once everything has settled', () => {
+    assert({
+      given: 'only resolved writes',
+      should: 'report none in flight',
+      actual: hasAnyInFlightSelfWrite([{ taskId: 'a', updatedAt: STAMP, at: NOW }], NOW),
+      expected: false,
+    });
+  });
+
+  it('ignores an abandoned write once its TTL has passed', () => {
+    // A write whose component unmounted mid-flight never settles. Without the
+    // TTL prune it would block the view's revalidation forever.
+    const stale: SelfWrite[] = [{ taskId: 'a', updatedAt: null, at: NOW - SELF_WRITE_TTL_MS }];
+    assert({
+      given: 'an unresolved write older than the TTL',
+      should: 'stop counting it as in flight',
+      actual: hasAnyInFlightSelfWrite(stale, NOW),
+      expected: false,
     });
   });
 });
