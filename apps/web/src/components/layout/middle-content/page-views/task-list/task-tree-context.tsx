@@ -49,11 +49,6 @@ const TaskTreeContext = createContext<TaskTreeContextValue | null>(null);
 
 export const TaskTreeProvider = TaskTreeContext.Provider;
 
-/** Null outside a provider — for chrome that renders in more than one mode. */
-export function useOptionalTaskTree(): TaskTreeContextValue | null {
-  return useContext(TaskTreeContext);
-}
-
 export function useTaskTree(): TaskTreeContextValue {
   const value = useContext(TaskTreeContext);
   if (!value) throw new Error('Task tree components must be rendered inside a TaskTreeProvider');

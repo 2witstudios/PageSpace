@@ -69,7 +69,7 @@ export function useSelfTask(
    * recorded write, is classified foreign, and costs the list below a full
    * revalidation — the very refetch the checkbox path exists to avoid.
    */
-  machinery?: TaskWriteMachinery,
+  machinery: TaskWriteMachinery,
 ): UseSelfTaskResult {
   const { data, mutate } = useSWR<SelfTaskResponse>(
     selfTaskKey(pageId),
@@ -107,14 +107,14 @@ export function useSelfTask(
         : base;
     };
 
-    const writeId = machinery?.noteSelfWriteStart(task.id);
+    const writeId = machinery.noteSelfWriteStart(task.id);
     try {
       await mutate(
         async (current) => {
           const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
             `/api/pages/${listPageId}/tasks/${task.id}`, { status },
           );
-          if (writeId !== undefined) machinery?.noteSelfWriteSettled(writeId, updated.updatedAt);
+          machinery.noteSelfWriteSettled(writeId, updated.updatedAt);
           return applyStatus(current, updated);
         },
         {
@@ -127,12 +127,12 @@ export function useSelfTask(
         },
       );
     } catch (e) {
-      if (writeId !== undefined) machinery?.noteSelfWriteSettled(writeId, null);
+      machinery.noteSelfWriteSettled(writeId, null);
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {
       // Refresh this header's own row too when a foreign echo survived: the
       // machinery's revalidation covers the list, not this key.
-      if (machinery?.flushDeferredRevalidate()) void mutate();
+      if (machinery.flushDeferredRevalidate()) void mutate();
     }
   }, [task, listPageId, canEdit, data, statusConfigs, mutate, machinery]);
 

@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/select';
 import { buildStatusConfig, getStatusOrder } from './task-list-types';
 import { useSelfTask } from './useSelfTask';
-import { useOptionalTaskTree } from './task-tree-context';
+import { useTaskTree } from './task-tree-context';
 
 interface TaskListHeaderProps {
   pageId: string;
@@ -120,10 +120,13 @@ export function TaskListHeader({
  * sitting under a folder).
  */
 function SelfTaskControls({ pageId, canEdit }: { pageId: string; canEdit: boolean }) {
-  // Optional: the header also renders in editor mode, outside the row tree.
-  const tree = useOptionalTaskTree();
+  // Required, not optional. Both of TaskListView's render paths provide it, and
+  // a third that forgot would otherwise degrade in silence: the header's write
+  // would look foreign to the echo suppressor and cost the list a full
+  // revalidation, with nothing on screen to say so.
+  const { writeMachinery } = useTaskTree();
   const { task, statusConfigs, isCompleted, isAvailable, setStatus, toggleComplete } =
-    useSelfTask(pageId, canEdit, tree?.writeMachinery);
+    useSelfTask(pageId, canEdit, writeMachinery);
 
   if (!isAvailable || !task) return null;
 

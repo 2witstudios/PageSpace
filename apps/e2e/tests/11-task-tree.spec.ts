@@ -209,6 +209,26 @@ test('completing a sub-task unblocks the header without a refresh', async ({ pag
     .toBeVisible({ timeout: 5000 });
 });
 
+test('the header still works in editor mode', async ({ page, request, driveId }) => {
+  // Editor mode is a separate early return in TaskListView, so it is its own
+  // render path — one that previously fell outside the tree provider and would
+  // have thrown once the header started requiring it.
+  const listPageId = await createList(request, driveId, `Tree F ${Date.now()}`);
+  const parent = await createTask(request, listPageId, 'Editable');
+
+  await wideViewport(page);
+  await page.goto(`/dashboard/${driveId}/${parent.pageId}`);
+  await expect(page.getByRole('checkbox', { name: /Complete this task/i })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Editor view' }).click();
+  const selfBox = page.getByRole('checkbox', { name: /Complete this task/i });
+  await expect(selfBox).toBeVisible();
+
+  await selfBox.click();
+  await expect(page.getByRole('checkbox', { name: /Reopen this task/i }))
+    .toBeVisible({ timeout: 5000 });
+});
+
 test('an inline sub-task row creates under the task being viewed', async ({ page, request, driveId }) => {
   const listPageId = await createList(request, driveId, `Tree D ${Date.now()}`);
   const parent = await createTask(request, listPageId, 'Holder');

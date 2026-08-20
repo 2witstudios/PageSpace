@@ -1105,6 +1105,12 @@ function TaskListView({ page }: TaskListViewProps) {
 
   if (viewMode === 'editor') {
     return (
+      // Provided here too, not just around the table: the header renders in
+      // this mode as well, and its self-task write reads the write machinery
+      // off this context. Without it that write's own socket echo is
+      // classified foreign and costs the list the full revalidation the whole
+      // optimistic path exists to avoid.
+      <TaskTreeProvider value={treeValue}>
       <div className="flex flex-col h-full min-w-0">
         <TaskListHeader
           pageId={page.id}
@@ -1129,6 +1135,7 @@ function TaskListView({ page }: TaskListViewProps) {
           </span>
         </div>
       </div>
+      </TaskTreeProvider>
     );
   }
 
