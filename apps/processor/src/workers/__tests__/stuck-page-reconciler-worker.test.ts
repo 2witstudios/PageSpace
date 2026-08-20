@@ -189,7 +189,9 @@ describe('runStuckPageReconciler', () => {
     // write lands, and a FILE→DOCUMENT conversion in that window inherits the
     // failure.
     expect(failCall?.[0]).toMatch(/AND type = \$3/);
-    expect(failCall?.[1]).toContain('FILE');
+    // Position matters: `toContain` would pass if FILE were bound to some other
+    // parameter while `$3` carried something else entirely.
+    expect((failCall?.[1] as unknown[])?.[2]).toBe('FILE');
   });
 
   it('marks a page with an invalid content hash failed instead of re-enqueueing', async () => {

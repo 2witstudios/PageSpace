@@ -42,4 +42,8 @@ if (process.env[PRISTINE_DATABASE_URL] === undefined) {
   process.env[PRISTINE_DATABASE_URL] = process.env.DATABASE_URL ?? '';
 } else if (process.env[PRISTINE_DATABASE_URL] !== '') {
   process.env.DATABASE_URL = process.env[PRISTINE_DATABASE_URL];
+} else {
+  // Pristine was unset. Restoring '' would leave a suite's placeholder looking
+  // like a configured database to every file that runs after it, so unset it.
+  delete process.env.DATABASE_URL;
 }
