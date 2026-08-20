@@ -1,14 +1,25 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockS3Send = vi.fn();
-vi.mock('@aws-sdk/client-s3', () => ({
-  S3Client: vi.fn(() => ({ send: mockS3Send })),
-  GetObjectCommand: vi.fn((params) => ({ __type: 'get', ...params })),
-  HeadObjectCommand: vi.fn((params) => ({ __type: 'head', ...params })),
-  PutObjectCommand: vi.fn((params) => ({ __type: 'put', ...params })),
-  DeleteObjectCommand: vi.fn((params) => ({ __type: 'delete', ...params })),
-  CopyObjectCommand: vi.fn((params) => ({ __type: 'copy', ...params })),
-}));
+vi.mock('@aws-sdk/client-s3', async () => {
+  // Type the constructor params off the real SDK inputs rather than leaving
+  // them inferred: a mocked request that no longer matches what the store
+  // actually sends should be a type error here, not a silently passing test.
+  const actual = await vi.importActual<typeof import('@aws-sdk/client-s3')>('@aws-sdk/client-s3');
+  type Get = ConstructorParameters<typeof actual.GetObjectCommand>[0];
+  type Head = ConstructorParameters<typeof actual.HeadObjectCommand>[0];
+  type Put = ConstructorParameters<typeof actual.PutObjectCommand>[0];
+  type Del = ConstructorParameters<typeof actual.DeleteObjectCommand>[0];
+  type Copy = ConstructorParameters<typeof actual.CopyObjectCommand>[0];
+  return {
+    S3Client: vi.fn(() => ({ send: mockS3Send })),
+    GetObjectCommand: vi.fn((params: Get) => ({ __type: 'get', ...params })),
+    HeadObjectCommand: vi.fn((params: Head) => ({ __type: 'head', ...params })),
+    PutObjectCommand: vi.fn((params: Put) => ({ __type: 'put', ...params })),
+    DeleteObjectCommand: vi.fn((params: Del) => ({ __type: 'delete', ...params })),
+    CopyObjectCommand: vi.fn((params: Copy) => ({ __type: 'copy', ...params })),
+  };
+});
 
 const mockStat = vi.fn();
 const mockUnlink = vi.fn();
@@ -33,7 +44,11 @@ let referenced = false;
  * lock, `select` for the reference probe. Recording the lock statements lets a
  * test assert the lock is actually taken rather than merely assumed.
  */
-const { mockExecute } = vi.hoisted(() => ({ mockExecute: vi.fn(async () => undefined) }));
+const { mockExecute } = vi.hoisted(() => ({
+  // Typed with the statement it receives so the lock assertion below can read
+  // it back without an unsound cast.
+  mockExecute: vi.fn(async (_statement: { strings: TemplateStringsArray }) => undefined),
+}));
 vi.mock('@pagespace/db/db', () => {
   const select = () => ({
     from: () => ({
@@ -106,7 +121,7 @@ describe('deletePageContent', () => {
     await deletePageContent(VALID_REF, { now: NOW });
 
     expect(mockExecute).toHaveBeenCalledTimes(1);
-    const [statement] = mockExecute.mock.calls[0] as [{ strings: TemplateStringsArray }];
+    const [statement] = mockExecute.mock.calls[0];
     expect(statement.strings.join('')).toContain('pg_advisory_xact_lock');
   });
 
