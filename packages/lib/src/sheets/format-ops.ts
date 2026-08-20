@@ -214,22 +214,35 @@ export function moveCellMetadata(
   }
 
   const formats: Record<string, CellFormat> = {};
+  const relocated = new Set<string>();
 
+  // Two passes, relocations first. A moved entry and a stationary one can
+  // target the same address — mapping A1 -> A5 while an untouched A5 exists —
+  // and a single pass would let iteration order decide which survives, losing
+  // one format silently. The relocated entry wins, matching what a structural
+  // edit means: the cell that moved into this address brought its formatting.
   for (const [address, format] of Object.entries(sheet.formats)) {
-    if (!addressMap.has(address)) {
-      formats[address] = format;
-      continue;
-    }
+    if (!addressMap.has(address)) continue;
 
     const target = addressMap.get(address);
     if (target === null || target === undefined) continue;
 
     const normalized = normalizeAddress(target);
-    if (normalized) formats[normalized] = format;
+    if (normalized) {
+      formats[normalized] = format;
+      relocated.add(normalized);
+    }
+  }
+
+  for (const [address, format] of Object.entries(sheet.formats)) {
+    if (addressMap.has(address)) continue;
+    if (relocated.has(address)) continue;
+    formats[address] = format;
   }
 
   return {
     ...sheet,
+    version: sheet.version + 1,
     formats: Object.keys(formats).length > 0 ? formats : undefined,
   };
 }

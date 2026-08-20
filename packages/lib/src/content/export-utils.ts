@@ -185,12 +185,17 @@ export function generateExcel(
 
     // Set column widths (with a max of 50 characters). An explicit width set in
     // the sheet wins over the auto-size guess.
-    worksheet['!cols'] = maxColumnWidths.map((width, columnIndex) => {
+    // Size by the wider of the two sources. `maxColumnWidths` only covers
+    // columns that actually hold data, and it is sparse when rows differ in
+    // length — `.map` skips holes — so deriving `!cols` from it alone drops an
+    // explicit width for any column past the widest row or at a hole.
+    const columnCount = Math.max(maxColumnWidths.length, typed?.columnWidths?.length ?? 0);
+    worksheet['!cols'] = Array.from({ length: columnCount }, (_, columnIndex) => {
       const explicit = typed?.columnWidths?.[columnIndex];
       if (typeof explicit === 'number' && Number.isFinite(explicit)) {
         return { wch: pxToExcelWidth(explicit) };
       }
-      return { wch: Math.min(width + 2, 50) };
+      return { wch: Math.min((maxColumnWidths[columnIndex] ?? 0) + 2, 50) };
     });
 
     // Add worksheet to workbook

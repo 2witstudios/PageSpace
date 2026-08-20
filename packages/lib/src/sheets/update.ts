@@ -6,6 +6,7 @@
 import { PageType } from '../utils/enums';
 import type { CellFormat, SheetData, SheetCellUpdate } from './types';
 import { cellRegex, decodeCellAddress } from './address';
+import { parseCellFormat } from './format';
 
 /**
  * Clone cells record
@@ -44,8 +45,14 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     columnCount: Math.max(1, sheet.columnCount),
     cells: sanitizedCells,
     formats: sanitizeFormats(sheet.formats),
+    columnFormats: sanitizeKeyedFormats(sheet.columnFormats, columnKeyRegex),
+    columnWidths: sanitizeKeyedNumbers(sheet.columnWidths, columnKeyRegex),
+    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex),
   };
 }
+
+const columnKeyRegex = /^[A-Z]+$/;
+const rowKeyRegex = /^[1-9]\d*$/;
 
 /**
  * Drop format entries whose address is not a valid A1 reference.
@@ -65,8 +72,51 @@ function sanitizeFormats(
   for (const [key, format] of Object.entries(formats)) {
     const normalized = key.toUpperCase();
     if (!cellRegex.test(normalized)) continue;
-    if (!format || typeof format !== 'object') continue;
-    sanitized[normalized] = format;
+
+    // Validate the format itself, not just its address. The read path runs
+    // `parseCellFormat` and drops anything non-conforming, so skipping it here
+    // let the write path persist a format that vanished on the next load.
+    const parsed = parseCellFormat(format);
+    if (parsed) sanitized[normalized] = parsed;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/** Per-column/row format maps, keyed by column letters or a row number. */
+function sanitizeKeyedFormats(
+  formats: Record<string, CellFormat> | undefined,
+  keyPattern: RegExp
+): Record<string, CellFormat> | undefined {
+  if (!formats) return undefined;
+
+  const sanitized: Record<string, CellFormat> = {};
+
+  for (const [key, format] of Object.entries(formats)) {
+    const normalized = key.toUpperCase();
+    if (!keyPattern.test(normalized)) continue;
+
+    const parsed = parseCellFormat(format);
+    if (parsed) sanitized[normalized] = parsed;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/** Per-column/row size maps; these reach the serializer unchecked otherwise. */
+function sanitizeKeyedNumbers(
+  values: Record<string, number> | undefined,
+  keyPattern: RegExp
+): Record<string, number> | undefined {
+  if (!values) return undefined;
+
+  const sanitized: Record<string, number> = {};
+
+  for (const [key, value] of Object.entries(values)) {
+    const normalized = key.toUpperCase();
+    if (!keyPattern.test(normalized)) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+    sanitized[normalized] = Math.round(value);
   }
 
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;

@@ -194,6 +194,24 @@ describe('xlsx export', () => {
     expect(cols?.[1]?.wch).toBe(25);
   });
 
+  it('emits an explicit width for a column with no data in it', () => {
+    // `!cols` used to be derived from the populated data width alone, so a
+    // configured width for a column past the widest row was silently dropped —
+    // and the route sizes `columnWidths` by `columnCount`, which usually
+    // exceeds the data width.
+    const sheet = createEmptySheet(2, 6);
+    sheet.cells.A1 = 'only column A has data';
+
+    const typed = typedExportFor(sheet);
+    typed.columnWidths = [undefined, undefined, undefined, undefined, 210];
+
+    const evaluation = evaluateSheet(sheet);
+    const buffer = generateExcel(evaluation.display, 'Sheet1', 'Widths', typed);
+    const cols = XLSX.read(buffer, { type: 'buffer', cellStyles: true }).Sheets.Sheet1['!cols'];
+
+    expect(cols?.[4]?.wch).toBe(29);
+  });
+
   it('still works without the typed payload', () => {
     const sheet = formattedSheet();
     const evaluation = evaluateSheet(sheet);

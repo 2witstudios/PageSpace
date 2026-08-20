@@ -28,6 +28,11 @@ vi.mock('@/hooks/useDocument', () => ({
     saveWithDebounce: vi.fn(),
     forceSave: vi.fn().mockResolvedValue(undefined),
     clearDocument: vi.fn(),
+    // Threaded through to the view's conflict gate; mirrored here so the mock
+    // keeps matching the real hook's surface.
+    conflict: null,
+    resolveConflict: vi.fn(),
+    isResolvingConflict: false,
   }),
 }));
 
@@ -47,13 +52,17 @@ describe('useSheetPersistence', () => {
     updateContentSpy.mockClear();
   });
 
-  const renderPersistence = (resetHistory: (sheet: unknown) => void) =>
-    renderHook(() =>
-      useSheetPersistence({
-        pageId: 'page-1',
-        socket: null,
-        resetHistory: resetHistory as never,
-      })
+  // `rerender()` is called with no props by most tests, so the page id falls
+  // back to the initial one unless a test is deliberately navigating.
+  const renderPersistence = (resetHistory: (sheet: unknown) => void, pageId = 'page-1') =>
+    renderHook(
+      (props: { id: string } | undefined) =>
+        useSheetPersistence({
+          pageId: props?.id ?? pageId,
+          socket: null,
+          resetHistory: resetHistory as never,
+        }),
+      { initialProps: { id: pageId } as { id: string } | undefined }
     );
 
   it('resets history once when content first loads', () => {
@@ -111,6 +120,29 @@ describe('useSheetPersistence', () => {
     rerender();
 
     expect(resetHistory).not.toHaveBeenCalled();
+  });
+
+  it('resets history when navigating to a different page with identical content', () => {
+    // Two fresh sheets serialize identically. Matching on content alone would
+    // read the new page's first load as this page's local echo, leaving the
+    // previous page's undo stack in place — an undo could then write the
+    // previous page's state into this one.
+    const resetHistory = vi.fn();
+    const shared = sheetContent({ A1: 'same' });
+    documentRef.current = { content: shared, isDirty: false };
+
+    const { result, rerender } = renderPersistence(resetHistory, 'page-1');
+    resetHistory.mockClear();
+
+    // An edit on page-1 records the echo for page-1.
+    act(() => {
+      result.current.updateContent(shared);
+    });
+
+    // Navigate to page-2, whose stored content happens to be byte-identical.
+    rerender({ id: 'page-2' });
+
+    expect(resetHistory).toHaveBeenCalledTimes(1);
   });
 
   it('reports a load error and does not hand an empty sheet to the editor', () => {

@@ -325,7 +325,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       // Announce edit mode to screen readers
       announce(`Editing cell ${cellAddress}`);
     },
-    [sheet.cells, isReadOnly, announce]
+    [sheet.cells, isReadOnly, readOnlyReason, announce]
   );
 
   // Commit cell edit
@@ -390,7 +390,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       setFormulaValue(value);
       applySheetUpdate((previous) => applyCellWrite(previous, currentAddress, value));
     },
-    [applySheetUpdate, currentAddress, isReadOnly]
+    [applySheetUpdate, currentAddress, isReadOnly, readOnlyReason]
   );
 
   const handleAddRow = useCallback(() => {
@@ -399,7 +399,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       return;
     }
     applySheetUpdate(addRow);
-  }, [applySheetUpdate, isReadOnly]);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   const handleAddColumn = useCallback(() => {
     if (isReadOnly) {
@@ -407,7 +407,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       return;
     }
     applySheetUpdate(addColumn);
-  }, [applySheetUpdate, isReadOnly]);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   // Undo handler
   const handleUndo = useCallback(() => {
@@ -749,7 +749,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         cell: next
       });
     },
-    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, announce]
+    [isReadOnly, readOnlyReason, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, announce]
   );
 
   const handleFormulaKeyDown = useCallback(

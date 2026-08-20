@@ -311,7 +311,10 @@ export function numberFormatToExcelCode(format: NumberFormat | undefined): strin
     case 'currency': {
       const count = decimals(2);
       const symbol = currencySymbol(format.currency).trim();
-      return `"${symbol}"#,##0${fraction(count)}`;
+      // `applyNumberFormat` honours `thousands: false` for currency, so the
+      // Excel code must too or the workbook groups digits the grid does not.
+      const integer = format.thousands === false ? '0' : '#,##0';
+      return `"${symbol}"${integer}${fraction(count)}`;
     }
     case 'percent':
       return `0${fraction(decimals(0))}%`;

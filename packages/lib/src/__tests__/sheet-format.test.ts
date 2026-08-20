@@ -317,6 +317,63 @@ describe('format operations', () => {
   });
 });
 
+describe('review findings', () => {
+  it('the currency Excel code honours thousands: false', () => {
+    // `applyNumberFormat` renders ungrouped for this format; the Excel code
+    // must match or the workbook groups digits the grid does not.
+    const format = { kind: 'currency' as const, currency: 'USD', thousands: false };
+    expect(applyNumberFormat(1234.5, format)).toBe('$1234.50');
+    expect(numberFormatToExcelCode(format)).toBe('"$"0.00');
+  });
+
+  it('sanitizeSheetData rejects a format the read path would drop', () => {
+    // The write path must not persist what the read path discards, or a
+    // format survives one save and vanishes on the next load.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      formats: { A1: { fontSize: 9999 } as CellFormat },
+    };
+    expect(sanitizeSheetData(sheet).formats).toBeUndefined();
+  });
+
+  it('sanitizeSheetData validates column and row metadata too', () => {
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      columnFormats: { A: { align: 'right' }, '!!': { bold: true } as CellFormat },
+      columnWidths: { A: 100, '3': 50 },
+      rowHeights: { '1': 30, ABC: 40 },
+    };
+
+    const sanitized = sanitizeSheetData(sheet);
+    expect(sanitized.columnFormats).toEqual({ A: { align: 'right' } });
+    expect(sanitized.columnWidths).toEqual({ A: 100 });
+    expect(sanitized.rowHeights).toEqual({ '1': 30 });
+  });
+
+  it('moveCellMetadata lets a relocated format win a collision', () => {
+    // A structural edit maps only the cells that moved. Without explicit
+    // handling, a moved A1 -> A5 and a stationary A5 both write key A5 and
+    // iteration order decides which format survives.
+    let sheet = createEmptySheet();
+    sheet = setCellFormats(sheet, ['A1'], { bold: true });
+    sheet = setCellFormats(sheet, ['A5'], { italic: true });
+
+    const moved = moveCellMetadata(sheet, new Map([['A1', 'A5']]));
+
+    expect(moved.formats?.A5).toEqual({ bold: true });
+    expect(moved.formats?.A1).toBeUndefined();
+  });
+
+  it('moveCellMetadata bumps the version like every other mutator', () => {
+    let sheet = createEmptySheet();
+    sheet = setCellFormats(sheet, ['A1'], { bold: true });
+    const before = sheet.version;
+
+    const moved = moveCellMetadata(sheet, new Map([['A1', 'A2']]));
+    expect(moved.version).toBe(before + 1);
+  });
+});
+
 describe('formats and the evaluator', () => {
   it('applies the format to the displayed value', () => {
     let sheet = createEmptySheet();

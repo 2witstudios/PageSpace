@@ -59,16 +59,22 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
 
   // Content this hook has already reconciled — either loaded from the server or
   // echoed back from a local edit. Used to tell those two apart below.
-  const knownContentRef = useRef<string | null>(null);
+  //
+  // Scoped to the page: two different pages can hold byte-identical content
+  // (two fresh empty sheets serialize the same), and a bare content match
+  // would then treat the new page's first load as this page's echo, leaving
+  // the previous page's undo stack in place. An undo could then write the
+  // previous page's state into this one.
+  const knownContentRef = useRef<{ pageId: string; content: string } | null>(null);
 
   // Record locally-originated content before it round-trips through the store,
   // so the reset effect can recognise the echo and leave history alone.
   const updateContent = useCallback(
     (content: string) => {
-      knownContentRef.current = content;
+      knownContentRef.current = { pageId, content };
       baseUpdateContent(content);
     },
-    [baseUpdateContent]
+    [baseUpdateContent, pageId]
   );
 
   // Reset history when content is (re)loaded from the server, so undo cannot
@@ -81,11 +87,15 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
   // server-originated content resets history.
   useEffect(() => {
     const content = documentState?.content;
-    if (content === undefined || content === knownContentRef.current) {
+    const known = knownContentRef.current;
+    if (
+      content === undefined ||
+      (known !== null && known.pageId === pageId && known.content === content)
+    ) {
       return;
     }
 
-    knownContentRef.current = content;
+    knownContentRef.current = { pageId, content };
 
     const parsed = parseSheetContentSafe(content);
     if (!parsed.ok) {
@@ -98,7 +108,7 @@ export const useSheetPersistence = ({ pageId, socket, resetHistory }: UseSheetPe
 
     setLoadError(null);
     resetHistory(sanitizeSheetData(parsed.sheet));
-  }, [documentState?.content, resetHistory]);
+  }, [pageId, documentState?.content, resetHistory]);
 
   // Socket updates — uses refs to avoid re-subscribing on every content change.
   useEffect(() => {
