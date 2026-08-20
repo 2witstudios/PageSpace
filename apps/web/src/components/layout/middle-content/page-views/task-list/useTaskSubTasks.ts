@@ -151,8 +151,15 @@ export interface UseTaskSubTasksResult {
    */
   retry: () => void;
   /**
-   * The bound swr/infinite mutate, for LOCAL WRITES ONLY — always with
+   * The bound swr/infinite mutate, for local writes — normally with
    * `revalidate: false`.
+   *
+   * One exception, and it is deliberate: a write that FAILS calls it bare, to
+   * refetch. There is no local answer there — SWR's rollback belongs to the
+   * optimistic path this code does not use, and an inverse patch is only honest
+   * when nothing else has touched the row (see task-write-machinery). A refetch
+   * of the pages already loaded is the fallback, and it carries the same "cost
+   * is nil, this node is already populated" reasoning as `retry` below.
    *
    * This is a deliberate, narrow widening of a hook whose entire configuration
    * says "nothing here refetches". It exists because a nested row's checkbox has

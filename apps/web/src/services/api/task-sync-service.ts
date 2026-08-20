@@ -679,11 +679,19 @@ async function addTaskItemUnderParent(
     userId: string;
     /** Shared across a backfill loop: the parent is fixed, so the seed is too. */
     seedStatusCache?: SeedCache;
+    /**
+     * The parent's already-resolved list. Same reasoning as seedStatusCache: the
+     * parent does not vary across a backfill loop, so re-deriving its list per
+     * missing row is a query — and a possible seeding write — repeated for
+     * nothing, inside a transaction the read is holding open.
+     */
+    taskList?: typeof taskLists.$inferSelect;
   },
 ): Promise<void> {
   const { pageId, parentId, userId, seedStatusCache } = params
 
-  const taskList = await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
+  const taskList = params.taskList
+    ?? await ensureTaskListForPage(tx, { pageId: parentId, title: 'Task List', userId })
 
   const existing = await tx.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
@@ -800,11 +808,17 @@ export async function backfillMissingTaskItems(
   if (missing.length === 0) return
 
   await database.transaction(async (tx) => {
-    // parentId is fixed for the whole loop, so its seed status is resolved once
-    // rather than re-queried for every missing row on this hot read path.
+    // parentId is fixed for the whole loop, so everything derived from it — the
+    // list itself and the seed resolved from its vocabulary — is resolved once
+    // rather than per missing row. This runs on an ordinary list read, inside a
+    // write transaction, so a hundred missing rows meant a few hundred round
+    // trips holding it open.
+    const taskList = await ensureTaskListForPage(tx, {
+      pageId: parentId, title: 'Task List', userId,
+    })
     const seedStatusCache: SeedCache = new Map()
     for (const pageId of missing) {
-      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache })
+      await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache, taskList })
     }
   })
 }

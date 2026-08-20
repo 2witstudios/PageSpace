@@ -879,6 +879,27 @@ describe('backfillMissingTaskItems', () => {
     expect(parts.taskItemInserts).toHaveLength(0);
   });
 
+  it('resolves the parent list once, not once per missing child', async () => {
+    // This runs on an ordinary list read, inside a write transaction. The parent
+    // is fixed for the whole loop, so re-deriving its list per row is a query —
+    // and a possible seeding write — repeated for nothing while the transaction
+    // stays open. A hundred missing rows used to mean a few hundred round trips.
+    const parts = makeTx({ pageTypes: { p: 'TASK_LIST' } });
+    const database = makeDb([], parts);
+    await backfillMissingTaskItems(database as never, {
+      parentId: 'p', childPageIds: ['a', 'b', 'c', 'd'], userId: 'u',
+    });
+    assert({
+      given: 'four children all missing their task_items row',
+      should: 'look the parent list up exactly once',
+      actual: {
+        listLookups: parts.tx.query.taskLists.findFirst.mock.calls.length,
+        inserted: parts.taskItemInserts.length,
+      },
+      expected: { listLookups: 1, inserted: 4 },
+    });
+  });
+
   it('backfills only the children missing a task item', async () => {
     const parts = makeTx({ pageTypes: { p: 'TASK_LIST' } });
     const database = makeDb(['a'], parts);
