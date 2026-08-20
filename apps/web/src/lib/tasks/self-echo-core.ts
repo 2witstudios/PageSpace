@@ -16,6 +16,16 @@
  */
 
 export interface SelfWrite {
+  /**
+   * Identity of THIS write, not of the task.
+   *
+   * Two writes to the same task overlap easily — a double-clicked checkbox is
+   * complete-then-reopen — and keying on taskId alone made the first to settle
+   * erase the second's in-flight marker, so the "is anything still open?" guard
+   * reported false while a write was mid-updater. Every record is addressed by
+   * its own id.
+   */
+  readonly writeId: number;
   readonly taskId: string;
   /** null while the PATCH is still in flight; set from the response when it resolves. */
   readonly updatedAt: string | null;
@@ -49,40 +59,31 @@ export const pruneSelfWrites = (
   return fresh.length > MAX_SELF_WRITES ? fresh.slice(fresh.length - MAX_SELF_WRITES) : fresh;
 };
 
-/**
- * Record a write this tab is making, or resolve one that was in flight.
- *
- * Called twice per write: once before the request with `updatedAt: null`, then
- * again with the server's stamp. The second call replaces the in-flight record
- * for that task rather than appending, so a resolved write can be matched
- * exactly while an unresolved one can't be mistaken for a completed match.
- */
-export const recordSelfWrite = (
+/** Register a write this tab is starting. */
+export const startSelfWrite = (
   records: readonly SelfWrite[],
-  write: SelfWrite,
+  write: { writeId: number; taskId: string; at: number },
+  now: number,
+): SelfWrite[] => [...pruneSelfWrites(records, now), { ...write, updatedAt: null }];
+
+/**
+ * Resolve one write by its own id.
+ *
+ * A successful write keeps its record, now stamped, so the echo it will produce
+ * can be recognised. A failed one is removed outright: leaving an unresolved
+ * record would make every later event for that task read as our own echo for
+ * the rest of the TTL.
+ */
+export const settleSelfWrite = (
+  records: readonly SelfWrite[],
+  writeId: number,
+  updatedAt: string | null,
   now: number,
 ): SelfWrite[] => {
   const pruned = pruneSelfWrites(records, now);
-  if (write.updatedAt === null) return [...pruned, write];
-  // Resolving: drop this task's in-flight placeholder, keep completed records
-  // (a second write to the same task in the TTL window has its own stamp).
-  const withoutInFlight = pruned.filter(
-    (r) => !(r.taskId === write.taskId && r.updatedAt === null),
-  );
-  return [...withoutInFlight, write];
+  if (updatedAt === null) return pruned.filter((r) => r.writeId !== writeId);
+  return pruned.map((r) => (r.writeId === writeId ? { ...r, updatedAt } : r));
 };
-
-/**
- * Forget an unresolved write, for when the request failed.
- *
- * Without this a failed PATCH leaves a permanent in-flight record, and every
- * inbound event for that task is classified `self-in-flight` and dropped for
- * the rest of the TTL — the list would go quiet after any write error.
- */
-export const dropInFlightSelfWrite = (
-  records: readonly SelfWrite[],
-  taskId: string,
-): SelfWrite[] => records.filter((r) => !(r.taskId === taskId && r.updatedAt === null));
 
 /**
  * Is ANY write from this tab still unresolved?
@@ -114,9 +115,9 @@ export const hasInFlightSelfWrite = (
  *   because that event's `updatedAt` matches no write this tab made.
  * - `self` — this exact write, already applied locally. Drop it.
  * - `self-in-flight` — our PATCH hasn't returned yet, so we can't compare
- *   stamps. Drop it, but the caller MUST remember to revalidate once the write
- *   resolves: otherwise a genuinely concurrent foreign edit that raced ours is
- *   swallowed and this tab shows stale data indefinitely.
+ *   stamps YET. Queue it: once our write settles, the same event is classified
+ *   again against the now-stamped record, and only a genuinely foreign one
+ *   survives to force a revalidation.
  */
 export const classifyTaskEcho = (
   records: readonly SelfWrite[],
@@ -141,3 +142,20 @@ export const classifyTaskEcho = (
 
   return 'foreign';
 };
+
+/**
+ * Does a queue of deferred echoes still contain one we cannot account for?
+ *
+ * The server broadcasts BEFORE it returns the response (the PATCH route awaits
+ * its realtime posts), so our own echo routinely arrives while the write is
+ * still in flight and gets deferred. Re-classifying the queue once the writes
+ * have settled is what tells "that was mine after all" apart from "someone else
+ * edited this while I was writing" — without it every click would end in a
+ * full revalidation, which is most of what this whole path exists to avoid.
+ */
+export const deferredEchoesNeedRevalidation = (
+  records: readonly SelfWrite[],
+  deferred: readonly InboundTaskEvent[],
+  selfUserId: string | null | undefined,
+  now: number,
+): boolean => deferred.some((e) => classifyTaskEcho(records, e, selfUserId, now) === 'foreign');

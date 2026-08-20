@@ -171,6 +171,39 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it('creates a sub-task with a status its own inherited list defines', async () => {
+    if (!dbAvailable) return;
+    const { taskPage } = await seedCustomisedTree();
+
+    // Exactly what the inline "+ Add a sub-task" row sends: a title and nothing
+    // else. Before the default was resolved from the list, this wrote the
+    // hardcoded 'pending' — a slug an inherited vocabulary does not define, so
+    // the row came back unclassifiable by isCompletedStatus and rendered by the
+    // status dropdown's raw-slug fallback with no matching option.
+    const res = await listTasksRoute.POST(
+      new Request(`http://localhost/api/pages/${taskPage.id}/tasks`, {
+        method: 'POST',
+        body: JSON.stringify({ title: 'Added inline' }),
+      }),
+      { params: Promise.resolve({ pageId: taskPage.id }) },
+    );
+    const created = await res.json();
+
+    assert({
+      given: 'a sub-task created with no explicit status, under an inherited vocabulary',
+      should: 'take the first status that vocabulary actually defines',
+      actual: { status: res.status, taskStatus: created?.status },
+      expected: { status: 201, taskStatus: 'icebox' },
+    });
+
+    assert({
+      given: 'that same sub-task',
+      should: 'carry a slug the list defines, so it is renderable and classifiable',
+      actual: (await slugsFor(taskPage.id)).includes(created?.status),
+      expected: true,
+    });
+  });
+
   it('still seeds the defaults for a list with no task-list ancestor', async () => {
     if (!dbAvailable) return;
     const owner = await factories.createUser();

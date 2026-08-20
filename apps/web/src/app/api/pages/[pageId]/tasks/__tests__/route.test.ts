@@ -134,7 +134,17 @@ vi.mock('@pagespace/db/db', () => {
           // the walk stops immediately and falls back to DEFAULT_TASK_STATUSES,
           // which is what these fixtures assume.
           select: vi.fn(() => makeSelectChain([])),
-          query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
+          query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            // POST resolves its default status from the list's own vocabulary
+            // (resolveSeedStatus) rather than hardcoding 'pending', since an
+            // inherited vocabulary need not define that slug. A truthy findFirst
+            // means "this list does define 'pending'", which these fixtures assume.
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
         };
         return callback(tx);
       }),
@@ -301,7 +311,17 @@ describe('Task API Routes', () => {
         // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
         // these fixtures assume.
         select: vi.fn(() => makeSelectChain([])),
-        query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
+        query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            // POST resolves its default status from the list's own vocabulary
+            // (resolveSeedStatus) rather than hardcoding 'pending', since an
+            // inherited vocabulary need not define that slug. A truthy findFirst
+            // means "this list does define 'pending'", which these fixtures assume.
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
       };
       return callback(tx);
     });
@@ -377,7 +397,17 @@ describe('Task API Routes', () => {
         // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
         // these fixtures assume.
         select: vi.fn(() => makeSelectChain([])),
-        query: { taskLists: { findFirst: vi.fn().mockResolvedValue(null) } },
+        query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            // POST resolves its default status from the list's own vocabulary
+            // (resolveSeedStatus) rather than hardcoding 'pending', since an
+            // inherited vocabulary need not define that slug. A truthy findFirst
+            // means "this list does define 'pending'", which these fixtures assume.
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
         };
         return callback(tx as never);
       });
@@ -1164,6 +1194,14 @@ describe('Task API Routes', () => {
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // resolveSeedStatus reads the list vocabulary through the tx.
+          query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;
@@ -1211,6 +1249,14 @@ describe('Task API Routes', () => {
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // resolveSeedStatus reads the list vocabulary through the tx.
+          query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;
@@ -1270,6 +1316,14 @@ describe('Task API Routes', () => {
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // resolveSeedStatus reads the list vocabulary through the tx.
+          query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;
@@ -1446,6 +1500,14 @@ describe('Task API Routes', () => {
       (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // resolveSeedStatus reads the list vocabulary through the tx.
+          query: {
+            taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+            taskStatusConfigs: {
+              findFirst: vi.fn().mockResolvedValue({ slug: 'pending' }),
+              findMany: vi.fn().mockResolvedValue([]),
+            },
+          },
           insert: vi.fn(() => ({
             values: vi.fn((vals: Record<string, unknown>) => {
               insertCallCount++;

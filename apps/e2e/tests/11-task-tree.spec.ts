@@ -120,8 +120,23 @@ test('a sub-task completes in place instead of navigating away', async ({ page, 
   // The parent shows its sub-task progress before anything is expanded.
   await expect(page.locator('table').getByTitle('0/1 sub-tasks complete')).toBeVisible();
 
+  // The tree is announced as a tree. Only the real app renders the depth-0 row
+  // wrapper (TaskListView's SortableTaskRow), so this is the one place the
+  // top-level row's own aria state can actually be checked.
+  await expect(page.getByRole('treegrid', { name: 'Tasks' })).toBeVisible();
+  const parentRow = () => page.locator('tr[data-task-id]').filter({ hasText: 'Parent' }).first();
+  await expect(parentRow()).toHaveAttribute('aria-expanded', 'false');
+  await expect(parentRow()).toHaveAttribute('aria-level', '1');
+
   await page.getByRole('button', { name: /Expand Parent/i }).click();
   await expect(rowCheckbox(page, 'Child')).toBeVisible();
+
+  await expect(parentRow(), 'the top-level row must announce that it opened')
+    .toHaveAttribute('aria-expanded', 'true');
+  await expect(
+    page.getByText('Child').locator('xpath=ancestor::tr[1]'),
+    'a nested row is announced one level deeper',
+  ).toHaveAttribute('aria-level', '2');
 
   const urlBefore = page.url();
   const childBox = rowCheckbox(page, 'Child');

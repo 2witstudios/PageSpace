@@ -279,7 +279,7 @@ async function normalizeStatusForList(
  * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
  * status its own list does not define.
  */
-async function resolveSeedStatus(
+export async function resolveSeedStatus(
   tx: Tx,
   taskListId: string,
   cache?: Map<string, string>,

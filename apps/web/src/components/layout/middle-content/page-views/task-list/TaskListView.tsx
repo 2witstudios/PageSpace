@@ -441,11 +441,16 @@ interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  /** Whether this row has anything to expand, and whether it currently is. */
+  expandable: boolean;
+  isExpanded: boolean;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({
+  task, canEdit, isCompleted, expandable, isExpanded, contextMenu, children,
+}: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -466,6 +471,9 @@ function SortableTaskRow({ task, canEdit, isCompleted, contextMenu, children }: 
       style={style}
       data-task-id={task.id}
       aria-level={1}
+      // Top-level rows are the ones most often expanded; without this the
+      // treegrid announces a level and never says whether it is open.
+      aria-expanded={expandable ? isExpanded : undefined}
       className={cn(
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
@@ -1345,11 +1353,13 @@ function TaskListView({ page }: TaskListViewProps) {
                         handlers={locatedHandlers}
                         statusConfigs={statusConfigs}
                         onCountDelta={(delta) => patchRootCounts(task.id, delta)}
-                        renderRow={(cells) => (
+                        renderRow={(cells, rowTree) => (
                           <SortableTaskRow
                             task={task}
                             canEdit={canEdit}
                             isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                            expandable={rowTree.expandable}
+                            isExpanded={rowTree.isExpanded}
                             contextMenu={
                               <ContextMenuContent>
                                 {task.pageId && (

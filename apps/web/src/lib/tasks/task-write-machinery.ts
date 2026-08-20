@@ -11,10 +11,11 @@ import type {
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
 import { applyTaskPatchToPages, type TaskFieldPatch } from './task-cache-core';
 import {
-  recordSelfWrite,
-  dropInFlightSelfWrite,
+  startSelfWrite,
+  settleSelfWrite,
   hasAnyInFlightSelfWrite,
   classifyTaskEcho,
+  deferredEchoesNeedRevalidation,
   type SelfWrite,
   type InboundTaskEvent,
 } from './self-echo-core';
@@ -46,9 +47,10 @@ type MutatePages = SWRInfiniteKeyedMutator<TaskListData[]>;
 export interface TaskWriteMachinery {
   /** Current user id, for telling our own socket events from everyone else's. */
   currentUserId: string | null | undefined;
-  noteSelfWriteStart: (taskId: string) => void;
+  /** Registers a write and returns its id; pass that id back to settle it. */
+  noteSelfWriteStart: (taskId: string) => number;
   /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
-  noteSelfWriteSettled: (taskId: string, updatedAt: string | null) => void;
+  noteSelfWriteSettled: (writeId: number, updatedAt: string | null) => void;
   /**
    * Run the revalidation an echo deferred, if one is pending and no write is
    * still open.
@@ -86,44 +88,57 @@ export function useTaskWriteMachinery(
   // One write produces TWO echoes: broadcastTaskEvent posts separately to
   // `user:<id>:tasks` and to the page room, and a task view is in both.
   const selfWritesRef = useRef<SelfWrite[]>([]);
-  const deferredRevalidateRef = useRef(false);
+  /**
+   * Echoes we could not classify yet because our own write was still open.
+   *
+   * Kept as the events themselves rather than a boolean so they can be
+   * re-classified once the writes settle: the server broadcasts before it
+   * responds, so our OWN echo lands here routinely, and a boolean would turn
+   * every click into a full revalidation.
+   */
+  const deferredEchoesRef = useRef<InboundTaskEvent[]>([]);
+  const nextWriteIdRef = useRef(0);
 
   const noteSelfWriteStart = useCallback((taskId: string) => {
     const now = Date.now();
-    selfWritesRef.current = recordSelfWrite(
-      selfWritesRef.current, { taskId, updatedAt: null, at: now }, now,
+    const writeId = ++nextWriteIdRef.current;
+    selfWritesRef.current = startSelfWrite(selfWritesRef.current, { writeId, taskId, at: now }, now);
+    return writeId;
+  }, []);
+
+  const noteSelfWriteSettled = useCallback((writeId: number, updatedAt: string | null) => {
+    selfWritesRef.current = settleSelfWrite(
+      selfWritesRef.current, writeId, updatedAt, Date.now(),
     );
   }, []);
 
-  const noteSelfWriteSettled = useCallback((taskId: string, updatedAt: string | null) => {
-    const now = Date.now();
-    // A failed write must forget its in-flight record, or every later event for
-    // that task is read as our own echo and dropped for the rest of the TTL.
-    selfWritesRef.current = updatedAt
-      ? recordSelfWrite(selfWritesRef.current, { taskId, updatedAt, at: now }, now)
-      : dropInFlightSelfWrite(selfWritesRef.current, taskId);
-  }, []);
-
   const flushDeferredRevalidate = useCallback(() => {
-    if (!deferredRevalidateRef.current) return;
-    // Not while ANY write is still open. The flag is view-wide, so an unrelated
+    if (deferredEchoesRef.current.length === 0) return;
+    // Not while ANY write is still open. The queue is view-wide, so an unrelated
     // write settling would otherwise start the refetch while this one is still
     // inside its updater — and its commit would then overwrite the foreign
-    // change the refetch just fetched. The flag stays set, so whichever write
+    // change the refetch just fetched. The queue survives, so whichever write
     // settles last performs the flush.
-    if (hasAnyInFlightSelfWrite(selfWritesRef.current, Date.now())) return;
-    deferredRevalidateRef.current = false;
-    revalidateAll();
-  }, [revalidateAll]);
+    const now = Date.now();
+    if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return;
+
+    const queued = deferredEchoesRef.current;
+    deferredEchoesRef.current = [];
+    // Re-ask, now that the stamps are known. An echo that turns out to have
+    // been ours needs nothing; only one still unaccounted for is a real
+    // concurrent edit worth refetching for.
+    if (deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now)) {
+      revalidateAll();
+    }
+  }, [revalidateAll, currentUserId]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
     const verdict = classifyTaskEcho(selfWritesRef.current, event, currentUserId, Date.now());
     if (verdict === 'self') return false;
     if (verdict === 'self-in-flight') {
-      // We cannot tell our own echo from a foreign edit that raced it. Dropping
-      // it outright would swallow someone else's change, so remember to
-      // revalidate once when our write settles.
-      deferredRevalidateRef.current = true;
+      // We cannot tell our own echo from a foreign edit that raced it YET.
+      // Queue the event and ask again once our write has a stamp to compare.
+      deferredEchoesRef.current = [...deferredEchoesRef.current, event];
       return false;
     }
     return true;
@@ -182,14 +197,14 @@ export function useTaskWriter(params: {
   const writeTaskField = useCallback(async ({
     loc, body, optimistic, fallbackMessage,
   }: WriteTaskFieldParams): Promise<boolean> => {
-    noteSelfWriteStart(loc.taskId);
+    const writeId = noteSelfWriteStart(loc.taskId);
     try {
       await mutatePages(
         async (current) => {
           const updated = await patch<TaskItem>(
             `/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, body,
           );
-          noteSelfWriteSettled(loc.taskId, updated?.updatedAt ?? null);
+          noteSelfWriteSettled(writeId, updated?.updatedAt ?? null);
           // Reconcile onto the server's values rather than keeping the guess:
           // completedAt in particular is a server-stamped timestamp.
           return applyTaskPatchToPages(current, loc.taskId, {
@@ -210,7 +225,7 @@ export function useTaskWriter(params: {
       );
       return true;
     } catch (e) {
-      noteSelfWriteSettled(loc.taskId, null);
+      noteSelfWriteSettled(writeId, null);
       if (isRevisionConflict(e)) onRevisionConflict?.();
       toast.error(taskWriteErrorMessage(e, fallbackMessage));
       return false;

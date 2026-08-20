@@ -13,7 +13,7 @@ import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '
 import { getActorInfo, logPageActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { createTaskAssignedNotification } from '@pagespace/lib/notifications/notifications';
 import { computeHasContent } from './task-utils';
-import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, seedInheritedTaskStatusConfigs, resolveSeedStatus } from '@/services/api/task-sync-service';
 import { compareByPagePosition, computeTaskMovePosition } from '@/services/api/task-ordering';
 import { reorderTaskListChildPages } from '@/services/api/task-reorder-service';
 import { computeReorderPlan } from '@pagespace/lib/services/reorder';
@@ -501,6 +501,14 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
 
   // Create task and its document page in a transaction
   const result = await db.transaction(async (tx) => {
+    // Resolve the default from the LIST's own vocabulary rather than hardcoding
+    // 'pending'. Sub-lists now inherit their ancestor's statuses, so a list
+    // customised to e.g. icebox/building/shipped does not define 'pending' at
+    // all — writing it would produce exactly the orphaned-status row that
+    // normalizeStatusForList exists to prevent: unclassifiable by
+    // isCompletedStatus, and rendered by the dropdown's raw-slug fallback with
+    // no matching option. addTaskItemUnderParent already resolves it this way.
+    const seedStatus = status || await resolveSeedStatus(tx, taskList.id);
     // Create task list page (description + sub-tasks live here)
     const [taskPage] = await tx.insert(pages).values({
       id: newTaskPageId,
@@ -517,7 +525,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ pageId:
     const [newTask] = await tx.insert(taskItems).values({
       userId,
       pageId: taskPage.id,
-      status: status || 'pending',
+      status: seedStatus,
       priority: priority || 'medium',
       assigneeId: primaryAssigneeId,
       assigneeAgentId: primaryAgentId,

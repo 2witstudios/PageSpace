@@ -321,6 +321,92 @@ describe('echo suppression', () => {
     });
   });
 
+  it('does not revalidate when the deferred echo turns out to have been ours', async () => {
+    // The PATCH route awaits its realtime broadcasts BEFORE returning, so our
+    // own echo routinely arrives while the write is still open and gets
+    // deferred. Re-classifying it once the stamp is known is what keeps the
+    // common click from ending in a full revalidation after all.
+    let resolve: (v: TaskItem) => void = () => {};
+    patchMock.mockReturnValue(new Promise<TaskItem>((r) => { resolve = r; }));
+    const revalidateAll = vi.fn();
+    const { view } = setup(pages([task({ id: 't1' })]), revalidateAll);
+
+    let pending: Promise<boolean>;
+    await act(async () => {
+      pending = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      await Promise.resolve();
+    });
+
+    // The echo of THIS write, arriving before its response.
+    const duringFlight = view.result.current.machinery.shouldRevalidateForEvent(echo('stamp-1'));
+
+    await act(async () => {
+      resolve(task({ id: 't1', updatedAt: 'stamp-1' }));
+      await pending!;
+    });
+
+    assert({
+      given: 'a deferred echo carrying the stamp our own write settled with',
+      should: 'drop it on settle rather than revalidating',
+      actual: [duringFlight, revalidateAll.mock.calls.length],
+      expected: [false, 0],
+    });
+  });
+
+  it('waits for a concurrent write on the SAME task before flushing', async () => {
+    // Two writes to one task overlap on a double-clicked checkbox. Keying the
+    // in-flight records on taskId alone let the first to settle erase the
+    // second's marker, so the guard reported "nothing open" and the
+    // revalidation could race the second write's commit.
+    let resolveA: (v: TaskItem) => void = () => {};
+    let resolveB: (v: TaskItem) => void = () => {};
+    patchMock
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveA = r; }))
+      .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveB = r; }));
+    const revalidateAll = vi.fn();
+    const { view } = setup(pages([task({ id: 't1' })]), revalidateAll);
+
+    let pendingA: Promise<boolean>; let pendingB: Promise<boolean>;
+    await act(async () => {
+      pendingA = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      pendingB = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'list', taskId: 't1' },
+        body: { status: 'pending' }, optimistic: { status: 'pending' },
+        fallbackMessage: 'nope',
+      });
+      await Promise.resolve();
+    });
+
+    // A foreign edit to the same task arrives while both are open.
+    view.result.current.machinery.shouldRevalidateForEvent(echo('someone-else'));
+
+    await act(async () => {
+      resolveA(task({ id: 't1', updatedAt: 'stamp-a' }));
+      await pendingA!;
+    });
+    const afterA = revalidateAll.mock.calls.length;
+
+    await act(async () => {
+      resolveB(task({ id: 't1', updatedAt: 'stamp-b' }));
+      await pendingB!;
+    });
+
+    assert({
+      given: 'two overlapping writes to one task, the first settling first',
+      should: 'hold the revalidation until the second settles too, then run it once',
+      actual: [afterA, revalidateAll.mock.calls.length],
+      expected: [0, 1],
+    });
+  });
+
   it('waits for a concurrent write before flushing the deferred revalidation', async () => {
     // The flag is view-wide. Write A takes a deferred echo and stays open while
     // write B settles: if B's flush ran, the refetch could land before A commits

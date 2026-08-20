@@ -93,14 +93,41 @@ const noopHandlers = (): LocatedTaskHandlers => ({
 
 const ROOT_PAGE = 'root-page';
 
+/**
+ * Stands in for TaskListView's depth-0 wrapper.
+ *
+ * Production never renders a top-level row through TaskRowGroup's own
+ * `NestedTaskRow` — it always passes `renderRow`. A test that omits it is
+ * asserting against a row shape the app does not ship, which is how an earlier
+ * version "covered" aria-expanded while the real depth-0 row had none.
+ */
+const rootRenderRow = (
+  children: React.ReactNode,
+  tree: { expandable: boolean; isExpanded: boolean },
+) => (
+  <tr
+    data-testid="root-row"
+    aria-level={1}
+    aria-expanded={tree.expandable ? tree.isExpanded : undefined}
+  >
+    <td />
+    {children}
+  </tr>
+);
+
 function Harness({
   tasks, expanded, canEdit = true, handlers = noopHandlers(), onCountDelta,
+  renderRow,
 }: {
   tasks: TaskItem[];
   expanded: Set<string>;
   canEdit?: boolean;
   handlers?: LocatedTaskHandlers;
   onCountDelta?: (delta: { total?: number; completed?: number }) => void;
+  renderRow?: (
+    children: React.ReactNode,
+    tree: { expandable: boolean; isExpanded: boolean },
+  ) => React.ReactNode;
 }) {
   const rootPath = rootNodePath(ROOT_PAGE);
   // Deliberately NOT wrapped in TaskWriteProvider: the app never renders one —
@@ -139,6 +166,7 @@ function Harness({
                   handlers={handlers}
                   statusConfigs={CONFIGS}
                   onCountDelta={onCountDelta}
+                  renderRow={renderRow}
                 />
               ))}
             </tbody>
@@ -224,6 +252,10 @@ describe('nested rows in the DOM', () => {
       <Harness
         tasks={[task({ id: 'parent', subTaskCount: 1 }), task({ id: 'leaf' })]}
         expanded={expandedFor('parent')}
+        // Through the production wrapper: the depth-0 rows are the ones users
+        // expand most, and they are exactly the ones an earlier version of this
+        // test could not see.
+        renderRow={rootRenderRow}
       />,
     );
     await screen.findByText('child');
@@ -232,8 +264,8 @@ describe('nested rows in the DOM', () => {
       screen.getByText(label).closest('tr')?.getAttribute('aria-expanded');
 
     assert({
-      given: 'an expanded parent, a collapsed-but-expandable child, and a leaf',
-      should: 'say true, false, and nothing at all',
+      given: 'a depth-0 expanded parent, its collapsed-but-expandable child, and a depth-0 leaf',
+      should: 'say true, false, and nothing at all — at both depths',
       actual: {
         parent: ariaExpanded('parent'),
         child: ariaExpanded('child'),

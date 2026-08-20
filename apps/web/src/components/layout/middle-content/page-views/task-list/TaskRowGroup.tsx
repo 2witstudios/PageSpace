@@ -79,8 +79,16 @@ export interface TaskRowGroupProps {
   /**
    * Wraps the row at depth 0, where it has to carry dnd-kit's sortable ref and
    * the context menu. Nested rows render a plain row.
+   *
+   * Receives the tree state as well as the cells: the depth-0 row is the one
+   * users expand most, and its wrapper has to put `aria-expanded` on the same
+   * `<tr>` it renders — the treegrid role is worthless on a row that never
+   * announces whether it is open.
    */
-  renderRow?: (children: React.ReactNode) => React.ReactNode;
+  renderRow?: (
+    children: React.ReactNode,
+    tree: { expandable: boolean; isExpanded: boolean },
+  ) => React.ReactNode;
 }
 
 export function TaskRowGroup({
@@ -113,7 +121,7 @@ export function TaskRowGroup({
 
   return (
     <>
-      {renderRow ? renderRow(cells) : (
+      {renderRow ? renderRow(cells, { expandable, isExpanded }) : (
         <NestedTaskRow task={task} depth={depth} isExpanded={isExpanded} expandable={expandable}>
           {cells}
         </NestedTaskRow>
