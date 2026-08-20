@@ -7,12 +7,6 @@ import { PageType } from '../utils/enums';
 import type { CellFormat, SheetData, SheetCellUpdate } from './types';
 import { cellRegex, decodeCellAddress } from './address';
 import { parseCellFormat } from './format';
-import {
-  MAX_COLUMN_WIDTH,
-  MAX_ROW_HEIGHT,
-  MIN_COLUMN_WIDTH,
-  MIN_ROW_HEIGHT,
-} from './format-ops';
 
 /**
  * Clone cells record
@@ -52,13 +46,8 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     cells: sanitizedCells,
     formats: sanitizeFormats(sheet.formats),
     columnFormats: sanitizeKeyedFormats(sheet.columnFormats, columnKeyRegex),
-    columnWidths: sanitizeKeyedNumbers(
-      sheet.columnWidths,
-      columnKeyRegex,
-      MIN_COLUMN_WIDTH,
-      MAX_COLUMN_WIDTH
-    ),
-    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT),
+    columnWidths: sanitizeKeyedNumbers(sheet.columnWidths, columnKeyRegex),
+    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex),
   };
 }
 
@@ -117,15 +106,17 @@ function sanitizeKeyedFormats(
 /**
  * Per-column/row size maps; these reach the serializer unchecked otherwise.
  *
- * Clamped to the same bounds the setters enforce. Loaded content never goes
- * through `setColumnWidth`/`setRowHeight`, so without this a stored negative
- * or absurd size reaches the grid and the XLSX export intact.
+ * Rejects what is meaningless (non-numeric, non-finite, zero or negative) but
+ * deliberately does NOT clamp to the editor's MIN/MAX. Sanitization runs on
+ * every save, so clamping here would silently rewrite a hand-authored or
+ * imported 10px gutter to 24px and destroy the original — the same
+ * "drop what we do not understand" failure the format and range passthroughs
+ * exist to avoid. Consumers clamp at the point of use instead, via
+ * `clampColumnWidth`/`clampRowHeight`.
  */
 function sanitizeKeyedNumbers(
   values: Record<string, number> | undefined,
-  keyPattern: RegExp,
-  min: number,
-  max: number
+  keyPattern: RegExp
 ): Record<string, number> | undefined {
   if (!values) return undefined;
 
@@ -134,8 +125,8 @@ function sanitizeKeyedNumbers(
   for (const [key, value] of Object.entries(values)) {
     const normalized = key.toUpperCase();
     if (!keyPattern.test(normalized)) continue;
-    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
-    sanitized[normalized] = Math.min(max, Math.max(min, Math.round(value)));
+    if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) continue;
+    sanitized[normalized] = Math.round(value);
   }
 
   return Object.keys(sanitized).length > 0 ? sanitized : undefined;

@@ -5,6 +5,12 @@ import {
   cellFormatToInlineCss,
   cellFormatToStyle,
   clearCellFormats,
+  clampColumnWidth,
+  clampRowHeight,
+  MAX_COLUMN_WIDTH,
+  MAX_ROW_HEIGHT,
+  MIN_COLUMN_WIDTH,
+  MIN_ROW_HEIGHT,
   createEmptySheet,
   evaluateSheet,
   getEffectiveCellFormat,
@@ -326,14 +332,58 @@ describe('review findings', () => {
     expect(numberFormatToExcelCode(format)).toBe('"$"0.00');
   });
 
-  it('sanitizeSheetData rejects a format the read path would drop', () => {
-    // The write path must not persist what the read path discards, or a
-    // format survives one save and vanishes on the next load.
+  it('drops only the offending field, not the whole format', () => {
+    // An invalid field must not take valid ones with it: the user can see the
+    // bold and did not ask to lose it.
     const sheet: SheetData = {
       ...createEmptySheet(),
-      formats: { A1: { fontSize: 9999 } as CellFormat },
+      formats: {
+        A1: { fontSize: 9999 } as CellFormat,
+        A2: { bold: true, fontSize: 5 } as CellFormat,
+      },
     };
-    expect(sanitizeSheetData(sheet).formats).toBeUndefined();
+
+    const sanitized = sanitizeSheetData(sheet);
+    expect(sanitized.formats?.A1).toBeUndefined();
+    expect(sanitized.formats?.A2).toEqual({ bold: true });
+  });
+
+  it('preserves a format field written by a newer build', () => {
+    // Stripping unknown fields would delete a newer build's work the first
+    // time an older build saves — the cross-version loss the ranges
+    // passthrough exists to prevent.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      formats: { A1: { bold: true, futureField: 'keep me' } as unknown as CellFormat },
+    };
+
+    expect(sanitizeSheetData(sheet).formats?.A1).toEqual({
+      bold: true,
+      futureField: 'keep me',
+    });
+  });
+
+  it('keeps a stored dimension exactly as authored', () => {
+    // Sanitization runs on every save, so clamping here would rewrite a
+    // hand-authored 10px gutter to the editor minimum and destroy it.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      columnWidths: { A: 10, B: 999999 },
+      rowHeights: { '1': 8 },
+    };
+
+    const sanitized = sanitizeSheetData(sheet);
+    expect(sanitized.columnWidths).toEqual({ A: 10, B: 999999 });
+    expect(sanitized.rowHeights).toEqual({ '1': 8 });
+  });
+
+  it('rejects a meaningless stored dimension', () => {
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      columnWidths: { A: -500, B: 0, C: 180 },
+    };
+
+    expect(sanitizeSheetData(sheet).columnWidths).toEqual({ C: 180 });
   });
 
   it('sanitizeSheetData validates column and row metadata too', () => {
@@ -350,20 +400,12 @@ describe('review findings', () => {
     expect(sanitized.rowHeights).toEqual({ '1': 30 });
   });
 
-  it('clamps stored dimensions that bypassed the setters', () => {
-    // Loaded content never goes through setColumnWidth/setRowHeight, so a
-    // negative or absurd stored size would otherwise reach the grid and the
-    // XLSX export intact.
-    const sheet: SheetData = {
-      ...createEmptySheet(),
-      columnWidths: { A: -500, B: 999999, C: 180 },
-      rowHeights: { '1': -20, '2': 500000, '3': 32 },
-    };
-
-    const sanitized = sanitizeSheetData(sheet);
-
-    expect(sanitized.columnWidths).toEqual({ A: 24, B: 2000, C: 180 });
-    expect(sanitized.rowHeights).toEqual({ '1': 16, '2': 1000, '3': 32 });
+  it('bounds a dimension at the point of use, not in storage', () => {
+    expect(clampColumnWidth(10)).toBe(MIN_COLUMN_WIDTH);
+    expect(clampColumnWidth(999999)).toBe(MAX_COLUMN_WIDTH);
+    expect(clampColumnWidth(180)).toBe(180);
+    expect(clampRowHeight(8)).toBe(MIN_ROW_HEIGHT);
+    expect(clampRowHeight(500000)).toBe(MAX_ROW_HEIGHT);
   });
 
   it('moveCellMetadata lets a relocated format win a collision', () => {

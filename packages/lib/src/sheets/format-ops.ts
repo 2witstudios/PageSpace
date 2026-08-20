@@ -127,6 +127,21 @@ export const MAX_ROW_HEIGHT = 1000;
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, Math.round(value)));
 
+/**
+ * Bound a stored column width for rendering or export.
+ *
+ * Stored values are kept exactly as authored — a sheet may legitimately carry
+ * a narrower gutter than the editor's own minimum — so anything that turns a
+ * width into pixels or Excel character units clamps here rather than letting
+ * sanitization rewrite the document.
+ */
+export const clampColumnWidth = (width: number): number =>
+  clamp(width, MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
+
+/** The row-height counterpart of {@link clampColumnWidth}. */
+export const clampRowHeight = (height: number): number =>
+  clamp(height, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
+
 /** Set a column's width in px, or clear it by passing `undefined`. */
 export function setColumnWidth(
   sheet: SheetData,
@@ -221,28 +236,49 @@ export function moveCellMetadata(
   // and a single pass would let iteration order decide which survives, losing
   // one format silently. The relocated entry wins, matching what a structural
   // edit means: the cell that moved into this address brought its formatting.
-  for (const [address, format] of Object.entries(sheet.formats)) {
+  // Source keys are normalized before lookup so a lowercase stored address
+  // still matches an uppercase map entry — otherwise the move is silently
+  // ignored and the stale key survives alongside its relocated twin.
+  const entries = Object.entries(sheet.formats).map(
+    ([address, format]) => [normalizeAddress(address) ?? address, format] as const
+  );
+
+  let changed = false;
+
+  for (const [address, format] of entries) {
     if (!addressMap.has(address)) continue;
 
     const target = addressMap.get(address);
-    if (target === null || target === undefined) continue;
+    if (target === null || target === undefined) {
+      changed = true;
+      continue;
+    }
 
     const normalized = normalizeAddress(target);
-    if (normalized) {
-      formats[normalized] = format;
-      relocated.add(normalized);
-    }
+    if (!normalized) continue;
+
+    // Two entries can map to the SAME target — a delete that collapses rows
+    // does exactly that. Last-writer-wins would make the survivor depend on
+    // iteration order, so the first relocation into an address keeps it.
+    if (relocated.has(normalized)) continue;
+
+    formats[normalized] = format;
+    relocated.add(normalized);
+    if (normalized !== address) changed = true;
   }
 
-  for (const [address, format] of Object.entries(sheet.formats)) {
+  for (const [address, format] of entries) {
     if (addressMap.has(address)) continue;
     if (relocated.has(address)) continue;
     formats[address] = format;
   }
 
+  // Bump only on a real change. Bumping for an empty map — while the
+  // no-formats early return above does not bump — would make the version
+  // signal wrong in both directions.
   return {
     ...sheet,
-    version: sheet.version + 1,
+    version: changed ? sheet.version + 1 : sheet.version,
     formats: Object.keys(formats).length > 0 ? formats : undefined,
   };
 }

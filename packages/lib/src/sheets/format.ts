@@ -87,17 +87,64 @@ export const cellFormatSchema: z.ZodType<CellFormat> = z.object({
   fontFamily: z.enum(['sans', 'mono']).optional(),
 });
 
+/** Per-field schemas, so one bad field does not condemn the whole format. */
+const FIELD_SCHEMAS: Record<string, z.ZodTypeAny> = {
+  number: numberFormatSchema,
+  bold: z.boolean(),
+  italic: z.boolean(),
+  underline: z.boolean(),
+  strike: z.boolean(),
+  align: z.enum(['left', 'center', 'right']),
+  valign: z.enum(['top', 'middle', 'bottom']),
+  wrap: z.boolean(),
+  color: hexColorSchema,
+  background: hexColorSchema,
+  borders: bordersSchema,
+  fontSize: z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE),
+  fontFamily: z.enum(['sans', 'mono']),
+};
+
 /**
- * Validate an untrusted format, dropping it entirely if it does not conform.
- * Used when reading stored documents, where the content may predate or
- * post-date this build, or may simply be hand-edited.
+ * Sanitize a stored format field by field.
+ *
+ * Deliberately NOT all-or-nothing, and deliberately not `cellFormatSchema`
+ * directly, for two reasons:
+ *
+ * - An invalid field must not take valid ones with it. `{bold: true,
+ *   fontSize: 5}` should keep the bold; dropping the whole entry loses styling
+ *   the user can see and did not ask to lose.
+ * - Unknown fields are preserved. A field written by a newer build would
+ *   otherwise be stripped the first time an older build saves — the same
+ *   silent cross-version data loss the `ranges` passthrough exists to avoid.
+ *
+ * Unknown fields are inert at render time: `cellFormatToStyle` reads only
+ * known fields and `cellFormatToInlineCss` emits only allow-listed properties,
+ * so passing them through carries no injection risk.
  */
 export function parseCellFormat(value: unknown): CellFormat | undefined {
-  const result = cellFormatSchema.safeParse(value);
-  if (!result.success) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
     return undefined;
   }
-  return isEmptyFormat(result.data) ? undefined : result.data;
+
+  const sanitized: Record<string, unknown> = {};
+
+  for (const [key, fieldValue] of Object.entries(value as Record<string, unknown>)) {
+    if (fieldValue === undefined) continue;
+
+    const schema = FIELD_SCHEMAS[key];
+    if (!schema) {
+      // Unknown to this build — carry it through untouched.
+      sanitized[key] = fieldValue;
+      continue;
+    }
+
+    const result = schema.safeParse(fieldValue);
+    if (result.success) {
+      sanitized[key] = result.data;
+    }
+  }
+
+  return Object.keys(sanitized).length > 0 ? (sanitized as CellFormat) : undefined;
 }
 
 /** Whether a format carries no instructions and can be dropped. */

@@ -212,6 +212,40 @@ describe('xlsx export', () => {
     expect(cols?.[4]?.wch).toBe(29);
   });
 
+  it('leaves empty columns at Excel\'s default width', () => {
+    // Asserting the WHOLE array on purpose: an earlier fix emitted a
+    // measured-width fallback for every column, pinning each empty one to
+    // ~2 characters. A single-index assertion passed while that shipped.
+    const sheet = createEmptySheet(2, 10);
+    sheet.cells.A1 = 'only A';
+
+    const typed = typedExportFor(sheet);
+    // The route always supplies a dense array of length columnCount.
+    typed.columnWidths = Array.from({ length: 10 }, () => undefined);
+
+    const evaluation = evaluateSheet(sheet);
+    const buffer = generateExcel(evaluation.display, 'Sheet1', 'Defaults', typed);
+    const cols = XLSX.read(buffer, { type: 'buffer', cellStyles: true }).Sheets.Sheet1['!cols'];
+
+    // Column A is measured; nothing else gets an entry at all.
+    expect(cols?.map((c) => c?.wch)).toEqual([8]);
+  });
+
+  it('bounds an absurd stored width at export time', () => {
+    const sheet = createEmptySheet(2, 3);
+    sheet.cells.A1 = 'x';
+
+    const typed = typedExportFor(sheet);
+    typed.columnWidths = [999999, undefined, undefined];
+
+    const evaluation = evaluateSheet(sheet);
+    const buffer = generateExcel(evaluation.display, 'Sheet1', 'Bounded', typed);
+    const cols = XLSX.read(buffer, { type: 'buffer', cellStyles: true }).Sheets.Sheet1['!cols'];
+
+    // MAX_COLUMN_WIDTH (2000px) -> (2000-5)/7 characters.
+    expect(cols?.[0]?.wch).toBe(285);
+  });
+
   it('still works without the typed payload', () => {
     const sheet = formattedSheet();
     const evaluation = evaluateSheet(sheet);

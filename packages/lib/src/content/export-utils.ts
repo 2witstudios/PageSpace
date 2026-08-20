@@ -1,5 +1,6 @@
 import HTMLtoDOCX from 'html-to-docx';
 import * as XLSX from 'xlsx';
+import { clampColumnWidth } from '../sheets/format-ops';
 
 /**
  * Generates a DOCX buffer from HTML content
@@ -96,8 +97,13 @@ export interface TypedSheetExport {
  * does not survive the round trip.
  */
 
-/** Excel measures column width in characters; the grid measures it in pixels. */
-const pxToExcelWidth = (px: number): number => Math.max(1, Math.round((px - 5) / 7));
+/**
+ * Excel measures column width in characters; the grid measures it in pixels.
+ * Stored widths are kept exactly as authored, so the bound is applied here at
+ * the point of use rather than by rewriting the document.
+ */
+const pxToExcelWidth = (px: number): number =>
+  Math.max(1, Math.round((clampColumnWidth(px) - 5) / 7));
 
 function applyTypedCells(
   worksheet: XLSX.WorkSheet,
@@ -189,14 +195,38 @@ export function generateExcel(
     // columns that actually hold data, and it is sparse when rows differ in
     // length — `.map` skips holes — so deriving `!cols` from it alone drops an
     // explicit width for any column past the widest row or at a hole.
+    //
+    // A column with neither data nor an explicit width gets NO entry, leaving
+    // Excel's own default. Emitting a measured-width fallback for those would
+    // pin every empty column of the grid to ~2 characters, collapsing them.
     const columnCount = Math.max(maxColumnWidths.length, typed?.columnWidths?.length ?? 0);
-    worksheet['!cols'] = Array.from({ length: columnCount }, (_, columnIndex) => {
-      const explicit = typed?.columnWidths?.[columnIndex];
-      if (typeof explicit === 'number' && Number.isFinite(explicit)) {
-        return { wch: pxToExcelWidth(explicit) };
+    const columnInfo: (XLSX.ColInfo | undefined)[] = Array.from(
+      { length: columnCount },
+      (_, columnIndex) => {
+        const explicit = typed?.columnWidths?.[columnIndex];
+        if (typeof explicit === 'number' && Number.isFinite(explicit)) {
+          return { wch: pxToExcelWidth(explicit) };
+        }
+
+        // `> 0`, not just "is a number": the display grid is dense, so every
+        // empty column measures 0 and would otherwise get `{wch: 2}` — pinning
+        // it to ~2 characters instead of leaving Excel's default.
+        const measured = maxColumnWidths[columnIndex];
+        if (typeof measured === 'number' && measured > 0) {
+          return { wch: Math.min(measured + 2, 50) };
+        }
+
+        return undefined;
       }
-      return { wch: Math.min((maxColumnWidths[columnIndex] ?? 0) + 2, 50) };
-    });
+    );
+
+    // Trailing gaps carry no information; dropping them keeps `!cols` the same
+    // length it was before an explicit width was ever supplied.
+    while (columnInfo.length > 0 && columnInfo[columnInfo.length - 1] === undefined) {
+      columnInfo.pop();
+    }
+
+    worksheet['!cols'] = columnInfo as XLSX.ColInfo[];
 
     // Add worksheet to workbook
     XLSX.utils.book_append_sheet(workbook, worksheet, sheetName);
