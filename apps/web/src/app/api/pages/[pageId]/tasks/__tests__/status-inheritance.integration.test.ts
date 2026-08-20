@@ -758,6 +758,71 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it('inherits when create_task is what first initialises a sub-list', async () => {
+    // The other half of the AI tool's fix, and the one the sibling test above
+    // does NOT reach: it inserts the task_lists row itself, so createTask takes
+    // the found branch and never runs its lazy-init. Here the target page has no
+    // list of its own, so createTask creates it — and has to inherit, like every
+    // other lazy-init, or the sub-list is born with the four built-ins.
+    if (!dbAvailable) return;
+    const { owner, taskPage } = await seedCustomisedTree();
+    const { createTask } = await import('@/lib/ai/tools/task-helpers');
+
+    await createTask({ timezone: 'UTC' } as never, owner.id, {
+      pageId: taskPage.id, title: 'First child',
+    } as never);
+
+    assert({
+      given: 'a sub-list first initialised by an agent creating a task in it',
+      should: "start from its ancestor's vocabulary, not the four built-ins",
+      actual: await slugsFor(taskPage.id),
+      expected: ['icebox', 'building', 'shipped'],
+    });
+  });
+
+  it('clears a stamp on reopen even when the old slug was not the literal completed', async () => {
+    // PATCH's config-less branch used to key the clear on the OLD SLUG. A row can
+    // reach a list with no vocabulary already stamped under some other slug —
+    // normalizeStatusForList returns early when the destination defines nothing,
+    // so a cross-list move leaves 'shipped' and its timestamp intact — and
+    // moving it to an open status then left the stamp behind: a non-done row
+    // that every `completedAt IS NOT NULL` counter still reads as finished.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    // A list row with NO status configs, so PATCH takes its built-in branch.
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Plain', status: 'pending',
+    });
+    const taskPage = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    const [row] = await db.insert(taskItems).values({
+      userId: owner.id, pageId: taskPage.id, status: 'shipped', completedAt: new Date(),
+    }).returning();
+
+    const patchRoute = await import('../[taskId]/route');
+    const res = await patchRoute.PATCH(
+      new Request(`http://localhost/api/pages/${listPage.id}/tasks/${row.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ status: 'pending' }),
+      }),
+      { params: Promise.resolve({ pageId: listPage.id, taskId: row.id }) },
+    );
+
+    const [after] = await db.select({ status: taskItems.status, completedAt: taskItems.completedAt })
+      .from(taskItems).where(eq(taskItems.id, row.id)).limit(1);
+    assert({
+      given: 'a stamped row on a non-completed slug, moved to an open status',
+      should: 'clear the stamp so the row and its counters agree',
+      actual: { status: res.status, slug: after?.status, stamped: after?.completedAt !== null },
+      expected: { status: 200, slug: 'pending', stamped: false },
+    });
+  });
+
   it('inherits through more than one level', async () => {
     if (!dbAvailable) return;
     const { owner, drive, taskPage } = await seedCustomisedTree();
