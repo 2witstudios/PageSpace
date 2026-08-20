@@ -71,7 +71,7 @@ vi.mock('@pagespace/db/db', () => {
   const mockInsert = vi.fn(() => ({
     values: vi.fn(() => ({
       // Status-config seeding is ON CONFLICT DO NOTHING (a catch inside a
-      // transaction would abort it — see seedDefaultTaskStatusConfigs).
+      // transaction would abort it — see seedInheritedTaskStatusConfigs).
       onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
       returning: vi.fn(),
     })),
@@ -125,7 +125,7 @@ vi.mock('@pagespace/db/db', () => {
               capturedInserts.push(values);
               return {
                 // Status-config seeding is ON CONFLICT DO NOTHING; see
-                // seedDefaultTaskStatusConfigs for why it cannot be a try/catch.
+                // seedInheritedTaskStatusConfigs for why it cannot be a try/catch.
                 onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
                 returning: vi.fn().mockImplementation(() => {
                   insertCallCount++;

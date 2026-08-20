@@ -75,7 +75,6 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 vi.mock('@/services/api/task-sync-service', () => ({
   backfillMissingTaskItems: vi.fn(),
   ensureTaskListForPage: vi.fn(),
-  seedDefaultTaskStatusConfigs: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({

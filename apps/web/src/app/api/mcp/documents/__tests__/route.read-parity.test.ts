@@ -83,7 +83,6 @@ vi.mock('@/services/api/task-sync-service', () => ({
     if (existing) return existing;
     return { id: 'tl_new', pageId: params.pageId };
   }),
-  seedDefaultTaskStatusConfigs: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({

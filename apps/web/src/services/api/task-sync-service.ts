@@ -31,32 +31,6 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
   return page?.type ?? null
 }
 
-/**
- * Seed the default `task_status_configs` for a `task_lists` row.
- *
- * Conflict tolerance is `onConflictDoNothing`, not a try/catch, for two
- * reasons — one demonstrated, one structural.
- *
- * Demonstrated: a real conflict IS reachable on the repair paths, where two
- * callers find the same config-less list and both seed it (the GET route's
- * migration branch, the MCP read, `read_page`). A catch has to recognise the
- * error first, and drizzle rethrows pg errors as DrizzleQueryError with the
- * SQLSTATE on `.cause` — so the message test that stood here would have
- * rethrown and 500'd the request. There is an integration test for exactly
- * this race; removing the conflict clause fails it.
- *
- * Structural: the create paths run inside `db.transaction`, where a RAISED
- * constraint violation aborts the transaction, and swallowing it would let the
- * callback return while Postgres converts the COMMIT to a ROLLBACK — handing
- * the caller a `task_lists` row that never committed. Today those paths seed a
- * freshly created id, so no conflict can occur and the hazard is latent rather
- * than live. ON CONFLICT DO NOTHING never raises, so it cannot become live.
- */
-export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
-  await tx.insert(taskStatusConfigs)
-    .values(DEFAULT_TASK_STATUSES.map(s => ({ taskListId, ...s })))
-    .onConflictDoNothing()
-}
 
 /**
  * How far up the page tree the status-vocabulary walk will look.
@@ -152,7 +126,25 @@ export async function resolveInheritedStatusSeed(
 /**
  * Seed a new `task_lists` row's vocabulary, inherited from its nearest ancestor
  * task list. Conflict-tolerant for the same reason, and by the same means, as
- * seedDefaultTaskStatusConfigs.
+ * seedInheritedTaskStatusConfigs.
+ *
+ * Conflict tolerance is `onConflictDoNothing`, not a try/catch, for two
+ * reasons — one demonstrated, one structural. (Carried over from the default
+ * seeder this replaced; the reasoning is about the insert, not the values.)
+ *
+ * Demonstrated: a real conflict IS reachable on the repair paths, where two
+ * callers find the same config-less list and both seed it (the GET route's
+ * migration branch, the MCP read, `read_page`). A catch has to recognise the
+ * error first, and drizzle rethrows pg errors as DrizzleQueryError with the
+ * SQLSTATE on `.cause` — so a message test would have rethrown and 500'd the
+ * request. There is an integration test for exactly this race; removing the
+ * conflict clause fails it.
+ *
+ * Structural: the create paths run inside `db.transaction`, where a RAISED
+ * constraint violation aborts the transaction, and swallowing it would let the
+ * callback return while Postgres converts the COMMIT to a ROLLBACK — handing
+ * the caller a `task_lists` row that never committed. ON CONFLICT DO NOTHING
+ * never raises, so it cannot become live.
  */
 export async function seedInheritedTaskStatusConfigs(
   tx: Tx,
@@ -289,7 +281,7 @@ async function conformExistingTasksToVocabulary(
  * Ensure a TASK_LIST page has its `task_lists` row and default `task_status_configs`
  * seeded. Idempotent — a no-op if the `task_lists` row already exists. Callers that
  * separately look up `task_status_configs` for display (the MCP documents `read` route,
- * `page-read-tools.ts`'s `read_page`) also call `seedDefaultTaskStatusConfigs` when that
+ * `page-read-tools.ts`'s `read_page`) also call `seedInheritedTaskStatusConfigs` when that
  * lookup comes back empty, so a legacy `task_lists` row missed by a pre-fix lazy-init
  * path gets backfilled on next read instead of staying half-initialized forever.
  *

@@ -275,12 +275,20 @@ function TaskSubTaskRows({
         }
       }
       const next = resolveToggleStatus(nodeStatusConfigs, isDone);
+      // What the resolved slug MEANS, not what the click intended. On a list
+      // with no status in the group asked for, resolveToggleStatus deliberately
+      // returns one from the other side rather than a slug the list does not
+      // define — the write then succeeds, and assuming it completed the task
+      // moves the parent's counter for a transition the server never made.
+      // Unlike status and completedAt, which the reconcile corrects from the
+      // response, that counter lives in another cache and nothing repairs it.
+      const nowDone = isCompletedStatus(next, nodeStatusConfigs);
       const ok = await writeTaskField({
         loc,
         body: { status: next },
         optimistic: {
           status: next,
-          completedAt: isDone ? null : new Date().toISOString(),
+          completedAt: nowDone ? new Date().toISOString() : null,
         },
         fallbackMessage: 'Failed to update status',
       });
@@ -293,7 +301,7 @@ function TaskSubTaskRows({
       // on exactly the done-group transitions (tasks/[taskId]/route.ts) — a real
       // coupling, not a coincidence, and the reason a status change that stops
       // stamping would silently drift these numbers.
-      if (ok) onParentCountDelta?.({ completed: isDone ? -1 : 1 });
+      if (ok && nowDone !== isDone) onParentCountDelta?.({ completed: nowDone ? 1 : -1 });
     },
     onStatusChange: async (loc, child, status) => {
       if (!tree.canEdit) return;

@@ -52,7 +52,6 @@ const schemaTables = {
 import {
   ensureTaskItemForPage,
   ensureTaskListForPage,
-  seedDefaultTaskStatusConfigs,
   resolveSeedCompletedAt,
   resolveSeedStatus,
   type SeedCache,
@@ -259,41 +258,6 @@ function makeTx(config: {
   return { tx, taskItemInserts, taskListInserts, taskStatusConfigInserts, deletedPageIds, taskItemUpdates, deletedTables, scrubSelects, deleteConditions, workflowDriveUpdates, statusConfigProbes };
 }
 
-describe('seedDefaultTaskStatusConfigs', () => {
-  it('inserts the 4 default status configs linked to the given task_lists id', async () => {
-    const { tx, taskStatusConfigInserts } = makeTx();
-    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
-    expect(taskStatusConfigInserts).toEqual([
-      { taskListId: 'list-1', slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
-    ]);
-  });
-
-  it('delegates conflict tolerance to Postgres rather than catching it', async () => {
-    // Not a style preference. Every caller runs inside db.transaction, and a
-    // raised 23505 aborts the whole transaction — so catching it lets the
-    // callback return normally while Postgres turns the COMMIT into a ROLLBACK,
-    // handing the caller a task_lists row that does not exist. ON CONFLICT DO
-    // NOTHING never raises, so the transaction stays valid.
-    const onConflictDoNothing = vi.fn(() => Promise.resolve());
-    const tx = { insert: vi.fn(() => ({ values: () => ({ onConflictDoNothing }) })) };
-    await seedDefaultTaskStatusConfigs(tx as never, 'list-1');
-    assert({
-      given: 'a seed insert',
-      should: 'be issued as ON CONFLICT DO NOTHING',
-      actual: onConflictDoNothing.mock.calls.length,
-      expected: 1,
-    });
-  });
-
-  it('still propagates an unrelated failure', async () => {
-    const tx = {
-      insert: vi.fn(() => ({
-        values: () => ({ onConflictDoNothing: () => Promise.reject(new Error('connection reset')) }),
-      })),
-    };
-    await expect(seedDefaultTaskStatusConfigs(tx as never, 'list-1')).rejects.toThrow('connection reset');
-  });
-});
 
 describe('resolveSeedCompletedAt', () => {
   // A done-group status with a null completedAt reads as complete to the UI

@@ -692,6 +692,51 @@ describe('sub-task counters', () => {
     });
   });
 
+  it('does not move the parent counter when the toggle cannot actually complete', async () => {
+    // A list with no done-group status. resolveToggleStatus deliberately returns
+    // a slug from the other side rather than one the list does not define — the
+    // write succeeds, so assuming it completed the task moves the parent's
+    // counter for a transition the server never made. Status and completedAt
+    // self-correct from the response; the counter lives in another cache and
+    // nothing repairs it.
+    const openOnly = [
+      { id: 'c1', taskListId: 'sub', name: 'Backlog', slug: 'backlog', color: 'x', group: 'todo' as const, position: 0 },
+      { id: 'c2', taskListId: 'sub', name: 'Doing', slug: 'doing', color: 'x', group: 'in_progress' as const, position: 1 },
+    ];
+    fetchWithAuth.mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        taskList: { id: 'sub', title: 'Sub', description: null, status: 'active', updatedAt: 'x' },
+        tasks: [task({ id: 'child', status: 'backlog' })],
+        statusConfigs: openOnly,
+        hasMore: false,
+      }),
+    });
+    patchMock.mockResolvedValue(task({ id: 'child', status: 'doing', completedAt: null, updatedAt: 's' }));
+    const onCountDelta = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'parent', subTaskCount: 1 })]}
+        expanded={expandedFor('parent')}
+        onCountDelta={onCountDelta}
+      />,
+    );
+    await screen.findByText('child');
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Complete child/i }));
+
+    await waitFor(() => expect(patchMock).toHaveBeenCalled());
+    assert({
+      given: 'a completion toggle on a list that defines no done status',
+      should: 'send a slug the list defines, and leave the parent counter alone',
+      actual: {
+        sent: (patchMock.mock.calls[0][1] as { status: string }).status,
+        deltas: onCountDelta.mock.calls.length,
+      },
+      expected: { sent: 'doing', deltas: 0 },
+    });
+  });
+
   it('reports a decrement when a completed child is reopened', async () => {
     fetchWithAuth.mockResolvedValue(
       subTaskResponse([task({ id: 'child', status: 'completed', completedAt: 'x' })]),

@@ -46,6 +46,16 @@ vi.mock('@/lib/websocket', () => ({
   createPageEventPayload: vi.fn(() => ({})),
 }));
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+// One test drives the AI tool's createTask directly, to check the seeding path
+// it uses. Its permission check is the only thing standing between the test and
+// the real DB writes it exists to inspect.
+vi.mock('@/lib/ai/tools/actor-permissions', () => ({
+  canActorEditPage: vi.fn(async () => true),
+  canActorViewPage: vi.fn(async () => true),
+  canActorAccessDrive: vi.fn(async () => true),
+  canActorManageDrive: vi.fn(async () => true),
+  getActorAccessiblePagesInDrive: vi.fn(async () => []),
+}));
 
 /** The custom vocabulary a root list's owner might define. */
 const CUSTOM_STATUSES = [
@@ -669,6 +679,82 @@ describe('sub-list status vocabulary inheritance', () => {
         stamped: body?.completedAt !== null && body?.completedAt !== undefined,
       },
       expected: { status: 201, slug: 'shipped', stamped: true },
+    });
+  });
+
+  it("create_task seeds the list's own status, and stamps a done one", async () => {
+    // The AI tool was the one seeding path that never learned resolveSeedStatus.
+    // Harmless while every lazy-init wrote DEFAULT_TASK_STATUSES, because
+    // 'pending' was then always defined — but this branch makes sub-lists
+    // inherit, so a list under a customised root defines no 'pending' at all,
+    // and the literal wrote a slug the list does not define. The validation
+    // below it only runs when a status was passed explicitly, so nothing caught
+    // it. It also never stamped completedAt, the last born-complete door.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [list] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values(
+      CUSTOM_STATUSES.map((c) => ({ taskListId: list.id, ...c })),
+    );
+
+    const { createTask } = await import('@/lib/ai/tools/task-helpers');
+    const ctx = { timezone: 'UTC' } as never;
+    await createTask(ctx, owner.id, { pageId: listPage.id, title: 'From an agent' } as never);
+    await createTask(ctx, owner.id, {
+      pageId: listPage.id, title: 'Already shipped', status: 'shipped',
+    } as never);
+
+    const rows = await db.select({ status: taskItems.status, completedAt: taskItems.completedAt })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(eq(pages.parentId, listPage.id))
+      .limit(10);
+    // Asserted from the DATABASE, not the return value: the row is the thing
+    // every later read and every counter sees.
+    const open = rows.find((r) => r.status === 'icebox');
+    const done = rows.find((r) => r.status === 'shipped');
+    assert({
+      given: 'two agent-created tasks, one defaulted and one explicitly done',
+      should: "use the list's own open status, and stamp only the done one",
+      actual: {
+        slugs: rows.map((r) => r.status).sort(),
+        openUnstamped: open?.completedAt === null,
+        doneStamped: done?.completedAt !== null && done?.completedAt !== undefined,
+      },
+      expected: { slugs: ['icebox', 'shipped'], openUnstamped: true, doneStamped: true },
+    });
+  });
+
+  it('inherits when the STATUSES route is what first initialises a sub-list', async () => {
+    // Every lazy-init decides a sub-list's vocabulary permanently, so each one
+    // has to inherit or it becomes another door into the original bug. This one
+    // and the AI tool were the last two seeding the built-ins; reverting either
+    // used to leave every test in its directory green.
+    if (!dbAvailable) return;
+    const { drive, taskPage } = await seedCustomisedTree();
+    const statusesRoute = await import('../statuses/route');
+
+    const res = await statusesRoute.POST(
+      new Request(`http://localhost/api/pages/${taskPage.id}/tasks/statuses`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name: 'Extra', group: 'todo', color: 'bg-slate-100' }),
+      }),
+      { params: Promise.resolve({ pageId: taskPage.id }) },
+    );
+    expect(res.status).toBe(201);
+    void drive;
+
+    assert({
+      given: 'a sub-list first initialised by adding a status to it',
+      should: "start from its ancestor's vocabulary, not the four built-ins",
+      actual: (await slugsFor(taskPage.id)).filter((slug) => slug !== 'extra'),
+      expected: ['icebox', 'building', 'shipped'],
     });
   });
 

@@ -81,7 +81,7 @@ vi.mock('@pagespace/db/db', () => {
         }
         mockInsertStatusConfigValues(vals);
         // Seeding goes through ON CONFLICT DO NOTHING (see
-        // seedDefaultTaskStatusConfigs — catching 23505 inside a transaction
+        // seedInheritedTaskStatusConfigs — catching 23505 inside a transaction
         // would abort it), so the values builder must offer that.
         return { onConflictDoNothing: () => Promise.resolve(undefined) };
       },
