@@ -5,6 +5,8 @@ import {
   makeNodePath,
   isNodeExpanded,
   toggleNodePath,
+  expandNodePath,
+  type TaskNodePath,
   canExpandNode,
   depthIndentStyle,
   resolveNodeStatusConfigs,
@@ -73,6 +75,32 @@ describe('node paths', () => {
       should: 'return a set without it',
       actual: isNodeExpanded(toggleNodePath(new Set(['root/a']), 'root/a'), 'root/a'),
       expected: false,
+    });
+  });
+});
+
+describe('expandNodePath', () => {
+  it('opens a closed node', () => {
+    assert({
+      given: 'a path that is not open',
+      should: 'add it',
+      actual: [...expandNodePath(new Set<TaskNodePath>(['a' as TaskNodePath]), 'b' as TaskNodePath)],
+      expected: ['a', 'b'],
+    });
+  });
+
+  it('is idempotent, and returns the SAME set when nothing changes', () => {
+    // Why this exists rather than reusing toggleNodePath: "make sure this is
+    // open" must survive being called twice against one rendered state, where
+    // two toggles net to closed. Returning the same reference also lets React
+    // skip the re-render.
+    const before: ReadonlySet<TaskNodePath> = new Set<TaskNodePath>(['a' as TaskNodePath]);
+    const after = expandNodePath(before, 'a' as TaskNodePath);
+    assert({
+      given: 'a path that is already open',
+      should: 'return the identical set',
+      actual: after === before,
+      expected: true,
     });
   });
 });

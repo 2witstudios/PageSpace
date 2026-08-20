@@ -146,6 +146,7 @@ function Harness({
     openTriggerDialog: vi.fn(),
     expandedPaths: expanded,
     toggleExpanded: vi.fn(),
+    expandNode: vi.fn(),
     editingTaskId: null,
     editingTitle: '',
     onEditingTitleChange: vi.fn(),
@@ -328,6 +329,82 @@ describe('nested rows in the DOM', () => {
         vanished: !!screen.queryByText('These sub-tasks are no longer here.'),
       },
       expected: { addRow: true, fetches: 0, vanished: false },
+    });
+  });
+});
+
+describe('recovering a sub-list that failed to load', () => {
+  // Carried over from TaskRowDescription's suite, which this component replaced;
+  // both branches were left unasserted in the move.
+  it('keeps a row collapsible once its last sub-task is gone', async () => {
+    // Deleting the last child drops subTaskCount to 0, which makes a row with
+    // no description un-expandable — while it is still OPEN and its inline add
+    // row is still on screen. The chevron would disappear and the user could
+    // not close what they can see, and aria-expanded would vanish off a row
+    // whose children are rendered.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([]));
+    render(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 0, hasContent: false })]} expanded={expandedFor('parent')} />,
+    );
+
+    assert({
+      given: 'an expanded row whose count has fallen to zero, with no description',
+      should: 'still offer the collapse control and still report itself expanded',
+      actual: {
+        collapse: !!screen.queryByRole('button', { name: /Collapse parent/i }),
+        ariaExpanded: screen.getByText('parent').closest('tr')?.getAttribute('aria-expanded'),
+      },
+      expected: { collapse: true, ariaExpanded: 'true' },
+    });
+  });
+
+  it('re-requests the failed FIRST page rather than paging past it', async () => {
+    fetchWithAuth.mockRejectedValue(new Error('offline'));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+    await screen.findByText('Could not load sub-tasks.');
+    const before = fetchWithAuth.mock.calls.length;
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(fetchWithAuth.mock.calls.length).toBeGreaterThan(before));
+
+    const after = fetchWithAuth.mock.calls.slice(before).map((c) => String(c[0]));
+    assert({
+      given: 'a retry after the first page failed',
+      should: 'ask for offset 0 again and not skip past it',
+      // Honest about its own reach: this pins the OUTCOME, not the branch.
+      // `loadMore` here produces the identical single request, because SWR will
+      // not fetch page N+1 while page N is unresolved — so no assertion can
+      // separate the two in this state. The next test is the one that does.
+      actual: {
+        refetchedFirst: after.some((u) => u.includes('offset=0')),
+        pagedPast: after.some((u) => u.includes('offset=100')),
+      },
+      expected: { refetchedFirst: true, pagedPast: false },
+    });
+  });
+
+  it('asks only for the page that failed when a LATER one did', async () => {
+    // `retry` re-issues every loaded page against a route that lazily writes,
+    // so the recovery for a later-page failure has to be the cheaper one.
+    fetchWithAuth
+      .mockResolvedValueOnce(subTaskResponse([task({ id: 'child' })], true))
+      .mockRejectedValue(new Error('offline'));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+    await screen.findByText('child');
+    await userEvent.click(screen.getByRole('button', { name: 'Load more sub-tasks' }));
+    await screen.findByText('Could not load the rest of the sub-tasks.');
+    const before = fetchWithAuth.mock.calls.length;
+
+    await userEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    await waitFor(() => expect(fetchWithAuth.mock.calls.length).toBeGreaterThan(before));
+
+    assert({
+      given: 'a retry after a later page failed, with the first page loaded',
+      should: 'request only the missing page, never re-issue offset 0',
+      actual: fetchWithAuth.mock.calls.slice(before).every(
+        (c) => !String(c[0]).includes('offset=0'),
+      ),
+      expected: true,
     });
   });
 });

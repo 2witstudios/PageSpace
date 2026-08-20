@@ -86,6 +86,21 @@ export interface TaskWriteMachinery {
    */
   registerCacheRefresher: (refresh: () => void) => () => void;
   /**
+   * Refresh every registered node cache.
+   *
+   * For changes made through a surface that does not own the cache the result
+   * renders from — the trigger dialog is the case: it is opened from a nested
+   * row, and the bell it toggles is drawn from that node's own cache, which has
+   * no revalidation trigger of its own. Refreshing the root list alone leaves
+   * the bell wrong for the rest of the session.
+   *
+   * Not wired to inbound socket events: those never carry a foreign nested
+   * change to this client in the first place (see TaskListView's handlers), so
+   * fanning out there would only re-fetch every open node on the user's own
+   * writes.
+   */
+  refreshNodeCaches: () => void;
+  /**
    * Run the revalidation an echo deferred, if one is pending and no write is
    * still open. Refreshes the view and every registered cache.
    *
@@ -225,11 +240,12 @@ export function useTaskWriteMachinery(
       canCaptureInverse,
       stillOwnsTask,
       registerCacheRefresher,
+      refreshNodeCaches,
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
     [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, canCaptureInverse, stillOwnsTask,
-     registerCacheRefresher, flushDeferredRevalidate, shouldRevalidateForEvent],
+     registerCacheRefresher, refreshNodeCaches, flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
 

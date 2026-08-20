@@ -88,6 +88,21 @@ export const toggleNodePath = (
 };
 
 /**
+ * Open a node, idempotently.
+ *
+ * Distinct from `toggleNodePath` because "make sure this is open" and "flip it"
+ * are different intents, and only one of them is safe to call from a handler
+ * that may run twice against the same rendered state: two toggles net to
+ * closed. The bootstrap that creates a first sub-task means the former.
+ *
+ * Returns the same Set when it was already open, so React skips the re-render.
+ */
+export const expandNodePath = (
+  expanded: ReadonlySet<TaskNodePath>,
+  path: TaskNodePath,
+): ReadonlySet<TaskNodePath> => (expanded.has(path) ? expanded : new Set(expanded).add(path));
+
+/**
  * Depth-aware form of `canExpandTask`. Same two conditions — the task has a
  * linked page and either its own document content or at least one sub-task —
  * plus the depth ceiling.

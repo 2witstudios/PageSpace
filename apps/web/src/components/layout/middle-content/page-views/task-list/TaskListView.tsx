@@ -100,6 +100,7 @@ import {
   makeNodePath,
   rootNodePath,
   toggleNodePath,
+  expandNodePath,
   type TaskNodePath,
 } from './task-tree-core';
 import { StatusConfigManager } from './StatusConfigManager';
@@ -551,6 +552,10 @@ function TaskListView({ page }: TaskListViewProps) {
   const [expandedPaths, setExpandedPaths] = useState<Set<TaskNodePath>>(new Set());
   const toggleExpanded = useCallback(
     (path: TaskNodePath) => setExpandedPaths(prev => toggleNodePath(prev, path)),
+    [],
+  );
+  const expandNode = useCallback(
+    (path: TaskNodePath) => setExpandedPaths(prev => new Set(expandNodePath(prev, path))),
     [],
   );
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
@@ -1094,6 +1099,7 @@ function TaskListView({ page }: TaskListViewProps) {
     openTriggerDialog,
     expandedPaths,
     toggleExpanded,
+    expandNode,
     editingTaskId,
     editingTitle,
     onEditingTitleChange: setEditingTitle,
@@ -1102,7 +1108,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // them would defeat the memo, and both read only state already listed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }), [canEdit, page.driveId, writeMachinery, statusConfigs, openTriggerDialog,
-       expandedPaths, toggleExpanded, editingTaskId, editingTitle]);
+       expandedPaths, toggleExpanded, expandNode, editingTaskId, editingTitle]);
 
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
@@ -1497,7 +1503,13 @@ function TaskListView({ page }: TaskListViewProps) {
           pageId={triggerDialogTask.listPageId}
           driveId={page.driveId}
           hasDueDate={!!triggerDialogTask.task.dueDate}
-          onSaved={() => mutateTasks()}
+          onSaved={() => {
+            mutateTasks();
+            // The dialog can be opened from a NESTED row, and the bell it
+            // toggles is rendered from that node's own cache — which mutateTasks
+            // does not touch and which has no revalidation trigger of its own.
+            writeMachinery.refreshNodeCaches();
+          }}
         />
       )}
 

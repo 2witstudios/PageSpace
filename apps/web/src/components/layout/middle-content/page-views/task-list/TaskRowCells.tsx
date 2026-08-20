@@ -74,7 +74,11 @@ export function TaskRowCells({
   const isCompleted = isCompletedStatus(task.status, statusConfigs);
   const statusConfigMap = buildStatusConfig(statusConfigs);
   const statusOrder = getStatusOrder(statusConfigs);
-  const expandable = canExpandNode(task, depth);
+  // `|| isExpanded`: deleting the last sub-task drops subTaskCount to 0, which
+  // makes a row with no description un-expandable — while it is still OPEN, its
+  // inline add row still rendering. Without this the chevron disappears and the
+  // user cannot close what they can see.
+  const expandable = canExpandNode(task, depth) || isExpanded;
   const progress = formatSubTaskProgress(task);
 
   const commitEdit = () => {

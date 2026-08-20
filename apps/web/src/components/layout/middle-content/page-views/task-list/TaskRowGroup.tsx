@@ -105,7 +105,10 @@ export function TaskRowGroup({
 }: TaskRowGroupProps) {
   const { expandedPaths, canEdit } = useTaskTree();
   const isExpanded = isNodeExpanded(expandedPaths, path);
-  const expandable = canExpandNode(task, depth);
+  // Same rule as the chevron in TaskRowCells: a row that is open is expandable,
+  // whatever its count now says, or aria-expanded vanishes off a row whose
+  // children are on screen.
+  const expandable = canExpandNode(task, depth) || isExpanded;
   const hasSubTasks = (task.subTaskCount ?? 0) > 0;
 
   // A leaf has no chevron and therefore nowhere to put an inline "+ sub-task"
@@ -133,9 +136,14 @@ export function TaskRowGroup({
     <>
       {renderRow ? renderRow(cells, { expandable, isExpanded }) : (
         <NestedTaskRow
-          task={task} depth={depth} path={path}
+          depth={depth} path={path}
           isExpanded={isExpanded} expandable={expandable}
           posInSet={posInSet} setSize={setSize}
+          // By STATUS GROUP, the same question the depth-0 row and the title's
+          // strikethrough ask. Dimming on `completedAt` instead meant a row
+          // whose group and stamp disagree — reachable, since a status can be
+          // regrouped in place — rendered differently depending on its depth.
+          isCompleted={isCompletedStatus(task.status, statusConfigs)}
         >
           {cells}
         </NestedTaskRow>
@@ -174,15 +182,15 @@ const MAX_REVEAL_PAGES = 5;
  * anyway.
  */
 function NestedTaskRow({
-  task, depth, path, isExpanded, expandable, posInSet, setSize, children,
+  depth, path, isExpanded, expandable, posInSet, setSize, isCompleted, children,
 }: {
-  task: TaskItem;
   depth: number;
   path: TaskNodePath;
   isExpanded: boolean;
   expandable: boolean;
   posInSet?: number;
   setSize?: number;
+  isCompleted: boolean;
   children: React.ReactNode;
 }) {
   return (
@@ -198,7 +206,7 @@ function NestedTaskRow({
       aria-posinset={posInSet}
       aria-setsize={setSize}
       aria-expanded={expandable ? isExpanded : undefined}
-      className={task.completedAt ? 'opacity-60' : undefined}
+      className={isCompleted ? 'opacity-60' : undefined}
     >
       {/* Empty drag-handle cell keeps nested columns aligned with the parent's. */}
       <TableCell className="w-8 px-2" />
@@ -361,7 +369,6 @@ function TaskSubTaskRows({
     },
     onNavigate: tree.onNavigate,
     onStartEdit: tree.onStartEdit,
-    onConfigureTriggers: (child) => tree.openTriggerDialog(child, listPageId),
   }), [
     tree, nodeStatusConfigs, writeTaskField, subTasks, mutatePages, retry,
     onParentCountDelta, listPageId,
@@ -473,10 +480,16 @@ function TaskSubTaskRows({
 
       {/* Shown on `error` even with nothing more to load: a FIRST page that
           failed leaves hasMore false, and nothing retries on its own, so a
-          missing control there would be a dead end. Which recovery to offer
-          depends on which page failed, and the difference is requests against a
-          route that writes — `retry` re-issues every loaded page, while paging
-          forward requests only the one that is missing. */}
+          missing control there would be a dead end.
+
+          Which recovery to offer depends on which page failed. For a LATER page
+          the difference is real and worth the branch: `retry` re-issues every
+          loaded page against a route that lazily writes, while paging forward
+          asks only for the one that is missing. For the FIRST page the two
+          currently coincide — SWR will not fetch page N+1 while page N is
+          unresolved, so `loadMore` issues the same single request — and `retry`
+          is still the right call there because it does not leave `size`
+          inflated for after the recovery. */}
       {(hasMore || error) && (
         <AffordanceRow depth={childDepth}>
           <Button
@@ -606,7 +619,7 @@ function useSubTaskBootstrap({
   onCountDelta?: CountDelta;
   enabled: boolean;
 }): (() => void) | undefined {
-  const { toggleExpanded, expandedPaths } = useTaskTree();
+  const { expandNode } = useTaskTree();
 
   const run = useCallback(async () => {
     if (!task.pageId) return;
@@ -615,11 +628,14 @@ function useSubTaskBootstrap({
       // Same rule as addCreatedChild: a done-seeded task arrives already
       // complete, and counting it as open blocks the parent.
       onCountDelta?.({ total: 1, completed: created.completedAt ? 1 : 0 });
-      if (!isNodeExpanded(expandedPaths, path)) toggleExpanded(path);
+      // expandNode, not toggleExpanded: this reads `path` out of a render-time
+      // closure, and two invocations resolving against the same one would flip
+      // twice and net to closed.
+      expandNode(path);
     } catch (e) {
       toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));
     }
-  }, [task.pageId, onCountDelta, expandedPaths, path, toggleExpanded]);
+  }, [task.pageId, onCountDelta, path, expandNode]);
 
   if (!enabled) return undefined;
   return () => { void run(); };

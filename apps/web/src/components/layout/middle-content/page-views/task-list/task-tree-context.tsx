@@ -38,6 +38,8 @@ export interface TaskTreeContextValue {
 
   expandedPaths: ReadonlySet<TaskNodePath>;
   toggleExpanded: (path: TaskNodePath) => void;
+  /** Open a node without the risk of closing one — see expandNodePath. */
+  expandNode: (path: TaskNodePath) => void;
 
   editingTaskId: string | null;
   editingTitle: string;
