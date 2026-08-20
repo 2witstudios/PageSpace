@@ -555,7 +555,10 @@ function TaskListView({ page }: TaskListViewProps) {
     [],
   );
   const expandNode = useCallback(
-    (path: TaskNodePath) => setExpandedPaths(prev => new Set(expandNodePath(prev, path))),
+    // Not re-wrapped in `new Set`: expandNodePath returns the SAME set when the
+    // node is already open, and React then skips the re-render — a wrapper here
+    // would mint a new one every time and throw that away.
+    (path: TaskNodePath) => setExpandedPaths(prev => expandNodePath(prev, path)),
     [],
   );
   const viewMode = useLayoutStore((state) => state.taskListViewMode);

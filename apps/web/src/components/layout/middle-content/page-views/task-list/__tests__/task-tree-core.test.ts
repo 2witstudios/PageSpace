@@ -94,7 +94,7 @@ describe('expandNodePath', () => {
     // open" must survive being called twice against one rendered state, where
     // two toggles net to closed. Returning the same reference also lets React
     // skip the re-render.
-    const before: ReadonlySet<TaskNodePath> = new Set<TaskNodePath>(['a' as TaskNodePath]);
+    const before = new Set<TaskNodePath>(['a' as TaskNodePath]);
     const after = expandNodePath(before, 'a' as TaskNodePath);
     assert({
       given: 'a path that is already open',

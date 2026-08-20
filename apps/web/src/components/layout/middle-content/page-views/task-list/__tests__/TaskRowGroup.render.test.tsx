@@ -336,6 +336,44 @@ describe('nested rows in the DOM', () => {
 describe('recovering a sub-list that failed to load', () => {
   // Carried over from TaskRowDescription's suite, which this component replaced;
   // both branches were left unasserted in the move.
+  it('reloads a node whose count went 1 -> 0 -> 1 rather than serving the empty cache', async () => {
+    // The clear-out-and-re-add workflow, which the un-gated subtree exists to
+    // support. Deleting the last sub-task takes subTaskCount to 0, which shuts
+    // the fetch gate and leaves the cache holding an empty page; adding one back
+    // reopens it — and with every revalidation trigger off, SWR serves that
+    // empty page rather than asking. The new task never appears and the row
+    // claims its sub-tasks are "no longer here" while the count says otherwise.
+    // Collapsing does not clear it either: the entry lives in the app-wide
+    // provider.
+    fetchWithAuth
+      .mockResolvedValueOnce(subTaskResponse([task({ id: 'first' })]))
+      .mockResolvedValue(subTaskResponse([task({ id: 'second' })]));
+    const { rerender } = render(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />,
+    );
+    await screen.findByText('first');
+
+    // The delete: the row goes, and the parent's counter with it.
+    rerender(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 0 })]} expanded={expandedFor('parent')} />,
+    );
+    // The re-add.
+    rerender(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />,
+    );
+
+    await waitFor(() => expect(screen.queryByText('second')).not.toBeNull(), { timeout: 3000 });
+    assert({
+      given: 'a node whose sub-task count fell to zero and came back',
+      should: 'refetch, and show the task that came back',
+      actual: {
+        shown: !!screen.queryByText('second'),
+        gone: !!screen.queryByText('These sub-tasks are no longer here.'),
+      },
+      expected: { shown: true, gone: false },
+    });
+  });
+
   it('keeps a row collapsible once its last sub-task is gone', async () => {
     // Deleting the last child drops subTaskCount to 0, which makes a row with
     // no description un-expandable — while it is still OPEN and its inline add

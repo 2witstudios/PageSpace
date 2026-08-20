@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import useSWRInfinite from 'swr/infinite';
 import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
@@ -210,6 +210,30 @@ export function useTaskSubTasks(
       shouldRetryOnError: false,
     },
   );
+
+  /**
+   * Refetch once when the gate REOPENS over a cache that already holds data.
+   *
+   * The gate closes whenever `subTaskCount` reaches 0 — delete the last
+   * sub-task and the key goes null — and the cache keeps the empty page it was
+   * last given. Add one back from the inline row that is still on screen and
+   * the key returns, but with cached data present and every revalidation
+   * trigger off, SWR issues nothing: the new task never renders, and the row
+   * says its sub-tasks are "no longer here" while the count says there is one.
+   * Collapsing and re-expanding does not help — the entry lives in the app-wide
+   * provider, so unmounting does not clear it — and nothing else in the session
+   * ever asks again.
+   *
+   * Only on the false -> true EDGE, and only with data already cached: a first
+   * expansion has no cache, so SWR fetches on its own and a refetch here would
+   * just double the request.
+   */
+  const gateWasOpen = useRef(gateOpen);
+  useEffect(() => {
+    const reopened = gateOpen && !gateWasOpen.current;
+    gateWasOpen.current = gateOpen;
+    if (reopened && pages !== undefined) void mutate();
+  }, [gateOpen, pages, mutate]);
 
   const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
   // Memoized for the same reason as subTasks: `?? []` mints a new array every render, and a

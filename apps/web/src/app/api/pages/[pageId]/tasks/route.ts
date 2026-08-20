@@ -64,7 +64,13 @@ async function getOrCreateTaskListForPage(pageId: string, userId: string) {
       // Same inheritance as the create path: a legacy list left half-initialized
       // should come back with its ancestor's vocabulary, not the defaults.
       //
-      await seedInheritedTaskStatusConfigs(db, taskList.id, pageId);
+      // In one transaction, as on the agent read paths: the seed writes twice —
+      // the configs, then the rows conformed to them — and this repair only ever
+      // runs while the vocabulary is empty. Commit the configs without the rows
+      // and those rows hold a slug their own list does not define, permanently,
+      // because no later read comes back for them.
+      const listId = taskList.id;
+      await db.transaction((tx) => seedInheritedTaskStatusConfigs(tx, listId, pageId));
     }
   }
 

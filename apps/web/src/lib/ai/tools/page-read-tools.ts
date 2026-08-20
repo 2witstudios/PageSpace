@@ -462,14 +462,20 @@ export const pageReadTools = {
               // the repair has just moved, on slugs absent from the vocabulary
               // named in the same response, which an agent then echoes back into
               // a 400.
-              statusConfigs = await db.query.taskStatusConfigs.findMany({
-                where: eq(taskStatusConfigs.taskListId, taskList.id),
-                orderBy: [asc(taskStatusConfigs.position)],
-                // Bounded, unlike the read above it: a vocabulary is a handful
-                // of statuses, and the same cap the seeding path applies.
-                limit: STATUS_CONFIG_REMAP_LIMIT,
-              });
-              tasks = await readTasks();
+              // Both in one destructuring, so a failure in the second cannot
+              // leave the first assigned: the outer catch would then send the
+              // NEW vocabulary beside the PRE-repair statuses, which is exactly
+              // the pairing this block exists to prevent.
+              [statusConfigs, tasks] = await Promise.all([
+                db.query.taskStatusConfigs.findMany({
+                  where: eq(taskStatusConfigs.taskListId, taskList.id),
+                  orderBy: [asc(taskStatusConfigs.position)],
+                  // Bounded, unlike the read above it: a vocabulary is a handful
+                  // of statuses, and the same cap the seeding path applies.
+                  limit: STATUS_CONFIG_REMAP_LIMIT,
+                }),
+                readTasks(),
+              ]);
             } catch (error) {
               pageReadLogger.error('Failed to backfill inherited task status configs', error as Error);
             }

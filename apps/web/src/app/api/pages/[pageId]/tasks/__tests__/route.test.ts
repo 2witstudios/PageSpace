@@ -275,7 +275,34 @@ describe('Task API Routes', () => {
     return chain;
   };
 
-  beforeEach(() => {
+  /**
+ * The transaction the vocabulary repair opens: the ancestor walk reads through
+ * it, the seed inserts through it, and the sweep updates through it. Tests that
+ * want to control the seed's outcome replace just that one call.
+ */
+function makeRepairTx({ onConflictDoNothing }: { onConflictDoNothing: () => unknown }) {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve([]).then(resolve),
+  };
+  chain.from = () => chain; chain.where = () => chain; chain.innerJoin = () => chain;
+  chain.orderBy = () => chain; chain.limit = () => chain; chain.groupBy = () => chain;
+  return {
+    select: () => chain,
+    insert: () => ({ values: () => ({ onConflictDoNothing }) }),
+    update: () => ({ set: () => ({ where: () => Promise.resolve(undefined) }) }),
+    query: {
+      taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
+      taskStatusConfigs: {
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      taskItems: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      pages: { findFirst: vi.fn().mockResolvedValue(undefined) },
+    },
+  };
+}
+
+beforeEach(() => {
     vi.resetAllMocks();
     // vi.resetAllMocks() clears mockCreateMentionNotification's implementation,
     // making .catch() throw TypeError and silently hide the success path.
@@ -322,6 +349,7 @@ describe('Task API Routes', () => {
         // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
         // these fixtures assume.
         select: vi.fn(() => makeSelectChain([])),
+        update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
         query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
             // POST resolves its default status from the list's own vocabulary
@@ -395,7 +423,7 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(null as never);
       // When task list doesn't exist, getOrCreateTaskListForPage uses db.transaction
       // The transaction mock creates it and returns the result
-      vi.mocked(db.transaction).mockImplementationOnce(async (callback) => {
+      vi.mocked(db.transaction).mockImplementation(async (callback) => {
         const tx = {
           insert: vi.fn(() => ({
             values: vi.fn(() => ({
@@ -409,6 +437,7 @@ describe('Task API Routes', () => {
         // immediately and falls back to DEFAULT_TASK_STATUSES, which is what
         // these fixtures assume.
         select: vi.fn(() => makeSelectChain([])),
+        update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
         query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
             // POST resolves its default status from the list's own vocabulary
@@ -514,13 +543,17 @@ describe('Task API Routes', () => {
       const response = await GET(createRequest(), { params: mockParams });
 
       expect(response.status).toBe(200);
-      expect(db.insert).toHaveBeenCalledTimes(1);
+      // On the TRANSACTION now, not the connection: the repair seeds the
+      // vocabulary and then conforms the rows to it, and a half-applied repair
+      // is permanent — it only ever runs while the vocabulary is empty.
+      expect(db.transaction).toHaveBeenCalledTimes(1);
+      expect(capturedInserts.at(-1)).toHaveLength(4);
     });
 
     it('seeds the migration path through ON CONFLICT DO NOTHING', async () => {
-      // This runs on the connection, but the same insert is used inside
-      // db.transaction elsewhere, where catching a 23505 would abort the
-      // transaction and hand the caller a task_lists row that never committed.
+      // Load-bearing precisely because this now runs INSIDE a transaction:
+      // catching a 23505 there aborts it, and the caller is handed rows that
+      // never committed. ON CONFLICT never raises, so nothing aborts.
       const mockTaskList = { id: mockTaskListId, title: 'My Tasks', status: 'pending', updatedAt: new Date() };
       vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: mockUserId } as never);
       vi.mocked(canUserViewPage).mockResolvedValue(true);
@@ -531,9 +564,9 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
       const onConflictDoNothing = vi.fn().mockResolvedValue(undefined);
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn(() => ({ onConflictDoNothing })),
-      } as never);
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb(makeRepairTx({ onConflictDoNothing })));
 
       const response = await GET(createRequest(), { params: mockParams });
 
@@ -551,12 +584,13 @@ describe('Task API Routes', () => {
         .mockResolvedValueOnce([] as never);
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
-      // Simulate a real error (not duplicate key)
-      vi.mocked(db.insert).mockReturnValue({
-        values: vi.fn(() => ({
+      // Simulate a real error (not duplicate key), on the transaction the
+      // repair now opens.
+      // @ts-expect-error - partial mock data
+      vi.mocked(db.transaction).mockImplementation(async (cb: (tx: unknown) => Promise<unknown>) =>
+        cb(makeRepairTx({
           onConflictDoNothing: vi.fn().mockRejectedValueOnce(new Error('connection refused')),
-        })),
-      } as never);
+        })));
 
       await expect(GET(createRequest(), { params: mockParams })).rejects.toThrow('connection refused');
     });
@@ -581,11 +615,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path (a task_lists row with no
-        // status configs) now walks the page tree to inherit its ancestor's
-        // vocabulary before seeding. That walk's first query lands here; an empty
-        // result ends it immediately and the seed falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: search-filtered ids
@@ -634,11 +663,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskItems.findMany).mockResolvedValue([] as never);
 
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path (a task_lists row with no
-        // status configs) now walks the page tree to inherit its ancestor's
-        // vocabulary before seeding. That walk's first query lands here; an empty
-        // result ends it immediately and the seed falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain([{ id: 'p-1', pageId: 'p-1' }]) as never) // backfill existingRows
         .mockImplementationOnce(() => phase1Chain as never) // phase 1: the query under test
@@ -678,11 +702,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path (a task_lists row with no
-        // status configs) now walks the page tree to inherit its ancestor's
-        // vocabulary before seeding. That walk's first query lands here; an empty
-        // result ends it immediately and the seed falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows (nothing missing)
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1: bounded + ordered ids
@@ -729,11 +748,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path (a task_lists row with no
-        // status configs) now walks the page tree to inherit its ancestor's
-        // vocabulary before seeding. That walk's first query lands here; an empty
-        // result ends it immediately and the seed falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRowsPlusOne) as never) // phase 1
@@ -770,11 +784,6 @@ describe('Task API Routes', () => {
       vi.mocked(db.query.taskLists.findFirst).mockResolvedValue(mockTaskList as never);
 
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path (a task_lists row with no
-        // status configs) now walks the page tree to inherit its ancestor's
-        // vocabulary before seeding. That walk's first query lands here; an empty
-        // result ends it immediately and the seed falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never) // status-inheritance walk
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // childPages
         .mockImplementationOnce(() => makeSelectChain(childPageRows) as never) // backfill existingRows
         .mockImplementationOnce(() => makeSelectChain(boundedIdRows) as never) // phase 1
@@ -1207,9 +1216,14 @@ describe('Task API Routes', () => {
 
       let capturedTaskInsert: Record<string, unknown> | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // The repair path now runs inside its OWN transaction (a half-applied
+          // repair is permanent), so these tx objects have to answer its reads
+          // and its two conforming UPDATEs as well as the create path's.
+          select: vi.fn(() => makeSelectChain([])),
+          update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
           // resolveSeedStatus reads the list vocabulary through the tx.
           query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -1264,9 +1278,14 @@ describe('Task API Routes', () => {
       let capturedPageInsert: Record<string, unknown> | null = null;
       let capturedTaskInsert: Record<string, unknown> | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // The repair path now runs inside its OWN transaction (a half-applied
+          // repair is permanent), so these tx objects have to answer its reads
+          // and its two conforming UPDATEs as well as the create path's.
+          select: vi.fn(() => makeSelectChain([])),
+          update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
           // resolveSeedStatus reads the list vocabulary through the tx.
           query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -1303,9 +1322,6 @@ describe('Task API Routes', () => {
       // The peer lookup that resolves the requested slot into a pages.position —
       // index 1 falls between these two peers, so the midpoint is 7.5.
       vi.mocked(db.select)
-        // getOrCreateTaskListForPage's repair path walks the page tree before
-        // seeding; an empty result ends the walk and falls back to the defaults.
-        .mockImplementationOnce(() => makeSelectChain([]) as never)
         .mockImplementationOnce(() => makeSelectChain([
           { id: 'peer-a', position: 7 },
           { id: 'peer-b', position: 8 },
@@ -1332,9 +1348,14 @@ describe('Task API Routes', () => {
 
       let capturedPageInsert: Record<string, unknown> | null = null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // The repair path now runs inside its OWN transaction (a half-applied
+          // repair is permanent), so these tx objects have to answer its reads
+          // and its two conforming UPDATEs as well as the create path's.
+          select: vi.fn(() => makeSelectChain([])),
+          update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
           // resolveSeedStatus reads the list vocabulary through the tx.
           query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -1518,9 +1539,14 @@ describe('Task API Routes', () => {
       let capturedPageInsert: Record<string, unknown> | null = null;
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (vi.mocked(db.transaction) as any).mockImplementationOnce(async (callback: (tx: unknown) => Promise<unknown>) => {
+      (vi.mocked(db.transaction) as any).mockImplementation(async (callback: (tx: unknown) => Promise<unknown>) => {
         let insertCallCount = 0;
         const tx = {
+          // The repair path now runs inside its OWN transaction (a half-applied
+          // repair is permanent), so these tx objects have to answer its reads
+          // and its two conforming UPDATEs as well as the create path's.
+          select: vi.fn(() => makeSelectChain([])),
+          update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
           // resolveSeedStatus reads the list vocabulary through the tx.
           query: {
             taskLists: { findFirst: vi.fn().mockResolvedValue(null) },

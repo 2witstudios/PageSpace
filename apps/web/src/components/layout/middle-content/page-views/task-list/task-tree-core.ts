@@ -98,9 +98,9 @@ export const toggleNodePath = (
  * Returns the same Set when it was already open, so React skips the re-render.
  */
 export const expandNodePath = (
-  expanded: ReadonlySet<TaskNodePath>,
+  expanded: Set<TaskNodePath>,
   path: TaskNodePath,
-): ReadonlySet<TaskNodePath> => (expanded.has(path) ? expanded : new Set(expanded).add(path));
+): Set<TaskNodePath> => (expanded.has(path) ? expanded : new Set(expanded).add(path));
 
 /**
  * Depth-aware form of `canExpandTask`. Same two conditions — the task has a
