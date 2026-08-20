@@ -18,7 +18,7 @@ import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
-import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveDriveScope } from './drive-context-defaults';
@@ -430,12 +430,20 @@ export const pageReadTools = {
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
+          //
+          // INHERITED, not defaults, and the same call the web route makes. This
+          // repair only fires while the vocabulary is empty, so whichever client
+          // touches the page first decides it permanently: an agent reading a
+          // sub-task before anyone opens it in the UI would otherwise stamp the
+          // four built-ins onto a list whose ancestor defines its own, and every
+          // later PATCH against an inherited slug 400s.
+          //
           // Best-effort: this read already has a correct in-memory fallback
           // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
           // fail the whole read — it'll simply retry on the next read of this page.
           if (statusConfigs.length === 0) {
             try {
-              await seedDefaultTaskStatusConfigs(db, taskList.id);
+              await seedInheritedTaskStatusConfigs(db, taskList.id, page.id);
             } catch (error) {
               pageReadLogger.error('Failed to backfill default task status configs', error as Error);
             }

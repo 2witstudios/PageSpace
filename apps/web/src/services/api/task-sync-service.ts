@@ -59,9 +59,18 @@ export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): 
 }
 
 /**
- * How far up the page tree the status-vocabulary walk will look. Task nesting is
- * capped in the UI well below this; the bound exists so a pathological chain
- * cannot turn a lazy list init into an unbounded query loop.
+ * How far up the page tree the status-vocabulary walk will look.
+ *
+ * The bound exists so a pathological chain cannot turn a lazy list init into an
+ * unbounded query loop. It is NOT backed by a UI cap, whatever an earlier
+ * version of this comment claimed: MAX_TASK_DEPTH caps inline EXPANSION only,
+ * and opening a task's own page makes it a root list with its own add
+ * affordance, so page nesting has no limit.
+ *
+ * Past this depth a list falls back to the built-in statuses rather than
+ * failing — the same outcome as having no task-list ancestor at all. A 10-deep
+ * chain of task pages is far outside anything observed, and the alternative
+ * (an unbounded walk on a hot read path) is worse than the fallback.
  */
 export const STATUS_INHERITANCE_MAX_DEPTH = 10
 
@@ -147,6 +156,43 @@ export async function seedInheritedTaskStatusConfigs(
   await tx.insert(taskStatusConfigs)
     .values(seed.map(s => ({ taskListId, ...s })))
     .onConflictDoNothing()
+  await conformExistingTasksToVocabulary(tx, taskListId, forPageId)
+}
+
+/**
+ * Bring a list's EXISTING task rows into the vocabulary just seeded for it.
+ *
+ * Only matters on the repair path, and it is the price of inheriting there.
+ * The old behaviour seeded DEFAULT_TASK_STATUSES, which always defines
+ * 'pending' — the schema default for `task_items.status`, and therefore exactly
+ * what a legacy row carries. Seeding the ancestor's vocabulary instead leaves
+ * those rows holding a slug their own list does not define, which is the
+ * invariant normalizeStatusForList exists to protect and which PATCH enforces
+ * with a 400. Nothing else would ever fix them: backfillMissingTaskItems only
+ * visits pages that have no row at all.
+ *
+ * Bounded by the same cap as the remap: a list past it is not silently
+ * half-converted, it simply keeps the rows this pass did not reach, and the
+ * next read repairs the rest.
+ */
+async function conformExistingTasksToVocabulary(
+  tx: Tx,
+  taskListId: string,
+  listPageId: string,
+): Promise<void> {
+  const rows = await tx
+    .select({
+      id: taskItems.id,
+      status: taskItems.status,
+      completedAt: taskItems.completedAt,
+    })
+    .from(taskItems)
+    .innerJoin(pages, eq(pages.id, taskItems.pageId))
+    .where(and(eq(pages.parentId, listPageId), eq(pages.isTrashed, false)))
+    .limit(STATUS_CONFIG_REMAP_LIMIT)
+  for (const item of rows) {
+    await normalizeStatusForList(tx, { item, taskListId })
+  }
 }
 
 /**

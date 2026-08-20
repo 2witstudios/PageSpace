@@ -37,7 +37,9 @@ export function TaskDocumentRow({ task, depth }: TaskDocumentRowProps) {
   });
 
   return (
-    <tr>
+    // Level of the row it belongs to, plus one: this IS that row's content, and
+    // without a level it is announced as a peer of the top-level rows.
+    <tr aria-level={depth + 2}>
       <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-2 border-b bg-muted/20">
         <div style={depthIndentStyle(depth + 1)}>
           {shouldShowPlaceholder(task.pageId) ? (

@@ -5,6 +5,17 @@
  *  2. Sub-tasks are interactive rows — a nested checkbox completes in place
  *     instead of navigating away.
  *  3. The task you are looking at can be completed from its own screen.
+ *
+ * RUN LOCALLY, not in CI, and knowingly so. The e2e job's allowlist is specs
+ * 15-19 (.github/workflows/ci.yml); every spec here creates pages, and page
+ * creation writes a first version to object storage unconditionally
+ * (page-service.ts -> createPageVersion -> writePageContent), which that job
+ * has no credentials for. Same reason 08-14 sit outside it. Adding object
+ * storage to the e2e job is the thing to do, and it is a change to make on its
+ * own rather than inside a task-list PR.
+ *
+ * To run:  bun run --filter web build && bun run --filter web start
+ *          cd apps/e2e && bunx playwright test tests/11-task-tree.spec.ts
  */
 import type { Page, APIRequestContext } from '@playwright/test';
 import { test, expect } from '../fixtures/auth.fixture';
@@ -221,6 +232,11 @@ test('the header still works in editor mode', async ({ page, request, driveId })
   await expect(page.getByRole('checkbox', { name: /Complete this task/i })).toBeVisible();
 
   await page.getByRole('button', { name: 'Editor view' }).click();
+  // Prove the mode actually changed before asserting anything about it: editor
+  // mode is a different early return with no task table in it. Without this the
+  // test passes even if the click does nothing, and silently re-runs the
+  // table-mode case under an editor-mode name.
+  await expect(page.getByRole('treegrid')).toHaveCount(0);
   const selfBox = page.getByRole('checkbox', { name: /Complete this task/i });
   await expect(selfBox).toBeVisible();
 

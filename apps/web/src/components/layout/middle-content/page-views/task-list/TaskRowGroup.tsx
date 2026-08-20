@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { toast } from 'sonner';
 import { TableCell, TableRow } from '@/components/ui/table';
 import { Button } from '@/components/ui/button';
@@ -79,6 +79,13 @@ export interface TaskRowGroupProps {
   /** Adjusts this row's own counters in the cache that holds it. */
   onCountDelta?: CountDelta;
   /**
+   * Which sibling this is, and how many there are. Omitted at depth 0, where
+   * the list is paginated and any number would be a claim about rows that are
+   * not loaded, and omitted for a sub-list with more pages to come.
+   */
+  posInSet?: number;
+  setSize?: number;
+  /**
    * Wraps the row at depth 0, where it has to carry dnd-kit's sortable ref and
    * the context menu. Nested rows render a plain row.
    *
@@ -95,6 +102,7 @@ export interface TaskRowGroupProps {
 
 export function TaskRowGroup({
   task, depth, listPageId, path, handlers, statusConfigs, onCountDelta, renderRow,
+  posInSet, setSize,
 }: TaskRowGroupProps) {
   const { expandedPaths, canEdit } = useTaskTree();
   const isExpanded = isNodeExpanded(expandedPaths, path);
@@ -128,12 +136,20 @@ export function TaskRowGroup({
         <NestedTaskRow
           task={task} depth={depth} path={path}
           isExpanded={isExpanded} expandable={expandable}
+          posInSet={posInSet} setSize={setSize}
         >
           {cells}
         </NestedTaskRow>
       )}
       {isExpanded && task.hasContent && <TaskDocumentRow task={task} depth={depth} />}
-      {isExpanded && task.pageId && hasSubTasks && (
+      {/*
+        * Not gated on hasSubTasks. It was, and deleting the last sub-task then
+        * unmounted this whole block — taking the inline "+ Add a sub-task…" row
+        * with it, mid-flow, in the commonest clear-out-and-re-add workflow. The
+        * network stays gated where it belongs: shouldFetchSubTasks returns
+        * false at a count of 0, so an expanded leaf still issues no request.
+        */}
+      {isExpanded && task.pageId && (
         <TaskSubTaskRows
           task={task}
           parentDepth={depth}
@@ -151,13 +167,15 @@ export function TaskRowGroup({
  * anyway.
  */
 function NestedTaskRow({
-  task, depth, path, isExpanded, expandable, children,
+  task, depth, path, isExpanded, expandable, posInSet, setSize, children,
 }: {
   task: TaskItem;
   depth: number;
   path: TaskNodePath;
   isExpanded: boolean;
   expandable: boolean;
+  posInSet?: number;
+  setSize?: number;
   children: React.ReactNode;
 }) {
   return (
@@ -167,6 +185,11 @@ function NestedTaskRow({
       // hand it matches its index cannot address.
       data-task-path={path}
       aria-level={depth + 1}
+      // Sibling rows are flat <tr>s with no `role="group"` between them — a
+      // tbody may not contain one — so aria-level alone says how deep this row
+      // is and nothing about which sibling it is or how many there are.
+      aria-posinset={posInSet}
+      aria-setsize={setSize}
       aria-expanded={expandable ? isExpanded : undefined}
       className={task.completedAt ? 'opacity-60' : undefined}
     >
@@ -336,14 +359,33 @@ function TaskSubTaskRows({
     onParentCountDelta, listPageId,
   ]);
 
+  /**
+   * Set when a created task landed on a page this cache has not loaded, so the
+   * window has to be widened until it comes into view.
+   *
+   * A refetch alone cannot do it: `retry` re-requests the pages already loaded,
+   * and a new task is at the END of the server's ordering — i.e. in a page that
+   * is not one of them. The row simply never appeared, while the input cleared
+   * and the parent's badge went up, which reads as "it didn't save" and invites
+   * the user to type it again. Only reachable on a sub-list past its first page
+   * of 100, where the inline add row sits directly above "Load more".
+   */
+  const [revealCreated, setRevealCreated] = useState(false);
+  useEffect(() => {
+    if (!revealCreated) return;
+    if (!hasMore) { setRevealCreated(false); return; }
+    if (!isLoadingMore) loadMore();
+  }, [revealCreated, hasMore, isLoadingMore, loadMore]);
+
   const addCreatedChild = useCallback((created: TaskItem) => {
     void mutatePages(
       (current) => (shouldAppendOptimistically(current)
         ? appendTaskToPages(current, created)
-        // A new task lands at the end of the server's ordering. With later pages
-        // still unloaded, that slot is not the end of what we have — rather than
-        // render it in the wrong place, leave the cache alone and refetch.
-        : (retry(), current)),
+        // Later pages are still unloaded, so the end of the server's ordering
+        // is not the end of what we have. Refresh what we hold and then walk
+        // the window out to the task rather than render it in a slot it does
+        // not occupy.
+        : (retry(), setRevealCreated(true), current)),
       { revalidate: false },
     );
     // Not always `{ total: 1 }`. POST seeds the status from the list's own
@@ -362,11 +404,16 @@ function TaskSubTaskRows({
         </AffordanceRow>
       )}
 
-      {subTasks.map((child) => (
+      {subTasks.map((child, index) => (
         <TaskRowGroup
           key={child.id}
           task={child}
           depth={childDepth}
+          posInSet={index + 1}
+          // Only what is loaded: with `hasMore` still true this understates the
+          // set, and saying "3 of 3" while a Load more row sits below would be
+          // worse than saying nothing.
+          setSize={hasMore ? undefined : subTasks.length}
           listPageId={listPageId}
           path={makeNodePath(parentPath, child.id)}
           handlers={handlers}
@@ -414,9 +461,15 @@ function TaskSubTaskRows({
   );
 }
 
+/**
+ * A non-task row inside the tree — loading, error, "load more", the inline add
+ * row. It carries aria-level for the same reason the task rows do: without it a
+ * row sitting inside a level-2 subtree is announced as a peer of the top-level
+ * rows.
+ */
 function AffordanceRow({ depth, children }: { depth: number; children: React.ReactNode }) {
   return (
-    <tr>
+    <tr aria-level={depth + 1}>
       <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-1 border-b bg-muted/10">
         <div style={depthIndentStyle(depth)}>{children}</div>
       </td>
@@ -485,7 +538,7 @@ function NewSubTaskRow({
   };
 
   return (
-    <tr>
+    <tr aria-level={depth + 1}>
       <td colSpan={TASK_TABLE_COLUMN_COUNT} className="px-4 py-1 border-b bg-muted/10">
         <div style={depthIndentStyle(depth)}>
           <Input

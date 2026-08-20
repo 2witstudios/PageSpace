@@ -5,7 +5,7 @@ import { assert } from '@/hooks/__tests__/riteway';
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'pages.id', driveId: 'pages.driveId', parentId: 'pages.parentId', isTrashed: 'pages.isTrashed', position: 'pages.position', type: 'pages.type' } }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt' },
+  taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt', status: 'taskItems.status' },
   taskAssignees: { taskId: 'taskAssignees.taskId', agentPageId: 'taskAssignees.agentPageId' },
   taskStatusConfigs: {},
   DEFAULT_TASK_STATUSES: [
@@ -84,6 +84,8 @@ function makeTx(config: {
   existingItemStatus?: string;
   existingItemCompletedAt?: Date | null;
   destinationStatusConfigs?: Array<{ slug: string; group: string; position: number }>;
+  /** Rows the post-seed vocabulary sweep should find already in the list. */
+  existingTaskRows?: Array<{ id: string; status: string; completedAt: Date | null }>;
 } = {}) {
   const {
     pageTypes = {},
@@ -102,6 +104,7 @@ function makeTx(config: {
     existingItemStatus = 'pending',
     existingItemCompletedAt = null,
     destinationStatusConfigs = [],
+    existingTaskRows = [],
   } = config;
 
   const taskItemUpdates: Array<Record<string, unknown>> = [];
@@ -152,6 +155,12 @@ function makeTx(config: {
           ? [...agentsInTargetDrive, ...pagesInTargetDrive].map((id) => ({ id }))
         : shape === 'taskItems.id' ? removeBranchTaskItemIds.map((id) => ({ id }))
         : null;
+      // The post-seed sweep: select(id,status,completedAt).from(taskItems)
+      //   .innerJoin(pages).where(...).limit(N)
+      if (shape === 'taskItems.completedAt,taskItems.id,taskItems.status') {
+        const sweep = { where: () => ({ limit: () => Promise.resolve(existingTaskRows) }) };
+        return { from: () => ({ ...sweep, innerJoin: () => sweep }) };
+      }
       if (result === null) return selectChain;
       const terminal = {
         where: (cond: unknown[]) => {

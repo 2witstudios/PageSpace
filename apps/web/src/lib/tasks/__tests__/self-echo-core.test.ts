@@ -8,7 +8,6 @@ import {
   hasInFlightSelfWrite,
   hasAnyInFlightSelfWrite,
   isSoleInFlightWriteForTask,
-  isNewestWriteForTask,
   SELF_WRITE_TTL_MS,
   MAX_SELF_WRITES,
   type SelfWrite,
@@ -388,19 +387,6 @@ describe('deciding whether a failed write may undo itself', () => {
       should: 'still refuse',
       actual: isSoleInFlightWriteForTask([rec(1, 'task-1', 'stamp'), rec(2, 'task-1')], 'task-1', 2),
       expected: false,
-    });
-  });
-
-  it('is newest only when no higher write id exists for the task', () => {
-    const records = [rec(1, 'task-1'), rec(2, 'task-1'), rec(9, 'task-2')];
-    assert({
-      given: 'writes 1 and 2 on task-1',
-      should: 'call 2 the newest and 1 not, ignoring the other task',
-      actual: [
-        isNewestWriteForTask(records, 'task-1', 2),
-        isNewestWriteForTask(records, 'task-1', 1),
-      ],
-      expected: [true, false],
     });
   });
 });

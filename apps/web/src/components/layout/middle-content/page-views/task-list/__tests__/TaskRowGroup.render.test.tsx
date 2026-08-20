@@ -67,13 +67,13 @@ const task = (over: Partial<TaskItem> & { id: string }): TaskItem => ({
   ...over,
 });
 
-const subTaskResponse = (tasks: TaskItem[]) => ({
+const subTaskResponse = (tasks: TaskItem[], hasMore = false) => ({
   ok: true,
   json: async () => ({
     taskList: { id: 'sub', title: 'Sub', description: null, status: 'active', updatedAt: 'x' },
     tasks,
     statusConfigs: CONFIGS,
-    hasMore: false,
+    hasMore,
   }),
 });
 
@@ -274,6 +274,59 @@ describe('nested rows in the DOM', () => {
       expected: { parent: 'true', child: 'false', leaf: null },
     });
   });
+
+  it('places each sub-task in its set, and says nothing when the set is partial', async () => {
+    // aria-level alone cannot say which sibling this is or how many there are —
+    // the rows are flat <tr>s with no role="group" possible in a tbody. The
+    // second half matters as much as the first: with more pages to load, any
+    // setsize would be a claim about rows that are not there.
+    fetchWithAuth
+      .mockResolvedValueOnce(subTaskResponse([task({ id: 'one' }), task({ id: 'two' })]))
+      .mockResolvedValue(subTaskResponse([task({ id: 'three' })], true));
+    const { unmount } = render(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 2 })]} expanded={expandedFor('parent')} />,
+    );
+    await screen.findByText('two');
+    const set = (label: string) => {
+      const row = screen.getByText(label).closest('tr');
+      return [row?.getAttribute('aria-posinset'), row?.getAttribute('aria-setsize')];
+    };
+    const complete = { one: set('one'), two: set('two') };
+    unmount();
+
+    render(
+      <Harness tasks={[task({ id: 'p2', subTaskCount: 5 })]} expanded={expandedFor('p2')} />,
+    );
+    await screen.findByText('three');
+    const partial = set('three');
+
+    assert({
+      given: 'a fully loaded sub-list, and one with more pages to come',
+      should: 'number the complete set and leave the partial one unsized',
+      actual: { ...complete, partial },
+      expected: { one: ['1', '2'], two: ['2', '2'], partial: ['1', null] },
+    });
+  });
+
+  it('keeps the inline add row after the last sub-task is deleted', async () => {
+    // The clear-out-and-re-add workflow. Rendering the subtree only while
+    // subTaskCount > 0 meant the count hitting zero unmounted the add row
+    // mid-flow, and the only way back was the row's ⋯ menu.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([]));
+    render(
+      <Harness tasks={[task({ id: 'parent', subTaskCount: 0, hasContent: true })]} expanded={expandedFor('parent')} />,
+    );
+
+    assert({
+      given: 'an expanded row whose sub-tasks are all gone',
+      should: 'still offer the inline add row, and still fetch nothing',
+      actual: {
+        addRow: !!screen.queryByPlaceholderText('+ Add a sub-task…'),
+        fetches: fetchWithAuth.mock.calls.length,
+      },
+      expected: { addRow: true, fetches: 0 },
+    });
+  });
 });
 
 describe('nested writes', () => {
@@ -311,6 +364,30 @@ describe('nested writes', () => {
       should: "POST it under the parent task's page",
       actual: [postMock.mock.calls[0][0], postMock.mock.calls[0][1]],
       expected: ['/api/pages/page-parent/tasks', { title: 'Fresh' }],
+    });
+  });
+
+  it('widens the window until a sub-task created past the loaded pages appears', async () => {
+    // With more pages to load, the new task is at the end of the server's
+    // ordering — i.e. in a page this cache does not hold. Refetching what it
+    // holds cannot surface it, so the input clears, the badge goes up, and the
+    // row is nowhere: the user retypes and creates a duplicate.
+    fetchWithAuth
+      .mockResolvedValueOnce(subTaskResponse([task({ id: 'child' })], true))
+      .mockResolvedValueOnce(subTaskResponse([task({ id: 'child' })], true))
+      .mockResolvedValue(subTaskResponse([task({ id: 'new', title: 'Fresh' })]));
+    postMock.mockResolvedValue(task({ id: 'new', title: 'Fresh' }));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+    await screen.findByText('child');
+
+    await userEvent.type(screen.getByPlaceholderText('+ Add a sub-task…'), 'Fresh{Enter}');
+
+    await waitFor(() => expect(screen.queryByText('Fresh')).not.toBeNull(), { timeout: 3000 });
+    assert({
+      given: 'a sub-task created onto a page the cache had not loaded',
+      should: 'end up rendering it',
+      actual: !!screen.queryByText('Fresh'),
+      expected: true,
     });
   });
 

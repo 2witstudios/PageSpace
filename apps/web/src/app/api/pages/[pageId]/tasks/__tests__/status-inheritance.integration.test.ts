@@ -321,6 +321,66 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it('stops at a non-task ancestor instead of reaching past it', async () => {
+    // The case the folder-at-the-root test cannot reach: there IS a customised
+    // task list above, but a FOLDER sits between. Inheriting through it would
+    // hand a list its grandparent's vocabulary across a boundary the user drew
+    // deliberately — a folder is where one project's conventions stop.
+    //
+    // The other test terminates on a missing parentId and never evaluates the
+    // type check at all, so removing that check left it green.
+    if (!dbAvailable) return;
+    const { drive, listPage } = await seedCustomisedTree();
+    const folder = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'FOLDER',
+    });
+    const nested = await factories.createPage(drive.id, {
+      parentId: folder.id, type: 'TASK_LIST',
+    });
+
+    await getTasks(nested.id);
+
+    assert({
+      given: 'a customised task list separated from this one by a folder',
+      should: 'seed the built-in statuses rather than reach past the folder',
+      actual: await slugsFor(nested.id),
+      expected: ['pending', 'in_progress', 'blocked', 'completed'],
+    });
+  });
+
+  it('brings a legacy list\'s existing tasks into the vocabulary it just inherited', async () => {
+    // The price of inheriting on the REPAIR path. Seeding DEFAULT_TASK_STATUSES
+    // always defined 'pending' — the schema default for task_items.status, and
+    // so exactly what a legacy row carries. Seeding the ancestor's vocabulary
+    // instead would leave those rows holding a slug their own list does not
+    // define, which PATCH rejects with a 400 and which nothing else repairs:
+    // backfillMissingTaskItems only visits pages with no row at all.
+    if (!dbAvailable) return;
+    const { owner, drive, taskPage } = await seedCustomisedTree();
+    // A sub-list that exists but was never given configs, holding a task left
+    // on the built-in default.
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
+    });
+    const legacyChild = await factories.createPage(drive.id, {
+      parentId: taskPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({
+      userId: owner.id, pageId: legacyChild.id, status: 'pending',
+    });
+
+    await getTasks(taskPage.id);
+
+    const [row] = await db.select({ status: taskItems.status })
+      .from(taskItems).where(eq(taskItems.pageId, legacyChild.id)).limit(1);
+    assert({
+      given: "a pre-existing task on a slug the inherited vocabulary does not define",
+      should: "move it to that vocabulary's open status",
+      actual: { status: row?.status, slugs: await slugsFor(taskPage.id) },
+      expected: { status: 'icebox', slugs: ['icebox', 'building', 'shipped'] },
+    });
+  });
+
   it('inherits through more than one level', async () => {
     if (!dbAvailable) return;
     const { owner, drive, taskPage } = await seedCustomisedTree();

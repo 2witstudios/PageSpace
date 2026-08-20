@@ -17,7 +17,6 @@ import {
   settleSelfWrite,
   hasAnyInFlightSelfWrite,
   isSoleInFlightWriteForTask,
-  isNewestWriteForTask,
   classifyTaskEcho,
   deferredEchoesNeedRevalidation,
   type SelfWrite,
@@ -61,10 +60,11 @@ export interface TaskWriteMachinery {
   /**
    * May a failed write undo itself from what it displaced?
    *
-   * Only when it is the sole write this tab has open on that task — see
-   * isSoleInFlightWriteForTask. Ask at paint time AND again at failure time:
-   * the first call rules out a write that was already open, the second rules
-   * out one that started since.
+   * Only when it is the sole write this tab has recorded against that task —
+   * see isSoleInFlightWriteForTask. Ask at paint time AND again at failure
+   * time: the paint-time answer is the load-bearing one, because a failed
+   * write's record is dropped before the revert runs; the failure-time answer
+   * catches a write that started since.
    */
   ownsTaskExclusively: (writeId: number, taskId: string) => boolean;
   /**
@@ -166,9 +166,7 @@ export function useTaskWriteMachinery(
   }, []);
 
   const ownsTaskExclusively = useCallback((writeId: number, taskId: string): boolean => {
-    const records = selfWritesRef.current;
-    return isSoleInFlightWriteForTask(records, taskId, writeId)
-      && isNewestWriteForTask(records, taskId, writeId);
+    return isSoleInFlightWriteForTask(selfWritesRef.current, taskId, writeId);
   }, []);
 
   const flushDeferredRevalidate = useCallback((): void => {
@@ -363,9 +361,9 @@ export function useTaskWriter(params: {
       // on screen until the 5-minute interval, which is gated the same way.
       // The local revert is conditional twice over — the row must still hold
       // exactly what this write painted (revertTaskPatch), and no other write
-      // on it may have been open at any point (ownsTaskExclusively, asked again
-      // here for writes that started after the paint). Where either fails there
-      // is no honest local answer, and the refetch is the only repair.
+      // on it may have been recorded, at the paint or since (ownsTaskExclusively,
+      // asked at both points). Where either fails there is no honest local
+      // answer, and the refetch is the only repair.
       await mutatePages(
         (current) => (ownsTaskExclusively(writeId, loc.taskId)
           ? revertTaskPatch(current, loc.taskId, optimistic, inverse)

@@ -118,31 +118,29 @@ export const hasInFlightSelfWrite = (
 ): boolean => records.some((r) => r.taskId === taskId && r.updatedAt === null);
 
 /**
- * Is this write the only one this tab has open on its task?
+ * Is this write the only one this tab has recorded against its task?
  *
- * Asked at PAINT time, and the answer decides whether a later failure may undo
- * itself locally. The undo restores what the paint displaced — and if another
- * write on the same row was already open, what it displaced was that write's
- * own unconfirmed paint, not anything the server ever said. Restoring it
- * fabricates a state the server has now rejected twice: double-click a
- * checkbox with the network down and the row ends up completed, with a
- * client-invented timestamp, permanently.
+ * The answer decides whether a failure may undo itself locally. The undo
+ * restores what the paint displaced — and if another write on the same row was
+ * already open, what it displaced was that write's own unconfirmed paint, not
+ * anything the server ever said. Restoring it fabricates a state the server has
+ * now rejected twice: double-click a checkbox with the network down and the row
+ * ends up completed, with a client-invented timestamp, permanently.
+ *
+ * Counts SETTLED records too, not just in-flight ones — a write that already
+ * succeeded keeps its stamped record, and it is exactly that write's committed
+ * value a later revert would clobber.
+ *
+ * Must be asked at PAINT time as well as at failure time, and the paint-time
+ * answer is the one that matters: settleSelfWrite drops a failed write's record
+ * outright, so by the time the revert runs the log has already forgotten that
+ * the competing write ever existed.
  */
 export const isSoleInFlightWriteForTask = (
   records: readonly SelfWrite[],
   taskId: string,
   writeId: number,
 ): boolean => !records.some((r) => r.taskId === taskId && r.writeId !== writeId);
-
-/**
- * Is no LATER write open on this task? Asked at failure time, for the writes
- * that started after the paint and so are invisible to the check above.
- */
-export const isNewestWriteForTask = (
-  records: readonly SelfWrite[],
-  taskId: string,
-  writeId: number,
-): boolean => !records.some((r) => r.taskId === taskId && r.writeId > writeId);
 
 /**
  * Classify an inbound event.

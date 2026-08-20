@@ -70,7 +70,8 @@ vi.mock('@pagespace/db/db', () => ({
     query: {
       pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
-      taskStatusConfigs: { findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
+      taskStatusConfigs: { findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
     },
     insert: (table: { pageId?: string }) => ({
       values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {

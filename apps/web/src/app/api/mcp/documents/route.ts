@@ -5,7 +5,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
-import { backfillMissingTaskItems, ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
@@ -272,12 +272,20 @@ export async function POST(req: NextRequest) {
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
+          //
+          // INHERITED, not defaults, and the same call the web route makes. This
+          // repair only fires while the vocabulary is empty, so whichever client
+          // touches the page first decides it permanently: an agent reading a
+          // sub-task before anyone opens it in the UI would otherwise stamp the
+          // four built-ins onto a list whose ancestor defines its own, and every
+          // later PATCH against an inherited slug 400s.
+          //
           // Best-effort: this read already has a correct in-memory fallback
           // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
           // fail the whole read — it'll simply retry on the next read of this page.
           if (statusConfigs.length === 0) {
             try {
-              await seedDefaultTaskStatusConfigs(db, taskList.id);
+              await seedInheritedTaskStatusConfigs(db, taskList.id, pageId);
             } catch (error) {
               loggers.api.error('Failed to backfill default task status configs', error as Error);
             }

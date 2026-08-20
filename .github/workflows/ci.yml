@@ -184,6 +184,12 @@ jobs:
   # more runner time than their regression risk here justifies. Widening the list means
   # widening `E2E_SPECS` below AND the citations in the evidence manifest.
   #
+  # 11 (task tree) is outside for the storage reason, not a coverage judgement: every spec
+  # in it creates pages, and page creation writes a first version to object storage
+  # unconditionally (page-service.ts -> createPageVersion -> writePageContent), which this
+  # job has no credentials for. Giving the job an object store would let 11 and 08 in
+  # together, and is worth doing as its own change.
+  #
   # 19 joins for the same reason 18 did: the sidebar Channels count is delivered over the
   # same socket topology, both ends of its seam are unit- and integration-tested, and a typo
   # in an event name or room fails silently as "no unread" rather than as a red test.

@@ -22,8 +22,10 @@ export { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 /**
  * Hard ceiling on how deep expansion goes. Each expanded node mounts its own
  * paginated fetch against a route with lazy write side effects, so unbounded
- * recursion is unbounded fan-out. Past the limit a row shows "Open task"
- * instead of a chevron — the subtree is still reachable, just not inline.
+ * recursion is unbounded fan-out. Past the limit a row simply has no chevron —
+ * the subtree is still reachable by opening the task's own page, which renders
+ * it as a list in its own right, just not inline. (There is no "Open task"
+ * affordance; an earlier version of this comment claimed one.)
  */
 export const MAX_TASK_DEPTH = 5;
 
