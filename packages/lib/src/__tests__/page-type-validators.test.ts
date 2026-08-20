@@ -35,6 +35,41 @@ const VALID_SHEETDOC_CONTENT = [
   '',
 ].join('\n')
 
+/**
+ * Carries the magic prefix but a malformed body — `cells=` has no value.
+ * Accepting this is what let corrupt content reach storage and read back as an
+ * empty sheet, so the validator must parse the body rather than trust the
+ * prefix.
+ */
+const MALFORMED_SHEETDOC_CONTENT = '#%PAGESPACE_SHEETDOC v1\nrows=10\ncols=10\ncells=\n'
+
+describe('SHEET content validation rejects a malformed body', () => {
+  it('rejects it on creation despite the magic prefix', () => {
+    const result = validatePageCreation(PageType.SHEET, {
+      title: 'Sheet',
+      content: MALFORMED_SHEETDOC_CONTENT,
+    })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Invalid sheet content')
+  })
+
+  it('rejects it on update despite the magic prefix', () => {
+    const result = validatePageUpdate(PageType.SHEET, {
+      content: MALFORMED_SHEETDOC_CONTENT,
+    })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Content must be valid sheet data')
+  })
+
+  it('still accepts a body that genuinely parses', () => {
+    expect(
+      validatePageUpdate(PageType.SHEET, { content: VALID_SHEETDOC_CONTENT }).valid
+    ).toBe(true)
+  })
+})
+
 describe('page-type-validators', () => {
   describe('validatePageCreation', () => {
     it('validates valid DOCUMENT creation', () => {
