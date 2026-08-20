@@ -1,6 +1,5 @@
 import HTMLtoDOCX from 'html-to-docx';
 import * as XLSX from 'xlsx';
-import { MAX_COLUMN_WIDTH } from '../sheets/format-ops';
 
 /**
  * Generates a DOCX buffer from HTML content
@@ -108,10 +107,8 @@ const EXCEL_MAX_COLUMN_CHARS = 255;
  * narrower gutter than the editor lets you drag to, and rewriting it on export
  * is the same overreach as rewriting it on save.
  */
-const pxToExcelWidth = (px: number): number => {
-  const bounded = Math.min(px, MAX_COLUMN_WIDTH);
-  return Math.min(EXCEL_MAX_COLUMN_CHARS, Math.max(1, Math.round((bounded - 5) / 7)));
-};
+const pxToExcelWidth = (px: number): number =>
+  Math.min(EXCEL_MAX_COLUMN_CHARS, Math.max(1, Math.round((px - 5) / 7)));
 
 function applyTypedCells(
   worksheet: XLSX.WorkSheet,
@@ -197,8 +194,9 @@ export function generateExcel(
       });
     });
 
-    // Set column widths (with a max of 50 characters). An explicit width set in
-    // the sheet wins over the auto-size guess.
+    // An explicit width set in the sheet wins over the auto-size guess. A
+    // measured width is capped at 50 characters; an explicit one only by
+    // Excel's own 255-character maximum.
     // Size by the wider of the two sources. `maxColumnWidths` only covers
     // columns that actually hold data, and it is sparse when rows differ in
     // length — `.map` skips holes — so deriving `!cols` from it alone drops an

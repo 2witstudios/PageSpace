@@ -1022,7 +1022,18 @@ function formatTomlValue(value: unknown): string {
   // Before `isObject`: a Date IS an object, and `Object.entries(date)` is
   // empty, so a TOML datetime would serialize as `{}` and be destroyed.
   if (value instanceof Date) {
-    return Number.isNaN(value.getTime()) ? formatTomlString('') : value.toISOString();
+    if (Number.isNaN(value.getTime())) {
+      return formatTomlString('');
+    }
+
+    // `toISOString` uses the expanded-year form outside 0000-9999
+    // (`+275760-…`), which TOML does not accept — emitting it unquoted would
+    // fail the serializer's self-verify and make the whole document
+    // unsavable. Such a year cannot come from parsed TOML, only from a Date
+    // set programmatically, so fall back to a quoted string: the value is
+    // preserved and the document still saves.
+    const iso = value.toISOString();
+    return /^\d{4}-/.test(iso) ? iso : formatTomlString(iso);
   }
   if (isObject(value)) {
     return formatInlineTable(value as Record<string, unknown>);

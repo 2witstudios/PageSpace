@@ -130,21 +130,6 @@ export const MAX_ROW_HEIGHT = 1000;
 const clamp = (value: number, min: number, max: number): number =>
   Math.min(max, Math.max(min, Math.round(value)));
 
-/**
- * Bound a stored column width for rendering or export.
- *
- * Stored values are kept exactly as authored — a sheet may legitimately carry
- * a narrower gutter than the editor's own minimum — so anything that turns a
- * width into pixels or Excel character units clamps here rather than letting
- * sanitization rewrite the document.
- */
-export const clampColumnWidth = (width: number): number =>
-  clamp(width, MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
-
-/** The row-height counterpart of {@link clampColumnWidth}. */
-export const clampRowHeight = (height: number): number =>
-  clamp(height, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
-
 /** Set a column's width in px, or clear it by passing `undefined`. */
 export function setColumnWidth(
   sheet: SheetData,
@@ -271,8 +256,13 @@ export function moveCellMetadata(
 
     // Two entries can map to the SAME target — a delete that collapses rows
     // does exactly that. Last-writer-wins would make the survivor depend on
-    // iteration order, so the first relocation into an address keeps it.
-    if (relocated.has(normalized)) continue;
+    // iteration order, so the first relocation into an address keeps it, and
+    // the loser being discarded is itself a change even when the winner
+    // maps to its own address.
+    if (relocated.has(normalized)) {
+      changed = true;
+      continue;
+    }
 
     formats[normalized] = format;
     relocated.add(normalized);

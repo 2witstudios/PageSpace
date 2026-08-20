@@ -5,12 +5,6 @@ import {
   cellFormatToInlineCss,
   cellFormatToStyle,
   clearCellFormats,
-  clampColumnWidth,
-  clampRowHeight,
-  MAX_COLUMN_WIDTH,
-  MAX_ROW_HEIGHT,
-  MIN_COLUMN_WIDTH,
-  MIN_ROW_HEIGHT,
   createEmptySheet,
   evaluateSheet,
   getEffectiveCellFormat,
@@ -320,6 +314,20 @@ describe('format operations', () => {
     expect(moved.version).toBe(sheet.version + 1);
   });
 
+  it('bumps the version when a collision drops the loser in the relocation pass', () => {
+    // The winner maps to its own address, so the "did the key change?" signal
+    // says no — but the loser's formatting is gone, which is a change.
+    const sheet: SheetData = {
+      ...createEmptySheet(),
+      formats: { C1: { bold: true }, B1: { italic: true } } as Record<string, CellFormat>,
+    };
+
+    const moved = moveCellMetadata(sheet, new Map([['C1', 'C1'], ['B1', 'C1']]));
+
+    expect(moved.formats).toEqual({ C1: { bold: true } });
+    expect(moved.version).toBe(sheet.version + 1);
+  });
+
   it('bumps the version whenever the format map actually changes', () => {
     const withLowercase: SheetData = {
       ...createEmptySheet(),
@@ -475,9 +483,10 @@ describe('review findings', () => {
     expect(sanitized.rowHeights).toEqual({ '1': 30 });
   });
 
-  it('keeps a fractional width from vanishing on the following save', () => {
-    // Guarding the raw value let 0.4 through, which stored as 0 and was then
-    // dropped by the next save — stable only after two round trips.
+  it('settles a fractional width on the first save, not the second', () => {
+    // Guarding the raw value let 0.4 through, which stored as 0 and was only
+    // dropped by the NEXT save. A sub-half width is still discarded — but now
+    // on the first pass, so two consecutive saves agree.
     const first = sanitizeSheetData({
       ...createEmptySheet(),
       columnWidths: { A: 0.4, B: 30.6 },

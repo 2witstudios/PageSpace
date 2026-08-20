@@ -111,8 +111,7 @@ function sanitizeKeyedFormats(
  * every save, so clamping here would silently rewrite a hand-authored or
  * imported 10px gutter to 24px and destroy the original — the same
  * "drop what we do not understand" failure the format and range passthroughs
- * exist to avoid. Consumers clamp at the point of use instead, via
- * `clampColumnWidth`/`clampRowHeight`.
+ * exist to avoid. Bounding belongs to whatever renders or exports the value.
  */
 function sanitizeKeyedNumbers(
   values: Record<string, number> | undefined,

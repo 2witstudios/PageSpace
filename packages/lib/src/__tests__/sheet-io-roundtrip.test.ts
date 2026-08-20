@@ -127,6 +127,56 @@ describe('SheetDoc serialization round trip', () => {
     expect(() => parseToml(body)).not.toThrow();
   });
 
+  it('round-trips a Date, whatever its year', () => {
+    // A Date reaches the emitter through an unknown format field of TOML
+    // datetime type. `Object.entries(date)` is empty, so it once serialized as
+    // `{}`; and `toISOString` uses the expanded-year form outside 0000-9999,
+    // which is not TOML and failed the serializer's self-verify — making the
+    // whole document unsavable rather than losing one field.
+    // The restored type differs by year, deliberately: a year TOML can express
+    // comes back as a real datetime, while an out-of-range one is quoted and
+    // comes back as the string — preserved either way, and the document saves.
+    const cases: Array<[string, Date, 'date' | 'string']> = [
+      ['a normal year', new Date('2020-01-01T00:00:00Z'), 'date'],
+      ['a five-digit year', new Date(Date.UTC(10000, 0, 1)), 'string'],
+      ['a negative year', new Date(Date.UTC(-1, 0, 1)), 'string'],
+    ];
+
+    for (const [name, when, restoredAs] of cases) {
+      const sheet = {
+        ...createEmptySheet(),
+        formats: { A1: { bold: true, when } as never },
+      };
+
+      expect(() => serializeSheetContent(sheet), name).not.toThrow();
+
+      const restored = parseSheetContent(serializeSheetContent(sheet)).formats?.A1 as
+        | (Record<string, unknown> | undefined);
+
+      expect(restored?.bold, name).toBe(true);
+
+      if (restoredAs === 'date') {
+        expect(restored?.when, name).toBeInstanceOf(Date);
+        expect((restored?.when as Date).toISOString(), name).toBe(when.toISOString());
+      } else {
+        expect(restored?.when, name).toBe(when.toISOString());
+      }
+    }
+  });
+
+  it('does not let an invalid Date break the document', () => {
+    const sheet = {
+      ...createEmptySheet(),
+      formats: { A1: { bold: true, when: new Date('not a date') } as never },
+    };
+
+    expect(() => serializeSheetContent(sheet)).not.toThrow();
+    expect(parseSheetContent(serializeSheetContent(sheet)).formats?.A1).toEqual({
+      bold: true,
+      when: '',
+    });
+  });
+
   it('quotes cell-address keys that are not bare-key safe', () => {
     const doc: SheetDoc = {
       version: SHEETDOC_VERSION,
