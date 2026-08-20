@@ -67,9 +67,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   a sub-task without leaving the screen. Sub-tasks are now full rows in the same table, indented
   under their parent and lined up with its columns, with a working checkbox, status, priority,
   assignees and due date. They expand further if they have children of their own, and each level has
-  a "+ Add a sub-task" line so you never have to open a task just to put something under it. A task
-  with no sub-tasks yet gets "Add sub-task" in its row menu, which creates the first one and opens
-  it out.
+  a "+ Add a sub-task" line so you never have to open a task just to put something under it — down
+  to four levels in, after which you open the task itself to keep going. A task with no sub-tasks
+  yet gets "Add sub-task" in its row menu, which creates the first one, opens it out and puts the
+  cursor in its title. This is the wide layout; on a narrow pane the cards still show the progress
+  count, and opening a task is how you reach what is under it.
 - **You can complete the task you are looking at** — opening a task shows the work underneath it, so
   the task itself had no row and no controls. Finishing it meant navigating back out to the list it
   came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
@@ -84,8 +86,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and the whole list had been re-fetched twice, which on a long list was a visible pause on every
   click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was
   suppressed and the checkbox never moved at all, even though the task really had been completed.
-  Status, priority, title, due date and assignee changes are all immediate now, and undo themselves
-  if the server refuses.
+  Status, priority, title and due date changes are all immediate now, and undo themselves if the
+  server refuses. Assignee changes still wait for the server, because the row shows the assignee's
+  name and picture and the request only sends an id.
 - **Failures say what went wrong** — a refused change used to read "Failed to update status" no
   matter the cause. If a task cannot be completed because sub-tasks are still open, it now says how
   many; if a status is not one the list allows, it says which ones are.

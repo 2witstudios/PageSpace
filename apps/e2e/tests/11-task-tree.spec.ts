@@ -165,6 +165,32 @@ test('a sub-task completes in place instead of navigating away', async ({ page, 
   await expect(parentBox).toBeChecked({ timeout: 2000 });
 });
 
+test('changing the filter closes expansions instead of showing rows it excludes', async ({ page, request, driveId }) => {
+  // The filter applies to the top-level rows; a node's sub-tasks are a separate
+  // paginated fetch with no filter in its key. Leaving a subtree open therefore
+  // showed completed sub-tasks, struck through, underneath a filter that says
+  // Active — one surface contradicting the other.
+  const listPageId = await createList(request, driveId, `Tree G ${Date.now()}`);
+  const parent = await createTask(request, listPageId, 'Holder');
+  await createTask(request, parent.pageId, 'Underneath');
+
+  await wideViewport(page);
+  await page.goto(`/dashboard/${driveId}/${listPageId}`);
+  await expect(rowCheckbox(page, 'Holder')).toBeVisible();
+  await showAllTasks(page);
+
+  await page.getByRole('button', { name: /Expand Holder/i }).click();
+  await expect(rowCheckbox(page, 'Underneath')).toBeVisible();
+
+  await page.getByRole('button', { name: 'Active', exact: true }).click();
+
+  await expect(
+    page.getByText('Underneath'),
+    'the subtree must close rather than show rows the filter does not cover',
+  ).toHaveCount(0);
+  await expect(rowCheckbox(page, 'Holder')).toBeVisible();
+});
+
 test('a task can be completed from its own screen', async ({ page, request, driveId }) => {
   const listPageId = await createList(request, driveId, `Tree C ${Date.now()}`);
   const parent = await createTask(request, listPageId, 'Container');

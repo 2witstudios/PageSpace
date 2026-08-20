@@ -356,6 +356,11 @@ function TaskSubTaskRows({
       });
     },
     onSaveTitle: (loc, title) => {
+      // The one handler in this block that was missing the guard its nine
+      // siblings have. Unreachable today — Rename is disabled and
+      // handleStartEdit returns early — but the uniformity is what a reader
+      // relies on, and the server is not the only thing that should say no.
+      if (!tree.canEdit) return;
       void writeTaskField({
         loc, body: { title }, optimistic: { title },
         fallbackMessage: 'Failed to update task',
@@ -627,7 +632,7 @@ function useSubTaskBootstrap({
   onCountDelta?: CountDelta;
   enabled: boolean;
 }): (() => void) | undefined {
-  const { expandNode } = useTaskTree();
+  const { expandNode, onStartEdit } = useTaskTree();
 
   const run = useCallback(async () => {
     if (!task.pageId) return;
@@ -640,10 +645,15 @@ function useSubTaskBootstrap({
       // closure, and two invocations resolving against the same one would flip
       // twice and net to closed.
       expandNode(path);
+      // Straight into rename. The title has to be SOMETHING to create the row —
+      // this is the leaf case, where there is no inline add row to type into
+      // yet — and leaving "New sub-task" sitting there for the user to find and
+      // rename through a menu is the roughest edge in the flow.
+      onStartEdit(created);
     } catch (e) {
       toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));
     }
-  }, [task.pageId, onCountDelta, path, expandNode]);
+  }, [task.pageId, onCountDelta, path, expandNode, onStartEdit]);
 
   if (!enabled) return undefined;
   return () => { void run(); };

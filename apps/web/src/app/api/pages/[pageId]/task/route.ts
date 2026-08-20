@@ -95,8 +95,9 @@ export async function GET(
   });
 
   // Deliberately a read: no getOrCreateTaskListForPage. A parent with no
-  // task_lists row yet yields an empty vocabulary, and the header falls back to
-  // a plain complete/reopen toggle rather than lazily writing rows.
+  // task_lists row yet yields an empty vocabulary, and the header then renders
+  // the four built-in slugs (getStatusOrder's own fallback) rather than this
+  // route lazily writing rows on a page the user only opened to look at.
   const statusConfigs = parentList
     ? await db
       .select()

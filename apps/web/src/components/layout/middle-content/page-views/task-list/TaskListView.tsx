@@ -369,6 +369,13 @@ function MobileTaskCard({
   );
 }
 
+/**
+ * The collapsed state, shared. Minting `new Set()` per call is a new reference
+ * every time, so setting it re-renders the whole tree even when nothing was
+ * open — which the filter effect does on every keystroke.
+ */
+const EMPTY_EXPANDED: Set<TaskNodePath> = new Set();
+
 // Only the most recently loaded page's hasMore matters — earlier pages are stale
 // snapshots of a bound that may have shifted as tasks were added/removed since.
 export const getHasMoreTasks = (pages: { hasMore: boolean }[] | undefined): boolean => {
@@ -560,7 +567,7 @@ function TaskListView({ page }: TaskListViewProps) {
   // Keyed by PATH (rootPageId/taskId/taskId…), not task id: it makes "collapse
   // this node's whole subtree" a prefix operation and gives React an
   // unambiguous key when the same task could appear in two places.
-  const [expandedPaths, setExpandedPaths] = useState<Set<TaskNodePath>>(new Set());
+  const [expandedPaths, setExpandedPaths] = useState<Set<TaskNodePath>>(EMPTY_EXPANDED);
   const toggleExpanded = useCallback(
     (path: TaskNodePath) => setExpandedPaths(prev => toggleNodePath(prev, path)),
     [],
@@ -788,6 +795,14 @@ function TaskListView({ page }: TaskListViewProps) {
   // useFindStore. Find should search whatever's already loaded, not reset it.
   useEffect(() => {
     setSize(1);
+    // Expansions go too. The filter applies to the top-level rows only — a
+    // node's own cache is a separate paginated fetch with no filter in its key
+    // — so leaving a subtree open shows completed sub-tasks, struck through,
+    // underneath a filter that says Active, and non-matching children under a
+    // search that says otherwise. Collapsing is the honest answer: filtering
+    // the subtrees too would mean re-fetching every open node against a
+    // lazily-writing route on every keystroke.
+    setExpandedPaths(EMPTY_EXPANDED);
   }, [filter, search, setSize]);
 
   // Filter tasks
@@ -981,13 +996,30 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Collapse every expanded row the moment a drag begins — see the onDragStart
   // comment on DndContext for why this can't wait until the drop.
-  const handleDragStart = () => setExpandedPaths(new Set());
+  //
+  // Remembered, though. The pointer sensor fires at 8px, so brushing a drag
+  // handle counts as a drag: without this, an accidental nudge or an Escape
+  // silently closed every open node in the list and there was no undo. A drag
+  // that actually moves something still leaves the tree flat, because the rows
+  // beneath it have moved.
+  const collapsedForDrag = useRef<Set<TaskNodePath>>(EMPTY_EXPANDED);
+  const handleDragStart = () => {
+    collapsedForDrag.current = expandedPaths;
+    setExpandedPaths(EMPTY_EXPANDED);
+  };
+  const restoreExpansionsAfterNoOpDrag = () => {
+    setExpandedPaths(collapsedForDrag.current);
+    collapsedForDrag.current = EMPTY_EXPANDED;
+  };
 
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    setExpandedPaths(new Set()); // also covers drag-cancel and keeps the post-drop tree flat
-    if (!over || active.id === over.id || !canEdit) return;
+    if (!over || active.id === over.id || !canEdit) {
+      restoreExpansionsAfterNoOpDrag();
+      return;
+    }
+    collapsedForDrag.current = EMPTY_EXPANDED;
 
     const tasks = filteredTasks;
     const oldIndex = tasks.findIndex(t => t.id === active.id);
@@ -1385,6 +1417,10 @@ function TaskListView({ page }: TaskListViewProps) {
               // with rows open produces wrong transforms and wrong drop targets.
               onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
+              // A cancelled drag (Escape, or a pointer lost outside the window)
+              // never reaches onDragEnd, so without this the expansions the
+              // start collapsed would stay closed with nothing having moved.
+              onDragCancel={restoreExpansionsAfterNoOpDrag}
             >
               <div className="overflow-x-auto">
               {/* treegrid, not table: the rows carry aria-level and (when they

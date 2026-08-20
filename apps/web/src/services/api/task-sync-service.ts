@@ -65,6 +65,16 @@ export const STATUS_INHERITANCE_MAX_DEPTH = 10
  * the POST/PATCH slug checks keep enforcing "a task's status is always a slug its
  * own list defines" exactly as before.
  *
+ * No permission check on the ancestor, deliberately, and worth saying out loud
+ * because the new GET /api/pages/[pageId]/task in the same change DOES gate on
+ * the parent before returning its vocabulary. The two are different questions:
+ * that route hands a principal the parent's configs on request, which is a
+ * disclosure; this copies them into a page the principal is already looking at,
+ * the way a page inherits its drive's settings — a system-level data operation
+ * with no requester to check. Gating it would mean a viewer's read seeding the
+ * built-ins and permanently deciding the child's vocabulary by who happened to
+ * open it first, which is the bug this whole path exists to prevent.
+ *
  * Returns rows in ancestor position order, or DEFAULT_TASK_STATUSES when no
  * ancestor list has a vocabulary to inherit.
  */
@@ -231,6 +241,22 @@ async function resolveVocabularyPicks(tx: Tx, taskListId: string): Promise<{
  *
  * Trashed pages included, deliberately. Skipping them costs nothing today and
  * hands back a broken row the moment one is restored.
+ *
+ * TWO THINGS A REVIEWER SHOULD WEIGH, because they are escalations rather than
+ * accidents:
+ *
+ *  1. This runs on a VIEW-permission read. The lazy-init pattern already wrote
+ *     on read — the route has always inserted a task_lists row and its configs
+ *     for a viewer — but this is the first time a read rewrites task ROWS. It
+ *     is not optional: the alternative is leaving rows whose slug their own
+ *     list does not define, which PATCH answers 400 on and which the badge
+ *     renders as a raw slug. It fires only while a vocabulary is empty, i.e.
+ *     once per legacy list, and never on data created since this shipped.
+ *  2. It is not audited and does not broadcast. Every deliberate status write
+ *     logs and emits a task event; this one has no request and no actor to
+ *     attribute, so another tab keeps showing pre-sweep statuses until it
+ *     refetches. Giving the service an actor is the fix, and it is a change to
+ *     the whole service's signature rather than to this function.
  *
  * A row whose slug the new vocabulary DOES define is untouched — `notInArray`
  * says so — which keeps the same promise normalizeStatusForList makes: a defined
