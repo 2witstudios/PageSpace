@@ -300,6 +300,31 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
       expect(response.status).toBe(200);
       expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
     });
+
+    it('refuses edit-cells when the sheet content could not be read', async () => {
+      // The lossy parse would yield an empty sheet, so writing would replace
+      // the whole spreadsheet with just the cells in this request.
+      mockIsSheetType.mockReturnValue(true);
+      const sheetModule = await import('@pagespace/lib/sheets/sheet');
+      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: false,
+        reason: 'toml',
+        message: 'Key without value at row 3',
+      });
+
+      const { POST } = await import('../route');
+      const response = await POST(
+        makeRequest({
+          operation: 'edit-cells',
+          pageId: 'page-1',
+          cells: [{ address: 'A1', value: '2' }],
+        })
+      );
+
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error).toMatch(/could not be read/);
+    });
   });
 
   describe('3. pageId is required — no silent current-page fallback', () => {
