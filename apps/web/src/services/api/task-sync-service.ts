@@ -167,6 +167,59 @@ export async function seedInheritedTaskStatusConfigs(
 }
 
 /**
+ * The three statuses any repair or seed needs, read directly rather than out of a
+ * page of the vocabulary.
+ *
+ * Every one of these used to come from a `findMany` capped at 200. Nothing caps how
+ * many statuses a list may define — the statuses PUT accepts any array — so that
+ * window could hide the answer and change it: a list whose only open status sits past
+ * row 200 handed new tasks a DONE slug, and `resolveSeedCompletedAt` then stamped
+ * them, so a task was born complete. A targeted read cannot be wrong that way, and
+ * `(taskListId, group)` is indexed by the same index that serves the slug lookup.
+ *
+ * `open` and `done` are the two sides of the completion boundary. Never land a row
+ * on the wrong side of it: one carrying a completion time stays complete, one without
+ * stays actionable. (The per-group deletion guard in the statuses route means a list
+ * with any configs keeps at least one of each group, so the later fallbacks are
+ * defence rather than live paths.)
+ *
+ * One resolver, used by the seed, the per-row repair and the set-based sweep alike —
+ * this rule written out three times is how the three come to disagree about which
+ * side a row belongs on.
+ */
+async function resolveVocabularyPicks(tx: Tx, taskListId: string): Promise<{
+  first: { slug: string };
+  open: { slug: string };
+  done: { slug: string };
+} | null> {
+  const byPosition = (extra?: ReturnType<typeof eq>) => ({
+    where: extra
+      ? and(eq(taskStatusConfigs.taskListId, taskListId), extra)
+      : eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+  })
+  const first = await tx.query.taskStatusConfigs.findFirst(byPosition())
+  // No vocabulary at all: nothing to conform to, and nothing to seed from.
+  if (!first) return null
+
+  const open = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'todo')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst(
+    byPosition(ne(taskStatusConfigs.group, 'done')),
+  ) ?? first
+  const done = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'done')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    // The LAST config by position. Reading it directly is also stricter than the
+    // in-memory version this replaced, which took the 200th row and called it last.
+    orderBy: [desc(taskStatusConfigs.position)],
+  }) ?? first
+
+  return { first, open, done }
+}
+
+/**
  * Bring a list's EXISTING task rows into the vocabulary just seeded for it.
  *
  * Only matters on the repair path, and it is the price of inheriting there. The
@@ -208,31 +261,9 @@ async function conformExistingTasksToVocabulary(
     .from(taskStatusConfigs)
     .where(eq(taskStatusConfigs.taskListId, taskListId))
 
-  // The two replacements, read directly rather than picked out of a page of
-  // configs, for the same reason. Order and fallbacks mirror
-  // pickReplacementStatus exactly — see it for why neither may cross the done
-  // boundary.
-  const byPosition = (extra?: ReturnType<typeof eq>) => ({
-    where: extra
-      ? and(eq(taskStatusConfigs.taskListId, taskListId), extra)
-      : eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-  })
-  const first = await tx.query.taskStatusConfigs.findFirst(byPosition())
-  // No vocabulary at all: nothing to conform to.
-  if (!first) return
-
-  const open = await tx.query.taskStatusConfigs.findFirst(
-    byPosition(eq(taskStatusConfigs.group, 'todo')),
-  ) ?? await tx.query.taskStatusConfigs.findFirst(
-    byPosition(ne(taskStatusConfigs.group, 'done')),
-  ) ?? first
-  const done = await tx.query.taskStatusConfigs.findFirst(
-    byPosition(eq(taskStatusConfigs.group, 'done')),
-  ) ?? await tx.query.taskStatusConfigs.findFirst({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [desc(taskStatusConfigs.position)],
-  }) ?? first
+  const picks = await resolveVocabularyPicks(tx, taskListId)
+  if (!picks) return
+  const { open, done } = picks
 
   const membersOfThisList = tx
     .select({ id: pages.id })
@@ -294,16 +325,6 @@ export async function ensureTaskListForPage(
   return taskList
 }
 
-/**
- * Upper bound on the status VOCABULARY read in one go. Lists carry 4 defaults and a
- * handful of custom statuses; the cap exists to satisfy the unbounded-findMany rule,
- * and overshooting it could only cost a remap to a different valid slug.
- *
- * Deliberately never applied to task ROWS — a list can hold thousands, and the sweep
- * that conforms them runs once and only once. Exported so the two agent read paths,
- * which re-read the vocabulary after repairing it, bound it the same way.
- */
-export const STATUS_CONFIG_REMAP_LIMIT = 200
 
 /**
  * Postgres caps a statement at 65535 bind parameters. The cascade binds one inArray per
@@ -366,18 +387,13 @@ async function normalizeStatusForList(
   // with the user's data.
   if (alreadyValid) return
 
-  const configs = await tx.query.taskStatusConfigs.findMany({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-    limit: STATUS_CONFIG_REMAP_LIMIT,
-  })
+  // Never land on the wrong side of the done boundary. Read directly rather than out
+  // of a page of the vocabulary — see resolveVocabularyPicks for what a window can do
+  // to this choice.
+  const picks = await resolveVocabularyPicks(tx, taskListId)
   // A list with no configs at all has no vocabulary to conform to.
-  if (configs.length === 0) return
-
-  // Never land on the wrong side of the done boundary. (The per-group deletion guard in
-  // the statuses route means a list with any configs keeps at least one of each group,
-  // so the final `?? configs[...]` arms are defence rather than live paths.)
-  const replacement = pickReplacementStatus(configs, item.completedAt !== null)
+  if (!picks) return
+  const replacement = item.completedAt !== null ? picks.done : picks.open
 
   await tx
     .update(taskItems)
@@ -385,26 +401,6 @@ async function normalizeStatusForList(
     .where(eq(taskItems.id, item.id))
 }
 
-/**
- * Which slug a task should land on when its own is not in its list's vocabulary.
- *
- * Never lands on the wrong side of the done boundary: a row with a completion
- * time stays complete, one without stays actionable. (The per-group deletion
- * guard in the statuses route means a list with any configs keeps at least one
- * of each group, so the final fallbacks are defence rather than live paths.)
- *
- * Shared by the row-at-a-time repair and the set-based sweep below, because two
- * copies of this rule is exactly how they would come to disagree about which
- * side of that boundary a row belongs on.
- */
-export const pickReplacementStatus = <T extends { slug: string; group: string }>(
-  configs: readonly T[],
-  isCompleted: boolean,
-): T => (isCompleted
-  ? (configs.find((config) => config.group === 'done') ?? configs[configs.length - 1])
-  : (configs.find((config) => config.group === 'todo')
-      ?? configs.find((config) => config.group !== 'done')
-      ?? configs[0]))
 
 /**
  * The slug a brand-new task should start in for THIS list. Defaults to 'pending' only
@@ -495,15 +491,11 @@ async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<st
   })
   if (hasDefault) return defaultSlug
 
-  const configs = await tx.query.taskStatusConfigs.findMany({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-    limit: STATUS_CONFIG_REMAP_LIMIT,
-  })
-  const seed = configs.find((config) => config.group === 'todo')
-    ?? configs.find((config) => config.group !== 'done')
-    ?? configs[0]
-  return seed?.slug ?? defaultSlug
+  // The open side of the vocabulary, read directly. Through a 200-row window this
+  // could miss a list's only open status and hand back a DONE slug instead — and
+  // resolveSeedCompletedAt would then stamp the new task complete on creation.
+  const picks = await resolveVocabularyPicks(tx, taskListId)
+  return picks?.open.slug ?? defaultSlug
 }
 
 /**

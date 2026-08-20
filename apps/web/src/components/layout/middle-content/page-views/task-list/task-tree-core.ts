@@ -136,10 +136,19 @@ export const depthIndentStyle = (depth: number): { paddingLeft: string } => ({
  *
  * Newly created sub-lists inherit their ancestor's vocabulary at seed time
  * (seedInheritedTaskStatusConfigs), which makes the two sides identical and this
- * function a no-op. It exists for sub-lists seeded before that landed: when any
- * root slug is missing from the node's list, fall back to the node's own configs
- * — visually inconsistent, but every option in the dropdown is one the server
- * will accept.
+ * function a no-op. It exists for sub-lists seeded before that landed: when the two
+ * vocabularies differ at all, fall back to the node's own configs — visually
+ * inconsistent, but every option in the dropdown is one the server will accept and
+ * every slug a row can be in has a config to render it with.
+ *
+ * The comparison is both ways round, which it was not. Asking only whether every ROOT
+ * slug exists in the node let a node SUPERSET through — reachable by opening a
+ * sub-task's own page and adding a status there, which seeds it onto that sub-list
+ * alone. The row then rendered with the root's configs, which have nothing for the
+ * slug the row is actually in: a done sub-task shows unchecked and unstruck while the
+ * parent's server-derived badge counts it complete, the dropdown offers no entry for
+ * its current value so any pick silently reclassifies it, and the completion delta is
+ * computed from the wrong vocabulary.
  */
 export const resolveNodeStatusConfigs = (
   rootConfigs: readonly TaskStatusConfig[],
@@ -147,9 +156,10 @@ export const resolveNodeStatusConfigs = (
 ): readonly TaskStatusConfig[] => {
   if (rootConfigs.length === 0) return nodeConfigs;
   if (nodeConfigs.length === 0) return nodeConfigs;
+  if (rootConfigs.length !== nodeConfigs.length) return nodeConfigs;
   const nodeSlugs = new Set(nodeConfigs.map((c) => c.slug));
-  const everyRootSlugExists = rootConfigs.every((c) => nodeSlugs.has(c.slug));
-  return everyRootSlugExists ? rootConfigs : nodeConfigs;
+  const sameVocabulary = rootConfigs.every((c) => nodeSlugs.has(c.slug));
+  return sameVocabulary ? rootConfigs : nodeConfigs;
 };
 
 /**

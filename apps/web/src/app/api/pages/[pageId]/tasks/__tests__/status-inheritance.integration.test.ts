@@ -29,6 +29,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists, taskStatusConfigs } from '@pagespace/db/schema/tasks';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { ensureTaskItemForPage } from '@/services/api/task-sync-service';
 
 let currentUserId = '';
 
@@ -504,6 +505,88 @@ describe('sub-list status vocabulary inheritance', () => {
       should: 'leave a slug it defines late alone, and send a completed row to the DONE status',
       actual: { kept: rows[keepMe.id], moved: rows[moveMe.id] },
       expected: { kept: 'stage-250', moved: 'shipped' },
+    });
+  });
+
+  it('does not seed a new task COMPLETE because the open status sits past a read window', async () => {
+    // The worst form of the capped-vocabulary bug, because it writes rather than
+    // displays. With the list's only open status past the window, the seed's
+    // "first todo, else first non-done, else first" chain saw nothing but done
+    // slugs and took one — and resolveSeedCompletedAt then stamped completedAt.
+    // The task was born finished, on creation, from an inline "+ Add a task".
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [list] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    // No 'pending' anywhere, 210 done-group statuses, and the only open one last.
+    await db.insert(taskStatusConfigs).values([
+      ...Array.from({ length: 210 }, (_, i) => ({
+        taskListId: list.id, slug: `arch-${i}`, name: `Archived ${i}`,
+        color: 'x', group: 'done' as const, position: i,
+      })),
+      { taskListId: list.id, slug: 'fresh', name: 'Fresh', color: 'x', group: 'todo' as const, position: 210 },
+    ]);
+
+    const created = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await ensureTaskItemForPage(db, {
+      pageId: created.id, pageType: 'TASK_LIST', parentId: listPage.id, userId: owner.id,
+    });
+
+    const [row] = await db.select({ status: taskItems.status, completedAt: taskItems.completedAt })
+      .from(taskItems).where(eq(taskItems.pageId, created.id)).limit(1);
+    assert({
+      given: "a list whose only open status is past any plausible read window",
+      should: 'seed the open status, and not stamp the task complete',
+      actual: { status: row?.status, bornComplete: row?.completedAt !== null },
+      expected: { status: 'fresh', bornComplete: false },
+    });
+  });
+
+  it('sends a completed row to the LAST status when the list defines no done group', async () => {
+    // The done-side fallback. A vocabulary can legally have no done group — the
+    // statuses PUT validates each group but never requires one of each — and a
+    // completed row still must not be dropped onto the OPEN end of the list,
+    // which is where the first-by-position config sits. Untested until now: the
+    // whole suite stayed green with the fallback's ordering reversed.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [rootList] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values([
+      { taskListId: rootList.id, slug: 'first', name: 'First', color: 'x', group: 'todo' as const, position: 0 },
+      { taskListId: rootList.id, slug: 'middle', name: 'Middle', color: 'x', group: 'in_progress' as const, position: 1 },
+      { taskListId: rootList.id, slug: 'last', name: 'Last', color: 'x', group: 'in_progress' as const, position: 2 },
+    ]);
+
+    const taskPage = await factories.createPage(drive.id, { parentId: listPage.id, type: 'TASK_LIST' });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id, status: 'first' });
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
+    });
+    const legacy = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
+    await db.insert(taskItems).values({
+      userId: owner.id, pageId: legacy.id, status: 'pending', completedAt: new Date(),
+    });
+
+    await getTasks(taskPage.id);
+
+    const [row] = await db.select({ status: taskItems.status })
+      .from(taskItems).where(eq(taskItems.pageId, legacy.id)).limit(1);
+    assert({
+      given: 'a completed row and a vocabulary with no done group',
+      should: 'land it on the last status by position, not the first',
+      actual: row?.status,
+      expected: 'last',
     });
   });
 

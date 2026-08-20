@@ -5,7 +5,7 @@ import { pages } from '@pagespace/db/schema/core';
 import { taskItems, taskLists, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
 import { channelMessages } from '@pagespace/db/schema/chat';
 import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpers';
-import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatusConfigs, STATUS_CONFIG_REMAP_LIMIT } from '@/services/api/task-sync-service';
+import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
@@ -304,12 +304,10 @@ export async function POST(req: NextRequest) {
               // slugs the response itself says do not exist.
               [tasks, statusConfigs] = await Promise.all([
                 fetchEnrichedTasks(pageId),
+                // eslint-disable-next-line no-restricted-syntax -- unbounded on purpose: the read it replaces is unbounded, and the seeding path it re-reads no longer caps either. Reporting 200 of a 260-status vocabulary beside rows the sweep just moved to a slug at position 259 names statuses the same response says do not exist.
                 db.query.taskStatusConfigs.findMany({
                   where: eq(taskStatusConfigs.taskListId, taskList.id),
                   orderBy: [asc(taskStatusConfigs.position)],
-                  // Bounded, unlike the read above it: a vocabulary is a handful
-                  // of statuses, and the same cap the seeding path applies.
-                  limit: STATUS_CONFIG_REMAP_LIMIT,
                 }),
               ]);
             } catch (error) {

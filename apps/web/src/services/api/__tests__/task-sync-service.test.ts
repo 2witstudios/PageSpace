@@ -7,7 +7,15 @@ vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
   taskItems: { pageId: 'taskItems.pageId', id: 'taskItems.id', assigneeAgentId: 'taskItems.assigneeAgentId', completedAt: 'taskItems.completedAt', status: 'taskItems.status' },
   taskAssignees: { taskId: 'taskAssignees.taskId', agentPageId: 'taskAssignees.agentPageId' },
-  taskStatusConfigs: {},
+  // Real identifiers: the vocabulary probes filter on group and order by
+  // position, and a bare {} makes every one of those conditions read as
+  // undefined — so the mock cannot tell them apart.
+  taskStatusConfigs: {
+    taskListId: 'taskStatusConfigs.taskListId',
+    slug: 'taskStatusConfigs.slug',
+    group: 'taskStatusConfigs.group',
+    position: 'taskStatusConfigs.position',
+  },
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
   ],
@@ -209,9 +217,27 @@ function makeTx(config: {
       }) },
       taskStatusConfigs: {
         // where: ['and', ['eq','taskStatusConfigs.taskListId', id], ['eq','taskStatusConfigs.slug', slug]]
-        findFirst: vi.fn(async (args: { where: unknown[] }) => {
+        findFirst: vi.fn(async (args: { where: unknown[]; orderBy?: unknown[] }) => {
           const listCond = args.where?.[1] as unknown[];
           const slugCond = args.where?.[2] as unknown[];
+          // The seed and the repairs no longer page the vocabulary — nothing caps
+          // how many statuses a list defines — so they ask for the pieces they
+          // need directly: the first config by position, and the first of a given
+          // group. Those queries have no slug term, and the group ones carry an
+          // 'eq'/'ne' on taskStatusConfigs.group.
+          const ordered = [...destinationStatusConfigs].sort((a, b) => a.position - b.position);
+          const descending = JSON.stringify(args.orderBy ?? []).includes('desc');
+          // A bare `eq(taskListId, …)` — no second condition — is the "first (or
+          // last) config by position" probe.
+          if (args.where?.[0] === 'eq') {
+            return descending ? ordered[ordered.length - 1] : ordered[0];
+          }
+          if (Array.isArray(slugCond) && slugCond[1] === 'taskStatusConfigs.group') {
+            const op = slugCond[0] as string;
+            const group = slugCond[2] as string;
+            const candidates = descending ? [...ordered].reverse() : ordered;
+            return candidates.find((c) => (op === 'ne' ? c.group !== group : c.group === group));
+          }
           statusConfigProbes.push({ taskListId: listCond?.[2] as string, slug: slugCond?.[2] as string });
           return destinationStatusConfigs.find((c) => c.slug === slugCond?.[2]);
         }),

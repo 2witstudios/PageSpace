@@ -249,6 +249,24 @@ describe('resolveNodeStatusConfigs', () => {
     });
   });
 });
+describe('resolveNodeStatusConfigs — a node that defines MORE', () => {
+  it("uses the node's own configs when the node has a slug the root does not", () => {
+    // Reachable: open a sub-task's own page and add a status there, and it is
+    // seeded onto that sub-list alone. Rendering that row with the ROOT's
+    // configs leaves nothing to draw the slug the row is actually in — a done
+    // sub-task shows unchecked while the parent badge counts it complete, and
+    // the dropdown has no entry for its current value.
+    const root = [config('pending'), config('completed', { group: 'done', position: 1 })];
+    const node = [...root, config('blocked', { group: 'in_progress', position: 2 })];
+    assert({
+      given: 'a node vocabulary that is a superset of the root',
+      should: "render with the node's own",
+      actual: resolveNodeStatusConfigs(root, node) === node,
+      expected: true,
+    });
+  });
+});
+
 
 describe('formatSubTaskProgress', () => {
   it('is null for a task with no sub-tasks', () => {

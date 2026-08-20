@@ -103,7 +103,10 @@ export async function GET(
       .from(taskStatusConfigs)
       .where(eq(taskStatusConfigs.taskListId, parentList.id))
       .orderBy(asc(taskStatusConfigs.position))
-      .limit(200)
+      // Unbounded on purpose. Nothing caps how many statuses a list may define,
+      // and a window here is not a safety valve but a wrong answer: a task whose
+      // status sits past it makes isCompletedStatus false, so the header renders
+      // a finished task as open and offers to complete it again.
     : [];
 
   // This page's own children, so the header honours the same sub-task

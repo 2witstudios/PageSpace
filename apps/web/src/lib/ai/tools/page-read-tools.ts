@@ -18,7 +18,7 @@ import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
-import { ensureTaskListForPage, seedInheritedTaskStatusConfigs, STATUS_CONFIG_REMAP_LIMIT } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveDriveScope } from './drive-context-defaults';
@@ -467,12 +467,10 @@ export const pageReadTools = {
               // NEW vocabulary beside the PRE-repair statuses, which is exactly
               // the pairing this block exists to prevent.
               [statusConfigs, tasks] = await Promise.all([
+                // eslint-disable-next-line no-restricted-syntax -- unbounded on purpose: the read it replaces is unbounded, and the seeding path it re-reads no longer caps either. Reporting 200 of a 260-status vocabulary beside rows the sweep just moved to a slug at position 259 names statuses the same response says do not exist.
                 db.query.taskStatusConfigs.findMany({
                   where: eq(taskStatusConfigs.taskListId, taskList.id),
                   orderBy: [asc(taskStatusConfigs.position)],
-                  // Bounded, unlike the read above it: a vocabulary is a handful
-                  // of statuses, and the same cap the seeding path applies.
-                  limit: STATUS_CONFIG_REMAP_LIMIT,
                 }),
                 readTasks(),
               ]);
