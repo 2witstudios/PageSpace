@@ -69,13 +69,42 @@ test('completing a top-level task is immediate and refetches nothing', async ({ 
     if (req.method() === 'GET' && req.url().includes(`/api/pages/${listPageId}/tasks?`)) listGets++;
   });
 
+  // Hold the PATCH open. Asserting "checked" after an unhindered click only
+  // proves the tick arrives quickly — it could equally be arriving from the
+  // server response. Blocking the response makes "optimistic" the only
+  // explanation for a checked box.
+  let releasePatch: () => void = () => {};
+  const patchHeld = new Promise<void>((r) => { releasePatch = r; });
+  let patchSeen = false;
+  await page.route(`**/api/pages/${listPageId}/tasks/*`, async (route) => {
+    if (route.request().method() !== 'PATCH') return route.fallback();
+    patchSeen = true;
+    await patchHeld;
+    await route.fallback();
+  });
+
   const checkbox = rowCheckbox(page, 'Alpha');
   await checkbox.click();
 
-  // The tick is there before the network settles.
-  await expect(checkbox).toBeChecked({ timeout: 1000 });
-  await page.waitForTimeout(1500);
-  expect(listGets, 'a completion should trigger no list refetch').toBe(0);
+  // Checked while the write is still in flight — this is the whole fix.
+  await expect(checkbox).toBeChecked();
+  expect(patchSeen, 'the PATCH should be in flight, not yet answered').toBe(true);
+  expect(listGets, 'no refetch may be issued while the write is pending').toBe(0);
+
+  // Release, then wait for the response itself rather than a fixed delay.
+  const settled = page.waitForResponse(
+    (r) => r.request().method() === 'PATCH' && r.url().includes(`/tasks/`),
+  );
+  releasePatch();
+  await settled;
+
+  // Reconciliation and any deferred revalidation both run off that response;
+  // give the microtask queue a turn and assert the count did not move.
+  await expect.poll(() => listGets, {
+    message: 'a completion should trigger no list refetch',
+    timeout: 2000,
+  }).toBe(0);
+  await expect(checkbox).toBeChecked();
 });
 
 test('a sub-task completes in place instead of navigating away', async ({ page, request, driveId }) => {
@@ -147,4 +176,15 @@ test('an inline sub-task row creates under the task being viewed', async ({ page
 
   await expect(rowCheckbox(page, 'Added inline')).toBeVisible({ timeout: 5000 });
   expect(page.url()).toContain(listPageId);
+
+  // Visibility alone would also pass if the task had been created at the ROOT.
+  // Collapsing Holder is what proves the parentage: a root row would stay.
+  await page.getByRole('button', { name: /Collapse Holder/i }).click();
+  await expect(rowCheckbox(page, 'Added inline')).toBeHidden();
+  await expect(rowCheckbox(page, 'Existing')).toBeHidden();
+  await expect(rowCheckbox(page, 'Holder')).toBeVisible();
+
+  // ...and re-expanding brings it back, so it really is in Holder's subtree.
+  await page.getByRole('button', { name: /Expand Holder/i }).click();
+  await expect(rowCheckbox(page, 'Added inline')).toBeVisible();
 });

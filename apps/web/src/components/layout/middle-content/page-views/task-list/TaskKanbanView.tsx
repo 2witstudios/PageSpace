@@ -276,6 +276,9 @@ function TaskCard({
             <span
               className="text-xs text-muted-foreground tabular-nums"
               title={`${subTaskProgress.label} sub-tasks complete`}
+              // `title` alone is not reliably announced; the visible text is
+              // just "2/3", which means nothing on its own.
+              aria-label={`${subTaskProgress.label} sub-tasks complete`}
             >
               {subTaskProgress.label}
             </span>
@@ -501,7 +504,7 @@ export function TaskKanbanView({
 
     // If the status changed, update it
     if (activeTask.status !== targetStatus) {
-      handlers.onStatusChange(activeTask.id, targetStatus);
+      handlers.onStatusChange(activeTask, targetStatus);
     }
 
     // Handle reordering within or across columns

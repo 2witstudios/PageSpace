@@ -46,6 +46,10 @@ const pages = (tasks: TaskItem[]): TaskListData[] => [{
  * Stands in for swr/infinite's bound mutate: records what it was called with,
  * and (like SWR) runs the async updater and rethrows its rejection.
  */
+/** Monotonic tick, so tests can assert the ORDER of two observed events. */
+let tick = 0;
+const nextTick = () => ++tick;
+
 const makeMutate = (initial: TaskListData[]) => {
   // Records what SWR was asked to do, and — like SWR — resolves functional
   // `optimisticData` and the async updater against the CURRENT cache value,
@@ -53,6 +57,7 @@ const makeMutate = (initial: TaskListData[]) => {
   const calls: { optimisticData?: TaskListData[]; revalidate?: boolean; rollbackOnError?: boolean }[] = [];
   const results: (TaskListData[] | undefined)[] = [];
   let current: TaskListData[] | undefined = initial;
+  let commitAt: number | null = null;
   const mutate = vi.fn(async (data?: unknown, opts?: Record<string, unknown>) => {
     const rawOptimistic = opts?.optimisticData;
     const optimisticData = typeof rawOptimistic === 'function'
@@ -63,31 +68,42 @@ const makeMutate = (initial: TaskListData[]) => {
     if (typeof data === 'function') {
       const out = await (data as (c?: TaskListData[]) => Promise<TaskListData[] | undefined>)(current);
       results.push(out);
-      if (out) current = out;
+      // The commit: SWR writes the updater's return value into the cache here.
+      if (out) { current = out; commitAt = nextTick(); }
       return out;
     }
     return undefined;
   });
-  return { mutate, calls, results };
+  return { mutate, calls, results, committedAt: () => commitAt };
 };
 
-const setup = (initial: TaskListData[], revalidateAll = vi.fn()) => {
-  const { mutate, calls, results } = makeMutate(initial);
+// Two distinct spies on purpose: the machinery's view-wide `revalidateAll` and
+// the writer's `onRevisionConflict` are different paths, and sharing one mock
+// made both the 409 assertion and the deferred-echo assertion read the same
+// counter — neither proved which one actually fired.
+const setup = (
+  initial: TaskListData[],
+  revalidateAll = vi.fn(),
+  onRevisionConflict = vi.fn(),
+) => {
+  const { mutate, calls, results, committedAt } = makeMutate(initial);
+  let revalidatedAt: number | null = null;
+  const trackedRevalidateAll = () => { revalidatedAt = nextTick(); revalidateAll(); };
   const view = renderHook(() => {
-    const machinery = useTaskWriteMachinery('user-me', revalidateAll);
-    const writer = useTaskWriter({
-      mutatePages: mutate as never,
-      onRevisionConflict: revalidateAll,
-      machinery,
-    });
+    const machinery = useTaskWriteMachinery('user-me', trackedRevalidateAll);
+    const writer = useTaskWriter({ mutatePages: mutate as never, onRevisionConflict, machinery });
     return { machinery, writer };
   });
-  return { view, mutate, calls, results, revalidateAll };
+  return {
+    view, mutate, calls, results, revalidateAll, onRevisionConflict,
+    committedAt, revalidatedAt: () => revalidatedAt,
+  };
 };
 
 beforeEach(() => {
   patchMock.mockReset();
   toastErrorMock.mockReset();
+  tick = 0;
 });
 
 describe('writeTaskField', () => {
@@ -195,7 +211,8 @@ describe('writeTaskField', () => {
   it('refetches on a revision conflict instead of trusting the rollback', async () => {
     patchMock.mockRejectedValue(Object.assign(new Error('x'), { status: 409, body: {} }));
     const revalidateAll = vi.fn();
-    const { view } = setup(pages([task({ id: 't1' })]), revalidateAll);
+    const onRevisionConflict = vi.fn();
+    const { view } = setup(pages([task({ id: 't1' })]), revalidateAll, onRevisionConflict);
     await act(async () => {
       await view.result.current.writer.writeTaskField({
         loc: { listPageId: 'list', taskId: 't1' },
@@ -206,9 +223,9 @@ describe('writeTaskField', () => {
     });
     assert({
       given: 'a 409 revision conflict',
-      should: 'revalidate, because the rolled-back data is already stale',
-      actual: revalidateAll.mock.calls.length,
-      expected: 1,
+      should: 'take the conflict path only — not the view-wide deferred revalidation',
+      actual: [onRevisionConflict.mock.calls.length, revalidateAll.mock.calls.length],
+      expected: [1, 0],
     });
   });
 });
@@ -262,7 +279,7 @@ describe('echo suppression', () => {
     let resolve: (v: TaskItem) => void = () => {};
     patchMock.mockReturnValue(new Promise<TaskItem>((r) => { resolve = r; }));
     const revalidateAll = vi.fn();
-    const { view } = setup(pages([task({ id: 't1' })]), revalidateAll);
+    const { view, committedAt, revalidatedAt } = setup(pages([task({ id: 't1' })]), revalidateAll);
 
     let pending: Promise<boolean>;
     await act(async () => {
@@ -288,6 +305,19 @@ describe('echo suppression', () => {
       should: 'drop it in the moment, then revalidate once the write settles',
       actual: [duringFlight, beforeSettle, revalidateAll.mock.calls.length],
       expected: [false, 0, 1],
+    });
+
+    assert({
+      given: 'the same deferred-echo write',
+      should: 'flush the revalidation only AFTER the cache write committed',
+      // Revalidating from inside SWR's updater starts a refetch that can land
+      // before the updater commits, and that commit would then overwrite the
+      // foreign change the refetch just fetched.
+      actual: {
+        committed: committedAt() !== null,
+        revalidatedAfterCommit: (revalidatedAt() ?? 0) > (committedAt() ?? 0),
+      },
+      expected: { committed: true, revalidatedAfterCommit: true },
     });
   });
 

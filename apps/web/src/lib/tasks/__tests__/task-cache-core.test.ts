@@ -14,6 +14,9 @@ import {
   resolveToggleStatus,
   blockedByOpenSubTasks,
   taskFromCreateResponse,
+  blockedStatusTransition,
+  subTasksBlockedMessage,
+  type CreateTaskResponse,
 } from '../task-cache-core';
 
 const assert = ({ given, should, actual, expected }: {
@@ -403,9 +406,107 @@ describe('blockedByOpenSubTasks', () => {
   });
 });
 
+describe('blockedStatusTransition', () => {
+  const configs = [
+    config('backlog', 'todo', 0),
+    config('doing', 'in_progress', 1),
+    config('shipped', 'done', 2),
+  ];
+  const withSubs = (status: string, total: number, done: number) =>
+    ({ status, subTaskCount: total, subTaskCompletedCount: done });
+
+  it('blocks selecting a done status while sub-tasks are open', () => {
+    // The dropdown reaches the same completion the checkbox does, so without
+    // this the UI optimistically completes and then rolls back on a 422.
+    assert({
+      given: 'a task with 1 of 3 sub-tasks done, moving to a done status',
+      should: 'block, naming the two that remain',
+      actual: blockedStatusTransition(withSubs('backlog', 3, 1), 'shipped', configs),
+      expected: { pending: 2, total: 3 },
+    });
+  });
+
+  it('allows a move between two open statuses', () => {
+    assert({
+      given: 'a task with open sub-tasks moving backlog -> doing',
+      should: 'not block, because it is not a completion',
+      actual: blockedStatusTransition(withSubs('backlog', 3, 1), 'doing', configs),
+      expected: null,
+    });
+  });
+
+  it('allows reopening', () => {
+    assert({
+      given: 'a done task with open sub-tasks moving back to an open status',
+      should: 'not block',
+      actual: blockedStatusTransition(withSubs('shipped', 3, 1), 'backlog', configs),
+      expected: null,
+    });
+  });
+
+  it('allows re-asserting a status on an already-done task', () => {
+    // The server already accepted this state; a sub-task added afterwards must
+    // not make the row impossible to touch.
+    assert({
+      given: 'an already-done task with open sub-tasks, set to a done status again',
+      should: 'not block',
+      actual: blockedStatusTransition(withSubs('shipped', 3, 1), 'shipped', configs),
+      expected: null,
+    });
+  });
+
+  it('allows completing when every sub-task is done', () => {
+    assert({
+      given: 'a task with 3 of 3 sub-tasks done',
+      should: 'not block',
+      actual: blockedStatusTransition(withSubs('backlog', 3, 3), 'shipped', configs),
+      expected: null,
+    });
+  });
+
+  it('allows completing a leaf', () => {
+    assert({
+      given: 'a task with no sub-tasks',
+      should: 'not block',
+      actual: blockedStatusTransition(withSubs('backlog', 0, 0), 'shipped', configs),
+      expected: null,
+    });
+  });
+});
+
+describe('subTasksBlockedMessage', () => {
+  it('singularises one pending sub-task', () => {
+    assert({
+      given: 'one pending sub-task',
+      should: 'say sub-task, not sub-tasks',
+      actual: subTasksBlockedMessage({ pending: 1 }),
+      expected: 'Finish 1 sub-task first',
+    });
+  });
+
+  it('pluralises more than one', () => {
+    assert({
+      given: 'three pending sub-tasks',
+      should: 'pluralise',
+      actual: subTasksBlockedMessage({ pending: 3 }),
+      expected: 'Finish 3 sub-tasks first',
+    });
+  });
+});
+
 describe('taskFromCreateResponse', () => {
+  // The parameter is typed as the create route's actual shape — a full row minus
+  // the four fields only the LIST route derives — so a newly required field
+  // cannot slip through as undefined behind a cast.
+  const createResponse = (over: Partial<TaskItem> = {}): CreateTaskResponse => {
+    const { activeTriggerCount, hasContent, subTaskCount, subTaskCompletedCount, ...rest } =
+      task({ id: 'new', title: 'New', ...over });
+    void activeTriggerCount; void hasContent; void subTaskCount; void subTaskCompletedCount;
+    return rest;
+  };
+
   it('defaults the derived fields the create route omits', () => {
-    const created = taskFromCreateResponse({ id: 'new', title: 'New' } as Partial<TaskItem> & { id: string });
+    const created = taskFromCreateResponse(createResponse());
     assert({
       given: 'a POST response with no derived fields',
       should: 'default counts to zero and hasContent to false',
@@ -419,13 +520,17 @@ describe('taskFromCreateResponse', () => {
     });
   });
 
-  it('does not override values the response did provide', () => {
-    const created = taskFromCreateResponse({ id: 'new', hasContent: true } as Partial<TaskItem> & { id: string });
+  it('carries the response through untouched apart from the defaults', () => {
+    // The four derived fields can no longer be present on the input at all —
+    // CreateTaskResponse omits them, so the compiler now guarantees what a
+    // "does the default win?" test used to check at runtime. What is still
+    // worth guarding is that nothing ELSE is dropped on the way in.
+    const created = taskFromCreateResponse(createResponse({ title: 'Fresh', status: 'doing' }));
     assert({
-      given: 'a response that carries hasContent',
-      should: 'keep the response value',
-      actual: created.hasContent,
-      expected: true,
+      given: 'a create response with its own title and status',
+      should: 'preserve them',
+      actual: [created.title, created.status, created.id],
+      expected: ['Fresh', 'doing', 'new'],
     });
   });
 });

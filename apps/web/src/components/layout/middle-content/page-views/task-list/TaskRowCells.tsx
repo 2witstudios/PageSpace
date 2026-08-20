@@ -143,6 +143,7 @@ export function TaskRowCells({
               <span
                 className="ml-1 shrink-0 text-xs text-muted-foreground tabular-nums"
                 title={`${progress.label} sub-tasks complete`}
+                aria-label={`${progress.label} sub-tasks complete`}
               >
                 {progress.label}
               </span>
@@ -155,7 +156,7 @@ export function TaskRowCells({
       <TableCell>
         <Select
           value={task.status}
-          onValueChange={(value) => handlers.onStatusChange(loc, value)}
+          onValueChange={(value) => handlers.onStatusChange(loc, task, value)}
           disabled={!canEdit}
         >
           <SelectTrigger className="h-8 w-28">

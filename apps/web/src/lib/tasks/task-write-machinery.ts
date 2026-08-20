@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useMemo, useRef } from 'react';
+import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { toast } from 'sonner';
 import { patch } from '@/lib/auth/auth-fetch';
 import type {
@@ -34,25 +35,29 @@ import { taskWriteErrorMessage, isRevisionConflict } from './task-write-errors';
  * the shared machinery to whichever cache the caller is rendering from.
  */
 
-type PagesUpdater = (
-  current: TaskListData[] | undefined,
-) => Promise<TaskListData[] | undefined> | TaskListData[] | undefined;
-
-type MutatePages = (
-  data?: TaskListData[] | Promise<TaskListData[] | undefined> | PagesUpdater | undefined,
-  opts?: {
-    optimisticData?: TaskListData[]
-      | ((current: TaskListData[] | undefined, displayed: TaskListData[] | undefined) => TaskListData[]);
-    rollbackOnError?: boolean;
-    revalidate?: boolean;
-  },
-) => Promise<TaskListData[] | undefined>;
+/**
+ * swr/infinite's own bound mutator. Using SWR's type rather than a hand-rolled
+ * one keeps every option it supports available and lets both call sites pass
+ * their `mutate` directly, with no cast to paper over a near-miss signature.
+ */
+type MutatePages = SWRInfiniteKeyedMutator<TaskListData[]>;
 
 export interface TaskWriteMachinery {
   /** Current user id, for telling our own socket events from everyone else's. */
   currentUserId: string | null | undefined;
   noteSelfWriteStart: (taskId: string) => void;
+  /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
   noteSelfWriteSettled: (taskId: string, updatedAt: string | null) => void;
+  /**
+   * Run the revalidation an echo deferred, if one is pending.
+   *
+   * Separate from noteSelfWriteSettled, and called only AFTER the cache write
+   * has committed. Revalidating from inside SWR's updater starts a refetch that
+   * can land before the updater's return value is committed — and that commit
+   * would then overwrite the foreign change the refetch just fetched, which is
+   * the exact data loss the deferral exists to prevent.
+   */
+  flushDeferredRevalidate: () => void;
   /**
    * Classify an inbound task event. Returns true when the caller should
    * revalidate; false when the event was this tab's own echo (already applied,
@@ -94,10 +99,12 @@ export function useTaskWriteMachinery(
     selfWritesRef.current = updatedAt
       ? recordSelfWrite(selfWritesRef.current, { taskId, updatedAt, at: now }, now)
       : dropInFlightSelfWrite(selfWritesRef.current, taskId);
-    if (deferredRevalidateRef.current) {
-      deferredRevalidateRef.current = false;
-      revalidateAll();
-    }
+  }, []);
+
+  const flushDeferredRevalidate = useCallback(() => {
+    if (!deferredRevalidateRef.current) return;
+    deferredRevalidateRef.current = false;
+    revalidateAll();
   }, [revalidateAll]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
@@ -114,8 +121,15 @@ export function useTaskWriteMachinery(
   }, [currentUserId]);
 
   return useMemo(
-    () => ({ currentUserId, noteSelfWriteStart, noteSelfWriteSettled, shouldRevalidateForEvent }),
-    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, shouldRevalidateForEvent],
+    () => ({
+      currentUserId,
+      noteSelfWriteStart,
+      noteSelfWriteSettled,
+      flushDeferredRevalidate,
+      shouldRevalidateForEvent,
+    }),
+    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate,
+     shouldRevalidateForEvent],
   );
 }
 
@@ -153,7 +167,7 @@ export function useTaskWriter(params: {
   machinery: TaskWriteMachinery;
   onRevisionConflict?: () => void;
 }): TaskWriter {
-  const { noteSelfWriteStart, noteSelfWriteSettled } = params.machinery;
+  const { noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate } = params.machinery;
   const { mutatePages, onRevisionConflict } = params;
 
   const writeTaskField = useCallback(async ({
@@ -191,8 +205,12 @@ export function useTaskWriter(params: {
       if (isRevisionConflict(e)) onRevisionConflict?.();
       toast.error(taskWriteErrorMessage(e, fallbackMessage));
       return false;
+    } finally {
+      // After the cache write has committed, never from inside the updater.
+      flushDeferredRevalidate();
     }
-  }, [mutatePages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled]);
+  }, [mutatePages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled,
+      flushDeferredRevalidate]);
 
   return { writeTaskField };
 }

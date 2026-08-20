@@ -135,7 +135,8 @@ export const STATUS_ORDER: string[] = ['pending', 'in_progress', 'blocked', 'com
 // Task handlers interface for shared components
 export interface TaskHandlers {
   onToggleComplete: (task: TaskItem) => void;
-  onStatusChange: (taskId: string, status: string) => void;
+  /** Takes the task, not just its id: the sub-task completion guard needs the row. */
+  onStatusChange: (task: TaskItem, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onAssigneeChange: (taskId: string, assigneeId: string | null, agentId: string | null) => void;
   onMultiAssigneeChange?: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
@@ -169,7 +170,7 @@ export interface TaskLocation {
  */
 export interface LocatedTaskHandlers {
   onToggleComplete: (loc: TaskLocation, task: TaskItem) => void;
-  onStatusChange: (loc: TaskLocation, status: string) => void;
+  onStatusChange: (loc: TaskLocation, task: TaskItem, status: string) => void;
   onPriorityChange: (loc: TaskLocation, priority: string) => void;
   onAssigneeChange: (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => void;
   onMultiAssigneeChange?: (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
@@ -193,7 +194,7 @@ export const bindTaskHandlersToList = (
   listPageId: string,
 ): TaskHandlers => ({
   onToggleComplete: (task) => h.onToggleComplete({ listPageId, taskId: task.id }, task),
-  onStatusChange: (taskId, status) => h.onStatusChange({ listPageId, taskId }, status),
+  onStatusChange: (task, status) => h.onStatusChange({ listPageId, taskId: task.id }, task, status),
   onPriorityChange: (taskId, priority) => h.onPriorityChange({ listPageId, taskId }, priority),
   onAssigneeChange: (taskId, assigneeId, agentId) =>
     h.onAssigneeChange({ listPageId, taskId }, assigneeId, agentId),

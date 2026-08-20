@@ -45,12 +45,13 @@ describe('bindTaskHandlersToList', () => {
     // The regression this guards: swapping the two produces a PATCH to
     // /api/pages/<taskId>/tasks/<listPageId>, which 404s on the parent check.
     const { handlers, calls } = located();
-    bindTaskHandlersToList(handlers, 'list-page').onStatusChange('task-9', 'done');
+    const t = task('task-9');
+    bindTaskHandlersToList(handlers, 'list-page').onStatusChange(t, 'done');
     assert({
       given: 'a status change on a bound handler',
-      should: 'address the list page and the task separately',
+      should: 'address the list page and the task separately, and pass the row itself',
       actual: calls.onStatusChange,
-      expected: [{ listPageId: 'list-page', taskId: 'task-9' }, 'done'],
+      expected: [{ listPageId: 'list-page', taskId: 'task-9' }, t, 'done'],
     });
   });
 

@@ -7,6 +7,8 @@ import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
 import {
   resolveToggleStatus,
   blockedByOpenSubTasks,
+  blockedStatusTransition,
+  subTasksBlockedMessage,
 } from '@/lib/tasks/task-cache-core';
 import { taskWriteErrorMessage } from '@/lib/tasks/task-write-errors';
 import { isCompletedStatus, type TaskStatusConfig } from './task-list-types';
@@ -72,6 +74,14 @@ export function useSelfTask(pageId: string, canEdit: boolean): UseSelfTaskResult
 
   const setStatus = useCallback(async (status: string) => {
     if (!task || !listPageId || !canEdit) return;
+    // The dropdown can select a done status directly, which completes the task
+    // just as the checkbox does — without this it optimistically completes and
+    // then rolls back on the server's 422.
+    const blocked = blockedStatusTransition(task, status, statusConfigs);
+    if (blocked) {
+      toast.error(subTasksBlockedMessage(blocked));
+      return;
+    }
     const optimistic: SelfTaskResponse = {
       ...(data as SelfTaskResponse),
       task: {
@@ -113,7 +123,7 @@ export function useSelfTask(pageId: string, canEdit: boolean): UseSelfTaskResult
       // exactly the screen where the open sub-tasks are listed below.
       const blocked = blockedByOpenSubTasks(task);
       if (blocked) {
-        toast.error(`Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`);
+        toast.error(subTasksBlockedMessage(blocked));
         return;
       }
     }

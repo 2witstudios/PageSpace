@@ -13,9 +13,9 @@
 import type { TaskItem, TaskStatusConfig } from './task-list-types';
 
 /**
- * Number of <th> cells in the desktop task table header. Re-exported from
- * TaskListView (its definition site) so nested-row components can span the full
- * width without importing the whole view.
+ * Number of <th> cells in the desktop task table header. Defined in
+ * ./table-columns and re-exported here so nested-row components can span the
+ * full width without importing the whole view.
  */
 export { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 

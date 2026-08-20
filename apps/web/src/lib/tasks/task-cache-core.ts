@@ -13,6 +13,8 @@
 
 import type { TaskItem, TaskListData, TaskPriority, TaskAssigneeData, TaskStatusConfig } from
   '@/components/layout/middle-content/page-views/task-list/task-list-types';
+import { isCompletedStatus } from
+  '@/components/layout/middle-content/page-views/task-list/task-list-types';
 
 /** The subset of a task row an optimistic write is allowed to touch. */
 export interface TaskFieldPatch {
@@ -183,6 +185,34 @@ export const blockedByOpenSubTasks = (
 };
 
 /**
+ * The sub-task guard as it applies to ANY status change, not just the checkbox.
+ *
+ * A status dropdown can select a done-group status directly, which is the same
+ * completion the checkbox performs — so it has to answer to the same rule, or
+ * the UI optimistically completes a blocked task and then rolls back on the
+ * server's 422.
+ *
+ * Only a transition INTO done is blocked. Moving between two open statuses is
+ * unaffected, reopening is always allowed, and a task already done is left
+ * alone: the server has accepted that state, and re-asserting it must not
+ * become impossible just because a sub-task was added afterwards.
+ */
+export const blockedStatusTransition = (
+  task: Pick<TaskItem, 'status' | 'subTaskCount' | 'subTaskCompletedCount'>,
+  nextStatus: string,
+  configs: readonly TaskStatusConfig[],
+): { pending: number; total: number } | null => {
+  const configList = [...configs];
+  if (!isCompletedStatus(nextStatus, configList)) return null;
+  if (isCompletedStatus(task.status, configList)) return null;
+  return blockedByOpenSubTasks(task);
+};
+
+/** One wording for the block, so every entry point reports it identically. */
+export const subTasksBlockedMessage = (blocked: { pending: number }): string =>
+  `Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`;
+
+/**
  * Normalize a POST /tasks response into a full TaskItem.
  *
  * The create route returns the task with its relations but WITHOUT the derived
@@ -192,10 +222,13 @@ export const blockedByOpenSubTasks = (
  * them undefined would make `canExpandNode` and the sub-task fetch gate read
  * `undefined ?? 0` on a row that has a real answer.
  */
-export const taskFromCreateResponse = (body: Partial<TaskItem> & { id: string }): TaskItem => ({
+export type CreateTaskResponse =
+  Omit<TaskItem, 'activeTriggerCount' | 'hasContent' | 'subTaskCount' | 'subTaskCompletedCount'>;
+
+export const taskFromCreateResponse = (body: CreateTaskResponse): TaskItem => ({
   activeTriggerCount: 0,
   hasContent: false,
   subTaskCount: 0,
   subTaskCompletedCount: 0,
   ...body,
-} as TaskItem);
+});

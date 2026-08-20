@@ -17,6 +17,8 @@ import {
   taskFromCreateResponse,
   resolveToggleStatus,
   blockedByOpenSubTasks,
+  blockedStatusTransition,
+  subTasksBlockedMessage,
 } from '@/lib/tasks/task-cache-core';
 import {
   type TaskItem,
@@ -192,7 +194,7 @@ function TaskSubTaskRows({
   );
 
   const { writeTaskField } = useTaskWriter({
-    mutatePages: mutatePages as never,
+    mutatePages,
     // Passed explicitly rather than read from a provider: TaskListView owns the
     // machinery (its socket effect needs it) and hands it down on the tree
     // context, so there is no second provider in the tree to read from.
@@ -216,7 +218,7 @@ function TaskSubTaskRows({
       if (!isDone) {
         const blocked = blockedByOpenSubTasks(child);
         if (blocked) {
-          toast.error(`Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`);
+          toast.error(subTasksBlockedMessage(blocked));
           return;
         }
       }
@@ -235,10 +237,16 @@ function TaskSubTaskRows({
       // there is no bubbling further than this.
       if (ok) onParentCountDelta?.({ completed: isDone ? -1 : 1 });
     },
-    onStatusChange: async (loc, status) => {
+    onStatusChange: async (loc, child, status) => {
       if (!tree.canEdit) return;
-      const child = subTasks.find((t) => t.id === loc.taskId);
-      const wasDone = child ? isCompletedStatus(child.status, nodeStatusConfigs) : false;
+      // The dropdown can select a done status directly — same completion the
+      // checkbox performs, so the same guard applies.
+      const blocked = blockedStatusTransition(child, status, nodeStatusConfigs);
+      if (blocked) {
+        toast.error(subTasksBlockedMessage(blocked));
+        return;
+      }
+      const wasDone = isCompletedStatus(child.status, nodeStatusConfigs);
       const nowDone = isCompletedStatus(status, nodeStatusConfigs);
       const ok = await writeTaskField({
         loc,

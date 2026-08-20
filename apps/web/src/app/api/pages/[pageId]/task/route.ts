@@ -62,10 +62,16 @@ export async function GET(
     return NextResponse.json({ task: null, listPageId: null, statusConfigs: [] });
   }
 
+  // Columns only, no relations: the header renders a checkbox and a status
+  // dropdown, so joining assignees (and through them users) would cost a
+  // three-table join on every task screen for data nothing displays — and
+  // returning those user rows would mean shipping field-encrypted columns this
+  // route has no reason to decrypt.
   const taskItem = await db.query.taskItems.findFirst({
     where: eq(taskItems.pageId, pageId),
-    with: {
-      assignees: { with: { user: true, agentPage: true } },
+    columns: {
+      id: true, status: true, priority: true,
+      completedAt: true, dueDate: true, updatedAt: true,
     },
   });
 

@@ -118,6 +118,8 @@ import {
 import {
   resolveToggleStatus,
   blockedByOpenSubTasks,
+  blockedStatusTransition,
+  subTasksBlockedMessage,
   applySubTaskCountsToPages,
 } from '@/lib/tasks/task-cache-core';
 import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-machinery';
@@ -141,7 +143,7 @@ interface MobileTaskCardProps {
   task: TaskItem;
   canEdit: boolean;
   onToggleComplete: (task: TaskItem) => void;
-  onStatusChange: (taskId: string, status: string) => void;
+  onStatusChange: (task: TaskItem, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
@@ -237,6 +239,7 @@ function MobileTaskCard({
                 <span
                   className="shrink-0 text-xs text-muted-foreground tabular-nums"
                   title={`${subTaskProgress.label} sub-tasks complete`}
+                  aria-label={`${subTaskProgress.label} sub-tasks complete`}
                 >
                   {subTaskProgress.label}
                 </span>
@@ -284,7 +287,7 @@ function MobileTaskCard({
         {/* Status - uses dynamic status configs */}
         <Select
           value={task.status}
-          onValueChange={(value) => onStatusChange(task.id, value)}
+          onValueChange={(value) => onStatusChange(task, value)}
           disabled={!canEdit}
         >
           <SelectTrigger className="h-7 w-auto px-2">
@@ -804,8 +807,15 @@ function TaskListView({ page }: TaskListViewProps) {
     handleCreateTask(page.id, title, status);
 
   // Update task status
-  const handleStatusChange = async (loc: TaskLocation, newStatus: string) => {
+  const handleStatusChange = async (loc: TaskLocation, task: TaskItem, newStatus: string) => {
     if (!canEdit) return;
+    // The dropdown can select a done status directly, which is the same
+    // completion the checkbox performs and answers to the same guard.
+    const blocked = blockedStatusTransition(task, newStatus, statusConfigs);
+    if (blocked) {
+      toast.error(subTasksBlockedMessage(blocked));
+      return;
+    }
     // completedAt is guessed only so the row's strikethrough and checkbox move
     // together with the status; the server's real stamp replaces it on resolve.
     const movesToDone = isCompletedStatus(newStatus, statusConfigs);
@@ -841,11 +851,11 @@ function TaskListView({ page }: TaskListViewProps) {
       // same rule with a 422; this avoids the round trip and the visible flip.
       const blocked = blockedByOpenSubTasks(task);
       if (blocked) {
-        toast.error(`Finish ${blocked.pending} sub-task${blocked.pending > 1 ? 's' : ''} first`);
+        toast.error(subTasksBlockedMessage(blocked));
         return;
       }
     }
-    await handleStatusChange(loc, resolveToggleStatus(statusConfigs, isDone));
+    await handleStatusChange(loc, task, resolveToggleStatus(statusConfigs, isDone));
   };
 
   // Start editing title
@@ -1303,7 +1313,11 @@ function TaskListView({ page }: TaskListViewProps) {
               onDragEnd={handleDragEnd}
             >
               <div className="overflow-x-auto">
-              <Table>
+              {/* treegrid, not table: the rows carry aria-level and (when they
+                  can expand) aria-expanded, and assistive technology ignores
+                  both inside a plain `table` role — the nesting and expansion
+                  state would simply not be announced. */}
+              <Table role="treegrid" aria-label="Tasks">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8"></TableHead>

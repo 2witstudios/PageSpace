@@ -213,8 +213,13 @@ describe('nested rows in the DOM', () => {
     });
   });
 
-  it('gives an expandable row aria-expanded and a leaf none', async () => {
-    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child' })]));
+  it('reports aria-expanded true, false, and absent for the three row states', async () => {
+    // All three states, deliberately: an earlier version probed two LEAVES and
+    // expected [false, false], which passes just as well with aria-expanded
+    // removed from every row. The positive case is what gives the assertion
+    // teeth, so the expanded parent and a collapsed-but-expandable child are
+    // both in the same render.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child', subTaskCount: 1 })]));
     render(
       <Harness
         tasks={[task({ id: 'parent', subTaskCount: 1 }), task({ id: 'leaf' })]}
@@ -223,14 +228,18 @@ describe('nested rows in the DOM', () => {
     );
     await screen.findByText('child');
 
+    const ariaExpanded = (label: string) =>
+      screen.getByText(label).closest('tr')?.getAttribute('aria-expanded');
+
     assert({
-      given: 'an expanded parent, its leaf child, and a top-level leaf',
-      should: 'expose aria-expanded only where expansion is possible',
-      actual: [
-        screen.getByText('child').closest('tr')?.hasAttribute('aria-expanded'),
-        screen.getByText('leaf').closest('tr')?.hasAttribute('aria-expanded'),
-      ],
-      expected: [false, false],
+      given: 'an expanded parent, a collapsed-but-expandable child, and a leaf',
+      should: 'say true, false, and nothing at all',
+      actual: {
+        parent: ariaExpanded('parent'),
+        child: ariaExpanded('child'),
+        leaf: ariaExpanded('leaf'),
+      },
+      expected: { parent: 'true', child: 'false', leaf: null },
     });
   });
 });
