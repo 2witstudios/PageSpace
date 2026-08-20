@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import DocumentConflictGate from '@/components/layout/middle-content/page-views/document/DocumentConflictGate';
 import { TreePage, usePageTree } from '@/hooks/usePageTree';
 import { useSocket } from '@/hooks/useSocket';
 import { useAuth } from '@/hooks/useAuth';
@@ -162,6 +163,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     updateContentFromServer,
     saveWithDebounce,
     forceSaveNow,
+    conflict,
+    resolveConflict,
+    isResolvingConflict,
   } = useSheetPersistence({ pageId: page.id, socket, resetHistory });
 
   // Pull-to-refresh handler
@@ -842,6 +846,12 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   return (
     <div className="flex h-full flex-col">
+      <DocumentConflictGate
+        conflict={conflict}
+        onResolve={resolveConflict}
+        isResolving={isResolvingConflict}
+        previewMode="plain"
+      />
       <SheetFormulaBar
         isRange={selection.type === 'range'}
         selectionAddress={selectionAddress}

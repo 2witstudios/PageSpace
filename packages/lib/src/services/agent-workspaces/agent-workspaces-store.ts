@@ -24,6 +24,7 @@
  *    (moving a thread is a fork).
  */
 
+import type { SQL } from 'drizzle-orm';
 import { planSessionReopen, type SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { withWorkspaceLock } from './workspace-lock';
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER } from '../../agent-workspaces/session-contract';
@@ -45,10 +46,13 @@ export interface AgentSessionRecord {
    * is not absent at runtime, it is present and invisible to the type system,
    * which is the drift this file would otherwise hand to its callers.
    *
-   * Nothing reads it yet — `spawnAgentSession` starts writing it in Phase 3.
-   * An env-bound session holds NO Sprite pointer of its own (it borrows the
-   * env's), which the database enforces via
-   * `agent_workspaces_env_no_sprite_check`.
+   * Written by `spawnAgentSession` (which first proves the env exists and
+   * belongs to this session's drive) and READ by `ensureAgentSessionSandbox`,
+   * which routes an env-bound session's provisioning at the ENV row instead of
+   * this one. An env-bound session holds NO Sprite pointer of its own (it
+   * borrows the env's), which the database enforces via
+   * `agent_workspaces_env_no_sprite_check` — so every Sprite column below stays
+   * null for the row's whole life.
    */
   envId: string | null;
 
@@ -74,7 +78,36 @@ export interface NewAgentSessionInput {
   /** null = a global-assistant session. */
   driveId: string | null;
   name: string | null;
+  /**
+   * The environment to run inside, or null for the ordinary ephemeral session
+   * that owns its own Sprite. NOT validated here — that the env exists and
+   * belongs to `driveId` is `spawnAgentSession`'s check, and the database's
+   * `agent_workspaces_env_needs_drive_check` is the backstop under it.
+   */
+  envId: string | null;
   now: Date;
+}
+
+/**
+ * The ENV Sprite pointers a session's listing carries alongside its own row.
+ *
+ * An env-bound session has no Sprite columns of its own (CHECK-enforced), so
+ * "does this session have a live sandbox" is a fact about the ENV's row. The
+ * listing LEFT JOINs it rather than making the DTO layer issue a lookup per
+ * row, and `deriveSandboxStatus` reads it — see that function for the mapping.
+ */
+export interface DriveEnvSpritePointers {
+  sandboxId: string | null;
+  spriteTornDownAt: Date | null;
+}
+
+/**
+ * A listed session: its own row, plus its env's Sprite pointers when it is
+ * env-bound (`null` for an ordinary session, and for an env-bound row whose env
+ * vanished mid-query — the FK makes that a race, not a state).
+ */
+export interface AgentSessionListRow extends AgentSessionRecord {
+  env: DriveEnvSpritePointers | null;
 }
 
 /**
@@ -142,7 +175,7 @@ export interface AgentSessionStore {
    * enumeration that never forgets grew without limit and reshuffled between
    * polls (review M3/M4).
    */
-  list(filter: AgentSessionListFilter): Promise<AgentSessionRecord[]>;
+  list(filter: AgentSessionListFilter): Promise<AgentSessionListRow[]>;
   /**
    * Count this owner's ACTIVE (not-ended) sessions — the spawn ceiling's
    * input. Distinct from `countLive`, which counts live SANDBOXES for the
@@ -361,13 +394,36 @@ export function revivedAgentSessionColumns(input: {
   egressPolicyToken: string | null;
   stamps: SpriteHolderRowStamps;
   now: Date;
+  /**
+   * The watermark to write — an `SQL` EXPRESSION, never a bare `Date`, and the
+   * type is the enforcement.
+   *
+   * The monotonic guarantee lives in the caller's `GREATEST(...)` because only
+   * the store has the table and `sql` in scope (this helper stays pure and free
+   * of the DB graph). That split is safe only if a caller cannot accidentally
+   * pass `now` and silently reopen the double-bill the guard closes — so the
+   * parameter refuses one. A future third caller gets a type error, not a
+   * production regression with no red test.
+   */
+  storageLastBilledAt: SQL;
 }) {
   return {
     spriteKey: input.spriteKey,
     sandboxId: input.sandboxId,
     spriteInstanceId: input.spriteInstanceId,
     egressPolicyToken: input.egressPolicyToken,
-    storageLastBilledAt: input.now,
+    // MONOTONIC, and supplied by the caller as an SQL expression rather than
+    // derived from `now` here.
+    // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
+    // IO, so by the time this write lands it can be tens of seconds stale — and a
+    // reconcile tick that charged through a LATER instant may already have
+    // advanced this column. Assigning `now` would drag the watermark backwards
+    // past what was just billed, and the next tick would re-bill the difference.
+    // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
+    // (a new generation must not inherit the old one's window) without ever
+    // moving the watermark down. The parameter's type refuses a bare `Date`, so
+    // this cannot be reopened by a caller that forgets.
+    storageLastBilledAt: input.storageLastBilledAt,
     updatedAt: input.now,
     ...stampColumns(input.stamps),
   };
@@ -390,6 +446,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     { db },
     { eq, and, or, eqOrIsNull, isNotNull, isNull, sql, count, desc },
     { agentWorkspaces },
+    { driveEnvs },
     { machineSpriteReclaims },
     // The membership table. `conversations` is no longer imported here at all:
     // this store never read anything from it but the thread→workspace binding,
@@ -399,6 +456,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/agent-workspaces'),
+    import('@pagespace/db/schema/drive-envs'),
     import('@pagespace/db/schema/machine-sprite-reclaims'),
     import('@pagespace/db/schema/agent-workspace-nodes'),
   ]);
@@ -445,6 +503,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
           ownerId: input.ownerId,
           driveId: input.driveId,
           name: input.name,
+          envId: input.envId,
           createdAt: input.now,
           updatedAt: input.now,
         })
@@ -452,7 +511,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
       return row as AgentSessionRecord;
     },
 
-    async createIfUnderLimit({ ownerId, driveId, name, now, maxActive }) {
+    async createIfUnderLimit({ ownerId, driveId, name, envId, now, maxActive }) {
       return db.transaction(async (tx) => {
         // Per-owner advisory lock, held for this transaction only — same
         // primitive `credit-gate.ts`'s billing-off daily ceiling uses.
@@ -467,7 +526,7 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         if (n >= maxActive) return { ok: false as const, reason: 'limit_reached' as const };
         const [row] = await tx
           .insert(agentWorkspaces)
-          .values({ ownerId, driveId, name, createdAt: now, updatedAt: now })
+          .values({ ownerId, driveId, name, envId, createdAt: now, updatedAt: now })
           .returning();
         return { ok: true as const, session: row as AgentSessionRecord };
       });
@@ -511,13 +570,34 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
         throw new Error('listAgentSessions requires at least one filter');
       }
       conditions.push(isNull(agentWorkspaces.endedAt));
+      // LEFT JOIN, not a second query and not a per-row lookup: an env-bound
+      // session's own Sprite columns are CHECK-forbidden to be anything but
+      // null, so "does this session have a live sandbox" is a fact about the
+      // ENV's row. LEFT rather than INNER so an ordinary session (no `envId`)
+      // is still listed — an inner join would silently drop every session that
+      // is not in an environment, which is nearly all of them.
       const rows = await db
-        .select()
+        .select({
+          session: agentWorkspaces,
+          envSandboxId: driveEnvs.sandboxId,
+          envSpriteTornDownAt: driveEnvs.spriteTornDownAt,
+        })
         .from(agentWorkspaces)
+        .leftJoin(driveEnvs, eq(driveEnvs.id, agentWorkspaces.envId))
         .where(and(...conditions))
         .orderBy(sql`${agentWorkspaces.lastActiveAt} DESC NULLS LAST`, desc(agentWorkspaces.createdAt))
         .limit(MAX_ACTIVE_WORKSPACES_PER_OWNER);
-      return rows as AgentSessionRecord[];
+      return rows.map((row) => ({
+        ...(row.session as AgentSessionRecord),
+        // Keyed on the SESSION's `envId`, not on the joined columns being
+        // non-null: an env that has never been provisioned has null pointers
+        // too, and reading that as "not env-bound" would send the DTO layer
+        // back to the session's own (permanently null) columns.
+        env:
+          row.session.envId === null
+            ? null
+            : { sandboxId: row.envSandboxId, spriteTornDownAt: row.envSpriteTornDownAt },
+      }));
     },
 
     async countActive(ownerId) {
@@ -570,7 +650,19 @@ export async function createDbAgentSessionStore(now: () => Date = () => new Date
     }) {
       const updated = await db
         .update(agentWorkspaces)
-        .set(revivedAgentSessionColumns({ spriteKey, sandboxId, spriteInstanceId, egressPolicyToken, stamps, now }))
+        .set(
+          revivedAgentSessionColumns({
+            spriteKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            stamps,
+            now,
+            // The monotonic reset, built HERE because this is where the table and
+            // `sql` are in scope — the helper stays pure and free of the DB graph.
+            storageLastBilledAt: sql`GREATEST(${agentWorkspaces.storageLastBilledAt}, ${sql.param(now, agentWorkspaces.storageLastBilledAt)})`,
+          }),
+        )
         .where(
           and(
             eq(agentWorkspaces.id, workspaceId),

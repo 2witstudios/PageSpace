@@ -35,6 +35,8 @@ const session = {
   driveId: 'drive-1',
   ownerId: 'user-1',
   name: 'Refactor the parser',
+  /** Ephemeral by default — the session that owns its own Sprite. */
+  envId: null,
   sandboxStatus: 'running',
   createdAt: '2026-07-28T10:00:00.000Z',
   lastActiveAt: '2026-07-28T10:05:00.000Z',
@@ -75,6 +77,17 @@ describe('agentSessionDtoSchema', () => {
 
   it('given a null driveId (global-assistant session, user-scoped), should parse', () => {
     expect(agentSessionDtoSchema.parse({ ...session, driveId: null }).driveId).toBeNull();
+  });
+
+  it('given an envId, should parse — the session runs inside a persistent environment', () => {
+    // Non-null changes what `sandboxStatus` is a reading OF: an env-bound
+    // session holds no Sprite of its own, so its status comes from the ENV's
+    // machine — the one every session in that env shares, along with its disk.
+    expect(agentSessionDtoSchema.parse({ ...session, envId: 'env-1' }).envId).toBe('env-1');
+  });
+
+  it('given an EMPTY envId, should fail — an id that addresses nothing is not a binding', () => {
+    expect(agentSessionDtoSchema.safeParse({ ...session, envId: '' }).success).toBe(false);
   });
 
   it('given an empty workspaceId, should fail (ids address — an empty one addresses nothing)', () => {

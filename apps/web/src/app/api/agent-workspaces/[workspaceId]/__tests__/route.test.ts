@@ -40,7 +40,7 @@ vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({
   endSession: (...args: unknown[]) => mockEndSession(...args),
   findSessionRecord: (...args: unknown[]) => mockFindSessionRecord(...args),
   provisionSessionSandbox: (...args: unknown[]) => mockProvisionSessionSandbox(...args),
-  toAgentSessionDTO: (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
+  toSessionDTOWithEnv: async (row: { id: string }) => ({ workspaceId: row.id, dto: true }),
 }));
 vi.mock('@pagespace/lib/services/agent-workspaces/agent-workspace-tenant', () => ({
   canRunCodeForSession: (...args: unknown[]) => mockResolveSandboxToolEligibility(...args),

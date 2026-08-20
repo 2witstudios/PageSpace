@@ -70,6 +70,20 @@ export interface ChannelEnd {
   aborted: boolean;
   /** Set when `reason === 'overflow'`. */
   resumeFromSeq?: number;
+  /**
+   * What this subscriber received is NOT the whole message, and no resume point can fix it.
+   *
+   * Distinct from `overflow`, which names a seq the reader can restart from. This says the
+   * SOURCE cannot serve the rest at all — the durable log was released while a follower was
+   * reading it, or it holds a hole. There is nothing to resume from; the only correct answer is
+   * to reload the durably-persisted message.
+   *
+   * Never set by a locally-owned channel, whose ring is the live record by construction. It
+   * exists for the remote follower (`remote-frame-follower.ts`), and it rides `ChannelEnd` —
+   * rather than being a special case in the SSE route — precisely so the route stays one code
+   * path for both sources.
+   */
+  truncated?: boolean;
 }
 
 export interface SubscribeOptions {
@@ -133,7 +147,12 @@ export interface StreamChannel {
   readonly aborted: boolean;
   readonly subscriberCount: number;
   append(chunk: UIMessageChunk): void;
-  finish(aborted: boolean): void;
+  /**
+   * End the channel. `truncated` marks an end where what was delivered is provably incomplete
+   * and unresumable — see `ChannelEnd.truncated`. A generation never passes it; a follower
+   * reading a released or holed durable log does.
+   */
+  finish(aborted: boolean, options?: { truncated?: boolean }): void;
   /** Frames still in memory from `fromSeq` onward. For the checkpoint / terminal fold. */
   getFrames(fromSeq?: number): UIMessageChunk[];
   subscribe(options: SubscribeOptions): () => void;
@@ -222,6 +241,7 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
   let firstAvailableSeq = 0;
   let finished = false;
   let aborted = false;
+  let truncated = false;
 
   const subscribers = new Set<Subscriber>();
 
@@ -270,12 +290,16 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
     }
   };
 
-  const finish = (nextAborted: boolean): void => {
+  const finish = (nextAborted: boolean, options?: { truncated?: boolean }): void => {
     if (finished) return;
     finished = true;
     aborted = nextAborted;
+    // Recorded, so a subscriber that joins AFTER the end is told the same thing as one that was
+    // already attached. A late joiner replaying a truncated log and being handed a clean `done`
+    // would render the short reply as if it were the whole one.
+    truncated = options?.truncated === true;
     for (const subscriber of [...subscribers]) {
-      endSubscriber(subscriber, { reason: 'finished', aborted: nextAborted });
+      endSubscriber(subscriber, { reason: 'finished', aborted: nextAborted, truncated });
     }
   };
 
@@ -318,7 +342,7 @@ export const openStreamChannel = (options: StreamChannelOptions): StreamChannel 
     // A stream that already ended still replays in full above, then ends — so a client
     // that joins a beat late gets the whole reply rather than an empty stream.
     if (!subscriber.ended && finished) {
-      endSubscriber(subscriber, { reason: 'finished', aborted });
+      endSubscriber(subscriber, { reason: 'finished', aborted, truncated });
     }
 
     return () => {

@@ -33,6 +33,7 @@
  * today's constants, not about the query.
  */
 
+import type { SQL } from 'drizzle-orm';
 import type { SpriteHolderRowStamps } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 
@@ -244,6 +245,37 @@ export interface DriveEnvStore {
     cas?: { sandboxId?: string | null; endedAt?: Date | null };
   }): Promise<boolean>;
   /**
+   * Persist an opportunistic storage measurement — the WRITE side of what the
+   * storage reconcile only ever reads. Without it an env bills the
+   * never-measured 0 floor forever while the cron keeps advancing its watermark,
+   * silently discarding every interval.
+   *
+   * Two guards, both the session store's (`recordStorageMeasurement`) verbatim,
+   * because a measurement is fire-and-forget and can land after the disk it
+   * describes is gone: a torn-down row is never written, and the write CASes on
+   * the INSTANCE measured so one generation's bytes can never be persisted
+   * against its replacement's id.
+   *
+   * Returns whether the row was actually written — the one place this diverges
+   * from the session store's twin, which returns void. A refused CAS is not an
+   * error and must not throw, but for an ENV it is not harmless either: this is
+   * the only writer the row has, so a silent miss leaves it never-measured and
+   * billing the 0 floor with nothing to retry it. A session's twin can stay void
+   * because its bash and git writers correct the same miss on the next real work.
+   * `envStorageMeasureSeam` warns on `false`.
+   */
+  recordStorageMeasurement(input: {
+    envId: string;
+    /**
+     * The instance actually measured. Null when the driver reports none — then
+     * the row's own null matches and the CAS degrades to the liveness guard,
+     * which is the most any caller can know without a generation id.
+     */
+    spriteInstanceId: string | null;
+    measuredBytes: number;
+    measuredAt: Date;
+  }): Promise<boolean>;
+  /**
    * Record the durable teardown INTENT, BEFORE the kill — the one stamp written
    * ahead of its IO, so a crash between "we decided to kill" and "the kill was
    * confirmed" leaves a durable record of the intent rather than a silent
@@ -327,13 +359,36 @@ export function revivedDriveEnvColumns(input: {
   egressPolicyToken: string | null;
   stamps: SpriteHolderRowStamps;
   now: Date;
+  /**
+   * The watermark to write — an `SQL` EXPRESSION, never a bare `Date`, and the
+   * type is the enforcement.
+   *
+   * The monotonic guarantee lives in the caller's `GREATEST(...)` because only
+   * the store has the table and `sql` in scope (this helper stays pure and free
+   * of the DB graph). That split is safe only if a caller cannot accidentally
+   * pass `now` and silently reopen the double-bill the guard closes — so the
+   * parameter refuses one. A future third caller gets a type error, not a
+   * production regression with no red test.
+   */
+  storageLastBilledAt: SQL;
 }) {
   return {
     spriteKey: input.spriteKey,
     sandboxId: input.sandboxId,
     spriteInstanceId: input.spriteInstanceId,
     egressPolicyToken: input.egressPolicyToken,
-    storageLastBilledAt: input.now,
+    // MONOTONIC, and supplied by the caller as an SQL expression rather than
+    // derived from `now` here.
+    // `input.now` is captured in `ensureSpriteHolderSandbox` BEFORE the provider
+    // IO, so by the time this write lands it can be tens of seconds stale — and a
+    // reconcile tick that charged through a LATER instant may already have
+    // advanced this column. Assigning `now` would drag the watermark backwards
+    // past what was just billed, and the next tick would re-bill the difference.
+    // The store passes a `GREATEST(...)` expression so the reset keeps its purpose
+    // (a new generation must not inherit the old one's window) without ever
+    // moving the watermark down. The parameter's type refuses a bare `Date`, so
+    // this cannot be reopened by a caller that forgets.
+    storageLastBilledAt: input.storageLastBilledAt,
     updatedAt: input.now,
     ...envStampColumns(input.stamps),
   };
@@ -518,7 +573,19 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     }) {
       const updated = await db
         .update(driveEnvs)
-        .set(revivedDriveEnvColumns({ spriteKey, sandboxId, spriteInstanceId, egressPolicyToken, stamps, now: at }))
+        .set(
+          revivedDriveEnvColumns({
+            spriteKey,
+            sandboxId,
+            spriteInstanceId,
+            egressPolicyToken,
+            stamps,
+            now: at,
+            // The monotonic reset, built HERE because this is where the table and
+            // `sql` are in scope — the helper stays pure and free of the DB graph.
+            storageLastBilledAt: sql`GREATEST(${driveEnvs.storageLastBilledAt}, ${sql.param(at, driveEnvs.storageLastBilledAt)})`,
+          }),
+        )
         .where(
           and(
             eq(driveEnvs.id, envId),
@@ -549,6 +616,28 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       // No guard requested: the caller accepted whatever the row currently is,
       // so a miss (the row was deleted) is not a refusal.
       if (cas?.sandboxId === undefined) return true;
+      return updated.length > 0;
+    },
+
+    async recordStorageMeasurement({ envId, spriteInstanceId, measuredBytes, measuredAt }) {
+      const updated = await db
+        .update(driveEnvs)
+        .set({ storageMeasuredBytes: measuredBytes, storageMeasuredAt: measuredAt })
+        .where(
+          and(
+            eq(driveEnvs.id, envId),
+            isNull(driveEnvs.spriteTornDownAt),
+            // CAS on the generation measured. `eqOrIsNull` so a driver that
+            // reports no instance id still matches its own null row rather than
+            // never persisting — plain `eq` never matches null in SQL.
+            eqOrIsNull(driveEnvs.spriteInstanceId, spriteInstanceId),
+          ),
+        )
+        .returning({ id: driveEnvs.id });
+      // Reported, not thrown: a refused CAS means the generation moved under a
+      // fire-and-forget `du`, which is correct behaviour, not an error. The
+      // CALLER decides it is worth a warning — and for an env it is, because
+      // nothing else will write this row.
       return updated.length > 0;
     },
 

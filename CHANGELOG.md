@@ -94,6 +94,30 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   ones. Now anything created under a list inherits that list's statuses.
 - **The expanded document is no longer cut off** — a task's notes were clamped to about three lines
   behind a fade. They render in full.
+- **Editing a document at the same time as someone else no longer throws away what you typed** —
+  when a colleague or an AI agent saved the same document while you had unsaved text, PageSpace
+  used to quietly replace everything in your editor with their version and tell you your copy "has
+  been updated". Whatever you had written was gone, with no way to get it back. Your text now stays
+  exactly where it is. A banner appears saying someone else saved the document, autosaving pauses
+  so nothing is sent behind your back, and you choose: **Keep mine**, which saves your text over
+  theirs, or **Use theirs**, which loads their version and drops your unsaved changes. You can
+  expand the banner to read their version first, so the choice is not blind. Use theirs simply
+  loads their version and saves nothing; and if someone saves again while you are still deciding,
+  Keep mine re-prompts you with that newer version instead of failing.
+
+- **Browsing a session's files now requires permission to run code, as starting a shell always
+  did** — the file browser, the diff view and the "show this file at that commit" reader were
+  reachable by anyone who could see the session, even though the Shell button beside them was
+  already greyed out for those same people. They read AND wrote through the session's machine, so
+  the browser was a way around a control the interface was already showing as locked. They now
+  answer exactly as they do for a session with no machine yet, which is also what they answer for a
+  session you cannot see — no response distinguishes "not allowed" from "not there".
+
+  If your role in a drive does not let you run code, you will notice the file, diff and history
+  panes of a session go quiet where they previously loaded. That is the intended state and matches
+  what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
+  permits running code if you need those panes back.
+
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a
   hang.

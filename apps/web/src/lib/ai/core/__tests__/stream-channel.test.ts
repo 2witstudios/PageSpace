@@ -125,7 +125,7 @@ describe('stream-channel — seq and fan-out', () => {
 
     const sub = collect(channel);
     expect(sub.frames).toHaveLength(2);
-    expect(sub.end).toEqual({ reason: 'finished', aborted: false });
+    expect(sub.end).toEqual({ reason: 'finished', aborted: false, truncated: false });
   });
 
   it('given finish(true), should report aborted to subscribers', () => {
@@ -133,7 +133,7 @@ describe('stream-channel — seq and fan-out', () => {
     const sub = collect(channel);
     channel.finish(true);
 
-    expect(sub.end).toEqual({ reason: 'finished', aborted: true });
+    expect(sub.end).toEqual({ reason: 'finished', aborted: true, truncated: false });
   });
 
   it('given an append after finish, should refuse it', () => {

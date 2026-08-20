@@ -5,6 +5,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { parseGlobalChannelId } from '@pagespace/lib/ai/global-channel-id';
 import { canSubscribeToStream } from '@/lib/ai/core/stream-subscription-authz';
 import { resolveStreamJoinContext } from '@/lib/ai/core/stream-join-context';
+import { acquireRemoteChannel } from '@/lib/ai/core/remote-frame-follower';
 
 export const dynamic = 'force-dynamic';
 
@@ -131,21 +132,41 @@ export async function GET(
   // frames to discard — under-skipping duplicated visible text, over-skipping left a silent
   // permanent gap, and neither was detectable from either side.
   //
-  // A `remote` or `terminal` context has no channel to read from YET — serving one is the next
-  // leaf (the durable log's follower). Until then this is the same 404 the route already gave
-  // for a registry miss, reached AFTER authorization rather than instead of it. The client's
-  // poll fallback (`stream-join-poll-fallback.ts`) handles a 404 exactly as it does today, so
-  // cross-instance delivery is unchanged by this leaf — what changes is that the answer is now
-  // classified, and that a caller who may not subscribe is refused for the right reason.
-  if (joinContext.kind !== 'local') {
-    return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
-  }
-  const channel = joinContext.channel;
+  // A REMOTE or TERMINAL context is served by a follower that tails the durable frame log and
+  // presents it as an ordinary `StreamChannel` — so everything below this line (the SSE framing,
+  // the ping, the recheck, the teardown, the overflow/resumeFromSeq semantics) is ONE code path
+  // for both sources. Forking the route body here is what this deliberately does not do: it
+  // would mean two copies of five behaviours, one of which nothing local exercises.
+  //
+  // `terminal` is followed too, not short-circuited. The frames are deleted on the terminal
+  // write, so a terminal row is exactly the case where the follower's honest-answer logic is
+  // needed: serve whatever the log still holds, then end — with `truncated` when the log was
+  // already released, which tells the client to reload rather than trust a short reply.
+  const remote = joinContext.kind === 'local' ? null : acquireRemoteChannel(messageId);
+  const channel = joinContext.kind === 'local' ? joinContext.channel : remote!.channel;
+  const joinSource = joinContext.kind === 'local' ? 'local' : joinContext.kind;
+  // Dropped in EVERY exit below, not only the happy one — a follower reference leaked by an
+  // early return keeps a poller alive for a reader that never arrived.
+  const releaseRemote = () => remote?.release();
 
   const requestedFromSeq = Number(new URL(request.url).searchParams.get('fromSeq') ?? '0');
   const fromSeq = Number.isFinite(requestedFromSeq) && requestedFromSeq >= 0
     ? Math.floor(requestedFromSeq)
     : 0;
+
+  // ONE teardown for both halves of this joiner's hold: the channel subscription, and — when
+  // the channel is a follower's — this reader's reference to it. Splitting them was the obvious
+  // shape and the wrong one: every path that unsubscribed would have had to remember the
+  // release too, and the one that forgot would keep a poller running against Postgres for a
+  // reader that had already gone.
+  let unsubscribeChannel: (() => void) | null = null;
+  let detached = false;
+  const detach = (): void => {
+    if (detached) return;
+    detached = true;
+    unsubscribeChannel?.();
+    releaseRemote();
+  };
 
   const unsubscribe = channel.subscribe({
     fromSeq,
@@ -163,9 +184,18 @@ export async function GET(
       // An `overflow` end means the cursor names a frame the ring no longer holds. Say so with
       // the seq that IS available rather than quietly serving a later prefix — the client can
       // then reseed deliberately instead of rendering a gap it cannot see.
+      //
+      // A `truncated` end is the OTHER thing, and they must not be conflated: it says there is
+      // no resume point at all — the durable log was released or holds a hole — so the only
+      // correct answer is `reload`, which the client turns into a read of the durably-persisted
+      // message. Sending a bare `done` there would leave a short reply on screen looking whole.
       const done = end.reason === 'overflow'
         ? encoder.encode(`data: ${JSON.stringify({ done: true, resumeFromSeq: end.resumeFromSeq })}\n\n`)
-        : encodeDoneFrame(end.aborted);
+        : encoder.encode(`data: ${JSON.stringify(
+          end.truncated === true
+            ? { done: true, aborted: end.aborted, reload: true }
+            : { done: true, aborted: end.aborted },
+        )}\n\n`);
       if (streamController) {
         streamController.enqueue(done);
         streamController.close();
@@ -173,22 +203,35 @@ export async function GET(
         preBuffer.push(done);
       }
       streamClosed = true;
+      detach();
     },
   });
+  unsubscribeChannel = unsubscribe;
 
   // finish() deletes entries before notifying subscribers, so subscribe() returns
   // null for both unknown and already-finished streams.
   if (unsubscribe === null) {
+    detach();
     return NextResponse.json({ error: 'Stream not found' }, { status: 404 });
   }
 
-  auditRequest(request, {
-    eventType: 'authz.access.granted',
-    resourceType: 'ai_stream',
-    resourceId: messageId,
-    details: { pageId: meta.pageId },
-    riskScore: 0,
-  });
+  // The success-path audit is synchronous up to its DB write (the async write is caught
+  // inside `audit` itself), and it is the last statement that can fail while BOTH holds are
+  // live — the subscription above and, for a followed stream, this reader's reference to
+  // the follower. An error propagating from here would strand both until the follower's
+  // eviction backstop, so release them first and let it fly.
+  try {
+    auditRequest(request, {
+      eventType: 'authz.access.granted',
+      resourceType: 'ai_stream',
+      resourceId: messageId,
+      details: { pageId: meta.pageId },
+      riskScore: 0,
+    });
+  } catch (error) {
+    detach();
+    throw error;
+  }
 
   const stream = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -202,7 +245,7 @@ export async function GET(
       }
       if (request.signal.aborted) {
         streamClosed = true;
-        unsubscribe();
+        detach();
         controller.close();
         return;
       }
@@ -211,14 +254,14 @@ export async function GET(
         streamClosed = true;
         clearRecheckTimeout();
         clearPingInterval();
-        unsubscribe();
+        detach();
         controller.close();
       }, { once: true });
 
       const closeStreamAsDenied = (reason: string) => {
         streamClosed = true;
         clearPingInterval();
-        unsubscribe();
+        detach();
         auditRequest(request, {
           eventType: 'authz.access.denied',
           resourceType: 'ai_stream',
@@ -283,6 +326,11 @@ export async function GET(
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache',
       'X-Accel-Buffering': 'no',
+      // WHERE THE FRAMES CAME FROM. An N=2 smoke test has no other way to PROVE it exercised
+      // the follower rather than getting lucky with the load balancer, and in production the
+      // remote share should sit near (N-1)/N — a free check that traffic is actually spread and
+      // that cross-instance joins are being served rather than silently falling back to polling.
+      'X-Stream-Join-Source': joinSource,
     },
   });
 }

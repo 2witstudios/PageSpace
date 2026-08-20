@@ -50,7 +50,7 @@ describe('consumeStreamJoin', () => {
     const result = await consumeStreamJoin('m1', new AbortController().signal,
       (parts, seq) => seen.push({ parts, seq }));
 
-    expect(result).toEqual({ aborted: false, resumeFromSeq: undefined });
+    expect(result).toEqual({ aborted: false, resumeFromSeq: undefined, reload: false });
     // The caller gets the FULL folded array each time, not a delta — so it writes with
     // replace semantics and there is no skip count to get wrong.
     expect(seen.at(-1)).toEqual({ parts: [textPart('hello world')], seq: 2 });

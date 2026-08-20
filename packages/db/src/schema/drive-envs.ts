@@ -161,9 +161,10 @@ export const driveEnvs = pgTable('drive_envs', {
 
   /**
    * The same "still believed live" slice the session table indexes, scanned by
-   * the same crons (`sandbox-storage-billing.ts`,
-   * `workspace-orphan-reconcile-runtime.ts`) once envs are folded into their
-   * row sources. Partial, because never-provisioned envs are permanently
+   * the same crons. `sandbox-storage-billing.ts` reads it today — its
+   * `listDriveEnvSprites` row source is this predicate, literally;
+   * `workspace-orphan-reconcile-runtime.ts` joins when envs are folded into it
+   * too. Partial, because never-provisioned envs are permanently
    * outside the predicate and would otherwise be scanned forever.
    */
   liveSpriteIdx: index('drive_envs_live_sprite_idx')
