@@ -794,8 +794,12 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
   // Create new task (with optional status for kanban).
-  // `listPageId` defaults to the viewed list; nested "+ sub-task" rows pass their
-  // own task's page so the task is created under that task, not at the root.
+  //
+  // Root-level only, despite taking a listPageId: the nested "+ sub-task" rows
+  // POST directly (NewSubTaskRow) so they can patch their own cache. That is
+  // what makes the refreshSelfTask() below correct — every task created here is
+  // a child of the viewed page. Wire a nested caller through this and that stops
+  // being true.
   const handleCreateTask = async (listPageId: string, title?: string, status?: string) => {
     const taskTitle = (title ?? newTaskTitle).trim();
     if (!taskTitle || !canEdit) return;

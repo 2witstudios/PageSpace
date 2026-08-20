@@ -218,6 +218,13 @@ describe('sub-list status vocabulary inheritance', () => {
     // callers therefore create two rows. That race predates this branch and
     // fixing it needs a migration; what matters here is that whatever commits
     // is complete and correctly seeded, never a phantom.
+    //
+    // A consequence worth stating plainly: because the two callers seed two
+    // DIFFERENT list ids, their config inserts do not actually collide, so this
+    // test is an end-state assertion and NOT a regression guard for the ON
+    // CONFLICT clause — reverting to a catch would very likely leave it green.
+    // The next test, where both repairs target one existing list, is the one
+    // that collides and the one that goes red.
     if (!dbAvailable) return;
     const { taskPage } = await seedCustomisedTree();
 

@@ -148,6 +148,36 @@ describe('useSelfTask', () => {
     });
   });
 
+  it('refreshes when another writer flushes a foreign echo', async () => {
+    // The header's key is its own cache. The machinery's revalidation covers the
+    // list, not this — so without registering a refresher, a concurrent edit to
+    // this task made while some other write was in flight never reaches it.
+    // That registration is now the ONLY path, since the direct fallback went.
+    fetchWithAuth.mockResolvedValue(response());
+    const view = setup();
+    await waitFor(() => expect(view.result.current.self.isAvailable).toBe(true));
+    const before = fetchWithAuth.mock.calls.length;
+
+    // Some other writer opens a write; a foreign echo lands mid-flight.
+    const writeId = view.result.current.machinery.noteSelfWriteStart('other-task');
+    view.result.current.machinery.shouldRevalidateForEvent({
+      taskId: 'other-task', userId: 'user-me', data: { updatedAt: 'not-ours' },
+    });
+    // ...and that writer settles, performing the flush.
+    await act(async () => {
+      view.result.current.machinery.noteSelfWriteSettled(writeId, 'their-stamp');
+      view.result.current.machinery.flushDeferredRevalidate();
+    });
+
+    await waitFor(() => expect(fetchWithAuth.mock.calls.length).toBeGreaterThan(before));
+    assert({
+      given: 'a foreign echo flushed by a different writer',
+      should: "re-read the header's own key",
+      actual: fetchWithAuth.mock.calls.length > before,
+      expected: true,
+    });
+  });
+
   it('reports nothing for a page that is not a task', async () => {
     fetchWithAuth.mockResolvedValue({
       ok: true,

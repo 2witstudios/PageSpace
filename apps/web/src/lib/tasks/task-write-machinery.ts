@@ -59,8 +59,13 @@ export interface TaskWriteMachinery {
    *
    * The queue is view-wide but each writer owns a different cache, and only one
    * writer's `finally` performs the flush — so a per-writer callback would miss
-   * every other cache. Whoever flushes refreshes them all. Returns an
-   * unregister function.
+   * every other cache. Whoever flushes refreshes them all.
+   *
+   * That fan-out is the cost of not knowing WHICH cache the echo belonged to:
+   * one such flush refreshes every expanded node, not one. It is bounded by how
+   * many nodes are open and only happens when an echo arrived mid-write and
+   * then failed to match any write this tab made. Returns an unregister
+   * function.
    */
   registerCacheRefresher: (refresh: () => void) => () => void;
   /**
@@ -109,6 +114,13 @@ export function useTaskWriteMachinery(
    * every click into a full revalidation.
    */
   const deferredEchoesRef = useRef<InboundTaskEvent[]>([]);
+  /**
+   * Set when the queue overflowed, because the cap drops the OLDEST events —
+   * and the one foreign echo the flush is looking for may be exactly that one.
+   * Forgetting it would turn "someone else edited this" into silence, so an
+   * overflow counts as unaccounted-for on its own.
+   */
+  const deferredOverflowRef = useRef(false);
   const nextWriteIdRef = useRef(0);
   const cacheRefreshersRef = useRef(new Set<() => void>());
 
@@ -142,17 +154,23 @@ export function useTaskWriteMachinery(
     if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return;
 
     const queued = deferredEchoesRef.current;
+    const overflowed = deferredOverflowRef.current;
     deferredEchoesRef.current = [];
+    deferredOverflowRef.current = false;
     // Re-ask, now that the stamps are known. An echo that turns out to have
     // been ours needs nothing; only one still unaccounted for is a real
     // concurrent edit worth refetching for.
-    if (!deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now)) {
-      return;
-    }
+    const unaccountedFor = overflowed
+      || deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now);
+    if (!unaccountedFor) return;
     revalidateAll();
     // Every open node's cache, not just the writer that happened to flush:
-    // the echo could have belonged to any of them.
-    for (const refresh of cacheRefreshersRef.current) refresh();
+    // the echo could have belonged to any of them. Guarded individually — this
+    // runs from a `finally`, so one throwing refresher would otherwise skip the
+    // rest and replace writeTaskField's result with a rejection.
+    for (const refresh of cacheRefreshersRef.current) {
+      try { refresh(); } catch { /* one stale cache must not block the others */ }
+    }
   }, [revalidateAll, currentUserId]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
@@ -163,8 +181,9 @@ export function useTaskWriteMachinery(
       // Queue the event and ask again once our write has a stamp to compare.
       // Bounded like the write log: a write that never settles (a hung fetch)
       // means nothing drains this, and a chatty room would grow it without end.
-      deferredEchoesRef.current =
-        [...deferredEchoesRef.current, event].slice(-MAX_DEFERRED_ECHOES);
+      const next = [...deferredEchoesRef.current, event];
+      if (next.length > MAX_DEFERRED_ECHOES) deferredOverflowRef.current = true;
+      deferredEchoesRef.current = next.slice(-MAX_DEFERRED_ECHOES);
       return false;
     }
     return true;

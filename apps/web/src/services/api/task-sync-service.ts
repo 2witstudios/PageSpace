@@ -286,16 +286,62 @@ async function normalizeStatusForList(
  * migrateToSlug) gets its own first todo-group slug instead, so the seed can never be a
  * status its own list does not define.
  */
+export async function resolveSeedStatus(
+  tx: Tx,
+  taskListId: string,
+  cache?: SeedCache,
+): Promise<string> {
+  const cached = cache?.get(taskListId)
+  if (cached !== undefined) return cached.slug
+  const slug = await resolveSeedStatusUncached(tx, taskListId)
+  cache?.set(taskListId, { slug })
+  return slug
+}
+
 /**
- * Should a task created with this resolved status be stamped complete?
+ * The seed a whole backfill loop shares.
  *
- * `resolveSeedStatus` falls back to the list's first config by position, and on
- * a vocabulary with no open status that is a done-group slug. A row carrying a
- * done status with a null `completedAt` reads as complete to isCompletedStatus
- * while the parent's `subTaskCompletedCount` — which counts
- * `completedAt IS NOT NULL` — does not count it, so the two disagree.
+ * The loop's parent — and therefore its list, its vocabulary and the seed
+ * derived from them — is fixed, so both queries behind a seed are worth
+ * resolving once for the run rather than per missing row on a read path. The
+ * `completedAt` field is absent until something asks for it, so a caller that
+ * only needs the slug never pays for the second lookup.
+ */
+export type SeedCache = Map<string, { slug: string; completedAt?: Date | null }>
+
+/**
+ * Should a task seeded with this status be stamped complete?
+ *
+ * `resolveSeedStatus` falls back to the list's first config by position, and a
+ * vocabulary whose statuses were all regrouped to `done` (permitted — the
+ * statuses PUT validates each group but never requires one per group) makes
+ * that a done slug. A row carrying a done status with a null `completedAt`
+ * reads as complete to `isCompletedStatus` while every counter that asks the
+ * database — `subTaskCompletedCount`, the header's own guard — counts
+ * `completedAt IS NOT NULL` and does not see it. The row then looks finished
+ * and blocks its parent at the same time.
+ *
+ * Every path that seeds a task goes through here, not just POST: the self-heal
+ * backfill on an ordinary read, page creation, and re-parenting all create rows
+ * the same way, and a rule applied to one of them is a divergence rather than a
+ * fix.
  */
 export async function resolveSeedCompletedAt(
+  tx: Tx,
+  taskListId: string,
+  seedStatus: string,
+  cache?: SeedCache,
+): Promise<Date | null> {
+  const cached = cache?.get(taskListId)
+  // Only reusable when it is the SAME status: the cache is keyed by list, and a
+  // caller passing an explicit status can hand us a different one.
+  if (cached?.slug === seedStatus && cached.completedAt !== undefined) return cached.completedAt
+  const resolved = await resolveSeedCompletedAtUncached(tx, taskListId, seedStatus)
+  if (cached?.slug === seedStatus) cache?.set(taskListId, { ...cached, completedAt: resolved })
+  return resolved
+}
+
+async function resolveSeedCompletedAtUncached(
   tx: Tx,
   taskListId: string,
   seedStatus: string,
@@ -305,23 +351,12 @@ export async function resolveSeedCompletedAt(
       eq(taskStatusConfigs.taskListId, taskListId),
       eq(taskStatusConfigs.slug, seedStatus),
     ),
+    columns: { group: true },
   })
-  if (config) return config.group === 'done' ? new Date() : null
-  // No configs at all: the built-in vocabulary applies, where only 'completed'
-  // is done.
-  return seedStatus === 'completed' ? new Date() : null
-}
-
-export async function resolveSeedStatus(
-  tx: Tx,
-  taskListId: string,
-  cache?: Map<string, string>,
-): Promise<string> {
-  const cached = cache?.get(taskListId)
-  if (cached !== undefined) return cached
-  const resolved = await resolveSeedStatusUncached(tx, taskListId)
-  cache?.set(taskListId, resolved)
-  return resolved
+  // No config for the slug means the list has no custom vocabulary, where the
+  // built-in rule is that only 'completed' is done.
+  if (!config) return seedStatus === 'completed' ? new Date() : null
+  return config.group === 'done' ? new Date() : null
 }
 
 async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<string> {
@@ -597,7 +632,7 @@ async function addTaskItemUnderParent(
     parentId: string;
     userId: string;
     /** Shared across a backfill loop: the parent is fixed, so the seed is too. */
-    seedStatusCache?: Map<string, string>;
+    seedStatusCache?: SeedCache;
   },
 ): Promise<void> {
   const { pageId, parentId, userId, seedStatusCache } = params
@@ -615,11 +650,16 @@ async function addTaskItemUnderParent(
   // ON CONFLICT DO NOTHING guards the self-heal race: concurrent GETs on a legacy list
   // can both pass the findFirst check above, and task_items.pageId is unique — without
   // this a second insert would 500 the read. The findFirst stays as a cheap fast path.
+  const seedStatus = await resolveSeedStatus(tx, taskList.id, seedStatusCache)
   await tx.insert(taskItems).values(
     buildTaskItemInsert({
       pageId,
       userId,
-      status: await resolveSeedStatus(tx, taskList.id, seedStatusCache),
+      status: seedStatus,
+      // Same rule POST applies. Without it the self-heal backfill — which runs
+      // on every list read — and page creation write a done-group status with a
+      // null completedAt, which no counter can see.
+      completedAt: await resolveSeedCompletedAt(tx, taskList.id, seedStatus, seedStatusCache),
     }),
   ).onConflictDoNothing({ target: taskItems.pageId })
 }
@@ -716,7 +756,7 @@ export async function backfillMissingTaskItems(
   await database.transaction(async (tx) => {
     // parentId is fixed for the whole loop, so its seed status is resolved once
     // rather than re-queried for every missing row on this hot read path.
-    const seedStatusCache = new Map<string, string>()
+    const seedStatusCache: SeedCache = new Map()
     for (const pageId of missing) {
       await addTaskItemUnderParent(tx, { pageId, parentId, userId, seedStatusCache })
     }

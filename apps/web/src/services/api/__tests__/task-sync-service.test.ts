@@ -45,6 +45,9 @@ import {
   ensureTaskItemForPage,
   ensureTaskListForPage,
   seedDefaultTaskStatusConfigs,
+  resolveSeedCompletedAt,
+  resolveSeedStatus,
+  type SeedCache,
   syncTaskItemOnMove,
   backfillMissingTaskItems,
   scrubDriveScopedTaskAssociations,
@@ -257,6 +260,77 @@ describe('seedDefaultTaskStatusConfigs', () => {
   });
 });
 
+describe('resolveSeedCompletedAt', () => {
+  // A done-group status with a null completedAt reads as complete to the UI
+  // while every count that asks the database (`completedAt IS NOT NULL`) says
+  // otherwise — the row looks finished AND blocks its parent.
+  const txWithConfig = (group?: 'todo' | 'in_progress' | 'done') => ({
+    query: {
+      taskStatusConfigs: {
+        findFirst: vi.fn().mockResolvedValue(group ? { group } : undefined),
+      },
+    },
+  });
+
+  it('stamps a done-group slug', async () => {
+    assert({
+      given: 'a seed status the list defines as done',
+      should: 'be stamped complete',
+      actual: (await resolveSeedCompletedAt(txWithConfig('done') as never, 'l', 'shipped')) instanceof Date,
+      expected: true,
+    });
+  });
+
+  it('leaves an open slug unstamped', async () => {
+    assert({
+      given: 'a seed status in the todo group',
+      should: 'not be stamped',
+      actual: await resolveSeedCompletedAt(txWithConfig('todo') as never, 'l', 'icebox'),
+      expected: null,
+    });
+  });
+
+  it('resolves once per list when a backfill loop shares a cache', async () => {
+    const tx = txWithConfig('done');
+    const cache: SeedCache = new Map();
+    const seed = await resolveSeedStatus(tx as never, 'l', cache);
+    await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
+    await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
+    assert({
+      given: 'the same list and seed status twice, through a shared cache',
+      // resolveSeedStatus took the first probe; the second call must not add one.
+      should: 'query the vocabulary once for the completion rule',
+      actual: tx.query.taskStatusConfigs.findFirst.mock.calls.length,
+      expected: 2,
+    });
+  });
+
+  it('does not reuse a cached answer for a different status', async () => {
+    // POST passes an explicit status, which the cached slug did not come from.
+    const tx = txWithConfig('done');
+    const cache: SeedCache = new Map([['l', { slug: 'shipped', completedAt: new Date() }]]);
+    assert({
+      given: 'a cache holding the completion answer for a DIFFERENT slug',
+      should: 'ask the database rather than reuse it',
+      actual: (await resolveSeedCompletedAt(tx as never, 'l', 'icebox', cache)) instanceof Date
+        && tx.query.taskStatusConfigs.findFirst.mock.calls.length === 1,
+      expected: true,
+    });
+  });
+
+  it("falls back to the built-in rule when the list has no vocabulary", async () => {
+    assert({
+      given: 'no config for the slug, on a list with no custom statuses',
+      should: "stamp only the built-in 'completed'",
+      actual: [
+        (await resolveSeedCompletedAt(txWithConfig() as never, 'l', 'completed')) instanceof Date,
+        await resolveSeedCompletedAt(txWithConfig() as never, 'l', 'pending'),
+      ],
+      expected: [true, null],
+    });
+  });
+});
+
 describe('ensureTaskListForPage', () => {
   it('is a no-op when a task_lists row already exists for the page', async () => {
     const { tx, taskListInserts, taskStatusConfigInserts } = makeTx({ existingTaskList: true });
@@ -318,8 +392,24 @@ describe('ensureTaskItemForPage', () => {
     await ensureTaskItemForPage(tx as never, { pageId: 'list', pageType: 'TASK_LIST', parentId: 'parent', userId: 'u' });
     // No position: task order lives on the linked page's pages.position (#2143).
     expect(taskItemInserts).toEqual([
-      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium' },
+      { userId: 'u', pageId: 'list', status: 'pending', priority: 'medium', completedAt: null },
     ]);
+  });
+
+  it('stamps completedAt when the seed status the list forces is a done one', async () => {
+    // Not hypothetical: the statuses PUT validates each group but never requires
+    // one per group, so a list CAN end up all-done, and resolveSeedStatus then
+    // has nothing but a done slug to fall back to. Every seeding path has to
+    // apply the same rule as POST or the row reads complete to the client while
+    // every `completedAt IS NOT NULL` counter says it is not.
+    const { tx, taskItemInserts } = makeTx({
+      pageTypes: { parent: 'TASK_LIST' },
+      destinationStatusConfigs: [{ slug: 'shipped', group: 'done', position: 0 }],
+    });
+    await ensureTaskItemForPage(tx as never, { pageId: 'list', pageType: 'TASK_LIST', parentId: 'parent', userId: 'u' });
+    expect(taskItemInserts).toHaveLength(1);
+    expect(taskItemInserts[0]).toMatchObject({ status: 'shipped' });
+    expect(taskItemInserts[0].completedAt).toBeInstanceOf(Date);
   });
 
   it('is idempotent — skips insert when the row already exists', async () => {

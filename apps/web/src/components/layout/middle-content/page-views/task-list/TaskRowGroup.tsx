@@ -434,19 +434,22 @@ function NewSubTaskRow({
   const [busy, setBusy] = useState(false);
 
   /**
-   * Registered for the SUBMIT window only, deliberately not per keystroke.
+   * Registered while a title is pending or a create is in flight.
    *
-   * The usual reason to register — SWR clobbering the editor — does not apply
-   * here: `title` is local state, not derived from any cache, and the sub-task
-   * cache this row lives in has every revalidation trigger switched off
-   * (useTaskSubTasks), so there is no background refresh to lose it to.
+   * Not for the usual reason. SWR cannot clobber `title` — it is local state,
+   * and this row's own cache (useTaskSubTasks) has every revalidation trigger
+   * switched off. The real loss mode is a REMOUNT: this component only exists
+   * while its ancestor row is rendered and expanded, so a ROOT-list
+   * revalidation — a socket task_added/task_deleted, the 5-minute interval, a
+   * filter change — that re-paginates or removes that ancestor unmounts the
+   * whole subtree and takes the half-typed title with it. `isAnyEditing` pauses
+   * exactly that revalidation, which is why the registration has to start at
+   * the first character and not at submit.
    *
-   * What registering DOES do is global: `isAnyEditing` pauses the root list's
-   * SWR, disables its "Load More" with "Finish editing to load more", and
-   * defers auth refresh — for every other surface too. Holding that from the
-   * first typed character, on a box three rows down, costs more than it
-   * protects. The in-flight create is worth covering, because an auth refresh
-   * landing mid-request is a real way to lose it, and that window is short.
+   * It is not free: the same flag disables the root list's "Load More" with
+   * "Finish editing to load more" and defers auth refresh. That is the standing
+   * trade this app already makes for every other editor, and losing typed text
+   * is the worse outcome.
    *
    * The id is per-instance: several of these exist at once, one per expanded
    * node, and a shared key would have the first to finish end them all.
@@ -454,7 +457,7 @@ function NewSubTaskRow({
   const instanceId = useId();
   useEditingSession(
     `new-subtask-${listPageId}-${instanceId}`,
-    busy,
+    title.trim().length > 0 || busy,
     'form',
     { componentName: 'NewSubTaskRow', pageId: listPageId },
   );

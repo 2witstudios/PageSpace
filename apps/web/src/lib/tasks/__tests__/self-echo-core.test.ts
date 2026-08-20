@@ -58,19 +58,19 @@ describe('startSelfWrite / settleSelfWrite', () => {
     });
   });
 
-  it('keeps a stamped record when the same write settles again as a failure', () => {
-    // A write settles twice: stamped inside the cache updater, then again from
-    // the catch if anything AFTER the PATCH rejects. Dropping it on that second
-    // call would leave a write that really reached the server unrecognisable,
-    // so its own echo would read as foreign and cost a full revalidation.
+  it('forgets a write settled as failed, even one already stamped', () => {
+    // Settling twice means the cache write threw AFTER the server accepted it,
+    // so rollbackOnError has reverted the row. The server's echo carries the
+    // committed state and is what repairs the display — keeping the stamp would
+    // suppress it as "ours" and leave the stale value on screen.
     let log = startSelfWrite([], { writeId: 1, taskId: 'task-1', at: NOW }, NOW);
     log = settleSelfWrite(log, 1, STAMP, NOW);
     log = settleSelfWrite(log, 1, null, NOW);
     assert({
       given: 'a stamped write settled a second time as failed',
-      should: 'keep the stamp so its echo is still recognised',
-      actual: log.map((r) => [r.writeId, r.updatedAt]),
-      expected: [[1, STAMP]],
+      should: 'forget it, so the echo carrying the committed state still lands',
+      actual: log.length,
+      expected: 0,
     });
   });
 

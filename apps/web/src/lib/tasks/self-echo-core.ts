@@ -70,9 +70,16 @@ export const startSelfWrite = (
  * Resolve one write by its own id.
  *
  * A successful write keeps its record, now stamped, so the echo it will produce
- * can be recognised. A failed one is removed outright: leaving an unresolved
- * record would make every later event for that task read as our own echo for
- * the rest of the TTL.
+ * can be recognised. A failed one is removed: leaving its record behind would
+ * make every later event for that task read as our own echo for the rest of the
+ * TTL.
+ *
+ * Removal is unconditional, including for a write that had already been stamped
+ * — a settle-as-failed after a settle-as-succeeded means the cache write threw
+ * AFTER the server accepted it, and `rollbackOnError` has just reverted the row
+ * to its pre-write value. The server's echo carries the committed state, so it
+ * is the thing that repairs the display: suppressing it as "ours" would leave
+ * the stale value on screen until the next focus revalidation.
  */
 export const settleSelfWrite = (
   records: readonly SelfWrite[],
@@ -84,12 +91,7 @@ export const settleSelfWrite = (
   if (updatedAt !== null) {
     return pruned.map((r) => (r.writeId === writeId ? { ...r, updatedAt } : r));
   }
-  // Only an UNRESOLVED record is dropped. A write can settle twice — stamped
-  // inside the cache updater, then again from the catch if anything after the
-  // PATCH rejects — and erasing the stamp there would leave a write that really
-  // reached the server unrecognisable, so its own echo would read as foreign
-  // and cost a full revalidation.
-  return pruned.filter((r) => !(r.writeId === writeId && r.updatedAt === null));
+  return pruned.filter((r) => r.writeId !== writeId);
 };
 
 /**
