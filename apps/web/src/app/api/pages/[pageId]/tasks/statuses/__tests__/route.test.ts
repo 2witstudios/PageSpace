@@ -45,10 +45,34 @@ const createTxMock = () => {
   const txInsertValues = vi.fn(() => ({ returning: txInsertReturning }));
   const txDeleteWhere = vi.fn().mockResolvedValue(undefined);
 
+  // Lazy init now INHERITS its vocabulary rather than seeding the built-ins, so
+  // the transaction also walks the page tree, reads the ancestor's configs and
+  // conforms any rows already in the list. With no resolvable parent here the
+  // walk ends immediately and the seed falls back to DEFAULT_TASK_STATUSES,
+  // which is what these fixtures assume.
+  const chain: Record<string, unknown> = {
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve([]).then(resolve),
+  };
+  chain.from = () => chain; chain.where = () => chain; chain.innerJoin = () => chain;
+  chain.orderBy = () => chain; chain.limit = () => chain;
+
   return {
     update: vi.fn(() => ({ set: txUpdateSet })),
-    insert: vi.fn(() => ({ values: txInsertValues })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        ...txInsertValues(),
+        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      })),
+    })),
     delete: vi.fn(() => ({ where: txDeleteWhere })),
+    select: vi.fn(() => chain),
+    query: {
+      taskLists: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      taskStatusConfigs: {
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    },
   };
 };
 
@@ -99,6 +123,11 @@ vi.mock('@pagespace/db/operators', () => ({
   asc: vi.fn((col) => ({ type: 'asc', col })),
   desc: vi.fn((col) => ({ type: 'desc', col })),
   inArray: vi.fn((col, vals) => ({ col, vals })),
+  // The inherit path's walk and the conform sweep.
+  ne: vi.fn((a, b) => ({ field: a, value: b })),
+  notInArray: vi.fn((col, vals) => ({ col, vals })),
+  isNull: vi.fn((col) => ({ col })),
+  isNotNull: vi.fn((col) => ({ col })),
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: {},

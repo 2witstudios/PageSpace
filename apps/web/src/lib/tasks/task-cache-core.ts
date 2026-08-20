@@ -191,18 +191,35 @@ export const removeTaskFromPages = (
  * Which slug a completion toggle should land on, given a list's vocabulary.
  *
  * Extracted from TaskListView's toggle handler so the header self-complete
- * control and nested rows resolve it identically. The 'completed' / 'pending'
- * fallbacks match the PATCH route's own behaviour for lists with no custom
- * configs.
+ * control and nested rows resolve it identically.
+ *
+ * The 'completed' / 'pending' literals are used ONLY for a list with no configs
+ * at all, where they are what the PATCH route itself assumes. With any configs,
+ * falling back to a literal sends a slug the list does not define and PATCH
+ * answers 400 — the checkbox paints, reverts, and toasts. That is reachable
+ * without anything exotic: the statuses PUT lets a list regroup its only todo
+ * status, and then reopening a task had nothing in the todo group to find.
+ *
+ * So the fallbacks stay inside the vocabulary, and they are the same ones the
+ * server applies when it has to move a row across the same boundary (see
+ * resolveVocabularyPicks in task-sync-service): for the open side, the first
+ * todo, else the first non-done, else the first; for the done side, the first
+ * done, else the last. Where a list genuinely has no status on the side asked
+ * for, the result is a slug on the wrong side — which is the same compromise
+ * the server makes, and far better than a 400 the user cannot act on.
  */
 export const resolveToggleStatus = (
   configs: readonly TaskStatusConfig[],
   isCurrentlyDone: boolean,
 ): string => {
-  const wantedGroup = isCurrentlyDone ? 'todo' : 'done';
-  const fallback = isCurrentlyDone ? 'pending' : 'completed';
+  if (configs.length === 0) return isCurrentlyDone ? 'pending' : 'completed';
   const ordered = [...configs].sort((a, b) => a.position - b.position);
-  return ordered.find((c) => c.group === wantedGroup)?.slug ?? fallback;
+  if (isCurrentlyDone) {
+    return (ordered.find((c) => c.group === 'todo')
+      ?? ordered.find((c) => c.group !== 'done')
+      ?? ordered[0]).slug;
+  }
+  return (ordered.find((c) => c.group === 'done') ?? ordered[ordered.length - 1]).slug;
 };
 
 /**

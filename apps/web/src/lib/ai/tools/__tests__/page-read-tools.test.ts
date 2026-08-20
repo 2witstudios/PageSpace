@@ -1586,9 +1586,19 @@ describe('page-read-tools', () => {
 
         assert({
           given: 'a read that repaired the vocabulary on its way through',
-          should: 'return the seeded slugs rather than the built-in fallback',
-          actual: result.availableStatuses?.map(s => s.slug),
-          expected: ['icebox', 'shipped'],
+          should: 'return the seeded slugs AND re-read the rows the repair moved',
+          // Both halves, because the repair writes twice. Re-reading only the
+          // vocabulary reports statuses beside rows the sweep has already moved
+          // off — naming slugs the same response says do not exist, which is the
+          // pairing this block exists to prevent.
+          actual: {
+            statuses: result.availableStatuses?.map(s => s.slug),
+            // The task read specifically — this route selects several other
+            // shapes, so a bare call count is already >1 without the re-read.
+            taskReads: (mockDb.select as ReturnType<typeof vi.fn>).mock.calls
+              .filter((c) => !!c[0] && 'completedAt' in (c[0] as Record<string, unknown>)).length,
+          },
+          expected: { statuses: ['icebox', 'shipped'], taskReads: 2 },
         });
       });
 

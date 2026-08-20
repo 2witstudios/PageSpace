@@ -4,6 +4,7 @@ import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
 import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -126,13 +127,13 @@ export async function POST(
         status: 'pending',
       }).returning();
 
-      // Create default status configs
-      await tx.insert(taskStatusConfigs).values(
-        DEFAULT_TASK_STATUSES.map(s => ({
-          taskListId: created.id,
-          ...s,
-        }))
-      );
+      // Inherit, not defaults. This is a lazy-init like every other, and the
+      // vocabulary is decided permanently by whichever path touches the page
+      // first — so a sub-list whose statuses are opened here before anyone
+      // reads it would otherwise be stamped with the four built-ins while its
+      // ancestor defines its own, and every later PATCH against an inherited
+      // slug 400s.
+      await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
 
       return created;
     });

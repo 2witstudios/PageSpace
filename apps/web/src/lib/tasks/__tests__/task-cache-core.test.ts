@@ -309,21 +309,32 @@ describe('resolveToggleStatus', () => {
     });
   });
 
-  it('falls back to completed when no done group exists', () => {
+  it('stays inside the vocabulary when the side asked for is missing', () => {
+    // The literals are only right for a list with NO configs. With configs,
+    // answering 'completed' or 'pending' sends a slug the list does not define
+    // and PATCH returns 400 — the checkbox paints, reverts and toasts. And this
+    // is reachable without anything exotic: the statuses PUT lets a list regroup
+    // its only todo status, and reopening then has nothing in that group.
     assert({
-      given: 'a vocabulary with no done-group status',
-      should: 'fall back to the built-in completed slug',
-      actual: resolveToggleStatus([config('backlog', 'todo', 0)], false),
-      expected: 'completed',
+      given: 'a vocabulary with no done group, and one with no todo group',
+      should: 'answer with a slug the list actually defines, on the nearest side',
+      actual: [
+        resolveToggleStatus([config('backlog', 'todo', 0), config('doing', 'in_progress', 1)], false),
+        resolveToggleStatus([config('shipped', 'done', 0)], true),
+      ],
+      // Completing with no done group lands on the LAST status; reopening with
+      // nothing open lands on the first. Both are the same compromise the server
+      // makes when it moves a row across that boundary.
+      expected: ['doing', 'shipped'],
     });
   });
 
-  it('falls back to pending when no todo group exists', () => {
+  it('uses the built-in literals only for a list with no configs at all', () => {
     assert({
-      given: 'a vocabulary with no todo-group status',
-      should: 'fall back to the built-in pending slug',
-      actual: resolveToggleStatus([config('shipped', 'done', 0)], true),
-      expected: 'pending',
+      given: 'an empty vocabulary, which is what the PATCH route itself assumes',
+      should: 'answer completed and pending',
+      actual: [resolveToggleStatus([], false), resolveToggleStatus([], true)],
+      expected: ['completed', 'pending'],
     });
   });
 

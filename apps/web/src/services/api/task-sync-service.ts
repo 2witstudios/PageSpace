@@ -488,8 +488,17 @@ async function resolveSeedStatusUncached(tx: Tx, taskListId: string): Promise<st
       eq(taskStatusConfigs.taskListId, taskListId),
       eq(taskStatusConfigs.slug, defaultSlug),
     ),
+    columns: { group: true },
   })
-  if (hasDefault) return defaultSlug
+  // Defined is not enough — it has to still MEAN "not started". The statuses PUT
+  // lets a list regroup 'pending' into the done group and validates only that the
+  // group is one of the three literals, so a list can define 'pending' as a DONE
+  // status. Seeding it there hands the new task a done slug, and
+  // resolveSeedCompletedAt then stamps it: the task is created already finished,
+  // counted in its parent's completed total, satisfying the completion guard, and
+  // with its due-date trigger permanently disabled. The list usually has a
+  // perfectly good open status; fall through and find it.
+  if (hasDefault && hasDefault.group !== 'done') return defaultSlug
 
   // The open side of the vocabulary, read directly. Through a 200-row window this
   // could miss a list's only open status and hand back a DONE slug instead — and

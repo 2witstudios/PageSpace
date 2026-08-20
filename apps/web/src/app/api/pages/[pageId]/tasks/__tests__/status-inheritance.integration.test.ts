@@ -590,6 +590,88 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it("does not seed 'pending' when the list has regrouped it as done", async () => {
+    // The other door into born-complete, and the one that survived the window
+    // fix: the seed returns 'pending' whenever the list DEFINES it, without
+    // asking what it now means. The statuses PUT validates that a group is one
+    // of the three literals and nothing else, so a list can legally move its
+    // built-in "To Do" into the done group — and the new task is then created
+    // finished, counted in its parent's completed total, satisfying the
+    // completion guard, with its due-date trigger disabled.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [list] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values([
+      // 'pending' still exists, but it means DONE here.
+      { taskListId: list.id, slug: 'pending', name: 'Filed', color: 'x', group: 'done' as const, position: 0 },
+      { taskListId: list.id, slug: 'doing', name: 'Doing', color: 'x', group: 'todo' as const, position: 1 },
+      { taskListId: list.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 2 },
+    ]);
+
+    const created = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await ensureTaskItemForPage(db, {
+      pageId: created.id, pageType: 'TASK_LIST', parentId: listPage.id, userId: owner.id,
+    });
+
+    const [row] = await db.select({ status: taskItems.status, completedAt: taskItems.completedAt })
+      .from(taskItems).where(eq(taskItems.pageId, created.id)).limit(1);
+    assert({
+      given: "a list that defines 'pending' but has regrouped it into done",
+      should: 'seed the list\'s actual open status, and not stamp the task complete',
+      actual: { status: row?.status, bornComplete: row?.completedAt !== null },
+      expected: { status: 'doing', bornComplete: false },
+    });
+  });
+
+  it('stamps a POSTed task complete when the list can only seed a done status', async () => {
+    // The POST route's own seedCompletedAt, which nothing covered: deleting it
+    // entirely left all 78 tests in this directory green. A list whose whole
+    // vocabulary is done-group (permitted — the statuses PUT validates each
+    // group but never requires one per group) can only seed a done slug, and a
+    // done row with a null completedAt reads as complete to the client while
+    // every counter that asks the database counts `completedAt IS NOT NULL`.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [list] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values([
+      { taskListId: list.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 0 },
+      { taskListId: list.id, slug: 'filed', name: 'Filed', color: 'x', group: 'done' as const, position: 1 },
+    ]);
+
+    const res = await listTasksRoute.POST(
+      new Request(`http://localhost/api/pages/${listPage.id}/tasks`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ title: 'Fresh' }),
+      }),
+      { params: Promise.resolve({ pageId: listPage.id }) },
+    );
+    const body = await res.json();
+
+    assert({
+      given: 'a task POSTed to a list whose every status is done-group',
+      should: 'seed a done slug AND stamp completedAt, so the two agree',
+      actual: {
+        status: res.status,
+        slug: body?.status,
+        stamped: body?.completedAt !== null && body?.completedAt !== undefined,
+      },
+      expected: { status: 201, slug: 'shipped', stamped: true },
+    });
+  });
+
   it('inherits through more than one level', async () => {
     if (!dbAvailable) return;
     const { owner, drive, taskPage } = await seedCustomisedTree();

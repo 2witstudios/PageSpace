@@ -157,8 +157,15 @@ export const resolveNodeStatusConfigs = (
   if (rootConfigs.length === 0) return nodeConfigs;
   if (nodeConfigs.length === 0) return nodeConfigs;
   if (rootConfigs.length !== nodeConfigs.length) return nodeConfigs;
-  const nodeSlugs = new Set(nodeConfigs.map((c) => c.slug));
-  const sameVocabulary = rootConfigs.every((c) => nodeSlugs.has(c.slug));
+  // (slug, GROUP) pairs, not slugs. A legacy sub-list can define the same slugs
+  // with a different group — regrouping is an in-place edit the statuses PUT
+  // allows — and the group is what decides completion. Matching on slugs alone
+  // let the root's configs render a row whose own list calls that slug open
+  // while the root calls it done: the row draws struck and dimmed while the
+  // server-derived badge counts it open, and the delta this pushes to the parent
+  // moves in a direction the server never took.
+  const nodeGroups = new Map(nodeConfigs.map((c) => [c.slug, c.group]));
+  const sameVocabulary = rootConfigs.every((c) => nodeGroups.get(c.slug) === c.group);
   return sameVocabulary ? rootConfigs : nodeConfigs;
 };
 

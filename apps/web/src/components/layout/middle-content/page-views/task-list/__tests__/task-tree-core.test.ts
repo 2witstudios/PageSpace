@@ -249,6 +249,24 @@ describe('resolveNodeStatusConfigs', () => {
     });
   });
 });
+describe('resolveNodeStatusConfigs — a node that disagrees about a GROUP', () => {
+  it("uses the node's own configs when a shared slug sits in a different group", () => {
+    // Same slugs, same count — but the node still calls 'blocked' in-progress
+    // while the root has regrouped it as done. The group is what decides
+    // completion, and the server derives completedAt from the NODE's list, so
+    // rendering with the root's makes the row draw struck while the badge counts
+    // it open, and pushes a completion delta the server never took.
+    const root = [config('pending'), config('blocked', { group: 'done', position: 1 })];
+    const node = [config('pending'), config('blocked', { group: 'in_progress', position: 1 })];
+    assert({
+      given: 'the same slugs grouped differently',
+      should: "render with the node's own",
+      actual: resolveNodeStatusConfigs(root, node) === node,
+      expected: true,
+    });
+  });
+});
+
 describe('resolveNodeStatusConfigs — a node that defines MORE', () => {
   it("uses the node's own configs when the node has a slug the root does not", () => {
     // Reachable: open a sub-task's own page and add a status there, and it is

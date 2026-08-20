@@ -329,14 +329,16 @@ describe('resolveSeedCompletedAt', () => {
     const tx = txWithConfig('done');
     const cache: SeedCache = new Map();
     const seed = await resolveSeedStatus(tx as never, 'l', cache);
+    // Counted from HERE: resolveSeedStatus's own probes vary with the shape of
+    // the vocabulary, and this is about the completion rule, not the seed.
+    const afterSeed = tx.query.taskStatusConfigs.findFirst.mock.calls.length;
     await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
     await resolveSeedCompletedAt(tx as never, 'l', seed, cache);
     assert({
       given: 'the same list and seed status twice, through a shared cache',
-      // resolveSeedStatus took the first probe; the second call must not add one.
-      should: 'query the vocabulary once for the completion rule',
-      actual: tx.query.taskStatusConfigs.findFirst.mock.calls.length,
-      expected: 2,
+      should: 'query the vocabulary once for the completion rule, not twice',
+      actual: tx.query.taskStatusConfigs.findFirst.mock.calls.length - afterSeed,
+      expected: 1,
     });
   });
 

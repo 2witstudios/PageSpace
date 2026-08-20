@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, desc, isNull, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { taskLists, taskItems, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
+import { taskLists, taskItems, taskStatusConfigs } from '@pagespace/db/schema/tasks';
+import { seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import type { ToolExecutionContext } from '../core/types';
 import { broadcastTaskEvent, broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { canActorViewPage, canActorAccessDrive } from './actor-permissions';
@@ -784,9 +785,10 @@ Returns the created status config including its slug to use in update_task.`,
             title: page.title,
             status: 'pending',
           }).returning();
-          await tx.insert(taskStatusConfigs).values(
-            DEFAULT_TASK_STATUSES.map(s => ({ taskListId: created.id, ...s }))
-          );
+          // Inherit, not defaults — see the same call in the statuses route.
+          // Whichever path lazily initialises a sub-list decides its vocabulary
+          // permanently, so seeding the built-ins here would strand it.
+          await seedInheritedTaskStatusConfigs(tx, created.id, pageId);
           return created;
         });
       }
