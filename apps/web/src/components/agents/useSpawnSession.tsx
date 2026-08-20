@@ -161,7 +161,12 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // than tidy: `envs` is `[]` BOTH while the listing is in flight and when the
   // drive genuinely has none, so a step decision that reads only `.length`
   // cannot tell "no environments" from "not answered yet". See `step` below.
-  const { envs: paletteEnvs, isLoading: paletteEnvsLoading } = useDriveEnvs(spawnTarget?.driveId ?? null);
+  const {
+    envs: paletteEnvs,
+    isLoading: paletteEnvsLoading,
+    error: paletteEnvsError,
+    mutate: retryPaletteEnvs,
+  } = useDriveEnvs(spawnTarget?.driveId ?? null);
 
   const paletteAgents = useMemo(
     () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
@@ -185,6 +190,8 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       agents={paletteAgents}
       envs={paletteEnvs}
       envsLoading={paletteEnvsLoading}
+      envsError={paletteEnvsError}
+      onRetryEnvs={retryPaletteEnvs}
       canRunSandbox={canRunSandbox}
       pick={spawnPick}
       spawning={spawning}
@@ -218,6 +225,8 @@ function SpawnSessionPalette({
   agents,
   envs,
   envsLoading,
+  envsError,
+  onRetryEnvs,
   canRunSandbox,
   pick,
   spawning,
@@ -242,6 +251,13 @@ function SpawnSessionPalette({
    * rather than treating a not-yet-arrived listing as an answer — see `step`.
    */
   envsLoading: boolean;
+  /**
+   * Whether that listing FAILED. The third fact `[]` collapses, and the one
+   * that survives after `envsLoading` goes false — so it needs its own step
+   * for the same reason loading did.
+   */
+  envsError: unknown;
+  onRetryEnvs: () => void;
   /**
    * Whether the requester can actually run this drive's sandbox (the
    * actor-aware server verdict: kill switch + the payer's tier + the
@@ -288,16 +304,25 @@ function SpawnSessionPalette({
   //
   // Waiting is therefore the only honest answer while the question is open. It
   // costs a beat exactly once per drive, and never once the SWR key is warm.
-  const step: 'target' | 'pending' | 'env' | 'name' =
+  //
+  // `'error'` is the same argument one step further. A FAILED listing also
+  // leaves `envs` at `[]`, and unlike loading it never resolves on its own —
+  // so without its own step the palette would sail past a question it could
+  // not ask and spawn ephemerally into a drive whose environments it simply
+  // failed to read. That is the silent-wrong-answer case again, just reached
+  // by a different route.
+  const step: 'target' | 'pending' | 'error' | 'env' | 'name' =
     pick === null
       ? 'target'
       : pick.envId !== undefined
         ? 'name'
         : envsLoading
           ? 'pending'
-          : envs.length > 0
-            ? 'env'
-            : 'name';
+          : envsError != null
+            ? 'error'
+            : envs.length > 0
+              ? 'env'
+              : 'name';
   const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
 
   return (
@@ -307,7 +332,7 @@ function SpawnSessionPalette({
       title={
         step === 'target'
           ? 'New session'
-          : step === 'env' || step === 'pending'
+          : step === 'env' || step === 'pending' || step === 'error'
             ? 'Where should it run?'
             : 'Name your session'
       }
@@ -318,6 +343,8 @@ function SpawnSessionPalette({
             : `Leave blank to use "${pick?.label ?? 'this session'}"`
           : step === 'pending'
             ? 'Checking this drive for environments…'
+            : step === 'error'
+              ? 'This drive’s environments could not be loaded.'
             : step === 'env'
               ? 'A session in an environment shares that environment’s files, and they stay there when the session ends.'
               : driveName
@@ -334,6 +361,36 @@ function SpawnSessionPalette({
            showing them a form that is about to be replaced. */
         <div className="p-4 text-sm text-muted-foreground" role="status">
           Looking for environments in this drive…
+        </div>
+      ) : step === 'error' ? (
+        /* Not a hard block. The user came here to start a session and may
+           genuinely want an ephemeral one — but that has to be a CHOICE they
+           make knowing the environment list is missing, not a default they
+           fall into because a request failed. Retry first, escape hatch
+           second, both spelled out. */
+        <div className="space-y-3 p-4">
+          <p className="text-sm text-muted-foreground">
+            We could not check which environments this drive has. Try again, or start a session in a
+            new sandbox of its own.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent"
+              onClick={onRetryEnvs}
+              disabled={spawning}
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+              onClick={() => onPickEnv(null)}
+              disabled={spawning}
+            >
+              Use a new sandbox
+            </button>
+          </div>
         </div>
       ) : step === 'env' ? (
         <>

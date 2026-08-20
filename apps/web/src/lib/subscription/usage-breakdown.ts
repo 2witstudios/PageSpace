@@ -201,7 +201,13 @@ export function aggregateUsageBreakdown(
       // the env was deleted, which is a fact worth showing rather than hiding.
       environmentMillicents += charge;
       const envKey = r.sessionId ?? '__unidentified_env__';
-      const envLabel = r.envName ?? 'Deleted environment';
+      // TWO different unknowns, told apart rather than merged. A row WITH an
+      // env id whose name did not resolve names an environment that is gone —
+      // "Deleted environment" is a fact. A row with NO env id establishes no
+      // such thing: the charge simply never recorded which environment it was
+      // for, so calling it deleted asserts something we do not know. Both keep
+      // their spend visible either way; only the claim differs.
+      const envLabel = r.envName ?? (r.sessionId ? 'Deleted environment' : 'Unknown environment');
       const eb = environmentBuckets.get(envKey) ?? { millicents: 0, calls: 0, envId: r.sessionId, label: envLabel };
       eb.millicents += charge;
       eb.calls += 1;

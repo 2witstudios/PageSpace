@@ -2098,6 +2098,61 @@ describe('AgentsSidebar', () => {
       expect(screen.queryByText('env-missing-xyz')).toBeNull();
     });
 
+    test('a FAILED env listing does not let the palette spawn ephemerally by default — it says so and offers a way out', async () => {
+      const user = userEvent.setup();
+      let envsShouldFail = true;
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }], () => envsShouldFail);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // A failed listing leaves `envs` at [] with loading finished — the exact
+      // shape of "this drive has none". Sailing past it would spawn ephemeral
+      // in a drive that HAS environments, silently.
+      expect(await screen.findByText(/could not check which environments/i)).toBeDefined();
+      expect(screen.queryByPlaceholderText('Researcher')).toBeNull();
+      expect(mockPost).not.toHaveBeenCalled();
+
+      envsShouldFail = false;
+      await user.click(screen.getByRole('button', { name: 'Try again' }));
+
+      // Recovered: the real question gets asked after all.
+      expect(await screen.findByText('in staging')).toBeDefined();
+    });
+
+    test('the failed-listing escape hatch spawns ephemerally only as an explicit choice', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }], () => true);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByPlaceholderText('Search sessions…');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByRole('button', { name: 'Use a new sandbox' }));
+
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: null,
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
     test('an active search flattens the list — a matching env-bound session shows, its environment steps aside', async () => {
       const user = userEvent.setup();
       respondWithSessions(

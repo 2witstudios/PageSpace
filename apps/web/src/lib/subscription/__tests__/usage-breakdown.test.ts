@@ -362,6 +362,20 @@ describe('aggregateUsageBreakdown', () => {
       expect(r.byEnvironment[0]).toMatchObject({ envId: 'env-gone', label: 'Deleted environment', spendCents: 3 });
     });
 
+    it('given a charge that recorded no env id at all, should say "Unknown environment" — not claim a deletion it cannot know', () => {
+      const r = aggregateUsageBreakdown(
+        [envStorageRow({ sessionId: null, envName: null, chargeMillicents: 5_000 })],
+        PERIOD,
+      );
+      expect(r.byEnvironment[0]).toMatchObject({
+        envId: null,
+        label: 'Unknown environment',
+        spendCents: 5,
+      });
+      // Still out of the agent section, which is the point of the split.
+      expect(r.byAgentSession).toEqual([]);
+    });
+
     it('computes sharePct against ENVIRONMENT spend, and sorts by spend descending', () => {
       const r = aggregateUsageBreakdown(
         [
