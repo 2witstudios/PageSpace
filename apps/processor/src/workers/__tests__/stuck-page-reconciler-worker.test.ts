@@ -172,6 +172,23 @@ describe('runStuckPageReconciler', () => {
     );
   });
 
+  it('re-checks the page type at write time so a converted page is never marked failed', async () => {
+    const db = makeFakeDb({
+      candidates: [candidate()],
+      attempts: { page_1: 3 },
+    });
+    const deps = makeDeps(db);
+
+    await runStuckPageReconciler(deps);
+
+    const failUpdate = db.queries.find((q) => q.includes('UPDATE pages'));
+    expect(failUpdate).toBeDefined();
+    // Without this predicate the scan's type filter is stale by the time the
+    // write lands, and a FILE→DOCUMENT conversion in that window inherits the
+    // failure.
+    expect(failUpdate).toMatch(/AND type = 'FILE'/);
+  });
+
   it('marks a page with an invalid content hash failed instead of re-enqueueing', async () => {
     const db = makeFakeDb({ candidates: [candidate({ contentHash: 'not-a-hash' })] });
     const deps = makeDeps(db);

@@ -57,9 +57,16 @@ export interface CreatePageInput {
   createdBy?: string | null;
 }
 
+/**
+ * Fields `pageRepository.update` may set.
+ *
+ * `content` is deliberately absent. This update is a bare `set(...)` with no
+ * revision compare-and-swap, no `page_versions` row, no activity entry and no
+ * realtime broadcast — writing content through it would silently clobber the
+ * authoritative copy. Page content goes through `applyPageMutation`.
+ */
 export interface UpdatePageInput {
   title?: string;
-  content?: string;
   isTrashed?: boolean;
   trashedAt?: Date | null;
   parentId?: string | null;
@@ -198,6 +205,15 @@ export const pageRepository = {
     pageId: string,
     data: UpdatePageInput
   ): Promise<{ id: string; title: string; type: PageTypeValue; parentId: string | null }> => {
+    // Backstop for callers that reach this seam through an `as` cast or an
+    // untyped payload, where the type above cannot help. Failing loudly beats
+    // an unguarded content write that no version row records.
+    if ('content' in data) {
+      throw new Error(
+        'pageRepository.update cannot set page content — use applyPageMutation, which does the revision compare-and-swap'
+      );
+    }
+
     const updateData: Record<string, unknown> = {
       ...data,
       updatedAt: data.updatedAt ?? new Date(),

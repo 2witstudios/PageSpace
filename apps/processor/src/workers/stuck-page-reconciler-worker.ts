@@ -35,6 +35,7 @@
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import * as Sentry from '@sentry/node';
 import { isValidContentHash } from '../cache/content-store';
+import { EXTRACTABLE_PAGE_TYPE } from '../extraction-write-guard';
 import {
   classifyStalePage,
   resolveReconcilerPolicy,
@@ -215,9 +216,15 @@ export async function runStuckPageReconciler(
           case 'fail':
             try {
               const result = await client.query(
+                // The type predicate is re-evaluated HERE, not in the candidate
+                // scan: a FILE page can be converted to a DOCUMENT
+                // (/api/files/[id]/convert-to-document) between the scan and
+                // this write, and a converted page must not inherit a file's
+                // extraction failure.
                 `UPDATE pages
                     SET "processingStatus" = 'failed', "processingError" = $1, "processedAt" = NOW()
                   WHERE id = $2
+                    AND type = '${EXTRACTABLE_PAGE_TYPE}'
                     AND "processingStatus" IN ('pending', 'processing')`,
                 [decision.message, pageId],
               );
@@ -225,8 +232,9 @@ export async function runStuckPageReconciler(
                 summary.failed += 1;
                 failedPages.push({ pageId, reason: decision.reason });
               } else {
-                // The owning worker completed the page between the candidate
-                // scan and this update — nothing to overwrite.
+                // The owning worker completed the page, or it was converted
+                // away from FILE, between the candidate scan and this update —
+                // nothing to overwrite either way.
                 summary.skipped += 1;
               }
             } catch (err) {

@@ -38,6 +38,28 @@ import {
 } from '../db';
 
 const SET_PAGE_COMPLETED_SQL = 'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5';
+const STATUS_ONLY_SQL = 'UPDATE pages SET "processingStatus" = $1, "extractionMethod" = $2, "extractionMetadata" = $3::jsonb, "processedAt" = NOW() WHERE id = $4';
+const TYPE_LOCK_SQL = 'SELECT type FROM pages WHERE id = $1 FOR UPDATE';
+
+/**
+ * setPageCompleted reads the page's type under a row lock before deciding
+ * whether the body may be written. Every call has to answer that SELECT.
+ */
+function respondWithPageType(type: string | null): void {
+  mockQuery.mockImplementation((sql: string) => {
+    if (sql === TYPE_LOCK_SQL) {
+      return Promise.resolve({ rows: type === null ? [] : [{ type }], rowCount: type === null ? 0 : 1 });
+    }
+    return Promise.resolve({ rows: [], rowCount: 0 });
+  });
+}
+
+/** SQL text of every UPDATE the call issued. */
+function updateStatements(): string[] {
+  return mockQuery.mock.calls
+    .map((call) => String(call[0]))
+    .filter((sql) => sql.startsWith('UPDATE '));
+}
 
 describe('db module', () => {
   beforeEach(() => {
@@ -66,6 +88,10 @@ describe('db module', () => {
   });
 
   describe('setPageCompleted', () => {
+    beforeEach(() => {
+      respondWithPageType('FILE');
+    });
+
     it('should execute with metadata and extraction method', async () => {
       await setPageCompleted('page-1', 'extracted', { title: 'Test' }, 'text');
       expect(mockQuery).toHaveBeenCalledWith(
@@ -105,6 +131,65 @@ describe('db module', () => {
     it('should release client on error', async () => {
       mockQuery.mockRejectedValueOnce(new Error('DB error'));
       await expect(setPageCompleted('p', 'text', null)).rejects.toThrow('DB error');
+      expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it('given a page converted to DOCUMENT after enqueue, never writes content', async () => {
+      respondWithPageType('DOCUMENT');
+
+      await setPageCompleted('page-1', 'extracted text', { title: 'Doc' }, 'text');
+
+      expect(updateStatements()).toEqual([STATUS_ONLY_SQL]);
+      expect(mockQuery).not.toHaveBeenCalledWith(
+        SET_PAGE_COMPLETED_SQL,
+        expect.anything(),
+      );
+      // The authored body survives; only the processing bookkeeping lands.
+      expect(mockQuery).toHaveBeenCalledWith(
+        STATUS_ONLY_SQL,
+        ['completed', 'text', '{"title":"Doc"}', 'page-1'],
+      );
+      expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it('given any non-FILE page type, refuses the content write', async () => {
+      for (const type of ['FOLDER', 'AI_CHAT', 'CHANNEL', 'SHEET', 'CANVAS']) {
+        mockQuery.mockClear();
+        respondWithPageType(type);
+        await setPageCompleted('page-1', 'extracted text', null, 'text');
+        expect(updateStatements()).toEqual([STATUS_ONLY_SQL]);
+      }
+    });
+
+    it('given the page no longer exists, writes nothing at all', async () => {
+      respondWithPageType(null);
+
+      await setPageCompleted('page-1', 'extracted text', null, 'text');
+
+      expect(updateStatements()).toEqual([]);
+      expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it('reads the type under a row lock in the same transaction as the write', async () => {
+      respondWithPageType('FILE');
+
+      await setPageCompleted('page-1', 'extracted text', null, 'text');
+
+      const sqls = mockQuery.mock.calls.map((call) => String(call[0]));
+      expect(sqls[0]).toBe('BEGIN');
+      expect(sqls[1]).toBe(TYPE_LOCK_SQL);
+      expect(sqls[2]).toBe(SET_PAGE_COMPLETED_SQL);
+      expect(sqls[3]).toBe('COMMIT');
+    });
+
+    it('rolls back when the write fails', async () => {
+      respondWithPageType('FILE');
+      mockQuery.mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // BEGIN
+        .mockImplementationOnce(() => Promise.resolve({ rows: [{ type: 'FILE' }], rowCount: 1 }))
+        .mockImplementationOnce(() => Promise.reject(new Error('write failed')));
+
+      await expect(setPageCompleted('page-1', 'text', null)).rejects.toThrow('write failed');
+      expect(mockQuery.mock.calls.map((c) => String(c[0]))).toContain('ROLLBACK');
       expect(mockRelease).toHaveBeenCalledTimes(1);
     });
   });

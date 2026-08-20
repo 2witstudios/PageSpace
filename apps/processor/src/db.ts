@@ -10,7 +10,9 @@ interface PgPool {
 }
 
 import pg from 'pg';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { buildAdminPgTypes, type PgTypesConfig } from './admin-pg-types';
+import { decideExtractionWrite, EXTRACTABLE_PAGE_TYPE } from './extraction-write-guard';
 const { Pool } = pg as unknown as {
   Pool: new (config: { connectionString: string; max: number; types?: PgTypesConfig }) => PgPool;
 };
@@ -64,18 +66,58 @@ export async function setPageProcessing(pageId: string): Promise<void> {
   }
 }
 
+/**
+ * Record a finished text extraction.
+ *
+ * The body write is fenced to FILE pages and the type is read under a row lock
+ * inside this transaction, so a page converted to a DOCUMENT between enqueue
+ * and here keeps its authored body. The processing bookkeeping still lands in
+ * that case — otherwise the converted page would sit "processing" forever and
+ * the stuck-page reconciler would eventually mark it failed.
+ */
 export async function setPageCompleted(
   pageId: string,
   content: string,
   metadata: Record<string, unknown> | null,
   extractionMethod: 'text' | 'ocr' | 'visual' | 'hybrid' | 'none' = 'text'
 ): Promise<void> {
+  const metadataJson = metadata ? JSON.stringify(metadata) : null;
   const client = await getPool().connect();
   try {
-    await client.query(
-      'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5',
-      [content, 'completed', extractionMethod, metadata ? JSON.stringify(metadata) : null, pageId]
-    );
+    await client.query('BEGIN');
+    try {
+      const current = await client.query(
+        'SELECT type FROM pages WHERE id = $1 FOR UPDATE',
+        [pageId]
+      );
+      const decision = decideExtractionWrite({
+        pageType: current.rows.length ? String(current.rows[0].type) : null,
+      });
+
+      if (decision.action === 'skip-all') {
+        loggers.processor.warn(
+          `extraction write skipped: page ${pageId} no longer exists`
+        );
+      } else if (decision.action === 'skip-content') {
+        loggers.processor.warn(
+          `extraction content write refused: page ${pageId} is a ${decision.pageType}, not a ${EXTRACTABLE_PAGE_TYPE} — recording extraction status only`
+        );
+        await client.query(
+          'UPDATE pages SET "processingStatus" = $1, "extractionMethod" = $2, "extractionMetadata" = $3::jsonb, "processedAt" = NOW() WHERE id = $4',
+          ['completed', extractionMethod, metadataJson, pageId]
+        );
+      } else {
+        await client.query(
+          'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5',
+          [content, 'completed', extractionMethod, metadataJson, pageId]
+        );
+      }
+
+      await client.query('COMMIT');
+    } catch (err) {
+      await client.query('ROLLBACK').catch(() => {});
+      throw err;
+    }
   } finally {
     client.release();
   }
