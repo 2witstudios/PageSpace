@@ -12,6 +12,10 @@ import {
 } from '@/lib/tasks/task-cache-core';
 import { taskWriteErrorMessage } from '@/lib/tasks/task-write-errors';
 import { isCompletedStatus, type TaskStatusConfig } from './task-list-types';
+import type { TaskWriteMachinery } from '@/lib/tasks/task-write-machinery';
+
+/** The SWR key for a page's own task row, so callers can refresh it. */
+export const selfTaskKey = (pageId: string) => `/api/pages/${pageId}/task`;
 
 /**
  * The task the currently-viewed page IS, if it is one.
@@ -57,9 +61,18 @@ export interface UseSelfTaskResult {
   toggleComplete: () => Promise<void>;
 }
 
-export function useSelfTask(pageId: string, canEdit: boolean): UseSelfTaskResult {
+export function useSelfTask(
+  pageId: string,
+  canEdit: boolean,
+  /**
+   * The view's write machinery. Without it this write's socket echo matches no
+   * recorded write, is classified foreign, and costs the list below a full
+   * revalidation — the very refetch the checkbox path exists to avoid.
+   */
+  machinery?: TaskWriteMachinery,
+): UseSelfTaskResult {
   const { data, mutate } = useSWR<SelfTaskResponse>(
-    `/api/pages/${pageId}/task`,
+    selfTaskKey(pageId),
     fetcher,
     // A page's own task row changes when someone edits it from the parent list.
     // Refetching on focus is the cheap way to notice, and unlike the task list
@@ -82,38 +95,44 @@ export function useSelfTask(pageId: string, canEdit: boolean): UseSelfTaskResult
       toast.error(subTasksBlockedMessage(blocked));
       return;
     }
-    const optimistic: SelfTaskResponse = {
-      ...(data as SelfTaskResponse),
-      task: {
-        ...task,
-        status,
-        completedAt: isCompletedStatus(status, statusConfigs)
-          ? new Date().toISOString()
-          : null,
-      },
+    // Functional, not a render-time snapshot: a write can resolve several
+    // renders after it started, and patching a captured object would drop
+    // whatever landed in between (the same rule task-write-machinery follows).
+    const applyStatus = (current: SelfTaskResponse | undefined, next: {
+      status: string; completedAt: string | null; updatedAt?: string;
+    }): SelfTaskResponse => {
+      const base = current ?? (data as SelfTaskResponse);
+      return base?.task
+        ? { ...base, task: { ...base.task, ...next, updatedAt: next.updatedAt ?? base.task.updatedAt } }
+        : base;
     };
+
+    const writeId = machinery?.noteSelfWriteStart(task.id);
     try {
       await mutate(
-        async () => {
+        async (current) => {
           const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
             `/api/pages/${listPageId}/tasks/${task.id}`, { status },
           );
-          return {
-            ...optimistic,
-            task: {
-              ...optimistic.task!,
-              status: updated.status,
-              completedAt: updated.completedAt,
-              updatedAt: updated.updatedAt,
-            },
-          };
+          if (writeId !== undefined) machinery?.noteSelfWriteSettled(writeId, updated.updatedAt);
+          return applyStatus(current, updated);
         },
-        { optimisticData: optimistic, rollbackOnError: true, revalidate: false },
+        {
+          optimisticData: (current) => applyStatus(current, {
+            status,
+            completedAt: isCompletedStatus(status, statusConfigs) ? new Date().toISOString() : null,
+          }),
+          rollbackOnError: true,
+          revalidate: false,
+        },
       );
     } catch (e) {
+      if (writeId !== undefined) machinery?.noteSelfWriteSettled(writeId, null);
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
+    } finally {
+      machinery?.flushDeferredRevalidate();
     }
-  }, [task, listPageId, canEdit, data, statusConfigs, mutate]);
+  }, [task, listPageId, canEdit, data, statusConfigs, mutate, machinery]);
 
   const toggleComplete = useCallback(async () => {
     if (!task) return;

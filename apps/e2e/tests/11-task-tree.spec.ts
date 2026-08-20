@@ -174,6 +174,41 @@ test('a task can be completed from its own screen', async ({ page, request, driv
   await expect(rowCheckbox(page, 'Container')).toBeChecked();
 });
 
+test('completing a sub-task unblocks the header without a refresh', async ({ page, request, driveId }) => {
+  // The workflow the header exists for: open a task, clear the work under it,
+  // finish it. The guard reads sub-task counts, so if they only refreshed on
+  // window focus the header would keep refusing while the row below shows done.
+  const listPageId = await createList(request, driveId, `Tree E ${Date.now()}`);
+  const parent = await createTask(request, listPageId, 'Container');
+  await createTask(request, parent.pageId, 'Blocker');
+
+  await wideViewport(page);
+  await page.goto(`/dashboard/${driveId}/${parent.pageId}`);
+  await expect(rowCheckbox(page, 'Blocker')).toBeVisible();
+  await showAllTasks(page);
+
+  // Blocked while the sub-task is open.
+  const selfBox = page.getByRole('checkbox', { name: /Complete this task/i });
+  await selfBox.click();
+  await expect(page.getByText(/Finish 1 sub-task first/i)).toBeVisible();
+  await expect(selfBox).not.toBeChecked();
+
+  // Clear the sub-task on this very screen; no reload, no refocus.
+  // Wait on the header's own refresh rather than a sleep — that refresh IS the
+  // fix, so if it never fires this times out instead of passing by luck.
+  const headerRefreshed = page.waitForResponse(
+    (r) => r.request().method() === 'GET' && new URL(r.url()).pathname.endsWith('/task'),
+  );
+  await rowCheckbox(page, 'Blocker').click();
+  await expect(rowCheckbox(page, 'Blocker')).toBeChecked();
+  await headerRefreshed;
+
+  // Now it goes through.
+  await page.getByRole('checkbox', { name: /Complete this task/i }).click();
+  await expect(page.getByRole('checkbox', { name: /Reopen this task/i }))
+    .toBeVisible({ timeout: 5000 });
+});
+
 test('an inline sub-task row creates under the task being viewed', async ({ page, request, driveId }) => {
   const listPageId = await createList(request, driveId, `Tree D ${Date.now()}`);
   const parent = await createTask(request, listPageId, 'Holder');

@@ -11,6 +11,7 @@ import {
 } from '@/components/ui/select';
 import { buildStatusConfig, getStatusOrder } from './task-list-types';
 import { useSelfTask } from './useSelfTask';
+import { useOptionalTaskTree } from './task-tree-context';
 
 interface TaskListHeaderProps {
   pageId: string;
@@ -119,8 +120,10 @@ export function TaskListHeader({
  * sitting under a folder).
  */
 function SelfTaskControls({ pageId, canEdit }: { pageId: string; canEdit: boolean }) {
+  // Optional: the header also renders in editor mode, outside the row tree.
+  const tree = useOptionalTaskTree();
   const { task, statusConfigs, isCompleted, isAvailable, setStatus, toggleComplete } =
-    useSelfTask(pageId, canEdit);
+    useSelfTask(pageId, canEdit, tree?.writeMachinery);
 
   if (!isAvailable || !task) return null;
 

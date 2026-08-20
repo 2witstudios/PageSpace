@@ -13,6 +13,7 @@ import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWRInfinite from 'swr/infinite';
+import { mutate as globalMutate } from 'swr';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
@@ -89,6 +90,7 @@ import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
 import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
+import { selfTaskKey } from './useSelfTask';
 import Toolbar from '@/components/editors/Toolbar';
 import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 import { TaskRowGroup } from './TaskRowGroup';
@@ -827,7 +829,7 @@ function TaskListView({ page }: TaskListViewProps) {
     // completedAt is guessed only so the row's strikethrough and checkbox move
     // together with the status; the server's real stamp replaces it on resolve.
     const movesToDone = isCompletedStatus(newStatus, statusConfigs);
-    await writeTaskField({
+    const ok = await writeTaskField({
       loc,
       body: { status: newStatus },
       optimistic: {
@@ -836,6 +838,9 @@ function TaskListView({ page }: TaskListViewProps) {
       },
       fallbackMessage: 'Failed to update status',
     });
+    // A row here is a sub-task of the page itself, so its completion moves the
+    // counts the header's own guard reads.
+    if (ok) refreshSelfTask();
   };
 
   // Update task priority
@@ -1042,6 +1047,19 @@ function TaskListView({ page }: TaskListViewProps) {
     },
     [mutateTaskPages],
   );
+
+  /**
+   * Refresh the header's view of THIS page as a task.
+   *
+   * Its completion guard reads sub-task counts, and this page's sub-tasks are
+   * exactly the rows below. Without this, clearing the last open sub-task on
+   * screen leaves the header still refusing with "Finish 1 sub-task first"
+   * until the window is blurred and refocused — in the one workflow the header
+   * was added for.
+   */
+  const refreshSelfTask = useCallback(() => {
+    void globalMutate(selfTaskKey(page.id));
+  }, [page.id]);
   // Everything a row needs that is identical at every depth. What varies per
   // node — the task, its depth, the list it writes to, and the handlers bound to
   // the cache that holds it — travels on props instead.
