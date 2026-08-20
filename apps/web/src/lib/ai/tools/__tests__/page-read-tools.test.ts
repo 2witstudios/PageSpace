@@ -20,7 +20,12 @@ vi.mock('@pagespace/db/db', () => {
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
       taskLists: { findFirst: vi.fn() },
-      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
+      taskStatusConfigs: {
+        // The sweep reads the replacement statuses one at a time, directly,
+        // rather than paging the vocabulary — nothing caps how many a list has.
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       channelMessages: { findMany: vi.fn() },
     },
   };
@@ -1311,6 +1316,10 @@ describe('page-read-tools', () => {
           }),
         } as unknown as typeof mockDb.query.taskLists;
         mockDb.query.taskStatusConfigs = {
+          // findFirst too: the post-seed sweep reads its replacement statuses
+          // one at a time rather than paging the vocabulary, since nothing caps
+          // how many statuses a list may define.
+          findFirst: vi.fn().mockResolvedValue(undefined),
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
         // Default no-op insert: most of these tests aren't asserting on the
@@ -1463,6 +1472,7 @@ describe('page-read-tools', () => {
         // ensureTaskListForPage just inserted, so the separate empty-configs backfill
         // check doesn't also fire and double-insert.
         mockDb.query.taskStatusConfigs = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
           findMany: vi.fn().mockResolvedValue([
             { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
           ]),

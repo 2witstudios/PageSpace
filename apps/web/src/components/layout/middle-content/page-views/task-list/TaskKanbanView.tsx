@@ -275,12 +275,17 @@ function TaskCard({
           {subTaskProgress && (
             <span
               className="text-xs text-muted-foreground tabular-nums"
+              // `title` stays: it is the sighted tooltip, and unlike aria-label it
+              // is not an ARIA naming mechanism, so role=generic does not discard it.
               title={`${subTaskProgress.label} sub-tasks complete`}
-              // `title` alone is not reliably announced; the visible text is
-              // just "2/3", which means nothing on its own.
-              aria-label={`${subTaskProgress.label} sub-tasks complete`}
             >
-              {subTaskProgress.label}
+              {/* ARIA forbids naming role=generic, so an aria-label on a plain
+                  span is discarded and a screen reader hears only "2/3" —
+                  which means nothing on its own. The sentence goes in sr-only
+                  text instead, and the visible ratio is hidden from AT so it is
+                  not announced twice. */}
+              <span aria-hidden="true">{subTaskProgress.label}</span>
+              <span className="sr-only">{`${subTaskProgress.label} sub-tasks complete`}</span>
             </span>
           )}
 

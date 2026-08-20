@@ -195,11 +195,11 @@ describe('writeTaskField', () => {
   });
 
   it('refetches to undo the paint when the write fails', async () => {
-    // Not a rollback: the writer no longer uses SWR's optimistic path, so there
-    // is no backed-up value to restore (and reversing by inverse patch would
-    // assume nothing else touched the row meanwhile). The paint stays on screen
-    // until the refetch answers, which is why the request itself is the thing
-    // worth asserting.
+    // The refetch is the SECOND half of the undo, not the whole of it: the
+    // writer reverts locally first, under two conditions, because a paused
+    // cache never issues the refetch at all. This asserts only that the request
+    // is made — the local revert and its conditions are proved against the real
+    // hook in task-write-machinery.swr.test.tsx, which is where they belong.
     patchMock.mockRejectedValue(Object.assign(new Error('x'), { status: 500, body: {} }));
     const { view, revalidationRequests } = setup(pages([task({ id: 't1', status: 'pending' })]));
     await act(async () => {

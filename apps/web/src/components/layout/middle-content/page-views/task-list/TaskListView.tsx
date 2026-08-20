@@ -242,9 +242,11 @@ function MobileTaskCard({
                 <span
                   className="shrink-0 text-xs text-muted-foreground tabular-nums"
                   title={`${subTaskProgress.label} sub-tasks complete`}
-                  aria-label={`${subTaskProgress.label} sub-tasks complete`}
                 >
-                  {subTaskProgress.label}
+                  {/* See TaskKanbanView: an aria-label on a generic span is
+                      discarded, so the sentence is sr-only text. */}
+                  <span aria-hidden="true">{subTaskProgress.label}</span>
+                  <span className="sr-only">{`${subTaskProgress.label} sub-tasks complete`}</span>
                 </span>
               )}
             </div>
@@ -444,6 +446,13 @@ interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  /**
+   * Which row this is and how many there are. Nested rows carry these, so
+   * omitting them here would have a treegrid where children announce "3 of 5"
+   * under a parent that announces no position at all.
+   */
+  posInSet: number;
+  setSize?: number;
   /** Whether this row has anything to expand, and whether it currently is. */
   expandable: boolean;
   isExpanded: boolean;
@@ -452,7 +461,7 @@ interface SortableTaskRowProps {
 }
 
 function SortableTaskRow({
-  task, canEdit, isCompleted, expandable, isExpanded, contextMenu, children,
+  task, canEdit, isCompleted, expandable, isExpanded, posInSet, setSize, contextMenu, children,
 }: SortableTaskRowProps) {
   const {
     attributes,
@@ -474,6 +483,8 @@ function SortableTaskRow({
       style={style}
       data-task-id={task.id}
       aria-level={1}
+      aria-posinset={posInSet}
+      aria-setsize={setSize}
       // Top-level rows are the ones most often expanded; without this the
       // treegrid announces a level and never says whether it is open.
       aria-expanded={expandable ? isExpanded : undefined}
@@ -1398,11 +1409,16 @@ function TaskListView({ page }: TaskListViewProps) {
                   strategy={verticalListSortingStrategy}
                 >
                   <TableBody>
-                    {filteredTasks.map((task) => (
+                    {filteredTasks.map((task, index) => (
                       <TaskRowGroup
                         key={task.id}
                         task={task}
                         depth={0}
+                        posInSet={index + 1}
+                        // Same rule as a sub-list: only claim a size when the
+                        // whole set is loaded. This list pages, so with more to
+                        // come any number would describe rows that are not here.
+                        setSize={hasMoreTasks ? undefined : filteredTasks.length}
                         listPageId={page.id}
                         path={makeNodePath(rootPath, task.id)}
                         handlers={locatedHandlers}
@@ -1411,6 +1427,8 @@ function TaskListView({ page }: TaskListViewProps) {
                         renderRow={(cells, rowTree) => (
                           <SortableTaskRow
                             task={task}
+                            posInSet={index + 1}
+                            setSize={hasMoreTasks ? undefined : filteredTasks.length}
                             canEdit={canEdit}
                             isCompleted={isCompletedStatus(task.status, statusConfigs)}
                             expandable={rowTree.expandable}

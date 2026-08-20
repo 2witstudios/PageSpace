@@ -1,5 +1,5 @@
 import { db } from '@pagespace/db/db'
-import { eq, and, asc, inArray, notInArray, isNull, isNotNull } from '@pagespace/db/operators'
+import { eq, ne, and, asc, desc, inArray, notInArray, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskItems, taskAssignees, taskStatusConfigs, DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks'
 import { taskTriggers } from '@pagespace/db/schema/task-triggers'
@@ -132,7 +132,14 @@ export async function resolveInheritedStatusSeed(
         .from(taskStatusConfigs)
         .where(eq(taskStatusConfigs.taskListId, ancestorList.id))
         .orderBy(asc(taskStatusConfigs.position))
-        .limit(STATUS_CONFIG_REMAP_LIMIT)
+        // Deliberately UNBOUNDED, and the only read here that is. This copies a
+        // vocabulary wholesale, and nothing caps how many statuses a list may
+        // define — the statuses PUT takes any array. Truncating the copy would
+        // hand the child a DIFFERENT vocabulary from the one it is supposed to
+        // inherit, and if the ancestor's only done-group status fell past the
+        // cut the child would have no way to complete a task at all. A bound
+        // that can silently change meaning is worse here than a large read of
+        // rows that are a few short strings each.
       if (configs.length > 0) return configs
     }
 
@@ -189,33 +196,59 @@ async function conformExistingTasksToVocabulary(
   taskListId: string,
   listPageId: string,
 ): Promise<void> {
-  // Read back rather than trusting what was just inserted: the seed is ON
-  // CONFLICT DO NOTHING, so a concurrent seeder may have written the row that
-  // actually landed, and conforming tasks to slugs that lost the race would be
-  // worse than not conforming them at all.
-  const configs = await tx.query.taskStatusConfigs.findMany({
-    where: eq(taskStatusConfigs.taskListId, taskListId),
-    orderBy: [asc(taskStatusConfigs.position)],
-    limit: STATUS_CONFIG_REMAP_LIMIT,
-  })
-  if (configs.length === 0) return
+  // The vocabulary is expressed as a SUBQUERY, not a materialised slug list.
+  // Nothing caps how many statuses a list may define — the statuses PUT accepts
+  // any array — so reading them into memory under any limit would make every
+  // slug past that window read as "not defined" and rewrite perfectly valid
+  // rows. Worse, if the list's only done-group status sat past the window, a
+  // completed task would be rewritten to an OPEN status. `IN (SELECT …)` has no
+  // window to fall outside of.
+  const vocabulary = tx
+    .select({ slug: taskStatusConfigs.slug })
+    .from(taskStatusConfigs)
+    .where(eq(taskStatusConfigs.taskListId, taskListId))
 
-  const slugs = configs.map((config) => config.slug)
+  // The two replacements, read directly rather than picked out of a page of
+  // configs, for the same reason. Order and fallbacks mirror
+  // pickReplacementStatus exactly — see it for why neither may cross the done
+  // boundary.
+  const byPosition = (extra?: ReturnType<typeof eq>) => ({
+    where: extra
+      ? and(eq(taskStatusConfigs.taskListId, taskListId), extra)
+      : eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [asc(taskStatusConfigs.position)],
+  })
+  const first = await tx.query.taskStatusConfigs.findFirst(byPosition())
+  // No vocabulary at all: nothing to conform to.
+  if (!first) return
+
+  const open = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'todo')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst(
+    byPosition(ne(taskStatusConfigs.group, 'done')),
+  ) ?? first
+  const done = await tx.query.taskStatusConfigs.findFirst(
+    byPosition(eq(taskStatusConfigs.group, 'done')),
+  ) ?? await tx.query.taskStatusConfigs.findFirst({
+    where: eq(taskStatusConfigs.taskListId, taskListId),
+    orderBy: [desc(taskStatusConfigs.position)],
+  }) ?? first
+
   const membersOfThisList = tx
     .select({ id: pages.id })
     .from(pages)
     .where(eq(pages.parentId, listPageId))
 
-  for (const [isCompleted, completionFilter] of [
-    [false, isNull(taskItems.completedAt)],
-    [true, isNotNull(taskItems.completedAt)],
+  for (const [replacement, completionFilter] of [
+    [open, isNull(taskItems.completedAt)],
+    [done, isNotNull(taskItems.completedAt)],
   ] as const) {
     await tx
       .update(taskItems)
-      .set({ status: pickReplacementStatus(configs, isCompleted).slug })
+      .set({ status: replacement.slug })
       .where(and(
         inArray(taskItems.pageId, membersOfThisList),
-        notInArray(taskItems.status, slugs),
+        notInArray(taskItems.status, vocabulary),
         completionFilter,
       ))
   }

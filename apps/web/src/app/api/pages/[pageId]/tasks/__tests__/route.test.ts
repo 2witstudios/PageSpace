@@ -166,6 +166,10 @@ vi.mock('@pagespace/db/operators', () => ({
   inArray: vi.fn((col, values) => ({ type: 'inArray', col, values })),
   count: vi.fn(() => ({ type: 'count' })),
   isNotNull: vi.fn((col) => ({ type: 'isNotNull', col })),
+  // The vocabulary sweep's two set-based UPDATEs and its subquery membership test.
+  isNull: vi.fn((col) => ({ type: 'isNull', col })),
+  notInArray: vi.fn((col, values) => ({ type: 'notInArray', col, values })),
+  ne: vi.fn((field, value) => ({ type: 'ne', field, value })),
   ilike: vi.fn((col, pattern) => ({ type: 'ilike', col, pattern })),
   sql: vi.fn((strings, ...values) => ({ type: 'sql', strings, values })),
 }));

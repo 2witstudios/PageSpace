@@ -147,9 +147,11 @@ export function TaskRowCells({
               <span
                 className="ml-1 shrink-0 text-xs text-muted-foreground tabular-nums"
                 title={`${progress.label} sub-tasks complete`}
-                aria-label={`${progress.label} sub-tasks complete`}
               >
-                {progress.label}
+                {/* See TaskKanbanView: an aria-label on a generic span is
+                    discarded, so the sentence is sr-only text. */}
+                <span aria-hidden="true">{progress.label}</span>
+                <span className="sr-only">{`${progress.label} sub-tasks complete`}</span>
               </span>
             )}
           </div>

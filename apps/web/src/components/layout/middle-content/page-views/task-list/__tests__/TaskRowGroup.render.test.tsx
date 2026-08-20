@@ -374,6 +374,59 @@ describe('recovering a sub-list that failed to load', () => {
     });
   });
 
+  it('reloads a node whose cache says empty while its count says otherwise', async () => {
+    // The unmount path, which an edge-detector alone cannot see: delete the last
+    // sub-task, COLLAPSE the row (which unmounts the subtree), then use the row
+    // menu's "Add sub-task" — offered precisely because the count is 0. The
+    // subtree mounts fresh with the count already back at 1, over a cache
+    // holding an empty page. There is no edge to observe.
+    //
+    // Staged as the resulting STATE rather than by driving the menu, because
+    // that state is what the repair keys on however it arose: gate open (so the
+    // count says there is a sub-task) while the cache holds pages with no rows.
+    // An ordinary collapse and re-expand cannot produce it — those pages have
+    // rows — which is what keeps that case from re-requesting.
+    fetchWithAuth
+      .mockResolvedValueOnce(subTaskResponse([]))
+      .mockResolvedValue(subTaskResponse([task({ id: 'second' })]));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+
+    await waitFor(() => expect(screen.queryByText('second')).not.toBeNull(), { timeout: 3000 });
+    assert({
+      given: 'a node whose cache contradicts its own sub-task count',
+      should: 'refetch once and render what comes back',
+      actual: {
+        shown: !!screen.queryByText('second'),
+        fetches: fetchWithAuth.mock.calls.length,
+      },
+      expected: { shown: true, fetches: 2 },
+    });
+  });
+
+  it('does not spin when the server never agrees with the count', async () => {
+    // A parent counter can be stale: the count says one sub-task and the server
+    // keeps answering with none, so the contradiction the repair fires on is
+    // still there after the repair.
+    //
+    // Honest about its reach: this pins that no loop occurs, and it passes with
+    // the explicit once-per-open guard REMOVED — the effect's deps already stop
+    // it, because an unchanged payload leaves `pages` at the same reference and
+    // the effect never re-runs. The guard stays as insurance for a payload that
+    // does change while still carrying no rows; that case is not staged here.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([]));
+    render(<Harness tasks={[task({ id: 'parent', subTaskCount: 1 })]} expanded={expandedFor('parent')} />);
+
+    await waitFor(() => expect(fetchWithAuth.mock.calls.length).toBeGreaterThan(1));
+    await new Promise((r) => setTimeout(r, 300));
+
+    assert({
+      given: 'a count the server never agrees with',
+      should: 'settle at one repair rather than keep asking',
+      actual: fetchWithAuth.mock.calls.length,
+      expected: 2,
+    });
+  });
+
   it('keeps a row collapsible once its last sub-task is gone', async () => {
     // Deleting the last child drops subTaskCount to 0, which makes a row with
     // no description un-expandable — while it is still OPEN and its inline add

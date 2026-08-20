@@ -450,6 +450,63 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it('conforms against the WHOLE vocabulary, past any read window', async () => {
+    // Nothing caps how many statuses a list may define — the statuses PUT takes
+    // any array. Reading the vocabulary into memory under a limit would make
+    // every slug past that window read as "not defined", so valid rows get
+    // rewritten; and if the only done-group status sat past it, a COMPLETED
+    // task would be rewritten to an open one. 260 statuses puts the done one
+    // well beyond the 200 the first version of this read.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [rootList] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values([
+      { taskListId: rootList.id, slug: 'icebox', name: 'Icebox', color: 'x', group: 'todo' as const, position: 0 },
+      ...Array.from({ length: 258 }, (_, i) => ({
+        taskListId: rootList.id, slug: `stage-${i}`, name: `Stage ${i}`,
+        color: 'x', group: 'in_progress' as const, position: i + 1,
+      })),
+      { taskListId: rootList.id, slug: 'shipped', name: 'Shipped', color: 'x', group: 'done' as const, position: 259 },
+    ]);
+
+    const taskPage = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id });
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
+    });
+    // Two legacy rows: one on a slug the vocabulary DOES define but only past
+    // the window, and one genuinely undefined AND already complete.
+    const keepMe = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
+    const moveMe = await factories.createPage(drive.id, { parentId: taskPage.id, type: 'TASK_LIST' });
+    await db.insert(taskItems).values([
+      { userId: owner.id, pageId: keepMe.id, status: 'stage-250' },
+      { userId: owner.id, pageId: moveMe.id, status: 'pending', completedAt: new Date() },
+    ]);
+
+    await getTasks(taskPage.id);
+
+    const rows = Object.fromEntries((await db
+      .select({ pageId: taskItems.pageId, status: taskItems.status })
+      .from(taskItems)
+      .innerJoin(pages, eq(pages.id, taskItems.pageId))
+      .where(eq(pages.parentId, taskPage.id))
+      .limit(10)).map((r) => [r.pageId, r.status]));
+
+    assert({
+      given: 'a vocabulary far larger than any read window',
+      should: 'leave a slug it defines late alone, and send a completed row to the DONE status',
+      actual: { kept: rows[keepMe.id], moved: rows[moveMe.id] },
+      expected: { kept: 'stage-250', moved: 'shipped' },
+    });
+  });
+
   it('inherits through more than one level', async () => {
     if (!dbAvailable) return;
     const { owner, drive, taskPage } = await seedCustomisedTree();

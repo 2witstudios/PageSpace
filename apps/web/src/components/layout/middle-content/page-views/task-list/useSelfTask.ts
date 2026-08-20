@@ -106,8 +106,10 @@ export function useSelfTask(
     // whatever landed in between (the same rule task-write-machinery follows).
     const applyStatus = (current: SelfTaskResponse | undefined, next: {
       status: string; completedAt: string | null; updatedAt?: string;
-    }): SelfTaskResponse => {
-      const base = current ?? (data as SelfTaskResponse);
+    }): SelfTaskResponse | undefined => {
+      // No cast: `data` genuinely can be undefined, and asserting it away made
+      // the declared return type a lie that only `base?.task` was covering.
+      const base = current ?? data;
       return base?.task
         ? { ...base, task: { ...base.task, ...next, updatedAt: next.updatedAt ?? base.task.updatedAt } }
         : base;

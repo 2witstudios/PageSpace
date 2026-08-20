@@ -229,10 +229,35 @@ export function useTaskSubTasks(
    * just double the request.
    */
   const gateWasOpen = useRef(gateOpen);
+  const repairedEmptyCache = useRef(false);
   useEffect(() => {
-    const reopened = gateOpen && !gateWasOpen.current;
-    gateWasOpen.current = gateOpen;
-    if (reopened && pages !== undefined) void mutate();
+    if (!gateOpen) {
+      gateWasOpen.current = false;
+      repairedEmptyCache.current = false;
+      return;
+    }
+    const reopened = !gateWasOpen.current;
+    gateWasOpen.current = true;
+    if (pages === undefined) return;
+
+    // The edge alone is not enough, because the node can UNMOUNT between the
+    // two states: collapse the row after deleting its last sub-task, then use
+    // the row menu's "Add sub-task" — which is offered precisely because the
+    // count is 0 — and TaskSubTaskRows mounts fresh over the emptied cache with
+    // the count already back at 1. There is no edge to see; the ref starts at
+    // whatever the gate says on mount.
+    //
+    // So also repair the state itself: the gate is open, which means the count
+    // says there is at least one sub-task, while the cache holds pages with no
+    // rows in them. That pair is the inconsistency, and it cannot arise from an
+    // ordinary collapse and re-expand — those pages have rows, which is why
+    // that case still issues nothing (a request here lazily WRITES).
+    //
+    // Once per open, so a genuinely stale parent counter cannot spin this.
+    const cacheContradictsTheCount = pages.every((page) => page.tasks.length === 0);
+    if (cacheContradictsTheCount && repairedEmptyCache.current) return;
+    if (cacheContradictsTheCount) repairedEmptyCache.current = true;
+    if (reopened || cacheContradictsTheCount) void mutate();
   }, [gateOpen, pages, mutate]);
 
   const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
