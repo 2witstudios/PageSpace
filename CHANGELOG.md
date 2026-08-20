@@ -61,9 +61,39 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   fixable one offers to try again. If the call connects but the transcript service does not, the
   call says so rather than letting you talk for ten minutes into something that was never going to
   be saved.
+- **Sub-tasks are real rows you can work in place** — expanding a task used to show its sub-tasks as
+  a list of links with a circle beside each one. The circle looked like a checkbox and was inside
+  the link, so clicking it opened the sub-task instead of completing it; there was no way to finish
+  a sub-task without leaving the screen. Sub-tasks are now full rows in the same table, indented
+  under their parent and lined up with its columns, with a working checkbox, status, priority,
+  assignees and due date. They expand further if they have children of their own, and each level has
+  a "+ Add a sub-task" line so you never have to open a task just to put something under it. A task
+  with no sub-tasks yet gets "Add sub-task" in its row menu, which creates the first one and opens
+  it out.
+- **You can complete the task you are looking at** — opening a task shows the work underneath it, so
+  the task itself had no row and no controls. Finishing it meant navigating back out to the list it
+  came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
+  just looking at. There is now a checkbox and a status dropdown at the top of the task's own
+  screen.
+- **Sub-task progress on every view** — a task showing "2/5" now says so in the table, on kanban
+  cards, and on the narrow-screen cards, rather than only in one of them.
 
 ### Fixed
 
+- **Clicking a task checkbox is instant** — the tick did not appear until the server had answered
+  and the whole list had been re-fetched twice, which on a long list was a visible pause on every
+  click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was
+  suppressed and the checkbox never moved at all, even though the task really had been completed.
+  Status, priority, title, due date and assignee changes are all immediate now, and undo themselves
+  if the server refuses.
+- **Failures say what went wrong** — a refused change used to read "Failed to update status" no
+  matter the cause. If a task cannot be completed because sub-tasks are still open, it now says how
+  many; if a status is not one the list allows, it says which ones are.
+- **A task's sub-lists use the same statuses as the list they came from** — if you had renamed or
+  added statuses on a task list, everything nested under it quietly fell back to the four built-in
+  ones. Now anything created under a list inherits that list's statuses.
+- **The expanded document is no longer cut off** — a task's notes were clamped to about three lines
+  behind a fade. They render in full.
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a
   hang.

@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useCallback, useContext, useMemo, useRef } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { toast } from 'sonner';
 import { patch } from '@/lib/auth/auth-fetch';
 import type {
@@ -48,7 +48,7 @@ type MutatePages = (
   },
 ) => Promise<TaskListData[] | undefined>;
 
-export interface TaskWriteContextValue {
+export interface TaskWriteMachinery {
   /** Current user id, for telling our own socket events from everyone else's. */
   currentUserId: string | null | undefined;
   noteSelfWriteStart: (taskId: string) => void;
@@ -61,33 +61,20 @@ export interface TaskWriteContextValue {
   shouldRevalidateForEvent: (event: InboundTaskEvent) => boolean;
 }
 
-const TaskWriteContext = createContext<TaskWriteContextValue | null>(null);
-
-export interface TaskWriteProviderProps {
-  currentUserId: string | null | undefined;
-  /** The view-wide revalidation to run when a deferred echo needs resolving. */
-  revalidateAll: () => void;
-  children: React.ReactNode;
-}
-
-export function TaskWriteProvider({
-  currentUserId,
-  revalidateAll,
-  children,
-}: TaskWriteProviderProps) {
-  const value = useTaskWriteMachinery(currentUserId, revalidateAll);
-  return <TaskWriteContext.Provider value={value}>{children}</TaskWriteContext.Provider>;
-}
-
 /**
- * The provider's state, exported so the view that owns `revalidateAll` can hold
- * it directly (it needs `shouldRevalidateForEvent` in its own socket effect,
- * which sits above the provider in the tree).
+ * Held by the view that owns `revalidateAll` — it needs
+ * `shouldRevalidateForEvent` in its own socket effect — and handed to every
+ * descendant on the task tree context.
+ *
+ * Deliberately NOT a React context of its own. It was one, and nothing rendered
+ * the provider: the view held the machinery directly while nested rows read it
+ * from a context that was never populated, so every expansion threw. A single
+ * explicit parameter cannot be half-wired that way.
  */
 export function useTaskWriteMachinery(
   currentUserId: string | null | undefined,
   revalidateAll: () => void,
-): TaskWriteContextValue {
+): TaskWriteMachinery {
   // One write produces TWO echoes: broadcastTaskEvent posts separately to
   // `user:<id>:tasks` and to the page room, and a task view is in both.
   const selfWritesRef = useRef<SelfWrite[]>([]);
@@ -162,15 +149,11 @@ export interface TaskWriter {
  */
 export function useTaskWriter(params: {
   mutatePages: MutatePages;
+  /** The view-wide machinery from useTaskWriteMachinery. */
+  machinery: TaskWriteMachinery;
   onRevisionConflict?: () => void;
-  machinery?: TaskWriteContextValue;
 }): TaskWriter {
-  const fromContext = useContext(TaskWriteContext);
-  const machinery = params.machinery ?? fromContext;
-  if (!machinery) {
-    throw new Error('useTaskWriter requires a TaskWriteProvider or an explicit machinery prop');
-  }
-  const { noteSelfWriteStart, noteSelfWriteSettled } = machinery;
+  const { noteSelfWriteStart, noteSelfWriteSettled } = params.machinery;
   const { mutatePages, onRevisionConflict } = params;
 
   const writeTaskField = useCallback(async ({

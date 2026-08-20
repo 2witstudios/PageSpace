@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from 'react';
 import type { TaskItem, TaskStatusConfig } from './task-list-types';
+import type { TaskWriteMachinery } from '@/lib/tasks/task-write-machinery';
 import type { TaskNodePath } from './task-tree-core';
 
 /**
@@ -15,6 +16,14 @@ import type { TaskNodePath } from './task-tree-core';
 export interface TaskTreeContextValue {
   canEdit: boolean;
   driveId: string;
+  /**
+   * The view-wide write machinery (self-write log + deferred revalidation).
+   *
+   * Carried here rather than through a second provider so there is exactly one
+   * place a row can get it from. Every expanded node binds it to its OWN cache
+   * via useTaskWriter — the machinery is shared, the cache is not.
+   */
+  writeMachinery: TaskWriteMachinery;
   /**
    * The ROOT list's status vocabulary. Nested rows render this rather than
    * their own list's, so a tree shows one consistent set of statuses — see

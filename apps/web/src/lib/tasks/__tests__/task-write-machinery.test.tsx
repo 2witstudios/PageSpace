@@ -13,7 +13,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 }));
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastErrorMock(...a) } }));
 
-const { useTaskWriteMachinery, useTaskWriter } = await import('../task-write-context');
+const { useTaskWriteMachinery, useTaskWriter } = await import('../task-write-machinery');
 
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;

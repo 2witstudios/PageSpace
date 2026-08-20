@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Skeleton } from '@/components/ui/skeleton';
 import { post, del } from '@/lib/auth/auth-fetch';
-import { useTaskWriter } from '@/lib/tasks/task-write-context';
+import { useTaskWriter } from '@/lib/tasks/task-write-machinery';
 import { taskWriteErrorMessage } from '@/lib/tasks/task-write-errors';
 import {
   appendTaskToPages,
@@ -193,6 +193,10 @@ function TaskSubTaskRows({
 
   const { writeTaskField } = useTaskWriter({
     mutatePages: mutatePages as never,
+    // Passed explicitly rather than read from a provider: TaskListView owns the
+    // machinery (its socket effect needs it) and hands it down on the tree
+    // context, so there is no second provider in the tree to read from.
+    machinery: tree.writeMachinery,
     // Nothing revalidates in this cache by design, so a conflict is resolved by
     // re-requesting the pages already loaded.
     onRevisionConflict: retry,

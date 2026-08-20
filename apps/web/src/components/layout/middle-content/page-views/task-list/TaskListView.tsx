@@ -115,8 +115,12 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
-import { resolveToggleStatus, blockedByOpenSubTasks } from '@/lib/tasks/task-cache-core';
-import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-context';
+import {
+  resolveToggleStatus,
+  blockedByOpenSubTasks,
+  applySubTaskCountsToPages,
+} from '@/lib/tasks/task-cache-core';
+import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-machinery';
 
 interface TaskListViewProps {
   page: TreePage;
@@ -1007,12 +1011,26 @@ function TaskListView({ page }: TaskListViewProps) {
   const taskHandlers = bindTaskHandlersToList(locatedHandlers, page.id);
 
   const rootPath = rootNodePath(page.id);
+
+  // A completed sub-task moves its DIRECT parent's counters, and for a
+  // top-level parent that row lives in this cache. Without this the "2/5" on a
+  // root row never moves while its children are worked inline.
+  const patchRootCounts = useCallback(
+    (taskId: string, delta: { total?: number; completed?: number }) => {
+      void mutateTaskPages(
+        (current) => applySubTaskCountsToPages(current, taskId, delta),
+        { revalidate: false },
+      );
+    },
+    [mutateTaskPages],
+  );
   // Everything a row needs that is identical at every depth. What varies per
   // node — the task, its depth, the list it writes to, and the handlers bound to
   // the cache that holds it — travels on props instead.
   const treeValue = useMemo(() => ({
     canEdit,
     driveId: page.driveId,
+    writeMachinery,
     rootStatusConfigs: statusConfigs,
     onNavigate: handleNavigate,
     onStartEdit: handleStartEdit,
@@ -1026,8 +1044,8 @@ function TaskListView({ page }: TaskListViewProps) {
   // handleNavigate and handleStartEdit are redefined every render; including
   // them would defeat the memo, and both read only state already listed.
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }), [canEdit, page.driveId, statusConfigs, openTriggerDialog, expandedPaths,
-       toggleExpanded, editingTaskId, editingTitle]);
+  }), [canEdit, page.driveId, writeMachinery, statusConfigs, openTriggerDialog,
+       expandedPaths, toggleExpanded, editingTaskId, editingTitle]);
 
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
@@ -1312,6 +1330,7 @@ function TaskListView({ page }: TaskListViewProps) {
                         path={makeNodePath(rootPath, task.id)}
                         handlers={locatedHandlers}
                         statusConfigs={statusConfigs}
+                        onCountDelta={(delta) => patchRootCounts(task.id, delta)}
                         renderRow={(cells) => (
                           <SortableTaskRow
                             task={task}

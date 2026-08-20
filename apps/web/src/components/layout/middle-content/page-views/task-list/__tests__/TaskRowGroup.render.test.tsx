@@ -44,7 +44,7 @@ vi.mock('../MultiAssigneeSelect', () => ({ MultiAssigneeSelect: () => null }));
 const { TaskRowGroup } = await import('../TaskRowGroup');
 const { TaskTreeProvider } = await import('../task-tree-context');
 const { rootNodePath, makeNodePath } = await import('../task-tree-core');
-const { TaskWriteProvider } = await import('@/lib/tasks/task-write-context');
+const { useTaskWriteMachinery } = await import('@/lib/tasks/task-write-machinery');
 
 const CONFIGS: TaskStatusConfig[] = [
   { id: 'c1', taskListId: 'l', name: 'To Do', slug: 'pending', color: 'x', group: 'todo', position: 0 },
@@ -94,17 +94,25 @@ const noopHandlers = (): LocatedTaskHandlers => ({
 const ROOT_PAGE = 'root-page';
 
 function Harness({
-  tasks, expanded, canEdit = true, handlers = noopHandlers(),
+  tasks, expanded, canEdit = true, handlers = noopHandlers(), onCountDelta,
 }: {
   tasks: TaskItem[];
   expanded: Set<string>;
   canEdit?: boolean;
   handlers?: LocatedTaskHandlers;
+  onCountDelta?: (delta: { total?: number; completed?: number }) => void;
 }) {
   const rootPath = rootNodePath(ROOT_PAGE);
+  // Deliberately NOT wrapped in TaskWriteProvider: the app never renders one —
+  // TaskListView owns the machinery and hands it down on the tree context. A
+  // provider here would supply something production does not, and hid a crash
+  // ("useTaskWriter requires a TaskWriteProvider") that only appeared in the
+  // real app when a nested node mounted.
+  const writeMachinery = useTaskWriteMachinery('user-me', vi.fn());
   const tree = {
     canEdit,
     driveId: 'drive-1',
+    writeMachinery,
     rootStatusConfigs: CONFIGS,
     onNavigate: vi.fn(),
     onStartEdit: vi.fn(),
@@ -118,8 +126,7 @@ function Harness({
   };
   return (
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <TaskWriteProvider currentUserId="user-me" revalidateAll={vi.fn()}>
-        <TaskTreeProvider value={tree}>
+      <TaskTreeProvider value={tree}>
           <table>
             <tbody data-testid="rows">
               {tasks.map((t) => (
@@ -131,12 +138,12 @@ function Harness({
                   path={makeNodePath(rootPath, t.id)}
                   handlers={handlers}
                   statusConfigs={CONFIGS}
+                  onCountDelta={onCountDelta}
                 />
               ))}
             </tbody>
           </table>
-        </TaskTreeProvider>
-      </TaskWriteProvider>
+      </TaskTreeProvider>
     </SWRConfig>
   );
 }
@@ -281,6 +288,60 @@ describe('nested writes', () => {
       should: 'not show the inline add row',
       actual: screen.queryByPlaceholderText('+ Add a sub-task…'),
       expected: null,
+    });
+  });
+});
+
+describe('sub-task counters', () => {
+  it('tells the parent when a child completes', async () => {
+    // The counters live on the PARENT row, in the cache one level up — a child
+    // completing has to report the delta upward or a top-level "0/1" never moves.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child' })]));
+    patchMock.mockResolvedValue(task({ id: 'child', status: 'completed', completedAt: 'x', updatedAt: 's' }));
+    const onCountDelta = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'parent', subTaskCount: 1 })]}
+        expanded={expandedFor('parent')}
+        onCountDelta={onCountDelta}
+      />,
+    );
+    await screen.findByText('child');
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Complete child/i }));
+
+    await waitFor(() => expect(onCountDelta).toHaveBeenCalled());
+    assert({
+      given: 'a sub-task completed inline',
+      should: "report one more completed to its parent's row",
+      actual: onCountDelta.mock.calls[0][0],
+      expected: { completed: 1 },
+    });
+  });
+
+  it('reports a decrement when a completed child is reopened', async () => {
+    fetchWithAuth.mockResolvedValue(
+      subTaskResponse([task({ id: 'child', status: 'completed', completedAt: 'x' })]),
+    );
+    patchMock.mockResolvedValue(task({ id: 'child', status: 'pending', completedAt: null, updatedAt: 's' }));
+    const onCountDelta = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'parent', subTaskCount: 1, subTaskCompletedCount: 1 })]}
+        expanded={expandedFor('parent')}
+        onCountDelta={onCountDelta}
+      />,
+    );
+    await screen.findByText('child');
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /Reopen child/i }));
+
+    await waitFor(() => expect(onCountDelta).toHaveBeenCalled());
+    assert({
+      given: 'a completed sub-task reopened',
+      should: 'report one fewer completed',
+      actual: onCountDelta.mock.calls[0][0],
+      expected: { completed: -1 },
     });
   });
 });
