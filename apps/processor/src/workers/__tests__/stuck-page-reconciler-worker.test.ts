@@ -181,12 +181,15 @@ describe('runStuckPageReconciler', () => {
 
     await runStuckPageReconciler(deps);
 
-    const failUpdate = db.queries.find((q) => q.includes('UPDATE pages'));
-    expect(failUpdate).toBeDefined();
+    const failCall = db.client.query.mock.calls.find(
+      ([sql]) => typeof sql === 'string' && sql.includes('UPDATE pages')
+    );
+    expect(failCall).toBeDefined();
     // Without this predicate the scan's type filter is stale by the time the
     // write lands, and a FILE→DOCUMENT conversion in that window inherits the
     // failure.
-    expect(failUpdate).toMatch(/AND type = 'FILE'/);
+    expect(failCall?.[0]).toMatch(/AND type = \$3/);
+    expect(failCall?.[1]).toContain('FILE');
   });
 
   it('marks a page with an invalid content hash failed instead of re-enqueueing', async () => {

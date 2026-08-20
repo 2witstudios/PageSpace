@@ -130,7 +130,7 @@ export async function runStuckPageReconciler(
                 p."filePath" AS "contentHash",
                 EXTRACT(EPOCH FROM (NOW() - GREATEST(p."createdAt", p."updatedAt"))) * 1000 AS "ageMs"
            FROM pages p
-          WHERE p.type = 'FILE'
+          WHERE p.type = $4
             AND p."isTrashed" = false
             AND p."processingStatus" IN ('pending', 'processing')
             AND GREATEST(p."createdAt", p."updatedAt") < NOW() - ($1::bigint * interval '1 millisecond')
@@ -142,7 +142,7 @@ export async function runStuckPageReconciler(
             )
           ORDER BY GREATEST(p."createdAt", p."updatedAt") ASC
           LIMIT $3`,
-        [policy.staleThresholdMs, OWNING_QUEUES, policy.batchLimit],
+        [policy.staleThresholdMs, OWNING_QUEUES, policy.batchLimit, EXTRACTABLE_PAGE_TYPE],
       );
       summary.scanned = candidates.rows.length;
       if (candidates.rows.length === 0) {
@@ -216,17 +216,17 @@ export async function runStuckPageReconciler(
           case 'fail':
             try {
               const result = await client.query(
-                // The type predicate is re-evaluated HERE, not in the candidate
-                // scan: a FILE page can be converted to a DOCUMENT
+                // The type predicate is re-evaluated HERE, not just in the
+                // candidate scan: a FILE page can be converted to a DOCUMENT
                 // (/api/files/[id]/convert-to-document) between the scan and
                 // this write, and a converted page must not inherit a file's
                 // extraction failure.
                 `UPDATE pages
                     SET "processingStatus" = 'failed', "processingError" = $1, "processedAt" = NOW()
                   WHERE id = $2
-                    AND type = '${EXTRACTABLE_PAGE_TYPE}'
+                    AND type = $3
                     AND "processingStatus" IN ('pending', 'processing')`,
-                [decision.message, pageId],
+                [decision.message, pageId, EXTRACTABLE_PAGE_TYPE],
               );
               if (result.rowCount && result.rowCount > 0) {
                 summary.failed += 1;

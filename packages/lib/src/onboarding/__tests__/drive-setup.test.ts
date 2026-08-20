@@ -50,9 +50,14 @@ interface InsertCall {
 
 /**
  * A database stand-in that models the two properties the seeder relies on:
- * inserted rows are visible to the next reader, and `db.transaction` bodies
- * for the same drive run one at a time (that is what the `SELECT … FOR UPDATE`
- * on the drive row buys us in Postgres).
+ * inserted rows are visible to the next reader, and transaction bodies for the
+ * same drive run one at a time — which is what the `SELECT … FOR UPDATE` on the
+ * drive row buys in Postgres, and which the fake grants unconditionally.
+ *
+ * That last point bounds what these tests can prove. Serialisation is assumed
+ * here, not demonstrated: what they check is that the seeder does the right
+ * thing GIVEN it — skip when the scope is already filled. That the lock is
+ * actually taken, and taken before the check, is a separate test below.
  *
  * The existence query is not filtered by drive/parent here — every test uses a
  * single scope, so any recorded page insert stands for "the scope is occupied".
@@ -61,8 +66,6 @@ function makeFakeDb() {
   const inserts: InsertCall[] = [];
   const executes: unknown[] = [];
   let queue: Promise<unknown> = Promise.resolve();
-  let concurrentBodies = 0;
-  let maxConcurrentBodies = 0;
 
   const tx = {
     execute: vi.fn(async (statement: unknown) => {
@@ -86,15 +89,7 @@ function makeFakeDb() {
 
   const db = {
     transaction: vi.fn((body: (tx: unknown) => Promise<unknown>) => {
-      const run = queue.then(async () => {
-        concurrentBodies += 1;
-        maxConcurrentBodies = Math.max(maxConcurrentBodies, concurrentBodies);
-        try {
-          return await body(tx);
-        } finally {
-          concurrentBodies -= 1;
-        }
-      });
+      const run = queue.then(() => body(tx));
       queue = run.then(
         () => undefined,
         () => undefined
@@ -108,7 +103,6 @@ function makeFakeDb() {
     tx,
     executes,
     pageInserts: () => inserts.filter((call) => call.table === pages),
-    maxConcurrentBodies: () => maxConcurrentBodies,
   };
 }
 
@@ -138,7 +132,7 @@ describe('populateUserDrive – idempotency', () => {
     expect(fake.pageInserts()).toHaveLength(afterFirstRun);
   });
 
-  test('given two seeders racing on the same drive, exactly one set of seed pages results', async () => {
+  test('given two seeders serialised on the same drive, only the first seeds', async () => {
     const [first, second] = await Promise.all([
       populateUserDrive('user-1', 'drive-1', fake.db as unknown as SeederClient),
       populateUserDrive('user-1', 'drive-1', fake.db as unknown as SeederClient),
@@ -150,8 +144,6 @@ describe('populateUserDrive – idempotency', () => {
       .pageInserts()
       .filter((call) => call.data.title === 'Welcome to PageSpace');
     expect(welcomePages).toHaveLength(1);
-    // The bodies never overlapped — the drive row lock is what guarantees that.
-    expect(fake.maxConcurrentBodies()).toBe(1);
   });
 
   test('takes the drive row lock before deciding whether to seed', async () => {

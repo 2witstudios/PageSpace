@@ -7,10 +7,11 @@ import {
   HeadObjectCommand,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { getTableColumns, getTableName, is } from 'drizzle-orm';
+import { PgTable } from 'drizzle-orm/pg-core';
 import { db } from '@pagespace/db/db';
-import { count, eq } from '@pagespace/db/operators';
-import { activityLogs } from '@pagespace/db/schema/monitoring';
-import { pageVersions } from '@pagespace/db/schema/versioning';
+import { eq } from '@pagespace/db/operators';
+import * as dbSchema from '@pagespace/db/schema';
 import { decideBlobReclaim, type BlobRetainReason } from './page-content-reclaim';
 import { hashWithPrefix } from '../utils/hash-utils';
 import {
@@ -44,14 +45,13 @@ export interface DeletePageContentOptions {
   now?: Date;
 }
 
-export interface DeletePageContentResult {
-  ref: string;
-  deleted: boolean;
-  /** Rows still referencing the blob after the caller removed its own. */
-  remainingReferences: number;
-  /** Why the blob was kept; absent when it was deleted. */
-  reason?: BlobRetainReason | 'not-stored';
-}
+/**
+ * A reason is present exactly when the blob was kept, so the two travel
+ * together rather than as a boolean a caller could read without the why.
+ */
+export type DeletePageContentResult =
+  | { ref: string; deleted: true }
+  | { ref: string; deleted: false; reason: BlobRetainReason };
 
 export interface WritePageContentResult {
   ref: string;
@@ -225,28 +225,42 @@ export async function getContentMetadata(ref: string): Promise<{
 }
 
 /**
- * Every table that can hold a content ref. A blob is reclaimable only when none
- * of them still points at it — `page-content-ref-coverage.test.ts` fails if a
- * new `contentRef` column appears in the schema and is not counted here.
+ * Every table that can hold a content ref, derived from the schema itself.
+ *
+ * A blob is reclaimable only when none of them still points at it, so this list
+ * being short by one table means deleting content that is still in use. Reading
+ * it off the schema rather than maintaining it by hand means a new `contentRef`
+ * column is covered the day it is added — including one declared with a
+ * different column type or built by a shared helper, which a source-text guard
+ * would miss.
  */
-const CONTENT_REF_SOURCES = [
-  { table: pageVersions, column: pageVersions.contentRef },
-  { table: activityLogs, column: activityLogs.contentRef },
-] as const;
+const CONTENT_REF_SOURCES = Object.values(dbSchema as Record<string, unknown>)
+  .filter((value): value is PgTable => !!value && is(value, PgTable))
+  .filter((table) => 'contentRef' in getTableColumns(table));
 
-/** How many rows, across every tenant, still reference this blob. */
-export async function countPageContentReferences(ref: string): Promise<number> {
+/** SQL names of the tables the reclaim path consults. Exported for the coverage test. */
+export const CONTENT_REF_TABLE_NAMES: string[] = [
+  ...new Set(CONTENT_REF_SOURCES.map((table) => getTableName(table))),
+].sort();
+
+/**
+ * Whether any row, in any drive of any tenant, still references this blob.
+ *
+ * Deliberately an existence probe rather than a count: the decision is binary,
+ * and neither `contentRef` column is indexed, so counting every match would scan
+ * the whole version history and activity log to learn something the first row
+ * already settles. (An index on those columns is worth adding in the change
+ * that first calls this on a real workload.)
+ */
+export async function pageContentIsReferenced(ref: string): Promise<boolean> {
   assertContentRef(ref);
 
-  let total = 0;
-  for (const source of CONTENT_REF_SOURCES) {
-    const [row] = await db
-      .select({ value: count() })
-      .from(source.table)
-      .where(eq(source.column, ref));
-    total += Number(row?.value ?? 0);
+  for (const table of CONTENT_REF_SOURCES) {
+    const column = getTableColumns(table).contentRef;
+    const rows = await db.select({ contentRef: column }).from(table).where(eq(column, ref)).limit(1);
+    if (rows.length > 0) return true;
   }
-  return total;
+  return false;
 }
 
 /**
@@ -285,7 +299,7 @@ async function statContentObject(
  * what the count is there to prevent.
  *
  * Returns without deleting — never throws — when the blob is still referenced,
- * too young, or already absent.
+ * too young, or already absent; the `reason` says which.
  */
 export async function deletePageContent(
   ref: string,
@@ -293,22 +307,26 @@ export async function deletePageContent(
 ): Promise<DeletePageContentResult> {
   assertContentRef(ref);
 
-  const remainingReferences = await countPageContentReferences(ref);
-  const stored = await statContentObject(ref);
+  // Settle the cheap, decisive question first: a referenced blob is kept
+  // whatever its age, so there is no reason to go ask storage about it.
+  if (await pageContentIsReferenced(ref)) {
+    return { ref, deleted: false, reason: 'still-referenced' };
+  }
 
+  const stored = await statContentObject(ref);
   if (!stored) {
-    return { ref, deleted: false, remainingReferences, reason: 'not-stored' };
+    return { ref, deleted: false, reason: 'not-stored' };
   }
 
   const now = options?.now ?? new Date();
   const decision = decideBlobReclaim({
-    remainingReferences,
+    hasReferences: false,
     blobAgeMs: stored.lastModified ? now.getTime() - stored.lastModified.getTime() : null,
     minAgeMs: options?.minAgeMs ?? RECLAIM_MIN_AGE_MS,
   });
 
   if (decision.action === 'retain') {
-    return { ref, deleted: false, remainingReferences, reason: decision.reason };
+    return { ref, deleted: false, reason: decision.reason };
   }
 
   if (stored.location === 's3') {
@@ -317,7 +335,7 @@ export async function deletePageContent(
     await fs.unlink(contentFilesystemPath(ref));
   }
 
-  return { ref, deleted: true, remainingReferences };
+  return { ref, deleted: true };
 }
 
 export { COMPRESSION_THRESHOLD_BYTES };

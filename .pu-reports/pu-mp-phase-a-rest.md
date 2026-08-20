@@ -5,10 +5,8 @@ Branch `pu/mp-phase-a-rest`. Epic `i7qcdfg3evjpn5mbe9ux8mk2`, Phase A page
 phase. Board tasks stay `in_progress` — they move to `completed` when the PR merges, and that is the
 orchestrator's call, not mine.
 
-Two commits:
-
-- `34e883ff9` — leaves 1 and 2 (repository input, processor fence)
-- `07a6c161d` — leaves 3 and 4 (onboarding seeder, content-store reclaim)
+Three commits: leaves 1–2, leaves 3–4, then a cleanup pass (`/simplify`, four review
+angles) whose findings are folded into the sections below rather than described separately.
 
 ---
 
@@ -25,13 +23,19 @@ Two halves:
 - **Compile time.** The field is gone. `page-repository-update-input.test.ts` puts a
   `@ts-expect-error` on `content:` in an `UpdatePageInput` literal, so reintroducing the field makes
   the directive unused and fails `bun run typecheck`.
-- **Runtime.** `update` throws on a `content` key. The type cannot help a caller that arrives through
-  an `as` cast or an untyped JSON payload, and that is exactly the caller this leaf is aimed at.
+- **Runtime.** `assertNoContentWrite` throws on a `content` key. The type cannot help a caller that
+  arrives through an `as` cast or an untyped JSON payload, and that is exactly the caller this leaf is
+  aimed at.
+
+The guard is shared, not inlined, because `pageRepository.update` is not the only seam of this shape:
+`agentRepository.updateConfig` (`agent-repository.ts:96`) spreads an equally widened
+`Record<string, unknown>` into the same bare `db.update(pages).set(...)`. Hardening one and not the
+other would have left the identical hazard one file away. Both now call the guard, and both are
+tested.
 
 **Mutation check.** Re-added `content?: string` to the interface → `tsc --noEmit` reported
-`TS2578: Unused '@ts-expect-error' directive` at the test line. Removed the runtime `if ('content' in
-data)` guard → the runtime test went red (`expected [Function] to throw error matching /content/i`).
-Both restored, both green.
+`TS2578: Unused '@ts-expect-error' directive` at the test line. Replaced the body of
+`assertNoContentWrite` with `return;` → both runtime tests went red. Restored, green.
 
 ---
 
@@ -43,15 +47,30 @@ DOCUMENT after enqueue does not get its body overwritten.**
 `decideExtractionWrite` (`apps/processor/src/extraction-write-guard.ts`) is the pure decision:
 `FILE` → `write`, any other type → `skip-content`, missing page → `skip-all`.
 
-`setPageCompleted` (`apps/processor/src/db.ts`) now runs `BEGIN` → `SELECT type … FOR UPDATE` →
-decide → write → `COMMIT`, with a `ROLLBACK` on failure. The type is read **at write time under a row
-lock**, not trusted from enqueue time, which is the whole point: `convert-to-document` can land in
-that window.
+`setPageCompleted` (`apps/processor/src/db.ts`) is **one statement**:
 
-On `skip-content` the processing bookkeeping (`processingStatus`, `extractionMethod`,
-`extractionMetadata`, `processedAt`) still lands, and only the body is withheld. Without that the
-converted page would sit `processing` forever and the stuck-page reconciler would eventually mark it
-failed — a worse outcome than the bug being fixed.
+```sql
+SET content = CASE WHEN type = $1 THEN $2 ELSE content END, "processingStatus" = $3, … RETURNING type
+```
+
+The UPDATE takes the row lock itself and evaluates `type` against the same row version it writes, so
+nothing can convert the page in between — which is the whole point, since `convert-to-document` can
+land in that window. `decideExtractionWrite` is fed from `RETURNING type` and drives the logging.
+
+I first wrote this as `BEGIN` → `SELECT … FOR UPDATE` → decide → write → `COMMIT`. The cleanup pass
+flagged the two near-identical UPDATE strings and the three extra round trips, and it was right: a
+single UPDATE gives the same guarantee. It also matches the reconciler's existing shape.
+
+The bookkeeping (`processingStatus`, `extractionMethod`, `extractionMetadata`, `processedAt`) lands
+either way; only the body is withheld. Without that the converted page would sit `processing` forever
+and the stuck-page reconciler would eventually mark it failed — a worse outcome than the bug.
+
+**The collapse moved the guard from TypeScript into SQL, so the unit tests could no longer execute
+it** — a mocked pg driver cannot evaluate a `CASE`. Asserting the statement's shape would have been a
+proxy for the property, so the fence is now covered by
+`workers/__tests__/set-page-completed.integration.test.ts`, which runs it against a real Postgres:
+insert a DOCUMENT page with an authored body, call `setPageCompleted`, assert the body is untouched
+and the bookkeeping landed.
 
 **One correction to the task description.** It says
 `workers/stuck-page-reconciler-worker.ts:218` runs `UPDATE pages SET content`. It does not — that
@@ -61,10 +80,18 @@ that file. The candidate scan already filters `p.type = 'FILE'`. The real gap th
 time, so a page converted between the scan and the write does not inherit a file's extraction
 failure. No content clobber existed there to fix.
 
-**Mutation check.** Made `decideExtractionWrite` return `{ action: 'write' }` unconditionally → 13
-tests red across `db.test.ts` and `extraction-write-guard.test.ts`, including "given a page converted
-to DOCUMENT after enqueue, never writes content". Separately deleted the `AND type = 'FILE'` line
+**Mutation check.** Replaced the fence with `CASE WHEN $1::text IS NOT NULL` — valid SQL, no fence —
+and the integration suite went red with the thing that actually matters:
+`expected 'text pulled out of the PDF' to be '<p>a paragraph a person wrote after converting the
+file</p>'`. The authored body was genuinely clobbered. Also removed the `AND type = $3` predicate
 from the reconciler's UPDATE → "re-checks the page type at write time" went red. Both restored.
+
+**A latent test-harness defect surfaced on the way.** `apps/processor` runs in a single fork, so
+`process.env` is shared across all 67 test files, and three suites assign a placeholder
+`DATABASE_URL` that outlives them. Any later suite talking to a real Postgres inherited
+`postgresql://localhost:5432/test` and died with `database "test" does not exist` — order-dependent,
+and invisible until this PR added the first such suite. Fixed once in `src/test/setup.ts` (stash the
+pristine value, restore before each file) rather than in each of the three offenders.
 
 ---
 
@@ -84,18 +111,27 @@ documentation. Unified on web's copy. The web/admin `drive-setup.ts` difference 
 path for the AI defaults — both resolve to the same `DEFAULT_AI_PROVIDER`/`DEFAULT_AI_MODEL`.
 
 `populateUserDrive` now wraps the whole seed in one transaction that takes `SELECT 1 FROM drives …
-FOR UPDATE` **before** checking whether the scope is populated, then decides via the pure
-`decideDriveSeeding`. A loser of the race blocks on the lock, then reads the winner's pages and
-returns `{ seeded: false }`. Return type changed from `void` to `{ seeded: boolean }`.
+FOR UPDATE` **before** checking whether the scope is populated. A loser of the race blocks on the
+lock, then reads the winner's pages and returns `{ seeded: false }`. Return type changed from `void`
+to `{ seeded: boolean }`.
 
-**Mutation check.** Removed the `existingPageCount > 0` branch from `decideDriveSeeding` → 3 red,
-including "given two seeders racing on the same drive, exactly one set of seed pages results" and
-"re-running is a no-op rather than a second copy". Separately removed the `FOR UPDATE` statement →
-"takes the drive row lock before deciding whether to seed" went red. Both restored.
+I had put the two-outcome check behind a pure `decideDriveSeeding` returning a tagged union; the
+cleanup pass pointed out the caller only ever compared `.action === 'skip'` and never read the
+`reason`, making it a boolean in costume. Inlined, and the module, its test and its exports entry are
+gone. (`decideExtractionWrite` and `decideBlobReclaim` kept their shape — three and four outcomes
+respectively, with the reason consumed by the caller.)
 
-The concurrency test drives two `populateUserDrive` calls through a database stand-in whose
-`transaction` serialises bodies (what the row lock buys in Postgres) and whose reads see prior
-inserts; it asserts exactly one "Welcome to PageSpace" insert and that the bodies never overlapped.
+**Mutation check.** Removed the already-seeded branch → "re-running is a no-op rather than a second
+copy" and the two-seeder test went red. Separately removed the `FOR UPDATE` statement → "takes the
+drive row lock before deciding whether to seed" went red. Both restored.
+
+**What the two-seeder test does and does not prove.** It drives two `populateUserDrive` calls through
+a database stand-in and asserts exactly one "Welcome to PageSpace" insert. But that stand-in
+serialises transaction bodies unconditionally, so serialisation is *assumed* there, not demonstrated
+— removing the `FOR UPDATE` leaves it green. I originally described it as covering the race; it does
+not. What it covers is that the seeder does the right thing given serialisation. That the lock is
+taken, and taken before the existence check, is the separate `invocationCallOrder` test. I dropped
+the `maxConcurrentBodies` assertion, which only ever restated a property of the fake.
 
 ---
 
@@ -109,14 +145,18 @@ is pure (`page-content-reclaim.ts`); the S3/filesystem/pg calls stay at the boun
 
 Four things this had to get right, since it is the one leaf that can destroy data:
 
-- **Refcount, not ownership.** `getS3Key` shards by hash prefix with no tenant scoping, so one object
-  is shared by every page in every drive of every tenant whose content hashes the same.
-  `countPageContentReferences` counts across **both** tables that can hold a ref — `page_versions`
-  and `activity_logs`. Missing the second would have deleted live content.
-- **A coverage guard against the next table.** `page-content-ref-coverage.test.ts` reads the schema
-  source, finds every file declaring a `contentRef` column, and fails if it is not in the counted
-  set. An uncounted table makes a referenced blob read as unreferenced — the exact failure mode that
-  silently deletes data, and the one no ordinary test would catch.
+- **Reference check, not ownership.** `getS3Key` shards by hash prefix with no tenant scoping, so one
+  object is shared by every page in every drive of every tenant whose content hashes the same.
+  `pageContentIsReferenced` consults **every** table that can hold a ref. Missing one would delete
+  live content.
+- **The table list is derived from the schema, not maintained by hand.** It walks the `@pagespace/db`
+  barrel for tables with a `contentRef` column. My first version hardcoded the two tables and added a
+  test that regex-scanned the schema *source* to catch drift — with a comment asserting runtime
+  enumeration was impossible. That was simply wrong: `getTableColumns` makes it a three-line walk,
+  two existing suites in this repo already do it, and the source scan it replaced was file-granular
+  and blind to any `contentRef` not declared as a literal `text(` call. The guard now compares the
+  store's derived list against an independent walk, plus a floor assertion so a broken barrel cannot
+  silently produce an empty list (which would read as "nothing references anything").
 - **An age floor.** `writePageContent` is HEAD-then-PUT: a writer that finds the object present skips
   the upload and stores the ref. A reclaim landing between that HEAD and the writer's row insert
   leaves the new ref pointing at nothing. Blobs younger than `RECLAIM_MIN_AGE_MS` (24h) are never
@@ -133,10 +173,21 @@ undermine the GDPR-erasure use case this exists for.
 
 `deletePageContent` has no caller yet — by design; it is the prerequisite the task describes.
 
+The reference check is an existence probe rather than a count: the decision is binary, and neither
+`contentRef` column is indexed, so counting every match would scan the whole version history and
+activity log to learn what the first row settles. It also runs **before** the storage HEAD, since a
+referenced blob is kept whatever its age. `DeletePageContentResult` is a discriminated union, so a
+retain always carries its reason and a caller cannot read an absent one.
+
+**Follow-up, deliberately not in this PR:** neither `contentRef` column is indexed, so even the
+existence probe seq-scans both tables when a blob is unreferenced — which is the common case for
+reclaim. A partial index (`ON ("contentRef") WHERE "contentRef" IS NOT NULL`) belongs in the change
+that first calls this on a real workload; adding a migration here, with no caller, would be staging
+risk for no benefit. Noted in the code as well.
+
 **Mutation check.** Removed the `still-referenced` and `too-young` branches from `decideBlobReclaim`
-and dropped `activityLogs` from `CONTENT_REF_SOURCES` → 8 red, including "given two pages share the
-ref and one is deleted, keeps the blob", "counts references from activity logs too", "never reclaims
-a blob written moments ago", and the schema-coverage guard. Restored, green.
+→ red, including "given two pages share the ref and one is deleted, keeps the blob" and "never
+reclaims a blob written moments ago". Restored, green.
 
 ---
 

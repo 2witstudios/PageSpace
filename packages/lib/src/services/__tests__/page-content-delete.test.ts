@@ -19,27 +19,25 @@ vi.mock('fs', () => ({
   },
 }));
 
-/** Reference counts per table, keyed by the order of CONTENT_REF_SOURCES. */
-const refCounts: number[] = [];
-let selectCall = 0;
+/**
+ * Whether the reference probe finds a row. The store derives its table list
+ * from the real schema barrel (left unmocked — table definitions open no
+ * connection), so this stands in for "some table still points at the blob".
+ */
+let referenced = false;
 vi.mock('@pagespace/db/db', () => ({
   db: {
     select: () => ({
       from: () => ({
-        where: async () => [{ value: refCounts[selectCall++] ?? 0 }],
+        where: () => ({
+          limit: async () => (referenced ? [{ contentRef: 'a'.repeat(64) }] : []),
+        }),
       }),
     }),
   },
 }));
 vi.mock('@pagespace/db/operators', () => ({
-  count: vi.fn(() => 'count()'),
   eq: vi.fn((a: unknown, b: unknown) => ({ eq: [a, b] })),
-}));
-vi.mock('@pagespace/db/schema/monitoring', () => ({
-  activityLogs: { contentRef: 'activityLogs.contentRef' },
-}));
-vi.mock('@pagespace/db/schema/versioning', () => ({
-  pageVersions: { contentRef: 'pageVersions.contentRef' },
 }));
 
 import { deletePageContent, RECLAIM_MIN_AGE_MS } from '../page-content-store';
@@ -47,13 +45,6 @@ import { deletePageContent, RECLAIM_MIN_AGE_MS } from '../page-content-store';
 const VALID_REF = 'a'.repeat(64);
 const NOW = new Date('2026-08-19T12:00:00.000Z');
 const OLD = new Date(NOW.getTime() - 30 * 24 * 60 * 60 * 1000);
-
-/** Reference counts for [page_versions, activity_logs]. */
-function setReferences(versions: number, activities: number): void {
-  refCounts.length = 0;
-  refCounts.push(versions, activities);
-  selectCall = 0;
-}
 
 function s3HasObject(lastModified: Date | null): void {
   mockS3Send.mockImplementation(async (command: { __type: string }) => {
@@ -80,42 +71,39 @@ describe('deletePageContent', () => {
     vi.clearAllMocks();
     process.env.BUCKET_NAME = 'test-bucket';
     process.env.PAGE_CONTENT_STORAGE_PATH = '/data/storage';
-    setReferences(0, 0);
+    referenced = false;
     mockStat.mockRejectedValue(new Error('ENOENT'));
     mockUnlink.mockResolvedValue(undefined);
   });
 
   it('given two pages share the ref and one is deleted, keeps the blob', async () => {
-    setReferences(1, 0);
+    referenced = true;
     s3HasObject(OLD);
 
     const result = await deletePageContent(VALID_REF, { now: NOW });
 
-    expect(result).toMatchObject({
-      deleted: false,
-      remainingReferences: 1,
-      reason: 'still-referenced',
-    });
+    expect(result).toEqual({ ref: VALID_REF, deleted: false, reason: 'still-referenced' });
     expect(deleteCommands()).toHaveLength(0);
   });
 
-  it('counts references from activity logs too, not only page versions', async () => {
-    setReferences(0, 1);
+  it('does not go near storage for a blob it already knows is referenced', async () => {
+    referenced = true;
     s3HasObject(OLD);
 
     const result = await deletePageContent(VALID_REF, { now: NOW });
 
-    expect(result).toMatchObject({ deleted: false, reason: 'still-referenced' });
-    expect(deleteCommands()).toHaveLength(0);
+    expect(result).toEqual({ ref: VALID_REF, deleted: false, reason: 'still-referenced' });
+    expect(mockS3Send).not.toHaveBeenCalled();
+    expect(mockStat).not.toHaveBeenCalled();
   });
 
   it('given the last reference is dropped, removes the object from storage', async () => {
-    setReferences(0, 0);
+    referenced = false;
     s3HasObject(OLD);
 
     const result = await deletePageContent(VALID_REF, { now: NOW });
 
-    expect(result).toMatchObject({ deleted: true, remainingReferences: 0 });
+    expect(result).toEqual({ ref: VALID_REF, deleted: true });
     expect(deleteCommands()).toHaveLength(1);
     expect(deleteCommands()[0][0]).toMatchObject({
       Bucket: 'test-bucket',
@@ -124,7 +112,7 @@ describe('deletePageContent', () => {
   });
 
   it('never reclaims a blob written moments ago, even with zero references', async () => {
-    setReferences(0, 0);
+    referenced = false;
     s3HasObject(new Date(NOW.getTime() - 1000));
 
     const result = await deletePageContent(VALID_REF, { now: NOW });
@@ -134,7 +122,7 @@ describe('deletePageContent', () => {
   });
 
   it('fails closed when the object cannot be dated', async () => {
-    setReferences(0, 0);
+    referenced = false;
     s3HasObject(null);
 
     const result = await deletePageContent(VALID_REF, { now: NOW });
@@ -144,7 +132,7 @@ describe('deletePageContent', () => {
   });
 
   it('reclaims pre-cutover content that still lives only on the filesystem', async () => {
-    setReferences(0, 0);
+    referenced = false;
     s3Missing();
     mockStat.mockResolvedValue({ mtime: OLD });
 
@@ -156,7 +144,7 @@ describe('deletePageContent', () => {
   });
 
   it('given the blob is already gone, reports it without throwing', async () => {
-    setReferences(0, 0);
+    referenced = false;
     s3Missing();
 
     const result = await deletePageContent(VALID_REF, { now: NOW });

@@ -11,7 +11,9 @@ const mockConnect = vi.fn(() =>
   Promise.resolve({ query: mockQuery, release: mockRelease }),
 );
 
-// Ensure DATABASE_URL is available before module loads
+// Ensure DATABASE_URL is available before module loads. This package runs in a
+// single fork, so the assignment outlives this file — src/test/setup.ts restores
+// the pristine value before each subsequent file for that reason.
 vi.hoisted(() => {
   process.env.DATABASE_URL = 'postgresql://localhost:5432/test';
 });
@@ -29,6 +31,7 @@ vi.mock('pg', () => {
   return { default: { Pool: MockPool }, Pool: MockPool };
 });
 
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   setPageProcessing,
   setPageCompleted,
@@ -37,28 +40,28 @@ import {
   getPageForIngestion,
 } from '../db';
 
-const SET_PAGE_COMPLETED_SQL = 'UPDATE pages SET content = $1, "processingStatus" = $2, "extractionMethod" = $3, "extractionMetadata" = $4::jsonb, "processedAt" = NOW() WHERE id = $5';
-const STATUS_ONLY_SQL = 'UPDATE pages SET "processingStatus" = $1, "extractionMethod" = $2, "extractionMetadata" = $3::jsonb, "processedAt" = NOW() WHERE id = $4';
-const TYPE_LOCK_SQL = 'SELECT type FROM pages WHERE id = $1 FOR UPDATE';
-
 /**
- * setPageCompleted reads the page's type under a row lock before deciding
- * whether the body may be written. Every call has to answer that SELECT.
+ * setPageCompleted is one statement: the FILE fence is the CASE expression, so
+ * these tests pin the statement's shape and the log/branching it drives. That
+ * the CASE actually protects a DOCUMENT body is proven by executing it against
+ * a real Postgres in set-page-completed.integration.test.ts — a mocked driver
+ * cannot evaluate SQL.
  */
-function respondWithPageType(type: string | null): void {
-  mockQuery.mockImplementation((sql: string) => {
-    if (sql === TYPE_LOCK_SQL) {
-      return Promise.resolve({ rows: type === null ? [] : [{ type }], rowCount: type === null ? 0 : 1 });
-    }
-    return Promise.resolve({ rows: [], rowCount: 0 });
-  });
-}
+const SET_PAGE_COMPLETED_SQL = `UPDATE pages
+          SET content = CASE WHEN type = $1 THEN $2 ELSE content END,
+              "processingStatus" = $3,
+              "extractionMethod" = $4,
+              "extractionMetadata" = $5::jsonb,
+              "processedAt" = NOW()
+        WHERE id = $6
+      RETURNING type`;
 
-/** SQL text of every UPDATE the call issued. */
-function updateStatements(): string[] {
-  return mockQuery.mock.calls
-    .map((call) => String(call[0]))
-    .filter((sql) => sql.startsWith('UPDATE '));
+/** Make the UPDATE report the row it wrote back, as RETURNING type does. */
+function respondWithPageType(type: string | null): void {
+  mockQuery.mockResolvedValue({
+    rows: type === null ? [] : [{ type }],
+    rowCount: type === null ? 0 : 1,
+  });
 }
 
 describe('db module', () => {
@@ -92,40 +95,46 @@ describe('db module', () => {
       respondWithPageType('FILE');
     });
 
-    it('should execute with metadata and extraction method', async () => {
+    it('writes content, status and extraction metadata in one statement', async () => {
       await setPageCompleted('page-1', 'extracted', { title: 'Test' }, 'text');
-      expect(mockQuery).toHaveBeenCalledWith(
-        expect.stringContaining('processingStatus'),
-        expect.arrayContaining(['extracted', 'completed']),
-      );
+
+      expect(mockQuery).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(SET_PAGE_COMPLETED_SQL, [
+        'FILE',
+        'extracted',
+        'completed',
+        'text',
+        '{"title":"Test"}',
+        'page-1',
+      ]);
       expect(mockRelease).toHaveBeenCalledTimes(1);
+    });
+
+    it('fences the content write to FILE pages inside the statement itself', async () => {
+      await setPageCompleted('page-1', 'extracted', null, 'text');
+
+      const [sql, values] = mockQuery.mock.calls[0] as [string, unknown[]];
+      // No separate read-then-write: the UPDATE tests `type` against the same
+      // row version it writes, so nothing can convert the page in between.
+      expect(sql).toContain('SET content = CASE WHEN type = $1 THEN $2 ELSE content END');
+      expect(values[0]).toBe('FILE');
+      expect(sql).toContain('RETURNING type');
     });
 
     it('should use default extraction method (text)', async () => {
       await setPageCompleted('page-1', 'content', null);
-      expect(mockQuery).toHaveBeenCalledWith(
-        SET_PAGE_COMPLETED_SQL,
-        ['content', 'completed', 'text', null, 'page-1'],
-      );
-      expect(mockRelease).toHaveBeenCalledTimes(1);
+
+      expect(mockQuery).toHaveBeenCalledWith(SET_PAGE_COMPLETED_SQL, [
+        'FILE', 'content', 'completed', 'text', null, 'page-1',
+      ]);
     });
 
     it('should pass null when metadata is null', async () => {
       await setPageCompleted('page-1', 'text', null, 'ocr');
-      expect(mockQuery).toHaveBeenCalledWith(
-        SET_PAGE_COMPLETED_SQL,
-        ['text', 'completed', 'ocr', null, 'page-1'],
-      );
-      expect(mockRelease).toHaveBeenCalledTimes(1);
-    });
 
-    it('should stringify non-null metadata', async () => {
-      await setPageCompleted('page-1', 'text', { key: 'val' }, 'text');
-      expect(mockQuery).toHaveBeenCalledWith(
-        SET_PAGE_COMPLETED_SQL,
-        ['text', 'completed', 'text', '{"key":"val"}', 'page-1'],
-      );
-      expect(mockRelease).toHaveBeenCalledTimes(1);
+      expect(mockQuery).toHaveBeenCalledWith(SET_PAGE_COMPLETED_SQL, [
+        'FILE', 'text', 'completed', 'ocr', null, 'page-1',
+      ]);
     });
 
     it('should release client on error', async () => {
@@ -134,63 +143,35 @@ describe('db module', () => {
       expect(mockRelease).toHaveBeenCalledTimes(1);
     });
 
-    it('given a page converted to DOCUMENT after enqueue, never writes content', async () => {
+    it('warns that the body was left alone when the page is no longer a FILE', async () => {
       respondWithPageType('DOCUMENT');
+      const warn = vi.spyOn(loggers.processor, 'warn').mockImplementation(() => {});
 
-      await setPageCompleted('page-1', 'extracted text', { title: 'Doc' }, 'text');
+      await setPageCompleted('page-1', 'extracted text', null, 'text');
 
-      expect(updateStatements()).toEqual([STATUS_ONLY_SQL]);
-      expect(mockQuery).not.toHaveBeenCalledWith(
-        SET_PAGE_COMPLETED_SQL,
-        expect.anything(),
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining('page-1 is a DOCUMENT, not a FILE')
       );
-      // The authored body survives; only the processing bookkeeping lands.
-      expect(mockQuery).toHaveBeenCalledWith(
-        STATUS_ONLY_SQL,
-        ['completed', 'text', '{"title":"Doc"}', 'page-1'],
-      );
-      expect(mockRelease).toHaveBeenCalledTimes(1);
+      warn.mockRestore();
     });
 
-    it('given any non-FILE page type, refuses the content write', async () => {
-      for (const type of ['FOLDER', 'AI_CHAT', 'CHANNEL', 'SHEET', 'CANVAS']) {
-        mockQuery.mockClear();
-        respondWithPageType(type);
-        await setPageCompleted('page-1', 'extracted text', null, 'text');
-        expect(updateStatements()).toEqual([STATUS_ONLY_SQL]);
-      }
-    });
-
-    it('given the page no longer exists, writes nothing at all', async () => {
+    it('warns when the page no longer exists', async () => {
       respondWithPageType(null);
+      const warn = vi.spyOn(loggers.processor, 'warn').mockImplementation(() => {});
 
       await setPageCompleted('page-1', 'extracted text', null, 'text');
 
-      expect(updateStatements()).toEqual([]);
-      expect(mockRelease).toHaveBeenCalledTimes(1);
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('no longer exists'));
+      warn.mockRestore();
     });
 
-    it('reads the type under a row lock in the same transaction as the write', async () => {
-      respondWithPageType('FILE');
+    it('says nothing when the write landed normally', async () => {
+      const warn = vi.spyOn(loggers.processor, 'warn').mockImplementation(() => {});
 
       await setPageCompleted('page-1', 'extracted text', null, 'text');
 
-      const sqls = mockQuery.mock.calls.map((call) => String(call[0]));
-      expect(sqls[0]).toBe('BEGIN');
-      expect(sqls[1]).toBe(TYPE_LOCK_SQL);
-      expect(sqls[2]).toBe(SET_PAGE_COMPLETED_SQL);
-      expect(sqls[3]).toBe('COMMIT');
-    });
-
-    it('rolls back when the write fails', async () => {
-      respondWithPageType('FILE');
-      mockQuery.mockImplementationOnce(() => Promise.resolve({ rows: [], rowCount: 0 })) // BEGIN
-        .mockImplementationOnce(() => Promise.resolve({ rows: [{ type: 'FILE' }], rowCount: 1 }))
-        .mockImplementationOnce(() => Promise.reject(new Error('write failed')));
-
-      await expect(setPageCompleted('page-1', 'text', null)).rejects.toThrow('write failed');
-      expect(mockQuery.mock.calls.map((c) => String(c[0]))).toContain('ROLLBACK');
-      expect(mockRelease).toHaveBeenCalledTimes(1);
+      expect(warn).not.toHaveBeenCalled();
+      warn.mockRestore();
     });
   });
 

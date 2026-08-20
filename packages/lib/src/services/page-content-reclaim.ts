@@ -20,24 +20,29 @@
 
 export interface BlobReclaimEvidence {
   /**
-   * Rows still referencing the blob at decision time. The caller deletes its
-   * own rows first, so its own reference is already gone from this count.
+   * Whether any row still references the blob at decision time. The caller
+   * deletes its own rows first, so its own reference is already gone.
    */
-  remainingReferences: number;
+  hasReferences: boolean;
   /** Age of the stored object in ms, or null when it could not be determined. */
   blobAgeMs: number | null;
   /** Blobs younger than this are never reclaimed. */
   minAgeMs: number;
 }
 
-export type BlobRetainReason = 'still-referenced' | 'age-unknown' | 'too-young';
+export type BlobRetainReason =
+  | 'still-referenced'
+  | 'age-unknown'
+  | 'too-young'
+  /** Nothing is stored under this ref — already reclaimed, or never written. */
+  | 'not-stored';
 
 export type BlobReclaimDecision =
   | { action: 'delete' }
   | { action: 'retain'; reason: BlobRetainReason };
 
 export function decideBlobReclaim(evidence: BlobReclaimEvidence): BlobReclaimDecision {
-  if (evidence.remainingReferences > 0) {
+  if (evidence.hasReferences) {
     return { action: 'retain', reason: 'still-referenced' };
   }
   if (evidence.blobAgeMs === null) {

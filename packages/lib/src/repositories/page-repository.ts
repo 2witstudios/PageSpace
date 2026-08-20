@@ -9,6 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, desc, isNull, inArray, isNotNull, lt } from '@pagespace/db/operators';
 import { pages, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { deleteConversationsForPages } from './conversation-cleanup';
+import { assertNoContentWrite } from './page-write-guard';
 
 export type PageTypeValue = PageTypeEnum;
 
@@ -205,14 +206,7 @@ export const pageRepository = {
     pageId: string,
     data: UpdatePageInput
   ): Promise<{ id: string; title: string; type: PageTypeValue; parentId: string | null }> => {
-    // Backstop for callers that reach this seam through an `as` cast or an
-    // untyped payload, where the type above cannot help. Failing loudly beats
-    // an unguarded content write that no version row records.
-    if ('content' in data) {
-      throw new Error(
-        'pageRepository.update cannot set page content — use applyPageMutation, which does the revision compare-and-swap'
-      );
-    }
+    assertNoContentWrite(data, 'pageRepository.update');
 
     const updateData: Record<string, unknown> = {
       ...data,

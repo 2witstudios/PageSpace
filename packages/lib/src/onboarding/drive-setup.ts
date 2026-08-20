@@ -7,7 +7,6 @@ import { getAboutPageSpaceAgentSystemPrompt, getReferenceSeedTemplate, type Seed
 import { buildBudgetSheetContent } from './faq/content-page-types';
 import { PLANNING_ASSISTANT_SYSTEM_PROMPT } from './faq/example-agent-prompts';
 import { DEFAULT_AI_PROVIDER, DEFAULT_AI_MODEL } from '../ai/model-defaults';
-import { decideDriveSeeding } from './seed-decision';
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 type DatabaseType = typeof db;
@@ -58,7 +57,7 @@ async function seedDriveInTransaction(
   );
 
   const rootParentId = options?.rootParentId;
-  const existing = await client
+  const [alreadySeeded] = await client
     .select({ id: pages.id })
     .from(pages)
     .where(
@@ -69,7 +68,7 @@ async function seedDriveInTransaction(
     )
     .limit(1);
 
-  if (decideDriveSeeding({ existingPageCount: existing.length }).action === 'skip') {
+  if (alreadySeeded) {
     return { seeded: false };
   }
 
@@ -92,7 +91,7 @@ async function seedDriveInTransaction(
       ...values,
       id,
       content: values.content ?? '',
-      parentId: values.parentId ?? options?.rootParentId,
+      parentId: values.parentId ?? rootParentId,
     });
     return id;
   };

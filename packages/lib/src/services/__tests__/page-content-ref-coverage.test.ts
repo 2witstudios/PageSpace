@@ -1,47 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { readdirSync, readFileSync } from 'fs';
-import { dirname, join } from 'path';
-import { fileURLToPath } from 'url';
+import { getTableColumns, getTableName, is } from 'drizzle-orm';
+import { PgTable } from 'drizzle-orm/pg-core';
+import * as dbSchema from '@pagespace/db/schema';
+import { CONTENT_REF_TABLE_NAMES } from '../page-content-store';
 
 /**
- * Reclaim is only as safe as its reference count is complete: a `contentRef`
- * column added to a new table would make `deletePageContent` see zero
- * references for a blob that is still in use, and delete it.
+ * Reclaim is only as safe as its reference check is complete: a table holding a
+ * `contentRef` that the check does not consult would make `deletePageContent`
+ * see no references for a blob that is still in use, and delete it.
  *
- * `CONTENT_REF_SOURCES` in page-content-store.ts cannot be enumerated from the
- * schema at runtime, so this guard reads the schema source instead. When it
- * fails, add the new table to CONTENT_REF_SOURCES and then to this list.
+ * The store derives its table list from the schema, so the two can only diverge
+ * if that derivation breaks. This asserts it against an independent walk, and
+ * pins the tables we know about so a barrel regression that silently empties
+ * the list cannot pass.
  */
-const COUNTED_TABLES = [
-  { file: 'versioning.ts', table: 'pageVersions' },
-  { file: 'monitoring.ts', table: 'activityLogs' },
-];
-
-const schemaDir = join(
-  dirname(fileURLToPath(import.meta.url)),
-  '../../../../db/src/schema'
-);
-
-function filesDeclaringContentRef(): string[] {
-  return readdirSync(schemaDir)
-    .filter((name) => name.endsWith('.ts'))
-    .filter((name) => /^\s*contentRef:\s*text\(/m.test(readFileSync(join(schemaDir, name), 'utf8')));
+function tablesWithContentRef(): string[] {
+  const names: string[] = [];
+  for (const value of Object.values(dbSchema as Record<string, unknown>)) {
+    if (value && is(value, PgTable) && 'contentRef' in getTableColumns(value)) {
+      names.push(getTableName(value));
+    }
+  }
+  return [...new Set(names)].sort();
 }
 
 describe('content ref reclaim coverage', () => {
-  it('every schema file with a contentRef column is counted by the reclaim path', () => {
-    expect(filesDeclaringContentRef().sort()).toEqual(
-      COUNTED_TABLES.map((entry) => entry.file).sort()
-    );
+  it('consults every table in the schema that holds a contentRef', () => {
+    expect(CONTENT_REF_TABLE_NAMES).toEqual(tablesWithContentRef());
   });
 
-  it('names the tables page-content-store counts', () => {
-    const store = readFileSync(
-      join(dirname(fileURLToPath(import.meta.url)), '../page-content-store.ts'),
-      'utf8'
+  it('covers the tables known to hold one', () => {
+    // Pinned so an empty derivation — a broken barrel, a drizzle upgrade that
+    // changes `is(value, PgTable)` — fails loudly instead of reporting that
+    // nothing anywhere references any blob.
+    expect(CONTENT_REF_TABLE_NAMES).toEqual(
+      expect.arrayContaining(['page_versions', 'activity_logs'])
     );
-    for (const { table } of COUNTED_TABLES) {
-      expect(store).toContain(`${table}.contentRef`);
-    }
   });
 });

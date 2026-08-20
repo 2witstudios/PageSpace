@@ -9,6 +9,7 @@
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { assertNoContentWrite } from './page-write-guard';
 
 // Types for repository operations
 export interface AgentRecord {
@@ -97,6 +98,8 @@ export const agentRepository = {
     agentId: string,
     config: AgentConfigUpdate
   ): Promise<void> => {
+    assertNoContentWrite(config, 'agentRepository.updateConfig');
+
     const updateData: Record<string, unknown> = {
       ...config,
       updatedAt: config.updatedAt ?? new Date(),

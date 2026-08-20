@@ -11,14 +11,15 @@
  * The hazard is not hypothetical at enqueue time: a FILE page can be converted
  * to a DOCUMENT (`/api/files/[id]/convert-to-document`) after extraction has
  * been queued but before the job runs. So the type must be evaluated at WRITE
- * time, under a row lock, not when the job was created.
+ * time against the row being written, not when the job was created.
  */
+import { PageType } from '@pagespace/lib/utils/enums';
 
 /** The one page type whose body the processor may write. */
-export const EXTRACTABLE_PAGE_TYPE = 'FILE';
+export const EXTRACTABLE_PAGE_TYPE = PageType.FILE;
 
 export interface ExtractionTarget {
-  /** The page's current type, read under a row lock; `null` when the page is gone. */
+  /** The page's type as of the write itself; `null` when the page is gone. */
   pageType: string | null;
 }
 

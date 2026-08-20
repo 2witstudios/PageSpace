@@ -9,8 +9,9 @@
  *
  * The compile-time half of this guard is the `@ts-expect-error` below: it fails
  * `bun run typecheck` the moment `content` is reintroduced to UpdatePageInput
- * (the directive becomes unused). The runtime half covers callers that reach
- * the repository through an `as` cast or an untyped JSON payload.
+ * (the directive becomes unused). The runtime half is `assertNoContentWrite`,
+ * shared with `agentRepository.updateConfig` — the sibling seam that spreads an
+ * equally widened input into the same bare `db.update(pages)`.
  */
 import { describe, it, expect, vi } from 'vitest';
 import type { UpdatePageInput } from '../page-repository';
@@ -30,12 +31,20 @@ describe('UpdatePageInput', () => {
   });
 });
 
-describe('pageRepository.update', () => {
-  it('rejects a content key that arrives at runtime despite the type', async () => {
+describe('the bare db.update(pages) seams', () => {
+  it('pageRepository.update rejects a content key that arrives despite the type', async () => {
     const { pageRepository } = await import('../page-repository');
 
     await expect(
       pageRepository.update('page-1', { content: 'clobbered' } as UpdatePageInput)
+    ).rejects.toThrow(/content/i);
+  });
+
+  it('agentRepository.updateConfig rejects one too — same widening, same hazard', async () => {
+    const { agentRepository } = await import('../agent-repository');
+
+    await expect(
+      agentRepository.updateConfig('agent-1', { content: 'clobbered' } as never)
     ).rejects.toThrow(/content/i);
   });
 });
