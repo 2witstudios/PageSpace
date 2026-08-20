@@ -99,6 +99,59 @@ export const applySubTaskCountsToPages = (
 };
 
 /**
+ * The values a patch is about to overwrite, so a failed write can be undone
+ * without asking the server.
+ *
+ * Returns only the keys the patch actually sets, read from the row as it stands
+ * — so the inverse is exact rather than a guess at what "empty" looked like.
+ * Null when the task is not in these pages, which is also the signal that there
+ * is nothing to undo.
+ */
+export const invertTaskPatch = (
+  pages: TaskListData[] | undefined,
+  taskId: string,
+  patch: TaskFieldPatch,
+): TaskFieldPatch | null => {
+  const task = pages?.flatMap((page) => page.tasks).find((t) => t.id === taskId);
+  if (!task) return null;
+  const inverse: TaskFieldPatch = {};
+  for (const key of Object.keys(patch) as (keyof TaskFieldPatch)[]) {
+    // Assigning through a union of optional fields one key at a time is not
+    // something TS can narrow; the read and the write are the same key.
+    (inverse as Record<string, unknown>)[key] = task[key as keyof TaskItem];
+  }
+  return inverse;
+};
+
+/**
+ * Undo an optimistic patch — but only where it is still the thing on screen.
+ *
+ * A field that changed again since (a second write on the same row, a socket
+ * echo, a refetch that landed) is left alone: restoring the value this write
+ * displaced would then revert somebody else's newer, correct value. That
+ * caution is the whole reason this is a conditional revert and not a plain
+ * `applyTaskPatchToPages(pages, id, inverse)`.
+ */
+export const revertTaskPatch = (
+  pages: TaskListData[] | undefined,
+  taskId: string,
+  applied: TaskFieldPatch,
+  inverse: TaskFieldPatch | null,
+): TaskListData[] | undefined => {
+  if (!inverse) return pages;
+  const task = pages?.flatMap((page) => page.tasks).find((t) => t.id === taskId);
+  if (!task) return pages;
+  const restorable: TaskFieldPatch = {};
+  for (const key of Object.keys(applied) as (keyof TaskFieldPatch)[]) {
+    if (task[key as keyof TaskItem] === applied[key]) {
+      (restorable as Record<string, unknown>)[key] = inverse[key];
+    }
+  }
+  if (Object.keys(restorable).length === 0) return pages;
+  return applyTaskPatchToPages(pages, taskId, restorable);
+};
+
+/**
  * Whether a newly created task can be appended straight into the cache.
  *
  * A new task lands at the end of the server's ordering. That is the last LOADED

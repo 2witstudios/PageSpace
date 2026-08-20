@@ -113,15 +113,23 @@ export function useSelfTask(
     };
 
     const writeId = machinery.noteSelfWriteStart(task.id);
-    // Two synchronous mutates around the request rather than SWR's
-    // optimisticData + async updater — see the header of task-write-machinery
-    // for why that pair loses a write when two overlap on one key. The header
-    // control is as easy to click twice as any row's checkbox.
-    await mutate((current) => applyStatus(current, {
+    const painted = {
       status,
       completedAt: isCompletedStatus(status, statusConfigs) ? new Date().toISOString() : null,
-    }), { revalidate: false });
+    };
+    // What the paint displaces, so a failure can be undone without the server.
+    let previous: { status: string; completedAt: string | null } | null = null;
     try {
+      // Two synchronous mutates around the request rather than SWR's
+      // optimisticData + async updater — see the header of
+      // task-write-machinery for why that pair loses a write when two overlap
+      // on one key. The header control is as easy to click twice as a row's
+      // checkbox.
+      await mutate((current) => {
+        const before = (current ?? (data as SelfTaskResponse))?.task;
+        previous = before ? { status: before.status, completedAt: before.completedAt } : null;
+        return applyStatus(current, painted);
+      }, { revalidate: false });
       const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
         `/api/pages/${listPageId}/tasks/${task.id}`, { status },
       );
@@ -129,7 +137,15 @@ export function useSelfTask(
       await mutate((current) => applyStatus(current, updated), { revalidate: false });
     } catch (e) {
       machinery.noteSelfWriteSettled(writeId, null);
-      // Refetch rather than reverse: see task-write-machinery's catch.
+      // Undo locally, then reconcile — see task-write-machinery's catch for why
+      // a refetch alone is not an undo. Restored only if the paint is still
+      // what is showing, so a newer value is never stomped.
+      const undo = previous;
+      await mutate((current) => (
+        undo && current?.task?.status === painted.status
+          ? applyStatus(current, undo)
+          : current
+      ), { revalidate: false });
       void mutate();
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {

@@ -695,32 +695,33 @@ function TaskListView({ page }: TaskListViewProps) {
 
     // Handle task events (event names match backend broadcast format: task:${operation})
     //
-    // Every one of these is a change somebody may have made to a SUB-task, and
-    // `mutateTasks` only refetches the root list. Expanded nodes own their own
-    // caches with no revalidation triggers at all, so they have to be told too
-    // or a foreign edit inside an open node is invisible until a page reload.
-    const revalidateTree = () => {
-      mutateTasks();
-      writeMachinery.refreshNodeCaches();
-    };
-
+    // These refetch the ROOT list only, and deliberately: expanded nodes own
+    // caches of their own that this does not touch. Fanning out to them was
+    // tried and reverted — broadcastTaskEvent posts to `user:<actor>:tasks` and
+    // to `payload.pageId`, which for a nested write is the PARENT TASK's page,
+    // not this view's. So a foreign edit inside an open node never arrives here
+    // at all (the F4 gap; nested realtime is filed as follow-up work), while
+    // `task_added`/`deleted`/`reordered` carry no self-echo filter — meaning
+    // the fan-out would have fired one extra GET per expanded node on the
+    // user's OWN every write, each one lazily seeding task_lists rows, and
+    // served no foreign case in exchange.
     const handleTaskAdded = () => {
-      revalidateTree();
+      mutateTasks();
     };
 
     // A task update is only worth a full revalidate-all if somebody ELSE made it.
     // Our own write already patched the cache; refetching on the echo would undo
     // the whole point of the optimistic update.
     const handleTaskUpdated = (payload: TaskEventPayload) => {
-      if (writeMachinery.shouldRevalidateForEvent(payload)) revalidateTree();
+      if (writeMachinery.shouldRevalidateForEvent(payload)) mutateTasks();
     };
 
     const handleTaskDeleted = () => {
-      revalidateTree();
+      mutateTasks();
     };
 
     const handleTasksReordered = () => {
-      revalidateTree();
+      mutateTasks();
     };
 
     // Handle tasks moved between lists via drag-and-drop. The reorder API emits

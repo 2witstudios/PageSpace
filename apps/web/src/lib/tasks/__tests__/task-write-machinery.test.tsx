@@ -390,33 +390,6 @@ describe('echo suppression', () => {
     });
   });
 
-  it('refreshes every registered node cache on demand, surviving a thrower', async () => {
-    // The plain (non-deferred) path: a foreign task event revalidates the ROOT
-    // list, and expanded nodes own caches with no revalidation triggers of
-    // their own, so the view has to fan out to them explicitly. One node
-    // throwing must not silence the rest — a caller runs this from a `finally`.
-    const good = vi.fn();
-    const thrower = vi.fn(() => { throw new Error('gone'); });
-    const alsoGood = vi.fn();
-    const { mutate } = makeMutate(pages([task({ id: 't1' })]));
-    const view = renderHook(() => {
-      const machinery = useTaskWriteMachinery('user-me', vi.fn());
-      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: good });
-      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: thrower });
-      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: alsoGood });
-      return machinery;
-    });
-
-    act(() => { view.result.current.refreshNodeCaches(); });
-
-    assert({
-      given: 'three registered caches, the middle one throwing',
-      should: 'refresh all three',
-      actual: [good.mock.calls.length, thrower.mock.calls.length, alsoGood.mock.calls.length],
-      expected: [1, 1, 1],
-    });
-  });
-
   it('refreshes EVERY registered cache, not just the writer that flushed', async () => {
     // The queue is view-wide but each node owns a different cache, and only one
     // writer's `finally` performs the flush. A per-writer callback would leave
@@ -428,7 +401,10 @@ describe('echo suppression', () => {
       .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveA = r; }))
       .mockReturnValueOnce(new Promise<TaskItem>((r) => { resolveB = r; }));
     const revalidateAll = vi.fn();
-    const refreshA = vi.fn();
+    // A throws on purpose: this runs from a `finally`, so an unguarded
+    // refresher would skip every cache after it AND turn writeTaskField's
+    // result into a rejection.
+    const refreshA = vi.fn(() => { throw new Error('node A is gone'); });
     const refreshB = vi.fn();
     const { mutate: mutateA } = makeMutate(pages([task({ id: 't1' })]));
     const { mutate: mutateB } = makeMutate(pages([task({ id: 't2' })]));
@@ -464,8 +440,8 @@ describe('echo suppression', () => {
     await act(async () => { resolveB(task({ id: 't2', updatedAt: 'sb' })); await pb!; });
 
     assert({
-      given: 'a foreign echo deferred across two nodes, the other one flushing',
-      should: 'refresh the view and both caches',
+      given: 'a foreign echo deferred across two nodes, the first refresher throwing',
+      should: 'still refresh the view and every other cache',
       actual: [revalidateAll.mock.calls.length, refreshA.mock.calls.length, refreshB.mock.calls.length],
       expected: [1, 1, 1],
     });

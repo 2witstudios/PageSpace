@@ -77,6 +77,50 @@ describe('useSelfTask', () => {
     });
   });
 
+  it('shows the completion before the response, and undoes it locally on failure', async () => {
+    // Both halves in one test because they are one mechanism: the header paints
+    // through a synchronous mutate (see task-write-machinery's header for why
+    // SWR's optimistic path cannot be used here), which means there is no
+    // `rollbackOnError` to fall back on. If the local undo were dropped in
+    // favour of a refetch, a failed click would leave a completion the server
+    // never accepted sitting on screen — and on a paused cache, forever.
+    fetchWithAuth.mockResolvedValue(response());
+    let reject: (e: unknown) => void = () => {};
+    patchMock.mockReturnValue(new Promise((_, r) => { reject = r; }));
+    const view = setup();
+    await waitFor(() => expect(view.result.current.self.isAvailable).toBe(true));
+
+    // From here the refetch can never answer. Without that, a refetch that
+    // happens to return the original row repairs the display on its own and
+    // the test passes whether or not the LOCAL undo exists — which is exactly
+    // the situation production is not in when the cache is paused.
+    fetchWithAuth.mockReturnValue(new Promise(() => {}));
+
+    let pending: Promise<void>;
+    await act(async () => {
+      pending = view.result.current.self.toggleComplete();
+      await Promise.resolve();
+    });
+    const whileInFlight = view.result.current.self.isCompleted;
+
+    await act(async () => {
+      reject(Object.assign(new Error('nope'), { status: 500, body: {} }));
+      await pending!;
+    });
+
+    assert({
+      given: 'a header completion whose PATCH then failed',
+      should: 'have shown it immediately, then put the row back',
+      actual: {
+        whileInFlight,
+        after: view.result.current.self.isCompleted,
+        status: view.result.current.self.task?.status,
+        completedAt: view.result.current.self.task?.completedAt,
+      },
+      expected: { whileInFlight: true, after: false, status: 'pending', completedAt: null },
+    });
+  });
+
   it('registers the write, so its own echo costs no revalidation', async () => {
     fetchWithAuth.mockResolvedValue(response());
     patchMock.mockResolvedValue({ status: 'completed', completedAt: 'c', updatedAt: 'stamp-1' });

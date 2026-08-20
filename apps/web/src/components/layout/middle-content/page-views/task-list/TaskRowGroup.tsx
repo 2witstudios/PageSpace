@@ -528,7 +528,7 @@ function useSubTaskBootstrap({
       const created = await post<TaskItem>(`/api/pages/${task.pageId}/tasks`, { title: 'New sub-task' });
       // Same rule as addCreatedChild: a done-seeded task arrives already
       // complete, and counting it as open blocks the parent.
-      onCountDelta?.({ total: 1, completed: created?.completedAt ? 1 : 0 });
+      onCountDelta?.({ total: 1, completed: created.completedAt ? 1 : 0 });
       if (!isNodeExpanded(expandedPaths, path)) toggleExpanded(path);
     } catch (e) {
       toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));

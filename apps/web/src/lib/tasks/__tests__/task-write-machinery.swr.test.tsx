@@ -57,6 +57,20 @@ const settle = async (taskId: string, value: unknown) => {
   await act(async () => { deferrals.get(taskId)!(value); await Promise.resolve(); });
 };
 
+const { applyTaskPatchToPages: applyPatch } = await import('../task-cache-core');
+
+/**
+ * Reproduces the root list's gate, which is `hasLoadedRef.current &&
+ * isAnyEditing` — it pauses only AFTER the first load, so the flag has to be
+ * flipped by the test rather than set here, or nothing ever loads.
+ */
+let paused = false;
+const pausedWrapper = ({ children }: { children: React.ReactNode }) => (
+  <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0, isPaused: () => paused }}>
+    {children}
+  </SWRConfig>
+);
+
 const wrapper = ({ children }: { children: React.ReactNode }) => (
   // A fresh provider per test: SWR's cache is module-global otherwise, and the
   // second test would inherit the first's committed data.
@@ -78,7 +92,7 @@ const useHarness = () => {
 const statuses = (data: TaskListData[] | undefined) => data?.[0].tasks.map((t) => t.status);
 
 describe('task writes against real SWR', () => {
-  beforeEach(() => { patchMock.mockReset(); deferrals.clear(); });
+  beforeEach(() => { patchMock.mockReset(); deferrals.clear(); paused = false; });
 
   it('keeps both writes when two overlap on one cache', async () => {
     patchMock.mockImplementation((url: string) => deferFor(url.split('/').pop()!));
@@ -122,6 +136,70 @@ describe('task writes against real SWR', () => {
         committed: ['completed', 'completed'],
         stamps: ['a', 'b'],
       },
+    });
+  });
+
+  it('undoes a failed write locally, without help from a refetch', async () => {
+    // The root list runs `isPaused: () => isAnyEditing`, and SWR returns early
+    // from every revalidation while that holds — so on a paused cache the
+    // error path's refetch is never issued at all. If the undo depended on it,
+    // a completion the server rejected would stay on screen until the
+    // 5-minute interval, which is gated the same way. Pausing here is what
+    // makes this test able to tell the two apart.
+    patchMock.mockRejectedValue(Object.assign(new Error('no'), { status: 500, body: {} }));
+    const { result } = renderHook(useHarness, { wrapper: pausedWrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    paused = true;
+
+    await act(async () => {
+      await result.current.writer.writeTaskField({
+        loc: { listPageId: 'p', taskId: 't1' }, body: { status: 'completed' },
+        optimistic: { status: 'completed', completedAt: 'client-guess' }, fallbackMessage: 'x',
+      });
+    });
+
+    assert({
+      given: 'a failed write on a cache whose revalidation is paused',
+      should: 'put the row back anyway',
+      actual: {
+        status: result.current.data?.[0].tasks[0].status,
+        completedAt: result.current.data?.[0].tasks[0].completedAt,
+      },
+      expected: { status: 'pending', completedAt: null },
+    });
+  });
+
+  it('leaves a failed write alone if something newer already changed the row', async () => {
+    // The undo is conditional for this case: restoring what this write
+    // displaced would otherwise revert a newer, correct value.
+    patchMock.mockImplementation(() => Promise.reject(
+      Object.assign(new Error('no'), { status: 500, body: {} }),
+    ));
+    const { result } = renderHook(useHarness, { wrapper: pausedWrapper });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    paused = true;
+
+    const failing = act(async () => {
+      await result.current.writer.writeTaskField({
+        loc: { listPageId: 'p', taskId: 't1' }, body: { status: 'completed' },
+        optimistic: { status: 'completed' }, fallbackMessage: 'x',
+      });
+    });
+    // A socket echo (or any other writer) moves the row on to a third value
+    // before the failure lands.
+    await act(async () => {
+      await result.current.mutate(
+        (current) => applyPatch(current, 't1', { status: 'blocked' }),
+        { revalidate: false },
+      );
+    });
+    await failing;
+
+    assert({
+      given: 'a row already moved on by the time the write failed',
+      should: 'leave the newer value in place',
+      actual: statuses(result.current.data),
+      expected: ['blocked', 'pending'],
     });
   });
 

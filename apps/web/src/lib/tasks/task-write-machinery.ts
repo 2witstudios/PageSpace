@@ -9,7 +9,9 @@ import type {
   TaskListData,
   TaskLocation,
 } from '@/components/layout/middle-content/page-views/task-list/task-list-types';
-import { applyTaskPatchToPages, type TaskFieldPatch } from './task-cache-core';
+import {
+  applyTaskPatchToPages, invertTaskPatch, revertTaskPatch, type TaskFieldPatch,
+} from './task-cache-core';
 import {
   startSelfWrite,
   settleSelfWrite,
@@ -68,18 +70,6 @@ export interface TaskWriteMachinery {
    * function.
    */
   registerCacheRefresher: (refresh: () => void) => () => void;
-  /**
-   * Refresh every registered node cache.
-   *
-   * The view's own `mutateTasks` refetches the ROOT list's pages and nothing
-   * else, so on its own it leaves every expanded node stale. `useTaskSubTasks`
-   * has focus, reconnect, stale and first-page revalidation all switched off
-   * and no interval, and collapse-then-expand is a cache hit — so a sub-task
-   * another user edits, adds or deletes stays wrong until a full page reload.
-   * Anything that revalidates the view because of a foreign change has to call
-   * this too.
-   */
-  refreshNodeCaches: () => void;
   /**
    * Run the revalidation an echo deferred, if one is pending and no write is
    * still open. Refreshes the view and every registered cache.
@@ -212,12 +202,11 @@ export function useTaskWriteMachinery(
       noteSelfWriteStart,
       noteSelfWriteSettled,
       registerCacheRefresher,
-      refreshNodeCaches,
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
     [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, registerCacheRefresher,
-     refreshNodeCaches, flushDeferredRevalidate, shouldRevalidateForEvent],
+     flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
 
@@ -308,13 +297,18 @@ export function useTaskWriter(params: {
     loc, body, optimistic, fallbackMessage,
   }: WriteTaskFieldParams): Promise<boolean> => {
     const writeId = noteSelfWriteStart(loc.taskId);
-    // Paint first, synchronously, so the row changes in this tick — and so the
-    // next write composes on top of this one instead of on a snapshot taken
-    // before it. Awaited only to keep the two mutates ordered.
-    await mutatePages((current) => applyTaskPatchToPages(current, loc.taskId, optimistic), {
-      revalidate: false,
-    });
+    // What the paint is about to overwrite, captured from the live cache so a
+    // failure can be undone locally. Read inside the updater because that is
+    // the only place SWR hands us the current value.
+    let inverse: TaskFieldPatch | null = null;
     try {
+      // Paint first, synchronously, so the row changes in this tick — and so
+      // the next write composes on top of this one instead of on a snapshot
+      // taken before it. Awaited only to keep the two mutates ordered.
+      await mutatePages((current) => {
+        inverse = invertTaskPatch(current, loc.taskId, optimistic);
+        return applyTaskPatchToPages(current, loc.taskId, optimistic);
+      }, { revalidate: false });
       const updated = await patch<TaskItem>(
         `/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, body,
       );
@@ -336,10 +330,19 @@ export function useTaskWriter(params: {
       return true;
     } catch (e) {
       noteSelfWriteSettled(writeId, null);
-      // Undo the paint by refetching rather than by reversing it. An inverse
-      // patch would have to assume nothing else touched these fields since,
-      // which overlapping writes and inbound echoes both break; the server's
-      // answer needs no such assumption.
+      // Undo locally FIRST, and only then ask the server.
+      //
+      // A refetch alone is not an undo: the root list's SWR is configured
+      // `isPaused: () => isAnyEditing`, and SWR returns early from every
+      // revalidation while that holds — so with any editor open anywhere in the
+      // app, the request is never issued and a fabricated completion would sit
+      // on screen until the 5-minute interval, which is gated the same way.
+      // The local revert is conditional (see revertTaskPatch), so it cannot
+      // stomp a newer value; the refetch behind it reconciles when it can.
+      await mutatePages(
+        (current) => revertTaskPatch(current, loc.taskId, optimistic, inverse),
+        { revalidate: false },
+      );
       void mutatePages();
       if (isRevisionConflict(e)) onRevisionConflict?.();
       toast.error(taskWriteErrorMessage(e, fallbackMessage));
