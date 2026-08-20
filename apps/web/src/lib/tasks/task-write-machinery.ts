@@ -69,6 +69,18 @@ export interface TaskWriteMachinery {
    */
   registerCacheRefresher: (refresh: () => void) => () => void;
   /**
+   * Refresh every registered node cache.
+   *
+   * The view's own `mutateTasks` refetches the ROOT list's pages and nothing
+   * else, so on its own it leaves every expanded node stale. `useTaskSubTasks`
+   * has focus, reconnect, stale and first-page revalidation all switched off
+   * and no interval, and collapse-then-expand is a cache hit — so a sub-task
+   * another user edits, adds or deletes stays wrong until a full page reload.
+   * Anything that revalidates the view because of a foreign change has to call
+   * this too.
+   */
+  refreshNodeCaches: () => void;
+  /**
    * Run the revalidation an echo deferred, if one is pending and no write is
    * still open. Refreshes the view and every registered cache.
    *
@@ -130,6 +142,15 @@ export function useTaskWriteMachinery(
     return () => { set.delete(refresh); };
   }, []);
 
+  const refreshNodeCaches = useCallback((): void => {
+    // Guarded individually: one caller runs this from a `finally`, so a single
+    // throwing refresher would otherwise skip the rest and replace that
+    // function's result with a rejection.
+    for (const refresh of cacheRefreshersRef.current) {
+      try { refresh(); } catch { /* one stale cache must not block the others */ }
+    }
+  }, []);
+
   const noteSelfWriteStart = useCallback((taskId: string) => {
     const now = Date.now();
     const writeId = ++nextWriteIdRef.current;
@@ -164,14 +185,10 @@ export function useTaskWriteMachinery(
       || deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now);
     if (!unaccountedFor) return;
     revalidateAll();
-    // Every open node's cache, not just the writer that happened to flush:
-    // the echo could have belonged to any of them. Guarded individually — this
-    // runs from a `finally`, so one throwing refresher would otherwise skip the
-    // rest and replace writeTaskField's result with a rejection.
-    for (const refresh of cacheRefreshersRef.current) {
-      try { refresh(); } catch { /* one stale cache must not block the others */ }
-    }
-  }, [revalidateAll, currentUserId]);
+    // Every open node's cache, not just the writer that happened to flush: the
+    // echo could have belonged to any of them.
+    refreshNodeCaches();
+  }, [revalidateAll, currentUserId, refreshNodeCaches]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
     const verdict = classifyTaskEcho(selfWritesRef.current, event, currentUserId, Date.now());
@@ -195,11 +212,12 @@ export function useTaskWriteMachinery(
       noteSelfWriteStart,
       noteSelfWriteSettled,
       registerCacheRefresher,
+      refreshNodeCaches,
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
     [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, registerCacheRefresher,
-     flushDeferredRevalidate, shouldRevalidateForEvent],
+     refreshNodeCaches, flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
 
@@ -223,13 +241,40 @@ export interface TaskWriter {
 /**
  * Bind the view-wide write machinery to one cache.
  *
- * Both the optimistic value and the reconciled one are computed from the cache
- * SWR hands the updater, never from a snapshot captured at call time — a write
- * can resolve many renders after it started, and patching a stale array would
- * silently drop everything that landed in between.
+ * Writes paint through two SYNCHRONOUS functional mutates — one before the
+ * request, one after — rather than SWR's `optimisticData` + async-updater pair.
+ * That is not a style choice; the optimistic path cannot survive two writes
+ * overlapping on one key, which a user produces just by ticking two checkboxes
+ * in a row (the PATCH awaits two outbound realtime posts, so the window is
+ * wide). In `swr@2.4.1`'s `internalMutate`:
  *
- * `onRevisionConflict` is the escape hatch for 409/428: the rollback would
- * restore data that is already stale, so the caller refetches instead.
+ *   • `optimisticData(committedData, …)` and `data(committedData)` are both
+ *     handed the PRE-optimistic snapshot backed up in `state._c`, not what is
+ *     on screen. So write B's optimistic value is computed from a cache that
+ *     never saw write A — A's checkbox visibly un-ticks the moment B is
+ *     clicked.
+ *   • On resolve, `beforeMutationTs !== MUTATION[key][0]` makes a superseded
+ *     mutation skip `populateCache` entirely. A's server response is then
+ *     discarded, and B's commit writes `patch(committedData, B)` — with no A in
+ *     it. A ends up displayed as open although the server has it complete.
+ *
+ * Nothing repairs that: `revalidate: false` is the point of this path, and the
+ * echo suppressor drops A's own socket event as recognised-self. The root list
+ * heals on its 5-minute interval; a nested sub-list, which has every
+ * revalidation trigger off, never heals at all.
+ *
+ * A synchronous functional mutate has neither failure mode. It never sets `_c`,
+ * so `committedData === displayedData` and the updater sees the live value; and
+ * it commits inline, so there is no window in which a later write can supersede
+ * it. Overlapping writes then compose in the order they land.
+ *
+ * The cost is rollback: `rollbackOnError` only exists for the optimistic path.
+ * A failed write therefore revalidates its cache instead of being reversed —
+ * one refetch on a path that is already showing the user an error toast, in
+ * exchange for a success path that cannot silently lose a write.
+ *
+ * `onRevisionConflict` is the escape hatch for 409/428, where the caller wants
+ * more than a refetch of this one cache.
  */
 export function useTaskWriter(params: {
   mutatePages: MutatePages;
@@ -263,34 +308,39 @@ export function useTaskWriter(params: {
     loc, body, optimistic, fallbackMessage,
   }: WriteTaskFieldParams): Promise<boolean> => {
     const writeId = noteSelfWriteStart(loc.taskId);
+    // Paint first, synchronously, so the row changes in this tick — and so the
+    // next write composes on top of this one instead of on a snapshot taken
+    // before it. Awaited only to keep the two mutates ordered.
+    await mutatePages((current) => applyTaskPatchToPages(current, loc.taskId, optimistic), {
+      revalidate: false,
+    });
     try {
+      const updated = await patch<TaskItem>(
+        `/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, body,
+      );
+      noteSelfWriteSettled(writeId, updated?.updatedAt ?? null);
+      // Reconcile onto the server's values rather than keeping the guess:
+      // completedAt in particular is a server-stamped timestamp.
       await mutatePages(
-        async (current) => {
-          const updated = await patch<TaskItem>(
-            `/api/pages/${loc.listPageId}/tasks/${loc.taskId}`, body,
-          );
-          noteSelfWriteSettled(writeId, updated?.updatedAt ?? null);
-          // Reconcile onto the server's values rather than keeping the guess:
-          // completedAt in particular is a server-stamped timestamp.
-          return applyTaskPatchToPages(current, loc.taskId, {
-            status: updated?.status,
-            completedAt: updated?.completedAt,
-            priority: updated?.priority,
-            title: updated?.title,
-            dueDate: updated?.dueDate,
-            assignees: updated?.assignees,
-            updatedAt: updated?.updatedAt,
-          });
-        },
-        {
-          optimisticData: (current) => applyTaskPatchToPages(current, loc.taskId, optimistic) ?? [],
-          rollbackOnError: true,
-          revalidate: false,
-        },
+        (current) => applyTaskPatchToPages(current, loc.taskId, {
+          status: updated?.status,
+          completedAt: updated?.completedAt,
+          priority: updated?.priority,
+          title: updated?.title,
+          dueDate: updated?.dueDate,
+          assignees: updated?.assignees,
+          updatedAt: updated?.updatedAt,
+        }),
+        { revalidate: false },
       );
       return true;
     } catch (e) {
       noteSelfWriteSettled(writeId, null);
+      // Undo the paint by refetching rather than by reversing it. An inverse
+      // patch would have to assume nothing else touched these fields since,
+      // which overlapping writes and inbound echoes both break; the server's
+      // answer needs no such assumption.
+      void mutatePages();
       if (isRevisionConflict(e)) onRevisionConflict?.();
       toast.error(taskWriteErrorMessage(e, fallbackMessage));
       return false;

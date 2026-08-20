@@ -113,26 +113,24 @@ export function useSelfTask(
     };
 
     const writeId = machinery.noteSelfWriteStart(task.id);
+    // Two synchronous mutates around the request rather than SWR's
+    // optimisticData + async updater — see the header of task-write-machinery
+    // for why that pair loses a write when two overlap on one key. The header
+    // control is as easy to click twice as any row's checkbox.
+    await mutate((current) => applyStatus(current, {
+      status,
+      completedAt: isCompletedStatus(status, statusConfigs) ? new Date().toISOString() : null,
+    }), { revalidate: false });
     try {
-      await mutate(
-        async (current) => {
-          const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
-            `/api/pages/${listPageId}/tasks/${task.id}`, { status },
-          );
-          machinery.noteSelfWriteSettled(writeId, updated.updatedAt);
-          return applyStatus(current, updated);
-        },
-        {
-          optimisticData: (current) => applyStatus(current, {
-            status,
-            completedAt: isCompletedStatus(status, statusConfigs) ? new Date().toISOString() : null,
-          }),
-          rollbackOnError: true,
-          revalidate: false,
-        },
+      const updated = await patch<{ status: string; completedAt: string | null; updatedAt: string }>(
+        `/api/pages/${listPageId}/tasks/${task.id}`, { status },
       );
+      machinery.noteSelfWriteSettled(writeId, updated.updatedAt);
+      await mutate((current) => applyStatus(current, updated), { revalidate: false });
     } catch (e) {
       machinery.noteSelfWriteSettled(writeId, null);
+      // Refetch rather than reverse: see task-write-machinery's catch.
+      void mutate();
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {
       machinery.flushDeferredRevalidate();

@@ -346,7 +346,12 @@ function TaskSubTaskRows({
         : (retry(), current)),
       { revalidate: false },
     );
-    onParentCountDelta?.({ total: 1 });
+    // Not always `{ total: 1 }`. POST seeds the status from the list's own
+    // vocabulary, and a list with no open status resolves to a done one — which
+    // the server then stamps complete. Counting that as an open sub-task leaves
+    // the parent reading n/(n+1) forever: the guard refuses to complete it, and
+    // this cache has no revalidation trigger to correct the number.
+    onParentCountDelta?.({ total: 1, completed: created.completedAt ? 1 : 0 });
   }, [mutatePages, retry, onParentCountDelta]);
 
   return (
@@ -520,8 +525,10 @@ function useSubTaskBootstrap({
   const run = useCallback(async () => {
     if (!task.pageId) return;
     try {
-      await post<TaskItem>(`/api/pages/${task.pageId}/tasks`, { title: 'New sub-task' });
-      onCountDelta?.({ total: 1 });
+      const created = await post<TaskItem>(`/api/pages/${task.pageId}/tasks`, { title: 'New sub-task' });
+      // Same rule as addCreatedChild: a done-seeded task arrives already
+      // complete, and counting it as open blocks the parent.
+      onCountDelta?.({ total: 1, completed: created?.completedAt ? 1 : 0 });
       if (!isNodeExpanded(expandedPaths, path)) toggleExpanded(path);
     } catch (e) {
       toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));

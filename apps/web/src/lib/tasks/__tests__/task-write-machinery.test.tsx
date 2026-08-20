@@ -43,47 +43,48 @@ const pages = (tasks: TaskItem[]): TaskListData[] => [{
 }];
 
 /**
- * Stands in for swr/infinite's bound mutate: records what it was called with,
- * and (like SWR) runs the async updater and rethrows its rejection.
+ * Stands in for swr/infinite's bound mutate.
+ *
+ * It models only the SYNCHRONOUS functional form, because that is the only form
+ * the writer uses — deliberately, see the header of task-write-machinery. A
+ * fake is the right tool for asserting what the writer ASKS for (URLs, ordering
+ * of the deferred flush, which spy fired); it is the wrong tool for asserting
+ * what SWR then DOES, and an earlier version of this file tried to do both. It
+ * modelled `optimisticData`/`rollbackOnError` against their intended meaning
+ * rather than their real one, and so stayed green through a bug that lost a
+ * committed write whenever two overlapped. Those behaviours are now proved
+ * against the real hook in task-write-machinery.swr.test.tsx; keep them there.
  */
 /** Monotonic tick, so tests can assert the ORDER of two observed events. */
 let tick = 0;
 const nextTick = () => ++tick;
 
 const makeMutate = (initial: TaskListData[]) => {
-  // Records what SWR was asked to do, and — like SWR — resolves functional
-  // `optimisticData` and the async updater against the CURRENT cache value,
-  // which is what proves the writer never patches a captured snapshot.
-  const calls: { optimisticData?: TaskListData[]; revalidate?: boolean; rollbackOnError?: boolean }[] = [];
+  const calls: { revalidate?: boolean }[] = [];
   const results: (TaskListData[] | undefined)[] = [];
+  /** Bare `mutate()` calls — the writer's way of asking for a refetch. */
+  let revalidationRequests = 0;
   let current: TaskListData[] | undefined = initial;
   let commitAt: number | null = null;
   const mutate = vi.fn(async (data?: unknown, opts?: Record<string, unknown>) => {
-    const rawOptimistic = opts?.optimisticData;
-    const optimisticData = typeof rawOptimistic === 'function'
-      ? (rawOptimistic as (c?: TaskListData[]) => TaskListData[])(current)
-      : rawOptimistic as TaskListData[] | undefined;
-    calls.push({ ...opts, optimisticData } as never);
-    const before = current;
-    if (optimisticData) current = optimisticData;
+    if (data === undefined) { revalidationRequests += 1; return current; }
+    calls.push({ ...opts } as never);
     if (typeof data === 'function') {
-      try {
-        const out = await (data as (c?: TaskListData[]) => Promise<TaskListData[] | undefined>)(current);
-        results.push(out);
-        // The commit: SWR writes the updater's return value into the cache here.
-        if (out) { current = out; commitAt = nextTick(); }
-        return out;
-      } catch (e) {
-        // SWR restores the pre-optimistic value when rollbackOnError is set.
-        // Modelling it is what lets a test assert the ROLLBACK rather than just
-        // the presence of the option.
-        if (opts?.rollbackOnError) current = before;
-        throw e;
-      }
+      // A sync functional mutate reads the live value and commits inline —
+      // both true of the real thing, and the reason the writer uses this form.
+      const out = (data as (c?: TaskListData[]) => TaskListData[] | undefined)(current);
+      results.push(out);
+      if (out) { current = out; commitAt = nextTick(); }
+      return out;
     }
     return undefined;
   });
-  return { mutate, calls, results, committedAt: () => commitAt, cache: () => current };
+  return {
+    mutate, calls, results,
+    committedAt: () => commitAt,
+    cache: () => current,
+    revalidationRequests: () => revalidationRequests,
+  };
 };
 
 // Two distinct spies on purpose: the machinery's view-wide `revalidateAll` and
@@ -95,7 +96,7 @@ const setup = (
   revalidateAll = vi.fn(),
   onRevisionConflict = vi.fn(),
 ) => {
-  const { mutate, calls, results, committedAt, cache } = makeMutate(initial);
+  const { mutate, calls, results, committedAt, cache, revalidationRequests } = makeMutate(initial);
   let revalidatedAt: number | null = null;
   const trackedRevalidateAll = () => { revalidatedAt = nextTick(); revalidateAll(); };
   const view = renderHook(() => {
@@ -105,7 +106,7 @@ const setup = (
   });
   return {
     view, mutate, calls, results, revalidateAll, onRevisionConflict,
-    committedAt, cache, revalidatedAt: () => revalidatedAt,
+    committedAt, cache, revalidationRequests, revalidatedAt: () => revalidatedAt,
   };
 };
 
@@ -142,7 +143,7 @@ describe('writeTaskField', () => {
     // post-write refetch of every loaded page.
     let resolve: (v: TaskItem) => void = () => {};
     patchMock.mockReturnValue(new Promise<TaskItem>((r) => { resolve = r; }));
-    const { view, calls } = setup(pages([task({ id: 't1' })]));
+    const { view, calls, cache } = setup(pages([task({ id: 't1' })]));
 
     let pending: Promise<boolean>;
     await act(async () => {
@@ -157,14 +158,13 @@ describe('writeTaskField', () => {
 
     assert({
       given: 'a write still in flight',
-      should: 'have already handed SWR the completed row, with revalidation off',
+      should: 'have already written the completed row, with revalidation off',
       actual: [
-        calls[0].optimisticData?.[0].tasks[0].status,
-        calls[0].optimisticData?.[0].tasks[0].completedAt,
+        cache()?.[0].tasks[0].status,
+        cache()?.[0].tasks[0].completedAt,
         calls[0].revalidate,
-        calls[0].rollbackOnError,
       ],
-      expected: ['completed', '2026-01-02T00:00:00.000Z', false, true],
+      expected: ['completed', '2026-01-02T00:00:00.000Z', false],
     });
 
     await act(async () => {
@@ -177,7 +177,7 @@ describe('writeTaskField', () => {
     patchMock.mockResolvedValue(
       task({ id: 't1', status: 'shipped', completedAt: 'server-stamp', updatedAt: 's1' }),
     );
-    const { view, results } = setup(pages([task({ id: 't1' })]));
+    const { view, cache } = setup(pages([task({ id: 't1' })]));
     await act(async () => {
       await view.result.current.writer.writeTaskField({
         loc: { listPageId: 'list', taskId: 't1' },
@@ -189,17 +189,19 @@ describe('writeTaskField', () => {
     assert({
       given: 'a resolved write whose server completedAt differs from the guess',
       should: 'store the server value',
-      actual: results[0]?.[0].tasks[0].completedAt,
+      actual: cache()?.[0].tasks[0].completedAt,
       expected: 'server-stamp',
     });
   });
 
-  it('rolls the optimistic patch back when the write fails', async () => {
-    // Previously only the rollbackOnError OPTION was asserted; nothing checked
-    // that the row actually reverts, so a change that stopped passing it — or
-    // passed it somewhere ineffective — would not have been caught.
+  it('refetches to undo the paint when the write fails', async () => {
+    // Not a rollback: the writer no longer uses SWR's optimistic path, so there
+    // is no backed-up value to restore (and reversing by inverse patch would
+    // assume nothing else touched the row meanwhile). The paint stays on screen
+    // until the refetch answers, which is why the request itself is the thing
+    // worth asserting.
     patchMock.mockRejectedValue(Object.assign(new Error('x'), { status: 500, body: {} }));
-    const { view, cache } = setup(pages([task({ id: 't1', status: 'pending' })]));
+    const { view, revalidationRequests } = setup(pages([task({ id: 't1', status: 'pending' })]));
     await act(async () => {
       await view.result.current.writer.writeTaskField({
         loc: { listPageId: 'list', taskId: 't1' },
@@ -210,9 +212,9 @@ describe('writeTaskField', () => {
     });
     assert({
       given: 'an optimistic completion whose write then failed',
-      should: 'leave the row exactly as it was',
-      actual: [cache()?.[0].tasks[0].status, cache()?.[0].tasks[0].completedAt],
-      expected: ['pending', null],
+      should: 'ask the server for the truth rather than leave the guess standing',
+      actual: revalidationRequests(),
+      expected: 1,
     });
   });
 
@@ -385,6 +387,33 @@ describe('echo suppression', () => {
       should: 'drop it on settle rather than revalidating',
       actual: [duringFlight, revalidateAll.mock.calls.length],
       expected: [false, 0],
+    });
+  });
+
+  it('refreshes every registered node cache on demand, surviving a thrower', async () => {
+    // The plain (non-deferred) path: a foreign task event revalidates the ROOT
+    // list, and expanded nodes own caches with no revalidation triggers of
+    // their own, so the view has to fan out to them explicitly. One node
+    // throwing must not silence the rest — a caller runs this from a `finally`.
+    const good = vi.fn();
+    const thrower = vi.fn(() => { throw new Error('gone'); });
+    const alsoGood = vi.fn();
+    const { mutate } = makeMutate(pages([task({ id: 't1' })]));
+    const view = renderHook(() => {
+      const machinery = useTaskWriteMachinery('user-me', vi.fn());
+      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: good });
+      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: thrower });
+      useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache: alsoGood });
+      return machinery;
+    });
+
+    act(() => { view.result.current.refreshNodeCaches(); });
+
+    assert({
+      given: 'three registered caches, the middle one throwing',
+      should: 'refresh all three',
+      actual: [good.mock.calls.length, thrower.mock.calls.length, alsoGood.mock.calls.length],
+      expected: [1, 1, 1],
     });
   });
 

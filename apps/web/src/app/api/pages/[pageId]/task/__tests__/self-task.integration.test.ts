@@ -30,12 +30,15 @@ let currentUserId = '';
  * a permission check quietly becomes decorative.
  */
 let canView = true;
+/** Page ids this principal may NOT view, so the parent gate is reachable. */
+let deniedPageIds = new Set<string>();
 
 vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(async () => ({ userId: currentUserId })),
   isAuthError: vi.fn(() => false),
   checkMCPPageScope: vi.fn(async () => null),
-  canPrincipalViewPage: vi.fn(async () => canView),
+  canPrincipalViewPage: vi.fn(async (_auth: unknown, pageId: string) =>
+    canView && !deniedPageIds.has(pageId)),
   canPrincipalEditPage: vi.fn(async () => true),
 }));
 
@@ -191,6 +194,41 @@ describe('GET /api/pages/[pageId]/task', () => {
       });
     } finally {
       canView = true;
+    }
+  });
+
+  it('withholds the parent list when the viewer cannot see the parent', async () => {
+    // Everything the response says about the parent — its page id, and the
+    // status names its owner chose — is the parent's to disclose. A principal
+    // shared into one child task but not the list it belongs to would otherwise
+    // read both off this endpoint.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [list] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values(
+      CUSTOM.map((c) => ({ taskListId: list.id, ...c })),
+    );
+    const taskPage = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id });
+
+    deniedPageIds = new Set([listPage.id]);
+    try {
+      const body = await get(taskPage.id);
+      assert({
+        given: 'a viewer with access to the task but not to its list',
+        should: 'disclose neither the parent id nor its vocabulary',
+        actual: { task: body.task, listPageId: body.listPageId, configs: body.statusConfigs },
+        expected: { task: null, listPageId: null, configs: [] },
+      });
+    } finally {
+      deniedPageIds = new Set();
     }
   });
 

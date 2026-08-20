@@ -79,6 +79,15 @@ export async function GET(
     return NextResponse.json({ task: null, listPageId: null, statusConfigs: [] });
   }
 
+  // Everything below this line describes the PARENT — its page id, and the
+  // status names and colours its owner chose — so it answers to the parent's
+  // permission, not this page's. A principal shared into a child but not its
+  // list would otherwise learn both. Nothing is lost by refusing: the header's
+  // control PATCHes the parent list, and that route would reject them anyway.
+  if (!(await canPrincipalViewPage(auth, page.parentId))) {
+    return NextResponse.json({ task: null, listPageId: null, statusConfigs: [] });
+  }
+
   // The vocabulary the PATCH that this header issues will be validated against
   // is the parent list's, not this page's own.
   const parentList = await db.query.taskLists.findFirst({

@@ -694,23 +694,33 @@ function TaskListView({ page }: TaskListViewProps) {
     socket.emit('join_channel', page.id);
 
     // Handle task events (event names match backend broadcast format: task:${operation})
-    const handleTaskAdded = () => {
+    //
+    // Every one of these is a change somebody may have made to a SUB-task, and
+    // `mutateTasks` only refetches the root list. Expanded nodes own their own
+    // caches with no revalidation triggers at all, so they have to be told too
+    // or a foreign edit inside an open node is invisible until a page reload.
+    const revalidateTree = () => {
       mutateTasks();
+      writeMachinery.refreshNodeCaches();
+    };
+
+    const handleTaskAdded = () => {
+      revalidateTree();
     };
 
     // A task update is only worth a full revalidate-all if somebody ELSE made it.
     // Our own write already patched the cache; refetching on the echo would undo
     // the whole point of the optimistic update.
     const handleTaskUpdated = (payload: TaskEventPayload) => {
-      if (writeMachinery.shouldRevalidateForEvent(payload)) mutateTasks();
+      if (writeMachinery.shouldRevalidateForEvent(payload)) revalidateTree();
     };
 
     const handleTaskDeleted = () => {
-      mutateTasks();
+      revalidateTree();
     };
 
     const handleTasksReordered = () => {
-      mutateTasks();
+      revalidateTree();
     };
 
     // Handle tasks moved between lists via drag-and-drop. The reorder API emits

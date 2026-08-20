@@ -360,6 +360,36 @@ describe('sub-task counters', () => {
     });
   });
 
+  it('counts a sub-task that arrives already complete as complete', async () => {
+    // POST seeds the status from the list's own vocabulary, and a list with no
+    // open status resolves to a done one — which the server stamps complete.
+    // Counting it as open leaves the parent at n/(n+1) with no way back: the
+    // completion guard refuses it, and this cache has no revalidation trigger.
+    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'child' })]));
+    postMock.mockResolvedValue(
+      task({ id: 'new', title: 'Fresh', status: 'shipped', completedAt: '2026-01-01T00:00:00.000Z' }),
+    );
+    const onCountDelta = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'parent', subTaskCount: 1 })]}
+        expanded={expandedFor('parent')}
+        onCountDelta={onCountDelta}
+      />,
+    );
+    await screen.findByText('child');
+
+    await userEvent.type(screen.getByPlaceholderText('+ Add a sub-task…'), 'Fresh{Enter}');
+
+    await waitFor(() => expect(onCountDelta).toHaveBeenCalled());
+    assert({
+      given: 'a created sub-task the server returned already stamped complete',
+      should: 'report it as both added and completed',
+      actual: onCountDelta.mock.calls[0][0],
+      expected: { total: 1, completed: 1 },
+    });
+  });
+
   it('reports a decrement when a completed child is reopened', async () => {
     fetchWithAuth.mockResolvedValue(
       subTaskResponse([task({ id: 'child', status: 'completed', completedAt: 'x' })]),
