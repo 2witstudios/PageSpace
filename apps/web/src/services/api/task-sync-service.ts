@@ -34,20 +34,23 @@ async function getPageType(tx: Tx, pageId: string): Promise<string | null> {
 /**
  * Seed the default `task_status_configs` for a `task_lists` row.
  *
- * Conflict tolerance is `onConflictDoNothing`, NOT a try/catch, and the
- * difference matters more than it looks. A concurrent caller may have seeded
- * the same list a moment earlier and we only need the rows to exist — but
- * catching that is unsafe here: every caller runs inside `db.transaction`, and
- * a raised constraint violation aborts the whole transaction. Swallowing it
- * lets the callback return normally, whereupon Postgres turns the COMMIT into a
- * ROLLBACK and the caller is handed a `task_lists` row that does not exist.
- * Anything reading that phantom list — `resolveSeedStatus`, for one — then sees
- * no configs and falls back to a slug the real list may not define.
+ * Conflict tolerance is `onConflictDoNothing`, not a try/catch, for two
+ * reasons — one demonstrated, one structural.
  *
- * (The catch that stood here briefly could not match a real conflict at all,
- * because drizzle wraps pg errors and puts the SQLSTATE on `.cause` — so it
- * rethrew, which was accidentally the safe outcome. Making the match work
- * without moving off the catch would have introduced the abort.)
+ * Demonstrated: a real conflict IS reachable on the repair paths, where two
+ * callers find the same config-less list and both seed it (the GET route's
+ * migration branch, the MCP read, `read_page`). A catch has to recognise the
+ * error first, and drizzle rethrows pg errors as DrizzleQueryError with the
+ * SQLSTATE on `.cause` — so the message test that stood here would have
+ * rethrown and 500'd the request. There is an integration test for exactly
+ * this race; removing the conflict clause fails it.
+ *
+ * Structural: the create paths run inside `db.transaction`, where a RAISED
+ * constraint violation aborts the transaction, and swallowing it would let the
+ * callback return while Postgres converts the COMMIT to a ROLLBACK — handing
+ * the caller a `task_lists` row that never committed. Today those paths seed a
+ * freshly created id, so no conflict can occur and the hazard is latent rather
+ * than live. ON CONFLICT DO NOTHING never raises, so it cannot become live.
  */
 export async function seedDefaultTaskStatusConfigs(tx: Tx, taskListId: string): Promise<void> {
   await tx.insert(taskStatusConfigs)

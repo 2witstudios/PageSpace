@@ -204,6 +204,94 @@ describe('sub-list status vocabulary inheritance', () => {
     });
   });
 
+  it('seeds a committed, inherited vocabulary even under concurrent lazy init', async () => {
+    // Only a real database shows what this guards. A raised 23505 aborts the
+    // whole transaction, so a seeder that CATCHES it lets the callback return
+    // normally while Postgres converts the COMMIT to a ROLLBACK — and the
+    // caller is handed a task_lists row that was never committed, whose
+    // (nonexistent) configs then send resolveSeedStatus back to the 'pending'
+    // fallback. ON CONFLICT DO NOTHING never raises, so nothing aborts.
+    //
+    // NOTE, deliberately not asserted: `task_lists.pageId` carries only an
+    // index, not a unique constraint (unlike `task_items.pageId`), and
+    // getOrCreateTaskListForPage is a check-then-insert. Two simultaneous
+    // callers therefore create two rows. That race predates this branch and
+    // fixing it needs a migration; what matters here is that whatever commits
+    // is complete and correctly seeded, never a phantom.
+    if (!dbAvailable) return;
+    const { taskPage } = await seedCustomisedTree();
+
+    const [a, b] = await Promise.all([getTasks(taskPage.id), getTasks(taskPage.id)]);
+
+    const lists = await db.select({ id: taskLists.id })
+      .from(taskLists).where(eq(taskLists.pageId, taskPage.id)).limit(10);
+    const perList = await Promise.all(lists.map(async (l) => {
+      const configs = await db
+        .select({ slug: taskStatusConfigs.slug })
+        .from(taskStatusConfigs)
+        .where(eq(taskStatusConfigs.taskListId, l.id))
+        .orderBy(asc(taskStatusConfigs.position))
+        .limit(50);
+      return configs.map((c) => c.slug);
+    }));
+
+    assert({
+      given: 'two concurrent lazy-init reads of the same task page',
+      should: 'both succeed, and every list that committed carries the inherited vocabulary',
+      actual: {
+        statuses: [a.status, b.status],
+        committed: lists.length > 0,
+        everyListInherited: perList.every(
+          (slugs) => JSON.stringify(slugs) === JSON.stringify(['icebox', 'building', 'shipped']),
+        ),
+      },
+      expected: { statuses: [200, 200], committed: true, everyListInherited: true },
+    });
+  });
+
+  it('repairs a config-less list under concurrency without raising', async () => {
+    // The one path where two callers can seed the SAME task_lists id: a list
+    // row that exists but has no configs (legacy, or a half-finished init).
+    // Both take the repair branch, both insert the same (taskListId, slug)
+    // pairs, and one loses the race. ON CONFLICT DO NOTHING absorbs that; a
+    // catch would have to correctly identify a DrizzleQueryError first.
+    if (!dbAvailable) return;
+    const owner = await factories.createUser();
+    currentUserId = owner.id;
+    const drive = await factories.createDrive(owner.id);
+    const listPage = await factories.createPage(drive.id, { type: 'TASK_LIST' });
+    const [rootList] = await db.insert(taskLists).values({
+      userId: owner.id, pageId: listPage.id, title: 'Root', status: 'pending',
+    }).returning();
+    await db.insert(taskStatusConfigs).values(
+      CUSTOM_STATUSES.map((c) => ({ taskListId: rootList.id, ...c })),
+    );
+
+    // A child task whose own list exists but was never given configs.
+    const taskPage = await factories.createPage(drive.id, {
+      parentId: listPage.id, type: 'TASK_LIST',
+    });
+    await db.insert(taskItems).values({ userId: owner.id, pageId: taskPage.id, status: 'icebox' });
+    await db.insert(taskLists).values({
+      userId: owner.id, pageId: taskPage.id, title: 'Sub', status: 'pending',
+    });
+
+    const [a, b] = await Promise.all([getTasks(taskPage.id), getTasks(taskPage.id)]);
+
+    assert({
+      given: 'two concurrent repairs of the same config-less list',
+      should: 'both succeed and seed the inherited vocabulary exactly once',
+      actual: {
+        statuses: [a.status, b.status],
+        slugs: await slugsFor(taskPage.id),
+      },
+      expected: {
+        statuses: [200, 200],
+        slugs: ['icebox', 'building', 'shipped'],
+      },
+    });
+  });
+
   it('still seeds the defaults for a list with no task-list ancestor', async () => {
     if (!dbAvailable) return;
     const owner = await factories.createUser();
