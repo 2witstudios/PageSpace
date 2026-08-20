@@ -12,6 +12,7 @@
 
 import {
   normalizeUsageSource,
+  SANDBOX_STORAGE_MODELS,
   USAGE_SOURCE_LABELS,
   type AIUsageSource,
 } from '@pagespace/lib/monitoring/usage-source';
@@ -28,6 +29,14 @@ export interface UsageLedgerRow {
   pageTitle: string | null;
   /** Active-window duration in milliseconds (source:'terminal' rows only). */
   durationMs: number | null;
+  /**
+   * The shared analytics session column. For an ENVIRONMENT storage charge
+   * (`model: SANDBOX_STORAGE_MODELS.env`) it carries the `drive_envs` id — the
+   * only handle those rows have, since they are page-less by construction.
+   */
+  sessionId: string | null;
+  /** The environment's name, pre-joined by the query — null once the env row is gone. */
+  envName: string | null;
 }
 
 export interface UsageBreakdownPeriod {
@@ -99,11 +108,37 @@ export interface UsageAgentSessionRow {
   sharePct: number;
 }
 
+/**
+ * One environment's persistence spend this period.
+ *
+ * Its OWN section, deliberately not a line in `byAgentSession`. An env storage
+ * row is `source: 'terminal'` with no `pageId`, so it used to fall into that
+ * view's catch-all "Unattributed agent" bucket — and once environments are a
+ * thing users create and name, a drive's shared machine reading as an
+ * unattributed agent is simply a wrong answer, not a rounding one. It is also
+ * excluded from that section's denominator, so an agent's share of agent spend
+ * no longer moves when an unrelated environment is billed for its disk.
+ *
+ * There is no `activeSeconds`: an environment is billed for the disk it keeps,
+ * not for a wall-clock window, and every one of these rows carries a zero
+ * duration. Reporting "0s" beside a real charge would read as a bug.
+ */
+export interface UsageEnvironmentRow {
+  /** `drive_envs.id`, or null for a charge whose env id was never recorded. */
+  envId: string | null;
+  label: string;
+  spendCents: number;
+  calls: number;
+  /** Share of ENVIRONMENT spend (not overall spend) this environment accounts for. */
+  sharePct: number;
+}
+
 export interface UsageBreakdown extends UsageBreakdownPeriod {
   totalSpendCents: number;
   byFeature: UsageFeatureRow[];
   byModel: UsageModelRow[];
   byAgentSession: UsageAgentSessionRow[];
+  byEnvironment: UsageEnvironmentRow[];
 }
 
 /** Internal accumulator (spend tracked in millicents for precision). */
@@ -130,8 +165,10 @@ export function aggregateUsageBreakdown(
   const featureBuckets = new Map<AIUsageSource, Bucket>();
   const modelBuckets = new Map<string, Bucket & { model: string; provider: string }>();
   const agentSessionBuckets = new Map<string, { millicents: number; calls: number; activeSeconds: number; pageId: string | null; label: string }>();
+  const environmentBuckets = new Map<string, { millicents: number; calls: number; envId: string | null; label: string }>();
   let totalMillicents = 0;
   let agentSessionMillicents = 0;
+  let environmentMillicents = 0;
 
   for (const r of rows) {
     const charge = r.chargeMillicents ?? 0;
@@ -155,7 +192,21 @@ export function aggregateUsageBreakdown(
     mb.calls += 1;
     modelBuckets.set(key, mb);
 
-    if (source === 'terminal') {
+    if (source === 'terminal' && r.model === SANDBOX_STORAGE_MODELS.env) {
+      // An ENVIRONMENT's disk. Split off BEFORE the per-agent bucketing below,
+      // which is the whole point: these rows have no `pageId` and would
+      // otherwise land in its "Unattributed agent" line and its denominator.
+      // The env id rides on `sessionId` (see `sandbox-storage-billing.ts`) and
+      // the name is resolved by the query; a name that no longer resolves means
+      // the env was deleted, which is a fact worth showing rather than hiding.
+      environmentMillicents += charge;
+      const envKey = r.sessionId ?? '__unidentified_env__';
+      const envLabel = r.envName ?? 'Deleted environment';
+      const eb = environmentBuckets.get(envKey) ?? { millicents: 0, calls: 0, envId: r.sessionId, label: envLabel };
+      eb.millicents += charge;
+      eb.calls += 1;
+      environmentBuckets.set(envKey, eb);
+    } else if (source === 'terminal') {
       agentSessionMillicents += charge;
       // Rows without a resolvable page (pre-attribution history, or a session
       // with no backing page e.g. the global assistant) collapse into one
@@ -204,6 +255,16 @@ export function aggregateUsageBreakdown(
     }))
     .sort((a, b) => b.spendCents - a.spendCents);
 
+  const byEnvironment: UsageEnvironmentRow[] = Array.from(environmentBuckets.values())
+    .map((b) => ({
+      envId: b.envId,
+      label: b.label,
+      spendCents: millicentsToCents(b.millicents),
+      calls: b.calls,
+      sharePct: sharePct(b.millicents, environmentMillicents),
+    }))
+    .sort((a, b) => b.spendCents - a.spendCents);
+
   return {
     periodStart: period.periodStart,
     periodEnd: period.periodEnd,
@@ -211,5 +272,6 @@ export function aggregateUsageBreakdown(
     byFeature,
     byModel,
     byAgentSession,
+    byEnvironment,
   };
 }

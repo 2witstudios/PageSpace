@@ -52,3 +52,25 @@ export const USAGE_SOURCE_LABELS: Record<AIUsageSource, string> = {
   terminal: 'Terminal',
   other: 'Other',
 };
+
+/**
+ * The `model` labels the sandbox storage meter writes for a persistence charge —
+ * one per BILLED UNIT, not per substrate.
+ *
+ * They live here, beside the source vocabulary, because they are read by two
+ * sides that must not drift: the meter that stamps them
+ * (`services/sandbox/sandbox-storage-billing.ts`) and the usage breakdown that
+ * splits an environment's storage out of the per-agent section
+ * (`apps/web/src/lib/subscription/usage-breakdown.ts`). Both rows carry
+ * `source: 'terminal'` and no `pageId`, so this label is the ONLY thing that
+ * says which of the two a charge is — which is why it cannot be a string
+ * literal spelled at each end.
+ *
+ * `session` keeps the string it has always been written under: renaming it
+ * would split one meter's history across two labels in every existing usage
+ * breakdown.
+ */
+export const SANDBOX_STORAGE_MODELS = {
+  session: 'terminal-machine-storage',
+  env: 'drive-env-storage',
+} as const;
