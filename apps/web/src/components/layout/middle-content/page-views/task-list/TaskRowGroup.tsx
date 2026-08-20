@@ -214,6 +214,9 @@ function TaskSubTaskRows({
     // Nothing revalidates in this cache by design, so a conflict is resolved by
     // re-requesting the pages already loaded.
     onRevisionConflict: retry,
+    // ...and for the same reason, a deferred foreign echo has to reach this
+    // cache explicitly: the machinery's revalidation refreshes the ROOT list.
+    refreshOwnCache: retry,
   });
 
   const patchCounts = useCallback((childId: string, delta: { total?: number; completed?: number }) => {

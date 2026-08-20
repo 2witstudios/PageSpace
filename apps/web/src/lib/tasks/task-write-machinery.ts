@@ -53,7 +53,8 @@ export interface TaskWriteMachinery {
   noteSelfWriteSettled: (writeId: number, updatedAt: string | null) => void;
   /**
    * Run the revalidation an echo deferred, if one is pending and no write is
-   * still open.
+   * still open. Returns whether it actually revalidated, so a caller bound to
+   * its own cache can refresh that too.
    *
    * Separate from noteSelfWriteSettled, and called only AFTER the cache write
    * has committed. Revalidating from inside SWR's updater starts a refetch that
@@ -62,7 +63,7 @@ export interface TaskWriteMachinery {
    * the exact data loss the deferral exists to prevent. The same applies across
    * writes, hence the in-flight check: see hasAnyInFlightSelfWrite.
    */
-  flushDeferredRevalidate: () => void;
+  flushDeferredRevalidate: () => boolean;
   /**
    * Classify an inbound task event. Returns true when the caller should
    * revalidate; false when the event was this tab's own echo (already applied,
@@ -112,24 +113,26 @@ export function useTaskWriteMachinery(
     );
   }, []);
 
-  const flushDeferredRevalidate = useCallback(() => {
-    if (deferredEchoesRef.current.length === 0) return;
+  const flushDeferredRevalidate = useCallback((): boolean => {
+    if (deferredEchoesRef.current.length === 0) return false;
     // Not while ANY write is still open. The queue is view-wide, so an unrelated
     // write settling would otherwise start the refetch while this one is still
     // inside its updater — and its commit would then overwrite the foreign
     // change the refetch just fetched. The queue survives, so whichever write
     // settles last performs the flush.
     const now = Date.now();
-    if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return;
+    if (hasAnyInFlightSelfWrite(selfWritesRef.current, now)) return false;
 
     const queued = deferredEchoesRef.current;
     deferredEchoesRef.current = [];
     // Re-ask, now that the stamps are known. An echo that turns out to have
     // been ours needs nothing; only one still unaccounted for is a real
     // concurrent edit worth refetching for.
-    if (deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now)) {
-      revalidateAll();
+    if (!deferredEchoesNeedRevalidation(selfWritesRef.current, queued, currentUserId, now)) {
+      return false;
     }
+    revalidateAll();
+    return true;
   }, [revalidateAll, currentUserId]);
 
   const shouldRevalidateForEvent = useCallback((event: InboundTaskEvent): boolean => {
@@ -190,9 +193,19 @@ export function useTaskWriter(params: {
   /** The view-wide machinery from useTaskWriteMachinery. */
   machinery: TaskWriteMachinery;
   onRevisionConflict?: () => void;
+  /**
+   * Refresh THIS writer's own cache.
+   *
+   * The machinery's revalidation is the view's — the root list. A nested writer
+   * patches a per-node cache that has every automatic revalidation turned off,
+   * so without this a foreign edit that raced a nested write is dropped for
+   * good rather than deferred, which is the opposite of what the deferral
+   * promises. Omitted at the root, where the two are the same cache.
+   */
+  refreshOwnCache?: () => void;
 }): TaskWriter {
   const { noteSelfWriteStart, noteSelfWriteSettled, flushDeferredRevalidate } = params.machinery;
-  const { mutatePages, onRevisionConflict } = params;
+  const { mutatePages, onRevisionConflict, refreshOwnCache } = params;
 
   const writeTaskField = useCallback(async ({
     loc, body, optimistic, fallbackMessage,
@@ -231,10 +244,10 @@ export function useTaskWriter(params: {
       return false;
     } finally {
       // After the cache write has committed, never from inside the updater.
-      flushDeferredRevalidate();
+      if (flushDeferredRevalidate()) refreshOwnCache?.();
     }
-  }, [mutatePages, onRevisionConflict, noteSelfWriteStart, noteSelfWriteSettled,
-      flushDeferredRevalidate]);
+  }, [mutatePages, onRevisionConflict, refreshOwnCache, noteSelfWriteStart,
+      noteSelfWriteSettled, flushDeferredRevalidate]);
 
   return { writeTaskField };
 }

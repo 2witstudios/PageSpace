@@ -388,6 +388,73 @@ describe('echo suppression', () => {
     });
   });
 
+  it("also refreshes the writer's own cache when a foreign echo survives", async () => {
+    // A nested writer's cache has every automatic revalidation off, so the
+    // machinery refreshing the ROOT list is not enough — without this the
+    // foreign edit that raced the write is dropped rather than deferred.
+    let resolve: (v: TaskItem) => void = () => {};
+    patchMock.mockReturnValue(new Promise<TaskItem>((r) => { resolve = r; }));
+    const revalidateAll = vi.fn();
+    const refreshOwnCache = vi.fn();
+    const { mutate } = makeMutate(pages([task({ id: 't1' })]));
+    const view = renderHook(() => {
+      const machinery = useTaskWriteMachinery('user-me', revalidateAll);
+      const writer = useTaskWriter({
+        mutatePages: mutate as never, machinery, refreshOwnCache,
+      });
+      return { machinery, writer };
+    });
+
+    let pending: Promise<boolean>;
+    await act(async () => {
+      pending = view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'sub', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+      await Promise.resolve();
+    });
+    view.result.current.machinery.shouldRevalidateForEvent(echo('someone-else'));
+    await act(async () => {
+      resolve(task({ id: 't1', updatedAt: 'mine' }));
+      await pending!;
+    });
+
+    assert({
+      given: 'a foreign echo deferred during a nested write',
+      should: 'refresh both the view and the nested cache',
+      actual: [revalidateAll.mock.calls.length, refreshOwnCache.mock.calls.length],
+      expected: [1, 1],
+    });
+  });
+
+  it('leaves the own cache alone when the deferred echo was ours', async () => {
+    patchMock.mockResolvedValue(task({ id: 't1', updatedAt: 'mine' }));
+    const revalidateAll = vi.fn();
+    const refreshOwnCache = vi.fn();
+    const { mutate } = makeMutate(pages([task({ id: 't1' })]));
+    const view = renderHook(() => {
+      const machinery = useTaskWriteMachinery('user-me', revalidateAll);
+      return {
+        machinery,
+        writer: useTaskWriter({ mutatePages: mutate as never, machinery, refreshOwnCache }),
+      };
+    });
+    await act(async () => {
+      await view.result.current.writer.writeTaskField({
+        loc: { listPageId: 'sub', taskId: 't1' },
+        body: { status: 'completed' }, optimistic: { status: 'completed' },
+        fallbackMessage: 'nope',
+      });
+    });
+    assert({
+      given: 'a write with no deferred echo at all',
+      should: 'refresh nothing',
+      actual: [revalidateAll.mock.calls.length, refreshOwnCache.mock.calls.length],
+      expected: [0, 0],
+    });
+  });
+
   it('waits for a concurrent write on the SAME task before flushing', async () => {
     // Two writes to one task overlap on a double-clicked checkbox. Keying the
     // in-flight records on taskId alone let the first to settle erase the

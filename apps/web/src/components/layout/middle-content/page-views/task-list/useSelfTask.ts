@@ -130,7 +130,9 @@ export function useSelfTask(
       if (writeId !== undefined) machinery?.noteSelfWriteSettled(writeId, null);
       toast.error(taskWriteErrorMessage(e, 'Failed to update status'));
     } finally {
-      machinery?.flushDeferredRevalidate();
+      // Refresh this header's own row too when a foreign echo survived: the
+      // machinery's revalidation covers the list, not this key.
+      if (machinery?.flushDeferredRevalidate()) void mutate();
     }
   }, [task, listPageId, canEdit, data, statusConfigs, mutate, machinery]);
 
