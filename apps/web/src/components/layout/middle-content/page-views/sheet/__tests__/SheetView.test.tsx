@@ -3,6 +3,14 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { createEmptySheet, serializeSheetContent } from '@pagespace/lib/sheets/sheet';
 
+// `serializeSheetContent` refuses to emit content it cannot parse back, so it
+// can throw on an edit. Spying lets a test force that without a contrived
+// document.
+vi.mock('@pagespace/lib/sheets/sheet', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@pagespace/lib/sheets/sheet')>();
+  return { ...actual, serializeSheetContent: vi.fn(actual.serializeSheetContent) };
+});
+
 /**
  * Render coverage for SheetView.
  *
@@ -116,6 +124,9 @@ const contentWith = (cells: Record<string, string>) => {
 describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
+    // A primed `mockImplementationOnce` that never fires would leak into the
+    // next test's setup, so clear any leftover between tests.
+    vi.mocked(serializeSheetContent).mockClear();
     documentState.current = { content: contentWith({ A1: 'hello' }), isDirty: false };
     toastError.mockClear();
   });
@@ -196,6 +207,28 @@ describe('SheetView', () => {
     render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getAllByRole('gridcell')[0].getAttribute('aria-readonly')).toBe('true');
+  });
+
+  it('survives a serialization failure instead of blanking the page', () => {
+    // The throw happens inside a React state updater. Uncaught, it escapes to
+    // the nearest error boundary and takes the whole view with it. "+ Row" is
+    // the shortest path that definitely reaches the persist helper.
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
+
+    vi.mocked(serializeSheetContent).mockImplementationOnce(() => {
+      throw new Error('Refusing to emit a SheetDoc that cannot be parsed back');
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: 'Add row' })[0]);
+
+    // The toast is the load-bearing assertion: it only appears if the throw
+    // was caught. `fireEvent` does not rethrow, so asserting "did not throw"
+    // passes with or without the guard.
+    expect(toastError).toHaveBeenCalledWith('That change could not be saved and was undone.');
+
+    // And the view survived, still showing the last good value.
+    expect(screen.getByRole('grid')).toBeTruthy();
+    expect(screen.getByText('hello')).toBeTruthy();
   });
 
   it('renders a formatted value the way the engine computed it', () => {

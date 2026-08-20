@@ -271,31 +271,45 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     triggerPattern: sheetTriggerPattern,
   });
 
+  /**
+   * Serialize and hand off to the store, returning false if serialization
+   * refused.
+   *
+   * `serializeSheetContent` re-parses its own output and throws rather than
+   * emit something that would read back as an empty sheet. Every caller runs
+   * inside a React event or state update, where an uncaught throw escapes to
+   * the nearest error boundary and blanks the view — so the failure is turned
+   * into a declined change here instead.
+   */
+  const persistSheet = useCallback(
+    (sheet: SheetData): boolean => {
+      try {
+        const serialized = serializeSheetContent(sheet);
+        updateContent(serialized);
+        saveWithDebounce(serialized);
+        return true;
+      } catch (error) {
+        console.error('Failed to serialize sheet; change not applied:', error);
+        toast.error('That change could not be saved and was undone.');
+        return false;
+      }
+    },
+    [saveWithDebounce, updateContent]
+  );
+
   const applySheetUpdate = useCallback(
     (updater: (previous: SheetData) => SheetData, shouldPersist = true) => {
       setSheet((previous) => {
         const updated = updater(previous);
         const sanitized = sanitizeSheetData({ ...updated });
-        if (shouldPersist) {
-          let serialized: string;
-          try {
-            serialized = serializeSheetContent(sanitized);
-          } catch (error) {
-            // `serializeSheetContent` refuses to emit content it cannot parse
-            // back. Uncaught here it would escape a React state update and
-            // blank the page; instead, reject the edit and keep the last good
-            // state, which is also what the user would want.
-            console.error('Failed to serialize sheet; edit not applied:', error);
-            toast.error('That change could not be saved and was undone.');
-            return previous;
-          }
-          updateContent(serialized);
-          saveWithDebounce(serialized);
+        if (shouldPersist && !persistSheet(sanitized)) {
+          // Serialization refused; keep the last good state.
+          return previous;
         }
         return sanitized;
       });
     },
-    [saveWithDebounce, updateContent, setSheet]
+    [persistSheet, setSheet]
   );
 
   // Start editing a cell with optional initial key
@@ -414,28 +428,22 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     if (isReadOnly || !canUndo) return;
 
     const previousState = undo();
-    if (previousState) {
-      const serialized = serializeSheetContent(previousState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (previousState && persistSheet(previousState)) {
       toast.success('Undo', { duration: 1500 });
       announce('Undo performed');
     }
-  }, [isReadOnly, canUndo, undo, updateContent, saveWithDebounce, announce]);
+  }, [isReadOnly, canUndo, undo, persistSheet, announce]);
 
   // Redo handler
   const handleRedo = useCallback(() => {
     if (isReadOnly || !canRedo) return;
 
     const nextState = redo();
-    if (nextState) {
-      const serialized = serializeSheetContent(nextState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (nextState && persistSheet(nextState)) {
       toast.success('Redo', { duration: 1500 });
       announce('Redo performed');
     }
-  }, [isReadOnly, canRedo, redo, updateContent, saveWithDebounce, announce]);
+  }, [isReadOnly, canRedo, redo, persistSheet, announce]);
 
   const handleCellMouseDown = useCallback(
     (row: number, column: number, event: React.MouseEvent) => {
