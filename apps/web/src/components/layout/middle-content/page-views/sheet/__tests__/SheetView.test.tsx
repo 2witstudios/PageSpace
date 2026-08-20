@@ -15,17 +15,26 @@ import { createEmptySheet, serializeSheetContent } from '@pagespace/lib/sheets/s
 const documentState: { current: { content: string; isDirty: boolean } | undefined } = {
   current: undefined,
 };
-const loadError: { current: string | null } = { current: null };
 const lacksEditPermission = { current: false };
 
-vi.mock('../hooks/useSheetPersistence', () => ({
-  useSheetPersistence: () => ({
-    documentState: documentState.current,
-    loadError: loadError.current,
+/**
+ * `useSheetPersistence` runs for real; only its boundary to the store and the
+ * network is mocked. That is deliberate — SheetView's read-only gating is
+ * driven by the `loadError` that hook derives, so stubbing the hook would test
+ * the stub. This way an unparseable document really does flow through
+ * `parseSheetContentSafe` into the banner and the gating.
+ */
+vi.mock('@/hooks/useDocument', () => ({
+  useDocument: () => ({
+    document: documentState.current ? { ...documentState.current } : undefined,
+    isLoading: false,
+    isSaving: false,
+    initializeAndActivate: vi.fn(),
     updateContent: vi.fn(),
     updateContentFromServer: vi.fn(),
     saveWithDebounce: vi.fn(),
-    forceSaveNow: vi.fn(),
+    forceSave: vi.fn().mockResolvedValue(undefined),
+    clearDocument: vi.fn(),
     conflict: null,
     resolveConflict: vi.fn(),
     isResolvingConflict: false,
@@ -95,6 +104,9 @@ const makePage = (content: string): TestPage =>
     content,
   }) as unknown as TestPage;
 
+/** Carries the SheetDoc magic but a malformed body, so parsing genuinely fails. */
+const UNPARSEABLE = '#%PAGESPACE_SHEETDOC v1\nthis is [not toml';
+
 const contentWith = (cells: Record<string, string>) => {
   const sheet = createEmptySheet();
   Object.assign(sheet.cells, cells);
@@ -103,7 +115,6 @@ const contentWith = (cells: Record<string, string>) => {
 
 describe('SheetView', () => {
   beforeEach(() => {
-    loadError.current = null;
     lacksEditPermission.current = false;
     documentState.current = { content: contentWith({ A1: 'hello' }), isDirty: false };
     toastError.mockClear();
@@ -124,10 +135,11 @@ describe('SheetView', () => {
 
   it('surfaces a banner when the stored content could not be read', () => {
     // The alternative is handing the editor an empty sheet, which autosaves
-    // straight over content we merely failed to parse.
-    loadError.current = 'Key without value at row 3';
+    // straight over content we merely failed to parse. The failure is derived
+    // from real content through the real hook, not injected.
+    documentState.current = { content: UNPARSEABLE, isDirty: false };
 
-    render(<SheetView page={makePage('broken')} />);
+    render(<SheetView page={makePage(UNPARSEABLE)} />);
 
     const alert = screen.getByRole('alert');
     expect(alert.textContent).toContain('could not be loaded');
@@ -137,9 +149,9 @@ describe('SheetView', () => {
   it('still renders the grid while the load error is showing', () => {
     // The banner must not replace the view — a user should still see whatever
     // did parse, and be able to select and copy it.
-    loadError.current = 'unparseable';
+    documentState.current = { content: UNPARSEABLE, isDirty: false };
 
-    render(<SheetView page={makePage('broken')} />);
+    render(<SheetView page={makePage(UNPARSEABLE)} />);
 
     expect(screen.getByRole('grid')).toBeTruthy();
   });
