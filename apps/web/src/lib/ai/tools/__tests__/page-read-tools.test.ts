@@ -1540,8 +1540,14 @@ describe('page-read-tools', () => {
         // failed tool call -- it should log and let the read still succeed.
         setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
 
+        // The failure has to come from the awaited call. Seeding is
+        // `.values(...).onConflictDoNothing()`, so rejecting at `values()`
+        // would build a promise nothing ever awaits — an unhandled rejection
+        // that fails the run while every test still reports green.
         mockDb.insert = vi.fn(() => ({
-          values: () => Promise.reject(new Error('connection reset')),
+          values: () => ({
+            onConflictDoNothing: () => Promise.reject(new Error('connection reset')),
+          }),
         })) as unknown as typeof mockDb.insert;
 
         const result = await pageReadTools.read_page.execute!(
