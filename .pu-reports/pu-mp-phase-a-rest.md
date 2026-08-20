@@ -125,7 +125,18 @@ respectively, with the reason consumed by the caller.)
 copy" and the two-seeder test went red. Separately removed the `FOR UPDATE` statement → "takes the
 drive row lock before deciding whether to seed" went red. Both restored.
 
-**What the two-seeder test does and does not prove.** It drives two `populateUserDrive` calls through
+**Real-Postgres coverage added (review follow-up).**
+`src/onboarding/__tests__/drive-setup-race.integration.test.ts` races two seeders for one drive on
+two *dedicated* single-connection pools — a shared pool with `DB_POOL_MAX=1` would serialise them
+and pass against a seeder with no lock at all — and proves the loser genuinely blocks by observing
+`wait_event_type = 'Lock'` in `pg_stat_activity` rather than inferring it from a sleep. Verified
+against a real database: removing the `FOR UPDATE` turns it red with `expected [ true, true ] to
+have a length of 1 but got 2` — both seeders claiming the work, which is the production incident
+reproduced. It was flaky on the first pass (green alone, red alongside siblings) because nothing
+made the holder acquire the row before the seeder started; the holder now signals from inside its
+transaction, and the suite was re-run three times and re-mutated after that fix.
+
+**What the two-seeder UNIT test does and does not prove.** It drives two `populateUserDrive` calls through
 a database stand-in and asserts exactly one "Welcome to PageSpace" insert. But that stand-in
 serialises transaction bodies unconditionally, so serialisation is *assumed* there, not demonstrated
 — removing the `FOR UPDATE` leaves it green. I originally described it as covering the race; it does
