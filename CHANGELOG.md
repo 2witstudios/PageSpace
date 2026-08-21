@@ -19,8 +19,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   underneath, so you can see at a glance who is working on which filesystem. An environment with
   nothing running in it still appears: it is infrastructure your drive keeps, not something that
   vanishes on an idle afternoon. Starting a new session in a drive that has environments asks where
-  it should run — a fresh sandbox, or in one of them.
-- **Creating, renaming, rebuilding and deleting an environment** — all four are for drive owners and
+  it should run — a fresh sandbox, or in one of them. Each environment carries its own “+” for
+  starting a session straight into it, which skips that question because the row already answered
+  it.
+- **Making an environment is part of the “new session” palette** — press ⌥N on the Agents screens,
+  or use the “+”, and the same keyboard-first selector that starts a session also offers “New
+  environment”: from the first step in any drive, and from the “where should it run?” step, where
+  the one you just made becomes the answer. There is no separate icon to find in the sidebar.
+- **Renaming, rebuilding and deleting an environment** — all three are for drive owners and
   admins, and the two destructive ones say what they destroy before they do it. Deleting refuses
   while sessions are still running inside and then offers to end them, naming both halves of what
   that means; rebuilding says plainly that the environment comes back BLANK, with its name intact

@@ -125,6 +125,7 @@ import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/
 import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
   id,
@@ -309,6 +310,12 @@ beforeEach(() => {
   // Same leak risk for the tree: two tests opening the same workspace id would
   // otherwise see each other's nodes, since nothing else clears this store.
   __resetWorkspaceQueuesForTests();
+  // Same reason, one store over: the environment dialogs register an editing
+  // session while open, and a test that unmounts mid-dialog leaves it
+  // registered. A leaked session is not inert — `isEditingActive()` gates the
+  // quick-create hotkey handler, so the next test's keypress would silently do
+  // nothing.
+  useEditingStore.getState().clearAllSessions();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
   // this default doubles as proof a non-admin gets full access too.
@@ -1792,6 +1799,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('offers no environment management to a member who cannot administer the drive', async () => {
+      const user = userEvent.setup();
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isOwned: false, role: 'MEMBER' })] });
       respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
       renderSidebar();
@@ -1801,21 +1809,148 @@ describe('AgentsSidebar', () => {
       const envRow = await screen.findByTestId('sidebar-env-env-1');
       expect(within(envRow).getByText('staging')).toBeDefined();
       expect(within(envRow).queryByLabelText('Environment actions')).toBeNull();
-      expect(screen.queryByLabelText('New environment')).toBeNull();
+
+      // Creating one is not offered anywhere either — not as a sidebar button
+      // (there is no longer one for anybody) and not in the palette, which is
+      // where the act moved to.
+      await user.click(screen.getByLabelText('New session'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByText('New environment')).toBeNull();
     });
 
-    test('an admin gets the "New environment" affordance, and creating one POSTs just a name', async () => {
+    /**
+     * ENVIRONMENT CREATION LIVES IN THE PALETTE, NOT IN AN ICON BUTTON.
+     *
+     * The sidebar used to carry a `Boxes` button beside each "+". It is gone:
+     * the selector that already offers environments as somewhere to run is
+     * where making one belongs, and it is reachable from BOTH steps that talk
+     * about them — the target step (which exists even in a drive with no
+     * environments, where the env step never renders) and the env step (where
+     * the environment just created is the answer to the question being asked).
+     */
+    test('no icon button creates an environment any more — the sidebar has none for an admin either', async () => {
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      expect(screen.queryByLabelText('New environment')).toBeNull();
+      expect(screen.queryByLabelText('New environment in Alpha')).toBeNull();
+    });
+
+    test('an admin creates one from the palette\'s target step, and lands back on that step with it offered', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);
       mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
       renderSidebar();
 
-      await user.click(await screen.findByLabelText('New environment'));
-      await user.type(await screen.findByLabelText('Name'), 'dev');
-      await user.click(screen.getByRole('button', { name: 'Create' }));
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
 
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }),
+      );
+      // Back on the target step — the session it came here to start is still
+      // unstarted, and the environment now exists for the step that asks where.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('creating from the environment step goes straight on to naming, with the new environment selected', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValueOnce({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      mockPost.mockResolvedValueOnce({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New environment…'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // No second trip through the environment step: what the user just made is
+      // the answer to it.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-new',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    test('a name already taken keeps the create step open with what was typed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      mockPost.mockRejectedValueOnce(
+        new ApiRequestError('An environment with this name already exists', 409, {}),
+      );
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      // Still the create step, still holding the name — the one refusal
+      // retyping can actually fix.
+      expect((await screen.findByLabelText('Environment name') as HTMLInputElement).value).toBe('dev');
+    });
+
+    /**
+     * THE QUICK-CREATE HOTKEY MEANS THIS SURFACE'S "NEW".
+     *
+     * Elsewhere `Alt+N` opens the page-type palette. On the Agents routes "new"
+     * is a session — or the environment to run one in, which the spawn palette
+     * now offers — so the sidebar answers the binding and
+     * `QuickCreatePalette` stands down (its own guard, tested at its own site).
+     */
+    test('the quick-create hotkey opens the spawn palette on a drive-scoped agents route', async () => {
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('New session');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('the environment row\'s "+" spawns INSIDE it — the row already answered where', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // Straight to naming: the environment step is not asked a question the
+      // row already answered.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      expect(screen.queryByText('New sandbox')).toBeNull();
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
       );
     });
 
