@@ -135,6 +135,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   mentions into ordinary links and the page quietly dropped out of the mention list on the pages it
   referenced. Mentions of every kind now come back intact, and a mention of a person is finally its
   own thing rather than being filed as a mention of a page with the person's id on it.
+- **Editing a page larger than 1MB no longer fails to save** — every edit records the page's
+  previous contents for version history, storing large ones outside the main record and keeping a
+  note of how big they were. That size was being held to the same 1MB limit as content stored
+  inline, so once a page grew past a megabyte its next edit was rejected and rolled back, and the
+  change never landed. Spreadsheets hit it first, since they reach that size on ordinary use;
+  writes to affected pages retried and failed in a loop. Large pages now save normally, and their
+  history is recorded in full.
 
 - **Turning an uploaded file into a document no longer risks losing what you wrote in it** — file
   text extraction runs in the background, and a file converted to a document while that extraction
