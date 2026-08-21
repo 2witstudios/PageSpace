@@ -1851,6 +1851,9 @@ describe('AgentsSidebar', () => {
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }),
       );
+      // Said out loud: the palette covers the sidebar, so the new row appearing
+      // there is no longer the confirmation it used to be.
+      expect(mockToastSuccess).toHaveBeenCalledWith('Created “dev”');
       // Back on the target step — the session it came here to start is still
       // unstarted, and the environment now exists for the step that asks where.
       expect(await screen.findByText('Researcher')).toBeDefined();

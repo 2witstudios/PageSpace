@@ -281,6 +281,12 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       // mid-keystroke. Writing the row in first means the answer is already
       // true when the next render asks; the revalidation behind it only
       // confirms it, and settles the ordering the server sorts by.
+      // Said out loud, because nothing else says it any more. The dialog this
+      // replaced closed onto the sidebar, where the new row appearing WAS the
+      // confirmation; the palette covers that, and the target step it returns
+      // to looks identical to the one it left. The other environment writes
+      // (delete, rebuild) already answer this way.
+      toast.success(`Created “${created.env.name}”`);
       globalMutate(
         driveEnvsKey(driveId),
         (current?: { envs: DriveEnvDTO[] }) => {
