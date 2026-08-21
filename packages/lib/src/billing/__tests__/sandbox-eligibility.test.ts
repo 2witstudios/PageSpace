@@ -135,12 +135,36 @@ const SCAN_DIRS = [
 ];
 
 /**
- * Comments stripped everywhere the sweep looks: these modules DOCUMENT the rule
- * at length, naming the very identifiers being swept for, and a sweep that reads
- * prose as code fails on its own explanation.
+ * Comment lines dropped everywhere the sweep looks: these modules DOCUMENT the
+ * rule at length, naming the very identifiers being swept for, and a sweep that
+ * reads prose as code fails on its own explanation.
+ *
+ * Whole LINES, never partial ones (review): a regex that deletes from `//` to
+ * end-of-line also fires inside a string literal, so `const s = 'a // b';
+ * isTenantMode();` would lose the call and the sweep would pass on a real
+ * violation. This drops a line only when the line IS a comment — nothing on a
+ * line of code is ever removed — so a violation can hide only by living inside
+ * something that lexically is a comment, which it cannot. It errs the safe way:
+ * an identifier in a TRAILING comment still counts as a hit, i.e. a false
+ * positive a maintainer must reword, not a false pass.
  */
-function stripComments(src: string): string {
-  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+function stripCommentLines(src: string): string {
+  let inBlock = false;
+  return src
+    .split('\n')
+    .filter((line) => {
+      const trimmed = line.trim();
+      if (inBlock) {
+        if (trimmed.includes('*/')) inBlock = false;
+        return false;
+      }
+      if (trimmed.startsWith('/*')) {
+        if (!trimmed.includes('*/')) inBlock = true;
+        return false;
+      }
+      return !trimmed.startsWith('//') && !trimmed.startsWith('*');
+    })
+    .join('\n');
 }
 
 function sourceFiles(): { path: string; src: string }[] {
@@ -159,7 +183,7 @@ function sourceFiles(): { path: string; src: string }[] {
       if (entry.isDirectory()) {
         walk(child, childRel);
       } else if (/\.tsx?$/.test(entry.name)) {
-        out.push({ path: childRel.slice(1), src: stripComments(readFileSync(child, 'utf8')) });
+        out.push({ path: childRel.slice(1), src: stripCommentLines(readFileSync(child, 'utf8')) });
       }
     }
   };
@@ -176,6 +200,22 @@ function isTestPath(path: string): boolean {
 function nonTestFiles() {
   return sourceFiles().filter(({ path }) => !isTestPath(path));
 }
+
+describe('the sweep\'s comment stripper', () => {
+  it('drops comment lines, block and line alike', () => {
+    const src = ['// isTenantMode();', '/* isTenantMode();', '   isTenantMode(); */', 'const a = 1;'].join('\n');
+    expect(stripCommentLines(src)).toBe('const a = 1;');
+  });
+
+  it('never truncates a line of code — a `//` inside a literal must not hide what follows', () => {
+    const src = "const s = 'a // b'; isTenantMode();";
+    expect(stripCommentLines(src)).toContain('isTenantMode()');
+  });
+
+  it('keeps code that precedes a trailing comment', () => {
+    expect(stripCommentLines('isTenantMode(); // why')).toContain('isTenantMode()');
+  });
+});
 
 describe('eligibility sweep — one place decides', () => {
   it('finds source to scan at all (a silently empty sweep proves nothing)', () => {
@@ -209,7 +249,7 @@ describe('eligibility sweep — one place decides', () => {
   });
 
   it('the tier-indexed ceiling tables are only ever indexed by the EFFECTIVE tier', () => {
-    const quota = stripComments(
+    const quota = stripCommentLines(
       readFileSync(`${REPO_ROOT}packages/lib/src/services/sandbox/quota.ts`, 'utf8'),
     );
     for (const table of ['CONCURRENCY_LIMITS', 'DRIVE_ENV_LIMITS']) {
