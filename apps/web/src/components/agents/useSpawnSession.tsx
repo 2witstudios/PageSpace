@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useId, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Bot, Boxes, Plus, SquareTerminal, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
@@ -96,6 +96,23 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    * the flow goes straight on to naming with it selected.
    */
   const [newEnvFrom, setNewEnvFrom] = useState<'target' | 'env' | null>(null);
+  /**
+   * WHICH OPENING OF THIS PALETTE A DEFERRED ANSWER BELONGS TO.
+   *
+   * Creating an environment is a network round trip, and the flow that started
+   * it can be gone by the time it lands: Escape closes the palette while the
+   * POST is still out, and the next thing the user opens is a DIFFERENT flow,
+   * with its own target and possibly its own drive. Without something to check
+   * against, the late continuation writes into whatever is on screen now — it
+   * would select an environment belonging to another drive, drop the row preset
+   * the new flow was opened with, or close a create step the user is typing in.
+   *
+   * Bumped on every open and every close, so a continuation can ask whether the
+   * flow it belongs to is still the one in front of the user. Only the STATE
+   * continuation is gated: the environment really was created, so its toast and
+   * its cache write stand either way.
+   */
+  const flowToken = useRef(0);
 
   const spawn = useCallback(
     async (input: { driveId: string | null; envId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
@@ -149,6 +166,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // A drive group's "+" opens the picker first so the naming step's
   // placeholder can reflect whichever agent/shell was chosen.
   const openSpawn = useCallback((driveId: string, driveName: string | null) => {
+    flowToken.current += 1;
     setSpawnTarget({ driveId, driveName });
     setSpawnPick(null);
     setPresetEnvId(null);
@@ -162,6 +180,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    * with no environments at all.
    */
   const openSpawnInEnv = useCallback((driveId: string, driveName: string | null, envId: string) => {
+    flowToken.current += 1;
     setSpawnTarget({ driveId, driveName });
     setSpawnPick(null);
     setPresetEnvId(envId);
@@ -171,6 +190,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // The Assistant group has nothing to pick (the assistant IS the
   // counterpart), so this skips straight to naming.
   const openAssistantSpawn = useCallback(() => {
+    flowToken.current += 1;
     setSpawnTarget({ driveId: null, driveName: null });
     setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' });
     setPresetEnvId(null);
@@ -306,7 +326,11 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const handleCreateEnv = useCallback(
     async (name: string) => {
       const from = newEnvFrom;
+      const token = flowToken.current;
       const result = await createEnvironment(name);
+      // The flow that asked is gone — closed, or replaced by another opening.
+      // Its answer must not be applied to whatever took its place.
+      if (flowToken.current !== token) return;
       // Retryable: hold the step, with what the user typed still in it.
       if (result === 'retry') return;
       // Not retryable: hand them back the step they came from rather than
@@ -354,6 +378,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       spawning={spawning}
       onOpenChange={(open) => {
         if (open) return;
+        flowToken.current += 1;
         setSpawnTarget(null);
         setSpawnPick(null);
         setPresetEnvId(null);
@@ -487,7 +512,13 @@ function SpawnSessionPalette({
   // Cleared when the create step OPENS, not when it closes: a 409 keeps the
   // step open with what the user typed, so only a fresh opening may blank it.
   useEffect(() => {
-    if (newEnvFrom !== null) setEnvName('');
+    if (newEnvFrom === null) return;
+    setEnvName('');
+    // `creatingEnv` too, and for a reason worth naming: a create still in
+    // flight when the palette was closed never runs its `finally` against a
+    // visible form, so without this the next create step would open with its
+    // button already reading "Creating…" and disabled forever.
+    setCreatingEnv(false);
   }, [newEnvFrom]);
 
   // WHICH OF THE FOUR STEPS IS ON SCREEN, decided in one place rather than by

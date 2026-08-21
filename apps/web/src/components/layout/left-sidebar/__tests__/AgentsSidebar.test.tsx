@@ -1984,6 +1984,61 @@ describe('AgentsSidebar', () => {
       expect(useEditingStore.getState().isAnyActive()).toBe(false);
     });
 
+    /**
+     * A CREATE THAT LANDS AFTER ITS FLOW IS GONE.
+     *
+     * The POST is a round trip, and Escape closes the palette while it is still
+     * out. Whatever the user opens next is a different flow with its own
+     * answers — so the late continuation must not write into it: not select the
+     * environment it made, not drop the row preset the new flow carries, not
+     * close a step being typed in.
+     */
+    test('a create that resolves after its flow closed does not touch the flow that replaced it', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      let resolveCreate: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      renderSidebar();
+
+      // Flow A: start creating an environment from the target step…
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // …then abandon it while the POST is still out.
+      await user.keyboard('{Escape}');
+
+      // Flow B: opened from staging's "+", which pre-answers where it runs.
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+
+      // Flow A's answer lands now.
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      await act(async () => {
+        resolveCreate?.({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // Flow B is untouched: still bound to staging, still going straight to
+      // naming rather than being asked again.
+      await user.click(await screen.findByText('Researcher'));
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
     test('a name already taken keeps the create step open with what was typed', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);
