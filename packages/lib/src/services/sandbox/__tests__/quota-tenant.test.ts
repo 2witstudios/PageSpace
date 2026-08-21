@@ -58,8 +58,23 @@ describe('tenant: eligibility is bypassed', () => {
 
 describe('tenant: the runaway guards still bite', () => {
   it('ceilings resolve to the tenant effective tier, not free', () => {
-    expect(getCodeExecutionConcurrencyLimit(TENANT_STORED_TIER)).toBe(50);
-    expect(getDriveEnvLimit(TENANT_STORED_TIER)).toBe(10);
+    // Compared against the BUSINESS row as read on cloud, not against the
+    // default numbers: `CODE_EXEC_CONCURRENCY_BUSINESS` / `DRIVE_ENV_LIMIT_BUSINESS`
+    // are operator knobs, and an override must not redden a test about which row
+    // tenant lands on. Read the reference under cloud so the comparison cannot
+    // pass by both sides being normalized the same way.
+    vi.stubEnv('DEPLOYMENT_MODE', 'cloud');
+    const businessConcurrency = getCodeExecutionConcurrencyLimit('business');
+    const businessEnvs = getDriveEnvLimit('business');
+    const freeConcurrency = getCodeExecutionConcurrencyLimit('free');
+    const freeEnvs = getDriveEnvLimit('free');
+
+    vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+    expect(getCodeExecutionConcurrencyLimit(TENANT_STORED_TIER)).toBe(businessConcurrency);
+    expect(getDriveEnvLimit(TENANT_STORED_TIER)).toBe(businessEnvs);
+    // …and that this says anything at all: the two rows must actually differ.
+    expect(businessConcurrency).toBeGreaterThan(freeConcurrency);
+    expect(businessEnvs).toBeGreaterThan(freeEnvs);
   });
 
   it('the env ceiling is a real cap, not an exemption', async () => {

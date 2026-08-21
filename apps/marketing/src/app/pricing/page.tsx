@@ -91,9 +91,11 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
       buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
-      // Derived from the same tier table that actually gates the feature
-      // server-side (packages/lib/src/billing/sandbox-eligibility.ts) — this row
-      // can never drift out of sync with what Free actually gets.
+      // Derived from the same eligibility predicate that actually gates the
+      // feature server-side (SANDBOX_ELIGIBLE_TIERS, in
+      // packages/lib/src/billing/sandbox-eligibility.ts — NOT the plan-limits
+      // table the rest of this file reads) — so this row can never drift out of
+      // sync with what Free actually gets.
       //
       // The PURE tier predicate, deliberately, not the deployment-aware gate
       // `isSandboxAvailable`: this is the cloud PRICE LIST, and what it must
