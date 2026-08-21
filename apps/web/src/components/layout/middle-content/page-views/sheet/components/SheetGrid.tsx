@@ -116,7 +116,17 @@ const ResizeHandle: React.FC<{
       // permanently visible on touch devices.
       data-hover-only
       onPointerDown={handlePointerDown}
-      onDoubleClick={onDoubleClick}
+      // `pointerdown` and `mousedown` are separate events: stopping the former
+      // does not stop the latter, so without this a resize drag would also run
+      // the header's select-whole-column handler.
+      onMouseDown={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+      }}
+      onDoubleClick={(event) => {
+        event.stopPropagation();
+        onDoubleClick?.();
+      }}
       className={cn(
         'absolute z-10 opacity-0 transition-opacity hover:opacity-100',
         'bg-primary',
