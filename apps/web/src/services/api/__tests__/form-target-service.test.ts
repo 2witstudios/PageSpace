@@ -488,9 +488,16 @@ describe('appendFormSubmission', () => {
     expect(mockSetCells).toHaveBeenCalledWith(
       { pageId: 'sheet-1' },
       expect.any(Array),
-      expect.objectContaining({ userId: 'owner-1', changeGroupId: 'ft-1' }),
+      expect.objectContaining({ userId: 'owner-1' }),
       txMock
     );
+
+    // A change group PER SUBMISSION, not the form target's id. Page history
+    // groups activities by (pageId, changeGroupId), so pinning it to the form
+    // would render five thousand submissions as a single history entry.
+    const [, , actor] = mockSetCells.mock.calls[0];
+    expect(actor.changeGroupId).toBeTruthy();
+    expect(actor.changeGroupId).not.toBe('ft-1');
     expect(mockLogActivityWithTx).toHaveBeenCalledWith(
       expect.objectContaining({ userId: 'owner-1', changeGroupType: 'automation' }),
       txMock

@@ -80,7 +80,11 @@ function textOf(column: string): SQL {
 
 export function assertColumn(column: string): string {
   const label = String(column ?? '').trim().toUpperCase();
-  if (!/^[A-Z]{1,3}$/.test(label)) {
+  // Up to 7 letters, which is past any addressable column, rather than 3.
+  // `encodeColumnLabel` emits four letters happily and `columnCount` is
+  // unbounded, so a three-letter cap silently made every column after ZZZ
+  // unfilterable, unsortable and unprojectable — a 400 on valid input.
+  if (!/^[A-Z]{1,7}$/.test(label)) {
     throw new SheetQueryError(`Invalid column: ${column}`);
   }
   // Round-trips through the address decoder so a column that passes here is one

@@ -29,7 +29,16 @@ import type { CellFormat, StoredCell } from './sheets-types';
  * one row, and leave the SHEETDOC form as an on-demand projection for export,
  * publishing and download rather than the storage format.
  *
- * `pages.content` is NULL for SHEET pages. Nothing reads it for a sheet.
+ * MIGRATION STATE — read this before assuming where a sheet's truth lives.
+ *
+ * The destination is that `pages.content` is empty for SHEET pages and the
+ * SHEETDOC form is generated on demand for export, publish and download. That
+ * is NOT yet true: the editor, `/api/mcp/documents` `edit-cells`, the AI write
+ * tools and `page-payload-service` still read and write that column, so a sheet
+ * has two representations until they are cut over. `ensureTab` materialises the
+ * document into rows on first row-store access, and the backfill script
+ * deliberately leaves `pages.content` in place unless `--clear-content` is
+ * passed, so the document remains the fallback until nothing depends on it.
  */
 
 /**

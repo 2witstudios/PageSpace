@@ -90,7 +90,13 @@ const requestSchema = z.object({
     value: z.string(),
   })).max(10_000).optional(),
 
-  /** delete-rows */
+  /**
+   * `get-rows`: the row index to start at. Named `fromRow` rather than
+   * `offset` because it is a POSITION, not a count of skipped rows — a sparse
+   * tab (rows 0-9, then 500-509) would make an agent advancing `offset +=
+   * rows.length` loop forever on the same rows. `query-rows` takes a true
+   * `offset`. Also `delete-rows`.
+   */
   fromRow: z.number().int().min(0).optional(),
   count: z.number().int().min(1).max(100_000).optional(),
 });
@@ -184,7 +190,10 @@ export async function POST(req: NextRequest) {
 
       case 'get-rows': {
         auditRequest(req, { eventType: 'data.read', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation } });
-        const rows = await readRows(tab.id, { fromRow: input.offset ?? 0, limit: input.limit });
+        const fromRow = input.fromRow ?? 0;
+        const rows = await readRows(tab.id, { fromRow, limit: input.limit });
+        const nextFromRow = rows.length > 0 ? rows[rows.length - 1].rowIndex + 1 : null;
+
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
@@ -192,6 +201,10 @@ export async function POST(req: NextRequest) {
           rows,
           rowCount: tab.rowCount,
           columnCount: tab.columnCount,
+          // Where to continue from, so paging a sparse tab terminates instead
+          // of returning the same rows forever.
+          nextFromRow,
+          hasMore: nextFromRow !== null && nextFromRow < tab.rowCount,
         });
       }
 

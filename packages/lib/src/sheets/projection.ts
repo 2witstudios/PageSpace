@@ -283,7 +283,11 @@ export function displayGridFromRows(
  * `1234.5` rather than `$1,234.50`.
  */
 export function storedDisplay(cell: StoredCell, columnFormat?: CellFormat): string {
-  if (cell.error) return '#ERROR';
+  // The SPECIFIC token, not a flattened '#ERROR'. `evaluateCellInternal`
+  // produces `#DIV/0!`, `#REF!`, `#NAME?` and so on, and `StoredCell.error.type`
+  // carries it — collapsing them here would make an export disagree with the
+  // grid it came from, which is the divergence this function exists to avoid.
+  if (cell.error) return cell.error.type || '#ERROR';
   if (cell.value === undefined) return cell.raw ?? '';
 
   // Same two steps, in the same order, as `evaluateCellInternal`: format the

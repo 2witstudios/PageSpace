@@ -10,7 +10,11 @@ import {
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { buildHeaderRowUpdates, buildSubmissionRowUpdates } from '@pagespace/lib/forms/cell-mapping';
 import { setCells } from '@pagespace/lib/sheets/store';
-import { logActivityWithTx } from '@pagespace/lib/monitoring/activity-logger';
+import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import {
+  logActivityWithTx,
+  type DeferredWorkflowTrigger,
+} from '@pagespace/lib/monitoring/activity-logger';
 import type { PageMutationContext } from './page-mutation-service';
 
 const FORM_TOKEN_PREFIX = 'pft';
@@ -88,10 +92,37 @@ export async function createFormTarget({
       // against an unreadable parse silently replacing the spreadsheet with
       // just these headers. Addressing cells removes the failure mode with the
       // code path.
+      const headerGroupId = createChangeGroupId();
+
       await setCells(
         { pageId: page.id },
         buildHeaderRowUpdates(fields, HEADER_ROW),
-        { userId: mutationContext.userId, actorEmail: mutationContext.actorEmail },
+        {
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail,
+          changeGroupId: headerGroupId,
+        },
+        tx
+      );
+
+      // Provisioning a form overwrites row 1 of somebody's sheet. That used to
+      // reach the page's activity timeline via `applyPageMutation`; without an
+      // entry here it happened invisibly.
+      await logActivityWithTx(
+        {
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail ?? 'unknown@system',
+          operation: 'update',
+          resourceType: 'page',
+          resourceId: page.id,
+          resourceTitle: page.title ?? undefined,
+          driveId: page.driveId,
+          pageId: page.id,
+          updatedFields: ['content'],
+          changeGroupId: headerGroupId,
+          changeGroupType: 'automation',
+          metadata: { source: 'form-target-provision', headerRow: HEADER_ROW },
+        },
         tx
       );
 
@@ -273,6 +304,8 @@ export async function appendFormSubmission({
   values,
   submitterIpHash,
 }: AppendFormSubmissionInput): Promise<void> {
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
+
   await db.transaction(async (tx) => {
     const [formTarget] = await tx
       .select()
@@ -298,12 +331,22 @@ export async function appendFormSubmission({
     // directly now, so cost is independent of how many submissions came
     // before.
     const rowUpdates = buildSubmissionRowUpdates(formTarget.fields, formTarget.nextRow, values);
+    // A change group per SUBMISSION, not per form.
+    //
+    // `activity-diff-utils` groups activities into one edit session by
+    // (pageId, changeGroupId), and version resolution keys off the same pair.
+    // Pinning the group to the form target id would collapse five thousand
+    // submissions into a single history entry and leave version resolution
+    // able to find only one of them. The form target belongs in metadata,
+    // where it already is.
+    const submissionGroupId = createChangeGroupId();
+
     await setCells(
       { pageId: page.id },
       rowUpdates,
       {
         userId: formTarget.createdBy,
-        changeGroupId: formTarget.id,
+        changeGroupId: submissionGroupId,
       },
       tx
     );
@@ -325,7 +368,10 @@ export async function appendFormSubmission({
     // took it, and the hashed IP it came from. Logged without any content
     // payload, and deliberately inside the transaction so a recorded
     // submission and a written row cannot disagree.
-    await logActivityWithTx(
+    // Returned so it can fire AFTER the commit. Dropping it — as this did —
+    // silently stopped workflows wired to the target sheet from running on form
+    // submissions: no error, just nothing happening.
+    deferredTrigger = await logActivityWithTx(
       {
         userId: formTarget.createdBy,
         actorEmail: 'form-submission@system',
@@ -336,7 +382,7 @@ export async function appendFormSubmission({
         driveId: page.driveId,
         pageId: page.id,
         updatedFields: ['content'],
-        changeGroupId: formTarget.id,
+        changeGroupId: submissionGroupId,
         changeGroupType: 'automation',
         metadata: {
           source: 'public-form-submission',
@@ -348,4 +394,6 @@ export async function appendFormSubmission({
       tx
     );
   });
+
+  deferredTrigger?.();
 }

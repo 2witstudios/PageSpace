@@ -19,6 +19,7 @@
 
 import { db } from '@pagespace/db/db';
 import { and, eq, gte, inArray, sql, asc } from '@pagespace/db/operators';
+import { pages } from '@pagespace/db/schema/core';
 import {
   sheetTabs,
   sheetRows,
@@ -34,6 +35,13 @@ import {
   decodeColumnLabel,
 } from './address';
 import { extractFormulaDependencies } from './deps';
+import {
+  parseSheetContentSafe,
+  parseSheetDocString,
+  isSheetDocString,
+  sheetDataFromSheetDoc,
+} from './io';
+import { SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
 import { evaluateAddresses } from './evaluation';
 import {
   sheetDataFromRows,
@@ -278,6 +286,148 @@ function pick(
   return out;
 }
 
+/**
+ * The tab for `ref`, creating it from the page's document if it does not exist.
+ *
+ * Sheets predate this store, and their content lives in `pages.content` until
+ * something moves it. Nothing in the product creates a `sheet_tabs` row — only
+ * the backfill script does — so every write path would otherwise throw for a
+ * newly created sheet, and for any sheet an operator had not backfilled yet. A
+ * public form submission would 500 and the submitted data would be discarded.
+ *
+ * So migration is lazy: the first row-store access to a sheet materialises its
+ * document into rows. The backfill script becomes an optional bulk pre-warm
+ * rather than a prerequisite.
+ *
+ * The important half is that a sheet WITH content never gets an empty tab.
+ * Creating one would make the store believe the sheet was blank and the next
+ * write would present that as the truth — losing the whole spreadsheet. A
+ * document that cannot be parsed therefore fails loudly rather than
+ * materialising as empty.
+ */
+export async function ensureTab(
+  ref: TabRef,
+  exec: Executor = db
+): Promise<StoredTab & { id: string }> {
+  const existing = await getTab(ref, exec);
+  if (existing) return existing;
+
+  const tabIndex = ref.tabIndex ?? 0;
+  const [page] = await exec
+    .select({ content: pages.content })
+    .from(pages)
+    .where(eq(pages.id, ref.pageId))
+    .limit(1);
+
+  if (!page) throw new Error(`Page ${ref.pageId} not found`);
+
+  await materializeFromDocument(ref.pageId, page.content ?? '', exec);
+
+  const created = await getTab({ pageId: ref.pageId, tabIndex }, exec);
+  if (created) return created;
+
+  // The document had fewer tabs than the caller asked for.
+  throw new Error(`Sheet tab ${tabIndex} not found for page ${ref.pageId}`);
+}
+
+/**
+ * Materialise a `#%PAGESPACE_SHEETDOC` document into rows.
+ *
+ * Shared by lazy provisioning and by the bulk backfill script, so there is one
+ * implementation of "what does this document become" rather than two that can
+ * drift. Idempotent: a page that already has tabs is left alone, which is what
+ * makes concurrent first-writes safe and the script re-runnable.
+ */
+export async function materializeFromDocument(
+  pageId: string,
+  content: string,
+  exec?: Executor
+): Promise<{ tabs: number; rows: number }> {
+  const run = async (tx: Executor) => {
+    // Re-check inside the transaction: two concurrent first-writes to the same
+    // sheet would otherwise both materialise it.
+    const [already] = await tx
+      .select({ id: sheetTabs.id })
+      .from(sheetTabs)
+      .where(eq(sheetTabs.pageId, pageId))
+      .limit(1);
+    if (already) return { tabs: 0, rows: 0 };
+
+    const sheets = documentTabs(content);
+
+    let rowTotal = 0;
+    for (const [tabIndex, sheet] of sheets.entries()) {
+      const materialized = rowsFromSheetData(sheet, tabIndex);
+
+      const [tab] = await tx
+        .insert(sheetTabs)
+        .values({
+          pageId,
+          tabIndex,
+          name: materialized.tab.name,
+          rowCount: materialized.tab.rowCount,
+          columnCount: materialized.tab.columnCount,
+          frozenRows: materialized.tab.frozenRows,
+          frozenColumns: materialized.tab.frozenColumns,
+          columnFormats: materialized.tab.columnFormats,
+          columnWidths: materialized.tab.columnWidths,
+          rowHeights: materialized.tab.rowHeights,
+          ranges: materialized.tab.ranges,
+        })
+        .returning({ id: sheetTabs.id });
+
+      const byIndex = new Map(materialized.rows.map((row) => [row.rowIndex, row]));
+      await persistRows(tab.id, pageId, byIndex, tx);
+      await insertDependencyRows(tab.id, materialized.cellDeps, materialized.rangeDeps, tx);
+      rowTotal += materialized.rows.length;
+    }
+
+    return { tabs: sheets.length, rows: rowTotal };
+  };
+
+  return exec ? run(exec) : db.transaction(run);
+}
+
+/**
+ * Every tab a stored document describes.
+ *
+ * `parseSheetContentSafe` returns only the first sheet; a multi-tab document
+ * keeps the rest in the doc's `sheets` array. Reading only the first would
+ * silently delete every other tab on materialisation.
+ */
+function documentTabs(content: string): SheetData[] {
+  if (!content.trim()) {
+    return [
+      {
+        version: 1,
+        rowCount: SHEET_DEFAULT_ROWS,
+        columnCount: SHEET_DEFAULT_COLUMNS,
+        cells: {},
+        sheetName: 'Sheet1',
+      },
+    ];
+  }
+
+  const parsed = parseSheetContentSafe(content);
+  if (!parsed.ok) {
+    // Loudly. Materialising an unreadable document as an empty sheet would
+    // present "this spreadsheet is blank" as the truth, and the next write
+    // would make it so.
+    throw new Error(
+      `Sheet content could not be read (${parsed.reason}); refusing to materialise it as empty.`
+    );
+  }
+
+  const tabs: SheetData[] = [parsed.sheet];
+  if (isSheetDocString(content)) {
+    const doc = parseSheetDocString(content);
+    for (let index = 1; index < doc.sheets.length; index++) {
+      tabs.push(sheetDataFromSheetDoc({ ...doc, sheets: [doc.sheets[index]] }));
+    }
+  }
+  return tabs;
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -306,8 +456,7 @@ export async function setCells(
   exec?: Executor
 ): Promise<SetCellsResult> {
   const run = async (tx: Executor): Promise<SetCellsResult> => {
-    const tab = await getTab(ref, tx);
-    if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
+    const tab = await ensureTab(ref, tx);
 
     const normalized = normalizeUpdates(updates);
     if (normalized.length === 0) {
@@ -322,7 +471,7 @@ export async function setCells(
     // only partially loaded would silently delete every column it did not know
     // about.
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
-    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx);
+    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx, true);
 
     const before: Record<string, StoredCell | undefined> = {};
     for (const update of normalized) {
@@ -351,7 +500,7 @@ export async function setCells(
     // 4. Load the rows holding those dependents, so recomputing a formula in an
     // untouched row rewrites that row with its other columns intact.
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
-    await mergeMissingRows(working, tab.id, closureRowIndexes, tx);
+    await mergeMissingRows(working, tab.id, closureRowIndexes, tx, true);
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.
     const toEvaluate = unique([...dirty, ...closure]);
@@ -422,11 +571,22 @@ export async function appendRows(
   exec?: Executor
 ): Promise<AppendRowsResult> {
   const run = async (tx: Executor): Promise<AppendRowsResult> => {
-    const tab = await getTab(ref, tx);
-    if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
+    const tab = await ensureTab(ref, tx);
     if (rows.length === 0) {
       return { firstRowIndex: tab.rowCount, appended: 0, rowCount: tab.rowCount };
     }
+
+    // Serialise appends to this tab.
+    //
+    // `max(rowIndex)` read without a lock is a classic lost-append: two callers
+    // both compute the same `firstRowIndex`, and because `persistRows` upserts,
+    // the second does not conflict — it overwrites the first caller's rows and
+    // reports success. Locking the tab row makes concurrent appends queue.
+    await tx
+      .select({ id: sheetTabs.id })
+      .from(sheetTabs)
+      .where(eq(sheetTabs.id, tab.id))
+      .for('update');
 
     const [{ maxIndex } = { maxIndex: null }] = await tx
       .select({ maxIndex: sql<number | null>`max(${sheetRows.rowIndex})` })
@@ -516,10 +676,15 @@ export async function deleteRows(
       .from(sheetRows)
       .where(eq(sheetRows.tabId, tab.id));
 
-    if (maxBefore === null || fromRow > maxBefore) {
+    // The declared extent, not the last populated row, is what a delete acts
+    // on: a tab can declare 1000 rows while holding data only in the first ten,
+    // and "delete rows 501-510" must still shrink the grid the user sees. Rows
+    // are removed where they exist; the extent shrinks either way.
+    const lastRow = Math.max(maxBefore ?? -1, tab.rowCount - 1);
+    if (fromRow > lastRow) {
       return { deleted: 0, rowCount: tab.rowCount };
     }
-    const effectiveCount = Math.min(count, maxBefore - fromRow + 1);
+    const effectiveCount = Math.min(count, lastRow - fromRow + 1);
 
     await tx
       .delete(sheetRows)
@@ -629,7 +794,7 @@ export async function rebuildTab(ref: TabRef, exec?: Executor): Promise<{ rows: 
         );
     }
 
-    await persistRows(tab.id, ref.pageId, byIndex, tx);
+    await persistRows(tab.id, ref.pageId, byIndex, tx, 'replace');
 
     await tx.delete(sheetCellDeps).where(eq(sheetCellDeps.tabId, tab.id));
     await tx.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tab.id));
@@ -672,7 +837,8 @@ function normalizeUpdates(updates: readonly SheetCellUpdate[]): NormalizedUpdate
 async function loadRowsByIndex(
   tabId: string,
   indexes: number[],
-  exec: Executor
+  exec: Executor,
+  forUpdate = false
 ): Promise<Map<number, StoredRow>> {
   const map = new Map<number, StoredRow>();
   if (indexes.length === 0) return map;
@@ -682,11 +848,20 @@ async function loadRowsByIndex(
   const CHUNK = 5_000;
   for (let index = 0; index < indexes.length; index += CHUNK) {
     const slice = indexes.slice(index, index + CHUNK);
-    const rows = await exec
+    let query = exec
       .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
       .from(sheetRows)
       .where(and(eq(sheetRows.tabId, tabId), inArray(sheetRows.rowIndex, slice)))
-      .limit(slice.length);
+      .limit(slice.length)
+      .$dynamic();
+
+    // Rows a caller intends to WRITE are locked, so two concurrent edits to
+    // the same row serialise rather than interleaving into a lost update. Rows
+    // loaded only as formula inputs are not locked — that would turn a read of
+    // a wide range into a lock on a large slice of the sheet.
+    if (forUpdate) query = query.for('update');
+
+    const rows = await query;
 
     for (const row of rows) {
       map.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
@@ -756,7 +931,15 @@ async function mergeMissingSpans(
       .from(sheetRows)
       .where(and(eq(sheetRows.tabId, tabId), sql`(${predicate})`))
       .orderBy(asc(sheetRows.rowIndex))
-      .limit(MAX_INPUT_ROWS);
+      .limit(MAX_INPUT_ROWS + 1);
+
+    // Same reasoning as the closure cap: a truncated input set makes a `SUM`
+    // quietly compute and persist the wrong number.
+    if (rows.length > MAX_INPUT_ROWS) {
+      throw new Error(
+        `Formula inputs reached ${MAX_INPUT_ROWS} rows; narrow the range or rebuild the sheet`
+      );
+    }
 
     for (const row of rows) {
       if (target.has(row.rowIndex)) continue;
@@ -776,12 +959,13 @@ async function mergeMissingRows(
   target: Map<number, StoredRow>,
   tabId: string,
   indexes: number[],
-  exec: Executor
+  exec: Executor,
+  forUpdate = false
 ): Promise<void> {
   const missing = indexes.filter((index) => !target.has(index));
   if (missing.length === 0) return;
 
-  const loaded = await loadRowsByIndex(tabId, missing, exec);
+  const loaded = await loadRowsByIndex(tabId, missing, exec, forUpdate);
   for (const [index, row] of loaded) target.set(index, row);
 }
 
@@ -876,7 +1060,7 @@ async function resolveDependentClosure(
           sql`${sheetCellDeps.dependsOn} && ${toTextArray(frontier)}`
         )
       )
-      .limit(MAX_RECOMPUTE_CLOSURE);
+      .limit(MAX_RECOMPUTE_CLOSURE + 1);
 
     const positions = frontier.map((address) => decodeCellAddress(address));
     const viaRange = positions.length
@@ -884,7 +1068,7 @@ async function resolveDependentClosure(
           .select({ address: sheetRangeDeps.formulaAddress })
           .from(sheetRangeDeps)
           .where(and(eq(sheetRangeDeps.tabId, tabId), rangeCovers(positions)))
-          .limit(MAX_RECOMPUTE_CLOSURE)
+          .limit(MAX_RECOMPUTE_CLOSURE + 1)
       : [];
 
     const next: string[] = [];
@@ -896,9 +1080,14 @@ async function resolveDependentClosure(
       next.push(normalized);
     }
 
-    if (closure.size > MAX_RECOMPUTE_CLOSURE) {
+    // `>=`, and the queries above fetch one past the cap, so hitting the limit
+    // THROWS rather than silently returning a truncated frontier. Truncating
+    // would leave dependents holding stale materialised values that later reads
+    // return as though they were correct — a wrong answer presented as a right
+    // one, which is worse than a failed write.
+    if (closure.size >= MAX_RECOMPUTE_CLOSURE) {
       throw new Error(
-        `Recompute closure exceeded ${MAX_RECOMPUTE_CLOSURE} cells; rebuild the sheet instead`
+        `Recompute closure reached ${MAX_RECOMPUTE_CLOSURE} cells; rebuild the sheet instead`
       );
     }
 
@@ -1070,11 +1259,19 @@ function applyEvaluation(
   }
 }
 
+/**
+ * @param mode `'merge'` contributes only the keys the caller touched, so a
+ * concurrent write to a different column of the same row survives. `'replace'`
+ * writes the row's cells verbatim — required by the repair path, which is the
+ * only caller that legitimately needs a cell to DISAPPEAR, and which holds the
+ * whole row anyway.
+ */
 async function persistRows(
   tabId: string,
   pageId: string,
   rows: Map<number, StoredRow>,
-  exec: Executor
+  exec: Executor,
+  mode: 'merge' | 'replace' = 'merge'
 ): Promise<void> {
   const values = Array.from(rows.values()).map((row) => ({
     tabId,
@@ -1092,7 +1289,25 @@ async function persistRows(
       .values(values.slice(index, index + INSERT_CHUNK_ROWS))
       .onConflictDoUpdate({
         target: [sheetRows.tabId, sheetRows.rowIndex],
-        set: { cells: sql`excluded."cells"`, updatedAt: new Date() },
+        set: {
+          // MERGE by default, not replace.
+          //
+          // `excluded.cells` alone loses concurrent writes: two callers each
+          // set a different column of the same row, both read the row, both
+          // write back their own merged copy, and the second commit erases the
+          // first cell — with a success returned to both. `||` is a jsonb
+          // shallow merge, so each write contributes only the keys it actually
+          // touched and columns it never saw survive.
+          //
+          // The keys this statement carries are exactly the cells the caller
+          // wrote plus those it recomputed, so a merge cannot resurrect a cell
+          // that was legitimately removed within the same call.
+          cells:
+            mode === 'replace'
+              ? sql`excluded."cells"`
+              : sql`${sheetRows.cells} || excluded."cells"`,
+          updatedAt: new Date(),
+        },
       });
   }
 }

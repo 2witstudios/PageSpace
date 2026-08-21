@@ -36,14 +36,23 @@ describe('column validation', () => {
     expect(assertColumn(' ab ')).toBe('AB');
   });
 
+  it('accepts wide column labels, matching what the engine can address', () => {
+    // `encodeColumnLabel` emits four letters happily and `columnCount` is
+    // unbounded, so a narrower cap here would make later columns unfilterable
+    // and unsortable — a 400 on entirely valid input.
+    expect(assertColumn('ABCD')).toBe('ABCD');
+    expect(assertColumn('value')).toBe('VALUE');
+  });
+
   it.each([
     ['A1', 'an address rather than a column'],
     ["A'", 'a quote'],
     ['A;DROP TABLE sheet_rows', 'a statement'],
     ['*', 'a wildcard'],
     ['', 'empty'],
-    ['ABCD', 'beyond the supported width'],
-    ['value', 'a json path segment'],
+    ['ABCDEFGHI', 'past any addressable column'],
+    ['A B', 'whitespace inside'],
+    ['cells->1', 'a json path'],
   ])('rejects %s (%s)', (column) => {
     expect(() => assertColumn(column)).toThrow(SheetQueryError);
   });

@@ -65,6 +65,20 @@ async function makeSheet(options: { rowCount?: number; columnCount?: number } = 
   return { ownerId: owner.id, pageId: page.id, tabId: tab.id };
 }
 
+/** A SHEET page with NO tab row — the state every sheet is in before migration. */
+async function makeUnmigratedSheet(content: string) {
+  const owner = await factories.createUser();
+  seededUserIds.push(owner.id);
+  const drive = await factories.createDrive(owner.id);
+  const page = await factories.createPage(drive.id, {
+    type: 'SHEET',
+    title: 'Sheet',
+    position: 0,
+    content,
+  });
+  return { ownerId: owner.id, pageId: page.id };
+}
+
 const cellAt = (rows: StoredRow[], rowIndex: number, column: string) =>
   rows.find((row) => row.rowIndex === rowIndex)?.cells[column];
 
@@ -200,6 +214,97 @@ describe('sheet store (integration)', () => {
 
       await setCells({ pageId }, [{ address: 'B1', value: 'plain text' }], { userId: ownerId });
       expect(await edges()).toHaveLength(0);
+    });
+  });
+
+  describe('lazy provisioning', () => {
+    it('materialises an existing document on first write', async () => {
+      // Nothing in the product creates a `sheet_tabs` row — only the backfill
+      // script did. Without this, every write path threw for a newly created
+      // sheet and for any sheet an operator had not backfilled: a public form
+      // submission would 500 and the submitted data would be discarded.
+      const { pageId, ownerId } = await makeUnmigratedSheet(
+        '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n[[sheets]]\nname = "Sheet1"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "existing"\n'
+      );
+
+      await setCells({ pageId }, [{ address: 'B1', value: 'new' }], { userId: ownerId });
+
+      const tab = await getTab({ pageId });
+      expect(tab).not.toBeNull();
+
+      const rows = await readRows(tab!.id, { limit: 10 });
+      // The write landed AND the document's existing content came with it.
+      expect(cellAt(rows, 0, 'B')?.value).toBe('new');
+      expect(cellAt(rows, 0, 'A')?.value).toBe('existing');
+    });
+
+    it('provisions an empty sheet for a page with no content', async () => {
+      const { pageId, ownerId } = await makeUnmigratedSheet('');
+      await expect(
+        setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId })
+      ).resolves.toBeTruthy();
+    });
+
+    it('refuses to materialise an unreadable document as an empty sheet', async () => {
+      // The dangerous case: presenting "this spreadsheet is blank" as the truth
+      // would make the next write destroy it.
+      const { pageId, ownerId } = await makeUnmigratedSheet('#%PAGESPACE_SHEETDOC v1\n{{{ not toml');
+
+      await expect(
+        setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId })
+      ).rejects.toThrow(/could not be read/);
+
+      expect(await getTab({ pageId })).toBeNull();
+    });
+  });
+
+  describe('concurrent writes', () => {
+    it('a row write contributes only its own columns, leaving the rest', async () => {
+      // Tests the MECHANISM rather than hoping to win a race.
+      //
+      // `persistRows` upserts a whole `cells` object. If that object replaces
+      // the stored one, a writer holding a stale snapshot erases every column
+      // it did not know about — the lost update. Issuing the upsert with a
+      // deliberately partial object is what a stale writer looks like, and is
+      // deterministic where two concurrent `setCells` calls are not: an earlier
+      // version of this test used `Promise.all` and passed even with the fix
+      // reverted, because nothing forced the reads to interleave.
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'keep-a' },
+        { address: 'B1', value: 'keep-b' },
+      ], { userId: ownerId });
+
+      // A write that knows only about column C, as a stale writer would.
+      await db
+        .insert(sheetRows)
+        .values({ tabId, pageId, rowIndex: 0, cells: { C: { raw: 'new-c', value: 'new-c' } } })
+        .onConflictDoUpdate({
+          target: [sheetRows.tabId, sheetRows.rowIndex],
+          set: { cells: sql`${sheetRows.cells} || excluded."cells"` },
+        });
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'C')?.value).toBe('new-c');
+      expect(cellAt(rows, 0, 'A')?.value).toBe('keep-a');
+      expect(cellAt(rows, 0, 'B')?.value).toBe('keep-b');
+    });
+
+    // NOTE: this one is a smoke test, not a race reproduction. Two `setCells`
+    // calls in `Promise.all` do not reliably interleave their reads, so it
+    // cannot demonstrate the row lock; it only asserts both appends survive.
+    it('lands both rows when two appends run together', async () => {
+      const { pageId, ownerId } = await makeSheet();
+      const tab = (await getTab({ pageId }))!;
+
+      await Promise.all([
+        appendRows({ pageId }, [{ A: 'first' }], { userId: ownerId }),
+        appendRows({ pageId }, [{ A: 'second' }], { userId: ownerId }),
+      ]);
+
+      const rows = await readRows(tab.id, { limit: 20 });
+      const values = rows.map((row) => row.cells.A?.value).filter(Boolean).sort();
+      expect(values).toEqual(['first', 'second']);
     });
   });
 

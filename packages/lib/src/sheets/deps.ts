@@ -43,7 +43,17 @@ export interface FormulaDependencies {
   external: string[];
 }
 
-const EMPTY: FormulaDependencies = { cells: [], ranges: [], external: [] };
+/**
+ * Frozen, and its arrays with it. This value is returned by reference for every
+ * non-formula, and callers put `deps.cells` straight into insert values — a
+ * shared mutable array there is a trap waiting for the first caller that sorts
+ * or pushes in place.
+ */
+const EMPTY: FormulaDependencies = Object.freeze({
+  cells: Object.freeze([]) as unknown as string[],
+  ranges: Object.freeze([]) as unknown as CellRect[],
+  external: Object.freeze([]) as unknown as string[],
+}) as FormulaDependencies;
 
 /**
  * Parse `formula` and report what it reads.
