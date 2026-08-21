@@ -85,6 +85,10 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // was inferred about you" rather than leaving the subject unable to tell
     // the difference between that and the category not being carried.
     { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
+    // The subject's own acts of classification. For an anchored tag the row
+    // carries the quoted text they selected, which nothing else in the bundle
+    // holds.
+    { name: 'content-tags.json', description: 'Tags you applied to pages, passages, sheet cells and messages, with the text each one was anchored to', recordCount: data.contentTags.length, data: data.contentTags },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -197,6 +201,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
+      { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
     ],
   };
 }

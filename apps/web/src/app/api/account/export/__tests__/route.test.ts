@@ -104,6 +104,7 @@ const mockUserData = {
   // could never fail it. It is now derived — see the test.
   agentWorkspaces: [{ id: 'ws-1', role: 'owner', name: 'Working context', shells: [] }],
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
+  contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
 };
 
 describe('GET /api/account/export', () => {

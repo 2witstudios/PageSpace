@@ -15,6 +15,8 @@ import * as auth from '../auth';
 import * as sessions from '../sessions';
 // Core schema
 import * as core from '../core';
+// Content tags schema
+import * as contentTagsSchema from '../content-tags';
 // Members schema
 import * as members from '../members';
 // Chat schema
@@ -116,7 +118,6 @@ describe('Schema definitions', () => {
       expect(core.drives).toBeDefined();
       expect(core.pages).toBeDefined();
       expect(core.tags).toBeDefined();
-      expect(core.pageTags).toBeDefined();
       expect(core.storageEvents).toBeDefined();
       expect(core.favorites).toBeDefined();
       expect(core.mentions).toBeDefined();
@@ -127,10 +128,22 @@ describe('Schema definitions', () => {
       expect(core.drivesRelations).toBeDefined();
       expect(core.pagesRelations).toBeDefined();
       expect(core.tagsRelations).toBeDefined();
-      expect(core.pageTagsRelations).toBeDefined();
       expect(core.favoritesRelations).toBeDefined();
       expect(core.mentionsRelations).toBeDefined();
       expect(core.userMentionsRelations).toBeDefined();
+    });
+  });
+
+  describe('content-tags schema', () => {
+    it('exports enums', () => {
+      expect(contentTagsSchema.contentTagTargetKind).toBeDefined();
+      expect(contentTagsSchema.contentTagAnchorStatus).toBeDefined();
+      expect(contentTagsSchema.contentTagSource).toBeDefined();
+    });
+
+    it('exports tables and relations', () => {
+      expect(contentTagsSchema.contentTags).toBeDefined();
+      expect(contentTagsSchema.contentTagsRelations).toBeDefined();
     });
   });
 

@@ -79,6 +79,7 @@ const EMPTY: AllUserData = {
   personalizationCandidates: [],
   agentWorkspaces: [],
   streamState: [],
+  contentTags: [],
 };
 
 describe('GDPR export table coverage', () => {
@@ -162,6 +163,7 @@ describe('GDPR export table coverage', () => {
       personalizationCandidates: 'personalization-candidates.json',
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
+      contentTags: 'content-tags.json',
     };
 
     const unshipped = [...new Set(Object.values(EXPORTED_TABLES))].filter((category) => {

@@ -4,7 +4,8 @@ import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
-import { drives, pages } from '@pagespace/db/schema/core';
+import { drives, pages, tags } from '@pagespace/db/schema/core';
+import { contentTags } from '@pagespace/db/schema/content-tags';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -389,6 +390,33 @@ export interface UserStreamStateExport {
   completedAt: Date | null;
 }
 
+/**
+ * One tag the subject APPLIED — `content_tags.createdBy = userId`.
+ *
+ * The tag's `name` is joined in rather than its id: the vocabulary row belongs
+ * to the drive (`tags` is ORGANISATION_OWNED in the coverage registry), so an
+ * opaque `tagId` would disclose the act without disclosing what was said. What
+ * is the subject's here is the ACT of classification — this person said this
+ * thing is a `#risk` — and that only means anything with the word attached.
+ *
+ * The anchor is carried verbatim. For a `text` tag it holds the quoted text the
+ * subject selected, which is their own content and has no other home in the
+ * bundle.
+ */
+export interface UserContentTagExport {
+  tagName: string | null;
+  pageId: string;
+  pageTitle: string | null;
+  targetKind: string;
+  anchor: unknown;
+  anchorStatus: string | null;
+  channelMessageId: string | null;
+  aiMessageId: string | null;
+  source: string;
+  confidence: number | null;
+  createdAt: Date;
+}
+
 export interface AllUserData {
   profile: UserProfileExport;
   drives: UserDriveExport[];
@@ -409,6 +437,7 @@ export interface AllUserData {
   personalizationCandidates: UserPersonalizationCandidateExport[];
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
+  contentTags: UserContentTagExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -1276,6 +1305,46 @@ async function collectStreamFrames(
   return byMessage;
 }
 
+/**
+ * Every tag the subject applied, across every target kind.
+ *
+ * Registered WITH its collector at the moment the table was added rather than
+ * when its writer arrives — the same call `ai_stream_frames` above records, and
+ * for the same reason: a table that reaches `master` unexported is exactly the
+ * failure `gdpr-export-coverage.ts` exists to catch, and "nothing writes it
+ * yet" is a state that expires quietly.
+ *
+ * `leftJoin` on both sides deliberately. `tags.id` is a cascade FK so a row
+ * cannot outlive its vocabulary entry, and `pageId` is notNull for the same
+ * reason — but an inner join would silently DROP a row if either ever became
+ * nullable, and silently dropping rows is the failure mode this whole file is
+ * built against. A null `tagName` in the bundle is visible; a missing line is
+ * not.
+ */
+export async function collectUserContentTags(
+  database: DB,
+  userId: string,
+): Promise<UserContentTagExport[]> {
+  return database
+    .select({
+      tagName: tags.name,
+      pageId: contentTags.pageId,
+      pageTitle: pages.title,
+      targetKind: contentTags.targetKind,
+      anchor: contentTags.anchor,
+      anchorStatus: contentTags.anchorStatus,
+      channelMessageId: contentTags.channelMessageId,
+      aiMessageId: contentTags.aiMessageId,
+      source: contentTags.source,
+      confidence: contentTags.confidence,
+      createdAt: contentTags.createdAt,
+    })
+    .from(contentTags)
+    .leftJoin(tags, eq(tags.id, contentTags.tagId))
+    .leftJoin(pages, eq(pages.id, contentTags.pageId))
+    .where(eq(contentTags.createdBy, userId));
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -1286,7 +1355,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState] = await Promise.all([
+  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
@@ -1304,6 +1373,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserPersonalizationCandidates(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
+    collectUserContentTags(database, userId),
   ]);
 
   return {
@@ -1326,5 +1396,6 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     personalizationCandidates: userPersonalizationCandidates,
     agentWorkspaces: userAgentWorkspaces,
     streamState: userStreamState,
+    contentTags: userContentTags,
   };
 }

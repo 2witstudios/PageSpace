@@ -176,6 +176,11 @@ export async function validateData(
   }
   const exportedUserIn = toSqlInList(exportedUserIds);
 
+  const contentTagSelectionWhere =
+    `"pageId" IN (${pageIn})`
+    + ` AND ("channelMessageId" IS NULL OR "channelMessageId" IN (${channelMsgIn}))`
+    + ` AND ("aiMessageId" IS NULL OR "aiMessageId" IN (SELECT id FROM messages WHERE "conversationId" IN (${convoIn})))`;
+
   // ID-based queries for tables with a single PK
   const idQueries: Record<string, ReturnType<typeof sql>> = {
     users: sql.raw(`SELECT id FROM users WHERE id IN (${userIn})`),
@@ -184,7 +189,14 @@ export async function validateData(
     drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIn})`),
     drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`),
     pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
-    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM page_tags WHERE "pageId" IN (${pageIn}))`),
+    // Mirrors the exporter's tag rules exactly (tenant-export.ts): assignments
+    // are taken by page, then narrowed to those whose message FK — if it has
+    // one — points at a message the bundle also carries; the vocabulary is
+    // whatever those surviving assignments reference. Written as one shared
+    // predicate so the two files cannot drift into disagreeing about what the
+    // bundle contains.
+    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM content_tags WHERE ${contentTagSelectionWhere})`),
+    content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagSelectionWhere}`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
     // The export's rule, from the shared helper: the sessions the EXPORTED
@@ -224,7 +236,6 @@ export async function validateData(
 
   // Count-based queries for composite-key tables
   const countQueries: Record<string, ReturnType<typeof sql>> = {
-    page_tags: sql.raw(`SELECT count(*) AS count FROM page_tags WHERE "pageId" IN (${pageIn})`),
     file_pages: sql.raw(`SELECT count(*) AS count FROM file_pages WHERE "fileId" IN (SELECT id FROM files WHERE "driveId" IN (${driveIn}))`),
     channel_read_status: sql.raw(`SELECT count(*) AS count FROM channel_read_status WHERE "userId" IN (${userIn}) AND "channelId" IN (${pageIn})`),
   };

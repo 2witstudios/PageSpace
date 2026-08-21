@@ -23,7 +23,7 @@ export interface ManifestTableCounts {
   filePages: number;
   pagePermissions: number;
   tags: number;
-  pageTags: number;
+  contentTags: number;
   mentions: number;
   userMentions: number;
   favorites: number;
@@ -125,7 +125,6 @@ export const TABLE_IMPORT_ORDER = [
   'drive_members',
   'pages',
   'tags',
-  'page_tags',
   'channel_messages',
   'channel_message_reactions',
   'channel_read_status',
@@ -150,6 +149,10 @@ export const TABLE_IMPORT_ORDER = [
   'agent_workspace_nodes',
   'conversations',
   'messages',
+  // The tag ASSIGNMENTS, which replaced `page_tags` (dead since migration 0000,
+  // dropped with the content-tags epic). It has to sit here rather than beside
+  // `tags`: a row can FK `channel_messages` OR `messages`, so it follows both.
+  'content_tags',
   'files',
   'file_pages',
   'page_permissions',

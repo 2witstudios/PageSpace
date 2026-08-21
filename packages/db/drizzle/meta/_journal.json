@@ -1877,6 +1877,20 @@
       "when": 1787047433075,
       "tag": "0267_chief_starfox",
       "breakpoints": true
+    },
+    {
+      "idx": 268,
+      "version": "7",
+      "when": 1787328054949,
+      "tag": "0268_lovely_spitfire",
+      "breakpoints": true
+    },
+    {
+      "idx": 269,
+      "version": "7",
+      "when": 1787328086264,
+      "tag": "0269_ambitious_toad_men",
+      "breakpoints": true
     }
   ]
 }

@@ -471,16 +471,36 @@ export async function exportData(
   ));
   nullifyOrphanedUserRefs(pagePermissionsData, allExportedUserIdSet, 'grantedBy');
 
-  // Tags referenced by exported pages
-  const pageTagsData = await queryRows(db, sql.raw(
-    `SELECT * FROM page_tags WHERE "pageId" IN (${pageIn})`,
-  ));
-  const tagIds = [...new Set(pageTagsData.map((r) => r.tagId as string))];
+  // Tag ASSIGNMENTS on exported pages, and the vocabulary rows they reference.
+  //
+  // `content_tags."pageId"` is notNull for every target kind, so this one page
+  // filter reaches page-, text-, cell- and message-anchored tags alike — which
+  // is exactly what that denormalization is for. But a message-anchored row
+  // also carries a real FK onto `channel_messages` or `messages`, and those two
+  // are selected by their OWN rules (a channel message by page, an AI message
+  // by conversation), so a tag whose page travels while its message does not
+  // would be a dangling FK the import aborts on. Neither reference is
+  // nullable-with-meaning here — an `ai_message` row with a NULL `aiMessageId`
+  // violates `content_tags_target_chk` — so the row is DROPPED rather than
+  // unbound, unlike the polymorphic pointers elsewhere in this file.
+  const exportedChannelMessageIdSet = new Set(channelMessageIds);
+  const exportedAiMessageIdSet = new Set(messagesData.map((r) => r.id as string));
+  const contentTagsData = (await queryRows(db, sql.raw(
+    `SELECT * FROM content_tags WHERE "pageId" IN (${pageIn})`,
+  ))).filter((r) => {
+    const channelMessageId = r.channelMessageId as string | null;
+    const aiMessageId = r.aiMessageId as string | null;
+    return (channelMessageId === null || exportedChannelMessageIdSet.has(channelMessageId))
+      && (aiMessageId === null || exportedAiMessageIdSet.has(aiMessageId));
+  });
+  nullifyOrphanedUserRefs(contentTagsData, allExportedUserIdSet, 'createdBy');
+  const tagIds = [...new Set(contentTagsData.map((r) => r.tagId as string))];
   const tagsData = tagIds.length > 0
     ? await queryRows(db, sql.raw(
         `SELECT * FROM tags WHERE id IN (${toSqlInList(tagIds)})`,
       ))
     : [];
+  nullifyOrphanedUserRefs(tagsData, allExportedUserIdSet, 'createdBy');
 
   // Mentions between exported pages only
   const mentionsData = await queryRows(db, sql.raw(
@@ -516,7 +536,6 @@ export async function exportData(
     // `not_found_page_id`) are set here, once the pages exist.
     buildDeferredUpdate('drives', deferredColumns('drives'), drivesData),
     buildInsert('tags', cols('tags'), tagsData),
-    buildInsert('page_tags', cols('page_tags'), pageTagsData),
     // `agent_workspaces` sits with `conversations` and before it by convention
     // rather than by an FK now — nothing on a conversation row references a
     // session. A session row still needs its drive and owner, both above.
@@ -562,6 +581,9 @@ export async function exportData(
     buildInsert('channel_messages', cols('channel_messages'), channelMessagesData),
     buildInsert('channel_message_reactions', cols('channel_message_reactions'), channelReactionsData),
     buildInsert('channel_read_status', cols('channel_read_status'), channelReadStatusData),
+    // After BOTH message tables, not beside `tags`: a row's FK may point at
+    // either one, so it cannot be inserted until both exist.
+    buildInsert('content_tags', cols('content_tags'), contentTagsData),
     buildInsert('files', cols('files'), filesData),
     buildInsert('file_pages', cols('file_pages'), filePagesData),
     buildInsert('page_permissions', cols('page_permissions'), pagePermissionsData),
@@ -595,7 +617,7 @@ export async function exportData(
     filePages: filePagesData.length,
     pagePermissions: pagePermissionsData.length,
     tags: tagsData.length,
-    pageTags: pageTagsData.length,
+    contentTags: contentTagsData.length,
     mentions: mentionsData.length,
     userMentions: userMentionsData.length,
     favorites: favoritesData.length,
