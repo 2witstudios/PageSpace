@@ -912,6 +912,14 @@ describe('tag-core purity and determinism', () => {
    * untouched.
    */
   it('imports nothing outside this package except erased type-only schema imports', () => {
+    // A BARE import (`import 'x';`, no `from`) is checked first and refused
+    // outright. It is the one form that is always a value import — there is no
+    // `import type 'x'` — so it survives compilation and runs the module's side
+    // effects, which is precisely what this test exists to prevent. The
+    // `from`-based scan below cannot see it: that pattern requires `from`.
+    const bare = [...code.matchAll(/^import\s+['"]([^'"]+)['"];?$/gm)].map((m) => m[1]);
+    expect(bare, `bare side-effect import(s): ${bare.join(', ')}`).toEqual([]);
+
     const specifiers = [...code.matchAll(/^import([^'"]*)from ['"]([^'"]+)['"];?$/gm)];
     expect(specifiers.length).toBeGreaterThan(0);
     for (const [, clause, specifier] of specifiers) {

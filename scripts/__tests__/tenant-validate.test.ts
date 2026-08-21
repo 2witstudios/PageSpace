@@ -228,7 +228,12 @@ describe('validateData', () => {
     expect(find('messages').sourceCount).toBe(2);
     expect(find('files').sourceCount).toBe(1);
     expect(find('page_permissions').sourceCount).toBe(1);
-    expect(find('tags').sourceCount).toBe(1);
+    // Two vocabulary rows (one of them unused) against one assignment — the
+    // validator selects tags by DRIVE, matching the exporter. If either side
+    // narrowed to "tags with a surviving assignment", both would agree on 1 and
+    // validation would report success over a bundle missing a row.
+    expect(find('tags').sourceCount).toBe(2);
+    expect(find('content_tags').sourceCount).toBe(1);
     expect(find('mentions').sourceCount).toBe(1);
     expect(find('user_mentions').sourceCount).toBe(1);
     expect(find('favorites').sourceCount).toBe(1);

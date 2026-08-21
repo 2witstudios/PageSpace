@@ -58,7 +58,7 @@ vi.mock('archiver', () => ({
 
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { collectAllUserData } from '@pagespace/lib/compliance/export/gdpr-export';
-import { buildNativeExportFiles } from '@pagespace/lib/compliance/export/export-format';
+import { buildNativeExportFiles, EXPORT_SCHEMA_VERSION } from '@pagespace/lib/compliance/export/export-format';
 import { checkDistributedRateLimit, resetDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { GET } from '../route';
 
@@ -251,7 +251,13 @@ describe('GET /api/account/export', () => {
       );
       expect(manifestCall).toBeDefined();
       const manifest = JSON.parse(manifestCall![0] as string);
-      expect(manifest.schemaVersion).toBe('1.0.0');
+      // Against the exported constant, not a hardcoded literal. A pinned
+      // version string turns every LEGITIMATE bump into a red test here, which
+      // is pressure not to bump — and the manifest's whole job is to let a
+      // recipient tell one bundle inventory from another. The substance is
+      // asserted below: that the manifest actually lists the files shipped.
+      expect(manifest.schemaVersion).toBe(EXPORT_SCHEMA_VERSION);
+      expect(manifest.schemaVersion).toMatch(/^\d+\.\d+\.\d+$/);
       expect(manifest.format).toBe('native');
       expect(Array.isArray(manifest.files)).toBe(true);
       expect(manifest.files.some((f: { name: string }) => f.name === 'pages.json')).toBe(true);
