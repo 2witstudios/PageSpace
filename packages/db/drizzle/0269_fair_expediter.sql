@@ -48,7 +48,7 @@ CREATE TABLE "sheet_rows" (
 CREATE TABLE "sheet_snapshots" (
 	"id" text PRIMARY KEY NOT NULL,
 	"pageId" text NOT NULL,
-	"seq" integer NOT NULL,
+	"seq" bigint NOT NULL,
 	"contentRef" text NOT NULL,
 	"contentFormat" "content_format",
 	"contentSize" integer,

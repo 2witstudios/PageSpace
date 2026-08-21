@@ -5,6 +5,7 @@ import {
   integer,
   jsonb,
   bigserial,
+  bigint,
   index,
   unique,
   primaryKey,
@@ -223,8 +224,15 @@ export const sheetChanges = pgTable('sheet_changes', {
 export const sheetSnapshots = pgTable('sheet_snapshots', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
   pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  /** The change-log position this snapshot reflects. */
-  seq: integer('seq').notNull(),
+  /**
+   * The change-log position this snapshot reflects.
+   *
+   * `bigint`, matching `sheet_changes.seq`. That sequence is shared by every
+   * page in the install, so it passes 2^31 long before any individual sheet is
+   * large — and an integer column would then fail the insert outright (22003)
+   * rather than truncating.
+   */
+  seq: bigint('seq', { mode: 'number' }).notNull(),
   contentRef: text('contentRef').notNull(),
   contentFormat: contentFormatEnum('contentFormat'),
   /**

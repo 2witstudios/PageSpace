@@ -1,5 +1,5 @@
 {
-  "id": "a90e1079-5d2d-4f23-8957-39352f1dd045",
+  "id": "5114b400-0495-4c22-97ef-14e12ef7a25f",
   "prevId": "297eb422-6779-4e85-90ac-c949471db11b",
   "version": "7",
   "dialect": "postgresql",
@@ -11673,7 +11673,7 @@
         },
         "seq": {
           "name": "seq",
-          "type": "integer",
+          "type": "bigint",
           "primaryKey": false,
           "notNull": true
         },

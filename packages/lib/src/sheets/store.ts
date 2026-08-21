@@ -55,6 +55,12 @@ type Executor = typeof db;
 export const MAX_RECOMPUTE_CLOSURE = 250_000;
 
 /**
+ * Ceiling on rows pulled in as formula inputs for a single recompute. A range
+ * formula legitimately reads a lot; this stops one from reading the universe.
+ */
+export const MAX_INPUT_ROWS = 250_000;
+
+/**
  * Above this many cells in one call, the change log records a single summary
  * entry instead of one row per cell.
  *
@@ -242,7 +248,12 @@ export async function queryRows(
     .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
     .from(sheetRows)
     .where(scope)
-    .orderBy(ordering ?? sql`${sheetRows.rowIndex} ASC`)
+    // `rowIndex` always tie-breaks. Postgres gives no stable order among equal
+    // sort keys ACROSS statements, so without it a filter with ties (a status
+    // column, say) can return a row twice and skip another as an agent pages
+    // through with limit/offset — silently corrupting a "read all matching
+    // rows" loop rather than failing it.
+    .orderBy(ordering ? sql`${ordering}, ${sheetRows.rowIndex} ASC` : sql`${sheetRows.rowIndex} ASC`)
     .limit(limit)
     .offset(offset);
 
@@ -496,6 +507,20 @@ export async function deleteRows(
     if (count <= 0) return { deleted: 0, rowCount: tab.rowCount };
 
     const end = fromRow + count - 1;
+
+    // Clamp to what exists. `count` arrives from a caller (an agent may send
+    // 100,000) and the span can sit entirely past the end of the sheet, in
+    // which case nothing is deleted and nothing should shift or shrink.
+    const [{ maxIndex: maxBefore } = { maxIndex: null }] = await tx
+      .select({ maxIndex: sql<number | null>`max(${sheetRows.rowIndex})` })
+      .from(sheetRows)
+      .where(eq(sheetRows.tabId, tab.id));
+
+    if (maxBefore === null || fromRow > maxBefore) {
+      return { deleted: 0, rowCount: tab.rowCount };
+    }
+    const effectiveCount = Math.min(count, maxBefore - fromRow + 1);
+
     await tx
       .delete(sheetRows)
       .where(
@@ -531,21 +556,32 @@ export async function deleteRows(
       .where(and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} > ${end}`));
     await tx
       .update(sheetRows)
-      .set({ rowIndex: sql`${sheetRows.rowIndex} - ${scratch + count}` })
+      .set({ rowIndex: sql`${sheetRows.rowIndex} - ${scratch + effectiveCount}` })
       .where(and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} > ${maxIndex ?? 0}`));
 
-    const rowCount = Math.max(0, tab.rowCount - count);
+    const rowCount = Math.max(0, tab.rowCount - effectiveCount);
     await updateExtent(tab.id, { rowCount, columnCount: tab.columnCount }, tx);
+
+    // Rebuild, and do not leave it to the caller.
+    //
+    // Shifting indexes moves cells without changing their text, so every
+    // formula that referenced them is now stale AND every dependency edge names
+    // an address that has moved or ceased to exist. Leaving that to a caller
+    // meant it never happened: stale materialised values, edges pointing at
+    // deleted addresses, and a later recompute resolving a closure containing a
+    // formula that is gone. This is O(sheet) and deliberately so — a structural
+    // change is the one operation incremental recompute cannot express.
+    await rebuildTab(ref, tx);
 
     await appendChanges(
       ref.pageId,
       tab.id,
       actor,
-      [{ op: 'delete_rows', address: null, rowIndex: fromRow, before: { count }, after: null }],
+      [{ op: 'delete_rows', address: null, rowIndex: fromRow, before: { count: effectiveCount }, after: null }],
       tx
     );
 
-    return { deleted: count, rowCount };
+    return { deleted: effectiveCount, rowCount };
   };
 
   return exec ? run(exec) : db.transaction(run);
@@ -573,12 +609,25 @@ export async function rebuildTab(ref: TabRef, exec?: Executor): Promise<{ rows: 
     // `persistRows` only upserts. A row that has become entirely empty is
     // absent from the projection, so without this its stale materialised value
     // would survive the repair and keep being returned by reads.
-    const keep = Array.from(byIndex.keys());
-    await tx.delete(sheetRows).where(
-      keep.length > 0
-        ? and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} <> ALL(${toIntArray(keep)})`)
-        : eq(sheetRows.tabId, tab.id)
-    );
+    // Delete by enumerating what is actually there and subtracting what the
+    // projection kept, in chunks. A `<> ALL(ARRAY[...])` over the kept set
+    // would emit one bind parameter per surviving row, so the repair path would
+    // die on the parameter ceiling for exactly the large sheets that need it.
+    const stale: number[] = [];
+    for (const row of rows) {
+      if (!byIndex.has(row.rowIndex)) stale.push(row.rowIndex);
+    }
+    const DELETE_CHUNK = 5_000;
+    for (let index = 0; index < stale.length; index += DELETE_CHUNK) {
+      await tx
+        .delete(sheetRows)
+        .where(
+          and(
+            eq(sheetRows.tabId, tab.id),
+            inArray(sheetRows.rowIndex, stale.slice(index, index + DELETE_CHUNK))
+          )
+        );
+    }
 
     await persistRows(tab.id, ref.pageId, byIndex, tx);
 
@@ -628,16 +677,92 @@ async function loadRowsByIndex(
   const map = new Map<number, StoredRow>();
   if (indexes.length === 0) return map;
 
-  const rows = await exec
-    .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
-    .from(sheetRows)
-    .where(and(eq(sheetRows.tabId, tabId), inArray(sheetRows.rowIndex, indexes)))
-    .limit(Math.max(indexes.length, 1));
+  // Chunked: `inArray` emits one bind parameter per index, and a caller with
+  // tens of thousands of them would hit the 65535 ceiling as a protocol error.
+  const CHUNK = 5_000;
+  for (let index = 0; index < indexes.length; index += CHUNK) {
+    const slice = indexes.slice(index, index + CHUNK);
+    const rows = await exec
+      .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+      .from(sheetRows)
+      .where(and(eq(sheetRows.tabId, tabId), inArray(sheetRows.rowIndex, slice)))
+      .limit(slice.length);
 
-  for (const row of rows) {
-    map.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
+    for (const row of rows) {
+      map.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
+    }
   }
   return map;
+}
+
+/** A contiguous, inclusive run of row indexes. */
+interface RowSpan {
+  start: number;
+  end: number;
+}
+
+/**
+ * Merge overlapping and adjacent spans, so a fan of small ranges over the same
+ * region becomes one predicate rather than dozens.
+ */
+function coalesceSpans(spans: readonly RowSpan[]): RowSpan[] {
+  const sorted = spans
+    .filter((span) => span.end >= span.start)
+    .slice()
+    .sort((a, b) => a.start - b.start || a.end - b.end);
+  if (sorted.length === 0) return [];
+
+  const merged: RowSpan[] = [{ ...sorted[0] }];
+  for (const span of sorted.slice(1)) {
+    const last = merged[merged.length - 1];
+    // `<= last.end + 1` so touching spans join: rows 1-3 and 4-6 are one read.
+    if (span.start <= last.end + 1) {
+      last.end = Math.max(last.end, span.end);
+    } else {
+      merged.push({ ...span });
+    }
+  }
+  return merged;
+}
+
+/**
+ * Load every row covered by `spans` that is not already present.
+ *
+ * Two bind parameters per span regardless of its width, and the spans
+ * themselves are chunked, so no sheet size can overrun the statement's
+ * parameter budget.
+ */
+async function mergeMissingSpans(
+  target: Map<number, StoredRow>,
+  tabId: string,
+  spans: readonly RowSpan[],
+  exec: Executor
+): Promise<void> {
+  const merged = coalesceSpans(spans);
+  if (merged.length === 0) return;
+
+  const SPANS_PER_QUERY = 200;
+  for (let index = 0; index < merged.length; index += SPANS_PER_QUERY) {
+    const chunk = merged.slice(index, index + SPANS_PER_QUERY);
+    const predicate = sql.join(
+      chunk.map(
+        (span) => sql`(${sheetRows.rowIndex} >= ${span.start} AND ${sheetRows.rowIndex} <= ${span.end})`
+      ),
+      sql` OR `
+    );
+
+    const rows = await exec
+      .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+      .from(sheetRows)
+      .where(and(eq(sheetRows.tabId, tabId), sql`(${predicate})`))
+      .orderBy(asc(sheetRows.rowIndex))
+      .limit(MAX_INPUT_ROWS);
+
+    for (const row of rows) {
+      if (target.has(row.rowIndex)) continue;
+      target.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
+    }
+  }
 }
 
 /**
@@ -804,10 +929,6 @@ function rangeCovers(positions: { row: number; column: number }[]) {
   return sql`(${sql.join(clauses, sql` OR `)})`;
 }
 
-function toIntArray(values: number[]) {
-  return sql`ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
-}
-
 function toTextArray(values: string[]) {
   return sql`ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::text[]`;
 }
@@ -843,17 +964,30 @@ async function evaluateClosure(
   const formulaRowIndexes = unique(addresses.map((address) => decodeCellAddress(address).row));
   await mergeMissingRows(loaded, tab.id, formulaRowIndexes, exec);
 
-  const inputRowIndexes = new Set<number>(formulaRowIndexes);
+  // Ranges stay RANGES here, and that is the whole point.
+  //
+  // Expanding `SUM(A1:A100000)` into 100,000 row indexes and handing them to an
+  // `IN (...)` list rebuilds, in the read path, exactly the problem this design
+  // removed from the write path: one bind parameter per row, blowing through
+  // Postgres's 65535-parameter ceiling (as an opaque 08P01) on precisely the
+  // 100k-row sheet the module exists to support. A span costs two parameters
+  // whether it covers three rows or a million.
+  const spans: RowSpan[] = formulaRowIndexes.map((row) => ({ start: row, end: row }));
   for (const raw of Object.values(collectRawText(loaded, targets))) {
     const deps = extractFormulaDependencies(raw);
-    for (const cell of deps.cells) inputRowIndexes.add(decodeCellAddress(cell).row);
+    for (const cell of deps.cells) {
+      const row = decodeCellAddress(cell).row;
+      spans.push({ start: row, end: row });
+    }
     for (const rect of deps.ranges) {
-      const end = rect.rowEnd ?? Math.max(tab.rowCount - 1, rect.rowStart);
-      for (let row = rect.rowStart; row <= end; row++) inputRowIndexes.add(row);
+      spans.push({
+        start: rect.rowStart,
+        end: rect.rowEnd ?? Math.max(tab.rowCount - 1, rect.rowStart),
+      });
     }
   }
 
-  await mergeMissingRows(loaded, tab.id, Array.from(inputRowIndexes), exec);
+  await mergeMissingSpans(loaded, tab.id, spans, exec);
   const stored = loaded;
 
   const cells: Record<string, string> = {};
@@ -918,7 +1052,13 @@ function applyEvaluation(
     if (!row) continue;
 
     const label = encodeColumnLabel(column);
-    const existing = row.cells[label] ?? { raw: '' };
+
+    // Never fabricate a CELL either. A closure can name an address whose cell
+    // no longer exists — a stale dependency edge, or a row that shifted under a
+    // structural change — and inventing one would write a phantom with a
+    // computed value and no text anybody authored.
+    const existing = row.cells[label];
+    if (!existing) continue;
 
     row.cells[label] = {
       ...existing,

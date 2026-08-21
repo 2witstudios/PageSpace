@@ -13,13 +13,13 @@
  *   ./scripts/test-with-db.sh
  *   bun run --filter '@pagespace/lib' test:integration
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq, sql } from '@pagespace/db/operators';
+import { eq, sql, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
-import { drives, pages } from '@pagespace/db/schema/core';
-import { sheetTabs, sheetRows, sheetCellDeps, sheetRangeDeps, sheetChanges } from '@pagespace/db/schema';
+import { pages } from '@pagespace/db/schema/core';
+import { sheetTabs, sheetRows, sheetRangeDeps, sheetChanges } from '@pagespace/db/schema';
 import {
   setCells,
   appendRows,
@@ -32,9 +32,22 @@ import {
 } from '../store';
 import type { StoredRow } from '../projection';
 
+/**
+ * Ids this file created, so cleanup can be row-scoped.
+ *
+ * Deleting `users`/`drives`/`pages` wholesale would empty the shared test
+ * database out from under every other suite in the same CI step. The adjacent
+ * `packages/db` integration job is justified in its workflow comment precisely
+ * on the grounds that its cleanup does not do that, and `fileParallelism:
+ * false` is a scheduling accident, not a guarantee — so this suite tracks what
+ * it seeded and removes only that.
+ */
+const seededUserIds: string[] = [];
+
 /** A sheet page with one tab, sized so appends land where the test expects. */
 async function makeSheet(options: { rowCount?: number; columnCount?: number } = {}) {
   const owner = await factories.createUser();
+  seededUserIds.push(owner.id);
   const drive = await factories.createDrive(owner.id);
   const page = await factories.createPage(drive.id, { type: 'SHEET', title: 'Sheet', position: 0 });
 
@@ -56,15 +69,14 @@ const cellAt = (rows: StoredRow[], rowIndex: number, column: string) =>
   rows.find((row) => row.rowIndex === rowIndex)?.cells[column];
 
 describe('sheet store (integration)', () => {
-  beforeEach(async () => {
-    await db.delete(sheetChanges);
-    await db.delete(sheetRangeDeps);
-    await db.delete(sheetCellDeps);
-    await db.delete(sheetRows);
-    await db.delete(sheetTabs);
-    await db.delete(pages);
-    await db.delete(drives);
-    await db.delete(users);
+  // Row-scoped, and after rather than before: every sheet table cascades from
+  // `pages`, which cascades from `drives`, which cascades from `users` — so
+  // removing the users this file made removes everything it made, and nothing
+  // it did not.
+  afterEach(async () => {
+    if (seededUserIds.length === 0) return;
+    await db.delete(users).where(inArray(users.id, seededUserIds));
+    seededUserIds.length = 0;
   });
 
   describe('writes materialise values', () => {
@@ -167,22 +179,55 @@ describe('sheet store (integration)', () => {
 
   describe('dependency edges', () => {
     it('stores a range as one row rather than expanding it', async () => {
-      const { pageId, ownerId } = await makeSheet();
+      const { pageId, tabId, ownerId } = await makeSheet();
       await setCells({ pageId }, [{ address: 'B1', value: '=SUM(A1:A1000)' }], { userId: ownerId });
 
-      const ranges = await db.select().from(sheetRangeDeps);
+      // Scoped to this tab: the suite shares a database with other suites, so
+      // a bare count over the table would depend on what else is running.
+      const ranges = await db.select().from(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tabId));
       expect(ranges).toHaveLength(1);
       expect(ranges[0].rowStart).toBe(0);
       expect(ranges[0].rowEnd).toBe(999);
     });
 
     it('drops edges when a formula becomes a literal', async () => {
-      const { pageId, ownerId } = await makeSheet();
+      const { pageId, tabId, ownerId } = await makeSheet();
+      const edges = () =>
+        db.select().from(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tabId));
+
       await setCells({ pageId }, [{ address: 'B1', value: '=SUM(A1:A10)' }], { userId: ownerId });
-      expect(await db.select().from(sheetRangeDeps)).toHaveLength(1);
+      expect(await edges()).toHaveLength(1);
 
       await setCells({ pageId }, [{ address: 'B1', value: 'plain text' }], { userId: ownerId });
-      expect(await db.select().from(sheetRangeDeps)).toHaveLength(0);
+      expect(await edges()).toHaveLength(0);
+    });
+  });
+
+  describe('wide range formulas', () => {
+    it('edits an input of a range far wider than the bind-parameter ceiling', async () => {
+      // Postgres refuses a statement with more than 65535 bind parameters. An
+      // earlier version expanded each dependency rectangle into one row index
+      // per row and handed the lot to `IN (...)`, so a `SUM` over 100k rows
+      // made every edit to its inputs die with an opaque 08P01 — on precisely
+      // the sheet size this storage model exists to support. Ranges now reach
+      // SQL as bounds, costing two parameters however wide they are.
+      const { pageId, tabId, ownerId } = await makeSheet();
+
+      await appendRows(
+        { pageId },
+        Array.from({ length: 200 }, (_, index) => ({ A: String(index + 1) })),
+        { userId: ownerId }
+      );
+      // A range far past both the row count and the parameter ceiling.
+      await setCells({ pageId }, [{ address: 'C1', value: '=SUM(A1:A100000)' }], { userId: ownerId });
+
+      await expect(
+        setCells({ pageId }, [{ address: 'A1', value: '1000' }], { userId: ownerId })
+      ).resolves.toBeTruthy();
+
+      const rows = await readRows(tabId, { limit: 300 });
+      // 2..200 sum to 20099, plus the edited 1000.
+      expect(cellAt(rows, 0, 'C')?.value).toBe(21099);
     });
   });
 
@@ -220,7 +265,8 @@ describe('sheet store (integration)', () => {
 
       const [{ count }] = await db
         .select({ count: sql<number>`count(*)::int` })
-        .from(sheetChanges);
+        .from(sheetChanges)
+        .where(eq(sheetChanges.pageId, pageId));
       expect(count).toBeLessThan(10);
     });
   });
@@ -413,7 +459,10 @@ describe('sheet store (integration)', () => {
 
       await db.delete(pages).where(eq(pages.id, pageId));
 
-      const [{ count }] = await db.select({ count: sql<number>`count(*)::int` }).from(sheetRows);
+      const [{ count }] = await db
+        .select({ count: sql<number>`count(*)::int` })
+        .from(sheetRows)
+        .where(eq(sheetRows.pageId, pageId));
       expect(count).toBe(0);
     });
   });

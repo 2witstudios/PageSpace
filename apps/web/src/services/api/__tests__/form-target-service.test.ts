@@ -4,6 +4,8 @@ import type { FormFieldDef } from '@pagespace/db/schema/form-targets';
 
 const mockFindById = vi.hoisted(() => vi.fn());
 const mockApplyPageMutation = vi.hoisted(() => vi.fn());
+const mockSetCells = vi.hoisted(() => vi.fn());
+const mockLogActivityWithTx = vi.hoisted(() => vi.fn());
 const mockSelectLimit = vi.hoisted(() => vi.fn());
 const mockOrderBy = vi.hoisted(() => vi.fn());
 const mockUpdateReturning = vi.hoisted(() => vi.fn());
@@ -21,6 +23,14 @@ vi.mock('@pagespace/lib/repositories/page-repository', () => ({
 vi.mock('../page-mutation-service', () => ({
   applyPageMutation: mockApplyPageMutation,
   PageRevisionMismatchError: class PageRevisionMismatchError extends Error {},
+}));
+
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  setCells: mockSetCells,
+}));
+
+vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
+  logActivityWithTx: mockLogActivityWithTx,
 }));
 
 const txMock = {
@@ -85,7 +95,6 @@ import {
   FormTargetAlreadyActiveError,
   FormTargetArchivedError,
 } from '../form-target-service';
-import { PageRevisionMismatchError } from '../page-mutation-service';
 
 const fields: FormFieldDef[] = [
   { name: 'name', label: 'Name', type: 'text', required: true },
@@ -131,19 +140,27 @@ describe('createFormTarget', () => {
     ]);
   });
 
-  it('refuses to write headers when the sheet could not be read', async () => {
+  it('writes headers as addressed cells, without reading the sheet body', async () => {
+    // Replaces "refuses to write headers when the sheet could not be read".
+    // That guard existed because creating a form re-serialised the WHOLE
+    // document, so an unparseable read would have replaced the spreadsheet
+    // with just these header cells. Header writes are addressed cell writes
+    // now, so there is no document to misparse and nothing to overwrite —
+    // an unreadable body is no longer reachable, rather than handled.
     mockFindById.mockResolvedValue({ ...sheetPage, content: UNREADABLE_SHEET });
 
-    await expect(
-      createFormTarget({
-        sheetPageId: 'sheet-1',
-        fields,
-        createdBy: 'user-1',
-        mutationContext: { userId: 'user-1' },
-      })
-    ).rejects.toThrow(/could not be read/);
+    await createFormTarget({
+      sheetPageId: 'sheet-1',
+      fields,
+      createdBy: 'user-1',
+      mutationContext: { userId: 'user-1' },
+    });
 
-    expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    expect(mockSetCells).toHaveBeenCalledTimes(1);
+    const [ref, updates] = mockSetCells.mock.calls[0];
+    expect(ref).toEqual({ pageId: 'sheet-1' });
+    // Header cells only — never the rest of the grid.
+    expect(updates.every((u: { address: string }) => /1$/.test(u.address))).toBe(true);
   });
 
   it('writes the header row and creates the grant in the same transaction (atomic)', async () => {
@@ -155,8 +172,13 @@ describe('createFormTarget', () => {
     });
 
     expect(mockTransaction).toHaveBeenCalledTimes(1);
-    expect(mockApplyPageMutation).toHaveBeenCalledWith(
-      expect.objectContaining({ pageId: 'sheet-1', operation: 'update', tx: txMock })
+    // Same transaction as the grant insert, so a form cannot exist without its
+    // headers or vice versa.
+    expect(mockSetCells).toHaveBeenCalledWith(
+      { pageId: 'sheet-1' },
+      expect.any(Array),
+      expect.any(Object),
+      txMock
     );
   });
 
@@ -410,34 +432,37 @@ describe('appendFormSubmission', () => {
     mockApplyPageMutation.mockResolvedValue({ nextRevision: 6 });
   });
 
-  it('refuses to append when the sheet could not be read', async () => {
-    // The whole point of the guard: an anonymous form POST must not be able to
-    // replace a spreadsheet it failed to parse with just the submitted row.
+  it('writes only the submitted row, never the rest of the sheet', async () => {
+    // Replaces "refuses to append when the sheet could not be read". That
+    // guard protected against an anonymous form POST re-serialising a
+    // spreadsheet it had failed to parse, replacing it with just the submitted
+    // row. A submission is an addressed cell write now: there is no read of
+    // the document body to fail, and no path by which one submission can touch
+    // another row. The stronger property is asserted directly.
     mockTxSelectLimit.mockResolvedValue([
       { ...sheetPage, content: UNREADABLE_SHEET, revision: 5 },
     ]);
 
-    await expect(
-      appendFormSubmission({
-        formTargetId: 'ft-1',
-        values: { name: 'Ada', email: 'ada@example.com' },
-        submitterIpHash: 'iphash',
-      })
-    ).rejects.toThrow(/could not be read/);
-
-    expect(mockApplyPageMutation).not.toHaveBeenCalled();
-  });
-
-  it('still appends normally to a sheet that reads fine', async () => {
-    // The guard must not refuse readable content — including a genuinely
-    // empty sheet, which is not the same as an unreadable one.
     await appendFormSubmission({
       formTargetId: 'ft-1',
       values: { name: 'Ada', email: 'ada@example.com' },
       submitterIpHash: 'iphash',
     });
 
-    expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
+    expect(mockSetCells).toHaveBeenCalledTimes(1);
+    const [, updates] = mockSetCells.mock.calls[0];
+    // `nextRow` is 2, so every address must be on row 2 and nowhere else.
+    expect(updates.every((u: { address: string }) => u.address.endsWith('2'))).toBe(true);
+  });
+
+  it('appends to a sheet that reads fine', async () => {
+    await appendFormSubmission({
+      formTargetId: 'ft-1',
+      values: { name: 'Ada', email: 'ada@example.com' },
+      submitterIpHash: 'iphash',
+    });
+
+    expect(mockSetCells).toHaveBeenCalledTimes(1);
   });
 
   it('locks the form_targets row before appending (FOR UPDATE)', async () => {
@@ -457,18 +482,18 @@ describe('appendFormSubmission', () => {
       submitterIpHash: 'iphash',
     });
 
-    expect(mockApplyPageMutation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        pageId: 'sheet-1',
-        operation: 'update',
-        expectedRevision: 5,
-        context: expect.objectContaining({
-          userId: 'owner-1',
-          changeGroupType: 'automation',
-          metadata: expect.objectContaining({ source: 'public-form-submission', formTargetId: 'ft-1' }),
-        }),
-        tx: txMock,
-      })
+    // Attribution rides on the cell write itself: the token owner is the
+    // actor, and the form target groups the change so a submission is
+    // identifiable in the sheet's change log.
+    expect(mockSetCells).toHaveBeenCalledWith(
+      { pageId: 'sheet-1' },
+      expect.any(Array),
+      expect.objectContaining({ userId: 'owner-1', changeGroupId: 'ft-1' }),
+      txMock
+    );
+    expect(mockLogActivityWithTx).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: 'owner-1', changeGroupType: 'automation' }),
+      txMock
     );
   });
 
@@ -482,31 +507,47 @@ describe('appendFormSubmission', () => {
     expect(txMock.update).toHaveBeenCalled();
   });
 
-  it('retries on a page-revision mismatch up to a bounded limit', async () => {
-    mockApplyPageMutation
-      .mockRejectedValueOnce(new PageRevisionMismatchError('stale', 6, 5))
-      .mockResolvedValueOnce({ nextRevision: 7 });
-
+  it('appends exactly once — there is no revision race left to retry', async () => {
+    // Replaces two tests that asserted a bounded retry on
+    // `PageRevisionMismatchError`. That loop existed because the append
+    // re-serialised the whole document under an `expectedRevision` check, so
+    // a second form targeting the same sheet could lose the race. Addressed
+    // cell writes do not contend — two forms writing different rows of one
+    // sheet no longer conflict — and the `FOR UPDATE` lock below already
+    // serialises submissions to the SAME form. The loop became unreachable, so
+    // it was removed rather than left as decoration; this pins the single-shot
+    // behaviour that replaced it.
     await appendFormSubmission({
       formTargetId: 'ft-1',
       values: { name: 'Ada', email: 'ada@example.com' },
       submitterIpHash: 'iphash',
     });
 
-    expect(mockApplyPageMutation).toHaveBeenCalledTimes(2);
+    expect(mockSetCells).toHaveBeenCalledTimes(1);
+    expect(mockTransaction).toHaveBeenCalledTimes(1);
   });
 
-  it('gives up after exceeding the bounded retry limit', async () => {
-    mockApplyPageMutation.mockRejectedValue(new PageRevisionMismatchError('stale', 6, 5));
+  it('records the submission provenance without the document', async () => {
+    // The hashed submitter IP is the audit trail for an anonymous, publicly
+    // reachable write. It used to ride in the page mutation's activity log
+    // alongside the whole sheet; the log entry stays, the payload does not.
+    await appendFormSubmission({
+      formTargetId: 'ft-1',
+      values: { name: 'Ada', email: 'ada@example.com' },
+      submitterIpHash: 'iphash',
+    });
 
-    await expect(
-      appendFormSubmission({
-        formTargetId: 'ft-1',
-        values: { name: 'Ada', email: 'ada@example.com' },
-        submitterIpHash: 'iphash',
-      })
-    ).rejects.toThrow(PageRevisionMismatchError);
-
-    expect(mockApplyPageMutation).toHaveBeenCalledTimes(3);
+    expect(mockLogActivityWithTx).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          source: 'public-form-submission',
+          formTargetId: 'ft-1',
+          submitterIpHash: 'iphash',
+        }),
+      }),
+      txMock
+    );
+    const [entry] = mockLogActivityWithTx.mock.calls[0];
+    expect(entry.contentSnapshot).toBeUndefined();
   });
 });

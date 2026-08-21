@@ -64,10 +64,25 @@ interface Report {
 
 function parseArgs(argv: string[]): Options {
   const pageFlag = argv.indexOf('--page');
+  let pageId: string | undefined;
+
+  if (pageFlag >= 0) {
+    const value = argv[pageFlag + 1];
+    // Refuse rather than fall through. `--page` with nothing after it used to
+    // yield `undefined`, which took the "every SHEET in the database" branch —
+    // a whole-table backfill from a command that asked for one page. `--page
+    // --dry-run` was worse: it took '--dry-run' as the id, matched nothing, and
+    // reported a clean run.
+    if (!value || value.startsWith('--')) {
+      throw new Error('--page requires a page id, e.g. --page abc123');
+    }
+    pageId = value;
+  }
+
   return {
     dryRun: argv.includes('--dry-run'),
     clearContent: argv.includes('--clear-content'),
-    pageId: pageFlag >= 0 ? argv[pageFlag + 1] : undefined,
+    pageId,
   };
 }
 

@@ -206,6 +206,14 @@ function compileCondition(condition: SheetCondition): SQL {
         return sql`(${valueOf(condition.column)}) ${operator} to_jsonb(${value}::boolean)`;
       }
 
+      if (op === 'neq') {
+        // Three-valued logic: `cells -> 'X' ->> 'value'` is NULL for a row with
+        // no cell in that column, and `NULL <> 'active'` is NULL, not true. A
+        // plain `<>` therefore drops every blank row from "status is not
+        // active" — the rows a person asking that question most wants to see.
+        return sql`(${textOf(condition.column)} IS NULL OR ${textOf(condition.column)} <> ${scalarToText(value)})`;
+      }
+
       return sql`${textOf(condition.column)} ${operator} ${scalarToText(value)}`;
     }
 
