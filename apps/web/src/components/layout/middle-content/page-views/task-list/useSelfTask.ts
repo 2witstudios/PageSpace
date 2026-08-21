@@ -139,7 +139,7 @@ export function useSelfTask(
       // on one key. The header control is as easy to click twice as a row's
       // checkbox.
       await mutate((current) => {
-        const before = (current ?? (data as SelfTaskResponse))?.task;
+        const before = (current ?? data)?.task;
         captured.previous = soleWriteAtPaint && before
           ? { status: before.status, completedAt: before.completedAt }
           : null;
