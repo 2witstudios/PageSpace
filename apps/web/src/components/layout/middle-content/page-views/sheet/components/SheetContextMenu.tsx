@@ -1,78 +1,75 @@
+"use client";
+
 import React from 'react';
-import { cn } from '@/lib/utils';
-import { clampContextMenuPosition } from '../core/layout';
-import type { ContextMenuState } from '../hooks/useContextMenu';
+import { ClipboardPaste, Copy, Eraser, Hash, Trash2 } from 'lucide-react';
+import {
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+} from '@/components/ui/context-menu';
 import type { CopyMode, PasteMode } from '../core/clipboard';
 
 interface SheetContextMenuProps {
-  contextMenu: ContextMenuState;
   /** Whether a paste is possible (internal copy present or clipboard readable). */
   canPaste: boolean;
+  isReadOnly: boolean;
   onCopy: (mode: CopyMode) => void;
   onPaste: (mode: PasteMode) => void;
-  onClose: () => void;
+  onClearContents: () => void;
+  onClearFormatting: () => void;
 }
 
-/** The desktop right-click context menu (copy/paste), positioned by the pure clamp. */
+/**
+ * The grid's right-click menu.
+ *
+ * This was a hand-rolled `position: fixed` div with `onClick` handlers on
+ * non-interactive elements — no roles, no keyboard navigation, no focus
+ * management, and a bespoke clamp to keep it on screen. The shared primitive
+ * brings all of that, matches `TaskListView`'s item conventions, and lets the
+ * clamp and its hook be deleted outright.
+ */
 export const SheetContextMenu: React.FC<SheetContextMenuProps> = ({
-  contextMenu,
   canPaste,
+  isReadOnly,
   onCopy,
   onPaste,
-  onClose,
-}) => {
-  if (!contextMenu.show) return null;
+  onClearContents,
+  onClearFormatting,
+}) => (
+  <ContextMenuContent className="w-52">
+    <ContextMenuItem onSelect={() => onCopy('formulas')}>
+      <Copy className="mr-2 h-4 w-4" />
+      Copy
+    </ContextMenuItem>
+    <ContextMenuItem onSelect={() => onCopy('values')}>
+      <Hash className="mr-2 h-4 w-4" />
+      Copy values
+    </ContextMenuItem>
 
-  const runPaste = (mode: PasteMode) => {
-    if (canPaste) {
-      onPaste(mode);
-      onClose();
-    }
-  };
+    <ContextMenuSeparator />
 
-  return (
-    <div
-      className="fixed z-50 bg-background border border-border rounded-md shadow-lg py-1 min-w-[160px]"
-      style={clampContextMenuPosition(contextMenu.x, contextMenu.y, contextMenu.bounds, contextMenu.viewport)}
-      onClick={(e) => e.stopPropagation()}
+    <ContextMenuItem disabled={!canPaste || isReadOnly} onSelect={() => onPaste('auto')}>
+      <ClipboardPaste className="mr-2 h-4 w-4" />
+      Paste
+    </ContextMenuItem>
+    <ContextMenuItem disabled={!canPaste || isReadOnly} onSelect={() => onPaste('values')}>
+      <ClipboardPaste className="mr-2 h-4 w-4" />
+      Paste values
+    </ContextMenuItem>
+
+    <ContextMenuSeparator />
+
+    <ContextMenuItem disabled={isReadOnly} onSelect={onClearFormatting}>
+      <Eraser className="mr-2 h-4 w-4" />
+      Clear formatting
+    </ContextMenuItem>
+    <ContextMenuItem
+      disabled={isReadOnly}
+      onSelect={onClearContents}
+      className="text-destructive focus:text-destructive"
     >
-      <div
-        className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
-        onClick={() => {
-          onCopy('formulas');
-          onClose();
-        }}
-      >
-        Copy
-      </div>
-      <div
-        className="flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors"
-        onClick={() => {
-          onCopy('values');
-          onClose();
-        }}
-      >
-        Copy Values
-      </div>
-      <div className="h-px bg-border my-1" />
-      <div
-        className={cn(
-          'flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors',
-          !canPaste && 'opacity-50 cursor-not-allowed'
-        )}
-        onClick={() => runPaste('auto')}
-      >
-        Paste
-      </div>
-      <div
-        className={cn(
-          'flex items-center px-3 py-2 text-sm cursor-pointer hover:bg-muted transition-colors',
-          !canPaste && 'opacity-50 cursor-not-allowed'
-        )}
-        onClick={() => runPaste('values')}
-      >
-        Paste Values
-      </div>
-    </div>
-  );
-};
+      <Trash2 className="mr-2 h-4 w-4" />
+      Clear contents
+    </ContextMenuItem>
+  </ContextMenuContent>
+);

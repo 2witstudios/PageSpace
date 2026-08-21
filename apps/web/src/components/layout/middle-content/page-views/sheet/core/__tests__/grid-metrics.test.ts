@@ -288,3 +288,36 @@ describe('visibleRange', () => {
     expect(visibleRange(buildAxis(0, () => 20), 0, 100)).toEqual({ start: 0, end: -1 });
   });
 });
+
+describe('resize preview override', () => {
+  it('previews a column width without the sheet changing', () => {
+    const s = sheet({ columnCount: 3 });
+    const axis = buildColumnAxis(s, { index: 1, size: 300 });
+    expect(axisSize(axis, 1)).toBe(300);
+    expect(axisSize(axis, 0)).toBe(DEFAULT_COLUMN_WIDTH);
+    // The sheet itself is untouched — the drag has not committed yet.
+    expect(s.columnWidths).toBeUndefined();
+  });
+
+  it('shifts the offsets of everything after the previewed column', () => {
+    const axis = buildColumnAxis(sheet({ columnCount: 3 }), { index: 0, size: 300 });
+    expect(axisOffset(axis, 1)).toBe(300);
+  });
+
+  it('clamps a preview dragged past the limits, so the handle stops with the column', () => {
+    const axis = buildColumnAxis(sheet({ columnCount: 2 }), { index: 0, size: -500 });
+    expect(axisSize(axis, 0)).toBe(MIN_COLUMN_WIDTH);
+  });
+
+  it('previews a row height', () => {
+    const axis = buildRowAxis(sheet({ rowCount: 3 }), DEFAULT_ROW_HEIGHT, { index: 2, size: 80 });
+    expect(axisSize(axis, 2)).toBe(80);
+    expect(axisSize(axis, 1)).toBe(DEFAULT_ROW_HEIGHT);
+  });
+
+  it('leaves the axis alone when nothing is being dragged', () => {
+    expect(buildColumnAxis(sheet({ columnCount: 3 }))).toEqual(
+      buildColumnAxis(sheet({ columnCount: 3 }), undefined),
+    );
+  });
+});

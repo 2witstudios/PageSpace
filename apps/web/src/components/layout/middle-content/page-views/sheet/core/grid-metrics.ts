@@ -134,14 +134,43 @@ export const rowHeightAt = (
   return clamp(stored, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT);
 };
 
+/**
+ * A size being dragged but not yet committed.
+ *
+ * A resize drag emits a size per pointer move. Writing each one to the sheet
+ * would push a hundred entries onto the undo stack for a single drag and make
+ * Ctrl+Z useless, so the drag previews through here and commits once on
+ * release.
+ */
+export interface SizeOverride {
+  index: number;
+  size: number;
+}
+
+const overriddenSize = (
+  override: SizeOverride | undefined,
+  index: number,
+  actual: number,
+  min: number,
+  max: number,
+): number => (override?.index === index ? clamp(override.size, min, max) : actual);
+
 export const buildColumnAxis = (
   sheet: Pick<SheetData, 'columnCount' | 'columnWidths'>,
-): AxisGeometry => buildAxis(sheet.columnCount, (index) => columnWidthAt(sheet, index));
+  override?: SizeOverride,
+): AxisGeometry =>
+  buildAxis(sheet.columnCount, (index) =>
+    overriddenSize(override, index, columnWidthAt(sheet, index), MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH),
+  );
 
 export const buildRowAxis = (
   sheet: Pick<SheetData, 'rowCount' | 'rowHeights'>,
   baseHeight: number = DEFAULT_ROW_HEIGHT,
-): AxisGeometry => buildAxis(sheet.rowCount, (index) => rowHeightAt(sheet, index, baseHeight));
+  override?: SizeOverride,
+): AxisGeometry =>
+  buildAxis(sheet.rowCount, (index) =>
+    overriddenSize(override, index, rowHeightAt(sheet, index, baseHeight), MIN_ROW_HEIGHT, MAX_ROW_HEIGHT),
+  );
 
 /** How many leading indices are frozen, clamped to something renderable. */
 export const frozenCount = (requested: number | undefined, axisCount: number): number => {

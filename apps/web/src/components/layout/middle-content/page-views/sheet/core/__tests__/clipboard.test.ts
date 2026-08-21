@@ -9,6 +9,9 @@ import {
 } from '../clipboard';
 import type { SelectionState } from '../selection';
 
+/** Adapt a dense fixture grid to the `DisplayLookup` the cores now take. */
+const lookup = (grid: string[][]) => (row: number, column: number): string => grid[row]?.[column] ?? '';
+
 const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
 }) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
@@ -93,7 +96,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a single-cell selection in formulas mode',
       should: 'copy the raw cell content',
-      actual: buildCopyPayload(single(0, 0), sheet(cells), display, 'formulas').data,
+      actual: buildCopyPayload(single(0, 0), sheet(cells), lookup(display), 'formulas').data,
       expected: '=1',
     });
   });
@@ -102,7 +105,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a single-cell selection in values mode',
       should: 'copy the evaluated display value',
-      actual: buildCopyPayload(single(0, 0), sheet(cells), display, 'values').data,
+      actual: buildCopyPayload(single(0, 0), sheet(cells), lookup(display), 'values').data,
       expected: '1',
     });
   });
@@ -111,7 +114,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a range selection in formulas mode',
       should: 'tab-join columns and newline-join rows of raw values',
-      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), display, 'formulas').data,
+      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), lookup(display), 'formulas').data,
       expected: '=1\t2\n\t',
     });
   });
@@ -120,7 +123,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a range selection in values mode',
       should: 'tab-join columns and newline-join rows of display values',
-      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), display, 'values').data,
+      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), lookup(display), 'values').data,
       expected: '1\t2\n4\t5',
     });
   });
@@ -129,7 +132,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a single-cell formulas copy over an empty cell',
       should: 'copy an empty string',
-      actual: buildCopyPayload(single(4, 2), sheet(cells), display, 'formulas').data,
+      actual: buildCopyPayload(single(4, 2), sheet(cells), lookup(display), 'formulas').data,
       expected: '',
     });
   });
@@ -138,7 +141,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a single-cell values copy where no display exists for the row',
       should: 'copy an empty string',
-      actual: buildCopyPayload(single(4, 2), sheet(cells), display, 'values').data,
+      actual: buildCopyPayload(single(4, 2), sheet(cells), lookup(display), 'values').data,
       expected: '',
     });
   });
@@ -147,7 +150,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a range values copy spanning rows without display data',
       should: 'emit empty strings for the missing cells',
-      actual: buildCopyPayload(range(1, 0, 2, 0), sheet(cells), [['1'], ['4']], 'values').data,
+      actual: buildCopyPayload(range(1, 0, 2, 0), sheet(cells), lookup([['1'], ['4']]), 'values').data,
       expected: '4\n',
     });
   });
@@ -156,7 +159,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a single-cell selection',
       should: 'report cellCount 1',
-      actual: buildCopyPayload(single(0, 0), sheet(cells), display, 'formulas').cellCount,
+      actual: buildCopyPayload(single(0, 0), sheet(cells), lookup(display), 'formulas').cellCount,
       expected: 1,
     });
   });
@@ -165,7 +168,7 @@ describe('buildCopyPayload', () => {
     assert({
       given: 'a 2x2 range selection',
       should: 'report cellCount 4',
-      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), display, 'values').cellCount,
+      actual: buildCopyPayload(range(0, 0, 1, 1), sheet(cells), lookup(display), 'values').cellCount,
       expected: 4,
     });
   });

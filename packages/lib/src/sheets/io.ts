@@ -17,7 +17,7 @@ import type {
 } from './types';
 import { parseCellFormat } from './format';
 import { SHEETDOC_MAGIC, SHEETDOC_VERSION, SHEET_VERSION, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
-import { evaluateSheet } from './evaluation';
+import { evaluateSheetSparse } from './evaluation';
 import { sanitizeSheetData } from './update';
 import { cellRegex } from './address';
 
@@ -172,7 +172,11 @@ export function serializeSheetContent(
   options: { pageId?: string; sheetName?: string } = {}
 ): string {
   const sanitized = sanitizeSheetData({ ...sheet });
-  const evaluation = evaluateSheet(sanitized);
+  // Sparse, not dense: this runs on every save, and the dense walk allocates an
+  // object per grid position — nearly three seconds for a 10,000-row sheet, on
+  // every keystroke. The emitted document is unchanged, because the loop below
+  // already skips every empty address the dense walk would have added.
+  const evaluation = evaluateSheetSparse(sanitized);
   const doc = sheetDataToSheetDoc(sanitized, evaluation, options);
   return stringifySheetDoc(doc);
 }
@@ -645,7 +649,7 @@ function normalizeSheetDocObject(value: Record<string, unknown>): SheetDoc {
 
 function sheetDataToSheetDoc(
   sheet: SheetData,
-  evaluation: ReturnType<typeof evaluateSheet>,
+  evaluation: ReturnType<typeof evaluateSheetSparse>,
   options: { pageId?: string; sheetName?: string }
 ): SheetDoc {
   const sheetName = options.sheetName ?? 'Sheet1';

@@ -65,11 +65,20 @@ export interface CopyPayload {
   cellCount: number;
 }
 
+/**
+ * The evaluated text at a grid position.
+ *
+ * A lookup rather than a materialized `string[][]`: the grid evaluates sparsely,
+ * so building a dense grid here would allocate one entry per position of a
+ * 10,000-row sheet just to copy four cells.
+ */
+export type DisplayLookup = (row: number, column: number) => string;
+
 /** Build the clipboard text for a selection: raw formulas or evaluated display values. */
 export const buildCopyPayload = (
   selection: SelectionState,
   sheet: SheetData,
-  display: string[][],
+  displayAt: DisplayLookup,
   mode: CopyMode,
 ): CopyPayload => {
   if (selection.type === 'single') {
@@ -77,7 +86,7 @@ export const buildCopyPayload = (
     const data =
       mode === 'formulas'
         ? sheet.cells[encodeCellAddress(row, column)] ?? ''
-        : display[row]?.[column] ?? '';
+        : displayAt(row, column);
     return { data, cellCount: 1 };
   }
 
@@ -94,7 +103,7 @@ export const buildCopyPayload = (
       if (mode === 'formulas') {
         cols.push(sheet.cells[encodeCellAddress(row, col)] ?? '');
       } else {
-        cols.push(display[row]?.[col] ?? '');
+        cols.push(displayAt(row, col));
       }
     }
     rows.push(cols.join('\t'));

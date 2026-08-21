@@ -89,10 +89,6 @@ vi.mock('@/components/ui/pull-to-refresh', () => ({
   PullToRefresh: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock('@/components/ui/custom-scroll-area', () => ({
-  CustomScrollArea: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-
 const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a) } }));
 
@@ -121,6 +117,10 @@ const contentWith = (cells: Record<string, string>) => {
   return serializeSheetContent(sheet);
 };
 
+/** The rendered text of one grid cell, by address. */
+const cellText = (address: string): string =>
+  document.querySelector(`[data-cell="${address}"]`)?.textContent ?? '';
+
 describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
@@ -135,7 +135,7 @@ describe('SheetView', () => {
     render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getByRole('grid')).toBeTruthy();
-    expect(screen.getByText('hello')).toBeTruthy();
+    expect(cellText('A1')).toBe('hello');
   });
 
   it('shows no load-failure banner when the sheet reads fine', () => {
@@ -228,7 +228,7 @@ describe('SheetView', () => {
 
     // And the view survived, still showing the last good value.
     expect(screen.getByRole('grid')).toBeTruthy();
-    expect(screen.getByText('hello')).toBeTruthy();
+    expect(cellText('A1')).toBe('hello');
   });
 
   it('renders a formatted value the way the engine computed it', () => {

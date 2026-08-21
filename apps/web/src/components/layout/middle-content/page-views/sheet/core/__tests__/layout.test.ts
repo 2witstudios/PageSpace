@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import {
-  clampContextMenuPosition,
   isMobileWidth,
   computeEditorPosition,
 } from '../layout';
@@ -10,46 +9,6 @@ const assert = ({ given, should, actual, expected }: {
 }) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
 const viewport = (width: number, height: number) => ({ width, height });
-
-describe('clampContextMenuPosition', () => {
-  it('keeps an in-bounds position where it is', () => {
-    assert({
-      given: 'a click well inside a large viewport with no bounds',
-      should: 'return the requested position',
-      actual: clampContextMenuPosition(100, 100, undefined, viewport(2000, 2000)),
-      expected: { left: '100px', top: '100px' },
-    });
-  });
-
-  it('clamps against the viewport edges when no bounds are given', () => {
-    assert({
-      given: 'a click near the far edge of the viewport',
-      should: 'pull the menu back so it fits (viewport minus menu size)',
-      actual: clampContextMenuPosition(1000, 1000, undefined, viewport(1000, 1000)),
-      expected: { left: `${1000 - 180}px`, top: `${1000 - 200}px` },
-    });
-  });
-
-  it('clamps within the provided bounds rather than the viewport', () => {
-    const bounds = { left: 50, top: 40, right: 400, bottom: 300 };
-    assert({
-      given: 'a click beyond the right/bottom of the element bounds',
-      should: 'clamp to bounds.right/bottom minus the menu size',
-      actual: clampContextMenuPosition(9999, 9999, bounds, viewport(5000, 5000)),
-      expected: { left: `${400 - 180}px`, top: `${300 - 200}px` },
-    });
-  });
-
-  it('never returns a position left/above the bounds minimum', () => {
-    const bounds = { left: 50, top: 40, right: 400, bottom: 300 };
-    assert({
-      given: 'a click above and to the left of the bounds',
-      should: 'clamp to the bounds minimum',
-      actual: clampContextMenuPosition(0, 0, bounds, viewport(5000, 5000)),
-      expected: { left: '50px', top: '40px' },
-    });
-  });
-});
 
 describe('isMobileWidth', () => {
   it('uses the container width when provided (mobile)', () => {
