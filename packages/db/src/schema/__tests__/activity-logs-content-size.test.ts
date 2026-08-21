@@ -65,6 +65,10 @@ describe('activity_logs content size CHECK', () => {
     const dir = path.resolve(__dirname, '../../../drizzle');
     const sql = fs
       .readdirSync(dir)
+      // `readdirSync` returns DIRECTORY order, which is sorted on APFS but hash
+      // order on ext4 — what CI runs. Without this the "last definition wins"
+      // reading below can land on the wrong migration.
+      .sort()
       .filter((file) => file.endsWith('.sql'))
       .map((file) => fs.readFileSync(path.join(dir, file), 'utf8'))
       .join('\n');

@@ -41,6 +41,13 @@ import {
   type StoredRow,
   type StoredTab,
 } from './projection';
+import {
+  compileWhere,
+  compileOrderBy,
+  assertColumn,
+  type SheetWhere,
+  type SheetOrderBy,
+} from './query';
 
 type Executor = typeof db;
 
@@ -180,6 +187,86 @@ export async function readSheetData(ref: TabRef, exec: Executor = db): Promise<S
   return sheetDataFromRows(tab, rows);
 }
 
+export interface QueryRowsOptions {
+  where?: SheetWhere;
+  orderBy?: SheetOrderBy[];
+  /** Column letters to return. Omitted means every column the row has. */
+  select?: string[];
+  limit?: number;
+  offset?: number;
+}
+
+export interface QueryRowsResult {
+  rows: { rowIndex: number; cells: Record<string, StoredCell> }[];
+  /** Rows matching the filter, ignoring limit/offset. */
+  total: number;
+  hasMore: boolean;
+}
+
+/**
+ * Filtered, sorted, paginated rows.
+ *
+ * The read that makes a sheet usable as a database: an agent asks for the rows
+ * it wants rather than reading the document and filtering in the model. The
+ * filter runs against the materialised `value`, so `=B2*C2` compares as its
+ * result — possible only because writes materialise.
+ *
+ * `select` is applied after the row is fetched rather than pushed into SQL: the
+ * saving that matters is the rows not returned, and projecting in jsonb would
+ * cost more in query complexity than it saves in bytes.
+ */
+export async function queryRows(
+  ref: TabRef,
+  options: QueryRowsOptions = {},
+  exec: Executor = db
+): Promise<QueryRowsResult> {
+  const tab = await getTab(ref, exec);
+  if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
+
+  const predicate = compileWhere(options.where);
+  const ordering = compileOrderBy(options.orderBy);
+  const limit = clampPageSize(options.limit);
+  const offset = Math.max(0, options.offset ?? 0);
+  const projection = options.select?.map(assertColumn);
+
+  const scope = predicate
+    ? and(eq(sheetRows.tabId, tab.id), predicate)
+    : eq(sheetRows.tabId, tab.id);
+
+  const [{ total }] = await exec
+    .select({ total: sql<number>`count(*)::int` })
+    .from(sheetRows)
+    .where(scope);
+
+  const found = await exec
+    .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+    .from(sheetRows)
+    .where(scope)
+    .orderBy(ordering ?? sql`${sheetRows.rowIndex} ASC`)
+    .limit(limit)
+    .offset(offset);
+
+  return {
+    rows: found.map((row) => ({
+      rowIndex: row.rowIndex,
+      cells: projection ? pick(row.cells ?? {}, projection) : (row.cells ?? {}),
+    })),
+    total,
+    hasMore: offset + found.length < total,
+  };
+}
+
+function pick(
+  cells: Record<string, StoredCell>,
+  columns: string[]
+): Record<string, StoredCell> {
+  const out: Record<string, StoredCell> = {};
+  for (const column of columns) {
+    if (cells[column]) out[column] = cells[column];
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Writes
 // ---------------------------------------------------------------------------
@@ -217,23 +304,30 @@ export async function setCells(
     }
 
     // 1. Apply authored text to the rows the updates name.
+    //
+    // `working` is the set of rows this call may WRITE, and every row in it is
+    // loaded whole before being modified. That invariant matters because
+    // `persistRows` upserts the entire `cells` object: writing a row that was
+    // only partially loaded would silently delete every column it did not know
+    // about.
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
-    const existing = await loadRowsByIndex(tab.id, touchedRowIndexes, tx);
+    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx);
 
     const before: Record<string, StoredCell | undefined> = {};
     for (const update of normalized) {
-      const row = existing.get(update.position.row) ?? { rowIndex: update.position.row, cells: {} };
+      const row = working.get(update.position.row) ?? { rowIndex: update.position.row, cells: {} };
       const label = encodeColumnLabel(update.position.column);
-      before[update.address] = row.cells[label];
-      const previousFormat = row.cells[label]?.format;
+      const previous = row.cells[label];
+      before[update.address] = previous;
 
-      // Clearing contents keeps formatting, as in Excel and Google Sheets, and
-      // as `updateSheetCells` already does for the document path.
-      row.cells[label] = previousFormat
-        ? { raw: update.value, format: previousFormat }
-        : { raw: update.value };
+      // Spread the previous cell rather than rebuilding it, so formatting —
+      // and anything else `StoredCell` grows later, such as notes — survives an
+      // edit. Clearing contents keeps formatting, as in Excel and Sheets, and
+      // as `updateSheetCells` already does on the document path.
+      row.cells[label] = { ...(previous ?? {}), raw: update.value, value: undefined, type: undefined };
+      delete row.cells[label].error;
 
-      existing.set(update.position.row, row);
+      working.set(update.position.row, row);
     }
 
     // 2. Re-derive dependency edges for the cells that changed.
@@ -243,14 +337,19 @@ export async function setCells(
     const dirty = normalized.map((u) => u.address);
     const closure = await resolveDependentClosure(tab.id, dirty, tx);
 
-    // 4. Evaluate the dirty cells and that closure, and nothing else.
-    const toEvaluate = unique([...dirty, ...closure]);
-    const evaluated = await evaluateClosure(tab, toEvaluate, existing, tx);
+    // 4. Load the rows holding those dependents, so recomputing a formula in an
+    // untouched row rewrites that row with its other columns intact.
+    const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
+    await mergeMissingRows(working, tab.id, closureRowIndexes, tx);
 
-    // 5. Persist.
-    applyEvaluation(existing, evaluated);
+    // 5. Evaluate the dirty cells and that closure, and nothing else.
+    const toEvaluate = unique([...dirty, ...closure]);
+    const evaluated = await evaluateClosure(tab, toEvaluate, working, tx);
+
+    // 6. Persist.
+    applyEvaluation(working, evaluated);
     const grown = growExtent(tab, normalized);
-    await persistRows(tab.id, ref.pageId, existing, tx);
+    await persistRows(tab.id, ref.pageId, working, tx);
     if (grown) await updateExtent(tab.id, grown, tx);
 
     if (!actor.suppressCellLog) {
@@ -273,7 +372,7 @@ export async function setCells(
               rowIndex: update.position.row,
               before: before[update.address] ?? null,
               after:
-                existing.get(update.position.row)?.cells[encodeColumnLabel(update.position.column)] ??
+                working.get(update.position.row)?.cells[encodeColumnLabel(update.position.column)] ??
                 null,
             }));
 
@@ -350,8 +449,17 @@ export async function appendRows(
       tx
     );
 
-    const rowCount = Math.max(tab.rowCount, firstRowIndex + rows.length);
-    await updateExtent(tab.id, { rowCount, columnCount: tab.columnCount }, tx);
+    // Re-read: the inner `setCells` widens `columnCount` when the appended rows
+    // use columns past the tab's declared width. Writing back the pre-call
+    // snapshot would revert that, leaving the editor rendering a grid too
+    // narrow to show the data just written.
+    const current = await getTab(ref, tx);
+    const rowCount = Math.max(current?.rowCount ?? tab.rowCount, firstRowIndex + rows.length);
+    await updateExtent(
+      tab.id,
+      { rowCount, columnCount: current?.columnCount ?? tab.columnCount },
+      tx
+    );
 
     await appendChanges(
       ref.pageId,
@@ -398,10 +506,33 @@ export async function deleteRows(
         )
       );
 
+    // Two passes, through a scratch range above every existing index.
+    //
+    // `sheet_rows_tab_row_unique` is not deferrable and Postgres checks it per
+    // row mid-statement, so a single `rowIndex = rowIndex - count` collides
+    // with a row the statement has not moved yet whenever the heap order is not
+    // ascending by rowIndex — which it generally is not after upserts. The
+    // failure is non-deterministic, which is worse than consistent.
+    //
+    // The scratch range is ABOVE the current maximum, not below zero: negative
+    // indexes would satisfy uniqueness but violate
+    // `sheet_rows_row_index_non_negative`, which is checked per row just the
+    // same. Offsetting by max+1 guarantees the parked rows cannot collide with
+    // the rows that stayed put, since those are all <= max.
+    const [{ maxIndex } = { maxIndex: null }] = await tx
+      .select({ maxIndex: sql<number | null>`max(${sheetRows.rowIndex})` })
+      .from(sheetRows)
+      .where(eq(sheetRows.tabId, tab.id));
+
+    const scratch = (maxIndex ?? 0) + 1;
     await tx
       .update(sheetRows)
-      .set({ rowIndex: sql`${sheetRows.rowIndex} - ${count}` })
+      .set({ rowIndex: sql`${sheetRows.rowIndex} + ${scratch}` })
       .where(and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} > ${end}`));
+    await tx
+      .update(sheetRows)
+      .set({ rowIndex: sql`${sheetRows.rowIndex} - ${scratch + count}` })
+      .where(and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} > ${maxIndex ?? 0}`));
 
     const rowCount = Math.max(0, tab.rowCount - count);
     await updateExtent(tab.id, { rowCount, columnCount: tab.columnCount }, tx);
@@ -438,6 +569,17 @@ export async function rebuildTab(ref: TabRef, exec?: Executor): Promise<{ rows: 
     const materialized = rowsFromSheetData(sheetDataFromRows(tab, rows), tab.tabIndex);
 
     const byIndex = new Map(materialized.rows.map((row) => [row.rowIndex, row]));
+
+    // `persistRows` only upserts. A row that has become entirely empty is
+    // absent from the projection, so without this its stale materialised value
+    // would survive the repair and keep being returned by reads.
+    const keep = Array.from(byIndex.keys());
+    await tx.delete(sheetRows).where(
+      keep.length > 0
+        ? and(eq(sheetRows.tabId, tab.id), sql`${sheetRows.rowIndex} <> ALL(${toIntArray(keep)})`)
+        : eq(sheetRows.tabId, tab.id)
+    );
+
     await persistRows(tab.id, ref.pageId, byIndex, tx);
 
     await tx.delete(sheetCellDeps).where(eq(sheetCellDeps.tabId, tab.id));
@@ -496,6 +638,26 @@ async function loadRowsByIndex(
     map.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
   }
   return map;
+}
+
+/**
+ * Load rows that are not already present, without disturbing pending edits.
+ *
+ * Merging rather than overwriting is the point: a row already in `target` may
+ * carry uncommitted changes from this same call, and re-reading it from the
+ * database would discard them.
+ */
+async function mergeMissingRows(
+  target: Map<number, StoredRow>,
+  tabId: string,
+  indexes: number[],
+  exec: Executor
+): Promise<void> {
+  const missing = indexes.filter((index) => !target.has(index));
+  if (missing.length === 0) return;
+
+  const loaded = await loadRowsByIndex(tabId, missing, exec);
+  for (const [index, row] of loaded) target.set(index, row);
 }
 
 /**
@@ -632,7 +794,18 @@ function rangeCovers(positions: { row: number; column: number }[]) {
     )`
   );
 
-  return sql.join(clauses, sql` OR `);
+  // Parenthesised as a whole. Without this the caller's
+  // `and(eq(tabId, ...), rangeCovers(...))` renders as
+  //   "tabId" = $1 AND (clause1) OR (clause2) OR ...
+  // and because AND binds tighter than OR, every clause after the first escapes
+  // the tab filter and matches range dependencies in other tabs — and other
+  // pages. Any multi-cell edit would then pull foreign formula addresses into
+  // this tab's recompute closure.
+  return sql`(${sql.join(clauses, sql` OR `)})`;
+}
+
+function toIntArray(values: number[]) {
+  return sql`ARRAY[${sql.join(values.map((value) => sql`${value}`), sql`, `)}]::int[]`;
 }
 
 function toTextArray(values: string[]) {
@@ -655,29 +828,33 @@ async function evaluateClosure(
 ): Promise<Record<string, { value: StoredCell['value']; type: StoredCell['type']; error?: string }>> {
   if (addresses.length === 0) return {};
 
-  const inputRowIndexes = new Set<number>();
-  for (const address of addresses) {
-    inputRowIndexes.add(decodeCellAddress(address).row);
-  }
-
-  // The rows every recomputed formula reads.
   const targets = new Set(addresses.map((a) => a.toUpperCase()));
-  const formulaTexts = collectRawText(pending, targets);
-  for (const raw of Object.values(formulaTexts)) {
+
+  // `loaded` is read-only scaffolding for the evaluation. It is deliberately
+  // NOT the map the caller persists: it holds input rows that this call has no
+  // business rewriting.
+  const loaded = new Map<number, StoredRow>(pending);
+
+  // Every recomputed formula must be READ before its inputs can be known, and
+  // a formula in an untouched row is not in `pending`. Reading the formula text
+  // only from `pending` was silently wrong: a dependent's inputs living in
+  // other rows were never loaded, so they evaluated as empty and the dependent
+  // was materialised with a plausible but incorrect value.
+  const formulaRowIndexes = unique(addresses.map((address) => decodeCellAddress(address).row));
+  await mergeMissingRows(loaded, tab.id, formulaRowIndexes, exec);
+
+  const inputRowIndexes = new Set<number>(formulaRowIndexes);
+  for (const raw of Object.values(collectRawText(loaded, targets))) {
     const deps = extractFormulaDependencies(raw);
     for (const cell of deps.cells) inputRowIndexes.add(decodeCellAddress(cell).row);
     for (const rect of deps.ranges) {
-      const end = rect.rowEnd ?? tab.rowCount - 1;
+      const end = rect.rowEnd ?? Math.max(tab.rowCount - 1, rect.rowStart);
       for (let row = rect.rowStart; row <= end; row++) inputRowIndexes.add(row);
     }
   }
 
-  const stored = await loadRowsByIndex(
-    tab.id,
-    Array.from(inputRowIndexes).filter((index) => !pending.has(index)),
-    exec
-  );
-  for (const [index, row] of pending) stored.set(index, row);
+  await mergeMissingRows(loaded, tab.id, Array.from(inputRowIndexes), exec);
+  const stored = loaded;
 
   const cells: Record<string, string> = {};
   for (const row of stored.values()) {
@@ -732,7 +909,14 @@ function applyEvaluation(
 ): void {
   for (const [address, result] of Object.entries(evaluated)) {
     const { row: rowIndex, column } = decodeCellAddress(address);
-    const row = rows.get(rowIndex) ?? { rowIndex, cells: {} };
+
+    // Never fabricate a row here. `persistRows` replaces a row's whole `cells`
+    // object, so writing a row that was not loaded in full would delete every
+    // column this call never saw. The caller loads every row it intends to
+    // write; a miss is a bug in that contract, not something to paper over.
+    const row = rows.get(rowIndex);
+    if (!row) continue;
+
     const label = encodeColumnLabel(column);
     const existing = row.cells[label] ?? { raw: '' };
 
@@ -743,8 +927,6 @@ function applyEvaluation(
       ...(result.error ? { error: { type: result.error } } : {}),
     };
     if (!result.error) delete row.cells[label].error;
-
-    rows.set(rowIndex, row);
   }
 }
 

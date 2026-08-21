@@ -40,16 +40,16 @@ import type { SheetData } from '@pagespace/lib/sheets/sheet';
  *
  * Usage:
  *   bun scripts/backfill-sheet-rows.ts --dry-run
- *   bun scripts/backfill-sheet-rows.ts
+ *   bun scripts/backfill-sheet-rows.ts                  # copy rows across
  *   bun scripts/backfill-sheet-rows.ts --page <pageId>
- *   bun scripts/backfill-sheet-rows.ts --keep-content   # migrate, don't empty
+ *   bun scripts/backfill-sheet-rows.ts --clear-content  # AFTER cutover only
  */
 
 const BATCH_SIZE = 50;
 
 interface Options {
   dryRun: boolean;
-  keepContent: boolean;
+  clearContent: boolean;
   pageId?: string;
 }
 
@@ -66,7 +66,7 @@ function parseArgs(argv: string[]): Options {
   const pageFlag = argv.indexOf('--page');
   return {
     dryRun: argv.includes('--dry-run'),
-    keepContent: argv.includes('--keep-content'),
+    clearContent: argv.includes('--clear-content'),
     pageId: pageFlag >= 0 ? argv[pageFlag + 1] : undefined,
   };
 }
@@ -219,9 +219,18 @@ async function main() {
           report.rowsWritten += materialized.rows.length;
         }
 
-        // Only after every tab landed. `pages.content` is NOT NULL, so a
-        // migrated sheet holds the empty string rather than NULL.
-        if (!options.keepContent) {
+        // Opt-in, and only after every tab landed.
+        //
+        // Copying the rows across is safe at any time; emptying the document is
+        // not, because it is destructive the moment anything still reads it.
+        // Until the editor, exporters and publisher are cut over to the row
+        // store, clearing content would leave every sheet rendering blank — so
+        // the default is to migrate and leave the document in place, and
+        // `--clear-content` is a deliberate second step run after cutover.
+        //
+        // `pages.content` is NOT NULL, so a cleared sheet holds the empty
+        // string rather than NULL.
+        if (options.clearContent) {
           await tx.update(pages).set({ content: '' }).where(eq(pages.id, page.id));
         }
       });

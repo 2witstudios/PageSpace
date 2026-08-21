@@ -28,6 +28,20 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
       { id: 'p1', title: 'Page One', type: 'DOCUMENT', content: 'hello', driveId: 'd1', createdAt: D1, updatedAt: D2 },
       { id: 'p2', title: 'Page Two', type: 'CANVAS', content: '{}', driveId: 'd1', createdAt: D1, updatedAt: D2 },
     ],
+    sheets: [
+      {
+        pageId: 'p3',
+        pageTitle: 'Budget',
+        driveId: 'd1',
+        tabIndex: 0,
+        tabName: 'Sheet1',
+        rowCount: 2,
+        columnCount: 2,
+        rows: [
+          { rowIndex: 0, cells: { A: { raw: '10', value: 10 }, B: { raw: '=A1*2', value: 20 } } },
+        ],
+      },
+    ],
     messages: [{ id: 'm1', source: 'channel', content: 'hi', createdAt: D1 }],
     files: [],
     activity: [],

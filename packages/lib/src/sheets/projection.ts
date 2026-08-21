@@ -12,7 +12,7 @@
  */
 
 import type { StoredCell, CellFormat } from '@pagespace/db/schema';
-import type { SheetData, SheetEvaluation } from './types';
+import type { SheetData, SheetEvaluation, CellFormat as LibCellFormat } from './types';
 import {
   decodeCellAddress,
   decodeColumnLabel,
@@ -22,6 +22,37 @@ import {
 } from './address';
 import { extractFormulaDependencies, type CellRect } from './deps';
 import { evaluateSheet } from './evaluation';
+import { applyNumberFormat, resolveCellFormat } from './format';
+import { formatDisplayValue } from './functions';
+
+/**
+ * `CellFormat` is defined twice — here as the `jsonb` column shape in
+ * `@pagespace/db`, and in `./types` as the shape the engine works with. The
+ * duplication is forced: `lib` depends on `db`, so `db` cannot import from
+ * `lib` and the column types have to live with the columns.
+ *
+ * This assertion is the guard against them drifting. Adding a field to one and
+ * not the other becomes a build error here, rather than a value silently
+ * dropped on write — which is how cell formatting would quietly stop
+ * round-tripping through the row store.
+ */
+type MutuallyAssignable<A, B> = [A] extends [B] ? ([B] extends [A] ? true : never) : never;
+
+/**
+ * Keys are compared separately, and that is not redundant.
+ *
+ * Structural assignability alone does not see an added OPTIONAL field: a type
+ * with an extra `foo?: string` is still assignable in both directions, so the
+ * assignability check passes while the two definitions have genuinely diverged.
+ * Since almost every field on `CellFormat` is optional, that is the *only*
+ * drift shape that actually happens here.
+ */
+type SameKeys<A, B> = [keyof A] extends [keyof B] ? ([keyof B] extends [keyof A] ? true : never) : never;
+
+const _cellFormatContract: MutuallyAssignable<CellFormat, LibCellFormat> = true;
+const _cellFormatKeys: SameKeys<CellFormat, LibCellFormat> = true;
+void _cellFormatContract;
+void _cellFormatKeys;
 
 /** The stored form of one tab, minus the database bookkeeping columns. */
 export interface StoredTab {
@@ -228,18 +259,42 @@ export function displayGridFromRows(
         continue;
       }
       if (column < 0 || column >= tab.columnCount) continue;
-      grid[row.rowIndex][column] = storedDisplay(cell);
+      grid[row.rowIndex][column] = storedDisplay(cell, tab.columnFormats?.[label]);
     }
   }
 
   return grid;
 }
 
-/** What a stored cell shows: its error, else its computed value, else its raw text. */
-export function storedDisplay(cell: StoredCell): string {
+/**
+ * What a stored cell shows: its error, else its formatted computed value, else
+ * its raw text.
+ *
+ * Two distinctions that look pedantic and are not:
+ *
+ * `value === ''` is a COMPUTED empty string, not a missing value. Falling
+ * through to `raw` for it would print the formula — `=IF(A1>0,"","x")` would
+ * export as its own source text instead of as blank. Only `undefined` means
+ * "nothing was materialised".
+ *
+ * The number format is re-applied here. `evaluateSheet` produces `display` by
+ * running `applyNumberFormat` over the value, but only the unformatted `value`
+ * is materialised on the row, so a currency cell would otherwise export as
+ * `1234.5` rather than `$1,234.50`.
+ */
+export function storedDisplay(cell: StoredCell, columnFormat?: CellFormat): string {
   if (cell.error) return '#ERROR';
-  if (cell.value !== undefined && cell.value !== '') return String(cell.value);
-  return cell.raw ?? '';
+  if (cell.value === undefined) return cell.raw ?? '';
+
+  // Same two steps, in the same order, as `evaluateCellInternal`: format the
+  // value, then let a number format override. Diverging here would make an
+  // export disagree with the grid it was exported from.
+  const base = formatDisplayValue(cell.value);
+  const format = resolveCellFormat(cell.format, columnFormat);
+  if (!format) return base;
+
+  const formatted = applyNumberFormat(cell.value, format.number);
+  return formatted ?? base;
 }
 
 /**

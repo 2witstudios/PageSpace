@@ -81,4 +81,15 @@ describe('evaluateAddresses', () => {
   it('reports an empty cell as empty rather than throwing', () => {
     expect(evaluateAddresses(sheet, ['Z9'])['Z9'].type).toBe('empty');
   });
+
+  it('does NOT produce usable dependency edges', () => {
+    // Pinned as a limitation, not an accident. `evaluateSheet` fills these in
+    // with a post-pass over the whole grid — the work this function skips — so
+    // nothing here can know which cells outside the closure point into it.
+    // Persisted edges come from `extractFormulaDependencies`; a caller that
+    // reached for these instead would silently write empty dependents.
+    const full = evaluateSheet(sheet);
+    expect(full.byAddress['A1'].dependents).toContain('B1');
+    expect(evaluateAddresses(sheet, ['A1'])['A1'].dependents).toEqual([]);
+  });
 });

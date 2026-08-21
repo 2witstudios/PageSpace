@@ -481,9 +481,16 @@ function evaluateCellInternal(
  * closure and nothing else.
  *
  * The environment, cache and ancestor-set cycle detection are exactly the ones
- * `evaluateSheet` uses, so a cell evaluated here and the same cell evaluated by
- * a full pass agree — including on `#CYCLE`. Cells outside `addresses` are
- * still readable as inputs; they are simply not returned.
+ * `evaluateSheet` uses, so `value`, `display`, `type` and `error` agree with a
+ * full pass — including on a cycle. Cells outside `addresses` are still
+ * readable as inputs; they are simply not returned.
+ *
+ * The dependency fields do NOT agree, and cannot: `evaluateSheet` fills in
+ * `dependents` and de-duplicates `dependsOn` in a post-pass over the whole
+ * grid, which is exactly the work this function exists to skip. Nothing here
+ * can know which cells outside the closure point at one inside it. Treat
+ * `dependsOn`/`dependents` from this function as unset, and derive persisted
+ * edges from `extractFormulaDependencies` (as `store.ts` does) instead.
  */
 export function evaluateAddresses(
   sheet: SheetData,

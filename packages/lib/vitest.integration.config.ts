@@ -8,7 +8,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
-    include: ['src/services/__tests__/*.integration.test.{js,ts}'],
+    include: ['src/**/*.integration.test.{js,ts}'],
     setupFiles: ['./src/test/setup.ts'],
     fileParallelism: false,
     pool: 'forks',
