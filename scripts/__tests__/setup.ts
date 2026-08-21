@@ -233,6 +233,18 @@ export const FIXTURES = {
       normalizedKey: 'important',
       color: '#ff0000',
     },
+    /**
+     * A vocabulary entry with NO assignment. It exists so the bundle's tag
+     * query is forced to select by drive: deriving the tag list from the
+     * surviving `content_tags` rows silently drops this one, and the tenant
+     * comes up missing a name and colour with nothing to say so.
+     */
+    unusedTag: {
+      id: 'test_tag_002',
+      name: 'unused',
+      normalizedKey: 'unused',
+      color: '#00ff00',
+    },
   },
   contentTags: {
     ct1: {
@@ -369,7 +381,9 @@ export async function seedFixtures(db: TestDb): Promise<void> {
   // Tag vocabulary + one page-level assignment
   await db.execute(sql`
     INSERT INTO tags (id, "driveId", name, "normalizedKey", color, "createdBy", "createdAt", "updatedAt")
-    VALUES (${tags.tag1.id}, ${drives.shared.id}, ${tags.tag1.name}, ${tags.tag1.normalizedKey}, ${tags.tag1.color}, ${users.owner.id}, ${now}, ${now})
+    VALUES
+      (${tags.tag1.id}, ${drives.shared.id}, ${tags.tag1.name}, ${tags.tag1.normalizedKey}, ${tags.tag1.color}, ${users.owner.id}, ${now}, ${now}),
+      (${tags.unusedTag.id}, ${drives.shared.id}, ${tags.unusedTag.name}, ${tags.unusedTag.normalizedKey}, ${tags.unusedTag.color}, ${users.owner.id}, ${now}, ${now})
   `);
 
   await db.execute(sql`

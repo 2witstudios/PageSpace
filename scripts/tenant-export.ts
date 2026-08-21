@@ -494,12 +494,15 @@ export async function exportData(
       && (aiMessageId === null || exportedAiMessageIdSet.has(aiMessageId));
   });
   nullifyOrphanedUserRefs(contentTagsData, allExportedUserIdSet, 'createdBy');
-  const tagIds = [...new Set(contentTagsData.map((r) => r.tagId as string))];
-  const tagsData = tagIds.length > 0
-    ? await queryRows(db, sql.raw(
-        `SELECT * FROM tags WHERE id IN (${toSqlInList(tagIds)})`,
-      ))
-    : [];
+  // The vocabulary travels by DRIVE, not by which entries happen to be in use.
+  // `tags` is drive-scoped now, so a drive's tag list is part of the drive —
+  // deriving it from the surviving assignments would silently drop any entry
+  // whose last use was removed, and the tenant would come up missing a name,
+  // colour and description with nothing to say so. (`tenant-validate.ts` counts
+  // the same way, so a narrowed query there would have reported success.)
+  const tagsData = await queryRows(db, sql.raw(
+    `SELECT * FROM tags WHERE "driveId" IN (${driveIn})`,
+  ));
   nullifyOrphanedUserRefs(tagsData, allExportedUserIdSet, 'createdBy');
 
   // Mentions between exported pages only

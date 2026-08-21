@@ -1314,6 +1314,21 @@ async function collectStreamFrames(
  * failure `gdpr-export-coverage.ts` exists to catch, and "nothing writes it
  * yet" is a state that expires quietly.
  *
+ * SCOPED TO THE SUBJECT'S CURRENT DRIVES, not to `createdBy` alone — the same
+ * boundary `collectUserPages` draws, and it has to be drawn here for the same
+ * reason. Removing someone from a drive deletes their `drive_members` row and
+ * nothing else, so their `content_tags.createdBy` values survive the removal.
+ * Filtering on `createdBy` by itself would therefore let a FORMER member pull
+ * live page titles, the drive's shared tag names, and the verbatim text an
+ * anchor quotes out of a drive they can no longer read, through their own
+ * account export. Art 15 is a right to one's own data, not a channel back into
+ * a workspace one has left.
+ *
+ * The consequence is deliberate and worth stating: a tag the subject applied in
+ * a drive they have since left is NOT in their export. That is the boundary
+ * `pages`, `drives` and the rest of this file already draw, and a category that
+ * drew a wider one would be the leak, not a courtesy.
+ *
  * `leftJoin` on both sides deliberately. `tags.id` is a cascade FK so a row
  * cannot outlive its vocabulary entry, and `pageId` is notNull for the same
  * reason — but an inner join would silently DROP a row if either ever became
@@ -1324,7 +1339,12 @@ async function collectStreamFrames(
 export async function collectUserContentTags(
   database: DB,
   userId: string,
+  preloadedDriveIds?: string[],
 ): Promise<UserContentTagExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+
+  if (driveIds.length === 0) return [];
+
   return database
     .select({
       tagName: tags.name,
@@ -1341,8 +1361,11 @@ export async function collectUserContentTags(
     })
     .from(contentTags)
     .leftJoin(tags, eq(tags.id, contentTags.tagId))
-    .leftJoin(pages, eq(pages.id, contentTags.pageId))
-    .where(eq(contentTags.createdBy, userId));
+    // innerJoin on `pages` here, unlike the `tags` join above: the drive filter
+    // is only enforceable through the page row, so a tag whose page is missing
+    // must not slip past the scope check on a NULL `driveId`.
+    .innerJoin(pages, eq(pages.id, contentTags.pageId))
+    .where(and(eq(contentTags.createdBy, userId), inArray(pages.driveId, driveIds)));
 }
 
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
@@ -1373,7 +1396,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserPersonalizationCandidates(database, userId),
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
-    collectUserContentTags(database, userId),
+    collectUserContentTags(database, userId, driveIds),
   ]);
 
   return {

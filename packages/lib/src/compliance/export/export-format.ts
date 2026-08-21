@@ -13,8 +13,16 @@
 
 import type { AllUserData } from './gdpr-export';
 
-/** Bump when the export bundle's structure/inventory changes. */
-export const EXPORT_SCHEMA_VERSION = '1.0.0';
+/**
+ * Bump when the export bundle's structure/inventory changes.
+ *
+ * 1.1.0 adds `content-tags.json` (and the matching `contentTags` portable
+ * property). Additive: every 1.0.0 file is still present and unchanged, so a
+ * consumer written against 1.0.0 keeps working — but one keyed on the version
+ * can now tell a bundle that carries the subject's tags from one predating the
+ * category, which is the whole point of the field being in the manifest.
+ */
+export const EXPORT_SCHEMA_VERSION = '1.1.0';
 
 export type ExportFormat = 'native' | 'portable';
 

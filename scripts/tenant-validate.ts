@@ -189,13 +189,13 @@ export async function validateData(
     drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIn})`),
     drive_members: sql.raw(`SELECT id FROM drive_members WHERE "driveId" IN (${driveIn}) AND "userId" IN (${userIn})`),
     pages: sql.raw(`SELECT id FROM pages WHERE "driveId" IN (${driveIn})`),
-    // Mirrors the exporter's tag rules exactly (tenant-export.ts): assignments
-    // are taken by page, then narrowed to those whose message FK — if it has
-    // one — points at a message the bundle also carries; the vocabulary is
-    // whatever those surviving assignments reference. Written as one shared
-    // predicate so the two files cannot drift into disagreeing about what the
-    // bundle contains.
-    tags: sql.raw(`SELECT id FROM tags WHERE id IN (SELECT DISTINCT "tagId" FROM content_tags WHERE ${contentTagSelectionWhere})`),
+    // Mirrors the exporter's tag rules exactly (tenant-export.ts): the
+    // VOCABULARY travels by drive, whether or not anything still references an
+    // entry; the ASSIGNMENTS are taken by page, then narrowed to those whose
+    // message FK — if it has one — points at a message the bundle also carries.
+    // The assignment rule is written as one shared predicate so the two files
+    // cannot drift into disagreeing about what the bundle contains.
+    tags: sql.raw(`SELECT id FROM tags WHERE "driveId" IN (${driveIn})`),
     content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagSelectionWhere}`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
