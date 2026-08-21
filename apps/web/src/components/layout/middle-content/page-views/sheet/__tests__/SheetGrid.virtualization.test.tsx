@@ -191,11 +191,15 @@ describe('editing across a scroll', () => {
     documentContent.current = bigSheetContent(10_000, 60);
   });
 
-  it('does not cancel an in-progress edit when its cell scrolls out of view', async () => {
+  it('keeps an in-progress edit when its cell scrolls out of view and back', async () => {
     // The defect this replaces: the editor's rectangle was measured from the
     // cell's DOM node, and a missing node was treated as "cell no longer
     // visible, cancel the edit" — so scrolling while editing silently threw the
     // user's typing away.
+    //
+    // The overlay is still hidden while the cell is off-screen (it would
+    // otherwise float over the toolbar), but that is presentation. What must
+    // survive is the edit itself.
     render(<SheetView page={makePage(documentContent.current)} />);
     await act(async () => {
       await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
@@ -209,10 +213,31 @@ describe('editing across a scroll', () => {
 
     await scrollBodyTo(32 * 400);
 
-    // A1 is long gone from the DOM...
+    // A1 is long gone from the DOM, and the overlay is not floating over the
+    // rest of the page...
     expect(document.querySelector('[data-cell="A1"]')).toBeNull();
-    // ...but the edit survived it.
-    const stillOpen = screen.getByLabelText('Edit cell value') as HTMLInputElement;
-    expect(stillOpen.value).toBe('still here');
+    expect(screen.queryByLabelText('Edit cell value')).toBeNull();
+
+    await scrollBodyTo(0);
+
+    // ...but the edit was never discarded.
+    const restored = screen.getByLabelText('Edit cell value') as HTMLInputElement;
+    expect(restored.value).toBe('still here');
+  });
+
+  it('leaves aria-activedescendant unset rather than dangling when the active cell is not rendered', async () => {
+    render(<SheetView page={makePage(documentContent.current)} />);
+    await act(async () => {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(null)));
+    });
+
+    const grid = screen.getByRole('grid');
+    expect(grid.getAttribute('aria-activedescendant')).toBe('cell-A1');
+
+    await scrollBodyTo(32 * 400);
+
+    // Pointing at an id that no longer exists reports nothing while claiming to
+    // point somewhere, which is worse for a screen reader than pointing nowhere.
+    expect(grid.getAttribute('aria-activedescendant')).toBeNull();
   });
 });

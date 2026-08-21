@@ -8,8 +8,6 @@ const assert = ({ given, should, actual, expected }: {
   given: string; should: string; actual: unknown; expected: unknown;
 }) => expect(actual, `Given ${given}, should ${should}`).toEqual(expected);
 
-const viewport = (width: number, height: number) => ({ width, height });
-
 describe('isMobileWidth', () => {
   it('uses the container width when provided (mobile)', () => {
     assert({

@@ -86,6 +86,7 @@ import {
   buildColumnAxis,
   buildRowAxis,
   cellViewportRect,
+  isCellVisible,
   scrollOffsetToReveal,
   type GridDensity,
   type SizeOverride,
@@ -265,28 +266,41 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   );
   const { viewport, scrollTo } = useGridViewport(scrollContainerRef);
 
+  /**
+   * The latest viewport, read through a ref rather than a dependency.
+   *
+   * `revealCell` needs the current scroll offsets, but depending on `viewport`
+   * would give it a new identity on every scroll frame — and that identity
+   * propagates through `startCellEdit` into the per-cell handlers object,
+   * changing every cell's props on every frame and defeating the memo that
+   * makes virtualization worth having.
+   */
+  const viewportRef = useRef(viewport);
+  viewportRef.current = viewport;
+
   /** Scroll the minimum distance that brings a cell into view, if it is not already. */
   const revealCell = useCallback(
     (row: number, column: number) => {
+      const view = viewportRef.current;
       const left = scrollOffsetToReveal(
         columnAxis,
         column,
-        viewport.scrollLeft,
-        viewport.bodyWidth,
+        view.scrollLeft,
+        view.bodyWidth,
         sheet.frozenColumns ?? 0
       );
       const top = scrollOffsetToReveal(
         rowAxis,
         row,
-        viewport.scrollTop,
-        viewport.bodyHeight,
+        view.scrollTop,
+        view.bodyHeight,
         sheet.frozenRows ?? 0
       );
-      if (left !== viewport.scrollLeft || top !== viewport.scrollTop) {
+      if (left !== view.scrollLeft || top !== view.scrollTop) {
         scrollTo(left, top);
       }
     },
-    [columnAxis, rowAxis, scrollTo, sheet.frozenColumns, sheet.frozenRows, viewport]
+    [columnAxis, rowAxis, scrollTo, sheet.frozenColumns, sheet.frozenRows]
   );
 
   // Register an editing session while a cell is being edited, the formula bar is
@@ -928,6 +942,28 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     });
   }, [editingCell, rowAxis, columnAxis, sheet.frozenRows, sheet.frozenColumns, viewport]);
 
+  /**
+   * Whether the edited cell is still within the scrolled body.
+   *
+   * The overlay is hidden when it is not — otherwise the editor floats over the
+   * toolbar and the rest of the page. Crucially this hides the overlay only:
+   * `editingCell` and `editingValue` are untouched, so scrolling back brings
+   * the editor and the typed text straight back. That is the distinction the
+   * old surface got wrong, where "not visible" meant "discard the edit".
+   */
+  const isEditingCellVisible = useMemo(() => {
+    if (!editingCell) return false;
+    return isCellVisible({
+      rowAxis,
+      columnAxis,
+      row: editingCell.row,
+      column: editingCell.column,
+      frozenRows: sheet.frozenRows,
+      frozenColumns: sheet.frozenColumns,
+      view: viewport,
+    });
+  }, [editingCell, rowAxis, columnAxis, sheet.frozenRows, sheet.frozenColumns, viewport]);
+
   // Keep the active cell in view when the selection moves. Guarded on the
   // address so this reacts to navigation only: re-running it on every scroll
   // would drag the viewport back and make the sheet impossible to scroll away
@@ -1259,7 +1295,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       <FloatingCellEditor
         value={editingValue}
         cellRect={editingCellRect}
-        isVisible={!!editingCell}
+        isVisible={!!editingCell && isEditingCellVisible}
         onCommit={commitCellEdit}
         onCancel={cancelCellEdit}
         onValueChange={(value) => {

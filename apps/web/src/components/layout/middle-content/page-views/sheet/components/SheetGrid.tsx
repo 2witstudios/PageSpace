@@ -371,6 +371,20 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
   const hasFrozenRows = frozenRows > 0;
   const hasFrozenColumns = frozenColumns > 0;
 
+  /**
+   * `aria-activedescendant` must name an element that exists. Only a window of
+   * the grid is in the DOM, so when the user scrolls the active cell out of
+   * view the id it points at is gone — and a dangling reference is worse for a
+   * screen reader than none, because it reports nothing while claiming to point
+   * somewhere. Navigation scrolls the active cell back into view, so this only
+   * goes empty during free scrolling.
+   */
+  const isActiveCellRendered =
+    (currentSelection.row < frozenRows ||
+      (currentSelection.row >= rows.start && currentSelection.row <= rows.end)) &&
+    (currentSelection.column < frozenColumns ||
+      (currentSelection.column >= columns.start && currentSelection.column <= columns.end));
+
   /** A pinned band: clips its contents and sits above the scrolling body. */
   const bandStyle = (extra: React.CSSProperties): React.CSSProperties => ({
     position: 'absolute',
@@ -386,7 +400,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
       aria-label="Spreadsheet"
       aria-rowcount={sheet.rowCount}
       aria-colcount={sheet.columnCount}
-      aria-activedescendant={`cell-${currentAddress}`}
+      aria-activedescendant={isActiveCellRendered ? `cell-${currentAddress}` : undefined}
       aria-readonly={isReadOnly}
       tabIndex={0}
       onKeyDown={onKeyDown}
