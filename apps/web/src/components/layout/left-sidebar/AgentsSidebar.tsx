@@ -21,6 +21,7 @@ import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
+import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
@@ -30,7 +31,10 @@ import DashboardFooter from './DashboardFooter';
 import DriveFooter from './DriveFooter';
 import PrimaryNavigation from './PrimaryNavigation';
 import { SidebarLoading, SidebarNotice } from './sidebar-states';
+import { matchesKeyEvent, getEffectiveBinding } from '@/stores/useHotkeyStore';
+import { isEditingActive } from '@/stores/useEditingStore';
 import { useAuth } from '@/hooks/useAuth';
+import { useTouchDevice } from '@/hooks/useTouchDevice';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
@@ -61,7 +65,8 @@ import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
-import { useDriveEnvs, driveEnvsKey } from '@/hooks/drive-envs/useDriveEnvs';
+import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
+import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
 
 /**
@@ -461,28 +466,7 @@ function SessionList({
   );
 
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
-  const { openSpawn, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
-
-  // ONE "New environment" dialog for the whole list, parameterized by which
-  // drive asked — the same shape `useSpawnSession` gives the spawn palette.
-  // Every group header would otherwise carry its own copy of a dialog that can
-  // only ever be open once.
-  const [newEnvTarget, setNewEnvTarget] = useState<{ driveId: string; driveName: string | null } | null>(null);
-  const { mutate: globalMutate } = useSWRConfig();
-
-  const createEnvironment = useCallback(
-    async (name: string): Promise<DriveEnvWriteOutcome> => {
-      if (!newEnvTarget) return 'done';
-      try {
-        await post(`/api/drives/${encodeURIComponent(newEnvTarget.driveId)}/envs`, { name });
-      } catch (error) {
-        return reportDriveEnvWriteFailure(error, 'Could not create the environment');
-      }
-      globalMutate(driveEnvsKey(newEnvTarget.driveId));
-      return 'done';
-    },
-    [newEnvTarget, globalMutate],
-  );
+  const { openSpawn, openSpawnInEnv, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
 
   // Sessions are always deliberately named now — both groups open the same
   // naming step. The ASSISTANT group has nothing to pick (the assistant IS
@@ -500,31 +484,75 @@ function SessionList({
     [openSpawn, openAssistantSpawn],
   );
 
+  // Whether the drive this surface is scoped to can be given new work at all.
+  // A trashed drive is on its way out: the group-header path has always
+  // withheld its spawn "+" for that reason, and everything below routes
+  // through this one answer so the drive-scoped header, the hotkey and the
+  // palette's environment entry cannot disagree about it.
+  const isLiveScopedDrive = driveId !== undefined && !trashedDriveIds.has(driveId);
+
+  // Global mode's own "where" question: with no drive in the route there is
+  // nothing to spawn INTO, so the flow starts by picking one — the same
+  // `DrivePickerDialog` step `AgentsListHeader` takes, including the Global
+  // Assistant, which is a valid destination for a session and for nothing else.
+  const [sessionDrivePickerOpen, setSessionDrivePickerOpen] = useState(false);
+
+  const startNewSession = useCallback(() => {
+    if (driveId) {
+      // A trashed drive gets nothing new — not a session, and not the drive
+      // dialog either, which would answer a question nobody asked.
+      if (!isLiveScopedDrive) return;
+      handleNewSession(driveId, null);
+      return;
+    }
+    setSessionDrivePickerOpen(true);
+  }, [driveId, isLiveScopedDrive, handleNewSession]);
+
+  // THE QUICK-CREATE HOTKEY, ON THE AGENTS ROUTES, MEANS THIS SURFACE'S "NEW".
+  //
+  // Elsewhere it opens the page-type palette; here "new" is a session — or the
+  // environment to run one in, which the spawn palette now offers too — so the
+  // binding opens the spawn flow, and `QuickCreatePalette` stands down while
+  // this route is active. That holds on the GLOBAL console too: it has no
+  // drive of its own, so it asks for one and carries on into the same palette,
+  // rather than diverting to drive creation, which is a different act that
+  // never reaches an environment or a session.
+  //
+  // Registered HERE, not in `AgentsListHeader`, because the header only renders
+  // in the list/empty state (it is gone inside an open session) while this
+  // sidebar is mounted on every Agents route. The header keeps its own
+  // `useSpawnSession` and registers no hotkey, so exactly one handler fires.
+  useEffect(() => {
+    if (!canSpawn) return;
+    const handler = (event: KeyboardEvent) => {
+      if (!matchesKeyEvent(getEffectiveBinding('pages.quick-create'), event)) return;
+      if (isEditingActive()) return;
+      event.preventDefault();
+      startNewSession();
+    };
+    document.addEventListener('keydown', handler);
+    return () => document.removeEventListener('keydown', handler);
+  }, [canSpawn, startNewSession]);
+
   return (
     <div className="space-y-1">
       {canSpawn && (
         <SessionSearchHeader
           value={searchQuery}
           onChange={setSearchQuery}
-          onAction={driveId ? () => handleNewSession(driveId, null) : () => setCreateDriveOpen(true)}
-          actionLabel={driveId ? 'New session' : 'New drive'}
-          // Drive-scoped mode suppresses its own group header (the drive is the
-          // whole surface), so this is where its environment affordance has to
-          // live — beside "New session", which is the act it sits next to
-          // everywhere else too. Global mode has no single drive to create one
-          // in, so it keeps just the two it had.
-          // `!trashedDriveIds.has` for the same reason the group-header path
-          // checks `isLiveDrive`: a drive on its way to deletion must not be
-          // offered new infrastructure inside it.
-          onNewEnvironment={
-            driveId && !trashedDriveIds.has(driveId) && manageableDriveIds.has(driveId)
-              ? () =>
-                  setNewEnvTarget({
-                    driveId,
-                    driveName: drives.find((d) => d.id === driveId)?.name ?? null,
-                  })
-              : undefined
+          // A trashed drive is offered nothing new — the same withholding the
+          // group headers have always done one level down, applied here where
+          // the drive IS the whole surface. Global mode keeps "New drive": it
+          // is the only place that offers one, and the hotkey's session flow
+          // (which asks for a drive first) does not replace it.
+          onAction={
+            driveId
+              ? isLiveScopedDrive
+                ? () => handleNewSession(driveId, null)
+                : undefined
+              : () => setCreateDriveOpen(true)
           }
+          actionLabel={driveId ? 'New session' : 'New drive'}
         />
       )}
       {visibleGroups.map((group) => {
@@ -547,12 +575,6 @@ function SessionList({
                   ? undefined
                   : () => handleNewSession(group.driveId, group.driveName)
               }
-              newEnvironmentLabel={`New environment in ${group.driveName ?? 'this drive'}`}
-              onNewEnvironment={
-                isLiveDrive && manageableDriveIds.has(group.driveId)
-                  ? () => setNewEnvTarget({ driveId: group.driveId, driveName: group.driveName })
-                  : undefined
-              }
             />
           )}
           <DriveGroupRows
@@ -570,20 +592,24 @@ function SessionList({
             // a query is active every matching session renders at drive level
             // and the environment rows step aside.
             showEnvironments={canSpawn && isLiveDrive && !hasSearch}
+            onNewSessionInEnv={(envId) => openSpawnInEnv(group.driveId, group.driveName, envId)}
           />
         </div>
         );
       })}
       {notice}
       {paletteElement}
-      <DriveEnvNameDialog
-        open={newEnvTarget !== null}
-        onOpenChange={(open) => {
-          if (!open) setNewEnvTarget(null);
+      <DrivePickerDialog
+        open={sessionDrivePickerOpen}
+        onOpenChange={setSessionDrivePickerOpen}
+        onPick={(pickedDriveId, pickedDriveName) => {
+          setSessionDrivePickerOpen(false);
+          openSpawn(pickedDriveId, pickedDriveName);
         }}
-        mode="create"
-        driveName={newEnvTarget?.driveName ?? null}
-        onSubmit={createEnvironment}
+        onPickGlobalAssistant={() => {
+          setSessionDrivePickerOpen(false);
+          openAssistantSpawn();
+        }}
       />
       {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
@@ -596,14 +622,12 @@ function SessionSearchHeader({
   onChange,
   onAction,
   actionLabel,
-  onNewEnvironment,
 }: {
   value: string;
   onChange: (value: string) => void;
-  onAction: () => void;
+  /** Omitted when there is nothing to create — a trashed drive gets no "+". */
+  onAction?: () => void;
   actionLabel: string;
-  /** Omitted for anyone who cannot administer the drive — environment CRUD is OWNER/ADMIN. */
-  onNewEnvironment?: () => void;
 }) {
   return (
     <div className="flex items-center gap-1 pl-2 pr-4 pb-1 pt-1.5">
@@ -617,25 +641,16 @@ function SessionSearchHeader({
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
-      {onNewEnvironment && (
+      {onAction && (
         <button
           type="button"
-          aria-label="New environment"
-          title="New environment"
+          aria-label={actionLabel}
           className="shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={onNewEnvironment}
+          onClick={onAction}
         >
-          <Boxes className="size-3.5" />
+          <Plus className="size-3.5" />
         </button>
       )}
-      <button
-        type="button"
-        aria-label={actionLabel}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-        onClick={onAction}
-      >
-        <Plus className="size-3.5" />
-      </button>
     </div>
   );
 }
@@ -645,15 +660,10 @@ function SessionGroupHeader({
   label,
   newSessionLabel,
   onNewSession,
-  newEnvironmentLabel,
-  onNewEnvironment,
 }: {
   label: string;
   newSessionLabel?: string;
   onNewSession?: () => void;
-  newEnvironmentLabel?: string;
-  /** Omitted for anyone who cannot administer the drive — environment CRUD is OWNER/ADMIN. */
-  onNewEnvironment?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between gap-1 pl-2 pr-4 pb-0.5 pt-1.5">
@@ -662,17 +672,6 @@ function SessionGroupHeader({
         <span className="truncate">{label}</span>
       </span>
       <span className="flex shrink-0 items-center gap-1">
-        {onNewEnvironment && (
-          <button
-            type="button"
-            aria-label={newEnvironmentLabel ?? 'New environment'}
-            title={newEnvironmentLabel ?? 'New environment'}
-            className="shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={onNewEnvironment}
-          >
-            <Boxes className="size-3.5" />
-          </button>
-        )}
         {onNewSession && (
           <button
             type="button"
@@ -686,26 +685,6 @@ function SessionGroupHeader({
       </span>
     </div>
   );
-}
-
-/**
- * What a caller should do with the dialog after an environment write.
- *
- * `'retry'` is reserved for the ONE refusal the user can fix without leaving
- * the dialog: a name already taken in this drive. Every other failure — a
- * plan's environment ceiling, a role that turned out not to be enough, the
- * network — is toasted and the dialog closes, because retyping the name would
- * not change the answer.
- */
-type DriveEnvWriteOutcome = 'done' | 'retry';
-
-function reportDriveEnvWriteFailure(error: unknown, fallbackTitle: string): DriveEnvWriteOutcome {
-  const description = error instanceof Error ? error.message : 'Please try again.';
-  const nameTaken = error instanceof ApiRequestError && error.status === 409;
-  toast.error(nameTaken ? 'That name is already used in this drive' : fallbackTitle, {
-    description: nameTaken ? 'Environment names are unique within a drive.' : description,
-  });
-  return nameTaken ? 'retry' : 'done';
 }
 
 /**
@@ -728,12 +707,15 @@ function DriveGroupRows({
   agentNamesById,
   canManage,
   showEnvironments,
+  onNewSessionInEnv,
 }: {
   driveId: string;
   sessions: SessionListEntry[];
   agentNamesById: Map<string, string>;
   canManage: boolean;
   showEnvironments: boolean;
+  /** Start a session INSIDE one of this drive's environments — the row's own "+". */
+  onNewSessionInEnv: (envId: string) => void;
 }) {
   const { envs, error: envsError, mutate: refreshEnvs } = useDriveEnvs(driveId, { enabled: showEnvironments });
 
@@ -778,6 +760,7 @@ function DriveGroupRows({
           canManage={canManage}
           agentNamesById={agentNamesById}
           onEnvsChanged={refreshEnvs}
+          onNewSession={() => onNewSessionInEnv(group.envId)}
         />
       ))}
       {looseSessions.map((session) => (
@@ -833,14 +816,17 @@ function DriveEnvRow({
   canManage,
   agentNamesById,
   onEnvsChanged,
+  onNewSession,
 }: {
   driveId: string;
   group: EnvGroup<SessionListEntry>;
   canManage: boolean;
   agentNamesById: Map<string, string>;
   onEnvsChanged: () => void;
+  onNewSession: () => void;
 }) {
   const { mutate } = useSWRConfig();
+  const isTouchDevice = useTouchDevice();
   // Expanded by default: an environment's whole claim is that it is a place you
   // come back to, and its sessions are the reason to look at it.
   const [expanded, setExpanded] = useState(true);
@@ -943,6 +929,34 @@ function DriveEnvRow({
         <EnvStatusDot status={group.status} />
         <span className="truncate font-medium text-foreground">{displayName}</span>
       </span>
+      {/* Every other level of this tree offers one; the level that IS a place to
+          come back to was the only one that did not. Not gated on `canManage`:
+          binding a session to an environment is member-level server-side, and
+          management (rename/rebuild/delete) is the OWNER/ADMIN act — this is
+          not. Withheld from an ORPHAN, which names an environment this drive's
+          listing did not return: there is nothing here to spawn into. */}
+      {!isOrphan && (
+        <button
+          type="button"
+          aria-label={`New session in ${displayName}`}
+          title={`New session in ${displayName}`}
+          // Revealed exactly the way this row's menu trigger is — hover on a
+          // pointer, always on a touch device, where there is no hover to
+          // reveal it with.
+          className={cn(
+            'shrink-0 text-muted-foreground transition-opacity hover:text-foreground',
+            isTouchDevice ? 'opacity-100' : 'opacity-0 focus-visible:opacity-100 group-hover:opacity-100',
+          )}
+          onClick={(event) => {
+            // The row's own click targets (its context menu, its disclosure)
+            // must not also fire.
+            event.stopPropagation();
+            onNewSession();
+          }}
+        >
+          <Plus className="size-3.5" />
+        </button>
+      )}
     </>
   );
 
@@ -961,7 +975,6 @@ function DriveEnvRow({
       <DriveEnvNameDialog
         open={renaming}
         onOpenChange={setRenaming}
-        mode="rename"
         initialName={group.envName ?? ''}
         onSubmit={renameEnv}
       />

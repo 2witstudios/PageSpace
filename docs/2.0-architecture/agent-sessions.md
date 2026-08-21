@@ -26,8 +26,10 @@ lives inside it.
 > **`envId` — owning versus borrowing a sandbox.** The schema now carries a nullable
 > `agent_workspaces.envId` pointing at a `drive_envs` row: a *persistent, drive-owned*
 > ENVIRONMENT that sessions can be spawned inside (epic "Deliberate Per-Drive
-> Environments"). The column **ships dark** — nothing writes it until that epic's Phase 3
-> — so everything below still describes every session that exists today.
+> Environments"). The column is **written now** — #2450 gave environments a surface and
+> #2452 moved creating one into the spawn palette, so a session started "in" an
+> environment carries its id. Everything below still describes every session that does
+> not: an ephemeral, self-owned sandbox remains the default and the common case.
 >
 > What changes when it is written: an env-bound session **borrows** its env's sandbox
 > instead of owning one, so it holds no Sprite pointer of its own. That is enforced by

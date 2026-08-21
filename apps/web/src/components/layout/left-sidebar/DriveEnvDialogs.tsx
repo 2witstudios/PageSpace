@@ -44,9 +44,14 @@ import { MAX_DRIVE_ENV_NAME_LENGTH } from '@pagespace/lib/drive-envs/env-contrac
 import { useEditingSession } from '@/stores/useEditingSession';
 
 /**
- * Create or rename — one dialog, because an environment has exactly one
- * editable attribute and there is no kind to choose (the epic deleted the enum
- * rather than never writing it; see `env-contract.ts`).
+ * Rename — the only edit an environment has (it has exactly one editable
+ * attribute and there is no kind to choose; the epic deleted the enum rather
+ * than never writing it, see `env-contract.ts`).
+ *
+ * It used to create one too. CREATION now lives in the spawn palette, as a step
+ * in the same Raycast-style selector that offers environments as somewhere to
+ * run — so this dialog no longer carries a mode, and the sidebar no longer
+ * carries the icon button that opened it.
  *
  * `onSubmit` answers what should happen to the dialog, not whether the write
  * succeeded — `'retry'` keeps it open with the user's text intact. That exists
@@ -56,17 +61,12 @@ import { useEditingSession } from '@/stores/useEditingSession';
 export function DriveEnvNameDialog({
   open,
   onOpenChange,
-  mode,
-  driveName,
   initialName,
   onSubmit,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  mode: 'create' | 'rename';
-  /** Named in the create dialog's description, when the caller has it. */
-  driveName?: string | null;
-  /** The current name, for a rename. */
+  /** The current name. */
   initialName?: string;
   onSubmit: (name: string) => Promise<'done' | 'retry'>;
 }) {
@@ -106,11 +106,9 @@ export function DriveEnvNameDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>{mode === 'create' ? 'New environment' : 'Rename environment'}</DialogTitle>
+          <DialogTitle>Rename environment</DialogTitle>
           <DialogDescription>
-            {mode === 'create'
-              ? `A persistent machine ${driveName ? `${driveName}'s` : 'this drive’s'} sessions can run inside, sharing one filesystem that survives every session that ends. Name it for what it is for — “dev”, “staging”, “data-import”.`
-              : 'Sessions running inside it are unaffected — the name is a label, not an address.'}
+            Sessions running inside it are unaffected — the name is a label, not an address.
           </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
@@ -131,13 +129,7 @@ export function DriveEnvNameDialog({
           </div>
           <DialogFooter>
             <Button type="submit" disabled={submitting || trimmed.length === 0}>
-              {submitting
-                ? mode === 'create'
-                  ? 'Creating…'
-                  : 'Renaming…'
-                : mode === 'create'
-                  ? 'Create'
-                  : 'Rename'}
+              {submitting ? 'Renaming…' : 'Rename'}
             </Button>
           </DialogFooter>
         </form>
