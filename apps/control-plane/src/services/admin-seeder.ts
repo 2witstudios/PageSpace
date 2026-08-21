@@ -55,6 +55,21 @@ export function createAdminSeeder(deps: AdminSeederDeps) {
           return { email, alreadyExisted: true }
         }
 
+        // `subscriptionTier` is deliberately NOT seeded — it stays at the column
+        // default (`free`) and that is correct, not an omission.
+        //
+        // A tenant has no Stripe path (`isBillingEnabled()` is false for it) and
+        // nothing in the tenant app ever writes or reconciles that column, so any
+        // value written here would be a number no process maintains — a stale
+        // entitlement record that reads like a purchase. Every tenant-side gate
+        // that used to consult it now resolves the payer's EFFECTIVE tier through
+        // `resolveEffectiveSandboxTier` (packages/lib/src/billing/sandbox-eligibility.ts),
+        // which treats tenant mode itself as the entitlement. Storage limits have
+        // worked this way for longer (`getStorageConfigFromSubscription`).
+        //
+        // So: do not "fix" tenant capability by seeding a tier here, and do not
+        // thread `request.tier` through provisioning to this insert. The gate no
+        // longer reads it; a seeded value would only mislead the next reader.
         await db.query(
           `INSERT INTO users (id, email, name, role, "emailVerified")
            VALUES ($1, $2, $3, $4, $5)`,
