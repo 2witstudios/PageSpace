@@ -154,6 +154,36 @@ describe('sparse evaluation', () => {
     expect(sparseDisplayAt(sparse, 4, 1)).toBe('');
   });
 
+  it('does not fabricate a local cell for an external reference', () => {
+    // `dependsOn` mixes local addresses with external references like
+    // `@[Budget]:B2`, which were resolved against another page. Materializing
+    // one as a local cell invents a target that never existed — and because
+    // `evaluateCellInternal` upper-cases the address, the fabricated key
+    // (`@[BUDGET]:B2`) did not even match the `dependsOn` entry it paired with.
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '=@[Budget]:B2';
+
+    const sparse = evaluateSheetSparse(sheet);
+
+    expect(sparse.byAddress.A1.dependsOn).toEqual(['@[Budget]:B2']);
+    expect(Object.keys(sparse.byAddress)).toEqual(['A1']);
+    expect(Object.keys(sparse.dependencies)).toEqual(['A1']);
+  });
+
+  it('matches the dense walk on which dependency records an external reference produces', () => {
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '=@[Budget]:B2';
+
+    const nonEmpty = (records: Record<string, { dependsOn: string[]; dependents: string[] }>) =>
+      Object.keys(records).filter(
+        (key) => records[key].dependsOn.length > 0 || records[key].dependents.length > 0,
+      );
+
+    expect(nonEmpty(evaluateSheetSparse(sheet).dependencies)).toEqual(
+      nonEmpty(evaluateSheet(sheet).dependencies),
+    );
+  });
+
   it('ignores a key that is not an A1 address, as the dense walk does', () => {
     // `cells` is a plain map, so it can hold junk. The dense evaluator never
     // sees such a key because it enumerates grid positions; the sparse one

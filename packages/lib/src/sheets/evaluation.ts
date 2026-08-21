@@ -548,6 +548,15 @@ export function evaluateSheet(
  * its dense grids, and the empty entries it emits reach the persisted
  * dependency table. `sheet-sparse-equivalence.test.ts` pins the two together.
  */
+/**
+ * Whether a key names a local A1 cell.
+ *
+ * `sheet.cells` is a plain map and `dependsOn` mixes local addresses with
+ * external references like `@[Budget]:B2`, so both the seed and the back-fill
+ * have to filter. Rows are 1-based, so `A0` is not an address either.
+ */
+const isLocalAddress = (key: string): boolean => /^[A-Z]+[1-9]\d*$/.test(key);
+
 export function evaluateSheetSparse(
   sheet: SheetData,
   options: SheetEvaluationOptions = {}
@@ -569,7 +578,7 @@ export function evaluateSheetSparse(
     // all (hand-written content, a newer writer). The dense walk never sees
     // such a key because it enumerates positions rather than keys; skipping it
     // here keeps the two in step instead of evaluating a nonsense address.
-    if (!/^[A-Z]+\d+$/.test(address)) continue;
+    if (!isLocalAddress(address)) continue;
     byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
   }
 
@@ -586,6 +595,13 @@ export function evaluateSheetSparse(
   // are empty ones with no dependencies of their own to process.
   for (const cell of Object.values(byAddress).slice()) {
     for (const dependency of cell.dependsOn) {
+      // Only local addresses. `dependsOn` also carries external references such
+      // as `@[Budget]:B2`, which were resolved through `getExternalCell` against
+      // another page — evaluating one here would fabricate a local cell for it,
+      // and `evaluateCellInternal` upper-cases the key, so the record would not
+      // even match the `dependsOn` entry it is supposed to pair with.
+      if (!isLocalAddress(dependency)) continue;
+
       let target = byAddress[dependency];
       if (!target) {
         target = evaluateCellInternal(dependency, pageKey, env, new Set());
