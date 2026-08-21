@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { canRunCode, type CanRunCodeDeps } from '../can-run-code';
 import type { DrivePermissionLevel } from '../../../permissions/permissions';
 import type { PermissionLevel } from '../../../permissions/permissions';
@@ -117,6 +117,37 @@ describe('canRunCode', () => {
       deps: makeDeps({ getUserDrivePermissions: async () => viewerPerms }),
     });
     expect(result).toEqual({ ok: false, reason: 'insufficient_role' });
+  });
+
+  it('given a TENANT deployment and the seeded free-tier payer, should allow — the deployment is the entitlement', async () => {
+    // The tenant seeder leaves `subscriptionTier` at the column default, so the
+    // payer really is 'free' there; before deployment-mode-aware eligibility
+    // this chokepoint denied every tenant sandbox outright.
+    vi.stubEnv('DEPLOYMENT_MODE', 'tenant');
+    try {
+      const result = await canRunCode({
+        userId: 'u1',
+        driveId: 'd1',
+        deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+      });
+      expect(result.ok).toBe(true);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it('given an ONPREM deployment and a free-tier payer, should still deny — the bypass is tenant-only', async () => {
+    vi.stubEnv('DEPLOYMENT_MODE', 'onprem');
+    try {
+      const result = await canRunCode({
+        userId: 'u1',
+        driveId: 'd1',
+        deps: makeDeps({ getUserSubscriptionTier: async () => 'free' }),
+      });
+      expect(result).toEqual({ ok: false, reason: 'tier_ineligible' });
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it('given a free-tier payer, should deny with tier_ineligible', async () => {

@@ -11,7 +11,7 @@ import {
   formatTierBytes,
   type SubscriptionTier,
 } from "@pagespace/lib/billing/subscription-tiers";
-import { isSandboxAvailable } from "@pagespace/lib/billing/sandbox-eligibility";
+import { isSandboxTierEligible } from "@pagespace/lib/billing/sandbox-eligibility";
 
 export const metadata = pageMetadata.pricing;
 
@@ -91,10 +91,15 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
       buyMore: true,
       realtime: true,
       hierarchicalAgents: true,
-      // Derived from the same eligibility check that actually gates the
-      // feature server-side (packages/lib/src/billing/sandbox-eligibility.ts)
-      // — this row can never drift out of sync with what Free actually gets.
-      sandbox: isSandboxAvailable(tier),
+      // Derived from the same tier table that actually gates the feature
+      // server-side (packages/lib/src/billing/sandbox-eligibility.ts) — this row
+      // can never drift out of sync with what Free actually gets.
+      //
+      // The PURE tier predicate, deliberately, not the deployment-aware gate
+      // `isSandboxAvailable`: this is the cloud PRICE LIST, and what it must
+      // describe is what a tier buys, not what the process rendering it happens
+      // to be configured as.
+      sandbox: isSandboxTierEligible(tier),
       prioritySupport: copy.prioritySupport,
     },
   };
