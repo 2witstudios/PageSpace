@@ -1888,6 +1888,44 @@ describe('AgentsSidebar', () => {
       );
     });
 
+    /**
+     * THE WINDOW BETWEEN CREATING ONE AND THE LISTING SAYING SO.
+     *
+     * `mutate(key)` alone is a revalidation, and while it is in flight the
+     * cache still holds the listing from before — with `isLoading` false, since
+     * that flags a first load and not a refresh. The step machine reads exactly
+     * those two things, so for the width of that request it would answer "this
+     * drive has no environments" about a drive that just got one, and spawn
+     * ephemerally into it.
+     *
+     * The environments endpoint here never answers after the create, which is
+     * that window held open: what the palette offers next can only have come
+     * from the cache write.
+     */
+    test('the environment created from the target step is offered before the listing catches up', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      envsHang = true;
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // Back on the target step. Picking an agent now must reach the question
+      // "where should it run?" — not skip it as though the drive had none.
+      await user.click(await screen.findByText('Researcher'));
+      expect(await screen.findByText('in dev')).toBeDefined();
+    });
+
     test('a name already taken keeps the create step open with what was typed', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);
@@ -1923,6 +1961,41 @@ describe('AgentsSidebar', () => {
       fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
 
       expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('on the global console the hotkey asks which drive, then goes on into the same palette', async () => {
+      const user = userEvent.setup();
+      mockUseParams.mockReturnValue({});
+      mockUsePathname.mockReturnValue('/dashboard/agents');
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // Not the New Drive dialog: creating a drive is a different act, and it
+      // never reaches a session or an environment.
+      const picker = await screen.findByRole('dialog', { name: 'Choose a destination' });
+      expect(within(picker).getByText('Global Assistant')).toBeDefined();
+
+      await user.click(within(picker).getByText('Alpha'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('a trashed drive is offered nothing new — not by the hotkey, and not by the header', async () => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isTrashed: true })] });
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      expect(screen.queryByLabelText('New session')).toBeNull();
+
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // And it does not fall through to drive creation, which would answer a
+      // question nobody asked.
+      expect(screen.queryByText('Researcher')).toBeNull();
+      expect(screen.queryByText('Global Assistant')).toBeNull();
     });
 
     test('the environment row\'s "+" spawns INSIDE it — the row already answered where', async () => {

@@ -21,6 +21,7 @@ import useSWR, { useSWRConfig } from 'swr';
 
 import EndSessionDialog from '@/components/agents/EndSessionDialog';
 import { useSpawnSession } from '@/components/agents/useSpawnSession';
+import DrivePickerDialog from '@/components/agents/DrivePickerDialog';
 import { Input } from '@/components/ui/input';
 import { cn, isElectron } from '@/lib/utils';
 import type { SidebarProps } from './index';
@@ -483,13 +484,41 @@ function SessionList({
     [openSpawn, openAssistantSpawn],
   );
 
+  // Whether the drive this surface is scoped to can be given new work at all.
+  // A trashed drive is on its way out: the group-header path has always
+  // withheld its spawn "+" for that reason, and everything below routes
+  // through this one answer so the drive-scoped header, the hotkey and the
+  // palette's environment entry cannot disagree about it.
+  const isLiveScopedDrive = driveId !== undefined && !trashedDriveIds.has(driveId);
+
+  // Global mode's own "where" question: with no drive in the route there is
+  // nothing to spawn INTO, so the flow starts by picking one — the same
+  // `DrivePickerDialog` step `AgentsListHeader` takes, including the Global
+  // Assistant, which is a valid destination for a session and for nothing else.
+  const [sessionDrivePickerOpen, setSessionDrivePickerOpen] = useState(false);
+
+  const startNewSession = useCallback(() => {
+    if (driveId) {
+      // A trashed drive gets nothing new — not a session, and not the drive
+      // dialog either, which would answer a question nobody asked.
+      if (!isLiveScopedDrive) return;
+      handleNewSession(driveId, null);
+      return;
+    }
+    setSessionDrivePickerOpen(true);
+  }, [driveId, isLiveScopedDrive, handleNewSession]);
+
   // THE QUICK-CREATE HOTKEY, ON THE AGENTS ROUTES, MEANS THIS SURFACE'S "NEW".
   //
   // Elsewhere it opens the page-type palette; here "new" is a session — or the
   // environment to run one in, which the spawn palette now offers too — so the
-  // binding is answered by whatever the header's "+" would do, and
-  // `QuickCreatePalette` stands down while this route is active. It is
-  // registered HERE, not in `AgentsListHeader`, because the header only renders
+  // binding opens the spawn flow, and `QuickCreatePalette` stands down while
+  // this route is active. That holds on the GLOBAL console too: it has no
+  // drive of its own, so it asks for one and carries on into the same palette,
+  // rather than diverting to drive creation, which is a different act that
+  // never reaches an environment or a session.
+  //
+  // Registered HERE, not in `AgentsListHeader`, because the header only renders
   // in the list/empty state (it is gone inside an open session) while this
   // sidebar is mounted on every Agents route. The header keeps its own
   // `useSpawnSession` and registers no hotkey, so exactly one handler fires.
@@ -499,17 +528,11 @@ function SessionList({
       if (!matchesKeyEvent(getEffectiveBinding('pages.quick-create'), event)) return;
       if (isEditingActive()) return;
       event.preventDefault();
-      if (driveId) {
-        handleNewSession(driveId, null);
-        return;
-      }
-      // Global mode has no drive to put a session in — same fallback its "+"
-      // already takes.
-      setCreateDriveOpen(true);
+      startNewSession();
     };
     document.addEventListener('keydown', handler);
     return () => document.removeEventListener('keydown', handler);
-  }, [canSpawn, driveId, handleNewSession]);
+  }, [canSpawn, startNewSession]);
 
   return (
     <div className="space-y-1">
@@ -517,7 +540,18 @@ function SessionList({
         <SessionSearchHeader
           value={searchQuery}
           onChange={setSearchQuery}
-          onAction={driveId ? () => handleNewSession(driveId, null) : () => setCreateDriveOpen(true)}
+          // A trashed drive is offered nothing new — the same withholding the
+          // group headers have always done one level down, applied here where
+          // the drive IS the whole surface. Global mode keeps "New drive": it
+          // is the only place that offers one, and the hotkey's session flow
+          // (which asks for a drive first) does not replace it.
+          onAction={
+            driveId
+              ? isLiveScopedDrive
+                ? () => handleNewSession(driveId, null)
+                : undefined
+              : () => setCreateDriveOpen(true)
+          }
           actionLabel={driveId ? 'New session' : 'New drive'}
         />
       )}
@@ -565,6 +599,18 @@ function SessionList({
       })}
       {notice}
       {paletteElement}
+      <DrivePickerDialog
+        open={sessionDrivePickerOpen}
+        onOpenChange={setSessionDrivePickerOpen}
+        onPick={(pickedDriveId, pickedDriveName) => {
+          setSessionDrivePickerOpen(false);
+          openSpawn(pickedDriveId, pickedDriveName);
+        }}
+        onPickGlobalAssistant={() => {
+          setSessionDrivePickerOpen(false);
+          openAssistantSpawn();
+        }}
+      />
       {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
   );
@@ -579,7 +625,8 @@ function SessionSearchHeader({
 }: {
   value: string;
   onChange: (value: string) => void;
-  onAction: () => void;
+  /** Omitted when there is nothing to create — a trashed drive gets no "+". */
+  onAction?: () => void;
   actionLabel: string;
 }) {
   return (
@@ -594,14 +641,16 @@ function SessionSearchHeader({
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
-      <button
-        type="button"
-        aria-label={actionLabel}
-        className="shrink-0 text-muted-foreground hover:text-foreground"
-        onClick={onAction}
-      >
-        <Plus className="size-3.5" />
-      </button>
+      {onAction && (
+        <button
+          type="button"
+          aria-label={actionLabel}
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={onAction}
+        >
+          <Plus className="size-3.5" />
+        </button>
+      )}
     </div>
   );
 }

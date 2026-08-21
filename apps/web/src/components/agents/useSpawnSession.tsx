@@ -251,8 +251,9 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    * should do next — `'retry'` on the one refusal retyping fixes (a name
    * already taken), which keeps the step open with the user's text.
    *
-   * On success it refreshes the SHARED environments key, so the sidebar's rows
-   * show the new environment without knowing this happened.
+   * On success it publishes the new environment into the SHARED environments
+   * key, so the sidebar's rows show it without knowing this happened — and so
+   * this palette's own next step is reading a listing that contains it.
    */
   const createEnvironment = useCallback(
     async (name: string): Promise<'retry' | 'failed' | { envId: string }> => {
@@ -266,7 +267,30 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         // toasted and is `'failed'`.
         return reportDriveEnvWriteFailure(error, 'Could not create the environment') === 'retry' ? 'retry' : 'failed';
       }
-      globalMutate(driveEnvsKey(driveId));
+      // PUBLISHED, not merely re-asked for. A bare `mutate(key)` is only a
+      // revalidation: the cache goes on holding the PREVIOUS listing until the
+      // network answers, and `isLoading` stays false throughout because data is
+      // already loaded (it flags a first load, not a refresh). So for the whole
+      // width of that request the step machine — which decides on `envs.length`
+      // and `isLoading` — reads "this drive has no environments" about a drive
+      // that just got one, and the two ways that lands are both silent: a quick
+      // pick goes straight to naming and spawns EPHEMERALLY into a drive whose
+      // environment the user just deliberately made, or the response arrives
+      // while they are typing a name and the form is swapped for the env step
+      // mid-keystroke. Writing the row in first means the answer is already
+      // true when the next render asks; the revalidation behind it only
+      // confirms it, and settles the ordering the server sorts by.
+      globalMutate(
+        driveEnvsKey(driveId),
+        (current?: { envs: DriveEnvDTO[] }) => {
+          const known = current?.envs ?? [];
+          // A revalidation already in flight may have brought it in first.
+          return known.some((env) => env.id === created.env.id)
+            ? { envs: known }
+            : { envs: [...known, created.env] };
+        },
+        { revalidate: true },
+      );
       return { envId: created.env.id };
     },
     [spawnTarget, globalMutate],
