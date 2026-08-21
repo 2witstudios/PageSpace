@@ -11,6 +11,7 @@ import type {
   SheetEvaluation,
   SheetEvaluationCell,
   SheetEvaluationOptions,
+  SheetCellAddress,
   SheetExternalReferenceToken,
   SheetExternalReferenceResolution,
   SheetDocDependencyRecord,
@@ -470,6 +471,43 @@ function evaluateCellInternal(
 /**
  * Evaluate a sheet and return all cell values, displays, and errors
  */
+/**
+ * Evaluate only the named addresses.
+ *
+ * `evaluateSheet` walks every cell of the grid and allocates three dense
+ * structures the size of the whole sheet, which is precisely the cost the row
+ * store exists to avoid: after a single cell write, the only values that can
+ * have changed are that cell and its dependency closure. This evaluates that
+ * closure and nothing else.
+ *
+ * The environment, cache and ancestor-set cycle detection are exactly the ones
+ * `evaluateSheet` uses, so a cell evaluated here and the same cell evaluated by
+ * a full pass agree — including on `#CYCLE`. Cells outside `addresses` are
+ * still readable as inputs; they are simply not returned.
+ */
+export function evaluateAddresses(
+  sheet: SheetData,
+  addresses: Iterable<string>,
+  options: SheetEvaluationOptions = {}
+): Record<SheetCellAddress, SheetEvaluationCell> {
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+  };
+
+  const result: Record<SheetCellAddress, SheetEvaluationCell> = {};
+  for (const address of addresses) {
+    const normalized = address.toUpperCase();
+    result[normalized] = evaluateCellInternal(normalized, pageKey, env, new Set());
+  }
+
+  return result;
+}
+
 export function evaluateSheet(
   sheet: SheetData,
   options: SheetEvaluationOptions = {}

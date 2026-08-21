@@ -54,6 +54,51 @@ export function decodeCellAddress(address: SheetCellAddress): { row: number; col
 }
 
 /**
+ * Column index to its letters ("A", "AB"). The row store keys a row's cells by
+ * column label, so this is the hot path for every row read and write.
+ */
+export function encodeColumnLabel(columnIndex: number): string {
+  if (columnIndex < 0) {
+    throw new Error('Column index must be non-negative');
+  }
+
+  let column = '';
+  let index = columnIndex;
+
+  while (index >= 0) {
+    column = String.fromCharCode((index % 26) + 65) + column;
+    index = Math.floor(index / 26) - 1;
+  }
+
+  return column;
+}
+
+/** Inverse of `encodeColumnLabel`. Throws on anything that is not letters. */
+export function decodeColumnLabel(label: string): number {
+  const normalized = label.trim().toUpperCase();
+  if (!/^[A-Z]+$/.test(normalized)) {
+    throw new Error(`Invalid column label: ${label}`);
+  }
+
+  let column = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    column *= 26;
+    column += normalized.charCodeAt(i) - 64;
+  }
+
+  return column - 1;
+}
+
+/**
+ * The letters of an A1 address, without its row. Returns '' for anything that
+ * does not start with letters, matching the lenient local helpers this
+ * replaces in `evaluation.ts` and `format-ops.ts`.
+ */
+export function columnLabelOf(address: string): string {
+  return address.replace(/\d+$/, '');
+}
+
+/**
  * Validate a cell address is in valid A1 format
  */
 export function isValidCellAddress(address: string): boolean {
