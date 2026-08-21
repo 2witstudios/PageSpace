@@ -1926,6 +1926,40 @@ describe('AgentsSidebar', () => {
       expect(await screen.findByText('in dev')).toBeDefined();
     });
 
+    test('making a new environment from a row-opened flow asks again rather than using the row\'s', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      // The listing never catches up after the create — the same held-open
+      // window the target-step test uses, so the new environment can only be
+      // here via the cache write rather than a revalidation that happened to
+      // win.
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      // Opened from staging's "+", which pre-answers "where should it run?".
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      envsHang = true;
+      // Then the user makes a DIFFERENT environment — a newer intent than the
+      // row's, which must not be silently overruled by it.
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await user.click(await screen.findByText('Researcher'));
+
+      // Asked once, with both to choose between — rather than spawning into
+      // staging as though the last minute had not happened.
+      expect(await screen.findByText('in dev')).toBeDefined();
+      expect(screen.getByText('in staging')).toBeDefined();
+    });
+
     test('a name already taken keeps the create step open with what was typed', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);

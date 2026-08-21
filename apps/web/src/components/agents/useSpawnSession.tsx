@@ -313,6 +313,15 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         // the answer: go on to naming with it selected rather than making the
         // user pick the thing they just created.
         setSpawnPick((current) => (current ? { ...current, envId: result.envId } : current));
+      } else {
+        // From the TARGET step, where a preset may be in play: this flow can
+        // have been opened by one environment's "+" in the sidebar, which
+        // pre-answered "where should it run?". Making a NEW environment is a
+        // newer intent than that row's, and silently spawning into the row's
+        // environment anyway would be the palette quietly overruling the thing
+        // the user just did. Dropping the preset lets the env step ask once,
+        // now with both to choose between.
+        setPresetEnvId(null);
       }
       setNewEnvFrom(null);
     },
