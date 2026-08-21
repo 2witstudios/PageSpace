@@ -14,7 +14,14 @@
  * both correct off-screen and cheaper on-screen.
  */
 
-import { columnKeyFromIndex, type SheetData } from '@pagespace/lib/sheets/sheet';
+import {
+  MAX_COLUMN_WIDTH,
+  MAX_ROW_HEIGHT,
+  MIN_COLUMN_WIDTH,
+  MIN_ROW_HEIGHT,
+  columnKeyFromIndex,
+  type SheetData,
+} from '@pagespace/lib/sheets/sheet';
 import type { EditorCellRect } from './layout';
 
 /** Fallback column width in px when the sheet defines none. */
@@ -27,14 +34,14 @@ export const ROW_HEADER_WIDTH = 48;
 export const COLUMN_HEADER_HEIGHT = 32;
 
 /**
- * Bounds applied when *reading* a stored size. Storage stays faithful to
- * whatever was written (an import may carry a 3px column); the clamp happens
- * here, at the point of use, so a save never rewrites the user's numbers.
+ * Bounds applied when *reading* a stored size, re-exported from the lib rather
+ * than restated. `setColumnWidth`/`setRowHeight` clamp to these same numbers on
+ * write; a second, tighter set here would mean a column the user drags to a
+ * legal width stores one number and renders another, and the drag would appear
+ * to stick. Reading still clamps because an imported document may carry a size
+ * that never went through the write path.
  */
-export const MIN_COLUMN_WIDTH = 24;
-export const MAX_COLUMN_WIDTH = 1000;
-export const MIN_ROW_HEIGHT = 16;
-export const MAX_ROW_HEIGHT = 500;
+export { MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH, MIN_ROW_HEIGHT, MAX_ROW_HEIGHT };
 
 /** Row-height presets for the density control. */
 export const DENSITY_ROW_HEIGHTS = {
