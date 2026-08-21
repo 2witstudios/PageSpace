@@ -134,6 +134,15 @@ const SCAN_DIRS = [
   'apps/processor/src',
 ];
 
+/**
+ * Comments stripped everywhere the sweep looks: these modules DOCUMENT the rule
+ * at length, naming the very identifiers being swept for, and a sweep that reads
+ * prose as code fails on its own explanation.
+ */
+function stripComments(src: string): string {
+  return src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
+}
+
 function sourceFiles(): { path: string; src: string }[] {
   const out: { path: string; src: string }[] = [];
   const walk = (dir: string, rel: string) => {
@@ -150,7 +159,7 @@ function sourceFiles(): { path: string; src: string }[] {
       if (entry.isDirectory()) {
         walk(child, childRel);
       } else if (/\.tsx?$/.test(entry.name)) {
-        out.push({ path: childRel.slice(1), src: readFileSync(child, 'utf8') });
+        out.push({ path: childRel.slice(1), src: stripComments(readFileSync(child, 'utf8')) });
       }
     }
   };
@@ -192,19 +201,17 @@ describe('eligibility sweep — one place decides', () => {
   });
 
   it('no sandbox/env/quota module branches on deployment mode beside a tier read', () => {
-    // Comments stripped first: these modules DOCUMENT the tenant rule at length,
-    // and a sweep that reads prose as code would fail on its own explanation.
-    const stripComments = (src: string) =>
-      src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/.*$/gm, '$1');
     const offenders = nonTestFiles()
       .filter(({ path }) => /\/(sandbox|drive-envs|agent-workspaces)\//.test(path))
-      .filter(({ src }) => /\bisTenantMode\s*\(|\bisCloud\s*\(|\bgetDeploymentMode\s*\(/.test(stripComments(src)))
+      .filter(({ src }) => /\bisTenantMode\s*\(|\bisCloud\s*\(|\bgetDeploymentMode\s*\(/.test(src))
       .map(({ path }) => path);
     expect(offenders).toEqual([]);
   });
 
   it('the tier-indexed ceiling tables are only ever indexed by the EFFECTIVE tier', () => {
-    const quota = readFileSync(`${REPO_ROOT}packages/lib/src/services/sandbox/quota.ts`, 'utf8');
+    const quota = stripComments(
+      readFileSync(`${REPO_ROOT}packages/lib/src/services/sandbox/quota.ts`, 'utf8'),
+    );
     for (const table of ['CONCURRENCY_LIMITS', 'DRIVE_ENV_LIMITS']) {
       const lookups = [...quota.matchAll(new RegExp(`${table}\\[([^\\]]*)\\]`, 'g'))].map((m) => m[1]);
       expect(lookups.length).toBeGreaterThan(0);
