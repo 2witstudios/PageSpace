@@ -176,8 +176,14 @@ export async function seedInheritedTaskStatusConfigs(
  * many statuses a list may define — the statuses PUT accepts any array — so that
  * window could hide the answer and change it: a list whose only open status sits past
  * row 200 handed new tasks a DONE slug, and `resolveSeedCompletedAt` then stamped
- * them, so a task was born complete. A targeted read cannot be wrong that way, and
- * `(taskListId, group)` is indexed by the same index that serves the slug lookup.
+ * them, so a task was born complete. A targeted read cannot be wrong that way.
+ *
+ * These are several small round trips where one ordered read would answer all of
+ * them. That is a deliberate trade, and NOT a claim about indexes — an earlier
+ * version of this comment said `(taskListId, group)` was indexed and it is not.
+ * The schema has `index(taskListId)` and `unique(taskListId, slug)`, so a group
+ * filter uses the former and scans the handful of rows it returns. Correctness
+ * first: the single read is the thing that had a window in it.
  *
  * `open` and `done` are the two sides of the completion boundary. Never land a row
  * on the wrong side of it: one carrying a completion time stays complete, one without

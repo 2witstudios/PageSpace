@@ -54,7 +54,7 @@ import {
   isCompletedStatus,
   PRIORITY_CONFIG,
 } from './task-list-types';
-import { formatSubTaskProgress } from './task-tree-core';
+import { SubTaskProgress } from './SubTaskProgress';
 
 interface TaskKanbanViewProps {
   tasks: TaskItem[];
@@ -159,7 +159,6 @@ function TaskCard({
   statusConfigs,
 }: TaskCardProps) {
   const isCompleted = isCompletedStatus(task.status, statusConfigs || []);
-  const subTaskProgress = formatSubTaskProgress(task);
 
   return (
     <Card
@@ -272,22 +271,7 @@ function TaskCard({
           {/* Sub-task progress — parity with the table's rows. Without it a
               parent card reads as a leaf, and "In Progress" on a container tells
               you nothing about the work underneath it. */}
-          {subTaskProgress && (
-            <span
-              className="text-xs text-muted-foreground tabular-nums"
-              // `title` stays: it is the sighted tooltip, and unlike aria-label it
-              // is not an ARIA naming mechanism, so role=generic does not discard it.
-              title={`${subTaskProgress.label} sub-tasks complete`}
-            >
-              {/* ARIA forbids naming role=generic, so an aria-label on a plain
-                  span is discarded and a screen reader hears only "2/3" —
-                  which means nothing on its own. The sentence goes in sr-only
-                  text instead, and the visible ratio is hidden from AT so it is
-                  not announced twice. */}
-              <span aria-hidden="true">{subTaskProgress.label}</span>
-              <span className="sr-only">{`${subTaskProgress.label} sub-tasks complete`}</span>
-            </span>
-          )}
+          <SubTaskProgress task={task} className="text-xs text-muted-foreground tabular-nums" />
 
           {/* Assignee */}
           {(task.assignee || task.assigneeAgent) && (

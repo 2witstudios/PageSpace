@@ -30,10 +30,10 @@ import {
 import {
   canExpandNode,
   depthIndentStyle,
-  formatSubTaskProgress,
   type TaskNodePath,
 } from './task-tree-core';
 import { useTaskTree } from './task-tree-context';
+import { SubTaskProgress } from './SubTaskProgress';
 
 /**
  * The seven cells of a task row, after the drag handle.
@@ -79,7 +79,6 @@ export function TaskRowCells({
   // inline add row still rendering. Without this the chevron disappears and the
   // user cannot close what they can see.
   const expandable = canExpandNode(task, depth) || isExpanded;
-  const progress = formatSubTaskProgress(task);
 
   const commitEdit = () => {
     const trimmed = editingTitle.trim();
@@ -143,17 +142,7 @@ export function TaskRowCells({
             >
               {task.title}
             </button>
-            {progress && (
-              <span
-                className="ml-1 shrink-0 text-xs text-muted-foreground tabular-nums"
-                title={`${progress.label} sub-tasks complete`}
-              >
-                {/* See TaskKanbanView: an aria-label on a generic span is
-                    discarded, so the sentence is sr-only text. */}
-                <span aria-hidden="true">{progress.label}</span>
-                <span className="sr-only">{`${progress.label} sub-tasks complete`}</span>
-              </span>
-            )}
+            <SubTaskProgress task={task} className="ml-1 shrink-0 text-xs text-muted-foreground tabular-nums" />
           </div>
         )}
       </TableCell>

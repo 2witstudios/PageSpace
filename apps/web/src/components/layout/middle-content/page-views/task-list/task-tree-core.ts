@@ -96,7 +96,7 @@ export const expandNodePath = (
 ): Set<TaskNodePath> => (expanded.has(path) ? expanded : new Set(expanded).add(path));
 
 /**
- * Depth-aware form of `canExpandTask`. Same two conditions — the task has a
+ * Whether a row can be opened out. Two conditions — the task has a
  * linked page and either its own document content or at least one sub-task —
  * plus the depth ceiling.
  */

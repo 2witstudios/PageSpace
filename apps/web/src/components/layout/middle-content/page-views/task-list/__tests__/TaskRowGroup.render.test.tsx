@@ -43,7 +43,7 @@ vi.mock('../MultiAssigneeSelect', () => ({ MultiAssigneeSelect: () => null }));
 
 const { TaskRowGroup } = await import('../TaskRowGroup');
 const { TaskTreeProvider } = await import('../task-tree-context');
-const { rootNodePath, makeNodePath, expandNodePath } = await import('../task-tree-core');
+const { rootNodePath, makeNodePath, expandNodePath, toggleNodePath } = await import('../task-tree-core');
 const { useTaskWriteMachinery } = await import('@/lib/tasks/task-write-machinery');
 
 const CONFIGS: TaskStatusConfig[] = [
@@ -160,7 +160,9 @@ function Harness({
     onStartEdit,
     openTriggerDialog: vi.fn(),
     expandedPaths: liveExpanded,
-    toggleExpanded: vi.fn(),
+    // Real, like expandNode: a mocked toggle means no test can close a row, and
+    // "what happens when this is closed" is a question worth asking.
+    toggleExpanded: (path: string) => setLiveExpanded((prev) => toggleNodePath(prev, path)),
     // Real, not a spy: the menu's "Add sub-task" expands the row it created
     // under, and a mocked expandNode leaves the subtree unmounted — which makes
     // every assertion about what happens once it renders vacuously true.
@@ -392,6 +394,48 @@ describe('the row menu\'s "Add sub-task" on a leaf', () => {
         delta: { total: 1, completed: 0 },
         renaming: 'first',
       },
+    });
+  });
+
+  it('forgets the pending rename if the row is closed before it arrives', async () => {
+    // The SWR entry outlives the component — it is in the app-wide provider — so
+    // a request left pending would fire on a re-expand minutes later, pulling a
+    // task the user may have renamed elsewhere into an edit they never asked
+    // for, with the app-wide editing session behind it.
+    let releaseFetch: (v: unknown) => void = () => {};
+    postMock.mockResolvedValue(task({ id: 'first', title: 'New sub-task' }));
+    fetchWithAuth.mockReturnValue(new Promise((resolve) => { releaseFetch = resolve; }));
+    const onStartEdit = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'leaf', subTaskCount: 0 })]}
+        expanded={new Set()}
+        onStartEdit={onStartEdit}
+        applyCountDeltas
+      />,
+    );
+
+    await openMenuFor('leaf');
+    await userEvent.click(screen.getByRole('menuitem', { name: /Add sub-task/i }));
+    await waitFor(() => expect(postMock).toHaveBeenCalled());
+
+    // Closed through the chevron, before the sub-list could answer.
+    await userEvent.click(await screen.findByRole('button', { name: /Collapse leaf/i }));
+    releaseFetch(subTaskResponse([task({ id: 'first', title: 'Renamed since' })]));
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Re-opened later. The SWR entry lives in the app-wide provider, so this is
+    // a cache hit that renders the row on the first commit — which is exactly
+    // when a request left pending would fire.
+    await userEvent.click(await screen.findByRole('button', { name: /Expand leaf/i }));
+    await screen.findByText('Renamed since');
+    await new Promise((r) => setTimeout(r, 100));
+
+    assert({
+      given: 'a row closed while its created sub-task was still loading',
+      should: 'not open anything into rename when it eventually arrives',
+      actual: onStartEdit.mock.calls.length,
+      expected: 0,
     });
   });
 

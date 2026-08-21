@@ -125,9 +125,6 @@ export const PRIORITY_CONFIG: Record<TaskPriority, { label: string; color: strin
   high: { label: 'High', color: 'bg-red-100 text-red-600 dark:bg-red-900 dark:text-red-400' },
 };
 
-export const canExpandTask = (task: Pick<TaskItem, 'hasContent' | 'subTaskCount' | 'pageId'>): boolean =>
-  !!task.pageId && (!!task.hasContent || (task.subTaskCount ?? 0) > 0);
-
 // Backward-compatible aliases
 export type TaskStatus = string;
 export const STATUS_ORDER: string[] = ['pending', 'in_progress', 'blocked', 'completed'];

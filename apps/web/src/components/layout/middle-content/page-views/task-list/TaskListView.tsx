@@ -96,7 +96,6 @@ import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
 import { TaskRowGroup } from './TaskRowGroup';
 import { TaskTreeProvider } from './task-tree-context';
 import {
-  formatSubTaskProgress,
   makeNodePath,
   rootNodePath,
   toggleNodePath,
@@ -106,6 +105,7 @@ import {
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
+import { SubTaskProgress } from './SubTaskProgress';
 import {
   TaskItem,
   TaskListData,
@@ -188,7 +188,6 @@ function MobileTaskCard({
   statusConfigs,
 }: MobileTaskCardProps) {
   const isCompleted = isCompletedStatus(task.status, statusConfigs);
-  const subTaskProgress = formatSubTaskProgress(task);
 
   return (
     <div
@@ -238,17 +237,7 @@ function MobileTaskCard({
                 {task.title}
               </button>
               {/* Sub-task progress — parity with the table and kanban. */}
-              {subTaskProgress && (
-                <span
-                  className="shrink-0 text-xs text-muted-foreground tabular-nums"
-                  title={`${subTaskProgress.label} sub-tasks complete`}
-                >
-                  {/* See TaskKanbanView: an aria-label on a generic span is
-                      discarded, so the sentence is sr-only text. */}
-                  <span aria-hidden="true">{subTaskProgress.label}</span>
-                  <span className="sr-only">{`${subTaskProgress.label} sub-tasks complete`}</span>
-                </span>
-              )}
+              <SubTaskProgress task={task} className="shrink-0 text-xs text-muted-foreground tabular-nums" />
             </div>
           )}
         </div>

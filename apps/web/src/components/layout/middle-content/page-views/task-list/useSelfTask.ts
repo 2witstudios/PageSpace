@@ -87,9 +87,9 @@ export function useSelfTask(
   useEffect(() => machinery.registerCacheRefresher(refresh), [machinery, refresh]);
 
   const task = data?.task ?? null;
-  // Memoized: `?? []` mints a new array every render, and this is a dependency
-  // of both write callbacks — so without it they are rebuilt on every render,
-  // and so is everything downstream that depends on their identity.
+  // Memoized because `?? []` mints a new array on every render where `data` has
+  // not arrived, and this is a dependency of both write callbacks — so they were
+  // rebuilt on each of those renders, and so was anything holding their identity.
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
   const listPageId = data?.listPageId ?? null;
   const isCompleted = !!task && isCompletedStatus(task.status, statusConfigs);

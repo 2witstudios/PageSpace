@@ -3,8 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, asc, desc, inArray } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
 import { taskLists, taskStatusConfigs, taskItems } from '@pagespace/db/schema/tasks';
-import { DEFAULT_TASK_STATUSES } from '@pagespace/db/schema/tasks';
-import { seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { seedInheritedTaskStatusConfigs, resolveInheritedStatusSeed } from '@/services/api/task-sync-service';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope } from '@/lib/auth';
 import { canPrincipalEditPage, canPrincipalViewPage } from '@/lib/auth'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -49,11 +48,17 @@ export async function GET(
   });
 
   if (!taskList) {
-    // Return default statuses if no task list exists yet
+    // No list row yet, so preview what this page WOULD be seeded with rather
+    // than the four built-ins. Since sub-lists inherit their ancestor's
+    // vocabulary, the built-ins are the right answer only for a page with no
+    // task-list ancestor — everywhere else this screen was naming four statuses
+    // that were never going to exist, one function above the POST that seeds the
+    // inherited set. A read: resolveInheritedStatusSeed only walks and reads.
+    const seed = await resolveInheritedStatusSeed(db, pageId);
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'task_status_config', resourceId: pageId, details: { action: 'list_status_configs' } });
 
     return NextResponse.json({
-      statusConfigs: DEFAULT_TASK_STATUSES.map((s, i) => ({
+      statusConfigs: seed.map((s, i) => ({
         id: `default-${s.slug}`,
         taskListId: '',
         ...s,

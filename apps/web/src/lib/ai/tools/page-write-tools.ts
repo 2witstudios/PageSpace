@@ -911,11 +911,17 @@ export const pageWriteTools = {
         // create() bypasses pageService.createPage()'s seeding, so without this the
         // Kanban UI crashes on first load with no status-group config to render.
         if (type === 'TASK_LIST') {
-          await ensureTaskListForPage(db, {
+          // In a transaction, like every other lazy-init: the seed inserts the
+          // vocabulary and then conforms any rows already under the page, and
+          // committing one without the other is permanent (the repair paths only
+          // re-run while the vocabulary is empty). The conform matches nothing
+          // here — the page was created moments ago — but the exception is not
+          // worth carrying when the rule is this cheap to keep.
+          await db.transaction((tx) => ensureTaskListForPage(tx, {
             pageId: newPage.id,
             title: newPage.title,
             userId,
-          });
+          }));
         }
 
         await createPageVersion({
