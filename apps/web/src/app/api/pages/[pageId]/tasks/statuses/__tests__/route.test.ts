@@ -207,6 +207,20 @@ function setupMCPScopeError() {
 
 // ---------- Tests ----------
 
+
+/** The walk's reads: `.where(...).limit(1)` for the two page hops, and an
+ *  awaited `.orderBy(...)` for the ancestor's configs. */
+const makeWalkChain = (result: unknown[]) => {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+  };
+  chain.from = () => chain;
+  chain.where = () => chain;
+  chain.orderBy = () => chain;
+  chain.limit = () => Promise.resolve(result);
+  return chain;
+};
+
 describe('GET /api/pages/[pageId]/tasks/statuses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -233,6 +247,31 @@ describe('GET /api/pages/[pageId]/tasks/statuses', () => {
     expect(response.status).toBe(403);
     const body = await response.json();
     expect(body.error).toBe('Access denied');
+  });
+
+  it("previews the ANCESTOR's vocabulary when no task list exists yet", async () => {
+    // Not the four built-ins. This screen sits one function above the POST that
+    // seeds the INHERITED set, so on a sub-list under a customised root it was
+    // naming four statuses that were never going to exist.
+    setupAuth();
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.taskLists.findFirst)
+      .mockResolvedValueOnce(null as never)              // this page has no list
+      .mockResolvedValue({ id: 'ancestor-list' } as never); // its parent does
+    // The walk: parentId, then the parent's type, then the ancestor's configs.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(makeWalkChain([{ parentId: 'parent-page' }]) as never)
+      .mockReturnValueOnce(makeWalkChain([{ type: 'TASK_LIST' }]) as never)
+      .mockReturnValueOnce(makeWalkChain([
+        { name: 'Icebox', slug: 'icebox', color: 'x', group: 'todo', position: 0 },
+        { name: 'Shipped', slug: 'shipped', color: 'x', group: 'done', position: 1 },
+      ]) as never);
+
+    const response = await GET(createGetRequest(), context);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.statusConfigs.map((c: { slug: string }) => c.slug)).toEqual(['icebox', 'shipped']);
   });
 
   it('returns default statuses when no task list exists', async () => {

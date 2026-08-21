@@ -35,7 +35,6 @@ describe('shouldShowPlaceholder', () => {
   });
 });
 
-
 describe('shouldShowSkeleton', () => {
   it('loading with no content yet', () => {
     assert({

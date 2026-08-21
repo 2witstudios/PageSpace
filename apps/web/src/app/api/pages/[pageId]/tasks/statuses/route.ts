@@ -54,6 +54,14 @@ export async function GET(
     // task-list ancestor — everywhere else this screen was naming four statuses
     // that were never going to exist, one function above the POST that seeds the
     // inherited set. A read: resolveInheritedStatusSeed only walks and reads.
+    //
+    // It discloses an ancestor's status names to a principal who may not be able
+    // to view that ancestor — but only the same names this very route returns
+    // once anything has initialised the list, with no ancestor check either.
+    // The preview is earlier, not wider. (See the note on
+    // resolveInheritedStatusSeed for why the seed itself is not gated.) The walk
+    // is bounded at STATUS_INHERITANCE_MAX_DEPTH and runs only for a page that
+    // has no list row yet, which is once.
     const seed = await resolveInheritedStatusSeed(db, pageId);
     auditRequest(req, { eventType: 'data.read', userId, resourceType: 'task_status_config', resourceId: pageId, details: { action: 'list_status_configs' } });
 
