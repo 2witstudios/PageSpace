@@ -338,7 +338,7 @@ beforeEach(() => {
             capturedInserts.push(values);
             return {
               // Status-config seeding is ON CONFLICT DO NOTHING; see
-              // seedDefaultTaskStatusConfigs for why it cannot be a try/catch.
+              // seedInheritedTaskStatusConfigs for why it cannot be a try/catch.
               onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
               returning: vi.fn().mockImplementation(() => {
                 insertCallCount++;

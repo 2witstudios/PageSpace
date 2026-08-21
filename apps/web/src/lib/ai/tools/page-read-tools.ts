@@ -387,7 +387,13 @@ export const pageReadTools = {
         if (page.type === 'TASK_LIST') {
           // Find or create task_list record for this page, seeding default status
           // configs alongside it so the DB is never left half-initialized.
-          const taskList = await ensureTaskListForPage(db, {
+          // In a transaction: ensureTaskListForPage's create branch seeds the
+          // vocabulary and then conforms any rows already under the page, and a
+          // page CAN hold task rows with no task_lists row of its own — there is
+          // no foreign key between them, only pages.parentId. Committing the
+          // configs without the conform is permanent, since the repair below
+          // only fires while the vocabulary is empty.
+          const taskList = await db.transaction((tx) => ensureTaskListForPage(tx, {
             pageId: page.id,
             title: page.title,
             userId,
@@ -395,7 +401,7 @@ export const pageReadTools = {
               createdAt: new Date().toISOString(),
               autoCreated: true,
             },
-          });
+          }));
 
           // Get all non-trashed tasks ordered by pages.position — the single ordering
           // rail users reorder against (#2143). Title lives on the linked page too.
@@ -439,9 +445,13 @@ export const pageReadTools = {
           // four built-ins onto a list whose ancestor defines its own, and every
           // later PATCH against an inherited slug 400s.
           //
-          // In ONE transaction — this repair, specifically. The create-path seed
-          // inside ensureTaskListForPage above is not wrapped, and does not need
-          // to be: a list being created has no rows to conform.
+          // In ONE transaction, as the create-path seed above now is too. Both
+          // run the same two-write sequence, and "a list being created has no
+          // rows to conform" — which stood here — is a claim about legacy data
+          // that nothing establishes: task_items are tied to their list only
+          // through pages.parentId, with no foreign key to task_lists, so a page
+          // can hold task rows while its own task_lists row is missing. That is
+          // precisely the half-initialised state these read paths exist to find.
           //
           // Here the seed inserts the configs and then conforms
           // any rows already in the list to them, and this repair only ever

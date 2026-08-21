@@ -1557,8 +1557,13 @@ describe('page-read-tools', () => {
           // It fires only while the vocabulary is empty, so once the configs
           // commit there is no later read that would come back and finish the
           // job. Structural, but the alternative is unobservable through a mock.
+          // Two: the create-path seed opens one as well now, since it runs the
+          // same two-write sequence and a page can hold task rows before its own
+          // task_lists row exists. That one wraps a pair of reads on the common
+          // path where the list is already there — a BEGIN/COMMIT for a
+          // correctness cliff is a trade worth making.
           actual: (mockDb.transaction as unknown as { mock: { calls: unknown[] } }).mock.calls.length,
-          expected: 1,
+          expected: 2,
         });
       });
 

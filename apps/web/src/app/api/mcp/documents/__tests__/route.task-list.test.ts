@@ -351,10 +351,11 @@ describe('MCP Documents API — TASK_LIST read', () => {
     expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual(['icebox', 'shipped']);
     expect(data.tasks.map((t: { status: string }) => t.status)).toEqual(['icebox']);
     expect(mockFetchEnrichedTasks).toHaveBeenCalledTimes(2);
-    // One transaction, not three autocommits: the repair writes the configs and
-    // then rewrites the rows, and it only ever fires while the vocabulary is
-    // empty — so a half-applied repair is a permanent one.
-    expect(mockTransaction).toHaveBeenCalledTimes(1);
+    // Two: the repair opens one, and the create-path seed above it opens
+    // another — it runs the same two-write sequence, and a page can hold task
+    // rows before its own task_lists row exists. Neither may be three
+    // autocommits: a half-applied repair is a permanent one.
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
   });
 
   it('still returns 200 with the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {

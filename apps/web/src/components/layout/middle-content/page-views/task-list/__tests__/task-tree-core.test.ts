@@ -89,6 +89,21 @@ describe('expandNodePath', () => {
     });
   });
 
+  it('does not mutate the set it was given', () => {
+    // Load-bearing since EMPTY_EXPANDED became a module singleton: it is the
+    // state immediately after every filter change and every drag start, so
+    // expandNode is routinely called with it. Mutating in place would poison
+    // the shared "nothing is open" value for the rest of the session.
+    const before = new Set<TaskNodePath>(['a' as TaskNodePath]);
+    expandNodePath(before, 'b' as TaskNodePath);
+    assert({
+      given: 'a set that does not contain the path',
+      should: 'leave the input untouched',
+      actual: [...before],
+      expected: ['a'],
+    });
+  });
+
   it('is idempotent, and returns the SAME set when nothing changes', () => {
     // Why this exists rather than reusing toggleNodePath: "make sure this is
     // open" must survive being called twice against one rendered state, where

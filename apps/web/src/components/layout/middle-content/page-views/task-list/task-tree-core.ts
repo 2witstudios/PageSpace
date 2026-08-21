@@ -13,13 +13,6 @@
 import type { TaskItem, TaskStatusConfig } from './task-list-types';
 
 /**
- * Number of <th> cells in the desktop task table header. Defined in
- * ./table-columns and re-exported here so nested-row components can span the
- * full width without importing the whole view.
- */
-export { TASK_TABLE_COLUMN_COUNT } from './table-columns';
-
-/**
  * Hard ceiling on how deep expansion goes. Each expanded node mounts its own
  * paginated fetch against a route with lazy write side effects, so unbounded
  * recursion is unbounded fan-out. Past the limit a row simply has no chevron —

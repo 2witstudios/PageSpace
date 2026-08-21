@@ -77,8 +77,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
   just looking at. There is now a checkbox and a status dropdown at the top of the task's own
   screen.
-- **Sub-task progress on every view** — a task showing "2/5" now says so in the table, on kanban
-  cards, and on the narrow-screen cards, rather than only in one of them.
+- **Sub-task progress wherever a task appears** — a task with sub-tasks now shows how many are done
+  in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
+  the only hint was a count inside the expanded row.
 
 ### Fixed
 

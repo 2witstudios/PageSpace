@@ -52,8 +52,6 @@ type MutatePages = SWRInfiniteKeyedMutator<TaskListData[]>;
 const MAX_DEFERRED_ECHOES = 200;
 
 export interface TaskWriteMachinery {
-  /** Current user id, for telling our own socket events from everyone else's. */
-  currentUserId: string | null | undefined;
   /** Registers a write and returns its id; pass that id back to settle it. */
   noteSelfWriteStart: (taskId: string) => number;
   /** Bookkeeping only — records the outcome. Does NOT revalidate; see flushDeferredRevalidate. */
@@ -234,7 +232,6 @@ export function useTaskWriteMachinery(
 
   return useMemo(
     () => ({
-      currentUserId,
       noteSelfWriteStart,
       noteSelfWriteSettled,
       canCaptureInverse,

@@ -111,10 +111,24 @@ export function TaskRowGroup({
   const expandable = canExpandNode(task, depth) || isExpanded;
   const hasSubTasks = (task.subTaskCount ?? 0) > 0;
 
-  // A leaf has no chevron and therefore nowhere to put an inline "+ sub-task"
-  // row, so the menu is the only way in. See useSubTaskBootstrap.
+  // A leaf with no description has no chevron, and therefore nowhere to put an
+  // inline "+ sub-task" row: the menu is the only way in. (A leaf WITH a
+  // description does get a chevron, and expanding it already shows the inline
+  // row — so it has both, which is fine.) See useSubTaskBootstrap.
+  /**
+   * The row the menu's "Add sub-task" just created, waiting for the sub-list to
+   * render it.
+   *
+   * The edit cannot start when the POST returns: the row does not exist yet, and
+   * `onStartEdit` opens an APP-WIDE editing session — it pauses the root list's
+   * revalidation, disables Load More and defers auth refresh. If the sub-list's
+   * fetch then fails, and it is terminal here (shouldRetryOnError is off), that
+   * session is latched with nothing on screen to blur or Escape until the user
+   * navigates away. So the id is held until the row is actually there.
+   */
+  const [pendingEditId, setPendingEditId] = useState<string | null>(null);
   const bootstrapSubTask = useSubTaskBootstrap({
-    task, path, onCountDelta,
+    task, path, onCountDelta, onCreated: setPendingEditId,
     // The menu creates a child one level below this row.
     enabled: canEdit && !!task.pageId && !hasSubTasks && canAddSubTaskAt(depth + 1),
   });
@@ -162,6 +176,8 @@ export function TaskRowGroup({
           parentDepth={depth}
           parentPath={path}
           onParentCountDelta={onCountDelta}
+          pendingEditId={pendingEditId}
+          onPendingEditSettled={() => setPendingEditId(null)}
         />
       )}
     </>
@@ -216,12 +232,15 @@ function NestedTaskRow({
 }
 
 function TaskSubTaskRows({
-  task, parentDepth, parentPath, onParentCountDelta,
+  task, parentDepth, parentPath, onParentCountDelta, pendingEditId, onPendingEditSettled,
 }: {
   task: TaskItem;
   parentDepth: number;
   parentPath: TaskNodePath;
   onParentCountDelta?: CountDelta;
+  /** A row the menu created that should open into rename once it renders. */
+  pendingEditId?: string | null;
+  onPendingEditSettled?: () => void;
 }) {
   const tree = useTaskTree();
   const {
@@ -419,6 +438,21 @@ function TaskSubTaskRows({
       loadMore();
     }
   }, [revealCreated, hasMore, error, isLoadingMore, loadMore]);
+
+  /**
+   * Open the menu-created row into rename — but only once it is really there.
+   *
+   * Both arms clear the request: if the fetch failed, the row is never coming
+   * (shouldRetryOnError is off here), and leaving the id pending would be
+   * harmless while leaving the EDIT pending would not — see pendingEditId.
+   */
+  useEffect(() => {
+    if (!pendingEditId) return;
+    const row = subTasks.find((child) => child.id === pendingEditId);
+    if (row) tree.onStartEdit(row);
+    else if (!error) return;
+    onPendingEditSettled?.();
+  }, [pendingEditId, subTasks, error, tree, onPendingEditSettled]);
 
   const addCreatedChild = useCallback((created: TaskItem) => {
     // Decided out here rather than inside the updater, which is contractually
@@ -625,14 +659,16 @@ function NewSubTaskRow({
  * expands the row, after which the normal inline flow takes over.
  */
 function useSubTaskBootstrap({
-  task, path, onCountDelta, enabled,
+  task, path, onCountDelta, onCreated, enabled,
 }: {
   task: TaskItem;
   path: TaskNodePath;
   onCountDelta?: CountDelta;
+  /** Reports the created row so its parent can open it into rename once it renders. */
+  onCreated: (taskId: string) => void;
   enabled: boolean;
 }): (() => void) | undefined {
-  const { expandNode, onStartEdit } = useTaskTree();
+  const { expandNode } = useTaskTree();
 
   const run = useCallback(async () => {
     if (!task.pageId) return;
@@ -645,15 +681,15 @@ function useSubTaskBootstrap({
       // closure, and two invocations resolving against the same one would flip
       // twice and net to closed.
       expandNode(path);
-      // Straight into rename. The title has to be SOMETHING to create the row —
-      // this is the leaf case, where there is no inline add row to type into
-      // yet — and leaving "New sub-task" sitting there for the user to find and
-      // rename through a menu is the roughest edge in the flow.
-      onStartEdit(created);
+      // Into rename, but not from here: the row does not exist yet. The title
+      // has to be SOMETHING to create it — this is the leaf case, with no inline
+      // add row to type into — and leaving "New sub-task" for the user to find
+      // and rename through a menu is the roughest edge in the flow.
+      onCreated(created.id);
     } catch (e) {
       toast.error(taskWriteErrorMessage(e, 'Failed to create sub-task'));
     }
-  }, [task.pageId, onCountDelta, path, expandNode, onStartEdit]);
+  }, [task.pageId, onCountDelta, path, expandNode, onCreated]);
 
   if (!enabled) return undefined;
   return () => { void run(); };

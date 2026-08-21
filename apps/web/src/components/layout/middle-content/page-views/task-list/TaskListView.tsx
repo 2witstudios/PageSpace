@@ -799,9 +799,14 @@ function TaskListView({ page }: TaskListViewProps) {
     // node's own cache is a separate paginated fetch with no filter in its key
     // — so leaving a subtree open shows completed sub-tasks, struck through,
     // underneath a filter that says Active, and non-matching children under a
-    // search that says otherwise. Collapsing is the honest answer: filtering
-    // the subtrees too would mean re-fetching every open node against a
-    // lazily-writing route on every keystroke.
+    // toolbar search that says otherwise. Collapsing is the honest answer:
+    // filtering the subtrees too would mean re-fetching every open node against
+    // a lazily-writing route on every keystroke.
+    //
+    // Cmd+F Find is deliberately NOT in these deps and so does not collapse:
+    // it fires per keystroke, and closing the tree under someone mid-search
+    // would be worse than the inconsistency. Find's own inability to see nested
+    // rows is the filed follow-up.
     setExpandedPaths(EMPTY_EXPANDED);
   }, [filter, search, setSize]);
 
@@ -932,6 +937,11 @@ function TaskListView({ page }: TaskListViewProps) {
 
   // Shared function to save task title
   const handleSaveTaskTitle = async (loc: TaskLocation, title: string) => {
+    // The depth-0 twin of the guard on the nested handler. Unreachable — Rename
+    // is disabled and handleStartEdit returns early — but this was the one
+    // handler in the block without it, and the uniformity is what a reader
+    // relies on when scanning for the hole.
+    if (!canEdit) return;
     await writeTaskField({
       loc,
       body: { title },
