@@ -800,6 +800,17 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const currentFormat = useMemo(() => activeFormat(sheet, selection), [sheet, selection]);
 
+  /**
+   * Hand focus back to the grid.
+   *
+   * Radix returns focus to the trigger when a menu or popover closes, so after
+   * choosing a colour or a number format the caret sits on a toolbar button and
+   * arrow keys stop moving the selection — the key handler is on the grid.
+   */
+  const focusGrid = useCallback(() => {
+    gridRef.current?.focus({ preventScroll: true });
+  }, []);
+
   const runFormatCommand = useCallback(
     (command: FormatCommand) => {
       if (isReadOnly) {
@@ -1215,6 +1226,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           onRedo={handleRedo}
           onFreezeRows={handleFreezeRows}
           onFreezeColumns={handleFreezeColumns}
+          onRefocusGrid={focusGrid}
         />
       </motion.div>
       <SheetFormulaBar

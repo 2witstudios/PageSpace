@@ -321,3 +321,31 @@ describe('resize preview override', () => {
     );
   });
 });
+
+describe('frozen edge cases', () => {
+  const columnAxis = buildColumnAxis(sheet());
+  const rowAxis = buildRowAxis(sheet());
+
+  it('hides a scrolling cell that has slid under a frozen COLUMN band', () => {
+    // The horizontal mirror of the frozen-row case: column 1 sits at x=112, and
+    // scrolling right by 130 puts it behind the pinned first column.
+    const scrolled = view({ scrollLeft: 130 });
+    expect(
+      isCellVisible({ rowAxis, columnAxis, row: 0, column: 1, frozenColumns: 1, view: scrolled }),
+    ).toBe(false);
+  });
+
+  it('keeps the frozen column itself visible at the same scroll offset', () => {
+    const scrolled = view({ scrollLeft: 130 });
+    expect(
+      isCellVisible({ rowAxis, columnAxis, row: 0, column: 0, frozenColumns: 1, view: scrolled }),
+    ).toBe(true);
+  });
+
+  it('does not scroll when the frozen band is larger than the viewport', () => {
+    // A pane dragged narrower than its own frozen columns leaves no free region
+    // to scroll into; moving anyway would push the cell somewhere invisible.
+    const axis = buildAxis(100, () => 20);
+    expect(scrollOffsetToReveal(axis, 50, 300, 30, 4)).toBe(300);
+  });
+});

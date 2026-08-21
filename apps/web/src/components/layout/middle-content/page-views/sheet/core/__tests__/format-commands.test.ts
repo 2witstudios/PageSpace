@@ -220,3 +220,106 @@ describe('formatting a blank cell', () => {
     expect(next.formats?.C3).toEqual({ background: '#dbeafe' });
   });
 });
+
+describe('vertical alignment and font family', () => {
+  it('sets a vertical alignment', () => {
+    const next = applyFormatCommand(base(), single(0, 0), { kind: 'valign', value: 'top' });
+    expect(next.formats?.A1?.valign).toBe('top');
+  });
+
+  it('clears vertical alignment with undefined', () => {
+    let sheet = applyFormatCommand(base(), single(0, 0), { kind: 'valign', value: 'bottom' });
+    sheet = applyFormatCommand(sheet, single(0, 0), { kind: 'valign', value: undefined });
+    expect(sheet.formats?.A1).toBeUndefined();
+  });
+
+  it('sets a font family across a range', () => {
+    const next = applyFormatCommand(base(), range([0, 0], [1, 0]), {
+      kind: 'fontFamily',
+      value: 'mono',
+    });
+    expect(next.formats?.A1?.fontFamily).toBe('mono');
+    expect(next.formats?.A2?.fontFamily).toBe('mono');
+  });
+
+  it('clears a font family with undefined', () => {
+    let sheet = applyFormatCommand(base(), single(0, 0), { kind: 'fontFamily', value: 'mono' });
+    sheet = applyFormatCommand(sheet, single(0, 0), { kind: 'fontFamily', value: undefined });
+    expect(sheet.formats?.A1).toBeUndefined();
+  });
+});
+
+describe('date formats', () => {
+  it('carries dateStyle across a change between date-like kinds', () => {
+    let sheet = applyFormatCommand(base(), single(0, 0), { kind: 'numberKind', value: 'date' });
+    sheet = { ...sheet, formats: { A1: { number: { kind: 'date', dateStyle: 'long' } } } };
+    sheet = applyFormatCommand(sheet, single(0, 0), { kind: 'numberKind', value: 'datetime' });
+    expect(sheet.formats?.A1?.number).toEqual({ kind: 'datetime', dateStyle: 'long' });
+  });
+
+  it('does not carry dateStyle onto a numeric kind, where it means nothing', () => {
+    const sheet = {
+      ...base(),
+      formats: { A1: { number: { kind: 'date' as const, dateStyle: 'iso' as const } } },
+    };
+    const next = applyFormatCommand(sheet, single(0, 0), { kind: 'numberKind', value: 'number' });
+    expect(next.formats?.A1?.number?.dateStyle).toBeUndefined();
+  });
+
+  it('leaves dateStyle unset when the previous format had none', () => {
+    const next = applyFormatCommand(base(), single(0, 0), { kind: 'numberKind', value: 'time' });
+    expect(next.formats?.A1?.number).toEqual({ kind: 'time' });
+  });
+});
+
+describe('horizontal alignment', () => {
+  it('sets an explicit alignment, overriding the type-driven default', () => {
+    // Numbers right-align by default; an explicit `align` is what lets a user
+    // left-align a column of IDs that happen to be numeric.
+    const sheet = base();
+    sheet.cells.A1 = '42';
+    const next = applyFormatCommand(sheet, single(0, 0), { kind: 'align', value: 'left' });
+    expect(next.formats?.A1?.align).toBe('left');
+  });
+
+  it('clears alignment with undefined, returning the cell to its default', () => {
+    // This is what the toolbar sends when the active alignment button is pressed
+    // again, so it has to round-trip back to an unstyled cell.
+    let sheet = applyFormatCommand(base(), single(0, 0), { kind: 'align', value: 'center' });
+    sheet = applyFormatCommand(sheet, single(0, 0), { kind: 'align', value: undefined });
+    expect(sheet.formats?.A1).toBeUndefined();
+  });
+
+  it('applies across a whole range', () => {
+    const next = applyFormatCommand(base(), range([0, 0], [0, 2]), {
+      kind: 'align',
+      value: 'right',
+    });
+    expect(next.formats?.A1?.align).toBe('right');
+    expect(next.formats?.C1?.align).toBe('right');
+  });
+});
+
+describe('defensive paths', () => {
+  it('carries the thousands separator across a kind change', () => {
+    const sheet = {
+      ...base(),
+      formats: { A1: { number: { kind: 'number' as const, thousands: false } } },
+    };
+    const next = applyFormatCommand(sheet, single(0, 0), { kind: 'numberKind', value: 'currency' });
+    expect(next.formats?.A1?.number).toEqual({ kind: 'currency', thousands: false, currency: 'USD' });
+  });
+
+  it('returns the sheet untouched for a selection that covers no cells', () => {
+    // A degenerate selection yields no addresses. Without the guard the sheet
+    // would come back with a bumped version and no change in it, which reads
+    // downstream as an edit worth saving and undoing.
+    const sheet = base();
+    const degenerate: SelectionState = {
+      type: 'single',
+      cell: { row: Number.NaN, column: Number.NaN },
+    };
+    expect(selectionAddresses(degenerate)).toEqual([]);
+    expect(applyFormatCommand(sheet, degenerate, { kind: 'toggle', field: 'bold' })).toBe(sheet);
+  });
+});

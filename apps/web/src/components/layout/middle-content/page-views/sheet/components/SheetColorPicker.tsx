@@ -15,6 +15,8 @@ interface SheetColorPickerProps {
   icon: React.ReactNode;
   label: string;
   disabled?: boolean;
+  /** Return focus to the grid when the popover closes. */
+  onRefocusGrid?: () => void;
 }
 
 const Swatch: React.FC<{ color: string; isActive: boolean; onSelect: () => void; label: string }> = ({
@@ -54,6 +56,7 @@ export const SheetColorPicker: React.FC<SheetColorPickerProps> = ({
   icon,
   label,
   disabled,
+  onRefocusGrid,
 }) => {
   const [open, setOpen] = useState(false);
   const [custom, setCustom] = useState('');
@@ -93,7 +96,23 @@ export const SheetColorPicker: React.FC<SheetColorPickerProps> = ({
           />
         </button>
       </PopoverTrigger>
-      <PopoverContent className="w-auto p-3" align="start">
+      {/*
+        Radix restores focus to the trigger when the popover closes, which parks
+        the caret on a toolbar button — arrow keys then do nothing, because the
+        spreadsheet's key handler lives on the grid. Preventing the default and
+        focusing the grid keeps the selection navigable straight after picking a
+        colour. `preventDefault` here does not make the popover modal; it only
+        overrides where focus lands on close.
+      */}
+      <PopoverContent
+        className="w-auto p-3"
+        align="start"
+        onCloseAutoFocus={(event) => {
+          if (!onRefocusGrid) return;
+          event.preventDefault();
+          onRefocusGrid();
+        }}
+      >
         <div className="flex flex-col gap-3">
           <button
             type="button"

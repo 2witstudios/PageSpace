@@ -101,6 +101,12 @@ export interface SheetToolbarProps {
   onRedo: () => void;
   onFreezeRows: (rows: number) => void;
   onFreezeColumns: (columns: number) => void;
+  /**
+   * Return focus to the grid after a menu or popover closes. Radix hands focus
+   * back to the trigger by default, which leaves it on a toolbar button and
+   * makes arrow-key navigation silently stop working.
+   */
+  onRefocusGrid: () => void;
 }
 
 /**
@@ -123,6 +129,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
   onRedo,
   onFreezeRows,
   onFreezeColumns,
+  onRefocusGrid,
 }) => {
   const numberKind = format.number?.kind ?? 'auto';
   const activeNumberFormat = NUMBER_FORMATS.find((entry) => entry.kind === numberKind);
@@ -201,6 +208,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
           icon={<Baseline size={16} />}
           label="Text colour"
           disabled={disabled}
+          onRefocusGrid={onRefocusGrid}
         />
         <SheetColorPicker
           value={format.background}
@@ -208,6 +216,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
           icon={<PaintBucket size={16} />}
           label="Fill colour"
           disabled={disabled}
+          onRefocusGrid={onRefocusGrid}
         />
 
         <Divider />
@@ -293,7 +302,14 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
               <span className="max-w-[72px] truncate">{activeNumberFormat?.label ?? 'Automatic'}</span>
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start" className="w-56">
+          <DropdownMenuContent
+            align="start"
+            className="w-56"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              onRefocusGrid();
+            }}
+          >
             <DropdownMenuLabel>Number format</DropdownMenuLabel>
             <DropdownMenuSeparator />
             {NUMBER_FORMATS.map((entry) => (
@@ -330,7 +346,13 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
               <Snowflake size={16} />
             </button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="start">
+          <DropdownMenuContent
+            align="start"
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              onRefocusGrid();
+            }}
+          >
             <DropdownMenuLabel>Freeze</DropdownMenuLabel>
             <DropdownMenuSeparator />
             <DropdownMenuItem onSelect={() => onFreezeRows(frozenRows > 0 ? 0 : 1)}>
