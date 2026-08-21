@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Bot, SquareTerminal } from 'lucide-react';
+import { Bot, Boxes, SquareTerminal, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 
 import {
@@ -14,7 +14,9 @@ import {
 import { post } from '@/lib/auth/auth-fetch';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
+import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
+import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 
 export type SpawnKind = 'agent' | 'shell' | 'assistant';
 
@@ -24,6 +26,22 @@ export interface SpawnPick {
   agentPageId: string | null;
   /** The sensible default: the agent's title, "Shell", or "Global Assistant". */
   label: string;
+  /**
+   * WHERE the session runs, in three states rather than two.
+   *
+   * `undefined` = not chosen yet, which is what makes the environment step
+   * appear; `null` = the ephemeral default (the session owns its own sandbox,
+   * gone when it ends); a string = the drive environment it runs INSIDE,
+   * sharing that environment's persistent filesystem with every other session
+   * in it. The `undefined`/`null` split is load-bearing: "ephemeral" is a real
+   * choice a user makes, not the absence of one, so it cannot be the same value
+   * as "has not answered yet".
+   *
+   * A drive with no environments never shows the step, and the pick goes
+   * straight to naming with this left unset — the flow is byte-for-byte what it
+   * was before environments existed.
+   */
+  envId?: string | null;
 }
 
 /**
@@ -55,14 +73,14 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const [spawning, setSpawning] = useState(false);
 
   const spawn = useCallback(
-    async (input: { driveId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
+    async (input: { driveId: string | null; envId: string | null; agentPageId: string | null; kind: SpawnKind; name: string }) => {
       if (spawning) return;
       setSpawning(true);
       try {
         if (input.kind === 'shell') {
           const created = await post<{ session: { workspaceId: string }; shellId: string; shellName: string }>(
             '/api/agent-workspaces',
-            { driveId: input.driveId, firstThing: 'shell', name: input.name },
+            { driveId: input.driveId, envId: input.envId, firstThing: 'shell', name: input.name },
           );
           setSpawnTarget(null);
           setSpawnPick(null);
@@ -79,7 +97,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         }
         const created = await post<{ session: { workspaceId: string }; conversationId: string }>(
           '/api/agent-workspaces',
-          { driveId: input.driveId, agentPageId: input.agentPageId, name: input.name },
+          { driveId: input.driveId, envId: input.envId, agentPageId: input.agentPageId, name: input.name },
         );
         setSpawnTarget(null);
         setSpawnPick(null);
@@ -120,10 +138,35 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const handleSubmitName = useCallback(
     (name: string) => {
       if (!spawnTarget || !spawnPick) return;
-      void spawn({ driveId: spawnTarget.driveId, agentPageId: spawnPick.agentPageId, kind: spawnPick.kind, name });
+      void spawn({
+        driveId: spawnTarget.driveId,
+        // `undefined` (the step was skipped because the drive has none) and
+        // `null` (the user chose ephemeral) mean the same thing to the server.
+        envId: spawnPick.envId ?? null,
+        agentPageId: spawnPick.agentPageId,
+        kind: spawnPick.kind,
+        name,
+      });
     },
     [spawn, spawnTarget, spawnPick],
   );
+
+  // The targeted drive's environments — ONE fetch, keyed on whichever drive the
+  // palette is currently open for, and none at all while it is closed or the
+  // target is the global assistant (which lives outside any drive and so has no
+  // environments to offer). Shares its SWR key with the sidebar's environment
+  // rows, so an environment created there is offered here without a second
+  // request.
+  // `isLoading` is consumed, not discarded, and that is load-bearing rather
+  // than tidy: `envs` is `[]` BOTH while the listing is in flight and when the
+  // drive genuinely has none, so a step decision that reads only `.length`
+  // cannot tell "no environments" from "not answered yet". See `step` below.
+  const {
+    envs: paletteEnvs,
+    isLoading: paletteEnvsLoading,
+    error: paletteEnvsError,
+    mutate: retryPaletteEnvs,
+  } = useDriveEnvs(spawnTarget?.driveId ?? null);
 
   const paletteAgents = useMemo(
     () => (spawnTarget ? (agentsByDrive.find((entry) => entry.driveId === spawnTarget.driveId)?.agents ?? []) : []),
@@ -145,6 +188,10 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
       open={spawnTarget !== null}
       driveName={spawnTarget?.driveName ?? null}
       agents={paletteAgents}
+      envs={paletteEnvs}
+      envsLoading={paletteEnvsLoading}
+      envsError={paletteEnvsError}
+      onRetryEnvs={retryPaletteEnvs}
       canRunSandbox={canRunSandbox}
       pick={spawnPick}
       spawning={spawning}
@@ -154,6 +201,7 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         setSpawnPick(null);
       }}
       onPickTarget={setSpawnPick}
+      onPickEnv={(envId) => setSpawnPick((current) => (current ? { ...current, envId } : current))}
       onSubmitName={handleSubmitName}
     />
   );
@@ -175,16 +223,41 @@ function SpawnSessionPalette({
   open,
   driveName,
   agents,
+  envs,
+  envsLoading,
+  envsError,
+  onRetryEnvs,
   canRunSandbox,
   pick,
   spawning,
   onOpenChange,
   onPickTarget,
+  onPickEnv,
   onSubmitName,
 }: {
   open: boolean;
   driveName: string | null;
   agents: DriveWithAgents['agents'];
+  /**
+   * The drive's environments. EMPTY IS THE COMMON CASE and it removes the step
+   * entirely — a drive that has never made one never sees a question about it.
+   *
+   * Always read together with `envsLoading`: an empty array on its own does not
+   * mean "this drive has none".
+   */
+  envs: DriveEnvDTO[];
+  /**
+   * Whether that listing is still in flight. The step machine WAITS on this
+   * rather than treating a not-yet-arrived listing as an answer — see `step`.
+   */
+  envsLoading: boolean;
+  /**
+   * Whether that listing FAILED. The third fact `[]` collapses, and the one
+   * that survives after `envsLoading` goes false — so it needs its own step
+   * for the same reason loading did.
+   */
+  envsError: unknown;
+  onRetryEnvs: () => void;
   /**
    * Whether the requester can actually run this drive's sandbox (the
    * actor-aware server verdict: kill switch + the payer's tier + the
@@ -201,6 +274,8 @@ function SpawnSessionPalette({
   spawning: boolean;
   onOpenChange: (open: boolean) => void;
   onPickTarget: (pick: SpawnPick) => void;
+  /** `null` is the ephemeral default — a real answer, not a cleared one. */
+  onPickEnv: (envId: string | null) => void;
   onSubmitName: (name: string) => void;
 }) {
   const [name, setName] = useState('');
@@ -211,22 +286,143 @@ function SpawnSessionPalette({
     if (open) setName('');
   }, [open, pick]);
 
+  // WHICH OF THE FOUR STEPS IS ON SCREEN, decided in one place rather than by
+  // ternaries that could disagree. The environment step exists only when there
+  // is something to choose between: no environments in the drive means
+  // `pick.envId` is never asked for and the flow is the original two steps.
+  //
+  // `'pending'` is the step that stops a race, and it is not cosmetic. The
+  // listing is `[]` while it is still in flight, so a step machine reading only
+  // `envs.length` treats "not answered yet" as "this drive has none" — and the
+  // two failure modes that follows are both silent. A fast pick lands straight
+  // on the name step and spawns with `envId: null`, quietly ephemeral in a
+  // drive that HAS environments; or the listing arrives while the user is
+  // already typing a name, the step recomputes to `'env'`, and the name form is
+  // replaced mid-keystroke (with `setName('')` wiping what they wrote). Both
+  // are likeliest from a cold cache — opening the palette from a header that
+  // never rendered the sidebar's environment rows and so never warmed the key.
+  //
+  // Waiting is therefore the only honest answer while the question is open. It
+  // costs a beat exactly once per drive, and never once the SWR key is warm.
+  //
+  // `'error'` is the same argument one step further. A FAILED listing also
+  // leaves `envs` at `[]`, and unlike loading it never resolves on its own —
+  // so without its own step the palette would sail past a question it could
+  // not ask and spawn ephemerally into a drive whose environments it simply
+  // failed to read. That is the silent-wrong-answer case again, just reached
+  // by a different route.
+  const step: 'target' | 'pending' | 'error' | 'env' | 'name' =
+    pick === null
+      ? 'target'
+      : pick.envId !== undefined
+        ? 'name'
+        : envsLoading
+          ? 'pending'
+          : envsError != null
+            ? 'error'
+            : envs.length > 0
+              ? 'env'
+              : 'name';
+  const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
+
   return (
     <CommandDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={pick ? 'Name your session' : 'New session'}
+      title={
+        step === 'target'
+          ? 'New session'
+          : step === 'env' || step === 'pending' || step === 'error'
+            ? 'Where should it run?'
+            : 'Name your session'
+      }
       description={
-        pick
-          ? `Leave blank to use "${pick.label}"`
-          : driveName
-            ? `Choose an agent to start a session with in ${driveName}`
-            : 'Choose an agent to start a session with'
+        step === 'name'
+          ? chosenEnv
+            ? `In ${chosenEnv.name} · leave blank to use "${pick?.label ?? 'this session'}"`
+            : `Leave blank to use "${pick?.label ?? 'this session'}"`
+          : step === 'pending'
+            ? 'Checking this drive for environments…'
+            : step === 'error'
+              ? 'This drive’s environments could not be loaded.'
+            : step === 'env'
+              ? 'A session in an environment shares that environment’s files, and they stay there when the session ends.'
+              : driveName
+                ? `Choose an agent to start a session with in ${driveName}`
+                : 'Choose an agent to start a session with'
       }
       showCloseButton={false}
       className="max-w-[420px]"
     >
-      {pick ? (
+      {step === 'pending' ? (
+        /* Deliberately inert — no input to focus and nothing selectable. The
+           question ("where should it run?") is already on screen; only its
+           options are missing, so this holds the user's place rather than
+           showing them a form that is about to be replaced. */
+        <div className="p-4 text-sm text-muted-foreground" role="status">
+          Looking for environments in this drive…
+        </div>
+      ) : step === 'error' ? (
+        /* Not a hard block. The user came here to start a session and may
+           genuinely want an ephemeral one — but that has to be a CHOICE they
+           make knowing the environment list is missing, not a default they
+           fall into because a request failed. Retry first, escape hatch
+           second, both spelled out. */
+        <div className="space-y-3 p-4">
+          <p className="text-sm text-muted-foreground">
+            We could not check which environments this drive has. Try again, or start a session in a
+            new sandbox of its own.
+          </p>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="rounded-md border border-input px-3 py-1.5 text-sm hover:bg-accent"
+              onClick={onRetryEnvs}
+              disabled={spawning}
+            >
+              Try again
+            </button>
+            <button
+              type="button"
+              className="rounded-md px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+              onClick={() => onPickEnv(null)}
+              disabled={spawning}
+            >
+              Use a new sandbox
+            </button>
+          </div>
+        </div>
+      ) : step === 'env' ? (
+        <>
+          <CommandInput placeholder="Search environments…" autoFocus />
+          <CommandList>
+            <CommandGroup>
+              {/* The ephemeral default leads, because it is what every session
+                  was before environments existed and what most still should be. */}
+              <CommandItem
+                value="ephemeral-New sandbox"
+                disabled={spawning}
+                onSelect={() => onPickEnv(null)}
+              >
+                <Zap className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="truncate">New sandbox</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
+              </CommandItem>
+              {envs.map((env) => (
+                <CommandItem
+                  key={env.id}
+                  value={`${env.id}-in ${env.name}`}
+                  disabled={spawning}
+                  onSelect={() => onPickEnv(env.id)}
+                >
+                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="truncate">in {env.name}</span>
+                </CommandItem>
+              ))}
+            </CommandGroup>
+          </CommandList>
+        </>
+      ) : step === 'name' ? (
         <form
           className="p-3"
           onSubmit={(event) => {
@@ -244,7 +440,7 @@ function SpawnSessionPalette({
               event.preventDefault();
               onSubmitName(name);
             }}
-            placeholder={pick.label}
+            placeholder={pick?.label ?? 'Session'}
             disabled={spawning}
             className="flex h-10 w-full rounded-md border border-input bg-transparent px-3 py-2 text-sm outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
           />

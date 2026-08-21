@@ -51,6 +51,7 @@ import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { SANDBOX_STORAGE_MODELS } from '../../monitoring/usage-source';
 import {
   reconcileSandboxStorage,
   type ReconcileSandboxStorageDeps,
@@ -150,14 +151,13 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // bigger guest, a GPU host or another platform keeps billing under this
       // same label.
       //
-      // What this label does NOT yet do is separate the two in the usage
-      // breakdown's per-agent section: that view buckets every `source:
-      // 'terminal'` row by `pageId`, and an env has none, so env storage lands
-      // in the same "Unattributed agent" line as global-assistant session
-      // storage. Only the by-model view distinguishes them today. Ratified as
-      // acceptable for this slice; envs get their own breakdown section as a
-      // binding requirement on the Environments UI task.
-      model: subjectKind === 'env' ? 'drive-env-storage' : 'terminal-machine-storage',
+      // This label is also what the usage breakdown splits on: an env row and a
+      // session row both carry `source: 'terminal'` and no `pageId`, so the
+      // model string is the ONLY thing that says which of the two a charge is.
+      // Hence the shared constant rather than a literal spelled at each end —
+      // the breakdown's environments section keys off the same value
+      // (`apps/web/src/lib/subscription/usage-breakdown.ts`).
+      model: subjectKind === 'env' ? SANDBOX_STORAGE_MODELS.env : SANDBOX_STORAGE_MODELS.session,
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',

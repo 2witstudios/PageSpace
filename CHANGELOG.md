@@ -7,6 +7,30 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Environments: a place in a drive that stays** — a drive can now hold named environments, and a
+  session can run inside one instead of in a sandbox that disappears when you close it. Everything
+  in an environment — your files, what you installed, what you configured — is still there the next
+  time anyone in the drive opens a session in it, because it is one machine with one filesystem that
+  everybody in the drive shares. Name them for what they are for: “dev”, “staging”, “data-import”.
+  Ephemeral sessions have not changed and are still the default; an environment is something you
+  deliberately make.
+- **Environments live in the sidebar beside your sessions, not inside them** — each one shows its
+  name and a dot for whether its machine is up, and the sessions running in it are listed
+  underneath, so you can see at a glance who is working on which filesystem. An environment with
+  nothing running in it still appears: it is infrastructure your drive keeps, not something that
+  vanishes on an idle afternoon. Starting a new session in a drive that has environments asks where
+  it should run — a fresh sandbox, or in one of them.
+- **Creating, renaming, rebuilding and deleting an environment** — all four are for drive owners and
+  admins, and the two destructive ones say what they destroy before they do it. Deleting refuses
+  while sessions are still running inside and then offers to end them, naming both halves of what
+  that means; rebuilding says plainly that the environment comes back BLANK, with its name intact
+  and nothing else. Anyone else in the drive sees the environments and can work in them, without the
+  controls they could not use anyway.
+- **Environments have their own line on your usage page** — what a drive's environments cost to keep
+  is listed per environment, by name, separately from your agent sessions. It was previously folded
+  into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
+  agent appeared to account for; both are now right.
+
 - **Agents can hand work to each other from anywhere, not just from a browser tab** — asking an
   assistant to spawn or message a worker used to fail with "the calling request carries no session
   credentials to dispatch with" whenever the request had not come from a logged-in browser. That

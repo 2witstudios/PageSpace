@@ -245,8 +245,10 @@ export async function POST(request: Request) {
   let driveId = typeof body.driveId === 'string' && body.driveId.length > 0 ? body.driveId : null;
   const agentPageId =
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
-  // The environment to run inside, when one is named. Accepted but not yet
-  // OFFERED anywhere — no UI sends it, which is what "ships dark" means here.
+  // The environment to run inside, when one is named. The spawn palette now
+  // offers it ("in <env name>", beside the ephemeral default), so this is a
+  // live field rather than the dark one #2441 landed. Omitted and `null` still
+  // mean the same thing they always did: the ordinary ephemeral sandbox.
   // It is NOT validated in this route: whether the env exists and belongs to
   // `driveId` is `spawnAgentSession`'s check, made there so every future caller
   // inherits it rather than each one re-deriving it.

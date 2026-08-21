@@ -10,11 +10,13 @@ import { and, eq, gte, lte } from '@pagespace/db/operators';
 import { creditBalances, creditLedger } from '@pagespace/db/schema/credits';
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { pages } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { aggregateUsageBreakdown, resolveUsageWindow, type UsageBreakdown } from './usage-breakdown';
 
 /**
- * Spend-by-feature, spend-by-model, and (for source:'terminal') spend-by-agent-session
- * for the user's current billing period. Spend is the ledger's precise charged amount
+ * Spend-by-feature, spend-by-model, spend-by-agent-session and spend-by-environment
+ * (the last two both from source:'terminal' rows, split by the storage meter's model
+ * label) for the user's current billing period. Spend is the ledger's precise charged amount
  * (`chargeMillicents`, post-markup) — never the raw provider `cost`. The join drops
  * usage rows whose AI log has been purged by retention, which is acceptable for a
  * "recent usage" view.
@@ -58,10 +60,20 @@ export async function getUserUsageBreakdown(userId: string): Promise<UsageBreakd
       pageId: aiUsageLogs.pageId,
       pageTitle: pages.title,
       durationMs: aiUsageLogs.duration,
+      // ENVIRONMENT attribution. `aiUsageLogs.sessionId` is a shared analytics
+      // column many sources write, so this join is only MEANINGFUL for the env
+      // storage rows the aggregator selects by model — every other row simply
+      // fails to match a `drive_envs` id and comes back with a null name, which
+      // the aggregator never reads. Left-joined (not inner) so a DELETED
+      // environment still surfaces its spend, under "Deleted environment",
+      // rather than disappearing — the same rule `pages` follows above.
+      sessionId: aiUsageLogs.sessionId,
+      envName: driveEnvs.name,
     })
     .from(creditLedger)
     .innerJoin(aiUsageLogs, eq(creditLedger.aiUsageLogId, aiUsageLogs.id))
     .leftJoin(pages, eq(aiUsageLogs.pageId, pages.id))
+    .leftJoin(driveEnvs, eq(aiUsageLogs.sessionId, driveEnvs.id))
     .where(
       and(
         eq(creditLedger.userId, userId),
