@@ -111,6 +111,8 @@ const ResizeHandle: React.FC<{
       role="separator"
       aria-orientation={orientation === 'column' ? 'vertical' : 'horizontal'}
       aria-label={label}
+      // Inside an aria-hidden strip, but kept so the handle is still a
+      // recognisable separator to anything walking the DOM directly.
       // `data-hover-only` opts out of the global coarse-pointer rule that
       // force-reveals hover-hidden elements; without it every handle would sit
       // permanently visible on touch devices.
@@ -302,8 +304,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
         output.push(
           <div
             key={`column-header-${column}`}
-            role="columnheader"
-            aria-colindex={column + 1}
+            data-column-header={column}
             style={{
               position: 'absolute',
               transform: `translate3d(${axisOffset(columnAxis, column) - originLeft}px, 0, 0)`,
@@ -347,8 +348,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
         output.push(
           <div
             key={`row-header-${row}`}
-            role="rowheader"
-            aria-rowindex={row + 1}
+            data-row-header={row}
             style={{
               position: 'absolute',
               transform: `translate3d(0, ${axisOffset(rowAxis, row) - originTop}px, 0)`,
@@ -424,11 +424,24 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
       />
 
       {/* Column letters */}
+      {/*
+        The header strips are marked aria-hidden and the cells carry their own
+        address instead ("B2: 138500").
+
+        Splitting the grid into frozen panes means a row's number lives in a
+        different DOM subtree from its cells, so `rowheader` elements cannot sit
+        inside the `row` they label — and `aria-rowindex={0}` is not even valid
+        (the index is 1-based). Emitting a broken structure would be worse than
+        emitting none: hiding the visual affordance and naming each cell by its
+        address gives a screen reader more than a header pane it cannot
+        associate with anything.
+      */}
       <div
+        aria-hidden="true"
         style={bandStyle({ left: ROW_HEADER_WIDTH, top: 0, right: 0, height: COLUMN_HEADER_HEIGHT, zIndex: 30 })}
         className="bg-background/80 backdrop-blur"
       >
-        <div role="row" aria-rowindex={0} style={{ position: 'absolute', inset: 0 }}>
+        <div style={{ position: 'absolute', inset: 0 }}>
           {hasFrozenColumns && columnHeaderCells(0, frozenColumns - 1, 0)}
           <div style={{ position: 'absolute', inset: 0, left: frozenWidth, overflow: 'hidden' }}>
             {columnHeaderCells(
@@ -442,6 +455,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
 
       {/* Row numbers */}
       <div
+        aria-hidden="true"
         style={bandStyle({ left: 0, top: COLUMN_HEADER_HEIGHT, bottom: 0, width: ROW_HEADER_WIDTH, zIndex: 30 })}
         className="bg-background/80 backdrop-blur"
       >
