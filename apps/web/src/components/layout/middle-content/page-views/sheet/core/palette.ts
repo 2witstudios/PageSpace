@@ -93,28 +93,11 @@ export const normalizeHex = (value: string): string | null => {
   return `#${hex(parsed.r)}${hex(parsed.g)}${hex(parsed.b)}`;
 };
 
-/**
- * Relative luminance per WCAG 2.1, used to decide what reads on top of a fill.
- */
-export const relativeLuminance = (hex: string): number => {
-  const parsed = parseHex(hex);
-  if (!parsed) return 1;
-
-  const channel = (value: number): number => {
-    const srgb = value / 255;
-    return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
-  };
-
-  return 0.2126 * channel(parsed.r) + 0.7152 * channel(parsed.g) + 0.0722 * channel(parsed.b);
-};
 
 /**
- * Black or white, whichever is legible on `background`.
- *
- * This never rewrites a user's stored text colour — it only picks the tick mark
- * drawn on a swatch, and the automatic foreground for a filled cell that has no
- * explicit colour of its own. Without it, applying a dark fill makes a cell's
- * text invisible and looks like the value was deleted.
+ * Re-exported from the lib so the tick drawn on a swatch is decided by exactly
+ * the same rule that decides a filled cell's text colour. Two copies of this
+ * would be free to disagree, and the disagreement would show as a tick you
+ * cannot see on a colour you just picked.
  */
-export const readableTextColor = (background: string): '#000000' | '#ffffff' =>
-  relativeLuminance(background) > 0.45 ? '#000000' : '#ffffff';
+export { readableTextColor } from '@pagespace/lib/sheets/sheet';

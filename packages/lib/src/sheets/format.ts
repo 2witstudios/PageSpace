@@ -420,6 +420,40 @@ const borderValue = (side: CellBorderSide | undefined): string | undefined => {
  * Colors are re-validated here even though they were validated on parse: this
  * value reaches a `style` attribute, and defence in depth is cheap.
  */
+/**
+ * Relative luminance per WCAG 2.1. Only defined for `#rrggbb`, which is the
+ * only colour shape `CellFormat` stores.
+ */
+function relativeLuminance(hex: string): number {
+  const channel = (value: number): number => {
+    const srgb = value / 255;
+    return srgb <= 0.03928 ? srgb / 12.92 : ((srgb + 0.055) / 1.055) ** 2.4;
+  };
+
+  const r = parseInt(hex.slice(1, 3), 16);
+  const g = parseInt(hex.slice(3, 5), 16);
+  const b = parseInt(hex.slice(5, 7), 16);
+
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/**
+ * Black or white, whichever is legible on `background`.
+ *
+ * A stored fill is an absolute colour — that is what makes the exported
+ * workbook and the published page match what the author saw — but the text
+ * colour of an unstyled cell is not stored, it inherits the theme. So a pale
+ * fill applied in light mode became white-on-pale in dark mode: the value was
+ * still there and completely unreadable.
+ *
+ * This only fills in a foreground the user never chose. An explicit
+ * `format.color` always wins, even where it is a poor choice: it is their
+ * decision, and silently overriding it would be worse.
+ */
+export function readableTextColor(background: string): '#000000' | '#ffffff' {
+  return relativeLuminance(background) > 0.45 ? '#000000' : '#ffffff';
+}
+
 export function cellFormatToStyle(format: CellFormat | undefined): Record<string, string> {
   const style: Record<string, string> = {};
   if (!format) return style;
@@ -443,7 +477,14 @@ export function cellFormatToStyle(format: CellFormat | undefined): Record<string
     style.overflowWrap = 'anywhere';
   }
   if (isValidHexColor(format.color)) style.color = format.color;
-  if (isValidHexColor(format.background)) style.backgroundColor = format.background;
+  if (isValidHexColor(format.background)) {
+    style.backgroundColor = format.background;
+    // A filled cell with no explicit text colour would otherwise inherit the
+    // theme foreground, which flips with dark mode while the fill does not.
+    if (!isValidHexColor(format.color)) {
+      style.color = readableTextColor(format.background);
+    }
+  }
   if (format.fontSize) style.fontSize = `${format.fontSize}px`;
   if (format.fontFamily) {
     style.fontFamily =

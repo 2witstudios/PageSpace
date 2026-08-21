@@ -5,11 +5,6 @@
  * positions and the mobile-breakpoint decision.
  */
 
-export interface Viewport {
-  width: number;
-  height: number;
-}
-
 /** The mobile breakpoint (Tailwind `sm`). */
 export const MOBILE_BREAKPOINT = 640;
 

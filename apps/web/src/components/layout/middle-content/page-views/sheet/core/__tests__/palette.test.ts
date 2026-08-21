@@ -1,14 +1,6 @@
 import { describe, it, expect } from 'vitest';
-import {
-  NEUTRALS,
-  PALETTE,
-  normalizeHex,
-  parseHex,
-  readableTextColor,
-  relativeLuminance,
-  swatchRow,
-} from '../palette';
-import { isValidHexColor } from '@pagespace/lib/sheets/sheet';
+import { NEUTRALS, PALETTE, normalizeHex, parseHex, readableTextColor, swatchRow } from '../palette';
+import { cellFormatToStyle, isValidHexColor } from '@pagespace/lib/sheets/sheet';
 
 describe('palette', () => {
   it('offers the same twelve hues the rest of the product uses', () => {
@@ -87,8 +79,10 @@ describe('readableTextColor', () => {
     }
   });
 
-  it('falls back to dark text for an unparseable colour rather than throwing', () => {
-    expect(readableTextColor('nonsense')).toBe('#000000');
-    expect(relativeLuminance('nonsense')).toBe(1);
+  it('is the same rule the renderer uses, so a tick is never invisible', () => {
+    // Re-exported from the lib rather than reimplemented: the tick on a swatch
+    // and the text colour of a cell filled with that swatch must agree.
+    expect(readableTextColor('#dbeafe')).toBe(cellFormatToStyle({ background: '#dbeafe' }).color);
+    expect(readableTextColor('#1d4ed8')).toBe(cellFormatToStyle({ background: '#1d4ed8' }).color);
   });
 });

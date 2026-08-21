@@ -149,7 +149,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
           }
           disabled={disabled}
         >
-          <SelectTrigger className="h-8 w-[76px] text-xs" aria-label="Font size">
+          <SelectTrigger className="h-8 w-[92px] text-xs" aria-label="Font size">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
