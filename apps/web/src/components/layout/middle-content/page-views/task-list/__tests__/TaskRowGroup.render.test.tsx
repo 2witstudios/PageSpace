@@ -16,7 +16,7 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from '@/hooks/__tests__/riteway';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SWRConfig } from 'swr';
 import type { TaskItem, TaskStatusConfig, LocatedTaskHandlers } from '../task-list-types';
@@ -43,7 +43,7 @@ vi.mock('../MultiAssigneeSelect', () => ({ MultiAssigneeSelect: () => null }));
 
 const { TaskRowGroup } = await import('../TaskRowGroup');
 const { TaskTreeProvider } = await import('../task-tree-context');
-const { rootNodePath, makeNodePath } = await import('../task-tree-core');
+const { rootNodePath, makeNodePath, expandNodePath } = await import('../task-tree-core');
 const { useTaskWriteMachinery } = await import('@/lib/tasks/task-write-machinery');
 
 const CONFIGS: TaskStatusConfig[] = [
@@ -117,7 +117,7 @@ const rootRenderRow = (
 
 function Harness({
   tasks, expanded, canEdit = true, handlers = noopHandlers(), onCountDelta,
-  renderRow,
+  renderRow, onStartEdit = vi.fn(), applyCountDeltas = false,
 }: {
   tasks: TaskItem[];
   expanded: Set<string>;
@@ -128,6 +128,14 @@ function Harness({
     children: React.ReactNode,
     tree: { expandable: boolean; isExpanded: boolean },
   ) => React.ReactNode;
+  onStartEdit?: (task: TaskItem) => void;
+  /**
+   * Apply count deltas to the rendered rows, the way the real cache does.
+   * Off by default so the existing cases keep asserting the delta in isolation;
+   * on for the ones that need the gate to actually open, since a sub-list only
+   * fetches once its parent's count says there is something there.
+   */
+  applyCountDeltas?: boolean;
 }) {
   const rootPath = rootNodePath(ROOT_PAGE);
   // Deliberately NOT wrapped in TaskWriteProvider: the app never renders one —
@@ -136,17 +144,27 @@ function Harness({
   // ("useTaskWriter requires a TaskWriteProvider") that only appeared in the
   // real app when a nested node mounted.
   const writeMachinery = useTaskWriteMachinery('user-me', vi.fn());
+  const [liveExpanded, setLiveExpanded] = React.useState(expanded);
+  const [counts, setCounts] = React.useState<Record<string, number>>({});
+  const handleCountDelta = (delta: { total?: number; completed?: number }) => {
+    onCountDelta?.(delta);
+    if (!applyCountDeltas || !delta.total) return;
+    setCounts((prev) => ({ ...prev, [tasks[0].id]: (prev[tasks[0].id] ?? tasks[0].subTaskCount ?? 0) + delta.total! }));
+  };
   const tree = {
     canEdit,
     driveId: 'drive-1',
     writeMachinery,
     rootStatusConfigs: CONFIGS,
     onNavigate: vi.fn(),
-    onStartEdit: vi.fn(),
+    onStartEdit,
     openTriggerDialog: vi.fn(),
-    expandedPaths: expanded,
+    expandedPaths: liveExpanded,
     toggleExpanded: vi.fn(),
-    expandNode: vi.fn(),
+    // Real, not a spy: the menu's "Add sub-task" expands the row it created
+    // under, and a mocked expandNode leaves the subtree unmounted — which makes
+    // every assertion about what happens once it renders vacuously true.
+    expandNode: (path: string) => setLiveExpanded((prev) => expandNodePath(prev, path)),
     editingTaskId: null,
     editingTitle: '',
     onEditingTitleChange: vi.fn(),
@@ -160,13 +178,13 @@ function Harness({
               {tasks.map((t) => (
                 <TaskRowGroup
                   key={t.id}
-                  task={t}
+                  task={counts[t.id] === undefined ? t : { ...t, subTaskCount: counts[t.id] }}
                   depth={0}
                   listPageId={ROOT_PAGE}
                   path={makeNodePath(rootPath, t.id)}
                   handlers={handlers}
                   statusConfigs={CONFIGS}
-                  onCountDelta={onCountDelta}
+                  onCountDelta={handleCountDelta}
                   renderRow={renderRow}
                 />
               ))}
@@ -329,6 +347,82 @@ describe('nested rows in the DOM', () => {
         vanished: !!screen.queryByText('These sub-tasks are no longer here.'),
       },
       expected: { addRow: true, fetches: 0, vanished: false },
+    });
+  });
+});
+
+describe('the row menu\'s "Add sub-task" on a leaf', () => {
+  const openMenuFor = async (title: string) => {
+    const row = screen.getByText(title).closest('tr')!;
+    await userEvent.click(within(row).getByRole('button', { name: new RegExp(`Actions for ${title}`, 'i') }));
+  };
+
+  it('creates the first sub-task, opens the row, and puts it into rename', async () => {
+    // A leaf has no inline add row to type into, so the title has to be
+    // something — but it must not stay "New sub-task" for the user to hunt down
+    // and rename through a menu.
+    postMock.mockResolvedValue(task({ id: 'first', title: 'New sub-task' }));
+    fetchWithAuth.mockResolvedValue(subTaskResponse([task({ id: 'first', title: 'New sub-task' })]));
+    const onCountDelta = vi.fn();
+    const onStartEdit = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'leaf', subTaskCount: 0 })]}
+        expanded={new Set()}
+        onCountDelta={onCountDelta}
+        onStartEdit={onStartEdit}
+        applyCountDeltas
+      />,
+    );
+
+    await openMenuFor('leaf');
+    await userEvent.click(screen.getByRole('menuitem', { name: /Add sub-task/i }));
+
+    await waitFor(() => expect(onStartEdit).toHaveBeenCalled(), { timeout: 3000 });
+    assert({
+      given: 'the menu item on a task with no sub-tasks',
+      should: "POST under that task's own page, count it, and open the row into rename",
+      actual: {
+        url: postMock.mock.calls[0][0],
+        delta: onCountDelta.mock.calls[0]?.[0],
+        renaming: (onStartEdit.mock.calls[0]?.[0] as { id: string } | undefined)?.id,
+      },
+      expected: {
+        url: '/api/pages/page-leaf/tasks',
+        delta: { total: 1, completed: 0 },
+        renaming: 'first',
+      },
+    });
+  });
+
+  it('does not open an editing session when the sub-list never loads', async () => {
+    // onStartEdit opens an APP-WIDE session — it pauses the root list's
+    // revalidation, disables Load More and defers auth refresh. Starting it when
+    // the POST returns, before the row exists, latched it on nothing whenever
+    // the sub-list fetch then failed: terminal here, so no row ever arrives and
+    // there is nothing on screen to blur or Escape.
+    postMock.mockResolvedValue(task({ id: 'first', title: 'New sub-task' }));
+    fetchWithAuth.mockRejectedValue(new Error('offline'));
+    const onStartEdit = vi.fn();
+    render(
+      <Harness
+        tasks={[task({ id: 'leaf', subTaskCount: 0 })]}
+        expanded={new Set()}
+        onStartEdit={onStartEdit}
+        applyCountDeltas
+      />,
+    );
+
+    await openMenuFor('leaf');
+    await userEvent.click(screen.getByRole('menuitem', { name: /Add sub-task/i }));
+    await waitFor(() => expect(postMock).toHaveBeenCalled());
+    await new Promise((r) => setTimeout(r, 250));
+
+    assert({
+      given: 'a created sub-task whose list then failed to load',
+      should: 'never start the edit, rather than latch it on a row that will not arrive',
+      actual: onStartEdit.mock.calls.length,
+      expected: 0,
     });
   });
 });

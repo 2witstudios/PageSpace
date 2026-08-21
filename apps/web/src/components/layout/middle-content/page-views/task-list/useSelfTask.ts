@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect } from 'react';
+import { useCallback, useEffect, useMemo } from 'react';
 import useSWR from 'swr';
 import { toast } from 'sonner';
 import { fetchWithAuth, patch } from '@/lib/auth/auth-fetch';
@@ -87,7 +87,10 @@ export function useSelfTask(
   useEffect(() => machinery.registerCacheRefresher(refresh), [machinery, refresh]);
 
   const task = data?.task ?? null;
-  const statusConfigs = data?.statusConfigs ?? [];
+  // Memoized: `?? []` mints a new array every render, and this is a dependency
+  // of both write callbacks — so without it they are rebuilt on every render,
+  // and so is everything downstream that depends on their identity.
+  const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
   const listPageId = data?.listPageId ?? null;
   const isCompleted = !!task && isCompletedStatus(task.status, statusConfigs);
 

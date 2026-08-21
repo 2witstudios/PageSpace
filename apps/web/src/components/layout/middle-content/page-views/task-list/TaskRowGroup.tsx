@@ -127,6 +127,13 @@ export function TaskRowGroup({
    * navigates away. So the id is held until the row is actually there.
    */
   const [pendingEditId, setPendingEditId] = useState<string | null>(null);
+  useEffect(() => {
+    // Collapsing unmounts the sub-list before its first page can resolve, so the
+    // request would otherwise sit here and fire on a LATER re-expand — pulling a
+    // row the user may have renamed elsewhere into an edit they never asked for,
+    // and opening the app-wide editing session with it.
+    if (!isExpanded) setPendingEditId(null);
+  }, [isExpanded]);
   const bootstrapSubTask = useSubTaskBootstrap({
     task, path, onCountDelta, onCreated: setPendingEditId,
     // The menu creates a child one level below this row.
@@ -403,7 +410,7 @@ function TaskSubTaskRows({
     onStartEdit: tree.onStartEdit,
   }), [
     tree, nodeStatusConfigs, writeTaskField, subTasks, mutatePages, retry,
-    onParentCountDelta, listPageId,
+    onParentCountDelta,
   ]);
 
   /**

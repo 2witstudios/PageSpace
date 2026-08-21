@@ -241,7 +241,7 @@ export function useTaskWriteMachinery(
       flushDeferredRevalidate,
       shouldRevalidateForEvent,
     }),
-    [currentUserId, noteSelfWriteStart, noteSelfWriteSettled, canCaptureInverse, stillOwnsTask,
+    [noteSelfWriteStart, noteSelfWriteSettled, canCaptureInverse, stillOwnsTask,
      registerCacheRefresher, refreshNodeCaches, flushDeferredRevalidate, shouldRevalidateForEvent],
   );
 }
