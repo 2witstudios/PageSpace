@@ -39,7 +39,7 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: vi.fn(() => false),
-  parseSheetContent: vi.fn(),
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),

@@ -9,7 +9,7 @@ import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatu
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
-import { isSheetType, parseSheetContent, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, parseSheetContentSafe, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
@@ -813,11 +813,18 @@ export async function POST(req: NextRequest) {
           }, { status: 400 });
         }
 
-        // Parse existing sheet content
-        const sheetData = parseSheetContent(rawContent);
+        // Parse existing sheet content. Aborting on a parse failure is the
+        // point: writing the empty sheet the unsafe parse returns would
+        // replace the whole spreadsheet with just the cells in this request.
+        const parsedSheet = parseSheetContentSafe(rawContent);
+        if (!parsedSheet.ok) {
+          return NextResponse.json({
+            error: `Sheet content could not be read (${parsedSheet.reason}); refusing to overwrite it.`,
+          }, { status: 409 });
+        }
 
         // Apply cell updates
-        const updatedSheet = updateSheetCells(sheetData, cells);
+        const updatedSheet = updateSheetCells(parsedSheet.sheet, cells);
 
         // Serialize back to TOML format
         const newContent = serializeSheetContent(updatedSheet, { pageId });

@@ -31,6 +31,23 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
   agent appeared to account for; both are now right.
 
+- **Spreadsheet cells can carry formatting** — number formats (currency, percent, decimals, dates),
+  bold and italic, text and fill colour, alignment, borders, column widths, and frozen rows and
+  columns are now stored with the sheet and survive saving, publishing and export. Clearing a
+  cell's contents keeps its formatting, as it does in Excel and Google Sheets. The controls for
+  setting these arrive with the redesigned spreadsheet view; this release puts the foundation in
+  place and makes anything already formatted display correctly everywhere.
+- **Exported spreadsheets contain real numbers** — an .xlsx export previously wrote every cell as
+  text, so nothing in Excel could sum, sort or chart it. Exports now carry the underlying numbers
+  along with their number formats, so the file reads the same as the sheet and behaves like a
+  spreadsheet.
+- **Spreadsheets with more than one tab keep all of them** — opening a multi-tab workbook and
+  editing it used to discard every tab after the first. The other tabs are now preserved untouched;
+  the editor still shows only the first.
+- **CSV exports show what the sheet shows** — a formatted cell exports as it appears (for example
+  `$1,234.50`), matching Excel's and Google Sheets' behaviour and the .xlsx export. Cells with no
+  formatting are unchanged. If you need the raw numbers for another system, use the .xlsx export,
+  which carries the underlying values.
 - **Agents can hand work to each other from anywhere, not just from a browser tab** — asking an
   assistant to spawn or message a worker used to fail with "the calling request carries no session
   credentials to dispatch with" whenever the request had not come from a logged-in browser. That
@@ -145,6 +162,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   panes of a session go quiet where they previously loaded. That is the intended state and matches
   what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
   permits running code if you need those panes back.
+- **A line break in a spreadsheet cell no longer wipes the whole sheet** — a value containing a
+  newline (or a tab, or certain invisible control characters) was written in a form the sheet could
+  not read back, so the next time the page loaded it came back completely empty: every cell, not
+  just the one that caused it. Nothing warned you, and the blank sheet was then saved over the real
+  one. This was reachable without typing anything — a public form response containing a line break
+  destroyed the sheet it fed. Such values are now stored correctly and survive a round trip, and a
+  sheet that genuinely cannot be read is shown with editing disabled and an explanation rather than
+  being silently replaced with an empty grid.
+- **Undo works in spreadsheets** — the undo history was being cleared after every single edit, so
+  Ctrl+Z had nothing to go back to for anything but the change you were part-way through making.
+- **People with view-only access can select cells in a spreadsheet again** — selecting a range to
+  read it, copy it, or see its total was blocked along with editing, even though selecting changes
+  nothing.
 
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a

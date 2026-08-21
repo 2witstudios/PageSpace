@@ -4,8 +4,9 @@
  */
 
 import { PageType } from '../utils/enums';
-import type { SheetData, SheetCellUpdate } from './types';
+import type { CellFormat, SheetData, SheetCellUpdate } from './types';
 import { cellRegex, decodeCellAddress } from './address';
+import { parseCellFormat } from './format';
 
 /**
  * Clone cells record
@@ -43,7 +44,97 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     rowCount: Math.max(1, sheet.rowCount),
     columnCount: Math.max(1, sheet.columnCount),
     cells: sanitizedCells,
+    formats: sanitizeFormats(sheet.formats),
+    columnFormats: sanitizeKeyedFormats(sheet.columnFormats, columnKeyRegex),
+    columnWidths: sanitizeKeyedNumbers(sheet.columnWidths, columnKeyRegex),
+    rowHeights: sanitizeKeyedNumbers(sheet.rowHeights, rowKeyRegex),
   };
+}
+
+const columnKeyRegex = /^[A-Z]+$/;
+const rowKeyRegex = /^[1-9]\d*$/;
+
+/**
+ * Drop format entries whose address is not a valid A1 reference.
+ *
+ * Entries that are merely *outside* the current row/column count are kept on
+ * purpose: a sheet that temporarily shrinks — or one whose formatting was
+ * applied ahead of its data — must not lose its styling, and the grid simply
+ * ignores formats it cannot show.
+ */
+function sanitizeFormats(
+  formats: Record<string, CellFormat> | undefined
+): Record<string, CellFormat> | undefined {
+  if (!formats) return undefined;
+
+  const sanitized: Record<string, CellFormat> = {};
+
+  for (const [key, format] of Object.entries(formats)) {
+    const normalized = key.toUpperCase();
+    if (!cellRegex.test(normalized)) continue;
+
+    // Validate the format itself, not just its address. The read path runs
+    // `parseCellFormat` and drops anything non-conforming, so skipping it here
+    // let the write path persist a format that vanished on the next load.
+    const parsed = parseCellFormat(format);
+    if (parsed) sanitized[normalized] = parsed;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/** Per-column/row format maps, keyed by column letters or a row number. */
+function sanitizeKeyedFormats(
+  formats: Record<string, CellFormat> | undefined,
+  keyPattern: RegExp
+): Record<string, CellFormat> | undefined {
+  if (!formats) return undefined;
+
+  const sanitized: Record<string, CellFormat> = {};
+
+  for (const [key, format] of Object.entries(formats)) {
+    const normalized = key.toUpperCase();
+    if (!keyPattern.test(normalized)) continue;
+
+    const parsed = parseCellFormat(format);
+    if (parsed) sanitized[normalized] = parsed;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
+}
+
+/**
+ * Per-column/row size maps; these reach the serializer unchecked otherwise.
+ *
+ * Rejects what is meaningless (non-numeric, non-finite, zero or negative) but
+ * deliberately does NOT clamp to the editor's MIN/MAX. Sanitization runs on
+ * every save, so clamping here would silently rewrite a hand-authored or
+ * imported 10px gutter to 24px and destroy the original — the same
+ * "drop what we do not understand" failure the format and range passthroughs
+ * exist to avoid. Bounding belongs to whatever renders or exports the value.
+ */
+function sanitizeKeyedNumbers(
+  values: Record<string, number> | undefined,
+  keyPattern: RegExp
+): Record<string, number> | undefined {
+  if (!values) return undefined;
+
+  const sanitized: Record<string, number> = {};
+
+  for (const [key, value] of Object.entries(values)) {
+    const normalized = key.toUpperCase();
+    if (!keyPattern.test(normalized)) continue;
+    if (typeof value !== 'number' || !Number.isFinite(value)) continue;
+
+    // Round FIRST: guarding the raw value let 0.4 through, which then stored
+    // as 0 and was dropped by the next save — a width that survives one save
+    // and vanishes on the following one.
+    const rounded = Math.round(value);
+    if (rounded <= 0) continue;
+    sanitized[normalized] = rounded;
+  }
+
+  return Object.keys(sanitized).length > 0 ? sanitized : undefined;
 }
 
 /**

@@ -6,6 +6,7 @@
 import { parse as parseToml } from '@iarna/toml';
 
 import type {
+  CellFormat,
   SheetData,
   SheetDoc,
   SheetDocCell,
@@ -14,10 +15,29 @@ import type {
   SheetDocDependencyRecord,
   SheetPrimitive,
 } from './types';
+import { parseCellFormat } from './format';
 import { SHEETDOC_MAGIC, SHEETDOC_VERSION, SHEET_VERSION, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
 import { evaluateSheet } from './evaluation';
 import { sanitizeSheetData } from './update';
 import { cellRegex } from './address';
+
+/**
+ * Thrown when a SheetDoc would serialize to something the parser rejects.
+ * Callers must treat this as "do not write", never as "write anyway".
+ */
+export class SheetSerializationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SheetSerializationError';
+  }
+}
+
+/** Why a sheet failed to load, for callers that must not overwrite it. */
+export type SheetParseFailureReason = 'toml' | 'json' | 'shape';
+
+export type SheetParseResult =
+  | { ok: true; sheet: SheetData }
+  | { ok: false; reason: SheetParseFailureReason; message: string };
 
 /**
  * Create an empty sheet with default dimensions
@@ -38,43 +58,78 @@ export function createEmptySheet(
  * Parse sheet content from various formats
  */
 export function parseSheetContent(content: unknown): SheetData {
+  const result = parseSheetContentSafe(content);
+  return result.ok ? result.sheet : createEmptySheet();
+}
+
+/**
+ * Parse sheet content, distinguishing "genuinely empty" from "failed to parse".
+ *
+ * `parseSheetContent` cannot tell those apart — it returns an empty sheet for
+ * both — so a caller that autosaves will write that empty sheet back over
+ * content it merely failed to read. Callers on a write path should use this
+ * and refuse to save on `ok: false`.
+ */
+export function parseSheetContentSafe(content: unknown): SheetParseResult {
   if (!content) {
-    return createEmptySheet();
+    return { ok: true, sheet: createEmptySheet() };
   }
 
   if (typeof content === 'string') {
     const trimmed = content.trim();
     if (!trimmed) {
-      return createEmptySheet();
+      return { ok: true, sheet: createEmptySheet() };
     }
 
     if (isSheetDocString(trimmed)) {
       try {
         const doc = parseSheetDocString(trimmed);
-        return sheetDataFromSheetDoc(doc);
-      } catch {
-        return createEmptySheet();
+        return { ok: true, sheet: sheetDataFromSheetDoc(doc) };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: 'toml',
+          message: error instanceof Error ? error.message : String(error),
+        };
       }
     }
 
     try {
       const parsed = JSON.parse(trimmed);
-      return parseSheetContent(parsed);
-    } catch {
-      return createEmptySheet();
+      return parseSheetContentSafe(parsed);
+    } catch (error) {
+      // Only report a failure for content that was *trying* to be a sheet.
+      // Malformed JSON may be a truncated sheet document whose cells we must
+      // not overwrite; arbitrary text (legacy plain-text or HTML content on a
+      // SHEET page) holds no sheet data to lose, and treating it as a failure
+      // would lock the page read-only forever with nothing to recover.
+      const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[');
+      if (!looksLikeJson) {
+        return { ok: true, sheet: createEmptySheet() };
+      }
+
+      return {
+        ok: false,
+        reason: 'json',
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
   if (isSheetDocObject(content)) {
     try {
-      return sheetDataFromSheetDoc(normalizeSheetDocObject(content));
-    } catch {
-      return createEmptySheet();
+      return { ok: true, sheet: sheetDataFromSheetDoc(normalizeSheetDocObject(content)) };
+    } catch (error) {
+      return {
+        ok: false,
+        reason: 'shape',
+        message: error instanceof Error ? error.message : String(error),
+      };
     }
   }
 
   if (!isObject(content)) {
-    return createEmptySheet();
+    return { ok: true, sheet: createEmptySheet() };
   }
 
   const version = typeof content.version === 'number' ? content.version : SHEET_VERSION;
@@ -99,10 +154,13 @@ export function parseSheetContent(content: unknown): SheetData {
   }
 
   return {
-    version,
-    rowCount,
-    columnCount,
-    cells,
+    ok: true,
+    sheet: {
+      version,
+      rowCount,
+      columnCount,
+      cells,
+    },
   };
 }
 
@@ -150,6 +208,11 @@ export function parseSheetDocString(value: string): SheetDoc {
     throw new Error('Invalid SheetDoc header');
   }
 
+  // An unknown version throws, and callers on a write path must use
+  // `parseSheetContentSafe` so the failure disables saving rather than
+  // overwriting. Rejecting outright beats parsing a future version
+  // best-effort, which would drop the fields this build cannot see and then
+  // persist that loss on the next save.
   const versionPart = headerLine.slice(SHEETDOC_MAGIC.length).trim();
   if (versionPart && versionPart !== SHEETDOC_VERSION) {
     throw new Error(`Unsupported SheetDoc version: ${versionPart}`);
@@ -172,11 +235,20 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
   }
 
   const cells: Record<string, string> = {};
+  const formats: Record<string, CellFormat> = {};
 
   for (const [address, cell] of Object.entries(target.cells)) {
     const normalizedAddress = normalizeCellAddress(address);
     if (!normalizedAddress) {
       continue;
+    }
+
+    // Formats are validated on the way in: stored content can be older, newer,
+    // or hand-edited, and an unparseable format must be dropped rather than
+    // carried into a `style` attribute.
+    const format = parseCellFormat(cell.format);
+    if (format) {
+      formats[normalizedAddress] = format;
     }
 
     if (cell.formula) {
@@ -191,12 +263,69 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
     }
   }
 
+  const columnWidths: Record<string, number> = {};
+  for (const [columnKey, columnValue] of Object.entries(target.columns)) {
+    const width = columnValue?.width;
+    if (typeof width === 'number' && Number.isFinite(width)) {
+      columnWidths[columnKey.toUpperCase()] = Math.round(width);
+    }
+  }
+
+  const columnFormats = readColumnFormats(target.ranges.__columnFormats);
+  const rowHeights = readRowHeights(target.ranges.__rowHeights);
+
+  // Strip the two internal bags back out so they do not resurface as if they
+  // were user-defined named ranges.
+  const userRanges = { ...target.ranges };
+  delete userRanges.__columnFormats;
+  delete userRanges.__rowHeights;
+
+  const extraSheets = normalized.sheets.slice(1);
+
   return {
     version: SHEET_VERSION,
     rowCount: Math.max(1, Math.floor(target.meta.rowCount)),
     columnCount: Math.max(1, Math.floor(target.meta.columnCount)),
     cells,
+    ...(Object.keys(formats).length > 0 ? { formats } : {}),
+    ...(columnFormats ? { columnFormats } : {}),
+    ...(Object.keys(columnWidths).length > 0 ? { columnWidths } : {}),
+    ...(rowHeights ? { rowHeights } : {}),
+    ...(Object.keys(userRanges).length > 0 ? { ranges: userRanges } : {}),
+    ...(typeof target.meta.frozenRows === 'number' && target.meta.frozenRows > 0
+      ? { frozenRows: target.meta.frozenRows }
+      : {}),
+    ...(typeof target.meta.frozenColumns === 'number' && target.meta.frozenColumns > 0
+      ? { frozenColumns: target.meta.frozenColumns }
+      : {}),
+    sheetName: target.name,
+    ...(extraSheets.length > 0 ? { extraSheets } : {}),
   };
+}
+
+function readColumnFormats(value: unknown): Record<string, CellFormat> | undefined {
+  if (!isObject(value)) return undefined;
+
+  const columnFormats: Record<string, CellFormat> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    const format = parseCellFormat(raw);
+    if (format) columnFormats[key.toUpperCase()] = format;
+  }
+
+  return Object.keys(columnFormats).length > 0 ? columnFormats : undefined;
+}
+
+function readRowHeights(value: unknown): Record<string, number> | undefined {
+  if (!isObject(value)) return undefined;
+
+  const rowHeights: Record<string, number> = {};
+  for (const [key, raw] of Object.entries(value)) {
+    if (typeof raw === 'number' && Number.isFinite(raw)) {
+      rowHeights[key] = Math.round(raw);
+    }
+  }
+
+  return Object.keys(rowHeights).length > 0 ? rowHeights : undefined;
 }
 
 /**
@@ -232,20 +361,20 @@ export function stringifySheetDoc(doc: SheetDoc): string {
       if (metaValue === undefined) {
         continue;
       }
-      lines.push(`${toSnakeCase(metaKey)} = ${formatTomlValue(metaValue)}`);
+      lines.push(`${formatTomlKey(toSnakeCase(metaKey))} = ${formatTomlValue(metaValue)}`);
     }
 
     if (Object.keys(sheet.columns).length > 0) {
       lines.push('');
       lines.push('[sheets.columns]');
       for (const [columnKey, columnValue] of Object.entries(sheet.columns)) {
-        lines.push(`${columnKey} = ${formatInlineTable(columnValue)}`);
+        lines.push(`${formatTomlKey(columnKey)} = ${formatInlineTable(columnValue)}`);
       }
     }
 
     for (const [address, cell] of Object.entries(sheet.cells)) {
       lines.push('');
-      lines.push(`[sheets.cells.${address}]`);
+      lines.push(`[sheets.cells.${formatTomlKey(address)}]`);
       if (cell.formula !== undefined) {
         lines.push(`formula = ${formatTomlString(cell.formula)}`);
       }
@@ -266,14 +395,17 @@ export function stringifySheetDoc(doc: SheetDoc): string {
         };
         lines.push(`error = ${formatInlineTable(errorRecord)}`);
       }
+      if (cell.format) {
+        lines.push(`format = ${formatInlineTable(cell.format as unknown as Record<string, unknown>)}`);
+      }
     }
 
     if (Object.keys(sheet.ranges).length > 0) {
       for (const [rangeKey, rangeValue] of Object.entries(sheet.ranges)) {
         lines.push('');
-        lines.push(`[sheets.ranges.${rangeKey}]`);
+        lines.push(`[sheets.ranges.${formatTomlKey(rangeKey)}]`);
         for (const [rangePropKey, rangePropValue] of Object.entries(rangeValue)) {
-          lines.push(`${rangePropKey} = ${formatTomlValue(rangePropValue)}`);
+          lines.push(`${formatTomlKey(rangePropKey)} = ${formatTomlValue(rangePropValue)}`);
         }
       }
     }
@@ -281,7 +413,7 @@ export function stringifySheetDoc(doc: SheetDoc): string {
     if (Object.keys(sheet.dependencies).length > 0) {
       for (const [address, dependency] of Object.entries(sheet.dependencies)) {
         lines.push('');
-        lines.push(`[sheets.dependencies.${address}]`);
+        lines.push(`[sheets.dependencies.${formatTomlKey(address)}]`);
         lines.push(`depends_on = ${formatTomlValue(dependency.dependsOn)}`);
         lines.push(`dependents = ${formatTomlValue(dependency.dependents)}`);
       }
@@ -289,7 +421,26 @@ export function stringifySheetDoc(doc: SheetDoc): string {
   }
 
   lines.push('');
-  return lines.join('\n');
+  const serialized = lines.join('\n');
+
+  // Self-verify: a document that cannot be re-parsed reads back as an empty
+  // sheet (see `parseSheetContent`), so an emitter bug silently destroys the
+  // user's data on the next load. Failing loudly on save is strictly better.
+  // `lines[0]` is the magic header, which is not TOML.
+  const tomlBody = lines.slice(1).join('\n');
+  try {
+    if (tomlBody.trim()) {
+      parseToml(tomlBody);
+    }
+  } catch (error) {
+    throw new SheetSerializationError(
+      `Refusing to emit a SheetDoc that cannot be parsed back: ${
+        error instanceof Error ? error.message : String(error)
+      }`
+    );
+  }
+
+  return serialized;
 }
 
 // Internal helper functions
@@ -395,6 +546,7 @@ function normalizeSheetDocObject(value: Record<string, unknown>): SheetDoc {
         const errorValue = isObject(cellValue.error)
           ? normalizeCellError(cellValue.error as Record<string, unknown>)
           : undefined;
+        const formatValue = parseCellFormat(cellValue.format);
 
         const cell: SheetDocCell = {};
         if (formula) {
@@ -411,6 +563,9 @@ function normalizeSheetDocObject(value: Record<string, unknown>): SheetDoc {
         }
         if (errorValue) {
           cell.error = errorValue;
+        }
+        if (formatValue) {
+          cell.format = formatValue;
         }
 
         if (Object.keys(cell).length > 0) {
@@ -539,22 +694,71 @@ function sheetDataToSheetDoc(
     }
   }
 
+  // Formats are attached to cells that may hold no value at all — a blank but
+  // coloured cell is a legitimate part of a laid-out sheet — so this runs over
+  // the format map rather than only over evaluated addresses.
+  for (const [address, format] of Object.entries(sheet.formats ?? {})) {
+    const normalized = normalizeCellAddress(address);
+    if (!normalized) continue;
+
+    const docCell = cells[normalized] ?? {};
+    docCell.format = format;
+    cells[normalized] = docCell;
+  }
+
+  const columns: Record<string, Record<string, string | number | boolean>> = {};
+
+  for (const [columnKey, width] of Object.entries(sheet.columnWidths ?? {})) {
+    if (!Number.isFinite(width)) continue;
+    columns[columnKey] = { ...(columns[columnKey] ?? {}), width: Math.round(width) };
+  }
+
+  const meta: SheetDocSheet['meta'] = {
+    rowCount: Math.max(1, Math.floor(sheet.rowCount)),
+    columnCount: Math.max(1, Math.floor(sheet.columnCount)),
+  };
+  if (typeof sheet.frozenRows === 'number' && sheet.frozenRows > 0) {
+    meta.frozenRows = Math.floor(sheet.frozenRows);
+  }
+  if (typeof sheet.frozenColumns === 'number' && sheet.frozenColumns > 0) {
+    meta.frozenColumns = Math.floor(sheet.frozenColumns);
+  }
+
+  // Anything the engine does not interpret is carried straight back out.
+  const ranges: Record<string, Record<string, unknown>> = { ...(sheet.ranges ?? {}) };
+  delete ranges.__columnFormats;
+  delete ranges.__rowHeights;
+
+  // Column defaults and row heights have no first-class SheetDoc home yet, so
+  // they ride in the same bag under reserved `__`-prefixed keys.
+  if (sheet.columnFormats && Object.keys(sheet.columnFormats).length > 0) {
+    ranges.__columnFormats = { ...sheet.columnFormats };
+  }
+  if (sheet.rowHeights && Object.keys(sheet.rowHeights).length > 0) {
+    ranges.__rowHeights = { ...sheet.rowHeights };
+  }
+
+  // Tabs beyond the first are carried through verbatim. Dropping them here is
+  // what previously deleted every other tab of a multi-tab document on save.
+  const extraSheets = (sheet.extraSheets ?? []).map((extra, index) => ({
+    ...extra,
+    order: typeof extra.order === 'number' ? extra.order : index + 1,
+  }));
+
   return sortSheetDoc({
     version: SHEETDOC_VERSION,
     pageId: options.pageId,
     sheets: [
       {
-        name: sheetName,
+        name: options.sheetName ?? sheet.sheetName ?? sheetName,
         order: 0,
-        meta: {
-          rowCount: Math.max(1, Math.floor(sheet.rowCount)),
-          columnCount: Math.max(1, Math.floor(sheet.columnCount)),
-        },
-        columns: {},
+        meta,
+        columns,
         cells,
-        ranges: {},
+        ranges,
         dependencies,
       },
+      ...extraSheets,
     ],
   });
 }
@@ -618,6 +822,9 @@ function normalizeCellForOutput(cell: SheetDocCell): SheetDocCell {
         ? { details: [...cell.error.details] }
         : {}),
     };
+  }
+  if (cell.format) {
+    normalized.format = cell.format;
   }
 
   return normalized;
@@ -733,8 +940,66 @@ function formatPrimitiveForCell(value: SheetPrimitive): string {
   return '';
 }
 
+/**
+ * Escape a string as a TOML basic string.
+ *
+ * TOML basic strings may not contain raw control characters — a literal newline
+ * or tab terminates the string and produces a document the parser rejects.
+ * Because `parseSheetContent` falls back to an empty sheet on a parse failure,
+ * under-escaping here silently destroys the whole document, and the input is
+ * not necessarily trusted: public form submissions are written straight through
+ * `updateSheetCells`. Escape the complete TOML control set, not just `\` and `"`.
+ */
 function formatTomlString(value: string): string {
-  return `"${value.replace(/\\/g, '\\\\').replace(/\"/g, '\\"')}"`;
+  let escaped = '';
+
+  for (const char of value) {
+    switch (char) {
+      case '\\':
+        escaped += '\\\\';
+        break;
+      case '"':
+        escaped += '\\"';
+        break;
+      case '\b':
+        escaped += '\\b';
+        break;
+      case '\t':
+        escaped += '\\t';
+        break;
+      case '\n':
+        escaped += '\\n';
+        break;
+      case '\f':
+        escaped += '\\f';
+        break;
+      case '\r':
+        escaped += '\\r';
+        break;
+      default: {
+        const code = char.codePointAt(0) ?? 0;
+        // Remaining C0 controls and DEL have no shorthand escape.
+        if (code <= 0x1f || code === 0x7f) {
+          escaped += `\\u${code.toString(16).padStart(4, '0')}`;
+        } else {
+          escaped += char;
+        }
+      }
+    }
+  }
+
+  return `"${escaped}"`;
+}
+
+/**
+ * Format a TOML key: bare where the syntax allows it, quoted otherwise.
+ *
+ * Column and range keys reach the emitter as user-controlled strings and are
+ * interpolated into table headers, where an unquoted space or bracket would
+ * produce invalid TOML.
+ */
+function formatTomlKey(key: string): string {
+  return /^[A-Za-z0-9_-]+$/.test(key) ? key : formatTomlString(key);
 }
 
 function formatTomlValue(value: unknown): string {
@@ -754,6 +1019,22 @@ function formatTomlValue(value: unknown): string {
     const parts = value.map((item) => formatTomlValue(item));
     return `[${parts.join(', ')}]`;
   }
+  // Before `isObject`: a Date IS an object, and `Object.entries(date)` is
+  // empty, so a TOML datetime would serialize as `{}` and be destroyed.
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) {
+      return formatTomlString('');
+    }
+
+    // `toISOString` uses the expanded-year form outside 0000-9999
+    // (`+275760-…`), which TOML does not accept — emitting it unquoted would
+    // fail the serializer's self-verify and make the whole document
+    // unsavable. Such a year cannot come from parsed TOML, only from a Date
+    // set programmatically, so fall back to a quoted string: the value is
+    // preserved and the document still saves.
+    const iso = value.toISOString();
+    return /^\d{4}-/.test(iso) ? iso : formatTomlString(iso);
+  }
   if (isObject(value)) {
     return formatInlineTable(value as Record<string, unknown>);
   }
@@ -762,7 +1043,9 @@ function formatTomlValue(value: unknown): string {
 
 function formatInlineTable(record: Record<string, unknown>): string {
   const entries = Object.entries(record).filter(([, entryValue]) => entryValue !== undefined);
-  const parts = entries.map(([key, entryValue]) => `${key} = ${formatTomlValue(entryValue)}`);
+  const parts = entries.map(
+    ([key, entryValue]) => `${formatTomlKey(key)} = ${formatTomlValue(entryValue)}`
+  );
   if (parts.length === 0) {
     return '{}';
   }
