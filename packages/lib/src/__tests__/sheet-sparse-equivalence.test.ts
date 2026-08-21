@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   createEmptySheet,
+  decodeCellAddress,
   encodeCellAddress,
   evaluateSheet,
   evaluateSheetSparse,
@@ -89,11 +90,30 @@ describe.each(FIXTURES)('sparse evaluation matches dense: $name', ({ sheet }) =>
     }
   });
 
-  it('agrees on the dependency records of the cells that exist', () => {
-    for (const address of Object.keys(sheet.cells)) {
-      const key = address.toUpperCase();
-      expect(sparse.dependencies[key]).toEqual(dense.dependencies[key]);
-    }
+  it('emits the same dependency records the serializer would write', () => {
+    // Compares the whole set, not just keys drawn from `sheet.cells`. The
+    // narrower version could not reach an empty cell that a formula references,
+    // which is exactly the record the sparse walk was dropping — the serializer
+    // only writes a record when one side is non-empty, so that is the set that
+    // has to match.
+    // Restricted to the rectangle: the dense walk enumerates grid positions, so
+    // it cannot see a reference to an address outside `rowCount × columnCount`
+    // at all. Sparse does, and keeps that edge — the same reason an
+    // out-of-rectangle cell now survives a save. That difference is asserted
+    // separately below rather than smoothed over here.
+    const inRectangle = (address: string) => {
+      const { row, column } = decodeCellAddress(address);
+      return row < sheet.rowCount && column < sheet.columnCount;
+    };
+    const meaningful = (records: Record<string, { dependsOn: string[]; dependents: string[] }>) =>
+      Object.fromEntries(
+        Object.entries(records).filter(
+          ([address, record]) =>
+            inRectangle(address) && (record.dependsOn.length > 0 || record.dependents.length > 0),
+        ),
+      );
+
+    expect(meaningful(sparse.dependencies)).toEqual(meaningful(dense.dependencies));
   });
 });
 
@@ -105,7 +125,30 @@ describe('sparse evaluation', () => {
     expect(Object.keys(evaluateSheetSparse(sheet).byAddress)).toHaveLength(3);
   });
 
-  it('leaves an empty cell absent rather than storing an empty record', () => {
+  it('also keeps an edge to a target outside the rectangle, which the dense walk never sees', () => {
+    // `evaluateSheet` enumerates grid positions, so a reference to Z9 in an
+    // 8-column sheet is invisible to it and the edge is lost on save. Sparse
+    // enumerates references instead, so it survives — the same improvement that
+    // stops an out-of-rectangle cell being deleted.
+    const sheet = sheetWith({ A1: '=Z9' }, 12, 8);
+    expect(evaluateSheetSparse(sheet).dependencies.Z9).toEqual({
+      dependsOn: [],
+      dependents: ['A1'],
+    });
+    expect(evaluateSheet(sheet).dependencies.Z9).toBeUndefined();
+  });
+
+  it('keeps the reverse edge on an empty cell a formula references', () => {
+    // `=B1` with B1 empty: the dense walk records B1.dependents = ['A1'] and the
+    // serializer writes it. Dropping it would quietly change the document.
+    const sheet = sheetWith({ A1: '=B1' });
+    expect(evaluateSheetSparse(sheet).dependencies.B1).toEqual({
+      dependsOn: [],
+      dependents: ['A1'],
+    });
+  });
+
+  it('leaves an unreferenced empty cell absent rather than storing an empty record', () => {
     const sparse = evaluateSheetSparse(sheetWith({ A1: '1' }));
     expect(sparse.byAddress.B5).toBeUndefined();
     expect(sparseDisplayAt(sparse, 4, 1)).toBe('');

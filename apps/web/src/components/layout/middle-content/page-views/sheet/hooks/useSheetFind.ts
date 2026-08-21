@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { SheetData } from '@pagespace/lib/sheets/sheet';
 import { useFindStore } from '@/stores/useFindStore';
 import { buildFindMatches } from '../core/find';
@@ -36,10 +36,22 @@ export const useSheetFind = (
     reportMatches(matches.length);
   }, [isFindOpen, findQuery, sheet, displayAt, reportMatches]);
 
+  // Guarded on the address, not on `onReveal`'s identity. `onReveal` closes over
+  // the grid axes, which change on every pointer move of a resize drag — without
+  // this the sheet would keep yanking itself back to the current find match
+  // while the user is dragging a column edge.
+  const lastRevealedRef = useRef<string | null>(null);
   useEffect(() => {
     const address = findAddresses[findIndex];
-    if (address) onReveal(address);
+    if (!address || lastRevealedRef.current === address) return;
+    lastRevealedRef.current = address;
+    onReveal(address);
   }, [findIndex, findAddresses, onReveal]);
+
+  // Reopening find on the same match should scroll to it again.
+  useEffect(() => {
+    if (!isFindOpen) lastRevealedRef.current = null;
+  }, [isFindOpen]);
 
   const findAddressSet = useMemo(() => new Set(findAddresses), [findAddresses]);
   const currentFindAddress = findAddresses[findIndex] ?? null;

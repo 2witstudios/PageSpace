@@ -5,6 +5,7 @@ import { cn } from '@/lib/utils';
 import {
   cellFormatToStyle,
   encodeCellAddress,
+  getEffectiveCellFormat,
   type SheetData,
   type SheetSparseEvaluation,
 } from '@pagespace/lib/sheets/sheet';
@@ -87,7 +88,14 @@ const ResizeHandle: React.FC<{
         onPreview(latest);
       };
       const finish = (commit: boolean) => {
-        element.releasePointerCapture(event.pointerId);
+        // Throws NotFoundError when capture is already gone — which is exactly
+        // what a pointercancel or a detached element means. Letting it escape
+        // would leave the move listener attached and the drag stuck.
+        try {
+          element.releasePointerCapture(event.pointerId);
+        } catch {
+          // already released
+        }
         element.removeEventListener('pointermove', move);
         element.removeEventListener('pointerup', release);
         element.removeEventListener('pointercancel', cancel);
@@ -229,6 +237,14 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
           const cell = evaluation.byAddress[address];
           const isPrimary = currentSelection.row === row && currentSelection.column === column;
 
+          // A cell with formatting but no value has no evaluation entry — the
+          // sparse evaluator is seeded from `sheet.cells`, and `setCellFormats`
+          // writes to `sheet.formats`. Falling back to the same resolver the
+          // evaluator uses keeps a blank-but-filled cell visible, which is the
+          // whole point of a laid-out dashboard, and picks up column defaults
+          // on empty cells too.
+          const format = cell?.format ?? getEffectiveCellFormat(sheet, address);
+
           cells.push(
             <SheetCell
               key={address}
@@ -249,10 +265,10 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
               // Right-alignment is the single strongest cue that a grid is a
               // spreadsheet and not a table, so numbers get it by default —
               // unless the cell's own format has an opinion.
-              isNumeric={cell?.type === 'number' && !cell?.format?.align}
-              wraps={!!cell?.format?.wrap}
+              isNumeric={cell?.type === 'number' && !format?.align}
+              wraps={!!format?.wrap}
               isReadOnly={isReadOnly}
-              formatStyle={cellFormatToStyle(cell?.format) as React.CSSProperties}
+              formatStyle={cellFormatToStyle(format) as React.CSSProperties}
               handlers={handlers}
             />,
           );
@@ -290,6 +306,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
       isReadOnly,
       rowAxis,
       selection,
+      sheet,
     ],
   );
 

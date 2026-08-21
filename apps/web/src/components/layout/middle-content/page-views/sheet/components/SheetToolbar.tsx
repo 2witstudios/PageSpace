@@ -319,6 +319,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
               type="button"
               aria-label="Freeze panes"
               title="Freeze panes"
+              aria-pressed={frozenRows > 0 || frozenColumns > 0}
               disabled={disabled}
               onMouseDown={(event) => event.preventDefault()}
               className={cn(

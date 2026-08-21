@@ -87,7 +87,10 @@ export const parseHex = (value: string): { r: number; g: number; b: number } | n
  * `CellFormat`, so the schema never has to reject a merely-informal spelling.
  */
 export const normalizeHex = (value: string): string | null => {
-  const parsed = parseHex(value.startsWith('#') ? value : `#${value}`);
+  // Trim first: `parseHex` trims, so testing `startsWith('#')` on the raw
+  // string made " #abc" fall into the `#${value}` branch and become "# #abc".
+  const trimmed = value.trim();
+  const parsed = parseHex(trimmed.startsWith('#') ? trimmed : `#${trimmed}`);
   if (!parsed) return null;
   const hex = (n: number) => n.toString(16).padStart(2, '0');
   return `#${hex(parsed.r)}${hex(parsed.g)}${hex(parsed.b)}`;

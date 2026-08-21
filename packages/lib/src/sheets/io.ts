@@ -174,8 +174,15 @@ export function serializeSheetContent(
   const sanitized = sanitizeSheetData({ ...sheet });
   // Sparse, not dense: this runs on every save, and the dense walk allocates an
   // object per grid position — nearly three seconds for a 10,000-row sheet, on
-  // every keystroke. The emitted document is unchanged, because the loop below
-  // already skips every empty address the dense walk would have added.
+  // every keystroke.
+  //
+  // The emitted cell blocks are unchanged: the loop below already skipped every
+  // empty address the dense walk added. Dependency blocks are unchanged too,
+  // but only because the sparse walk materializes the empty cells that formulas
+  // reference; without that it would silently stop emitting their reverse
+  // edges. It additionally emits an edge to a referenced address *outside*
+  // rowCount x columnCount, which the dense walk could never see —  the same
+  // reason an out-of-rectangle cell now survives a save at all.
   const evaluation = evaluateSheetSparse(sanitized);
   const doc = sheetDataToSheetDoc(sanitized, evaluation, options);
   return stringifySheetDoc(doc);

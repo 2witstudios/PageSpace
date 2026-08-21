@@ -1,7 +1,12 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { createEmptySheet, serializeSheetContent } from '@pagespace/lib/sheets/sheet';
+import {
+  createEmptySheet,
+  serializeSheetContent,
+  setCellFormats,
+  setColumnFormat,
+} from '@pagespace/lib/sheets/sheet';
 
 // `serializeSheetContent` refuses to emit content it cannot parse back, so it
 // can throw on an edit. Spying lets a test force that without a contrived
@@ -184,6 +189,30 @@ describe('SheetView', () => {
 
     expect(cellAt('B2').getAttribute('aria-selected')).toBe('true');
     expect(cellAt('A1').getAttribute('aria-selected')).toBe('false');
+  });
+
+  it('paints a cell that has a fill but no value', () => {
+    // The dashboard case, and the one nothing else covers: `setCellFormats`
+    // writes to `sheet.formats`, not `sheet.cells`, so a blank coloured cell has
+    // no entry in the sparse evaluation. It was persisted and invisible.
+    const sheet = createEmptySheet();
+    const content = serializeSheetContent(setCellFormats(sheet, ['C3'], { background: '#dbeafe' }));
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('C3').style.backgroundColor).toBe('rgb(219, 234, 254)');
+  });
+
+  it('applies a column default to the empty cells of that column', () => {
+    const content = serializeSheetContent(setColumnFormat(createEmptySheet(), 1, {
+      background: '#fee2e2',
+    }));
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('B4').style.backgroundColor).toBe('rgb(254, 226, 226)');
   });
 
   it('extends the selection on shift-click', () => {

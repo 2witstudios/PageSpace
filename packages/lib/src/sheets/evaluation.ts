@@ -573,16 +573,23 @@ export function evaluateSheetSparse(
     byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
   }
 
-  // A cell can only depend on something if it holds a formula, and a formula
-  // cell is by definition non-empty — so every possible dependent is already in
-  // the map and this back-fill sees exactly what the dense walk would. Targets
-  // that are empty cells have no entry, which is the sparse equivalent of the
-  // empty record the dense form stores for them.
-  for (const cell of Object.values(byAddress)) {
+  // Every cell that *depends* on something holds a formula, and a formula cell
+  // is by definition non-empty, so the seed above already contains all of them.
+  // The targets are another matter: `=B1` where B1 is empty has no seeded entry,
+  // and simply skipping it would drop the reverse edge that the dense walk
+  // records — changing what `sheetDataToSheetDoc` emits. Materializing the
+  // target keeps the persisted dependency graph symmetric and the output
+  // identical; it costs one entry per referenced empty address, which is
+  // bounded by the formulas actually written rather than by the grid's area.
+  //
+  // Snapshot first: the loop inserts into `byAddress`, and the cells it inserts
+  // are empty ones with no dependencies of their own to process.
+  for (const cell of Object.values(byAddress).slice()) {
     for (const dependency of cell.dependsOn) {
-      const target = byAddress[dependency];
+      let target = byAddress[dependency];
       if (!target) {
-        continue;
+        target = evaluateCellInternal(dependency, pageKey, env, new Set());
+        byAddress[dependency] = target;
       }
       if (!target.dependents.includes(cell.address)) {
         target.dependents = [...target.dependents, cell.address];

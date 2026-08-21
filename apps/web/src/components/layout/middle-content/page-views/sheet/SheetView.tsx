@@ -51,6 +51,7 @@ import {
 import {
   applyCellWrite,
   applyCellDelete,
+  applyCellsDelete,
   initialEditValueForKey,
   isPrintableKey,
   addRow,
@@ -1146,9 +1147,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       return;
     }
     const addresses = selectionAddresses(selection);
-    applySheetUpdate((previous) =>
-      addresses.reduce((sheetSoFar, address) => applyCellDelete(sheetSoFar, address), previous)
-    );
+    applySheetUpdate((previous) => applyCellsDelete(previous, addresses));
     setFormulaValue('');
   }, [applySheetUpdate, isReadOnly, readOnlyReason, selection]);
 

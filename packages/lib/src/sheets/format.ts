@@ -451,7 +451,10 @@ function relativeLuminance(hex: string): number {
  * decision, and silently overriding it would be worse.
  */
 export function readableTextColor(background: string): '#000000' | '#ffffff' {
-  return relativeLuminance(background) > 0.45 ? '#000000' : '#ffffff';
+  // 0.179 is the WCAG 2.x crossover: the luminance at which black and white
+  // text have equal contrast against the background. Picking a rounder number
+  // puts mid-tones on the wrong side of it.
+  return relativeLuminance(background) > 0.179 ? '#000000' : '#ffffff';
 }
 
 export function cellFormatToStyle(format: CellFormat | undefined): Record<string, string> {

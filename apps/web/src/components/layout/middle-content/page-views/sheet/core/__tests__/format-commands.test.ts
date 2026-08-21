@@ -206,3 +206,17 @@ describe('clear', () => {
     expect(sheet.cells.A1).toBe('Revenue');
   });
 });
+
+describe('formatting a blank cell', () => {
+  it('stores the format even though the cell has no value', () => {
+    // The dashboard case: a blank cell used as a coloured band. It has no entry
+    // in `sheet.cells`, so nothing seeded from `cells` alone can see it — which
+    // is how it ended up persisted but invisible in the grid.
+    const next = applyFormatCommand(base(), single(2, 2), {
+      kind: 'background',
+      value: '#dbeafe',
+    });
+    expect(next.cells.C3).toBeUndefined();
+    expect(next.formats?.C3).toEqual({ background: '#dbeafe' });
+  });
+});

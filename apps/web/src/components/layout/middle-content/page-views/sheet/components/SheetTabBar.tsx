@@ -39,14 +39,22 @@ export const SheetTabBar: React.FC<SheetTabBarProps> = ({ activeName, otherNames
     {otherNames.map((name) => (
       <Tooltip key={name}>
         <TooltipTrigger asChild>
+          {/*
+            `aria-disabled` rather than `disabled`: a disabled button dispatches
+            no pointer events and takes no focus, so the tooltip explaining why
+            the tab cannot be opened was unreachable by both mouse and keyboard
+            — and that explanation is the only reason the tooltip exists.
+          */}
           <button
             type="button"
             role="tab"
             aria-selected={false}
-            disabled
+            aria-disabled
+            onClick={(event) => event.preventDefault()}
             className={cn(
-              'flex shrink-0 items-center gap-1 rounded-md px-3 py-1 text-xs',
+              'flex shrink-0 cursor-default items-center gap-1 rounded-md px-3 py-1 text-xs',
               'text-muted-foreground opacity-70',
+              'focus-visible:ring-ring/50 focus-visible:ring-[3px] focus-visible:outline-none',
             )}
           >
             <Lock size={12} />
