@@ -496,6 +496,20 @@ function SpawnSessionPalette({
   const [envName, setEnvName] = useState('');
   const [creatingEnv, setCreatingEnv] = useState(false);
   const createEnvInputId = useId();
+  /**
+   * WHICH ATTEMPT AT CREATING ONE the pending request belongs to.
+   *
+   * `creatingEnv` is what disables this form while its POST is out, and a
+   * settling request clears it — but the request that settles is not
+   * necessarily the one on screen. Abandon a create (Escape), open another, and
+   * start its request: the FIRST one landing would clear the second's loading
+   * state and hand back an enabled button over a POST still in flight, which is
+   * a second, non-idempotent create one keystroke away.
+   *
+   * Bumped whenever the create step changes, so a late `finally` can tell
+   * whether the attempt it belongs to is still the one being shown.
+   */
+  const createAttempt = useRef(0);
 
   // The repo rule for a surface holding text the user typed, and here it is a
   // REGRESSION GUARD as much as a convention: this form used to be
@@ -516,6 +530,9 @@ function SpawnSessionPalette({
   // Cleared when the create step OPENS, not when it closes: a 409 keeps the
   // step open with what the user typed, so only a fresh opening may blank it.
   useEffect(() => {
+    // Every change of step — opened, cancelled, closed with the palette —
+    // retires whatever attempt was outstanding.
+    createAttempt.current += 1;
     if (newEnvFrom === null) return;
     setEnvName('');
     // `creatingEnv` too, and for a reason worth naming: a create still in
@@ -614,8 +631,14 @@ function SpawnSessionPalette({
             event.preventDefault();
             const trimmed = envName.trim();
             if (!trimmed || creatingEnv) return;
+            const attempt = createAttempt.current;
             setCreatingEnv(true);
-            void onCreateEnv(trimmed).finally(() => setCreatingEnv(false));
+            void onCreateEnv(trimmed).finally(() => {
+              // Only the attempt still on screen may re-enable the form. An
+              // older one landing must leave the current request's POST looking
+              // exactly as in-flight as it is.
+              if (createAttempt.current === attempt) setCreatingEnv(false);
+            });
           }}
         >
           <input

@@ -2039,6 +2039,47 @@ describe('AgentsSidebar', () => {
       );
     });
 
+    /**
+     * TWO CREATES IN FLIGHT AT ONCE.
+     *
+     * `creatingEnv` is what holds this form closed while its POST is out, and
+     * the request that settles is not necessarily the one on screen: abandon a
+     * create, start another, and the FIRST landing would re-enable the form
+     * over a POST still in flight — a second, non-idempotent create one
+     * keystroke away.
+     */
+    test('an abandoned create landing later does not re-enable the form over a live request', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let resolveFirst: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+      mockPost.mockImplementationOnce(() => new Promise(() => {}));
+      renderSidebar();
+
+      // Attempt A, abandoned while its POST is still out.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'a');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.keyboard('{Escape}');
+
+      // Attempt B, still in flight.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'b');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+
+      // A lands now.
+      await act(async () => {
+        resolveFirst?.({ env: { id: 'env-a', name: 'a', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // B's request is still out, so B's form stays closed.
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Create environment' })).toBeNull();
+    });
+
     test('a name already taken keeps the create step open with what was typed', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);
