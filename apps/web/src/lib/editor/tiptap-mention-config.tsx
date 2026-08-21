@@ -202,6 +202,30 @@ function readDriveIdFromHref(element: HTMLElement): string | null {
 }
 
 /**
+ * Where a click on a page mention goes, in the editor's node view.
+ *
+ * With a driveId, the direct dashboard URL. Without one — the AI-authored shape
+ * carries `data-page-id` and nothing else — the `/p/{pageId}` resolver, which
+ * exists precisely so "mentions [can] link directly to a page ID without
+ * knowing the driveId" (`app/p/[pageId]/page.tsx`). Null when there is no id,
+ * so the chip simply does not navigate, rather than following the bare
+ * `/dashboard/` this used to fall back to, which landed on the dashboard root
+ * instead of the mentioned page.
+ *
+ * Deliberately NOT used by `renderHTML`. That output is stored and published,
+ * and `neutralizeDashboardLinks` (`packages/lib/src/publish/`) makes a mention
+ * inert on a published page by rewriting hrefs that start with `/dashboard/`.
+ * A `/p/{pageId}` href would slip past it and publish as a live link into an
+ * auth-gated route, so stored HTML gets the dashboard href or no href at all.
+ */
+function pageMentionNavigationHref(id: string, driveId: string | null): string | null {
+  if (!id) {
+    return null;
+  }
+  return driveId ? `/dashboard/${driveId}/${id}` : `/p/${id}`;
+}
+
+/**
  * `data-mention-type` when it is there, otherwise inferred from whichever
  * identity attribute is present. `syncMentions` selects on `a[data-page-id]`
  * and `a[data-user-id]` alone, so content written against that contract can
@@ -334,10 +358,10 @@ const PageMentionNode = Mention.extend({
       }
 
       const dom = document.createElement('a');
-      const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+      const href = pageMentionNavigationHref(id, driveId);
 
       // NO target="_blank" - stays in WebView on Capacitor
-      dom.href = href;
+      if (href) dom.href = href;
       dom.rel = 'noopener noreferrer nofollow';
       dom.className = 'mention';
       dom.contentEditable = 'false';
@@ -345,11 +369,13 @@ const PageMentionNode = Mention.extend({
       dom.setAttribute('data-page-id', id);
       dom.textContent = `@${label}`;
 
-      dom.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        dispatchInternalNavigation(href);
-      });
+      if (href) {
+        dom.addEventListener('click', (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          dispatchInternalNavigation(href);
+        });
+      }
       dom.addEventListener('mousedown', (event) => { event.preventDefault(); });
 
       return { dom, contentDOM: null };
@@ -421,13 +447,20 @@ export const PageMention = PageMentionNode.configure({
       ];
     }
 
-    const href = driveId && id ? `/dashboard/${driveId}/${id}` : `/dashboard/`;
+    // Stored HTML only ever gets the dashboard href, and only when the drive is
+    // known. Without it there is no URL this output may carry: the old fallback
+    // wrote a bare `/dashboard/`, which reads as a link and lands on the
+    // dashboard root, and the `/p/{pageId}` resolver the node view uses would
+    // slip past `neutralizeDashboardLinks` (`packages/lib/src/publish/`) and
+    // publish as a live link into an auth-gated route. An href-less anchor is
+    // already inert on a published page.
+    const href = driveId && id ? `/dashboard/${driveId}/${id}` : null;
     return [
       'a',
       {
         ...options.HTMLAttributes,
         ...slugAttrs,
-        href,
+        ...(href ? { href } : {}),
         // NO target="_blank" - stays in WebView on Capacitor iOS
         rel: 'noopener noreferrer nofollow',
         'data-mention-type': 'page',

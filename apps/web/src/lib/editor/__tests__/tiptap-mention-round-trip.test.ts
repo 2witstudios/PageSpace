@@ -214,6 +214,31 @@ describe('pageMention HTML round trip', () => {
     });
   });
 
+  describe('a page mention with no drive context', () => {
+    // The AI-authored shape carries data-page-id and nothing else. renderHTML
+    // used to fall back to a bare `/dashboard/` href, so the chip rendered as a
+    // link that navigated to the dashboard root instead of the mentioned page.
+    const noDrive = `<p><a class="mention" data-mention-type="page" data-page-id="${PAGE}">@Quarterly Plan</a></p>`;
+
+    it('emits no href at all rather than a bare /dashboard/', () => {
+      const once = roundTrip(noDrive);
+      expect(once).not.toContain('href=');
+      expect(once).toContain(`data-page-id="${PAGE}"`);
+    });
+
+    it('never emits the /p/ resolver into stored HTML, which publishing would not neutralize', () => {
+      // neutralizeDashboardLinks only rewrites hrefs starting with /dashboard/,
+      // so a /p/{pageId} href would publish as a live link into an auth-gated
+      // route. The resolver belongs to the node view, not to stored content.
+      expect(roundTrip(noDrive)).not.toContain('/p/');
+    });
+
+    it('still emits the dashboard href when the drive is known', () => {
+      const html = `<p><a class="mention" data-mention-type="page" data-page-id="${PAGE}" data-drive-id="${DRIVE}">@My Page</a></p>`;
+      expect(roundTrip(html)).toContain(`href="/dashboard/${DRIVE}/${PAGE}"`);
+    });
+  });
+
   describe('driveId recovery from the href', () => {
     it('reads the driveId out of /dashboard/{driveId}/{pageId} when the attribute is absent', () => {
       const html = `<p><a class="mention" data-mention-type="page" data-page-id="${PAGE}" href="/dashboard/${DRIVE}/${PAGE}">@My Page</a></p>`;
