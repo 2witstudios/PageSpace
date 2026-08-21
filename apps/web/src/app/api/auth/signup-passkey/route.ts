@@ -17,7 +17,7 @@ import {
 } from '@pagespace/lib/security/distributed-rate-limit';
 import { validateLoginCSRFToken, getClientIP, createDeviceToken } from '@/lib/auth';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded, type ProvisionHomeDriveResult } from '@pagespace/lib/onboarding/home-drive';
 import {
   consumeAllInvitesForEmail,
   consumeAnyInviteIfPresent,

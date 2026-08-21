@@ -22,7 +22,7 @@ import { getClientIP, revokeSessionsForLogin } from '@/lib/auth';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/auth-helpers';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
 import { resolveAppUrl } from '@pagespace/lib/services/email-service';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 import { authRepository } from '@/lib/repositories/auth-repository';
 import { driveInviteRepository } from '@/lib/repositories/drive-invite-repository';
 import {

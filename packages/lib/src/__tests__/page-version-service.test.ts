@@ -13,6 +13,11 @@ vi.mock('@aws-sdk/client-s3', () => {
         if (!s3Store.has(Key)) throw Object.assign(new Error('NoSuchKey'), { name: 'NoSuchKey' });
         return { ContentLength: s3Store.get(Key)!.byteLength };
       }
+      if (command._tag === 'CopyObjectCommand') {
+        // Dedupe hit: the bytes are already correct, the copy only refreshes
+        // LastModified. Nothing to do to the store.
+        return {};
+      }
       if (command._tag === 'PutObjectCommand') {
         s3Store.set(Key, Body instanceof Buffer ? new Uint8Array(Body) : new Uint8Array(Body as unknown as ArrayBuffer));
         return {};
@@ -35,6 +40,8 @@ vi.mock('@aws-sdk/client-s3', () => {
     HeadObjectCommand: makeCommand('HeadObjectCommand'),
     PutObjectCommand: makeCommand('PutObjectCommand'),
     GetObjectCommand: makeCommand('GetObjectCommand'),
+    CopyObjectCommand: makeCommand('CopyObjectCommand'),
+    DeleteObjectCommand: makeCommand('DeleteObjectCommand'),
   };
 });
 
@@ -42,6 +49,10 @@ vi.mock('@aws-sdk/client-s3', () => {
 vi.mock('@pagespace/db/db', () => ({
   db: {
     insert: vi.fn().mockReturnThis(),
+    // writePageContent serialises its dedupe check against reclaim inside a
+    // transaction, taking the ref's advisory lock on the handle.
+    transaction: async (fn: (tx: { execute: () => Promise<void> }) => Promise<unknown>) =>
+      fn({ execute: async () => undefined }),
   },
 }));
 vi.mock('@pagespace/db/schema/versioning', () => ({

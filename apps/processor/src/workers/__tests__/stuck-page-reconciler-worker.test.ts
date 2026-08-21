@@ -172,6 +172,28 @@ describe('runStuckPageReconciler', () => {
     );
   });
 
+  it('re-checks the page type at write time so a converted page is never marked failed', async () => {
+    const db = makeFakeDb({
+      candidates: [candidate()],
+      attempts: { page_1: 3 },
+    });
+    const deps = makeDeps(db);
+
+    await runStuckPageReconciler(deps);
+
+    const failCall = db.client.query.mock.calls.find(
+      ([sql]) => typeof sql === 'string' && sql.includes('UPDATE pages')
+    );
+    expect(failCall).toBeDefined();
+    // Without this predicate the scan's type filter is stale by the time the
+    // write lands, and a FILE→DOCUMENT conversion in that window inherits the
+    // failure.
+    expect(failCall?.[0]).toMatch(/AND type = \$3/);
+    // Position matters: `toContain` would pass if FILE were bound to some other
+    // parameter while `$3` carried something else entirely.
+    expect((failCall?.[1] as unknown[])?.[2]).toBe('FILE');
+  });
+
   it('marks a page with an invalid content hash failed instead of re-enqueueing', async () => {
     const db = makeFakeDb({ candidates: [candidate({ contentHash: 'not-a-hash' })] });
     const deps = makeDeps(db);

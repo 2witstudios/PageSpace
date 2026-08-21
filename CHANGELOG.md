@@ -124,6 +124,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Turning an uploaded file into a document no longer risks losing what you wrote in it** — file
+  text extraction runs in the background, and a file converted to a document while that extraction
+  was still queued could have the document you had started writing replaced by the raw extracted
+  text when the job finally finished. Extraction now checks what the page is at the moment it
+  writes, so a converted page keeps everything you wrote and simply stops showing as processing.
+- **Signing up can no longer leave you with two copies of the starter content** — the Getting
+  Started pages were seeded by four near-identical routines, and two signup paths arriving at once
+  for the same account could each lay down a full set. There is now one seeder, it runs once per
+  drive, and running it again does nothing.
 - **Clicking a task checkbox is instant** — the tick did not appear until the server had answered
   and the whole list had been re-fetched twice, which on a long list was a visible pause on every
   click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was

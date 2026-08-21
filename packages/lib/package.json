@@ -37,6 +37,11 @@
       "import": "./dist/commands/starter-skill-installer.js",
       "require": "./dist/commands/starter-skill-installer.js"
     },
+    "./onboarding/home-drive": {
+      "types": "./dist/onboarding/home-drive.d.ts",
+      "import": "./dist/onboarding/home-drive.js",
+      "require": "./dist/onboarding/home-drive.js"
+    },
     "./db/bounded-query": {
       "types": "./dist/db/bounded-query.d.ts",
       "import": "./dist/db/bounded-query.js",

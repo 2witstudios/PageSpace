@@ -3,11 +3,11 @@ import { eq, sql } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { createId } from '@paralleldrive/cuid2'
-import { HOME_DRIVE_NAME, resolveUniqueSlug } from '@pagespace/lib/services/drive-guards'
-import { allocatePublishSubdomain } from '@pagespace/lib/services/drive-service'
-import { populateUserDrive } from '@/lib/onboarding/drive-setup'
-import { installStarterSkills } from '@pagespace/lib/commands/starter-skill-installer'
-import { provisionMemoryPages } from '@pagespace/lib/memory/memory-pages'
+import { HOME_DRIVE_NAME, resolveUniqueSlug } from '../services/drive-guards'
+import { allocatePublishSubdomain } from '../services/drive-service'
+import { populateUserDrive } from './drive-setup'
+import { installStarterSkills } from '../commands/starter-skill-installer'
+import { provisionMemoryPages } from '../memory/memory-pages'
 
 type TransactionType = Parameters<Parameters<typeof db.transaction>[0]>[0];
 

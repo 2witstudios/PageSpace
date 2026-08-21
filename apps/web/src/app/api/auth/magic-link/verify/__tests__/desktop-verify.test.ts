@@ -91,7 +91,7 @@ vi.mock('@/lib/auth/cookie-config', () => ({
   appendSessionCookie: vi.fn(),
 }));
 
-vi.mock('@/lib/onboarding/home-drive', () => ({
+vi.mock('@pagespace/lib/onboarding/home-drive', () => ({
   provisionHomeDriveIfNeeded: vi.fn().mockResolvedValue(null),
 }));
 
@@ -121,7 +121,7 @@ import { GET } from '../route';
 import { verifyMagicLinkToken } from '@pagespace/lib/auth/magic-link-service';
 import { createExchangeCode } from '@pagespace/lib/auth/exchange-codes';
 import { appendSessionCookie } from '@/lib/auth/cookie-config';
-import { provisionHomeDriveIfNeeded } from '@/lib/onboarding/home-drive';
+import { provisionHomeDriveIfNeeded } from '@pagespace/lib/onboarding/home-drive';
 
 const desktopMetadata = JSON.stringify({
   platform: 'desktop',

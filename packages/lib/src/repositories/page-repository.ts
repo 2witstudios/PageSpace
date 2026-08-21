@@ -9,6 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq, and, desc, isNull, inArray, isNotNull, lt } from '@pagespace/db/operators';
 import { pages, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { deleteConversationsForPages } from './conversation-cleanup';
+import { assertNoContentWrite } from './page-write-guard';
 
 export type PageTypeValue = PageTypeEnum;
 
@@ -57,9 +58,16 @@ export interface CreatePageInput {
   createdBy?: string | null;
 }
 
+/**
+ * Fields `pageRepository.update` may set.
+ *
+ * `content` is deliberately absent. This update is a bare `set(...)` with no
+ * revision compare-and-swap, no `page_versions` row, no activity entry and no
+ * realtime broadcast — writing content through it would silently clobber the
+ * authoritative copy. Page content goes through `applyPageMutation`.
+ */
 export interface UpdatePageInput {
   title?: string;
-  content?: string;
   isTrashed?: boolean;
   trashedAt?: Date | null;
   parentId?: string | null;
@@ -198,6 +206,8 @@ export const pageRepository = {
     pageId: string,
     data: UpdatePageInput
   ): Promise<{ id: string; title: string; type: PageTypeValue; parentId: string | null }> => {
+    assertNoContentWrite(data, 'pageRepository.update');
+
     const updateData: Record<string, unknown> = {
       ...data,
       updatedAt: data.updatedAt ?? new Date(),
