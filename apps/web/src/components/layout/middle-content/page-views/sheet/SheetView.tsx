@@ -555,6 +555,22 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       event.preventDefault();
       const cell = clampSelection({ row, column }, sheet);
 
+      // Shift-click extends from the current anchor rather than replacing the
+      // selection. Without this the only way to select a range is to drag,
+      // which makes formatting a wide block of a large sheet impractical —
+      // and every other spreadsheet binds it.
+      if (event.shiftKey) {
+        setSelection((previous) => ({
+          type: 'range',
+          range: { start: getPrimaryCell(previous), end: cell },
+        }));
+        setIsFormulaFocused(false);
+        requestAnimationFrame(() => {
+          gridRef.current?.focus({ preventScroll: true });
+        });
+        return;
+      }
+
       setIsDragging(true);
       setDragStart(cell);
       setSelection({

@@ -89,7 +89,7 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
       'box-border border-b border-r border-[var(--separator)]',
       'flex items-center px-2 text-sm leading-tight',
       'cursor-cell select-none touch-manipulation',
-      isNumeric && 'justify-end font-mono tabular-nums',
+      isNumeric && 'text-right font-mono tabular-nums',
       wraps ? 'whitespace-pre-wrap break-words' : 'overflow-hidden whitespace-nowrap',
       hasError && 'text-destructive',
       isSelected && !isPrimary && 'bg-primary/10',

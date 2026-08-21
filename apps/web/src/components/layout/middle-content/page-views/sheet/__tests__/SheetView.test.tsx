@@ -186,6 +186,22 @@ describe('SheetView', () => {
     expect(cellAt('A1').getAttribute('aria-selected')).toBe('false');
   });
 
+  it('extends the selection on shift-click', () => {
+    // Dragging was the only way to select a range, which makes formatting a
+    // wide block of a large sheet impractical. Every other spreadsheet binds
+    // shift-click, and the formatting toolbar is only useful with it.
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
+
+    fireEvent.mouseDown(cellAt('A1'));
+    fireEvent.mouseDown(cellAt('C3'), { shiftKey: true });
+
+    for (const address of ['A1', 'B2', 'C3', 'A3', 'C1']) {
+      expect(cellAt(address).getAttribute('aria-selected'), address).toBe('true');
+    }
+    // ...and nothing beyond the rectangle.
+    expect(cellAt('D4').getAttribute('aria-selected')).toBe('false');
+  });
+
   it('lets a view-only user drag out a range', () => {
     lacksEditPermission.current = true;
 
