@@ -155,14 +155,24 @@ function stripCommentLines(src: string): string {
     .filter((line) => {
       const trimmed = line.trim();
       if (inBlock) {
-        if (trimmed.includes('*/')) inBlock = false;
-        return false;
+        const end = trimmed.indexOf('*/');
+        if (end === -1) return false;
+        inBlock = false;
+        // A block can END mid-line; whatever follows `*/` is code, so keep it.
+        // (A JSDoc continuation line starting with `*` is always inside a block,
+        // which is why nothing needs to special-case that shape — and why a line
+        // of arithmetic wrapped onto a leading `*` survives.)
+        return trimmed.slice(end + 2).trim().length > 0;
       }
       if (trimmed.startsWith('/*')) {
-        if (!trimmed.includes('*/')) inBlock = true;
-        return false;
+        const end = trimmed.indexOf('*/');
+        if (end === -1) {
+          inBlock = true;
+          return false;
+        }
+        return trimmed.slice(end + 2).trim().length > 0;
       }
-      return !trimmed.startsWith('//') && !trimmed.startsWith('*');
+      return !trimmed.startsWith('//');
     })
     .join('\n');
 }
@@ -214,6 +224,19 @@ describe('the sweep\'s comment stripper', () => {
 
   it('keeps code that precedes a trailing comment', () => {
     expect(stripCommentLines('isTenantMode(); // why')).toContain('isTenantMode()');
+  });
+
+  it('keeps code that FOLLOWS a block comment, on one line or after it closes', () => {
+    expect(stripCommentLines('/* rationale */ isTenantMode();')).toContain('isTenantMode()');
+    expect(stripCommentLines(['/* rationale', '   more */ isTenantMode();'].join('\n'))).toContain(
+      'isTenantMode()',
+    );
+  });
+
+  it('keeps a continuation line that merely starts with `*` — that is arithmetic, not a comment', () => {
+    expect(stripCommentLines(['const n = 2', '  * isTenantMode();'].join('\n'))).toContain(
+      'isTenantMode()',
+    );
   });
 });
 
