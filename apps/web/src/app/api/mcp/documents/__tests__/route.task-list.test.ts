@@ -65,12 +65,14 @@ vi.mock('@/services/api/page-mutation-service', () => ({
   PageRevisionMismatchError: class extends Error {},
 }));
 
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+const mockTransaction = vi.fn();
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     query: {
       pages: { findFirst: (...args: unknown[]) => mockFindFirstPage(...args) },
       taskLists: { findFirst: (...args: unknown[]) => mockFindFirstTaskList(...args) },
-      taskStatusConfigs: { findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
+      taskStatusConfigs: { findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: (...args: unknown[]) => mockFindManyStatusConfigs(...args) },
     },
     insert: (table: { pageId?: string }) => ({
       values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
@@ -78,16 +80,38 @@ vi.mock('@pagespace/db/db', () => ({
           return { returning: (...args: unknown[]) => mockInsertReturning(...args) };
         }
         mockInsertStatusConfigValues(vals);
-        return Promise.resolve(undefined);
+        // Seeding goes through ON CONFLICT DO NOTHING (see
+        // seedInheritedTaskStatusConfigs — catching 23505 inside a transaction
+        // would abort it), so the values builder must offer that.
+        return { onConflictDoNothing: () => Promise.resolve(undefined) };
       },
     }),
-    select: () => ({
-      from: () => ({
-        where: (..._args: unknown[]) => mockSelectChildPages(),
-      }),
-    }),
-  },
-}));
+    // Chainable, because ensureTaskListForPage now walks the page tree to inherit
+    // its nearest ancestor task list's status vocabulary before seeding — that
+    // walk adds `.limit()` / `.orderBy()` to the shapes this mock has to answer.
+    // Here the walk finds no resolvable parent, ends immediately, and falls back
+    // to DEFAULT_TASK_STATUSES, which is what these cases assert.
+    select: () => {
+      const chain: Record<string, unknown> = {
+        then: (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+          Promise.resolve(mockSelectChildPages()).then(resolve, reject),
+      };
+      chain.from = () => chain;
+      chain.where = () => chain;
+      chain.innerJoin = () => chain;
+      chain.orderBy = () => chain;
+      chain.limit = () => chain;
+      return chain;
+    },
+    // The vocabulary sweep issues two set-based UPDATEs after seeding; they
+    // match nothing in these fixtures but still have to be callable.
+    update: () => ({ set: () => ({ where: () => Promise.resolve(undefined) }) }),
+  };
+  // The repair runs in ONE transaction now — a half-applied one is permanent,
+  // since it only ever fires while the vocabulary is empty.
+  dbMock.transaction = mockTransaction.mockImplementation((cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
 
 // ensureTaskListForPage is real (not mocked) — it's the fix under test, exercised
 // against the mocked `db` above so we can assert the status configs actually persist.
@@ -108,6 +132,10 @@ vi.mock('@pagespace/db/operators', () => ({
   and: vi.fn(),
   desc: vi.fn(),
   inArray: vi.fn(),
+  // The vocabulary sweep's two set-based UPDATEs.
+  notInArray: vi.fn(),
+  isNull: vi.fn(),
+  isNotNull: vi.fn(),
 }));
 
 vi.mock('@pagespace/db/schema/core', () => ({
@@ -116,7 +144,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
 
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { pageId: 'taskLists.pageId' },
-  taskItems: { pageId: 'taskItems.pageId' },
+  taskItems: { pageId: 'taskItems.pageId', status: 'taskItems.status', completedAt: 'taskItems.completedAt' },
   taskStatusConfigs: { taskListId: 'taskStatusConfigs.taskListId', position: 'taskStatusConfigs.position' },
   DEFAULT_TASK_STATUSES: [
     { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300' },
@@ -295,6 +323,39 @@ describe('MCP Documents API — TASK_LIST read', () => {
     const inserted = mockInsertStatusConfigValues.mock.calls[0][0];
     expect(inserted).toHaveLength(4);
     expect(inserted.every((c: { taskListId: string }) => c.taskListId === EXISTING_TASK_LIST.id)).toBe(true);
+  });
+
+  it('reports the vocabulary and the rows the repair just wrote, in one transaction', async () => {
+    // Everything above the repair is read BEFORE it, and the repair writes
+    // twice: it seeds the vocabulary and then conforms the rows to it. Report
+    // either half stale and the response names statuses it also says do not
+    // exist — which an agent echoes straight back into a 400.
+    //
+    // And in ONE transaction: the repair only ever fires while the vocabulary
+    // is empty, so a half-applied one is permanent.
+    mockFindFirstTaskList.mockResolvedValue(EXISTING_TASK_LIST);
+    mockFindManyStatusConfigs
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+        { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+      ]);
+    mockFetchEnrichedTasks
+      .mockResolvedValueOnce([{ id: 't1', title: 'T', status: 'pending', priority: 'medium' }])
+      .mockResolvedValue([{ id: 't1', title: 'T', status: 'icebox', priority: 'medium' }]);
+
+    const { POST } = await import('../route');
+    const response = await POST(makeRequest({ operation: 'read', pageId: 'page_tl' }));
+    const data = await response.json();
+
+    expect(data.availableStatuses.map((s: { slug: string }) => s.slug)).toEqual(['icebox', 'shipped']);
+    expect(data.tasks.map((t: { status: string }) => t.status)).toEqual(['icebox']);
+    expect(mockFetchEnrichedTasks).toHaveBeenCalledTimes(2);
+    // Two: the repair opens one, and the create-path seed above it opens
+    // another — it runs the same two-write sequence, and a page can hold task
+    // rows before its own task_lists row exists. Neither may be three
+    // autocommits: a half-applied repair is a permanent one.
+    expect(mockTransaction).toHaveBeenCalledTimes(2);
   });
 
   it('still returns 200 with the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {

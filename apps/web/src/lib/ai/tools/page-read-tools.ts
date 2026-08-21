@@ -18,7 +18,7 @@ import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
-import { ensureTaskListForPage, seedDefaultTaskStatusConfigs } from '@/services/api/task-sync-service';
+import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveDriveScope } from './drive-context-defaults';
@@ -387,7 +387,13 @@ export const pageReadTools = {
         if (page.type === 'TASK_LIST') {
           // Find or create task_list record for this page, seeding default status
           // configs alongside it so the DB is never left half-initialized.
-          const taskList = await ensureTaskListForPage(db, {
+          // In a transaction: ensureTaskListForPage's create branch seeds the
+          // vocabulary and then conforms any rows already under the page, and a
+          // page CAN hold task rows with no task_lists row of its own — there is
+          // no foreign key between them, only pages.parentId. Committing the
+          // configs without the conform is permanent, since the repair below
+          // only fires while the vocabulary is empty.
+          const taskList = await db.transaction((tx) => ensureTaskListForPage(tx, {
             pageId: page.id,
             title: page.title,
             userId,
@@ -395,11 +401,11 @@ export const pageReadTools = {
               createdAt: new Date().toISOString(),
               autoCreated: true,
             },
-          });
+          }));
 
           // Get all non-trashed tasks ordered by pages.position — the single ordering
           // rail users reorder against (#2143). Title lives on the linked page too.
-          const tasks = await db
+          const readTasks = () => db
             .select({
               id: taskItems.id,
               title: pages.title,
@@ -418,26 +424,68 @@ export const pageReadTools = {
               eq(pages.isTrashed, false),
             ))
             .orderBy(asc(pages.position), asc(taskItems.id));
+          let tasks = await readTasks();
 
           // Resolve available statuses for this task list. Falls back to
           // documented defaults when no custom configs are present so the
           // AI always sees a concrete list.
           // eslint-disable-next-line no-restricted-syntax -- pre-existing unbounded findMany, not fixed by Phase 8 (PageSpace epic j44e35jwzlhr54fbmruk3k4i follow-up)
-          const statusConfigs = await db.query.taskStatusConfigs.findMany({
+          let statusConfigs = await db.query.taskStatusConfigs.findMany({
             where: eq(taskStatusConfigs.taskListId, taskList.id),
             orderBy: [asc(taskStatusConfigs.position)],
           });
 
           // Legacy task_lists row (e.g. seeded by a pre-fix lazy-init path) with no
           // configs — backfill now instead of leaving it half-initialized forever.
-          // Best-effort: this read already has a correct in-memory fallback
-          // (DEFAULT_TASK_STATUSES below), so a transient backfill failure must not
-          // fail the whole read — it'll simply retry on the next read of this page.
+          //
+          // INHERITED, not defaults, and the same call the web route makes. This
+          // repair only fires while the vocabulary is empty, so whichever client
+          // touches the page first decides it permanently: an agent reading a
+          // sub-task before anyone opens it in the UI would otherwise stamp the
+          // four built-ins onto a list whose ancestor defines its own, and every
+          // later PATCH against an inherited slug 400s.
+          //
+          // In ONE transaction, as the create-path seed above now is too. Both
+          // run the same two-write sequence, and "a list being created has no
+          // rows to conform" — which stood here — is a claim about legacy data
+          // that nothing establishes: task_items are tied to their list only
+          // through pages.parentId, with no foreign key to task_lists, so a page
+          // can hold task rows while its own task_lists row is missing. That is
+          // precisely the half-initialised state these read paths exist to find.
+          //
+          // Here the seed inserts the configs and then conforms
+          // any rows already in the list to them, and this repair only ever
+          // runs while the vocabulary is empty — so a half-applied repair is a
+          // permanent one: the configs commit, the rows keep slugs the list no
+          // longer defines, and no later read comes back for them. There is no
+          // "it'll retry next time" here, whatever an earlier comment claimed.
+          //
+          // Still best-effort at the outer level: this read has a correct
+          // in-memory fallback, so a failed repair must not fail the read.
           if (statusConfigs.length === 0) {
             try {
-              await seedDefaultTaskStatusConfigs(db, taskList.id);
+              await db.transaction((tx) =>
+                seedInheritedTaskStatusConfigs(tx, taskList.id, page.id));
+              // Re-read BOTH. The repair writes twice — it seeds the vocabulary
+              // and then conforms the rows to it — and everything above was read
+              // before either. Re-reading only the configs would report statuses
+              // the repair has just moved, on slugs absent from the vocabulary
+              // named in the same response, which an agent then echoes back into
+              // a 400.
+              // Both in one destructuring, so a failure in the second cannot
+              // leave the first assigned: the outer catch would then send the
+              // NEW vocabulary beside the PRE-repair statuses, which is exactly
+              // the pairing this block exists to prevent.
+              [statusConfigs, tasks] = await Promise.all([
+                // eslint-disable-next-line no-restricted-syntax -- unbounded on purpose: the read it replaces is unbounded, and the seeding path it re-reads no longer caps either. Reporting 200 of a 260-status vocabulary beside rows the sweep just moved to a slug at position 259 names statuses the same response says do not exist.
+                db.query.taskStatusConfigs.findMany({
+                  where: eq(taskStatusConfigs.taskListId, taskList.id),
+                  orderBy: [asc(taskStatusConfigs.position)],
+                }),
+                readTasks(),
+              ]);
             } catch (error) {
-              pageReadLogger.error('Failed to backfill default task status configs', error as Error);
+              pageReadLogger.error('Failed to backfill inherited task status configs', error as Error);
             }
           }
 

@@ -1,9 +1,11 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback, useEffect, useMemo, useRef } from 'react';
 import useSWRInfinite from 'swr/infinite';
+import type { SWRInfiniteKeyedMutator } from 'swr/infinite';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import type { TaskItem, TaskListData, TaskStatusConfig } from './task-list-types';
+import { shouldAppendOptimistically } from '@/lib/tasks/task-cache-core';
 
 /**
  * Sub-tasks come from the SAME route the top-level list uses — called with the
@@ -125,6 +127,17 @@ export interface UseTaskSubTasksResult {
    */
   statusConfigs: TaskStatusConfig[];
   hasMore: boolean;
+  /**
+   * Whether a newly created task can be appended straight into this cache.
+   *
+   * NOT the negation of `hasMore`, and the difference is the whole reason this
+   * is exported rather than derived by the caller: with no pages loaded at all
+   * — a first page that failed, or one still in flight — `hasMore` is false
+   * while there is nothing to append TO, and `appendTaskToPages` silently
+   * returns the empty cache unchanged. A caller reading `!hasMore` drops the
+   * task on the floor in exactly the case it most needs to refetch.
+   */
+  canAppendCreated: boolean;
   isLoading: boolean;
   isLoadingMore: boolean;
   error: Error | undefined;
@@ -137,11 +150,37 @@ export interface UseTaskSubTasksResult {
    *
    * Deliberately not a general refresh: it is meant to be wired to a user pressing "try
    * again" after a visible failure, which is the same class of explicit action as Load more.
-   * Sub-task rows going stale when something changes elsewhere is a different problem with a
-   * different answer (subscribing to the sub-list's own events, which belongs with recursive
-   * expansion state) — do not solve that by calling this on a timer or a socket event.
+   * Do NOT call it on a timer, and do not reach for it to keep rows generally fresh.
+   *
+   * ONE socket-driven caller is allowed, and it is narrow enough to state exactly: the write
+   * machinery's deferred-echo flush (lib/tasks/task-write-machinery.ts). That fires only after
+   * an event arrived DURING one of this tab's own writes and then failed to match any write
+   * this tab made — i.e. a genuine concurrent edit, at most once per write, never on an
+   * ordinary echo. Its lazy-write cost is nil here for the reason the gate exists: this node is
+   * already expanded, so its task_lists row and configs were created by the fetch that
+   * populated it. The hazard the gate guards — fetching for a LEAF and creating rows for a task
+   * with no children — cannot arise from a refresh of pages already loaded.
    */
   retry: () => void;
+  /**
+   * The bound swr/infinite mutate, for local writes — normally with
+   * `revalidate: false`.
+   *
+   * One exception, and it is deliberate: a write that FAILS calls it bare, to
+   * refetch. There is no local answer there — SWR's rollback belongs to the
+   * optimistic path this code does not use, and an inverse patch is only honest
+   * when nothing else has touched the row (see task-write-machinery). A refetch
+   * of the pages already loaded is the fallback, and it carries the same "cost
+   * is nil, this node is already populated" reasoning as `retry` below.
+   *
+   * This is a deliberate, narrow widening of a hook whose entire configuration
+   * says "nothing here refetches". It exists because a nested row's checkbox has
+   * to patch the cache it renders from, and that cache is this one. It is not a
+   * refresh: `retry` remains the only revalidation path, for exactly the reasons
+   * documented on it, and calling this with no arguments would re-issue every
+   * loaded page against a route that lazily writes.
+   */
+  mutatePages: SWRInfiniteKeyedMutator<TaskListData[]>;
 }
 
 export function useTaskSubTasks(
@@ -172,6 +211,55 @@ export function useTaskSubTasks(
     },
   );
 
+  /**
+   * Refetch once when the gate REOPENS over a cache that already holds data.
+   *
+   * The gate closes whenever `subTaskCount` reaches 0 — delete the last
+   * sub-task and the key goes null — and the cache keeps the empty page it was
+   * last given. Add one back from the inline row that is still on screen and
+   * the key returns, but with cached data present and every revalidation
+   * trigger off, SWR issues nothing: the new task never renders, and the row
+   * says its sub-tasks are "no longer here" while the count says there is one.
+   * Collapsing and re-expanding does not help — the entry lives in the app-wide
+   * provider, so unmounting does not clear it — and nothing else in the session
+   * ever asks again.
+   *
+   * Only on the false -> true EDGE, and only with data already cached: a first
+   * expansion has no cache, so SWR fetches on its own and a refetch here would
+   * just double the request.
+   */
+  const gateWasOpen = useRef(gateOpen);
+  const repairedEmptyCache = useRef(false);
+  useEffect(() => {
+    if (!gateOpen) {
+      gateWasOpen.current = false;
+      repairedEmptyCache.current = false;
+      return;
+    }
+    const reopened = !gateWasOpen.current;
+    gateWasOpen.current = true;
+    if (pages === undefined) return;
+
+    // The edge alone is not enough, because the node can UNMOUNT between the
+    // two states: collapse the row after deleting its last sub-task, then use
+    // the row menu's "Add sub-task" — which is offered precisely because the
+    // count is 0 — and TaskSubTaskRows mounts fresh over the emptied cache with
+    // the count already back at 1. There is no edge to see; the ref starts at
+    // whatever the gate says on mount.
+    //
+    // So also repair the state itself: the gate is open, which means the count
+    // says there is at least one sub-task, while the cache holds pages with no
+    // rows in them. That pair is the inconsistency, and it cannot arise from an
+    // ordinary collapse and re-expand — those pages have rows, which is why
+    // that case still issues nothing (a request here lazily WRITES).
+    //
+    // Once per open, so a genuinely stale parent counter cannot spin this.
+    const cacheContradictsTheCount = pages.every((page) => page.tasks.length === 0);
+    if (cacheContradictsTheCount && repairedEmptyCache.current) return;
+    if (cacheContradictsTheCount) repairedEmptyCache.current = true;
+    if (reopened || cacheContradictsTheCount) void mutate();
+  }, [gateOpen, pages, mutate]);
+
   const subTasks = useMemo(() => (pages ?? []).flatMap((p) => p.tasks), [pages]);
   // Memoized for the same reason as subTasks: `?? []` mints a new array every render, and a
   // caller that puts this in a dependency array (a nested renderer resolving status labels is
@@ -195,6 +283,7 @@ export function useTaskSubTasks(
     subTasks,
     statusConfigs,
     hasMore,
+    canAppendCreated: shouldAppendOptimistically(pages),
     // With the gate shut there is no key, so SWR reports neither loading nor data —
     // report "not loading" rather than leaving a caller spinning forever.
     isLoading: gateOpen && isLoading,
@@ -216,5 +305,6 @@ export function useTaskSubTasks(
     error: normalizedError,
     loadMore,
     retry,
+    mutatePages: mutate,
   };
 }

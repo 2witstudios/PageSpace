@@ -13,6 +13,7 @@ import { type Editor } from '@tiptap/react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import useSWRInfinite from 'swr/infinite';
+import { mutate as globalMutate } from 'swr';
 import { formatDistanceToNow } from 'date-fns';
 import { useAuth } from '@/hooks/useAuth';
 import { usePermissions, canManageDrive } from '@/hooks/usePermissions';
@@ -25,6 +26,7 @@ import { useTaskListPageFilter } from './useTaskListPageFilter';
 import { TreePage } from '@/hooks/usePageTree';
 import { fetchWithAuth, post, patch, del } from '@/lib/auth/auth-fetch';
 import { useSocketStore } from '@/stores/useSocketStore';
+import type { TaskEventPayload } from '@/lib/websocket/socket-utils';
 import {
   Table,
   TableBody,
@@ -66,8 +68,6 @@ import {
   GripVertical,
   Zap,
   Bell,
-  ChevronRight,
-  ChevronDown,
 } from 'lucide-react';
 import {
   DndContext,
@@ -90,22 +90,42 @@ import { DueDatePicker } from './DueDatePicker';
 import { TaskKanbanView } from './TaskKanbanView';
 import { TaskListDescriptionContent } from './TaskListDescription';
 import { TaskListHeader } from './TaskListHeader';
+import { selfTaskKey } from './useSelfTask';
 import Toolbar from '@/components/editors/Toolbar';
-import { TaskRowDescription } from './TaskRowDescription';
+import { TASK_TABLE_COLUMN_COUNT } from './table-columns';
+import { TaskRowGroup } from './TaskRowGroup';
+import { TaskTreeProvider } from './task-tree-context';
+import {
+  makeNodePath,
+  rootNodePath,
+  toggleNodePath,
+  expandNodePath,
+  type TaskNodePath,
+} from './task-tree-core';
 import { StatusConfigManager } from './StatusConfigManager';
 import { TaskAgentTriggersDialog } from './TaskAgentTriggersDialog';
 import { TaskListWorkflowsDialog } from './TaskListWorkflowsDialog';
+import { SubTaskProgress } from './SubTaskProgress';
 import {
   TaskItem,
   TaskListData,
   TaskStatusConfig,
+  TaskLocation,
+  LocatedTaskHandlers,
+  bindTaskHandlersToList,
   buildStatusConfig,
   getStatusOrder,
   isCompletedStatus,
   PRIORITY_CONFIG,
-  TaskHandlers,
-  canExpandTask,
 } from './task-list-types';
+import {
+  resolveToggleStatus,
+  blockedByOpenSubTasks,
+  blockedStatusTransition,
+  subTasksBlockedMessage,
+  applySubTaskCountsToPages,
+} from '@/lib/tasks/task-cache-core';
+import { useTaskWriteMachinery, useTaskWriter } from '@/lib/tasks/task-write-machinery';
 
 interface TaskListViewProps {
   page: TreePage;
@@ -126,7 +146,7 @@ interface MobileTaskCardProps {
   task: TaskItem;
   canEdit: boolean;
   onToggleComplete: (task: TaskItem) => void;
-  onStatusChange: (taskId: string, status: string) => void;
+  onStatusChange: (task: TaskItem, status: string) => void;
   onPriorityChange: (taskId: string, priority: string) => void;
   onMultiAssigneeChange: (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => void;
   onDueDateChange: (taskId: string, date: Date | null) => void;
@@ -205,16 +225,20 @@ function MobileTaskCard({
               className="h-8"
             />
           ) : (
-            <button
-              type="button"
-              className={cn(
-                'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
-                isCompleted && 'line-through text-muted-foreground'
-              )}
-              onClick={() => onNavigate(task)}
-            >
-              {task.title}
-            </button>
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                className={cn(
+                  'font-medium cursor-pointer hover:text-primary bg-transparent border-0 p-0 text-left',
+                  isCompleted && 'line-through text-muted-foreground'
+                )}
+                onClick={() => onNavigate(task)}
+              >
+                {task.title}
+              </button>
+              {/* Sub-task progress — parity with the table and kanban. */}
+              <SubTaskProgress task={task} className="shrink-0 text-xs text-muted-foreground tabular-nums" />
+            </div>
           )}
         </div>
         <DropdownMenu>
@@ -257,7 +281,7 @@ function MobileTaskCard({
         {/* Status - uses dynamic status configs */}
         <Select
           value={task.status}
-          onValueChange={(value) => onStatusChange(task.id, value)}
+          onValueChange={(value) => onStatusChange(task, value)}
           disabled={!canEdit}
         >
           <SelectTrigger className="h-7 w-auto px-2">
@@ -334,14 +358,12 @@ function MobileTaskCard({
   );
 }
 
-export const getExpansionRowClass = (isExpanded: boolean): string =>
-  isExpanded ? '' : 'hidden';
-
-export const toggleSet = (set: Set<string>, id: string): Set<string> => {
-  const next = new Set(set);
-  if (next.has(id)) next.delete(id); else next.add(id);
-  return next;
-};
+/**
+ * The collapsed state, shared. Minting `new Set()` per call is a new reference
+ * every time, so setting it re-renders the whole tree even when nothing was
+ * open — which the filter effect does on every keystroke.
+ */
+const EMPTY_EXPANDED: Set<TaskNodePath> = new Set();
 
 // Only the most recently loaded page's hasMore matters — earlier pages are stale
 // snapshots of a bound that may have shifted as tasks were added/removed since.
@@ -408,20 +430,35 @@ export const redistributeTasksAcrossPages = <P extends { tasks: TaskItem[] }>(
   });
 };
 
-// Sortable row component for drag-and-drop
+/**
+ * The top-level row: a sortable `<tr>` plus its context menu.
+ *
+ * It owns only the row now. Expansion content — the document and the nested
+ * sub-task rows — is emitted by TaskRowGroup as SIBLING rows in the same
+ * `<tbody>`, so the columns of a sub-task line up with its parent's instead of
+ * living inside a colspan cell.
+ */
 interface SortableTaskRowProps {
   task: TaskItem;
   canEdit: boolean;
   isCompleted: boolean;
+  /**
+   * Which row this is and how many there are. Nested rows carry these, so
+   * omitting them here would have a treegrid where children announce "3 of 5"
+   * under a parent that announces no position at all.
+   */
+  posInSet: number;
+  setSize?: number;
+  /** Whether this row has anything to expand, and whether it currently is. */
+  expandable: boolean;
   isExpanded: boolean;
-  // Sub-task links in the expansion are drive-scoped page URLs, and the row has no
-  // other route to the drive it lives in.
-  driveId: string;
   contextMenu?: React.ReactNode;
   children: React.ReactNode;
 }
 
-function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, contextMenu, children }: SortableTaskRowProps) {
+function SortableTaskRow({
+  task, canEdit, isCompleted, expandable, isExpanded, posInSet, setSize, contextMenu, children,
+}: SortableTaskRowProps) {
   const {
     attributes,
     listeners,
@@ -441,6 +478,12 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, cont
       ref={setNodeRef}
       style={style}
       data-task-id={task.id}
+      aria-level={1}
+      aria-posinset={posInSet}
+      aria-setsize={setSize}
+      // Top-level rows are the ones most often expanded; without this the
+      // treegrid announces a level and never says whether it is open.
+      aria-expanded={expandable ? isExpanded : undefined}
       className={cn(
         isCompleted && 'opacity-60',
         isDragging && 'opacity-50 bg-muted'
@@ -462,33 +505,14 @@ function SortableTaskRow({ task, canEdit, isCompleted, isExpanded, driveId, cont
     </TableRow>
   );
 
-  const expansionRow = (
-    <tr key={`${task.id}-desc`} className={getExpansionRowClass(isExpanded)}>
-      <td colSpan={8} className="px-4 py-2 border-b bg-muted/20">
-        {isExpanded && <TaskRowDescription task={task} driveId={driveId} />}
-      </td>
-    </tr>
-  );
-
-  if (!contextMenu) {
-    return (
-      <>
-        {row}
-        {expansionRow}
-      </>
-    );
-  }
+  if (!contextMenu) return row;
 
   return (
-    <>
-      <ContextMenu>
-        <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
-        {contextMenu}
-      </ContextMenu>
-      {expansionRow}
-    </>
+    <ContextMenu>
+      <ContextMenuTrigger asChild>{row}</ContextMenuTrigger>
+      {contextMenu}
+    </ContextMenu>
   );
-
 }
 
 function TaskListView({ page }: TaskListViewProps) {
@@ -519,10 +543,31 @@ function TaskListView({ page }: TaskListViewProps) {
   }, [isFindOpen]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
-  const [triggerDialogTask, setTriggerDialogTask] = useState<TaskItem | null>(null);
+  // Carries the list the task belongs to, not just the task: TaskAgentTriggersDialog
+  // writes through /api/pages/{pageId}/tasks/... , and for a nested task that is its
+  // parent task's page, not the viewed list's.
+  const [triggerDialogTask, setTriggerDialogTask] =
+    useState<{ task: TaskItem; listPageId: string } | null>(null);
+  const openTriggerDialog = useCallback(
+    (task: TaskItem, listPageId: string) => setTriggerDialogTask({ task, listPageId }),
+    [],
+  );
   const [workflowsDialogOpen, setWorkflowsDialogOpen] = useState(false);
-  const [expandedTaskIds, setExpandedTaskIds] = useState<Set<string>>(new Set());
-  const toggleTaskExpand = (id: string) => setExpandedTaskIds(prev => toggleSet(prev, id));
+  // Keyed by PATH (rootPageId/taskId/taskId…), not task id: it makes "collapse
+  // this node's whole subtree" a prefix operation and gives React an
+  // unambiguous key when the same task could appear in two places.
+  const [expandedPaths, setExpandedPaths] = useState<Set<TaskNodePath>>(EMPTY_EXPANDED);
+  const toggleExpanded = useCallback(
+    (path: TaskNodePath) => setExpandedPaths(prev => toggleNodePath(prev, path)),
+    [],
+  );
+  const expandNode = useCallback(
+    // Not re-wrapped in `new Set`: expandNodePath returns the SAME set when the
+    // node is already open, and React then skips the re-render — a wrapper here
+    // would mint a new one every time and throw that away.
+    (path: TaskNodePath) => setExpandedPaths(prev => expandNodePath(prev, path)),
+    [],
+  );
   const viewMode = useLayoutStore((state) => state.taskListViewMode);
   const setViewMode = useLayoutStore((state) => state.setTaskListViewMode);
   // Description is always collapsed on load; the user expands it via the header toggle.
@@ -625,6 +670,28 @@ function TaskListView({ page }: TaskListViewProps) {
   const tasksRef = useRef(data?.tasks);
   useEffect(() => { tasksRef.current = data?.tasks; }, [data?.tasks]);
 
+  // View-wide: the log of writes this tab made (so its own socket echoes can be
+  // told apart from everyone else's — including the same account in another
+  // tab), plus the queue of echoes that arrived too early to classify.
+  const writeMachinery = useTaskWriteMachinery(user?.id, mutateTasks);
+
+  /**
+   * Task field writes that show their result before the network answers.
+   *
+   * This is what makes the checkbox feel instant. Previously every handler
+   * awaited a PATCH — which itself awaits two outbound realtime HTTP posts —
+   * and then called mutateTasks(), a revalidate-ALL that refetches every loaded
+   * page; the socket echo then fired a second one. The row did not change until
+   * all of that finished, and if any edit session was open anywhere in the app
+   * the SWR `isPaused` gate made the post-write mutate a silent no-op, so the
+   * checkbox never moved at all.
+   */
+  const { writeTaskField } = useTaskWriter({
+    mutatePages: mutateTaskPages,
+    onRevisionConflict: mutateTasks,
+    machinery: writeMachinery,
+  });
+
   // Connect to socket store when user is available
   useEffect(() => {
     if (!user) return;
@@ -642,12 +709,26 @@ function TaskListView({ page }: TaskListViewProps) {
     socket.emit('join_channel', page.id);
 
     // Handle task events (event names match backend broadcast format: task:${operation})
+    //
+    // These refetch the ROOT list only, and deliberately: expanded nodes own
+    // caches of their own that this does not touch. Fanning out to them was
+    // tried and reverted — broadcastTaskEvent posts to `user:<actor>:tasks` and
+    // to `payload.pageId`, which for a nested write is the PARENT TASK's page,
+    // not this view's. So a foreign edit inside an open node never arrives here
+    // at all (the F4 gap; nested realtime is filed as follow-up work), while
+    // `task_added`/`deleted`/`reordered` carry no self-echo filter — meaning
+    // the fan-out would have fired one extra GET per expanded node on the
+    // user's OWN every write, each one lazily seeding task_lists rows, and
+    // served no foreign case in exchange.
     const handleTaskAdded = () => {
       mutateTasks();
     };
 
-    const handleTaskUpdated = () => {
-      mutateTasks();
+    // A task update is only worth a full revalidate-all if somebody ELSE made it.
+    // Our own write already patched the cache; refetching on the echo would undo
+    // the whole point of the optimistic update.
+    const handleTaskUpdated = (payload: TaskEventPayload) => {
+      if (writeMachinery.shouldRevalidateForEvent(payload)) mutateTasks();
     };
 
     const handleTaskDeleted = () => {
@@ -682,7 +763,7 @@ function TaskListView({ page }: TaskListViewProps) {
       socket.off('task:tasks_reordered', handleTasksReordered);
       socket.off('page:moved', handlePageMoved);
     };
-  }, [socket, connectionStatus, page.id, mutateTasks]);
+  }, [socket, connectionStatus, page.id, mutateTasks, writeMachinery]);
 
   // Derive dynamic status config from API response
   const statusConfigs = useMemo(() => data?.statusConfigs ?? [], [data?.statusConfigs]);
@@ -703,6 +784,19 @@ function TaskListView({ page }: TaskListViewProps) {
   // useFindStore. Find should search whatever's already loaded, not reset it.
   useEffect(() => {
     setSize(1);
+    // Expansions go too. The filter applies to the top-level rows only — a
+    // node's own cache is a separate paginated fetch with no filter in its key
+    // — so leaving a subtree open shows completed sub-tasks, struck through,
+    // underneath a filter that says Active, and non-matching children under a
+    // toolbar search that says otherwise. Collapsing is the honest answer:
+    // filtering the subtrees too would mean re-fetching every open node against
+    // a lazily-writing route on every keystroke.
+    //
+    // Cmd+F Find is deliberately NOT in these deps and so does not collapse:
+    // it fires per keystroke, and closing the tree under someone mid-search
+    // would be worse than the inconsistency. Find's own inability to see nested
+    // rows is the filed follow-up.
+    setExpandedPaths(EMPTY_EXPANDED);
   }, [filter, search, setSize]);
 
   // Filter tasks
@@ -738,75 +832,89 @@ function TaskListView({ page }: TaskListViewProps) {
     visibleEl?.scrollIntoView({ block: 'center' });
   }, [findIndex, filteredTasks, isFindOpen, findQuery]);
 
-  // Create new task (with optional status for kanban)
-  const handleCreateTask = async (title?: string, status?: string) => {
+  // Create new task (with optional status for kanban).
+  //
+  // Root-level only, despite taking a listPageId: the nested "+ sub-task" rows
+  // POST directly (NewSubTaskRow) so they can patch their own cache. That is
+  // what makes the refreshSelfTask() below correct — every task created here is
+  // a child of the viewed page. Wire a nested caller through this and that stops
+  // being true.
+  const handleCreateTask = async (listPageId: string, title?: string, status?: string) => {
     const taskTitle = (title ?? newTaskTitle).trim();
     if (!taskTitle || !canEdit) return;
 
     try {
-      await post(`/api/pages/${page.id}/tasks`, {
+      await post(`/api/pages/${listPageId}/tasks`, {
         title: taskTitle,
         ...(status && { status }),
       });
       if (!title) setNewTaskTitle('');
       mutateTasks();
+      // A new row here is a new sub-task OF this page, so the header's guard
+      // needs to see it — same reason completion refreshes it.
+      refreshSelfTask();
     } catch {
       toast.error('Failed to create task');
     }
   };
 
-  // Update task status
-  const handleStatusChange = async (taskId: string, newStatus: string) => {
-    if (!canEdit) return;
+  // Create at the root of the viewed list — the toolbar / new-task-row entry point.
+  const handleCreateRootTask = (title?: string, status?: string) =>
+    handleCreateTask(page.id, title, status);
 
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { status: newStatus });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update status');
+  // Update task status
+  const handleStatusChange = async (loc: TaskLocation, task: TaskItem, newStatus: string) => {
+    if (!canEdit) return;
+    // The dropdown can select a done status directly, which is the same
+    // completion the checkbox performs and answers to the same guard.
+    const blocked = blockedStatusTransition(task, newStatus, statusConfigs);
+    if (blocked) {
+      toast.error(subTasksBlockedMessage(blocked));
+      return;
     }
+    // completedAt is guessed only so the row's strikethrough and checkbox move
+    // together with the status; the server's real stamp replaces it on resolve.
+    const movesToDone = isCompletedStatus(newStatus, statusConfigs);
+    const ok = await writeTaskField({
+      loc,
+      body: { status: newStatus },
+      optimistic: {
+        status: newStatus,
+        completedAt: movesToDone ? new Date().toISOString() : null,
+      },
+      fallbackMessage: 'Failed to update status',
+    });
+    // A row here is a sub-task of the page itself, so its completion moves the
+    // counts the header's own guard reads.
+    if (ok) refreshSelfTask();
   };
 
   // Update task priority
-  const handlePriorityChange = async (taskId: string, newPriority: string) => {
+  const handlePriorityChange = async (loc: TaskLocation, newPriority: string) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { priority: newPriority });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update priority');
-    }
+    await writeTaskField({
+      loc,
+      body: { priority: newPriority },
+      optimistic: { priority: newPriority as TaskItem['priority'] },
+      fallbackMessage: 'Failed to update priority',
+    });
   };
 
   // Toggle task completion - uses group-based detection
-  const handleToggleComplete = async (task: TaskItem) => {
+  const handleToggleComplete = async (loc: TaskLocation, task: TaskItem) => {
     if (!canEdit) return;
 
     const isDone = isCompletedStatus(task.status, statusConfigs);
-    if (isDone) {
-      // Move to first "todo" group status
-      const todoStatus = statusOrder.find(slug => {
-        const cfg = statusConfigMap[slug];
-        return cfg && cfg.group === 'todo';
-      }) || 'pending';
-      await handleStatusChange(task.id, todoStatus);
-    } else {
-      // Block completion when sub-tasks are incomplete
-      const subTaskCount = task.subTaskCount ?? 0;
-      const subTaskCompletedCount = task.subTaskCompletedCount ?? 0;
-      if (subTaskCount > 0 && subTaskCompletedCount < subTaskCount) {
-        const pending = subTaskCount - subTaskCompletedCount;
-        toast.error(`Finish ${pending} sub-task${pending > 1 ? 's' : ''} first`);
+    if (!isDone) {
+      // Block completion when sub-tasks are incomplete. The server enforces the
+      // same rule with a 422; this avoids the round trip and the visible flip.
+      const blocked = blockedByOpenSubTasks(task);
+      if (blocked) {
+        toast.error(subTasksBlockedMessage(blocked));
         return;
       }
-      // Move to first "done" group status
-      const doneStatus = statusOrder.find(slug => {
-        const cfg = statusConfigMap[slug];
-        return cfg && cfg.group === 'done';
-      }) || 'completed';
-      await handleStatusChange(task.id, doneStatus);
     }
+    await handleStatusChange(loc, task, resolveToggleStatus(statusConfigs, isDone));
   };
 
   // Start editing title
@@ -817,85 +925,100 @@ function TaskListView({ page }: TaskListViewProps) {
   };
 
   // Shared function to save task title
-  const handleSaveTaskTitle = async (taskId: string, title: string) => {
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { title });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update task');
-    }
-  };
-
-  // Save edited title (wraps shared function with state cleanup)
-  const handleSaveEdit = async () => {
-    if (!editingTaskId || !editingTitle.trim()) {
-      setEditingTaskId(null);
-      return;
-    }
-
-    await handleSaveTaskTitle(editingTaskId, editingTitle.trim());
-    setEditingTaskId(null);
+  const handleSaveTaskTitle = async (loc: TaskLocation, title: string) => {
+    // The depth-0 twin of the guard on the nested handler. Unreachable — Rename
+    // is disabled and handleStartEdit returns early — but this was the one
+    // handler in the block without it, and the uniformity is what a reader
+    // relies on when scanning for the hole.
+    if (!canEdit) return;
+    await writeTaskField({
+      loc,
+      body: { title },
+      optimistic: { title },
+      fallbackMessage: 'Failed to update task',
+    });
   };
 
   // Delete task
-  const handleDeleteTask = async (taskId: string) => {
+  const handleDeleteTask = async (loc: TaskLocation) => {
     if (!canEdit) return;
 
     try {
-      await del(`/api/pages/${page.id}/tasks/${taskId}`);
+      await del(`/api/pages/${loc.listPageId}/tasks/${loc.taskId}`);
       mutateTasks();
+      // Deleting the last open sub-task unblocks this page's own task just as
+      // completing it would; without this the header keeps refusing.
+      refreshSelfTask();
       toast.success('Task deleted');
     } catch {
       toast.error('Failed to delete task');
     }
   };
 
-  // Update task assignee (user or agent) - legacy single assignee
-  const handleAssigneeChange = async (taskId: string, assigneeId: string | null, agentId: string | null) => {
+  // Update task assignee (user or agent) - legacy single assignee.
+  // No optimistic patch: the row renders the hydrated `assignees` relation, which
+  // this request does not supply, so there is nothing honest to show early. The
+  // server response reconciles it.
+  const handleAssigneeChange = async (loc: TaskLocation, assigneeId: string | null, agentId: string | null) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
-        assigneeId,
-        assigneeAgentId: agentId,
-      });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update assignee');
-    }
+    await writeTaskField({
+      loc,
+      body: { assigneeId, assigneeAgentId: agentId },
+      optimistic: {},
+      fallbackMessage: 'Failed to update assignee',
+    });
   };
 
-  // Update task assignees (multiple)
-  const handleMultiAssigneeChange = async (taskId: string, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
+  // Update task assignees (multiple). Same reasoning as the single-assignee
+  // handler: ids in, hydrated relations out, so the optimistic patch is empty.
+  const handleMultiAssigneeChange = async (loc: TaskLocation, assigneeIds: { type: 'user' | 'agent'; id: string }[]) => {
     if (!canEdit) return;
-
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, { assigneeIds });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update assignees');
-    }
+    await writeTaskField({
+      loc,
+      body: { assigneeIds },
+      optimistic: {},
+      fallbackMessage: 'Failed to update assignees',
+    });
   };
 
   // Update task due date
-  const handleDueDateChange = async (taskId: string, dueDate: Date | null) => {
+  const handleDueDateChange = async (loc: TaskLocation, dueDate: Date | null) => {
     if (!canEdit) return;
+    const iso = dueDate?.toISOString() ?? null;
+    await writeTaskField({
+      loc,
+      body: { dueDate: iso },
+      optimistic: { dueDate: iso },
+      fallbackMessage: 'Failed to update due date',
+    });
+  };
 
-    try {
-      await patch(`/api/pages/${page.id}/tasks/${taskId}`, {
-        dueDate: dueDate?.toISOString() || null,
-      });
-      mutateTasks();
-    } catch {
-      toast.error('Failed to update due date');
-    }
+  // Collapse every expanded row the moment a drag begins — see the onDragStart
+  // comment on DndContext for why this can't wait until the drop.
+  //
+  // Remembered, though. The pointer sensor fires at 8px, so brushing a drag
+  // handle counts as a drag: without this, an accidental nudge or an Escape
+  // silently closed every open node in the list and there was no undo. A drag
+  // that actually moves something still leaves the tree flat, because the rows
+  // beneath it have moved.
+  const collapsedForDrag = useRef<Set<TaskNodePath>>(EMPTY_EXPANDED);
+  const handleDragStart = () => {
+    collapsedForDrag.current = expandedPaths;
+    setExpandedPaths(EMPTY_EXPANDED);
+  };
+  const restoreExpansionsAfterNoOpDrag = () => {
+    setExpandedPaths(collapsedForDrag.current);
+    collapsedForDrag.current = EMPTY_EXPANDED;
   };
 
   // Handle drag end - reorder pages (page position is source of truth)
   const handleDragEnd = async (event: DragEndEvent) => {
     const { active, over } = event;
-    setExpandedTaskIds(new Set()); // collapse all rows before reorder
-    if (!over || active.id === over.id || !canEdit) return;
+    if (!over || active.id === over.id || !canEdit) {
+      restoreExpansionsAfterNoOpDrag();
+      return;
+    }
+    collapsedForDrag.current = EMPTY_EXPANDED;
 
     const tasks = filteredTasks;
     const oldIndex = tasks.findIndex(t => t.id === active.id);
@@ -963,19 +1086,74 @@ function TaskListView({ page }: TaskListViewProps) {
     }
   };
 
-  // Handlers object for kanban view
-  const taskHandlers: TaskHandlers = {
+  // Every write is addressed by TaskLocation so a nested row can target its own
+  // parent list. Kanban and the mobile cards only ever render top-level tasks, so
+  // they keep the flat TaskHandlers contract via the root binding below.
+  const locatedHandlers: LocatedTaskHandlers = {
     onToggleComplete: handleToggleComplete,
     onStatusChange: handleStatusChange,
     onPriorityChange: handlePriorityChange,
     onAssigneeChange: handleAssigneeChange,
+    onMultiAssigneeChange: handleMultiAssigneeChange,
     onDueDateChange: handleDueDateChange,
     onSaveTitle: handleSaveTaskTitle,
     onDelete: handleDeleteTask,
     onNavigate: handleNavigate,
     onStartEdit: handleStartEdit,
-    onConfigureTriggers: setTriggerDialogTask,
+    onConfigureTriggers: (task) => openTriggerDialog(task, page.id),
   };
+  const taskHandlers = bindTaskHandlersToList(locatedHandlers, page.id);
+
+  const rootPath = rootNodePath(page.id);
+
+  // A completed sub-task moves its DIRECT parent's counters, and for a
+  // top-level parent that row lives in this cache. Without this the "2/5" on a
+  // root row never moves while its children are worked inline.
+  const patchRootCounts = useCallback(
+    (taskId: string, delta: { total?: number; completed?: number }) => {
+      void mutateTaskPages(
+        (current) => applySubTaskCountsToPages(current, taskId, delta),
+        { revalidate: false },
+      );
+    },
+    [mutateTaskPages],
+  );
+
+  /**
+   * Refresh the header's view of THIS page as a task.
+   *
+   * Its completion guard reads sub-task counts, and this page's sub-tasks are
+   * exactly the rows below. Without this, clearing the last open sub-task on
+   * screen leaves the header still refusing with "Finish 1 sub-task first"
+   * until the window is blurred and refocused — in the one workflow the header
+   * was added for.
+   */
+  const refreshSelfTask = useCallback(() => {
+    void globalMutate(selfTaskKey(page.id));
+  }, [page.id]);
+  // Everything a row needs that is identical at every depth. What varies per
+  // node — the task, its depth, the list it writes to, and the handlers bound to
+  // the cache that holds it — travels on props instead.
+  const treeValue = useMemo(() => ({
+    canEdit,
+    driveId: page.driveId,
+    writeMachinery,
+    rootStatusConfigs: statusConfigs,
+    onNavigate: handleNavigate,
+    onStartEdit: handleStartEdit,
+    openTriggerDialog,
+    expandedPaths,
+    toggleExpanded,
+    expandNode,
+    editingTaskId,
+    editingTitle,
+    onEditingTitleChange: setEditingTitle,
+    onCancelEdit: () => setEditingTaskId(null),
+  // handleNavigate and handleStartEdit are redefined every render; including
+  // them would defeat the memo, and both read only state already listed.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [canEdit, page.driveId, writeMachinery, statusConfigs, openTriggerDialog,
+       expandedPaths, toggleExpanded, expandNode, editingTaskId, editingTitle]);
 
   // Shared between the table, kanban, and mobile card renders — the bounded GET route
   // (limit=100 default) means any of them can silently truncate without this.
@@ -999,6 +1177,12 @@ function TaskListView({ page }: TaskListViewProps) {
 
   if (viewMode === 'editor') {
     return (
+      // Provided here too, not just around the table: the header renders in
+      // this mode as well, and its self-task write reads the write machinery
+      // off this context. Without it that write's own socket echo is
+      // classified foreign and costs the list the full revalidation the whole
+      // optimistic path exists to avoid.
+      <TaskTreeProvider value={treeValue}>
       <div className="flex flex-col h-full min-w-0">
         <TaskListHeader
           pageId={page.id}
@@ -1023,6 +1207,7 @@ function TaskListView({ page }: TaskListViewProps) {
           </span>
         </div>
       </div>
+      </TaskTreeProvider>
     );
   }
 
@@ -1046,6 +1231,7 @@ function TaskListView({ page }: TaskListViewProps) {
   }
 
   return (
+    <TaskTreeProvider value={treeValue}>
     <div className="flex flex-col h-full min-w-0 @container">
       <TaskListHeader
         pageId={page.id}
@@ -1148,20 +1334,16 @@ function TaskListView({ page }: TaskListViewProps) {
           <MobileTaskCard
             task={task}
             canEdit={canEdit}
-            onToggleComplete={handleToggleComplete}
-            onStatusChange={handleStatusChange}
-            onPriorityChange={handlePriorityChange}
-            onMultiAssigneeChange={handleMultiAssigneeChange}
-            onDueDateChange={handleDueDateChange}
-            onSaveTitle={handleSaveTaskTitle}
-            onStartEdit={handleStartEdit}
-            onDelete={handleDeleteTask}
-            onNavigate={(t) => {
-              if (t.pageId) {
-                router.push(`/dashboard/${page.driveId}/${t.pageId}`);
-              }
-            }}
-            onConfigureTriggers={(t) => setTriggerDialogTask(t)}
+            onToggleComplete={taskHandlers.onToggleComplete}
+            onStatusChange={taskHandlers.onStatusChange}
+            onPriorityChange={taskHandlers.onPriorityChange}
+            onMultiAssigneeChange={taskHandlers.onMultiAssigneeChange!}
+            onDueDateChange={taskHandlers.onDueDateChange}
+            onSaveTitle={taskHandlers.onSaveTitle}
+            onStartEdit={taskHandlers.onStartEdit}
+            onDelete={taskHandlers.onDelete}
+            onNavigate={taskHandlers.onNavigate}
+            onConfigureTriggers={taskHandlers.onConfigureTriggers}
             driveId={page.driveId}
             isEditing={editingTaskId === task.id}
             editingTitle={editingTitle}
@@ -1185,7 +1367,7 @@ function TaskListView({ page }: TaskListViewProps) {
               value={newTaskTitle}
               onChange={(e) => setNewTaskTitle(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCreateTask();
+                if (e.key === 'Enter') handleCreateRootTask();
               }}
               className="border-0 shadow-none focus-visible:ring-0 px-0"
             />
@@ -1213,7 +1395,7 @@ function TaskListView({ page }: TaskListViewProps) {
             editingTitle={editingTitle}
             onEditingTitleChange={setEditingTitle}
             onCancelEdit={() => setEditingTaskId(null)}
-            onCreateTask={handleCreateTask}
+            onCreateTask={handleCreateRootTask}
             statusConfigs={statusConfigs}
           />
           {loadMoreControl}
@@ -1227,10 +1409,24 @@ function TaskListView({ page }: TaskListViewProps) {
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
+              // Collapse BEFORE the drag, not after. Today the expansion row is
+              // always rendered and merely CSS-`hidden`, so it has no layout and
+              // verticalListSortingStrategy sees contiguous sortables either way.
+              // Once expansions render real sibling rows with layout, dragging
+              // with rows open produces wrong transforms and wrong drop targets.
+              onDragStart={handleDragStart}
               onDragEnd={handleDragEnd}
+              // A cancelled drag (Escape, or a pointer lost outside the window)
+              // never reaches onDragEnd, so without this the expansions the
+              // start collapsed would stay closed with nothing having moved.
+              onDragCancel={restoreExpansionsAfterNoOpDrag}
             >
               <div className="overflow-x-auto">
-              <Table>
+              {/* treegrid, not table: the rows carry aria-level and (when they
+                  can expand) aria-expanded, and assistive technology ignores
+                  both inside a plain `table` role — the nesting and expansion
+                  state would simply not be announced. */}
+              <Table role="treegrid" aria-label="Tasks">
                 <TableHeader>
                   <TableRow>
                     <TableHead className="w-8"></TableHead>
@@ -1248,217 +1444,61 @@ function TaskListView({ page }: TaskListViewProps) {
                   strategy={verticalListSortingStrategy}
                 >
                   <TableBody>
-                    {filteredTasks.map((task) => (
-                      <SortableTaskRow
+                    {filteredTasks.map((task, index) => (
+                      <TaskRowGroup
                         key={task.id}
                         task={task}
-                        canEdit={canEdit}
-                        isCompleted={isCompletedStatus(task.status, statusConfigs)}
-                        isExpanded={expandedTaskIds.has(task.id)}
-                        driveId={page.driveId}
-                        contextMenu={
-                          <ContextMenuContent>
-                            {task.pageId && (
-                              <ContextMenuItem onSelect={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                                <FileText className="h-4 w-4 mr-2" />
-                                Open
-                              </ContextMenuItem>
-                            )}
-                            <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
-                              <Pencil className="h-4 w-4 mr-2" />
-                              Rename
-                            </ContextMenuItem>
-                            <ContextMenuItem onSelect={() => setTriggerDialogTask(task)} disabled={!canEdit}>
-                              <Zap className="h-4 w-4 mr-2" />
-                              Agent triggers…
-                            </ContextMenuItem>
-                            <ContextMenuItem
-                              onSelect={() => handleDeleteTask(task.id)}
-                              className="text-destructive"
-                              disabled={!canEdit}
-                            >
-                              <Trash2 className="h-4 w-4 mr-2" />
-                              Delete
-                            </ContextMenuItem>
-                          </ContextMenuContent>
-                        }
-                      >
-                        {/* Checkbox */}
-                        <TableCell>
-                          <Checkbox
-                            checked={isCompletedStatus(task.status, statusConfigs)}
-                            onCheckedChange={() => handleToggleComplete(task)}
-                            disabled={!canEdit}
-                          />
-                        </TableCell>
-
-                        {/* Title */}
-                        <TableCell>
-                          {editingTaskId === task.id ? (
-                            <Input
-                              value={editingTitle}
-                              onChange={(e) => setEditingTitle(e.target.value)}
-                              onBlur={handleSaveEdit}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') handleSaveEdit();
-                                if (e.key === 'Escape') setEditingTaskId(null);
-                              }}
-                              autoFocus
-                              className="h-8"
-                            />
-                          ) : (
-                            <div className="flex items-center gap-1">
-                              {canExpandTask(task) ? (
-                                <button
-                                  type="button"
-                                  aria-label={expandedTaskIds.has(task.id) ? 'Collapse description' : 'Expand description'}
-                                  onClick={() => toggleTaskExpand(task.id)}
-                                  className="text-muted-foreground hover:text-foreground shrink-0"
-                                >
-                                  {expandedTaskIds.has(task.id)
-                                    ? <ChevronDown className="h-3.5 w-3.5" />
-                                    : <ChevronRight className="h-3.5 w-3.5" />}
-                                </button>
-                              ) : (
-                                <span className="inline-block w-[19px] shrink-0" />
-                              )}
-                              <span
-                                className={cn(
-                                  'cursor-pointer hover:text-primary hover:underline',
-                                  isCompletedStatus(task.status, statusConfigs) && 'line-through'
+                        depth={0}
+                        posInSet={index + 1}
+                        // Same rule as a sub-list: only claim a size when the
+                        // whole set is loaded. This list pages, so with more to
+                        // come any number would describe rows that are not here.
+                        setSize={hasMoreTasks ? undefined : filteredTasks.length}
+                        listPageId={page.id}
+                        path={makeNodePath(rootPath, task.id)}
+                        handlers={locatedHandlers}
+                        statusConfigs={statusConfigs}
+                        onCountDelta={(delta) => patchRootCounts(task.id, delta)}
+                        renderRow={(cells, rowTree) => (
+                          <SortableTaskRow
+                            task={task}
+                            posInSet={index + 1}
+                            setSize={hasMoreTasks ? undefined : filteredTasks.length}
+                            canEdit={canEdit}
+                            isCompleted={isCompletedStatus(task.status, statusConfigs)}
+                            expandable={rowTree.expandable}
+                            isExpanded={rowTree.isExpanded}
+                            contextMenu={
+                              <ContextMenuContent>
+                                {task.pageId && (
+                                  <ContextMenuItem onSelect={() => handleNavigate(task)}>
+                                    <FileText className="h-4 w-4 mr-2" />
+                                    Open
+                                  </ContextMenuItem>
                                 )}
-                                onClick={() => {
-                                  if (task.pageId) {
-                                    router.push(`/dashboard/${page.driveId}/${task.pageId}`);
-                                  }
-                                }}
-                              >
-                                {task.title}
-                              </span>
-                            </div>
-                          )}
-                        </TableCell>
-
-                        {/* Status - uses dynamic status configs */}
-                        <TableCell>
-                          <Select
-                            value={task.status}
-                            onValueChange={(value) => handleStatusChange(task.id, value)}
-                            disabled={!canEdit}
+                                <ContextMenuItem onSelect={() => handleStartEdit(task)} disabled={!canEdit}>
+                                  <Pencil className="h-4 w-4 mr-2" />
+                                  Rename
+                                </ContextMenuItem>
+                                <ContextMenuItem onSelect={() => openTriggerDialog(task, page.id)} disabled={!canEdit}>
+                                  <Zap className="h-4 w-4 mr-2" />
+                                  Agent triggers…
+                                </ContextMenuItem>
+                                <ContextMenuItem
+                                  onSelect={() => handleDeleteTask({ listPageId: page.id, taskId: task.id })}
+                                  className="text-destructive"
+                                  disabled={!canEdit}
+                                >
+                                  <Trash2 className="h-4 w-4 mr-2" />
+                                  Delete
+                                </ContextMenuItem>
+                              </ContextMenuContent>
+                            }
                           >
-                            <SelectTrigger className="h-8 w-28">
-                              <SelectValue>
-                                <Badge className={cn('text-xs', statusConfigMap[task.status]?.color || 'bg-slate-100 text-slate-700')}>
-                                  {statusConfigMap[task.status]?.label || task.status}
-                                </Badge>
-                              </SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {statusOrder.map(slug => {
-                                const cfg = statusConfigMap[slug];
-                                if (!cfg) return null;
-                                return (
-                                  <SelectItem key={slug} value={slug}>
-                                    <Badge className={cn('text-xs', cfg.color)}>{cfg.label}</Badge>
-                                  </SelectItem>
-                                );
-                              })}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-
-                        {/* Priority */}
-                        <TableCell>
-                          <Select
-                            value={task.priority}
-                            onValueChange={(value) => handlePriorityChange(task.id, value)}
-                            disabled={!canEdit}
-                          >
-                            <SelectTrigger className="h-8 w-28">
-                              <SelectValue>
-                                <Badge className={cn('text-xs', PRIORITY_CONFIG[task.priority].color)}>
-                                  {PRIORITY_CONFIG[task.priority].label}
-                                </Badge>
-                              </SelectValue>
-                            </SelectTrigger>
-                            <SelectContent>
-                              {Object.entries(PRIORITY_CONFIG).map(([key, { label, color }]) => (
-                                <SelectItem key={key} value={key}>
-                                  <Badge className={cn('text-xs', color)}>{label}</Badge>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </TableCell>
-
-                        {/* Multiple Assignees */}
-                        <TableCell>
-                          <div className="flex items-center gap-1.5">
-                            <MultiAssigneeSelect
-                              driveId={page.driveId}
-                              assignees={task.assignees || []}
-                              onUpdate={(assigneeIds) => handleMultiAssigneeChange(task.id, assigneeIds)}
-                              disabled={!canEdit}
-                            />
-                            {canEdit && (task.activeTriggerCount ?? 0) > 0 && (
-                              <button
-                                type="button"
-                                onClick={() => setTriggerDialogTask(task)}
-                                title="Agent trigger configured — click to edit"
-                                aria-label="Agent trigger configured — click to edit"
-                                className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-amber-300/60 bg-amber-50 text-amber-700 hover:bg-amber-100 dark:border-amber-700/50 dark:bg-amber-950/40 dark:text-amber-300"
-                              >
-                                <Bell className="h-3 w-3" />
-                                <span className="sr-only">Agent trigger configured</span>
-                              </button>
-                            )}
-                          </div>
-                        </TableCell>
-
-                        {/* Due Date */}
-                        <TableCell>
-                          <DueDatePicker
-                            currentDate={task.dueDate}
-                            onSelect={(date) => handleDueDateChange(task.id, date)}
-                            disabled={!canEdit}
-                          />
-                        </TableCell>
-
-                        {/* Actions */}
-                        <TableCell>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="icon" className="h-8 w-8">
-                                <MoreHorizontal className="h-4 w-4" />
-                              </Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {task.pageId && (
-                                <DropdownMenuItem onClick={() => router.push(`/dashboard/${page.driveId}/${task.pageId}`)}>
-                                  <FileText className="h-4 w-4 mr-2" />
-                                  Open
-                                </DropdownMenuItem>
-                              )}
-                              <DropdownMenuItem onClick={() => handleStartEdit(task)} disabled={!canEdit}>
-                                <Pencil className="h-4 w-4 mr-2" />
-                                Rename
-                              </DropdownMenuItem>
-                              <DropdownMenuItem onClick={() => setTriggerDialogTask(task)} disabled={!canEdit}>
-                                <Zap className="h-4 w-4 mr-2" />
-                                Agent triggers…
-                              </DropdownMenuItem>
-                              <DropdownMenuItem
-                                onClick={() => handleDeleteTask(task.id)}
-                                className="text-destructive"
-                                disabled={!canEdit}
-                              >
-                                <Trash2 className="h-4 w-4 mr-2" />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </TableCell>
-                      </SortableTaskRow>
+                            {cells}
+                          </SortableTaskRow>
+                        )}
+                      />
                     ))}
                   </TableBody>
                 </SortableContext>
@@ -1471,14 +1511,14 @@ function TaskListView({ page }: TaskListViewProps) {
                       <TableCell>
                         <Checkbox disabled className="opacity-30" />
                       </TableCell>
-                      <TableCell colSpan={6}>
+                      <TableCell colSpan={TASK_TABLE_COLUMN_COUNT - 2}>
                         <Input
                           id="new-task-input"
                           placeholder="+ Add a new task..."
                           value={newTaskTitle}
                           onChange={(e) => setNewTaskTitle(e.target.value)}
                           onKeyDown={(e) => {
-                            if (e.key === 'Enter') handleCreateTask();
+                            if (e.key === 'Enter') handleCreateRootTask();
                           }}
                           className="border-0 shadow-none focus-visible:ring-0 px-0"
                         />
@@ -1514,12 +1554,18 @@ function TaskListView({ page }: TaskListViewProps) {
         <TaskAgentTriggersDialog
           open={!!triggerDialogTask}
           onOpenChange={(open) => { if (!open) setTriggerDialogTask(null); }}
-          taskId={triggerDialogTask.id}
-          taskTitle={triggerDialogTask.title}
-          pageId={page.id}
+          taskId={triggerDialogTask.task.id}
+          taskTitle={triggerDialogTask.task.title}
+          pageId={triggerDialogTask.listPageId}
           driveId={page.driveId}
-          hasDueDate={!!triggerDialogTask.dueDate}
-          onSaved={() => mutateTasks()}
+          hasDueDate={!!triggerDialogTask.task.dueDate}
+          onSaved={() => {
+            mutateTasks();
+            // The dialog can be opened from a NESTED row, and the bell it
+            // toggles is rendered from that node's own cache — which mutateTasks
+            // does not touch and which has no revalidation trigger of its own.
+            writeMachinery.refreshNodeCaches();
+          }}
         />
       )}
 
@@ -1531,6 +1577,7 @@ function TaskListView({ page }: TaskListViewProps) {
         taskListTitle={data?.taskList.title ?? page.title ?? 'Task list'}
       />
     </div>
+    </TaskTreeProvider>
   );
 }
 

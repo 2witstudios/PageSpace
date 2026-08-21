@@ -45,10 +45,34 @@ const createTxMock = () => {
   const txInsertValues = vi.fn(() => ({ returning: txInsertReturning }));
   const txDeleteWhere = vi.fn().mockResolvedValue(undefined);
 
+  // Lazy init now INHERITS its vocabulary rather than seeding the built-ins, so
+  // the transaction also walks the page tree, reads the ancestor's configs and
+  // conforms any rows already in the list. With no resolvable parent here the
+  // walk ends immediately and the seed falls back to DEFAULT_TASK_STATUSES,
+  // which is what these fixtures assume.
+  const chain: Record<string, unknown> = {
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve([]).then(resolve),
+  };
+  chain.from = () => chain; chain.where = () => chain; chain.innerJoin = () => chain;
+  chain.orderBy = () => chain; chain.limit = () => chain;
+
   return {
     update: vi.fn(() => ({ set: txUpdateSet })),
-    insert: vi.fn(() => ({ values: txInsertValues })),
+    insert: vi.fn(() => ({
+      values: vi.fn(() => ({
+        ...txInsertValues(),
+        onConflictDoNothing: vi.fn().mockResolvedValue(undefined),
+      })),
+    })),
     delete: vi.fn(() => ({ where: txDeleteWhere })),
+    select: vi.fn(() => chain),
+    query: {
+      taskLists: { findFirst: vi.fn().mockResolvedValue(undefined) },
+      taskStatusConfigs: {
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+    },
   };
 };
 
@@ -99,6 +123,11 @@ vi.mock('@pagespace/db/operators', () => ({
   asc: vi.fn((col) => ({ type: 'asc', col })),
   desc: vi.fn((col) => ({ type: 'desc', col })),
   inArray: vi.fn((col, vals) => ({ col, vals })),
+  // The inherit path's walk and the conform sweep.
+  ne: vi.fn((a, b) => ({ field: a, value: b })),
+  notInArray: vi.fn((col, vals) => ({ col, vals })),
+  isNull: vi.fn((col) => ({ col })),
+  isNotNull: vi.fn((col) => ({ col })),
 }));
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: {},
@@ -178,6 +207,20 @@ function setupMCPScopeError() {
 
 // ---------- Tests ----------
 
+
+/** The walk's reads: `.where(...).limit(1)` for the two page hops, and an
+ *  awaited `.orderBy(...)` for the ancestor's configs. */
+const makeWalkChain = (result: unknown[]) => {
+  const chain: Record<string, unknown> = {
+    then: (resolve: (v: unknown) => unknown) => Promise.resolve(result).then(resolve),
+  };
+  chain.from = () => chain;
+  chain.where = () => chain;
+  chain.orderBy = () => chain;
+  chain.limit = () => Promise.resolve(result);
+  return chain;
+};
+
 describe('GET /api/pages/[pageId]/tasks/statuses', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -204,6 +247,31 @@ describe('GET /api/pages/[pageId]/tasks/statuses', () => {
     expect(response.status).toBe(403);
     const body = await response.json();
     expect(body.error).toBe('Access denied');
+  });
+
+  it("previews the ANCESTOR's vocabulary when no task list exists yet", async () => {
+    // Not the four built-ins. This screen sits one function above the POST that
+    // seeds the INHERITED set, so on a sub-list under a customised root it was
+    // naming four statuses that were never going to exist.
+    setupAuth();
+    vi.mocked(canUserViewPage).mockResolvedValue(true);
+    vi.mocked(db.query.taskLists.findFirst)
+      .mockResolvedValueOnce(null as never)              // this page has no list
+      .mockResolvedValue({ id: 'ancestor-list' } as never); // its parent does
+    // The walk: parentId, then the parent's type, then the ancestor's configs.
+    vi.mocked(db.select)
+      .mockReturnValueOnce(makeWalkChain([{ parentId: 'parent-page' }]) as never)
+      .mockReturnValueOnce(makeWalkChain([{ type: 'TASK_LIST' }]) as never)
+      .mockReturnValueOnce(makeWalkChain([
+        { name: 'Icebox', slug: 'icebox', color: 'x', group: 'todo', position: 0 },
+        { name: 'Shipped', slug: 'shipped', color: 'x', group: 'done', position: 1 },
+      ]) as never);
+
+    const response = await GET(createGetRequest(), context);
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.statusConfigs.map((c: { slug: string }) => c.slug)).toEqual(['icebox', 'shipped']);
   });
 
   it('returns default statuses when no task list exists', async () => {

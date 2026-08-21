@@ -21,7 +21,14 @@ vi.mock('@pagespace/db/db', () => ({
       taskItems: { findFirst: vi.fn(), findMany: vi.fn() },
       taskLists: { findFirst: vi.fn() },
       pages: { findFirst: vi.fn() },
-      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
+      taskStatusConfigs: {
+        // The seed reads the vocabulary a piece at a time rather than paging it
+        // — nothing caps how many statuses a list defines. Undefined here means
+        // "this list has none", so the resolver falls back to the built-ins,
+        // which is what these fixtures assume.
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
     },
   },
 }));
@@ -39,8 +46,17 @@ vi.mock('@pagespace/db/schema/core', () => ({
 vi.mock('@pagespace/db/schema/tasks', () => ({
   taskLists: { id: 'id', pageId: 'pageId', userId: 'userId' },
   taskItems: { id: 'id', position: 'position' },
-  taskStatusConfigs: { taskListId: 'taskListId', position: 'position' },
+  taskStatusConfigs: {
+    taskListId: 'taskListId', position: 'position', slug: 'slug', group: 'group',
+  },
   taskAssignees: { taskId: 'taskId' },
+  // create_task now resolves its default status from the LIST rather than the
+  // literal 'pending' — sub-lists inherit their ancestor's vocabulary, which
+  // need not define it — and that resolver falls back to these.
+  DEFAULT_TASK_STATUSES: [
+    { slug: 'pending', name: 'To Do', color: 'c', group: 'todo', position: 0 },
+    { slug: 'completed', name: 'Done', color: 'c', group: 'done', position: 3 },
+  ],
 }));
 
 const { deferredTriggerMock } = vi.hoisted(() => ({
