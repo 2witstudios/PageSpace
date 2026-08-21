@@ -892,11 +892,38 @@ describe('tag-core purity and determinism', () => {
     expect(src).not.toMatch(/\bglobalThis\./);
   });
 
-  it('imports nothing outside this package', () => {
-    const specifiers = [...code.matchAll(/^import[^'"]*from ['"]([^'"]+)['"];?$/gm)].map((m) => m[1]);
+  /**
+   * RELAXED in Phase 2, deliberately, from "every import must be relative" to
+   * the house rule it was always meant to mirror:
+   * `services/__tests__/page-webhook-core.test.ts` allows a `/schema/` import
+   * so long as it is TYPE-ONLY.
+   *
+   * The property being protected is "no I/O at runtime", and `import type` is
+   * erased by the compiler — it emits nothing, so it cannot perform I/O, reach
+   * a db singleton, or add a runtime dependency. The blanket ban was stricter
+   * than the property, and that cost something real: `TargetKind` now DERIVES
+   * from the `ContentTagTargetKind` pgEnum instead of restating it, which is
+   * only possible across a package boundary. A ban that forces a hand-copied
+   * parallel union, kept in step by a drift test, buys nothing this test cares
+   * about and loses a structure in which drift cannot happen.
+   *
+   * Everything else stays banned: a VALUE import from `@pagespace/db` would
+   * survive compilation, and the `/db` and `fetch` assertions above are
+   * untouched.
+   */
+  it('imports nothing outside this package except erased type-only schema imports', () => {
+    const specifiers = [...code.matchAll(/^import([^'"]*)from ['"]([^'"]+)['"];?$/gm)];
     expect(specifiers.length).toBeGreaterThan(0);
-    for (const specifier of specifiers) {
-      expect(specifier.startsWith('.'), `unexpected import: ${specifier}`).toBe(true);
+    for (const [, clause, specifier] of specifiers) {
+      if (specifier.startsWith('.')) continue;
+      expect(
+        /\/schema\//.test(specifier),
+        `unexpected import: ${specifier}`,
+      ).toBe(true);
+      expect(
+        clause.trimStart().startsWith('type '),
+        `${specifier} must be imported with \`import type\` — a value import is not erased`,
+      ).toBe(true);
     }
   });
 

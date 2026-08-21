@@ -64,6 +64,7 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
     personalizationCandidates: [],
     agentWorkspaces: [],
     streamState: [],
+    contentTags: [],
     ...overrides,
   };
 }
