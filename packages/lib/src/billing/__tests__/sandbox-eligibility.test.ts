@@ -158,8 +158,14 @@ function sourceFiles(): { path: string; src: string }[] {
   return out;
 }
 
+/** Two separate questions, deliberately not one alternation: mixing an anchored
+ *  branch with an unanchored one reads as a precedence bug (and CodeQL flags it). */
+function isTestPath(path: string): boolean {
+  return path.includes('/__tests__/') || /\.test\.tsx?$/.test(path);
+}
+
 function nonTestFiles() {
-  return sourceFiles().filter(({ path }) => !/__tests__|\.test\.tsx?$/.test(path));
+  return sourceFiles().filter(({ path }) => !isTestPath(path));
 }
 
 describe('eligibility sweep — one place decides', () => {
