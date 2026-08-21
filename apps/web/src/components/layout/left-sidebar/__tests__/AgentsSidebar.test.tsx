@@ -1960,6 +1960,27 @@ describe('AgentsSidebar', () => {
       expect(screen.getByText('in staging')).toBeDefined();
     });
 
+    test('the create step registers with the editing store, as the dialog it replaced did', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+
+      await user.click(await screen.findByText('New environment'));
+
+      // Registered while the form is up: a background revalidation or an auth
+      // refresh landing mid-type must not tear down what is being named.
+      await screen.findByLabelText('Environment name');
+      expect(useEditingStore.getState().isAnyActive()).toBe(true);
+
+      // And released when it closes, rather than leaving the app thinking
+      // someone is forever typing.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+    });
+
     test('a name already taken keeps the create step open with what was typed', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);

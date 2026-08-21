@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useState } from 'react';
 import { Bot, Boxes, Plus, SquareTerminal, Zap } from 'lucide-react';
 import { toast } from 'sonner';
 import { useSWRConfig } from 'swr';
@@ -20,6 +20,7 @@ import { useDriveEnvs, driveEnvsKey } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure } from '@/hooks/drive-envs/drive-env-writes';
 import { useDriveStore } from '@/hooks/useDrive';
 import { canManageDrive } from '@/hooks/usePermissions';
+import { useEditingSession } from '@/stores/useEditingSession';
 import type { DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { MAX_DRIVE_ENV_NAME_LENGTH, type DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 
@@ -459,6 +460,17 @@ function SpawnSessionPalette({
   // below is still blank, and neither must ever prefill the other.
   const [envName, setEnvName] = useState('');
   const [creatingEnv, setCreatingEnv] = useState(false);
+  const createEnvInputId = useId();
+
+  // The repo rule for a surface holding text the user typed, and here it is a
+  // REGRESSION GUARD as much as a convention: this form used to be
+  // `DriveEnvNameDialog`, which registered, and moving it into the palette
+  // would otherwise have quietly dropped the protection on the way. A
+  // background revalidation or an auth refresh landing mid-type must not tear
+  // down what someone is halfway through naming.
+  useEditingSession(`spawn-new-env-${createEnvInputId}`, newEnvFrom !== null, 'form', {
+    componentName: 'SpawnSessionPalette',
+  });
 
   // Blank by default every time a new naming step starts — a stale typed
   // value from resolving one spawn must never prefill the next.
