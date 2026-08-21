@@ -70,22 +70,25 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   const selectConversation = useAgentSurfaceStore((state) => state.selectConversation);
   const selectSession = useAgentSurfaceStore((state) => state.selectSession);
 
-  const [spawnTarget, setSpawnTarget] = useState<{ driveId: string | null; driveName: string | null } | null>(null);
+  /**
+   * The OPENING: which drive this palette was opened for, and — when it was
+   * opened from one environment's row — which environment that row already
+   * answered "where should it run?" with. Both belong to the opening rather
+   * than to the pick, which does not exist until the target step is answered,
+   * so they live and die together instead of as two states that could disagree.
+   */
+  const [spawnTarget, setSpawnTarget] = useState<{
+    driveId: string | null;
+    driveName: string | null;
+    /** The row's environment, or null when the flow was opened without one. */
+    envId: string | null;
+  } | null>(null);
   // Set once a target (agent/shell/assistant) is picked in the palette's first
   // step — its presence is what swaps the dialog to the naming step. Null
   // driveId + kind 'assistant' is the only shape `openAssistantSpawn` ever
   // produces (it skips the picker entirely).
   const [spawnPick, setSpawnPick] = useState<SpawnPick | null>(null);
   const [spawning, setSpawning] = useState(false);
-  /**
-   * An environment the CALLER already chose, before any target was picked —
-   * set only by `openSpawnInEnv` (the sidebar's per-environment "+"). It cannot
-   * live on `spawnPick`, which is null until the target step is answered, so it
-   * waits here and is merged into the pick the moment one exists. The step
-   * machine then reads `envId !== undefined` and skips straight to naming: the
-   * row the user clicked already answered "where should it run?".
-   */
-  const [presetEnvId, setPresetEnvId] = useState<string | null>(null);
   /**
    * Which step asked for a new environment, or null when none did.
    *
@@ -167,9 +170,8 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // placeholder can reflect whichever agent/shell was chosen.
   const openSpawn = useCallback((driveId: string, driveName: string | null) => {
     flowToken.current += 1;
-    setSpawnTarget({ driveId, driveName });
+    setSpawnTarget({ driveId, driveName, envId: null });
     setSpawnPick(null);
-    setPresetEnvId(null);
     setNewEnvFrom(null);
   }, []);
 
@@ -181,9 +183,8 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
    */
   const openSpawnInEnv = useCallback((driveId: string, driveName: string | null, envId: string) => {
     flowToken.current += 1;
-    setSpawnTarget({ driveId, driveName });
+    setSpawnTarget({ driveId, driveName, envId });
     setSpawnPick(null);
-    setPresetEnvId(envId);
     setNewEnvFrom(null);
   }, []);
 
@@ -191,9 +192,8 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
   // counterpart), so this skips straight to naming.
   const openAssistantSpawn = useCallback(() => {
     flowToken.current += 1;
-    setSpawnTarget({ driveId: null, driveName: null });
+    setSpawnTarget({ driveId: null, driveName: null, envId: null });
     setSpawnPick({ kind: 'assistant', agentPageId: null, label: 'Global Assistant' });
-    setPresetEnvId(null);
     setNewEnvFrom(null);
   }, []);
 
@@ -345,14 +345,14 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         // user pick the thing they just created.
         setSpawnPick((current) => (current ? { ...current, envId: result.envId } : current));
       } else {
-        // From the TARGET step, where a preset may be in play: this flow can
-        // have been opened by one environment's "+" in the sidebar, which
-        // pre-answered "where should it run?". Making a NEW environment is a
-        // newer intent than that row's, and silently spawning into the row's
-        // environment anyway would be the palette quietly overruling the thing
-        // the user just did. Dropping the preset lets the env step ask once,
-        // now with both to choose between.
-        setPresetEnvId(null);
+        // From the TARGET step, where the OPENING may already carry an
+        // environment: this flow can have been started by one environment's "+"
+        // in the sidebar, which pre-answered "where should it run?". Making a
+        // NEW environment is a newer intent than that row's, and spawning into
+        // the row's environment anyway would be the palette quietly overruling
+        // what the user just did. Dropping the row's answer lets the env step
+        // ask once, now with both to choose between.
+        setSpawnTarget((current) => (current ? { ...current, envId: null } : current));
       }
       setNewEnvFrom(null);
     },
@@ -381,10 +381,14 @@ export function useSpawnSession(agentsByDrive: DriveWithAgents[], onSpawned?: ()
         flowToken.current += 1;
         setSpawnTarget(null);
         setSpawnPick(null);
-        setPresetEnvId(null);
         setNewEnvFrom(null);
       }}
-      onPickTarget={(pick) => setSpawnPick({ ...pick, ...(presetEnvId !== null && { envId: presetEnvId }) })}
+      onPickTarget={(pick) =>
+        // The opening's environment, when it had one, is the answer the env
+        // step would otherwise ask for — carried onto the pick so the step
+        // machine reads it as already given.
+        setSpawnPick({ ...pick, ...(spawnTarget?.envId != null && { envId: spawnTarget.envId }) })
+      }
       onPickEnv={(envId) => setSpawnPick((current) => (current ? { ...current, envId } : current))}
       onSubmitName={handleSubmitName}
     />
