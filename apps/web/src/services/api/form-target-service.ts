@@ -6,7 +6,7 @@ import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
   isSheetType,
-  parseSheetContent,
+  parseSheetContentSafe,
   serializeSheetContent,
   updateSheetCells,
 } from '@pagespace/lib/sheets/sheet';
@@ -83,8 +83,19 @@ export async function createFormTarget({
 
   try {
     const [formTarget] = await db.transaction(async (tx) => {
-      const sheetData = parseSheetContent(page.content);
-      const updatedSheet = updateSheetCells(sheetData, buildHeaderRowUpdates(fields, HEADER_ROW));
+      // Refuse to write if the existing content could not be read: appending
+      // to the empty sheet the unsafe parse returns would replace the whole
+      // spreadsheet with just these header cells.
+      const parsedSheet = parseSheetContentSafe(page.content);
+      if (!parsedSheet.ok) {
+        throw new Error(
+          `Sheet "${page.id}" could not be read (${parsedSheet.reason}); refusing to overwrite it.`
+        );
+      }
+      const updatedSheet = updateSheetCells(
+        parsedSheet.sheet,
+        buildHeaderRowUpdates(fields, HEADER_ROW)
+      );
       const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
 
       await applyPageMutation({
@@ -286,9 +297,17 @@ export async function appendFormSubmission({
           throw new Error(`Page "${formTarget.pageId}" not found`);
         }
 
-        const sheetData = parseSheetContent(page.content);
+        // Same guard on the submission path — and this one takes anonymous
+        // public input, so an unreadable sheet must fail the submission rather
+        // than replace the sheet with a single submitted row.
+        const parsedSheet = parseSheetContentSafe(page.content);
+        if (!parsedSheet.ok) {
+          throw new Error(
+            `Sheet "${page.id}" could not be read (${parsedSheet.reason}); refusing to overwrite it.`
+          );
+        }
         const rowUpdates = buildSubmissionRowUpdates(formTarget.fields, formTarget.nextRow, values);
-        const updatedSheet = updateSheetCells(sheetData, rowUpdates);
+        const updatedSheet = updateSheetCells(parsedSheet.sheet, rowUpdates);
         const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
 
         await applyPageMutation({

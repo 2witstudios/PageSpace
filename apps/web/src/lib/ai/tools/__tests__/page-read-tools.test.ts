@@ -2,8 +2,8 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
 
 // Mock database and dependencies
-vi.mock('@pagespace/db/db', () => ({
-  db: {
+vi.mock('@pagespace/db/db', () => {
+  const dbMock: Record<string, unknown> = {
     select: vi.fn().mockReturnThis(),
     selectDistinct: vi.fn().mockReturnThis(),
     from: vi.fn().mockReturnThis(),
@@ -11,16 +11,30 @@ vi.mock('@pagespace/db/db', () => ({
     orderBy: vi.fn().mockReturnThis(),
     groupBy: vi.fn().mockReturnThis(),
     insert: vi.fn(),
+    // The repair path seeds the ancestor's vocabulary and then conforms any
+    // rows already in the list to it — two set-based UPDATEs that match nothing
+    // in these fixtures, but still have to be callable.
+    update: vi.fn(() => ({ set: () => ({ where: vi.fn().mockResolvedValue(undefined) }) })),
     query: {
       pages: { findFirst: vi.fn(), findMany: vi.fn().mockResolvedValue([]) },
       drives: { findFirst: vi.fn() },
       taskItems: { findFirst: vi.fn() },
       taskLists: { findFirst: vi.fn() },
-      taskStatusConfigs: { findMany: vi.fn().mockResolvedValue([]) },
+      taskStatusConfigs: {
+        // The sweep reads the replacement statuses one at a time, directly,
+        // rather than paging the vocabulary — nothing caps how many a list has.
+        findFirst: vi.fn().mockResolvedValue(undefined),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
       channelMessages: { findMany: vi.fn() },
     },
-  },
-}));
+  };
+  // The repair runs in one transaction now: a half-applied repair is permanent,
+  // because it only ever fires while the vocabulary is empty. The tx is the same
+  // surface as `db` here.
+  dbMock.transaction = vi.fn(async (cb: (tx: unknown) => unknown) => cb(dbMock));
+  return { db: dbMock };
+});
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
   ne: vi.fn(),
@@ -30,6 +44,7 @@ vi.mock('@pagespace/db/operators', () => ({
   isNull: vi.fn(),
   isNotNull: vi.fn(),
   inArray: vi.fn(),
+  notInArray: vi.fn(),
   sql: vi.fn(),
   count: vi.fn(),
   max: vi.fn(),
@@ -1301,13 +1316,17 @@ describe('page-read-tools', () => {
           }),
         } as unknown as typeof mockDb.query.taskLists;
         mockDb.query.taskStatusConfigs = {
+          // findFirst too: the post-seed sweep reads its replacement statuses
+          // one at a time rather than paging the vocabulary, since nothing caps
+          // how many statuses a list may define.
+          findFirst: vi.fn().mockResolvedValue(undefined),
           findMany: vi.fn().mockResolvedValue(opts.statusConfigs ?? []),
         } as unknown as typeof mockDb.query.taskStatusConfigs;
         // Default no-op insert: most of these tests aren't asserting on the
         // legacy-backfill insert this triggers when statusConfigs is empty
         // (see the dedicated backfill test below, which overrides this).
         mockDb.insert = vi.fn(() => ({
-          values: () => Promise.resolve(undefined),
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
         })) as unknown as typeof mockDb.insert;
 
         // db.select().from().innerJoin().where().orderBy() for tasks (title joined from pages)
@@ -1331,6 +1350,12 @@ describe('page-read-tools', () => {
             }))
           ),
           groupBy: vi.fn().mockResolvedValue([]),
+          // ensureTaskListForPage now walks the page tree to inherit its nearest
+          // ancestor task list's status vocabulary before seeding, which adds a
+          // `.where().limit()` shape. An empty result ends the walk immediately
+          // and the seed falls back to DEFAULT_TASK_STATUSES — what these cases
+          // assert.
+          limit: vi.fn().mockResolvedValue([]),
         })) as unknown as typeof mockDb.select;
 
         mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
@@ -1447,6 +1472,7 @@ describe('page-read-tools', () => {
         // ensureTaskListForPage just inserted, so the separate empty-configs backfill
         // check doesn't also fire and double-insert.
         mockDb.query.taskStatusConfigs = {
+          findFirst: vi.fn().mockResolvedValue(undefined),
           findMany: vi.fn().mockResolvedValue([
             { slug: 'pending', name: 'To Do', group: 'todo', position: 0, color: '#gray' },
           ]),
@@ -1461,7 +1487,8 @@ describe('page-read-tools', () => {
               return { returning: () => Promise.resolve([{ id: 'list-new', pageId: 'page-1', title: 'My Tasks' }]) };
             }
             statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
-            return Promise.resolve(undefined);
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
           },
         })) as unknown as typeof mockDb.insert;
 
@@ -1502,7 +1529,8 @@ describe('page-read-tools', () => {
         mockDb.insert = vi.fn(() => ({
           values: (vals: Record<string, unknown> | Record<string, unknown>[]) => {
             statusConfigInserts.push(...(Array.isArray(vals) ? vals : [vals]));
-            return Promise.resolve(undefined);
+            // Status-config seeding uses ON CONFLICT DO NOTHING.
+            return { onConflictDoNothing: () => Promise.resolve(undefined) };
           },
         })) as unknown as typeof mockDb.insert;
 
@@ -1523,6 +1551,60 @@ describe('page-read-tools', () => {
           actual: statusConfigInserts.every(c => c.taskListId === 'list-1'),
           expected: true,
         });
+        assert({
+          given: 'a repair that both writes configs and rewrites task statuses',
+          should: 'run as one transaction, since a half-applied repair is permanent',
+          // It fires only while the vocabulary is empty, so once the configs
+          // commit there is no later read that would come back and finish the
+          // job. Structural, but the alternative is unobservable through a mock.
+          // Two: the create-path seed opens one as well now, since it runs the
+          // same two-write sequence and a page can hold task rows before its own
+          // task_lists row exists. That one wraps a pair of reads on the common
+          // path where the list is already there — a BEGIN/COMMIT for a
+          // correctness cliff is a trade worth making.
+          actual: (mockDb.transaction as unknown as { mock: { calls: unknown[] } }).mock.calls.length,
+          expected: 2,
+        });
+      });
+
+      it('reports the vocabulary it just seeded, not the one it read before seeding', async () => {
+        // statusConfigs is read BEFORE the repair. Without a re-read the same
+        // response that seeds icebox/shipped tells the agent the statuses are
+        // the four built-ins — and the agent then writes a status the list does
+        // not define, which PATCH rejects.
+        setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
+        const seeded = [
+          { slug: 'icebox', name: 'Icebox', group: 'todo', position: 0, color: 'x' },
+          { slug: 'shipped', name: 'Shipped', group: 'done', position: 1, color: 'x' },
+        ];
+        vi.mocked(mockDb.query.taskStatusConfigs.findMany)
+          .mockResolvedValueOnce([] as never)
+          .mockResolvedValue(seeded as never);
+        mockDb.insert = vi.fn(() => ({
+          values: () => ({ onConflictDoNothing: () => Promise.resolve(undefined) }),
+        })) as unknown as typeof mockDb.insert;
+
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'My Tasks', pageId: 'page-1' },
+          createAuthContext()
+        ) as { availableStatuses?: Array<{ slug: string }> };
+
+        assert({
+          given: 'a read that repaired the vocabulary on its way through',
+          should: 'return the seeded slugs AND re-read the rows the repair moved',
+          // Both halves, because the repair writes twice. Re-reading only the
+          // vocabulary reports statuses beside rows the sweep has already moved
+          // off — naming slugs the same response says do not exist, which is the
+          // pairing this block exists to prevent.
+          actual: {
+            statuses: result.availableStatuses?.map(s => s.slug),
+            // The task read specifically — this route selects several other
+            // shapes, so a bare call count is already >1 without the re-read.
+            taskReads: (mockDb.select as ReturnType<typeof vi.fn>).mock.calls
+              .filter((c) => !!c[0] && 'completedAt' in (c[0] as Record<string, unknown>)).length,
+          },
+          expected: { statuses: ['icebox', 'shipped'], taskReads: 2 },
+        });
       });
 
       it('still returns the DEFAULT_TASK_STATUSES fallback when the legacy backfill insert fails', async () => {
@@ -1532,8 +1614,14 @@ describe('page-read-tools', () => {
         // failed tool call -- it should log and let the read still succeed.
         setupTaskListMocks({ tasks: [{ id: 't1', status: 'pending' }], statusConfigs: [] });
 
+        // The failure has to come from the awaited call. Seeding is
+        // `.values(...).onConflictDoNothing()`, so rejecting at `values()`
+        // would build a promise nothing ever awaits — an unhandled rejection
+        // that fails the run while every test still reports green.
         mockDb.insert = vi.fn(() => ({
-          values: () => Promise.reject(new Error('connection reset')),
+          values: () => ({
+            onConflictDoNothing: () => Promise.reject(new Error('connection reset')),
+          }),
         })) as unknown as typeof mockDb.insert;
 
         const result = await pageReadTools.read_page.execute!(

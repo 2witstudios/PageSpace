@@ -139,7 +139,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const socket = useSocket();
   const { user } = useAuth();
-  const isReadOnly = useSheetPermissions(page.id, user?.id);
+  const lacksEditPermission = useSheetPermissions(page.id, user?.id);
   const { tree } = usePageTree(page.driveId);
   const externalReferences = useMemo(() => collectExternalReferences(sheet), [sheet]);
   const flattenedPages = useMemo(() => (tree && tree.length > 0 ? flattenTree(tree) : []), [tree]);
@@ -159,6 +159,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   const {
     documentState,
+    loadError,
     updateContent,
     updateContentFromServer,
     saveWithDebounce,
@@ -167,6 +168,17 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     resolveConflict,
     isResolvingConflict,
   } = useSheetPersistence({ pageId: page.id, socket, resetHistory });
+
+  // Editing is blocked either by permissions or by a load failure. When the
+  // stored content could not be parsed we must not let edits through: saving
+  // would overwrite content we were unable to read.
+  const isReadOnly = lacksEditPermission || loadError !== null;
+
+  // Two different reasons to refuse an edit deserve two different messages;
+  // blaming permissions for a load failure sends the user to the wrong place.
+  const readOnlyReason = loadError
+    ? 'This sheet could not be loaded, so editing is disabled'
+    : "You don't have permission to edit this sheet";
 
   // Pull-to-refresh handler
   const handleRefresh = useCallback(async () => {
@@ -259,27 +271,52 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     triggerPattern: sheetTriggerPattern,
   });
 
+  /**
+   * Serialize and hand off to the store, returning false if serialization
+   * refused.
+   *
+   * `serializeSheetContent` re-parses its own output and throws rather than
+   * emit something that would read back as an empty sheet. Every caller runs
+   * inside a React event or state update, where an uncaught throw escapes to
+   * the nearest error boundary and blanks the view — so the failure is turned
+   * into a declined change here instead.
+   */
+  const persistSheet = useCallback(
+    (sheet: SheetData): boolean => {
+      try {
+        const serialized = serializeSheetContent(sheet);
+        updateContent(serialized);
+        saveWithDebounce(serialized);
+        return true;
+      } catch (error) {
+        console.error('Failed to serialize sheet; change not applied:', error);
+        toast.error('That change could not be saved and was undone.');
+        return false;
+      }
+    },
+    [saveWithDebounce, updateContent]
+  );
+
   const applySheetUpdate = useCallback(
     (updater: (previous: SheetData) => SheetData, shouldPersist = true) => {
       setSheet((previous) => {
         const updated = updater(previous);
         const sanitized = sanitizeSheetData({ ...updated });
-        if (shouldPersist) {
-          const serialized = serializeSheetContent(sanitized);
-          updateContent(serialized);
-          saveWithDebounce(serialized);
+        if (shouldPersist && !persistSheet(sanitized)) {
+          // Serialization refused; keep the last good state.
+          return previous;
         }
         return sanitized;
       });
     },
-    [saveWithDebounce, updateContent, setSheet]
+    [persistSheet, setSheet]
   );
 
   // Start editing a cell with optional initial key
   const startCellEdit = useCallback(
     (row: number, column: number, key?: string) => {
       if (isReadOnly) {
-        toast.error("You don't have permission to edit this sheet");
+        toast.error(readOnlyReason);
         return;
       }
 
@@ -302,7 +339,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       // Announce edit mode to screen readers
       announce(`Editing cell ${cellAddress}`);
     },
-    [sheet.cells, isReadOnly, announce]
+    [sheet.cells, isReadOnly, readOnlyReason, announce]
   );
 
   // Commit cell edit
@@ -361,63 +398,58 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   const handleCommitFormula = useCallback(
     (value: string) => {
       if (isReadOnly) {
-        toast.error("You don't have permission to edit this sheet");
+        toast.error(readOnlyReason);
         return;
       }
       setFormulaValue(value);
       applySheetUpdate((previous) => applyCellWrite(previous, currentAddress, value));
     },
-    [applySheetUpdate, currentAddress, isReadOnly]
+    [applySheetUpdate, currentAddress, isReadOnly, readOnlyReason]
   );
 
   const handleAddRow = useCallback(() => {
     if (isReadOnly) {
-      toast.error("You don't have permission to edit this sheet");
+      toast.error(readOnlyReason);
       return;
     }
     applySheetUpdate(addRow);
-  }, [applySheetUpdate, isReadOnly]);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   const handleAddColumn = useCallback(() => {
     if (isReadOnly) {
-      toast.error("You don't have permission to edit this sheet");
+      toast.error(readOnlyReason);
       return;
     }
     applySheetUpdate(addColumn);
-  }, [applySheetUpdate, isReadOnly]);
+  }, [applySheetUpdate, isReadOnly, readOnlyReason]);
 
   // Undo handler
   const handleUndo = useCallback(() => {
     if (isReadOnly || !canUndo) return;
 
     const previousState = undo();
-    if (previousState) {
-      const serialized = serializeSheetContent(previousState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (previousState && persistSheet(previousState)) {
       toast.success('Undo', { duration: 1500 });
       announce('Undo performed');
     }
-  }, [isReadOnly, canUndo, undo, updateContent, saveWithDebounce, announce]);
+  }, [isReadOnly, canUndo, undo, persistSheet, announce]);
 
   // Redo handler
   const handleRedo = useCallback(() => {
     if (isReadOnly || !canRedo) return;
 
     const nextState = redo();
-    if (nextState) {
-      const serialized = serializeSheetContent(nextState);
-      updateContent(serialized);
-      saveWithDebounce(serialized);
+    if (nextState && persistSheet(nextState)) {
       toast.success('Redo', { duration: 1500 });
       announce('Redo performed');
     }
-  }, [isReadOnly, canRedo, redo, updateContent, saveWithDebounce, announce]);
+  }, [isReadOnly, canRedo, redo, persistSheet, announce]);
 
   const handleCellMouseDown = useCallback(
     (row: number, column: number, event: React.MouseEvent) => {
-      if (isReadOnly) return;
-
+      // Selection is not a mutation: a view-only user still needs to select a
+      // range to read it, copy it, and see the sum/average footer. Editing is
+      // gated at each write site instead.
       event.preventDefault();
       const cell = clampSelection({ row, column }, sheet);
 
@@ -444,7 +476,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         gridRef.current?.focus({ preventScroll: true });
       });
     },
-    [sheet, editingCell, isReadOnly, closeContextMenu]
+    [sheet, editingCell, closeContextMenu]
   );
 
   const handleCellRightClick = useCallback(
@@ -690,7 +722,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
       // Handle Delete and Backspace as instant delete actions
       if (key === 'Delete' || key === 'Backspace') {
         if (isReadOnly) {
-          toast.error("You don't have permission to edit this sheet");
+          toast.error(readOnlyReason);
           return;
         }
 
@@ -725,7 +757,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         cell: next
       });
     },
-    [isReadOnly, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, announce]
+    [isReadOnly, readOnlyReason, selection, sheet, editingCell, startCellEdit, handleCopy, applySheetUpdate, setFormulaValue, announce]
   );
 
   const handleFormulaKeyDown = useCallback(
@@ -842,7 +874,14 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   }, [sheet.columnCount, sheet.rowCount, sheet]);
 
   // Global keyboard shortcuts (Ctrl/Cmd + S / Z / Y) — attached once, ref-driven.
-  useSheetKeyboardShortcuts({ onSave: forceSaveNow, onUndo: handleUndo, onRedo: handleRedo });
+  // Ctrl+S must not write when the document failed to load: there is nothing
+  // legitimate to save, and the write would only bump the revision.
+  const handleSaveShortcut = useCallback(() => {
+    if (isReadOnly) return;
+    forceSaveNow();
+  }, [isReadOnly, forceSaveNow]);
+
+  useSheetKeyboardShortcuts({ onSave: handleSaveShortcut, onUndo: handleUndo, onRedo: handleRedo });
 
   return (
     <div className="flex h-full flex-col">
@@ -852,6 +891,15 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         isResolving={isResolvingConflict}
         previewMode="plain"
       />
+      {loadError && (
+        <div
+          role="alert"
+          className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive"
+        >
+          This sheet could not be loaded, so editing is disabled to protect your data. Reload the
+          page to try again; if it keeps failing, the stored content needs repair.
+        </div>
+      )}
       <SheetFormulaBar
         isRange={selection.type === 'range'}
         selectionAddress={selectionAddress}

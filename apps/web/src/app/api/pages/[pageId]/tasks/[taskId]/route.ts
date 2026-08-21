@@ -113,7 +113,14 @@ export async function PATCH(
       if (status === 'completed') {
         updates.completedAt = new Date();
         statusMovedToDone = !existingTask.completedAt;
-      } else if (existingTask.status === 'completed' && status !== 'completed') {
+      } else if (existingTask.completedAt) {
+        // Keyed on the STAMP, not on the old slug being the literal 'completed'.
+        // A row can arrive in a config-less list already stamped while carrying
+        // some other slug — normalizeStatusForList returns early when the
+        // destination has no vocabulary, so a cross-list move leaves 'shipped'
+        // and its timestamp intact — and testing the slug then left the stamp
+        // behind on a move to an open status: a non-done row that every
+        // `completedAt IS NOT NULL` counter still reads as finished.
         updates.completedAt = null;
       }
     }
@@ -272,6 +279,15 @@ export async function PATCH(
     [updatedTask] = await db.transaction(async (tx) => {
       // Update the task (only if there are field-level updates)
       let task: typeof taskItems.$inferSelect = existingTask;
+      // A title-only edit touches the linked PAGE, not this row — but the row's
+      // `updatedAt` is what the broadcast carries, and clients tell their own
+      // echo from a foreign one by matching that stamp. Leaving it untouched
+      // makes two tabs renaming the same task within the echo TTL broadcast the
+      // SAME stamp, so the second tab reads the first's edit as its own and
+      // drops it. A renamed task IS a changed task; stamp it.
+      if (trimmedTitle !== undefined) {
+        updates.updatedAt = new Date();
+      }
       if (Object.keys(updates).length > 0) {
         [task] = await tx.update(taskItems)
           .set(updates)

@@ -223,3 +223,84 @@ describe('useSheetHistory', () => {
     expect(result.current.sheet).toEqual(initialSheet);
   });
 });
+
+describe('useSheetHistory presentation changes', () => {
+  /**
+   * The change-detection compared only cells/rowCount/columnCount, so a
+   * formatting-only edit counted as a no-op: it was sent to the server but
+   * dropped from state, and the next edit serialized the stale state and
+   * deleted the formatting again. Every persisted field must be compared.
+   */
+  const change = (
+    label: string,
+    mutate: (previous: SheetData) => SheetData,
+    initial: SheetData = createTestSheet({ A1: '10' })
+  ) => {
+    it(`records a change to ${label}`, () => {
+      const { result } = renderHook(() => useSheetHistory(initial));
+
+      act(() => {
+        result.current.setSheet(mutate);
+      });
+
+      expect(result.current.canUndo, label).toBe(true);
+    });
+  };
+
+  change('a cell format', (prev) => ({ ...prev, formats: { A1: { bold: true } } }));
+  change('a column format', (prev) => ({ ...prev, columnFormats: { A: { align: 'right' } } }));
+  change('a column width', (prev) => ({ ...prev, columnWidths: { A: 180 } }));
+  change('a row height', (prev) => ({ ...prev, rowHeights: { '1': 32 } }));
+  change('frozen rows', (prev) => ({ ...prev, frozenRows: 1 }));
+  change('frozen columns', (prev) => ({ ...prev, frozenColumns: 2 }));
+  change('the sheet name', (prev) => ({ ...prev, sheetName: 'Renamed' }));
+  change(
+    'a carried-through tab',
+    (prev) => ({
+      ...prev,
+      extraSheets: [
+        {
+          name: 'Second',
+          order: 1,
+          meta: { rowCount: 5, columnCount: 5 },
+          columns: {},
+          cells: {},
+          ranges: {},
+          dependencies: {},
+        },
+      ],
+    })
+  );
+  change('a named range', (prev) => ({ ...prev, ranges: { myRange: { ref: 'A1:B2' } } }));
+
+  it('undoes a formatting-only edit back to unformatted', () => {
+    const initial = createTestSheet({ A1: '10' });
+    const { result } = renderHook(() => useSheetHistory(initial));
+
+    act(() => {
+      result.current.setSheet((prev) => ({ ...prev, formats: { A1: { bold: true } } }));
+    });
+    expect(result.current.sheet.formats).toEqual({ A1: { bold: true } });
+
+    act(() => {
+      result.current.undo();
+    });
+    expect(result.current.sheet.formats).toBeUndefined();
+  });
+
+  it('still treats an identical sheet as no change', () => {
+    const initial: SheetData = {
+      ...createTestSheet({ A1: '10' }),
+      formats: { A1: { bold: true } },
+      columnWidths: { A: 180 },
+    };
+    const { result } = renderHook(() => useSheetHistory(initial));
+
+    act(() => {
+      // A new object with the same content — e.g. a re-serialize round trip.
+      result.current.setSheet((prev) => ({ ...prev, formats: { ...prev.formats } }));
+    });
+
+    expect(result.current.canUndo).toBe(false);
+  });
+});

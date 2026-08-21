@@ -1,7 +1,12 @@
 import { renderCanvasDocument } from '../canvas/render-document';
 import { buildDocumentCsp } from '../canvas/csp';
 import { escapeHtml } from '../utils/html';
-import { evaluateSheet, parseSheetContent } from '../sheets/sheet';
+import {
+  cellFormatToInlineCss,
+  encodeCellAddress,
+  evaluateSheet,
+  parseSheetContent,
+} from '../sheets/sheet';
 import { wrapDocumentBody, DOCUMENT_TYPOGRAPHY_CSS } from './document-shell';
 
 export interface RenderSheetPageInput {
@@ -38,14 +43,45 @@ function buildSheetTableHtml(serializedContent: unknown, hasHeaders?: boolean): 
       return EMPTY_STATE_HTML;
     }
 
-    const { display } = evaluateSheet(sheet);
+    const evaluation = evaluateSheet(sheet);
+    const { display } = evaluation;
+
+    // Carry the sheet's formatting into the published snapshot, so a laid-out
+    // sheet still reads as one once published. `cellFormatToInlineCss` emits
+    // only known properties with re-validated values — user-supplied colors
+    // never reach the attribute verbatim, which matters because this document
+    // is served with `script-src 'none'` but still honours inline styles.
+    const styleAttribute = (rowIndex: number, columnIndex: number): string => {
+      const cell = evaluation.byAddress[encodeCellAddress(rowIndex, columnIndex)];
+      const css = cellFormatToInlineCss(cell?.format);
+      return css ? ` style="${escapeHtml(css)}"` : '';
+    };
+
+    const renderCell = (
+      value: string,
+      rowIndex: number,
+      columnIndex: number,
+      tag: 'th' | 'td'
+    ): string => `<${tag}${styleAttribute(rowIndex, columnIndex)}>${escapeHtml(value)}</${tag}>`;
+
     const headerRow = hasHeaders ? display[0] : null;
     const bodyRows = hasHeaders ? display.slice(1) : display;
+    const bodyOffset = hasHeaders ? 1 : 0;
+
     const theadHtml = headerRow
-      ? `<thead><tr>${headerRow.map((cell) => `<th>${escapeHtml(cell)}</th>`).join('')}</tr></thead>`
+      ? `<thead><tr>${headerRow
+          .map((cell, columnIndex) => renderCell(cell, 0, columnIndex, 'th'))
+          .join('')}</tr></thead>`
       : '';
     const tbodyHtml = `<tbody>${bodyRows
-      .map((row) => `<tr>${row.map((cell) => `<td>${escapeHtml(cell)}</td>`).join('')}</tr>`)
+      .map(
+        (row, rowIndex) =>
+          `<tr>${row
+            .map((cell, columnIndex) =>
+              renderCell(cell, rowIndex + bodyOffset, columnIndex, 'td')
+            )
+            .join('')}</tr>`
+      )
       .join('')}</tbody>`;
 
     return `<table>${theadHtml}${tbodyHtml}</table>`;

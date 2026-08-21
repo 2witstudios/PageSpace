@@ -19,6 +19,10 @@ import { LOCAL_PAGE_KEY } from './constants';
 import { encodeCellAddress, expandRange, numberRegex } from './address';
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
+import { applyNumberFormat, resolveCellFormat } from './format';
+
+/** Column letters of an A1 address, for column-default format lookup. */
+const columnLettersOf = (address: string): string => address.replace(/\d+$/, '');
 
 interface EvaluationEnvironment {
   options: SheetEvaluationOptions;
@@ -434,6 +438,29 @@ function evaluateCellInternal(
       dependsOn: [],
       dependents: [],
     };
+  }
+
+  // Apply presentation last, in one place, so the grid, both exports and the
+  // published page all read the same `display`.
+  //
+  // This deliberately rewrites only `display` and never `value`: the
+  // concatenation and comparison operators format *values* via
+  // `formatDisplayValue`, so touching `value` here would make `="Total: "&A1`
+  // embed a currency symbol and `A1=B1` compare formatted text.
+  const format = resolveCellFormat(
+    sheet.formats?.[normalized],
+    sheet.columnFormats?.[columnLettersOf(normalized)]
+  );
+
+  if (format) {
+    result.format = format;
+
+    if (!result.error) {
+      const formatted = applyNumberFormat(result.value, format.number);
+      if (formatted !== null) {
+        result.display = formatted;
+      }
+    }
   }
 
   cache.set(normalized, result);

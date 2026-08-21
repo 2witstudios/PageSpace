@@ -75,6 +75,7 @@ export interface TaskItemInsert {
   readonly pageId: string;
   readonly status: string;
   readonly priority: 'medium';
+  readonly completedAt: Date | null;
 }
 
 /**
@@ -94,11 +95,18 @@ export const buildTaskItemInsert = (input: {
    * vocabulary pass its default instead.
    */
   status?: string;
+  /**
+   * Set when the seeded status is in the `done` group. A done status with a
+   * null completedAt is invisible to every count that asks the database, so the
+   * row reads as finished while still blocking its parent.
+   */
+  completedAt?: Date | null;
 }): TaskItemInsert => ({
   userId: input.userId,
   pageId: input.pageId,
   status: input.status ?? 'pending',
   priority: 'medium',
+  completedAt: input.completedAt ?? null,
 });
 
 /**

@@ -7,6 +7,47 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Environments: a place in a drive that stays** — a drive can now hold named environments, and a
+  session can run inside one instead of in a sandbox that disappears when you close it. Everything
+  in an environment — your files, what you installed, what you configured — is still there the next
+  time anyone in the drive opens a session in it, because it is one machine with one filesystem that
+  everybody in the drive shares. Name them for what they are for: “dev”, “staging”, “data-import”.
+  Ephemeral sessions have not changed and are still the default; an environment is something you
+  deliberately make.
+- **Environments live in the sidebar beside your sessions, not inside them** — each one shows its
+  name and a dot for whether its machine is up, and the sessions running in it are listed
+  underneath, so you can see at a glance who is working on which filesystem. An environment with
+  nothing running in it still appears: it is infrastructure your drive keeps, not something that
+  vanishes on an idle afternoon. Starting a new session in a drive that has environments asks where
+  it should run — a fresh sandbox, or in one of them.
+- **Creating, renaming, rebuilding and deleting an environment** — all four are for drive owners and
+  admins, and the two destructive ones say what they destroy before they do it. Deleting refuses
+  while sessions are still running inside and then offers to end them, naming both halves of what
+  that means; rebuilding says plainly that the environment comes back BLANK, with its name intact
+  and nothing else. Anyone else in the drive sees the environments and can work in them, without the
+  controls they could not use anyway.
+- **Environments have their own line on your usage page** — what a drive's environments cost to keep
+  is listed per environment, by name, separately from your agent sessions. It was previously folded
+  into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
+  agent appeared to account for; both are now right.
+
+- **Spreadsheet cells can carry formatting** — number formats (currency, percent, decimals, dates),
+  bold and italic, text and fill colour, alignment, borders, column widths, and frozen rows and
+  columns are now stored with the sheet and survive saving, publishing and export. Clearing a
+  cell's contents keeps its formatting, as it does in Excel and Google Sheets. The controls for
+  setting these arrive with the redesigned spreadsheet view; this release puts the foundation in
+  place and makes anything already formatted display correctly everywhere.
+- **Exported spreadsheets contain real numbers** — an .xlsx export previously wrote every cell as
+  text, so nothing in Excel could sum, sort or chart it. Exports now carry the underlying numbers
+  along with their number formats, so the file reads the same as the sheet and behaves like a
+  spreadsheet.
+- **Spreadsheets with more than one tab keep all of them** — opening a multi-tab workbook and
+  editing it used to discard every tab after the first. The other tabs are now preserved untouched;
+  the editor still shows only the first.
+- **CSV exports show what the sheet shows** — a formatted cell exports as it appears (for example
+  `$1,234.50`), matching Excel's and Google Sheets' behaviour and the .xlsx export. Cells with no
+  formatting are unchanged. If you need the raw numbers for another system, use the .xlsx export,
+  which carries the underlying values.
 - **Agents can hand work to each other from anywhere, not just from a browser tab** — asking an
   assistant to spawn or message a worker used to fail with "the calling request carries no session
   credentials to dispatch with" whenever the request had not come from a logged-in browser. That
@@ -61,6 +102,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   fixable one offers to try again. If the call connects but the transcript service does not, the
   call says so rather than letting you talk for ten minutes into something that was never going to
   be saved.
+- **Sub-tasks are real rows you can work in place** — expanding a task used to show its sub-tasks as
+  a list of links with a circle beside each one. The circle looked like a checkbox and was inside
+  the link, so clicking it opened the sub-task instead of completing it; there was no way to finish
+  a sub-task without leaving the screen. Sub-tasks are now full rows in the same table, indented
+  under their parent and lined up with its columns, with a working checkbox, status, priority,
+  assignees and due date. They expand further if they have children of their own, and each level has
+  a "+ Add a sub-task" line so you never have to open a task just to put something under it — down
+  to four levels in, after which you open the task itself to keep going. A task with no sub-tasks
+  yet gets "Add sub-task" in its row menu, which creates the first one, opens it out and puts the
+  cursor in its title. This is the wide layout; on a narrow pane the cards still show the progress
+  count, and opening a task is how you reach what is under it.
+- **You can complete the task you are looking at** — opening a task shows the work underneath it, so
+  the task itself had no row and no controls. Finishing it meant navigating back out to the list it
+  came from, where completing it is blocked until its sub-tasks are done — the sub-tasks you were
+  just looking at. There is now a checkbox and a status dropdown at the top of the task's own
+  screen.
+- **Sub-task progress wherever a task appears** — a task with sub-tasks now shows how many are done
+  in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
+  the only hint was a count inside the expanded row.
 
 ### Fixed
 
@@ -73,6 +133,21 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   Started pages were seeded by four near-identical routines, and two signup paths arriving at once
   for the same account could each lay down a full set. There is now one seeder, it runs once per
   drive, and running it again does nothing.
+- **Clicking a task checkbox is instant** — the tick did not appear until the server had answered
+  and the whole list had been re-fetched twice, which on a long list was a visible pause on every
+  click. Worse, if you had anything else open and being edited anywhere in the app, the refresh was
+  suppressed and the checkbox never moved at all, even though the task really had been completed.
+  Status, priority, title and due date changes are all immediate now, and undo themselves if the
+  server refuses. Assignee changes still wait for the server, because the row shows the assignee's
+  name and picture and the request only sends an id.
+- **Failures say what went wrong** — a refused change used to read "Failed to update status" no
+  matter the cause. If a task cannot be completed because sub-tasks are still open, it now says how
+  many; if a status is not one the list allows, it says which ones are.
+- **A task's sub-lists use the same statuses as the list they came from** — if you had renamed or
+  added statuses on a task list, everything nested under it quietly fell back to the four built-in
+  ones. Now anything created under a list inherits that list's statuses.
+- **The expanded document is no longer cut off** — a task's notes were clamped to about three lines
+  behind a fade. They render in full.
 - **Editing a document at the same time as someone else no longer throws away what you typed** —
   when a colleague or an AI agent saved the same document while you had unsaved text, PageSpace
   used to quietly replace everything in your editor with their version and tell you your copy "has
@@ -96,6 +171,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   panes of a session go quiet where they previously loaded. That is the intended state and matches
   what the Shell and reattach buttons have always shown you; ask a drive admin for a role that
   permits running code if you need those panes back.
+- **A line break in a spreadsheet cell no longer wipes the whole sheet** — a value containing a
+  newline (or a tab, or certain invisible control characters) was written in a form the sheet could
+  not read back, so the next time the page loaded it came back completely empty: every cell, not
+  just the one that caused it. Nothing warned you, and the blank sheet was then saved over the real
+  one. This was reachable without typing anything — a public form response containing a line break
+  destroyed the sheet it fed. Such values are now stored correctly and survive a round trip, and a
+  sheet that genuinely cannot be read is shown with editing disabled and an explanation rather than
+  being silently replaced with an empty grid.
+- **Undo works in spreadsheets** — the undo history was being cleared after every single edit, so
+  Ctrl+Z had nothing to go back to for anything but the change you were part-way through making.
+- **People with view-only access can select cells in a spreadsheet again** — selecting a range to
+  read it, copy it, or see its total was blocked along with editing, even though selecting changes
+  nothing.
 
 - **Stop and Retry now react the moment you press them** — both were doing their work at roughly
   the speed they always had, and both spent that time showing you nothing at all, which reads as a

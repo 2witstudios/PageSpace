@@ -100,6 +100,13 @@ const sheetPage = {
   revision: 1,
 };
 
+/**
+ * Carries the SheetDoc magic but a malformed body. The lossy parse turns this
+ * into an EMPTY sheet, so appending to it would store a document containing
+ * only the appended cells — replacing the user's entire spreadsheet.
+ */
+const UNREADABLE_SHEET = '#%PAGESPACE_SHEETDOC v1\nthis is [not toml';
+
 describe('createFormTarget', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -122,6 +129,21 @@ describe('createFormTarget', () => {
         notificationEmail: null,
       },
     ]);
+  });
+
+  it('refuses to write headers when the sheet could not be read', async () => {
+    mockFindById.mockResolvedValue({ ...sheetPage, content: UNREADABLE_SHEET });
+
+    await expect(
+      createFormTarget({
+        sheetPageId: 'sheet-1',
+        fields,
+        createdBy: 'user-1',
+        mutationContext: { userId: 'user-1' },
+      })
+    ).rejects.toThrow(/could not be read/);
+
+    expect(mockApplyPageMutation).not.toHaveBeenCalled();
   });
 
   it('writes the header row and creates the grant in the same transaction (atomic)', async () => {
@@ -386,6 +408,36 @@ describe('appendFormSubmission', () => {
     mockTxSelectLimit.mockResolvedValue([{ ...sheetPage, revision: 5 }]);
     mockTxUpdateWhere.mockResolvedValue(undefined);
     mockApplyPageMutation.mockResolvedValue({ nextRevision: 6 });
+  });
+
+  it('refuses to append when the sheet could not be read', async () => {
+    // The whole point of the guard: an anonymous form POST must not be able to
+    // replace a spreadsheet it failed to parse with just the submitted row.
+    mockTxSelectLimit.mockResolvedValue([
+      { ...sheetPage, content: UNREADABLE_SHEET, revision: 5 },
+    ]);
+
+    await expect(
+      appendFormSubmission({
+        formTargetId: 'ft-1',
+        values: { name: 'Ada', email: 'ada@example.com' },
+        submitterIpHash: 'iphash',
+      })
+    ).rejects.toThrow(/could not be read/);
+
+    expect(mockApplyPageMutation).not.toHaveBeenCalled();
+  });
+
+  it('still appends normally to a sheet that reads fine', async () => {
+    // The guard must not refuse readable content — including a genuinely
+    // empty sheet, which is not the same as an unreadable one.
+    await appendFormSubmission({
+      formTargetId: 'ft-1',
+      values: { name: 'Ada', email: 'ada@example.com' },
+      submitterIpHash: 'iphash',
+    });
+
+    expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
   });
 
   it('locks the form_targets row before appending (FOR UPDATE)', async () => {

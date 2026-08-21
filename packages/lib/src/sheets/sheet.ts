@@ -12,6 +12,8 @@ export * from './types';
 export * from './address';
 export * from './parser';
 export * from './functions';
+export * from './format';
+export * from './format-ops';
 export * from './evaluation';
 export * from './io';
 export * from './external';

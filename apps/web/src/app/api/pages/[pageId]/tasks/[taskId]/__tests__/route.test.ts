@@ -760,6 +760,46 @@ describe('PATCH /api/pages/[pageId]/tasks/[taskId]', () => {
     expect(broadcastPageEvent).toHaveBeenCalledTimes(1);
   });
 
+  it('stamps the task row on a title-only edit, so the echo it broadcasts is unique', async () => {
+    // The title lives on the linked PAGE, so a title-only PATCH used to leave
+    // task_items untouched — and the row's updatedAt is what the broadcast
+    // carries. Clients tell their own echo from a foreign one by matching that
+    // stamp, so two tabs renaming the same task inside the 30s echo TTL sent
+    // the SAME stamp and the second tab read the first's edit as its own and
+    // dropped it. On an expanded sub-list, which has no revalidation triggers
+    // at all, that edit is then lost until a page reload.
+    setupAuth();
+    setupCanEdit(true);
+    const taskWithPage = { ...baseTask, pageId: 'linked-page-1' };
+    setupTaskLookup({ id: mockTaskListId }, taskWithPage);
+    vi.mocked(db.query.pages.findFirst).mockResolvedValue({ driveId: 'drive-1' } as never);
+
+    const setCalls: Record<string, unknown>[] = [];
+    vi.mocked(db.transaction).mockImplementation(async (callback) => {
+      const txUpdateReturning = vi.fn().mockResolvedValue([{ ...taskWithPage }]);
+      const txUpdateWhere = vi.fn(() => ({ returning: txUpdateReturning }));
+      const txUpdateSet = vi.fn((vals: Record<string, unknown>) => {
+        setCalls.push(vals);
+        return { where: txUpdateWhere };
+      });
+      const txSelectLimit = vi.fn().mockResolvedValue([{ revision: 1 }]);
+      const tx = {
+        update: vi.fn(() => ({ set: txUpdateSet })),
+        delete: vi.fn(() => ({ where: vi.fn() })),
+        insert: vi.fn(() => ({ values: vi.fn(() => ({ returning: vi.fn() })) })),
+        select: vi.fn(() => ({ from: vi.fn(() => ({ where: vi.fn(() => ({ limit: txSelectLimit })) })) })),
+      };
+      return callback(tx as never);
+    });
+    vi.mocked(applyPageMutation).mockResolvedValue({ deferredTrigger: vi.fn() } as never);
+    setupRelationsLookup({ ...taskWithPage, page: { title: 'New Title', parentId: mockPageId }, assignee: null, assigneeAgent: null, user: null, assignees: [] });
+
+    const response = await PATCH(createPatchRequest({ title: 'New Title' }), context);
+
+    expect(response.status).toBe(200);
+    expect(setCalls.some((vals) => vals.updatedAt instanceof Date)).toBe(true);
+  });
+
   it('handles PageRevisionMismatchError with expectedRevision (409)', async () => {
     setupAuth();
     setupCanEdit(true);

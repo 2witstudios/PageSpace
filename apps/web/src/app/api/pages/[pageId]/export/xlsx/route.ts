@@ -7,7 +7,13 @@ import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrincipalViewPage } from '@/lib/auth';
-import { parseSheetContent, sanitizeSheetData, evaluateSheet } from '@pagespace/lib/sheets/sheet';
+import {
+  parseSheetContent,
+  sanitizeSheetData,
+  evaluateSheet,
+  encodeCellAddress,
+  numberFormatToExcelCode,
+} from '@pagespace/lib/sheets/sheet';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const };
 
@@ -60,8 +66,27 @@ export async function GET(req: Request, context: { params: Promise<{ pageId: str
       pageTitle: page.title,
     });
 
-    // Generate Excel from evaluated display values
-    const excelBuffer = generateExcel(evaluation.display, page.title, page.title);
+    // Generate Excel from the evaluated display values, plus the underlying
+    // values and number formats so the workbook holds real numbers rather than
+    // formatted text — otherwise nothing in the export sums or charts.
+    const excelBuffer = generateExcel(evaluation.display, page.title, page.title, {
+      values: evaluation.display.map((row, rowIndex) =>
+        row.map((_, columnIndex) => {
+          const cell = evaluation.byAddress[encodeCellAddress(rowIndex, columnIndex)];
+          return cell?.error ? cell.display : cell?.value;
+        })
+      ),
+      numberFormats: evaluation.display.map((row, rowIndex) =>
+        row.map((_, columnIndex) => {
+          const cell = evaluation.byAddress[encodeCellAddress(rowIndex, columnIndex)];
+          return numberFormatToExcelCode(cell?.format?.number);
+        })
+      ),
+      columnWidths: Array.from({ length: sheetData.columnCount }, (_, columnIndex) => {
+        const key = encodeCellAddress(0, columnIndex).replace(/\d+$/, '');
+        return sheetData.columnWidths?.[key];
+      }),
+    });
 
     // Create a sanitized filename
     const filename = sanitizeFilename(page.title) || 'sheet';

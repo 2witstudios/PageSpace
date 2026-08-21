@@ -59,8 +59,15 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
     isDocumentPage: vi.fn((type) => type === 'DOCUMENT'),
     isCodePage: vi.fn((type) => type === 'CODE'),
 }));
+// `edit_sheet_cells` parses through the ok/failure API so it can refuse to
+// write over content it could not read; the mock has to expose that, or the
+// tool throws before it reaches the branch under test.
+const mockParseSheetContentSafe = vi.fn(() => ({
+  ok: true as const,
+  sheet: { rowCount: 10, columnCount: 5 },
+}));
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
-    parseSheetContent: vi.fn(() => ({ rowCount: 10, columnCount: 5 })),
+    parseSheetContentSafe: (...args: unknown[]) => mockParseSheetContentSafe(...args as []),
     serializeSheetContent: vi.fn(() => ''),
     updateSheetCells: vi.fn((data) => data),
     isValidCellAddress: vi.fn((addr) => /^[A-Z]+\d+$/.test(addr.toUpperCase())),
@@ -2080,6 +2087,42 @@ describe('page-write-tools', () => {
           context
         )
       ).rejects.toThrow('User authentication required');
+    });
+
+    it('refuses to edit a sheet whose stored content could not be read', async () => {
+      // Writing here would replace the whole spreadsheet with just these cells.
+      mockParseSheetContentSafe.mockReturnValueOnce({
+        ok: false as never,
+        reason: 'toml',
+        message: 'Key without value at row 3',
+      } as never);
+
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Budget',
+        type: 'SHEET',
+        content: '#%PAGESPACE_SHEETDOC v1\nthis is [not toml',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      await expect(
+        pageWriteTools.edit_sheet_cells.execute!(
+          { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
+          context
+        )
+      ).rejects.toThrow(/could not be read/);
     });
 
     it('returns error for non-sheet pages', async () => {

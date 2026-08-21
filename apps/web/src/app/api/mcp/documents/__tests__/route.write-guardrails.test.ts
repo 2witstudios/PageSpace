@@ -35,7 +35,9 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: (...args: unknown[]) => mockIsSheetType(...args),
-  parseSheetContent: vi.fn(),
+  // The route refuses to write when existing content cannot be read, so it
+  // parses through the ok/failure API rather than the lossy one.
+  parseSheetContentSafe: vi.fn(),
   serializeSheetContent: vi.fn(),
   updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
@@ -75,7 +77,6 @@ vi.mock('@/services/api/page-mutation-service', () => ({
 vi.mock('@/services/api/task-sync-service', () => ({
   backfillMissingTaskItems: vi.fn(),
   ensureTaskListForPage: vi.fn(),
-  seedDefaultTaskStatusConfigs: vi.fn(),
 }));
 
 vi.mock('@/lib/ai/tools/task-helpers', () => ({
@@ -282,7 +283,10 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
       });
 
       const sheetModule = await import('@pagespace/lib/sheets/sheet');
-      (sheetModule.parseSheetContent as ReturnType<typeof vi.fn>).mockReturnValue({ cells: {}, rowCount: 1, columnCount: 1 });
+      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: true,
+        sheet: { cells: {}, rowCount: 1, columnCount: 1 },
+      });
       (sheetModule.updateSheetCells as ReturnType<typeof vi.fn>).mockReturnValue({ cells: {}, rowCount: 1, columnCount: 1 });
       (sheetModule.serializeSheetContent as ReturnType<typeof vi.fn>).mockReturnValue('[cells]\nA1 = "2"');
 
@@ -295,6 +299,31 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
 
       expect(response.status).toBe(200);
       expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses edit-cells when the sheet content could not be read', async () => {
+      // The lossy parse would yield an empty sheet, so writing would replace
+      // the whole spreadsheet with just the cells in this request.
+      mockIsSheetType.mockReturnValue(true);
+      const sheetModule = await import('@pagespace/lib/sheets/sheet');
+      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
+        ok: false,
+        reason: 'toml',
+        message: 'Key without value at row 3',
+      });
+
+      const { POST } = await import('../route');
+      const response = await POST(
+        makeRequest({
+          operation: 'edit-cells',
+          pageId: 'page-1',
+          cells: [{ address: 'A1', value: '2' }],
+        })
+      );
+
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.error).toMatch(/could not be read/);
     });
   });
 

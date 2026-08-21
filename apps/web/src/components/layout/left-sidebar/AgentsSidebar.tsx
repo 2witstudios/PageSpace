@@ -2,7 +2,20 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'next/navigation';
-import { ChevronDown, ChevronRight, FileText, Folder, Plus, Search, SquareTerminal, X } from 'lucide-react';
+import {
+  Boxes,
+  ChevronDown,
+  ChevronRight,
+  FileText,
+  Folder,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Search,
+  SquareTerminal,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 
@@ -35,7 +48,7 @@ import {
 } from '@/stores/agent-workspace/workspace-tree-view';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
 import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
-import { fetchWithAuth, del } from '@/lib/auth/auth-fetch';
+import { fetchWithAuth, del, patch, post, ApiRequestError } from '@/lib/auth/auth-fetch';
 import {
   isAgentWorkspacesKey,
   isWorkspaceListingKey,
@@ -45,7 +58,11 @@ import {
 } from '@/components/agents/panes/workspace-conversations';
 import { decideClosePane } from '@/components/agents/panes/close-pane';
 import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
+import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
+import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import { useDriveEnvs, driveEnvsKey } from '@/hooks/drive-envs/useDriveEnvs';
+import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
 
 /**
  * The Agents console's left sidebar: **Drive → Session → Pane.**
@@ -217,6 +234,16 @@ interface SessionListEntry {
    */
   workspaceId: string;
   driveId: string | null;
+  /**
+   * The persistent ENVIRONMENT this session runs inside, or null for the
+   * ordinary ephemeral one. It is what the sidebar nests by: two sessions
+   * carrying the same value are two windows onto one filesystem, so grouping by
+   * it groups by the disk rather than by a label (see the field's docblock on
+   * `session-contract.ts`). It also changes what `sandboxStatus` below reads —
+   * for an env-bound session that status is the ENVIRONMENT's machine, shared
+   * with every other session in it.
+   */
+  envId: string | null;
   name: string;
   sandboxStatus: 'none' | 'starting' | 'running' | 'ended';
   conversations: SessionConversationEntry[];
@@ -423,8 +450,39 @@ function SessionList({
     [groups, hasSearch],
   );
 
+  // Which drives this user may ADMINISTER — environment CRUD is drive
+  // OWNER/ADMIN, so the affordances that need it are not rendered at all for a
+  // plain member rather than rendered and refused. Same source and same helper
+  // the drive footer's manage controls use; a drive the roster does not hold
+  // (an orphan group) is simply absent from the set, which reads as "no".
+  const manageableDriveIds = useMemo(
+    () => new Set(drives.filter((d) => canManageDrive(d)).map((d) => d.id)),
+    [drives],
+  );
+
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
   const { openSpawn, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
+
+  // ONE "New environment" dialog for the whole list, parameterized by which
+  // drive asked — the same shape `useSpawnSession` gives the spawn palette.
+  // Every group header would otherwise carry its own copy of a dialog that can
+  // only ever be open once.
+  const [newEnvTarget, setNewEnvTarget] = useState<{ driveId: string; driveName: string | null } | null>(null);
+  const { mutate: globalMutate } = useSWRConfig();
+
+  const createEnvironment = useCallback(
+    async (name: string): Promise<DriveEnvWriteOutcome> => {
+      if (!newEnvTarget) return 'done';
+      try {
+        await post(`/api/drives/${encodeURIComponent(newEnvTarget.driveId)}/envs`, { name });
+      } catch (error) {
+        return reportDriveEnvWriteFailure(error, 'Could not create the environment');
+      }
+      globalMutate(driveEnvsKey(newEnvTarget.driveId));
+      return 'done';
+    },
+    [newEnvTarget, globalMutate],
+  );
 
   // Sessions are always deliberately named now — both groups open the same
   // naming step. The ASSISTANT group has nothing to pick (the assistant IS
@@ -450,9 +508,32 @@ function SessionList({
           onChange={setSearchQuery}
           onAction={driveId ? () => handleNewSession(driveId, null) : () => setCreateDriveOpen(true)}
           actionLabel={driveId ? 'New session' : 'New drive'}
+          // Drive-scoped mode suppresses its own group header (the drive is the
+          // whole surface), so this is where its environment affordance has to
+          // live — beside "New session", which is the act it sits next to
+          // everywhere else too. Global mode has no single drive to create one
+          // in, so it keeps just the two it had.
+          // `!trashedDriveIds.has` for the same reason the group-header path
+          // checks `isLiveDrive`: a drive on its way to deletion must not be
+          // offered new infrastructure inside it.
+          onNewEnvironment={
+            driveId && !trashedDriveIds.has(driveId) && manageableDriveIds.has(driveId)
+              ? () =>
+                  setNewEnvTarget({
+                    driveId,
+                    driveName: drives.find((d) => d.id === driveId)?.name ?? null,
+                  })
+              : undefined
+          }
         />
       )}
-      {visibleGroups.map((group) => (
+      {visibleGroups.map((group) => {
+        // Environments belong to a real, live drive. The Assistant group is not
+        // one (it is the drive-less bucket) and a trashed drive must not be
+        // offered infrastructure it is on its way out of — both fall back to a
+        // flat list of sessions, which is what they had before.
+        const isLiveDrive = group.driveId !== ASSISTANT_GROUP_KEY && !trashedDriveIds.has(group.driveId);
+        return (
         <div key={group.driveId}>
           {/* `group.driveId` is always a real string (never undefined), so
               this alone already covers global mode (every group differs from
@@ -466,15 +547,44 @@ function SessionList({
                   ? undefined
                   : () => handleNewSession(group.driveId, group.driveName)
               }
+              newEnvironmentLabel={`New environment in ${group.driveName ?? 'this drive'}`}
+              onNewEnvironment={
+                isLiveDrive && manageableDriveIds.has(group.driveId)
+                  ? () => setNewEnvTarget({ driveId: group.driveId, driveName: group.driveName })
+                  : undefined
+              }
             />
           )}
-          {group.sessions.map((session) => (
-            <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
-          ))}
+          <DriveGroupRows
+            driveId={group.driveId}
+            sessions={group.sessions}
+            agentNamesById={agentNamesById}
+            canManage={manageableDriveIds.has(group.driveId)}
+            // Three things switch it off. `canSpawn` is the authentication gate
+            // — the same one that nulls the sessions SWR key, because a surface
+            // that will not show a signed-out visitor anything has no business
+            // fetching a drive's infrastructure on their behalf. Search is a
+            // FLAT find over session names (the header says so), and an
+            // environment whose sessions were all filtered out would otherwise
+            // sit there as an empty container claiming to be a match — so while
+            // a query is active every matching session renders at drive level
+            // and the environment rows step aside.
+            showEnvironments={canSpawn && isLiveDrive && !hasSearch}
+          />
         </div>
-      ))}
+        );
+      })}
       {notice}
       {paletteElement}
+      <DriveEnvNameDialog
+        open={newEnvTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setNewEnvTarget(null);
+        }}
+        mode="create"
+        driveName={newEnvTarget?.driveName ?? null}
+        onSubmit={createEnvironment}
+      />
       {!driveId && <CreateDriveDialog isOpen={createDriveOpen} setIsOpen={setCreateDriveOpen} />}
     </div>
   );
@@ -486,11 +596,14 @@ function SessionSearchHeader({
   onChange,
   onAction,
   actionLabel,
+  onNewEnvironment,
 }: {
   value: string;
   onChange: (value: string) => void;
   onAction: () => void;
   actionLabel: string;
+  /** Omitted for anyone who cannot administer the drive — environment CRUD is OWNER/ADMIN. */
+  onNewEnvironment?: () => void;
 }) {
   return (
     <div className="flex items-center gap-1 pl-2 pr-4 pb-1 pt-1.5">
@@ -504,6 +617,17 @@ function SessionSearchHeader({
           onChange={(event) => onChange(event.target.value)}
         />
       </div>
+      {onNewEnvironment && (
+        <button
+          type="button"
+          aria-label="New environment"
+          title="New environment"
+          className="shrink-0 text-muted-foreground hover:text-foreground"
+          onClick={onNewEnvironment}
+        >
+          <Boxes className="size-3.5" />
+        </button>
+      )}
       <button
         type="button"
         aria-label={actionLabel}
@@ -521,10 +645,15 @@ function SessionGroupHeader({
   label,
   newSessionLabel,
   onNewSession,
+  newEnvironmentLabel,
+  onNewEnvironment,
 }: {
   label: string;
   newSessionLabel?: string;
   onNewSession?: () => void;
+  newEnvironmentLabel?: string;
+  /** Omitted for anyone who cannot administer the drive — environment CRUD is OWNER/ADMIN. */
+  onNewEnvironment?: () => void;
 }) {
   return (
     <div className="flex items-center justify-between gap-1 pl-2 pr-4 pb-0.5 pt-1.5">
@@ -532,15 +661,332 @@ function SessionGroupHeader({
         <Folder className="size-4 shrink-0" aria-hidden="true" />
         <span className="truncate">{label}</span>
       </span>
-      {onNewSession && (
-        <button
-          type="button"
-          aria-label={newSessionLabel ?? 'New session'}
-          className="shrink-0 text-muted-foreground hover:text-foreground"
-          onClick={onNewSession}
-        >
-          <Plus className="size-3.5" />
-        </button>
+      <span className="flex shrink-0 items-center gap-1">
+        {onNewEnvironment && (
+          <button
+            type="button"
+            aria-label={newEnvironmentLabel ?? 'New environment'}
+            title={newEnvironmentLabel ?? 'New environment'}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={onNewEnvironment}
+          >
+            <Boxes className="size-3.5" />
+          </button>
+        )}
+        {onNewSession && (
+          <button
+            type="button"
+            aria-label={newSessionLabel ?? 'New session'}
+            className="shrink-0 text-muted-foreground hover:text-foreground"
+            onClick={onNewSession}
+          >
+            <Plus className="size-3.5" />
+          </button>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * What a caller should do with the dialog after an environment write.
+ *
+ * `'retry'` is reserved for the ONE refusal the user can fix without leaving
+ * the dialog: a name already taken in this drive. Every other failure — a
+ * plan's environment ceiling, a role that turned out not to be enough, the
+ * network — is toasted and the dialog closes, because retyping the name would
+ * not change the answer.
+ */
+type DriveEnvWriteOutcome = 'done' | 'retry';
+
+function reportDriveEnvWriteFailure(error: unknown, fallbackTitle: string): DriveEnvWriteOutcome {
+  const description = error instanceof Error ? error.message : 'Please try again.';
+  const nameTaken = error instanceof ApiRequestError && error.status === 409;
+  toast.error(nameTaken ? 'That name is already used in this drive' : fallbackTitle, {
+    description: nameTaken ? 'Environment names are unique within a drive.' : description,
+  });
+  return nameTaken ? 'retry' : 'done';
+}
+
+/**
+ * One drive group's contents: its ENVIRONMENTS, then its loose sessions.
+ *
+ * The two are siblings on purpose. A drive contains environments AND sessions
+ * at the same level — an environment is not a folder someone filed sessions
+ * into, it is a machine the drive owns, and a session either runs inside one or
+ * owns its own sandbox. Nesting a session under its environment is therefore
+ * showing which filesystem it sees, not organising a list.
+ *
+ * The environments fetch lives HERE, one hook per rendered drive group, rather
+ * than as one bulk read in the parent: a group is where a drive id first exists
+ * as a single value, the listing is small and cached per drive, and the spawn
+ * palette shares the key so opening it costs nothing extra.
+ */
+function DriveGroupRows({
+  driveId,
+  sessions,
+  agentNamesById,
+  canManage,
+  showEnvironments,
+}: {
+  driveId: string;
+  sessions: SessionListEntry[];
+  agentNamesById: Map<string, string>;
+  canManage: boolean;
+  showEnvironments: boolean;
+}) {
+  const { envs, error: envsError, mutate: refreshEnvs } = useDriveEnvs(driveId, { enabled: showEnvironments });
+
+  // With environments off (the Assistant bucket, a trashed drive, an active
+  // search) this hands back every session as loose, which is exactly the flat
+  // list this surface rendered before environments existed.
+  const { envGroups, looseSessions } = useMemo(
+    () => (showEnvironments ? partitionSessionsByEnv(sessions, envs) : { envGroups: [], looseSessions: sessions }),
+    [showEnvironments, sessions, envs],
+  );
+
+  return (
+    <>
+      {/* A FAILED LISTING SAYS SO. Without this the drive reads as one that
+          simply has no environments, and any env-bound session in it falls
+          through to an orphan group — a correct mechanism reached for the wrong
+          reason, and one the user cannot act on because nothing told them a
+          read failed. The retry is the affordance; the sessions below still
+          render, because a drive's sessions do not depend on this request. */}
+      {showEnvironments && envsError != null && (
+        <div className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-muted-foreground">
+          <span className="truncate">Could not load environments</span>
+          <button
+            type="button"
+            /* "Try again", not "Retry": the sidebar already has a Retry for the
+               SESSIONS listing, and when both requests fail the two sit feet
+               apart. Distinct words are the difference between one control and
+               two identical ones the user has to guess between. */
+            aria-label="Try again loading environments"
+            className="shrink-0 underline hover:text-foreground"
+            onClick={refreshEnvs}
+          >
+            Try again
+          </button>
+        </div>
+      )}
+      {envGroups.map((group) => (
+        <DriveEnvRow
+          key={group.envId}
+          driveId={driveId}
+          group={group}
+          canManage={canManage}
+          agentNamesById={agentNamesById}
+          onEnvsChanged={refreshEnvs}
+        />
+      ))}
+      {looseSessions.map((session) => (
+        <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
+      ))}
+    </>
+  );
+}
+
+/**
+ * An environment's status, as a dot — the only badge an environment row carries.
+ *
+ * Always rendered, unlike a session's dot, and that difference is the point. A
+ * session's dot appears when it has a sandbox and is absent otherwise, because
+ * a session without one is just a conversation. An environment without a
+ * machine is still an environment: it is drive infrastructure that exists,
+ * costs its keep, and provisions on first use. A dot that disappeared would say
+ * the environment had, so `'none'` gets a dimmed dot and a name for the state
+ * rather than nothing at all.
+ */
+function EnvStatusDot({ status }: { status: DriveEnvStatus | null }) {
+  const { className, label } =
+    status === 'running'
+      ? { className: 'bg-emerald-500', label: 'Environment running' }
+      : status === 'stopped'
+        ? { className: 'bg-amber-500', label: 'Environment stopped' }
+        : status === 'none'
+          ? { className: 'bg-muted-foreground/40', label: 'Environment not started yet' }
+          : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
+  // `role="img"` so the label is announced — aria-label on a bare span is not.
+  return <span role="img" aria-label={label} className={cn('size-1.5 shrink-0 rounded-full', className)} />;
+}
+
+/**
+ * ONE ENVIRONMENT: name, status dot, and the sessions running inside it.
+ *
+ * It renders **even with no sessions**, and that is deliberate rather than an
+ * oversight about empty states. An environment is infrastructure someone
+ * created on purpose and is billed for; a row that vanished whenever nobody
+ * happened to be working would recreate exactly the ephemeral mental model
+ * environments exist to replace.
+ *
+ * Management is drive OWNER/ADMIN, so a member gets a row with no menu at all
+ * rather than a menu that refuses — the same way the group header withholds its
+ * "New environment" button. An ORPHAN (a session naming an environment this
+ * drive's listing did not return) also gets no menu: there is no row here to
+ * act on, and offering to rename or destroy something we cannot see would be
+ * guessing.
+ */
+function DriveEnvRow({
+  driveId,
+  group,
+  canManage,
+  agentNamesById,
+  onEnvsChanged,
+}: {
+  driveId: string;
+  group: EnvGroup<SessionListEntry>;
+  canManage: boolean;
+  agentNamesById: Map<string, string>;
+  onEnvsChanged: () => void;
+}) {
+  const { mutate } = useSWRConfig();
+  // Expanded by default: an environment's whole claim is that it is a place you
+  // come back to, and its sessions are the reason to look at it.
+  const [expanded, setExpanded] = useState(true);
+  const [renaming, setRenaming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
+
+  const isOrphan = group.envName === null;
+  // An orphan has no name to show and its id is not one: a raw CUID is not a
+  // thing a user has ever seen or could recognise, and printing it would read
+  // as the environment's name rather than as the absence of one. What we
+  // actually know is that a session claims an environment this drive's listing
+  // did not return — so say that, and keep the id out of the interface.
+  const displayName = group.envName ?? 'Unavailable environment';
+  const envPath = `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(group.envId)}`;
+
+  const renameEnv = useCallback(
+    async (name: string): Promise<DriveEnvWriteOutcome> => {
+      try {
+        await patch(envPath, { name });
+      } catch (error) {
+        return reportDriveEnvWriteFailure(error, 'Could not rename the environment');
+      }
+      onEnvsChanged();
+      return 'done';
+    },
+    [envPath, onEnvsChanged],
+  );
+
+  const deleteEnv = useCallback(
+    async ({ force }: { force: boolean }): Promise<{ blockedByLiveSessions: number } | null> => {
+      try {
+        await del(force ? `${envPath}?force=true` : envPath);
+      } catch (error) {
+        // The ONE refusal that is not an ending: sessions are still live inside
+        // the environment, and the dialog escalates to the forced delete rather
+        // than closing. `liveSessionCount` is the server's — this listing only
+        // holds the viewer's own sessions, so a teammate's is invisible here.
+        if (error instanceof ApiRequestError && error.status === 409) {
+          const body = error.body as { reason?: unknown; liveSessionCount?: unknown } | null;
+          if (body?.reason === 'live_sessions') {
+            return { blockedByLiveSessions: typeof body.liveSessionCount === 'number' ? body.liveSessionCount : 0 };
+          }
+        }
+        toast.error('Could not delete the environment', {
+          description: error instanceof Error ? error.message : 'Please try again.',
+        });
+        return null;
+      }
+      onEnvsChanged();
+      // Deleting an environment CASCADES its sessions away, so the sessions
+      // listing is stale the moment this resolves — not just the env listing.
+      void mutate(isWorkspaceListingKey);
+      toast.success(`Deleted “${displayName}”`);
+      return null;
+    },
+    [envPath, onEnvsChanged, mutate, displayName],
+  );
+
+  const rebuildEnv = useCallback(async () => {
+    try {
+      await post(`${envPath}/rebuild`);
+    } catch (error) {
+      toast.error('Could not rebuild the environment', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
+      return;
+    }
+    onEnvsChanged();
+    // The sessions listing goes stale too, for the same reason the delete path
+    // refreshes it: an env-bound session's `sandboxStatus` is read off the
+    // ENVIRONMENT's row, not its own, so replacing the environment's machine
+    // changes what every session inside it should be rendering. Without this
+    // the rows keep claiming `running` against a machine that no longer exists.
+    void mutate(isWorkspaceListingKey);
+    toast.success(`“${displayName}” was rebuilt`, { description: 'It came back blank.' });
+  }, [envPath, onEnvsChanged, mutate, displayName]);
+
+  const menuItems: RowMenuItem[] = useMemo(
+    () => [
+      { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
+      { label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true },
+      { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
+    ],
+    [],
+  );
+
+  const rowInner = (
+    <>
+      <button
+        type="button"
+        aria-label={expanded ? `Collapse ${displayName}` : `Expand ${displayName}`}
+        className="shrink-0 text-muted-foreground hover:text-foreground"
+        onClick={() => setExpanded((value) => !value)}
+      >
+        {expanded ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
+      </button>
+      <span className="flex min-w-0 flex-1 items-center gap-1.5">
+        <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <EnvStatusDot status={group.status} />
+        <span className="truncate font-medium text-foreground">{displayName}</span>
+      </span>
+    </>
+  );
+
+  const rowClassName = 'gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent';
+
+  return (
+    <div data-testid={`sidebar-env-${group.envId}`}>
+      {canManage && !isOrphan ? (
+        <RowMenu items={menuItems} menuLabel="Environment actions" className={rowClassName}>
+          {rowInner}
+        </RowMenu>
+      ) : (
+        <div className={cn('group flex w-full items-center', rowClassName)}>{rowInner}</div>
+      )}
+
+      <DriveEnvNameDialog
+        open={renaming}
+        onOpenChange={setRenaming}
+        mode="rename"
+        initialName={group.envName ?? ''}
+        onSubmit={renameEnv}
+      />
+      <DeleteDriveEnvDialog
+        open={deleting}
+        onOpenChange={setDeleting}
+        envName={displayName}
+        onDelete={deleteEnv}
+      />
+      <RebuildDriveEnvDialog
+        open={rebuilding}
+        onOpenChange={setRebuilding}
+        envName={displayName}
+        onRebuild={rebuildEnv}
+      />
+
+      {expanded && (
+        <div className="ml-4 space-y-0.5 border-l border-border pl-1.5">
+          {group.sessions.map((session) => (
+            <SessionRow key={session.workspaceId} session={session} agentNamesById={agentNamesById} />
+          ))}
+          {group.sessions.length === 0 && (
+            <div className="px-2 py-1 text-xs text-muted-foreground">No sessions running in here</div>
+          )}
+        </div>
       )}
     </div>
   );

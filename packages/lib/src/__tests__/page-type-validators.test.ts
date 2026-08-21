@@ -8,6 +8,68 @@ import {
 } from '../content/page-type-validators'
 import { PageType } from '../utils/enums'
 
+/**
+ * Genuinely valid SheetDoc content.
+ *
+ * These tests previously used `'#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'`,
+ * which carries the magic prefix but is malformed TOML (`cells=` has no
+ * value). It only passed because the validator trusted the prefix without
+ * parsing the body — the same gap that let newline-corrupted content reach
+ * storage and read back as an empty sheet. The intent of the assertions is
+ * unchanged; the fixture now matches what it claims to be.
+ */
+const VALID_SHEETDOC_CONTENT = [
+  '#%PAGESPACE_SHEETDOC v1',
+  '',
+  '[[sheets]]',
+  'name = "Sheet1"',
+  'order = 0',
+  '',
+  '[sheets.meta]',
+  'row_count = 10',
+  'column_count = 10',
+  '',
+  '[sheets.cells.A1]',
+  'value = "hello"',
+  'type = "string"',
+  '',
+].join('\n')
+
+/**
+ * Carries the magic prefix but a malformed body — `cells=` has no value.
+ * Accepting this is what let corrupt content reach storage and read back as an
+ * empty sheet, so the validator must parse the body rather than trust the
+ * prefix.
+ */
+const MALFORMED_SHEETDOC_CONTENT = '#%PAGESPACE_SHEETDOC v1\nrows=10\ncols=10\ncells=\n'
+
+describe('SHEET content validation rejects a malformed body', () => {
+  it('rejects it on creation despite the magic prefix', () => {
+    const result = validatePageCreation(PageType.SHEET, {
+      title: 'Sheet',
+      content: MALFORMED_SHEETDOC_CONTENT,
+    })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Invalid sheet content')
+  })
+
+  it('rejects it on update despite the magic prefix', () => {
+    const result = validatePageUpdate(PageType.SHEET, {
+      content: MALFORMED_SHEETDOC_CONTENT,
+    })
+
+    expect(result.valid).toBe(false)
+    expect(result.errors).toContain('Content must be valid sheet data')
+  })
+
+  it('still accepts a body that genuinely parses', () => {
+    expect(
+      validatePageUpdate(PageType.SHEET, { content: VALID_SHEETDOC_CONTENT }).valid
+    ).toBe(true)
+  })
+})
+
 describe('page-type-validators', () => {
   describe('validatePageCreation', () => {
     it('validates valid DOCUMENT creation', () => {
@@ -119,7 +181,7 @@ describe('page-type-validators', () => {
     it('validates valid SHEET creation', () => {
       const result = validatePageCreation(PageType.SHEET, {
         title: 'Test Sheet',
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)
@@ -230,7 +292,7 @@ describe('page-type-validators', () => {
 
     it('validates valid sheet content for SHEET', () => {
       const result = validatePageUpdate(PageType.SHEET, {
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)
@@ -443,7 +505,7 @@ describe('page-type-validators', () => {
     it('accepts SHEET with valid SheetDoc content', () => {
       const result = validatePageCreation(PageType.SHEET, {
         title: 'Sheet Test',
-        content: '#%PAGESPACE_SHEETDOC\nrows=10\ncols=10\ncells=\n'
+        content: VALID_SHEETDOC_CONTENT
       })
 
       expect(result.valid).toBe(true)

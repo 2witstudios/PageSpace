@@ -5,11 +5,107 @@
 
 export type SheetCellAddress = string;
 
+/** How a cell's computed value is rendered. */
+export type NumberFormatKind =
+  | 'auto'
+  | 'plain'
+  | 'number'
+  | 'currency'
+  | 'percent'
+  | 'date'
+  | 'time'
+  | 'datetime'
+  | 'scientific'
+  | 'text'
+  | 'custom';
+
+export interface NumberFormat {
+  kind: NumberFormatKind;
+  /** 0–10; ignored by kinds that have no fractional part. */
+  decimals?: number;
+  /** ISO 4217, for `kind: 'currency'`. */
+  currency?: string;
+  thousands?: boolean;
+  dateStyle?: 'short' | 'medium' | 'long' | 'iso';
+  /**
+   * Only for `kind: 'custom'` — an imported pattern this engine cannot render.
+   * Preserved through the round trip and displayed as `auto`, so an unsupported
+   * format is never silently discarded.
+   */
+  pattern?: string;
+}
+
+export type CellHorizontalAlign = 'left' | 'center' | 'right';
+export type CellVerticalAlign = 'top' | 'middle' | 'bottom';
+export type CellFontFamily = 'sans' | 'mono';
+export type CellBorderStyle = 'thin' | 'medium' | 'thick' | 'dashed' | 'dotted';
+
+export interface CellBorderSide {
+  style: CellBorderStyle;
+  /** `#rrggbb`; omitted means the theme's default border color. */
+  color?: string;
+}
+
+export interface CellBorders {
+  top?: CellBorderSide;
+  right?: CellBorderSide;
+  bottom?: CellBorderSide;
+  left?: CellBorderSide;
+}
+
+/**
+ * Presentation for a single cell. Deliberately separate from the cell's value:
+ * `SheetData.cells` stays a plain string map, so clearing a cell's contents
+ * leaves its formatting intact (as in Excel and Google Sheets) and every
+ * existing consumer of `cells` is unaffected.
+ */
+export interface CellFormat {
+  number?: NumberFormat;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  align?: CellHorizontalAlign;
+  valign?: CellVerticalAlign;
+  wrap?: boolean;
+  /** `#rrggbb` text color. */
+  color?: string;
+  /** `#rrggbb` fill color. */
+  background?: string;
+  borders?: CellBorders;
+  fontSize?: number;
+  fontFamily?: CellFontFamily;
+}
+
 export interface SheetData {
   version: number;
   rowCount: number;
   columnCount: number;
   cells: Record<SheetCellAddress, string>;
+  /** Per-cell presentation, keyed by A1 address. */
+  formats?: Record<SheetCellAddress, CellFormat>;
+  /** Column defaults, keyed by column letters ("A", "AB"). */
+  columnFormats?: Record<string, CellFormat>;
+  /** Column widths in px, keyed by column letters. */
+  columnWidths?: Record<string, number>;
+  /** Row heights in px, keyed by 1-based row number as a string. */
+  rowHeights?: Record<string, number>;
+  frozenRows?: number;
+  frozenColumns?: number;
+  /** Name of the sheet this data came from. */
+  sheetName?: string;
+  /**
+   * Named/defined ranges, carried verbatim. Nothing in the engine resolves
+   * them yet, but dropping what we do not understand turns every save into
+   * silent data loss for anything written by a newer build or by hand.
+   */
+  ranges?: Record<string, Record<string, unknown>>;
+  /**
+   * Tabs after the first, carried verbatim so a multi-tab document survives a
+   * load/save cycle. The editor renders only the first sheet today; without
+   * this, saving would silently delete every other tab.
+   */
+  extraSheets?: SheetDocSheet[];
 }
 
 export type SheetPrimitive = number | string | boolean | '';
@@ -26,6 +122,7 @@ export interface SheetDocCell {
   type?: string;
   notes?: string[];
   error?: SheetDocCellError;
+  format?: CellFormat;
 }
 
 export interface SheetDocDependencyRecord {
@@ -87,6 +184,11 @@ export interface SheetEvaluationCell {
   error?: string;
   dependsOn: SheetCellAddress[];
   dependents: SheetCellAddress[];
+  /**
+   * The format actually applied to `display`, with the column default already
+   * resolved, so renderers do not each re-implement that precedence.
+   */
+  format?: CellFormat;
 }
 
 export interface SheetEvaluation {
