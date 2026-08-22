@@ -18,6 +18,7 @@ import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
 import { existsSync } from 'fs';
 import path from 'path';
+import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
 import {
@@ -324,7 +325,23 @@ export async function validateData(
 
   for (const file of fileStorageData) {
     const storagePath = file.storagePath as string;
-    const srcPath = path.join(sourceFileStoragePath, storagePath);
+    // `resolvePathWithin`, not `path.join`, because that is what the EXPORT
+    // uses to resolve the source blob. It returns null for `..`/`.` segments,
+    // absolute paths, malformed encodings, and — the case that actually bites —
+    // a symlink escaping the storage root, and the export SKIPS such a row
+    // ("WARNING: skipping file with path traversal in storagePath").
+    //
+    // A raw join here follows the symlink, finds the file, and then faults the
+    // row as 'missing in target': the bundle correctly did not carry it, and
+    // the migration is reported as broken. Same class as everything else in
+    // this file — the validator re-deriving a decision instead of reproducing
+    // the exporter's.
+    const resolvedSrc = await resolvePathWithin(sourceFileStoragePath, storagePath);
+    if (!resolvedSrc) {
+      console.warn(`WARNING: unsafe storagePath, not compared (the export skipped it too): ${storagePath}`);
+      continue;
+    }
+    const srcPath = resolvedSrc;
     const tgtPath = path.join(targetFileStoragePath, storagePath);
 
     // SOURCE FIRST. If the source blob is not on disk, tenant-export.ts skipped
@@ -337,6 +354,19 @@ export async function validateData(
     // is why sweeping the query maps did not reach it. An orphaned `files` row
     // (row present, blob long gone) is common enough that this was not
     // hypothetical.
+    //
+    // NOT MIRRORED, and it cannot be from here: the export ALSO skips a row
+    // whose DESTINATION path fails the same check
+    // (`resolvePathWithin(outputDir/files, storagePath)`), and `validateData`
+    // is not given the bundle directory, so it cannot ask that question. It is
+    // only reachable when the source check passed and the destination one did
+    // not. The real fix for the whole file-blob comparison is to validate
+    // against `manifest.fileChecksums` — the export's own record of exactly
+    // what it carried, already written and already readable via
+    // `validateChecksums` — instead of re-deriving the decision from the source
+    // database and disk. That needs the bundle dir in ValidateOptions, so it is
+    // deliberately left for a change that owns that API rather than smuggled in
+    // here.
     if (!existsSync(srcPath)) {
       console.warn(`WARNING: source file not found, not compared: ${srcPath}`);
       continue;
