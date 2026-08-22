@@ -326,6 +326,59 @@ describe('content_tags_target_scope trigger — what it deliberately does NOT do
   });
 });
 
+describe('content_tags_target_scope trigger — must never block Art 17 erasure', () => {
+  it('lets a user deletion NULL createdBy even on a row a cross-drive move left stale', async () => {
+    // `content_tags."createdBy"` is ON DELETE SET NULL, so erasing a user issues
+    // an UPDATE against every row they tagged. If this trigger fired on that
+    // UPDATE and any of those rows had been made stale by a cross-drive page
+    // move, the erasure would FAIL and the user could not be deleted at all.
+    //
+    // That is not hypothetical: verified directly against Postgres, a bare
+    // `BEFORE INSERT OR UPDATE` form refuses the SET NULL with
+    // `content_tags scope: tag ... is in drive ...` and leaves the user in place.
+    // `UPDATE OF <scope columns>` is what keeps the erasure path clear, which
+    // makes the column list a COMPLIANCE property, not a performance one.
+    //
+    // The drive OWNER is a different user on purpose: erasing the owner would
+    // cascade the drives away and delete the tag rows before the SET NULL could
+    // be attempted, which quietly turns this into a test of nothing.
+    const owner = createId();
+    const tagger = createId();
+    const driveHome = createId();
+    const driveElsewhere = createId();
+    const movingPage = createId();
+    const tagId = createId();
+    const rowId = createId();
+
+    await db.insert(users).values([
+      { id: owner, name: 'Owner', email: `${owner}@example.com`, createdAt: now, updatedAt: now },
+      { id: tagger, name: 'Tagger', email: `${tagger}@example.com`, createdAt: now, updatedAt: now },
+    ]);
+    await db.insert(drives).values([
+      { id: driveHome, name: 'Home', slug: `home-${driveHome}`, ownerId: owner, createdAt: now, updatedAt: now },
+      { id: driveElsewhere, name: 'Elsewhere', slug: `else-${driveElsewhere}`, ownerId: owner, createdAt: now, updatedAt: now },
+    ]);
+    await db.insert(pages).values({ id: movingPage, title: 'Moves', type: 'DOCUMENT', position: 1, driveId: driveHome, createdAt: now, updatedAt: now });
+    await db.insert(tags).values({ id: tagId, driveId: driveHome, name: 'Risk', normalizedKey: 'risk', createdAt: now, updatedAt: now });
+    await insert({ id: rowId, tagId, pageId: movingPage, targetKind: 'page', createdBy: tagger });
+
+    // The cross-drive move, which writes `pages` and never this table.
+    await db.update(pages).set({ driveId: driveElsewhere }).where(inArray(pages.id, [movingPage]));
+
+    try {
+      await expect(db.delete(users).where(inArray(users.id, [tagger]))).resolves.toBeDefined();
+      const survivors = await db.select({ id: users.id }).from(users).where(inArray(users.id, [tagger]));
+      expect(survivors, 'the subject must actually be gone, not merely not-errored').toEqual([]);
+
+      const row = await db.select({ createdBy: contentTags.createdBy }).from(contentTags).where(inArray(contentTags.id, [rowId]));
+      expect(row[0].createdBy, 'the attribution must be nulled, which is what erasure means here').toBeNull();
+    } finally {
+      await db.delete(drives).where(inArray(drives.id, [driveHome, driveElsewhere]));
+      await db.delete(users).where(inArray(users.id, [owner, tagger]));
+    }
+  });
+});
+
 describe('content_tags_target_scope trigger — installation', () => {
   it('is installed on content_tags for INSERT and UPDATE', async () => {
     const result = await db.execute<{ tgname: string; timing: string; events: string; definition: string }>(sql`
