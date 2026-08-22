@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetMatchingRowsByPage } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRowsByPage, type MatchingRowText } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
@@ -120,8 +120,11 @@ export const searchTools = {
         }> = [];
 
         // One query for every visible sheet's matching rows, not one per sheet.
-        const sheetExcerpts = searchIn === 'title'
-          ? new Map<string, { rowIndex: number; text: string }[]>()
+        //
+        // Skipped entirely when no excerpt will be read from it — a title-only
+        // search, or a call that asked for conversations and not documents.
+        const sheetExcerpts = searchIn === 'title' || !contentTypes.includes('documents')
+          ? new Map<string, MatchingRowText[]>()
           : await sheetMatchingRowsByPage(
               matchingPages
                 .filter(page => isSheetType(page.type as PageType) && accessiblePageIds.has(page.id))
