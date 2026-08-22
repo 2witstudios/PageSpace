@@ -193,25 +193,40 @@ export async function validateData(
   /**
    * ID-based queries for tables with a single PK.
    *
-   * EVERY query here must carry the exporter's user filter as well as its
-   * structural one. Four of them did not — `messages`, `page_permissions`,
-   * `user_mentions` and `channel_message_reactions` selected purely on the
-   * parent (conversation, page, message) while tenant-export.ts additionally
-   * requires the row's user to be in `allExportedUserIdSet`.
+   * EVERY query here must reproduce its counterpart in tenant-export.ts IN
+   * FULL — not "plus the user filter", which is how the first sweep was framed
+   * and is why it missed two of these.
    *
-   * That asymmetry is not harmless: the source side then counts rows the bundle
-   * deliberately never carried, they show up as MISSING, and `allTablesPassed`
-   * turns a CORRECT migration into a reported failure. It is the same defect
-   * the shared `conversationSelectionWhere` / `workspaceSelectionWhere` /
-   * `contentTagSelectionWhere` helpers were introduced to stop, just in the
-   * queries that never got a helper.
+   * Six were wrong. Five under-filtered relative to the export
+   * (`messages`, `page_permissions`, `user_mentions`,
+   * `channel_message_reactions` on the row's USER; `mentions` on its TARGET
+   * PAGE), so the source side counted rows the bundle deliberately never
+   * carried, they showed up as MISSING, and `allTablesPassed` turned a CORRECT
+   * migration into a reported failure.
+   *
+   * `users` was wrong in the OPPOSITE and more dangerous direction: it checked
+   * only the REQUESTED users while the bundle carries the discovered ones too,
+   * so a discovered user's row was compared on neither side and a dropped row
+   * would still have printed [PASS].
+   *
+   * Same defect the shared `conversationSelectionWhere` /
+   * `workspaceSelectionWhere` / `contentTagSelectionWhere` helpers exist to
+   * stop, in the queries that never got a helper. When adding a query here,
+   * read the exporter's line for that table and copy every arm of it.
    *
    * `exportedUserIn` is the exporter's `allExportedUserIdSet` — requested users
    * plus everyone discovered with them — which is why it is built above rather
    * than using the narrower requested-only `userIn`.
    */
   const idQueries: Record<string, ReturnType<typeof sql>> = {
-    users: sql.raw(`SELECT id FROM users WHERE id IN (${userIn})`),
+    // `exportedUserIn`, NOT `userIn`. The bundle carries the requested users
+    // PLUS everyone discovered with them, so checking only the requested set
+    // leaves a discovered user's row compared on NEITHER side: if the import
+    // dropped it, this still prints [PASS]. That is the opposite and more
+    // dangerous direction from the rest of this map — a false pass rather than
+    // a false failure — and it is the same scar `workspaceSelectionWhere`
+    // records for `agent_workspaces`.
+    users: sql.raw(`SELECT id FROM users WHERE id IN (${exportedUserIn})`),
     user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIn})`),
     drives: sql.raw(`SELECT id FROM drives WHERE id IN (${driveIn})`),
     drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIn})`),
@@ -266,7 +281,15 @@ export async function validateData(
       `SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`
       + ` AND "userId" IN (${exportedUserIn})`,
     ),
-    mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
+    // Both endpoints, as the exporter requires. A mention pointing OUT of the
+    // exported page set is deliberately not carried, so selecting on the source
+    // page alone counts a row the bundle never held and fails a correct
+    // migration. This one is a PAGE filter, which is why framing the previous
+    // sweep as "the exporter's user filter" missed it.
+    mentions: sql.raw(
+      `SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`
+      + ` AND "targetPageId" IN (${pageIn})`,
+    ),
     user_mentions: sql.raw(
       `SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`
       + ` AND "targetUserId" IN (${exportedUserIn})`,
