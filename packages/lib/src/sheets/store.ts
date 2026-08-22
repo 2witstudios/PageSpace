@@ -872,6 +872,22 @@ export async function setCells(
     //
     // Reads only the dirty ADDRESSES, so no row has to be read first — which is
     // what lets every row be read once, under the lock, in step 3.
+    //
+    // Resolved BEFORE the locks, because the locks are derived from it: the set
+    // of rows to lock is exactly the touched rows plus the closure's. That
+    // leaves one narrow race. If another transaction CREATES a formula
+    // referencing a cell this call is writing, in a DIFFERENT row, after this
+    // query's snapshot and before this call commits, the new formula is not in
+    // this closure and its author evaluated it against the pre-write value — so
+    // it keeps a stale result until something touches it again.
+    //
+    // Same-row is safe, which covers the common shape (`=A1*2` beside `A1`):
+    // one `sheet_rows` row holds both, so the row lock serialises the two
+    // writers and the second re-reads. The document path is safe too — it
+    // rewrites every row. Closing the cross-row case would mean re-resolving
+    // after locking and then acquiring more row locks out of order, which
+    // trades a rare stale value for a real deadlock, so it is left open
+    // deliberately rather than half-fixed.
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
     const dirty = normalized.map((u) => u.address);
     const closure = await resolveDependentClosure(tab.id, dirty, tx);

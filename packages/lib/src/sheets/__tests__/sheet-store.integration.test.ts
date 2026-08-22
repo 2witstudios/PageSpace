@@ -928,6 +928,29 @@ describe('sheet store (integration)', () => {
     });
   });
 
+  describe('a formula added after its input already exists', () => {
+    it('is recomputed by later writes to that input', async () => {
+      // Sequential on purpose. A concurrent CROSS-ROW version of this — the
+      // formula created by another transaction mid-write — is a real gap, and
+      // it is documented in `setCells` rather than tested here: the closure is
+      // resolved before the locks because the locks are derived from it, and
+      // closing that would mean taking row locks out of order, trading a rare
+      // stale value for a real deadlock.
+      //
+      // Deliberately NOT a `Promise.all` race test. One was written here and
+      // deleted: it passed with `lockRows` removed entirely, so it asserted
+      // nothing about the locking it was named for.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells({ pageId }, [{ address: 'A1', value: '5' }], { userId: ownerId });
+      await setCells({ pageId }, [{ address: 'B5', value: '=A1*2' }], { userId: ownerId });
+
+      await setCells({ pageId }, [{ address: 'A1', value: '50' }], { userId: ownerId });
+
+      const rows = await readRows((await listTabs(pageId))[0].id, {});
+      expect(cellAt(rows, 4, 'B')?.value).toBe(100);
+    });
+  });
+
   describe('batched matching rows', () => {
     it('applies the row cap PER PAGE, so one big sheet cannot crowd out the others', async () => {
       // The whole point of the window function. A plain LIMIT over the joined
