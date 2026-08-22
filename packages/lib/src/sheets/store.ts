@@ -37,6 +37,7 @@ import {
 import { extractFormulaDependencies } from './deps';
 import {
   parseSheetContentSafe,
+  serializeSheetContent,
   parseSheetDocString,
   isSheetDocString,
   sheetDataFromSheetDoc,
@@ -426,6 +427,116 @@ function documentTabs(content: string): SheetData[] {
     }
   }
   return tabs;
+}
+
+/**
+ * The whole sheet as a `#%PAGESPACE_SHEETDOC` document, generated from rows.
+ *
+ * This is the projection that lets everything which already speaks the document
+ * format — the editor, exports, the publisher, the AI read path — keep working
+ * unchanged while rows are the source of truth. It is generated on demand and
+ * never stored: writing it back to `pages.content` would put the O(document)
+ * write this design removed straight back into every edit.
+ *
+ * O(sheet) by nature, so it belongs only on paths that are genuinely about the
+ * whole sheet. A viewport or a filter should use `readRows`/`queryRows`.
+ */
+export async function readSheetDocument(pageId: string, exec: Executor = db): Promise<string | null> {
+  const tabs = await listTabs(pageId, exec);
+  if (tabs.length === 0) return null;
+
+  const asSheetData = async (tab: typeof tabs[number]): Promise<SheetData> => {
+    const rows: StoredRow[] = [];
+    for await (const row of streamRows(tab.id, exec)) rows.push(row);
+    return sheetDataFromRows(toStoredTab(tab), rows);
+  };
+
+  const base = await asSheetData(tabs[0]);
+
+  // Tabs after the first ride in `extraSheets`, which the serialiser folds back
+  // into the document's sheet list. Round-tripping each through the serialiser
+  // is how a `SheetData` becomes the `SheetDocSheet` that field wants, and
+  // reuses the one tested conversion rather than reimplementing it.
+  if (tabs.length > 1) {
+    const extras = [];
+    for (const tab of tabs.slice(1)) {
+      const data = await asSheetData(tab);
+      const doc = parseSheetDocString(serializeSheetContent(data, { pageId }));
+      if (doc.sheets[0]) extras.push({ ...doc.sheets[0], order: tab.tabIndex });
+    }
+    base.extraSheets = extras;
+  }
+
+  return serializeSheetContent(base, { pageId });
+}
+
+/**
+ * Replace a tab's contents with a document.
+ *
+ * The editor still sends a whole serialised sheet on save, so this is the
+ * bridge for that path: parse it, write the rows it describes, and remove the
+ * ones it does not. O(document) and unavoidably so until the editor sends cell
+ * deltas — but it is the interactive path, where the client has already
+ * re-serialised anyway. The programmatic paths (forms, MCP, SDK) address cells
+ * and stay O(1).
+ */
+export async function replaceFromDocument(
+  ref: TabRef,
+  content: string,
+  actor: SheetActor = {},
+  exec?: Executor
+): Promise<{ rows: number }> {
+  const run = async (tx: Executor) => {
+    const tab = await ensureTab(ref, tx);
+    const [sheet] = documentTabs(content);
+    const materialized = rowsFromSheetData(sheet, tab.tabIndex);
+
+    const byIndex = new Map(materialized.rows.map((row) => [row.rowIndex, row]));
+
+    const existing = await tx
+      .select({ rowIndex: sheetRows.rowIndex })
+      .from(sheetRows)
+      .where(eq(sheetRows.tabId, tab.id));
+
+    const stale = existing.map((row) => row.rowIndex).filter((index) => !byIndex.has(index));
+    const DELETE_CHUNK = 5_000;
+    for (let index = 0; index < stale.length; index += DELETE_CHUNK) {
+      await tx
+        .delete(sheetRows)
+        .where(
+          and(
+            eq(sheetRows.tabId, tab.id),
+            inArray(sheetRows.rowIndex, stale.slice(index, index + DELETE_CHUNK))
+          )
+        );
+    }
+
+    // Replace, not merge: the document is the complete statement of this tab,
+    // so a cell absent from it has been removed.
+    await persistRows(tab.id, ref.pageId, byIndex, tx, 'replace');
+
+    await tx.delete(sheetCellDeps).where(eq(sheetCellDeps.tabId, tab.id));
+    await tx.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tab.id));
+    await insertDependencyRows(tab.id, materialized.cellDeps, materialized.rangeDeps, tx);
+
+    await updateExtent(
+      tab.id,
+      { rowCount: materialized.tab.rowCount, columnCount: materialized.tab.columnCount },
+      tx
+    );
+
+    await appendChanges(
+      ref.pageId,
+      tab.id,
+      actor,
+      [{ op: 'update_rows', address: null, rowIndex: null, before: null, after: { rows: materialized.rows.length } }],
+      tx
+    );
+
+    return { rows: materialized.rows.length };
+  };
+
+  return exec ? run(exec) : db.transaction(run);
 }
 
 // ---------------------------------------------------------------------------

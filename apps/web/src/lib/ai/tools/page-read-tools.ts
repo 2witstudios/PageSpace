@@ -16,6 +16,8 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
@@ -824,10 +826,17 @@ export const pageReadTools = {
           };
         }
 
+        // A sheet's content is generated from its rows. `pages.content` is
+        // empty once a sheet has been materialised, so serialising the page as
+        // stored would hand the model a blank spreadsheet.
+        const readable = isSheetType(page.type as PageType)
+          ? { ...page, content: (await readSheetDocument(page.id)) ?? page.content }
+          : page;
+
         // Format content for AI line-based editing, then split into lines.
         // Shared with command injection (page-serializer) so both surfaces
         // serialize page content identically.
-        const formattedContent = serializePageContentForAI(page);
+        const formattedContent = serializePageContentForAI(readable);
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 

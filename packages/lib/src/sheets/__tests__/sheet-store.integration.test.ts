@@ -29,6 +29,8 @@ import {
   readSheetData,
   getTab,
   rebuildTab,
+  readSheetDocument,
+  replaceFromDocument,
 } from '../store';
 import type { StoredRow } from '../projection';
 
@@ -554,6 +556,55 @@ describe('sheet store (integration)', () => {
       // The formula, not its result — a round trip must not lose it.
       expect(data?.cells['B1']).toBe('=1+1');
       expect(data?.sheetName).toBe('Sheet1');
+    });
+  });
+
+  describe('document projection', () => {
+    it('round-trips a sheet through the document form', async () => {
+      // The bridge that lets the editor, exports and the publisher keep
+      // speaking the document format while rows hold the truth.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10, columnCount: 4 });
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'Name' },
+        { address: 'B1', value: '10' },
+        { address: 'C1', value: '=B1*2' },
+      ], { userId: ownerId });
+
+      const document = await readSheetDocument(pageId);
+      expect(document).toContain('#%PAGESPACE_SHEETDOC');
+
+      // Feed it back: the sheet must be unchanged.
+      await replaceFromDocument({ pageId }, document!, { userId: ownerId });
+
+      const data = await readSheetData({ pageId });
+      expect(data?.cells['A1']).toBe('Name');
+      expect(data?.cells['C1']).toBe('=B1*2');
+    });
+
+    it('a document write removes cells the document no longer has', async () => {
+      // The editor sends a COMPLETE statement of the tab, so a cell absent from
+      // it has been deleted — merging would resurrect it.
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'keep' },
+        { address: 'B1', value: 'remove me' },
+      ], { userId: ownerId });
+
+      const document = await readSheetDocument(pageId);
+      await setCells({ pageId }, [{ address: 'B1', value: '' }], { userId: ownerId });
+      const withoutB = await readSheetDocument(pageId);
+      void document;
+
+      await replaceFromDocument({ pageId }, withoutB!, { userId: ownerId });
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'A')?.value).toBe('keep');
+      expect(cellAt(rows, 0, 'B')?.value ?? '').toBe('');
+    });
+
+    it('returns null for a page with no rows, so callers can fall back', async () => {
+      const { pageId } = await makeUnmigratedSheet('');
+      expect(await readSheetDocument(pageId)).toBeNull();
     });
   });
 

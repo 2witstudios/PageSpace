@@ -9,7 +9,8 @@ import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatu
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
-import { isSheetType, parseSheetContentSafe, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { setCells, readSheetDocument } from '@pagespace/lib/sheets/store';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
@@ -220,15 +221,19 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const rawContent = page.content || '';
-
     // CODE and markdown pages have natural line structure (and CODE may
     // contain raw HTML/XML that addLineBreaksForAI would mangle); HTML
     // documents are normalized. Shared with the internal read_page/
     // replace_lines tools via serializePageContentForAI so both surfaces
     // agree on line numbers.
     const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-    const serializedContent = serializePageContentForAI(page);
+
+    // Sheets serialise from their rows — `pages.content` is empty for a
+    // materialised sheet, so reading the column would return a blank grid.
+    const readablePage = isSheetType(page.type as PageType)
+      ? { ...page, content: (await readSheetDocument(pageId)) ?? page.content }
+      : page;
+    const serializedContent = serializePageContentForAI(readablePage);
     const lines = serializedContent.split('\n');
 
     switch (operation) {
@@ -813,48 +818,23 @@ export async function POST(req: NextRequest) {
           }, { status: 400 });
         }
 
-        // Parse existing sheet content. Aborting on a parse failure is the
-        // point: writing the empty sheet the unsafe parse returns would
-        // replace the whole spreadsheet with just the cells in this request.
-        const parsedSheet = parseSheetContentSafe(rawContent);
-        if (!parsedSheet.ok) {
-          return NextResponse.json({
-            error: `Sheet content could not be read (${parsedSheet.reason}); refusing to overwrite it.`,
-          }, { status: 409 });
-        }
-
-        // Apply cell updates
-        const updatedSheet = updateSheetCells(parsedSheet.sheet, cells);
-
-        // Serialize back to TOML format
-        const newContent = serializeSheetContent(updatedSheet, { pageId });
-
-        // Summarize changes for response and metadata
+        // Addressed cell writes, not a document rewrite.
+        //
+        // This used to parse the whole sheet, splice the cells in and
+        // re-serialise all of it — O(document) per call, and it needed a guard
+        // against an unreadable parse replacing the spreadsheet with just these
+        // cells. `setCells` writes the named cells and recomputes only what
+        // depended on them; there is no document to misread.
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
         const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
         const clearCount = cells.filter(c => c.value.trim() === '').length;
 
         const actorInfo = await getActorInfo(userId);
-        await applyPageMutation({
-          pageId,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: {
-            userId,
-            actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'edit-cells',
-              cellsUpdated: cells.length,
-              valuesSet: valueCount,
-              formulasSet: formulaCount,
-              cellsCleared: clearCount,
-            },
-          },
-        });
+        const setResult = await setCells(
+          { pageId },
+          cells,
+          { userId, actorEmail: actorInfo.actorEmail }
+        );
 
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);
@@ -879,9 +859,10 @@ export async function POST(req: NextRequest) {
             formulasSet: formulaCount,
             cellsCleared: clearCount,
             sheetDimensions: {
-              rows: updatedSheet.rowCount,
-              columns: updatedSheet.columnCount,
+              rows: setResult.rowCount,
+              columns: setResult.columnCount,
             },
+            recomputed: setResult.recomputed.length,
           },
           updatedCells: cells.map(c => ({
             address: c.address.toUpperCase(),

@@ -62,6 +62,12 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
 // `edit_sheet_cells` parses through the ok/failure API so it can refuse to
 // write over content it could not read; the mock has to expose that, or the
 // tool throws before it reaches the branch under test.
+const mockSetCells = vi.fn(async (..._args: unknown[]) => ({
+  changed: ['A1'],
+  recomputed: [] as string[],
+  rowCount: 1,
+  columnCount: 1,
+}));
 const mockParseSheetContentSafe = vi.fn(() => ({
   ok: true as const,
   sheet: { rowCount: 10, columnCount: 5 },
@@ -72,6 +78,9 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
     updateSheetCells: vi.fn((data) => data),
     isValidCellAddress: vi.fn((addr) => /^[A-Z]+\d+$/.test(addr.toUpperCase())),
     isSheetType: vi.fn((type) => type === 'SHEET'),
+}));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+    setCells: (...args: unknown[]) => mockSetCells(...args as []),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {
@@ -2089,19 +2098,17 @@ describe('page-write-tools', () => {
       ).rejects.toThrow('User authentication required');
     });
 
-    it('refuses to edit a sheet whose stored content could not be read', async () => {
-      // Writing here would replace the whole spreadsheet with just these cells.
-      mockParseSheetContentSafe.mockReturnValueOnce({
-        ok: false as never,
-        reason: 'toml',
-        message: 'Key without value at row 3',
-      } as never);
-
+    it('writes only the addressed cells, never the rest of the sheet', async () => {
+      // Replaces "refuses to edit a sheet whose stored content could not be
+      // read". That guard protected a read-modify-write of the whole document:
+      // an unparseable read would have replaced the spreadsheet with just these
+      // cells. The tool addresses cells now, so there is no document read to
+      // fail — the stronger property is asserted directly.
       mockPageRepo.findById.mockResolvedValue({
         id: 'page-1',
         title: 'Budget',
         type: 'SHEET',
-        content: '#%PAGESPACE_SHEETDOC v1\nthis is [not toml',
+        content: '',
         contentMode: 'html' as const,
         driveId: 'drive-1',
         parentId: null,
@@ -2117,12 +2124,15 @@ describe('page-write-tools', () => {
         experimental_context: { userId: 'user-123' } as ToolExecutionContext,
       };
 
-      await expect(
-        pageWriteTools.edit_sheet_cells.execute!(
-          { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
-          context
-        )
-      ).rejects.toThrow(/could not be read/);
+      await pageWriteTools.edit_sheet_cells.execute!(
+        { pageId: 'page-1', cells: [{ address: 'A1', value: 'test' }] },
+        context
+      );
+
+      expect(mockSetCells).toHaveBeenCalledTimes(1);
+      const [ref, cells] = mockSetCells.mock.calls[0] as [unknown, unknown];
+      expect(ref).toEqual({ pageId: 'page-1' });
+      expect(cells).toEqual([{ address: 'A1', value: 'test' }]);
     });
 
     it('returns error for non-sheet pages', async () => {

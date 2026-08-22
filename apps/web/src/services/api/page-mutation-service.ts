@@ -8,6 +8,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { writePageContent } from '@pagespace/lib/services/page-content-store';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 
@@ -169,7 +172,19 @@ export async function applyPageMutation({
 
   const stateHashAfter = computePageStateHash(nextPageState);
 
-  const shouldSnapshotBefore = updates.content !== undefined;
+  // A sheet's content lives in rows, so a content write to one takes a
+  // different path entirely.
+  //
+  // Everything that edits page content funnels through here — the editor, the
+  // AI write tools, `/api/mcp/documents`, the page service — so routing sheets
+  // once, here, is what stops rows and `pages.content` being two competing
+  // sources of truth. It also removes the whole O(document) apparatus for
+  // sheets: no blob snapshot, no page version, and no full-document payload in
+  // the activity log. The sheet's own change log records the edit instead.
+  const isSheetContentWrite =
+    updates.content !== undefined && isSheetType(currentPage.type as PageType);
+
+  const shouldSnapshotBefore = updates.content !== undefined && !isSheetContentWrite;
   let contentSnapshotRef: string | null = null;
   let contentSnapshotSize = 0;
 
@@ -186,6 +201,11 @@ export async function applyPageMutation({
   const newValues: Record<string, unknown> = {};
 
   for (const field of safeUpdatedFields) {
+    // A sheet's content is never carried in the activity log's value payloads.
+    // Two copies of a multi-megabyte document per edit is the write
+    // amplification that made a 1MB sheet fail its CHECK constraint and roll
+    // the user's write back; the change is described, not duplicated.
+    if (isSheetContentWrite && field === 'content') continue;
     if (field in currentPage) {
       previousValues[field] = (currentPage as Record<string, unknown>)[field];
     }
@@ -205,6 +225,8 @@ export async function applyPageMutation({
       .update(pages)
       .set({
         ...updates,
+        // Rows are the truth for a sheet; the column would be a stale copy.
+        ...(isSheetContentWrite ? { content: '' } : {}),
         revision: nextRevision,
         stateHash: stateHashAfter,
         updatedAt: new Date(),
@@ -220,6 +242,15 @@ export async function applyPageMutation({
       );
     }
 
+    if (isSheetContentWrite) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: context.userId, actorEmail: context.actorEmail ?? undefined, changeGroupId },
+        transaction
+      );
+    }
+
     if (updates.content !== undefined) {
       mentionsResult = await syncMentions(pageId, nextContent, transaction, {
         mentionedByUserId: context.userId,
@@ -229,7 +260,7 @@ export async function applyPageMutation({
 
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
-    await createPageVersion({
+    if (!isSheetContentWrite) await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
       createdBy: context.userId,

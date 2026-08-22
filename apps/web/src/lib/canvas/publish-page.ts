@@ -16,6 +16,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { neutralizeDashboardLinks } from '@pagespace/lib/publish/neutralize-dashboard-links';
 import { marked } from 'marked';
 import { renderPublishedPage, renderPublishedDocument, renderPublishedCode, renderPublishedSheet } from './render-published';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import {
   buildPublishedKey,
   putPublishedArtifact,
@@ -212,8 +213,13 @@ async function preparePublishContent(params: {
       // generics/comparisons in it, so leave it empty like SHEET's non-prose
       // content (an empty derived description, same accepted tradeoff).
       return { meta: {}, body: '', render: (args) => renderPublishedCode({ code: content ?? '', ...args }) };
-    case PageType.SHEET:
-      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: content ?? '', ...args }) };
+    case PageType.SHEET: {
+      // From rows, with the document column as the fallback for a sheet that
+      // has not been materialised yet. Publishing `content` directly would
+      // render a blank grid for every migrated sheet.
+      const serialized = (await readSheetDocument(currentPageId)) ?? content ?? '';
+      return { meta: {}, body: '', render: (args) => renderPublishedSheet({ serializedContent: serialized, ...args }) };
+    }
     default:
       throw new PublishError(`Cannot publish page type: ${type}`, 400);
   }

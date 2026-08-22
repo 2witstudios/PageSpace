@@ -7,6 +7,7 @@
 
 import { db } from '@pagespace/db/db';
 import { eq, and, inArray, sql } from '@pagespace/db/operators';
+import { sheetRows } from '@pagespace/db/schema/sheets';
 import { pages, drives, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 
@@ -377,12 +378,25 @@ export async function regexSearchPages(
   // Create regex for PostgreSQL - escape backslashes but preserve regex shortcuts
   const pgPattern = pattern.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
 
-  // Build where conditions based on searchIn parameter
+  // A sheet's text is in its rows, not in `pages.content`.
+  //
+  // Once a sheet is materialised its content column is empty, so a regex over
+  // that column alone silently drops every spreadsheet out of search — the
+  // pages most likely to contain the string somebody is looking for. This
+  // matches the row payloads too.
+  const sheetContentMatch = sql`EXISTS (
+    SELECT 1 FROM ${sheetRows}
+    WHERE ${sheetRows.pageId} = ${pages.id}
+      AND ${sheetRows.cells}::text ~ ${pgPattern}
+  )`;
+
+  const contentMatch = sql`(${pages.content} ~ ${pgPattern} OR ${sheetContentMatch})`;
+
   const regexCondition = searchIn === 'content'
-    ? sql`${pages.content} ~ ${pgPattern}`
+    ? contentMatch
     : searchIn === 'title'
       ? sql`${pages.title} ~ ${pgPattern}`
-      : sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern})`;
+      : sql`(${contentMatch} OR ${pages.title} ~ ${pgPattern})`;
 
   const whereConditions = and(
     eq(pages.driveId, driveId),
