@@ -17,7 +17,7 @@ import type {
 } from './types';
 import { parseCellFormat } from './format';
 import { SHEETDOC_MAGIC, SHEETDOC_VERSION, SHEET_VERSION, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
-import { evaluateSheet } from './evaluation';
+import { evaluateSheetSparse } from './evaluation';
 import { sanitizeSheetData } from './update';
 import { cellRegex } from './address';
 
@@ -172,7 +172,18 @@ export function serializeSheetContent(
   options: { pageId?: string; sheetName?: string } = {}
 ): string {
   const sanitized = sanitizeSheetData({ ...sheet });
-  const evaluation = evaluateSheet(sanitized);
+  // Sparse, not dense: this runs on every save, and the dense walk allocates an
+  // object per grid position — nearly three seconds for a 10,000-row sheet, on
+  // every keystroke.
+  //
+  // The emitted cell blocks are unchanged: the loop below already skipped every
+  // empty address the dense walk added. Dependency blocks are unchanged too,
+  // but only because the sparse walk materializes the empty cells that formulas
+  // reference; without that it would silently stop emitting their reverse
+  // edges. It additionally emits an edge to a referenced address *outside*
+  // rowCount x columnCount, which the dense walk could never see —  the same
+  // reason an out-of-rectangle cell now survives a save at all.
+  const evaluation = evaluateSheetSparse(sanitized);
   const doc = sheetDataToSheetDoc(sanitized, evaluation, options);
   return stringifySheetDoc(doc);
 }
@@ -645,7 +656,7 @@ function normalizeSheetDocObject(value: Record<string, unknown>): SheetDoc {
 
 function sheetDataToSheetDoc(
   sheet: SheetData,
-  evaluation: ReturnType<typeof evaluateSheet>,
+  evaluation: ReturnType<typeof evaluateSheetSparse>,
   options: { pageId?: string; sheetName?: string }
 ): SheetDoc {
   const sheetName = options.sheetName ?? 'Sheet1';

@@ -11,6 +11,7 @@ import type {
   SheetEvaluation,
   SheetEvaluationCell,
   SheetEvaluationOptions,
+  SheetSparseEvaluation,
   SheetExternalReferenceToken,
   SheetExternalReferenceResolution,
   SheetDocDependencyRecord,
@@ -527,6 +528,117 @@ export function evaluateSheet(
     errors,
     dependencies,
   };
+}
+
+/**
+ * Evaluate only the cells that exist.
+ *
+ * `evaluateSheet` walks the whole `rowCount × columnCount` rectangle and
+ * allocates an entry per grid position, empty ones included. For the 10,000-row
+ * sheet a virtualized grid is meant to make usable that is 600,000 objects, and
+ * it runs on every keystroke — so the grid would stay unusable no matter how
+ * few cells it rendered.
+ *
+ * This walks `Object.keys(sheet.cells)` instead. An address with no entry in
+ * the returned map is an empty cell, which every consumer already handles the
+ * same way as the empty entry the dense form produces.
+ *
+ * `evaluateSheet` is deliberately left alone rather than reimplemented on top
+ * of this: the exports, the published page, and the serializer all depend on
+ * its dense grids, and the empty entries it emits reach the persisted
+ * dependency table. `sheet-sparse-equivalence.test.ts` pins the two together.
+ */
+/**
+ * Whether a key names a local A1 cell.
+ *
+ * `sheet.cells` is a plain map and `dependsOn` mixes local addresses with
+ * external references like `@[Budget]:B2`, so both the seed and the back-fill
+ * have to filter. Rows are 1-based, so `A0` is not an address either.
+ */
+const isLocalAddress = (key: string): boolean => /^[A-Z]+[1-9]\d*$/.test(key);
+
+export function evaluateSheetSparse(
+  sheet: SheetData,
+  options: SheetEvaluationOptions = {}
+): SheetSparseEvaluation {
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+  };
+
+  const byAddress: Record<string, SheetEvaluationCell> = {};
+
+  for (const rawAddress of Object.keys(sheet.cells)) {
+    const address = rawAddress.toUpperCase();
+    // `cells` is a plain map and may hold a key that is not an A1 address at
+    // all (hand-written content, a newer writer). The dense walk never sees
+    // such a key because it enumerates positions rather than keys; skipping it
+    // here keeps the two in step instead of evaluating a nonsense address.
+    if (!isLocalAddress(address)) continue;
+    byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
+  }
+
+  // Every cell that *depends* on something holds a formula, and a formula cell
+  // is by definition non-empty, so the seed above already contains all of them.
+  // The targets are another matter: `=B1` where B1 is empty has no seeded entry,
+  // and simply skipping it would drop the reverse edge that the dense walk
+  // records — changing what `sheetDataToSheetDoc` emits. Materializing the
+  // target keeps the persisted dependency graph symmetric and the output
+  // identical; it costs one entry per referenced empty address, which is
+  // bounded by the formulas actually written rather than by the grid's area.
+  //
+  // Snapshot first: the loop inserts into `byAddress`, and the cells it inserts
+  // are empty ones with no dependencies of their own to process.
+  for (const cell of Object.values(byAddress).slice()) {
+    for (const dependency of cell.dependsOn) {
+      // Only local addresses. `dependsOn` also carries external references such
+      // as `@[Budget]:B2`, which were resolved through `getExternalCell` against
+      // another page — evaluating one here would fabricate a local cell for it,
+      // and `evaluateCellInternal` upper-cases the key, so the record would not
+      // even match the `dependsOn` entry it is supposed to pair with.
+      if (!isLocalAddress(dependency)) continue;
+
+      let target = byAddress[dependency];
+      if (!target) {
+        target = evaluateCellInternal(dependency, pageKey, env, new Set());
+        byAddress[dependency] = target;
+      }
+      if (!target.dependents.includes(cell.address)) {
+        target.dependents = [...target.dependents, cell.address];
+      }
+    }
+  }
+
+  const dependencies: Record<string, SheetDocDependencyRecord> = {};
+
+  for (const cell of Object.values(byAddress)) {
+    cell.dependsOn = uniqueSorted(cell.dependsOn);
+    cell.dependents = uniqueSorted(cell.dependents);
+    dependencies[cell.address] = {
+      dependsOn: cell.dependsOn,
+      dependents: cell.dependents,
+    };
+  }
+
+  return { byAddress, dependencies };
+}
+
+/**
+ * The display text for one position of a sparse evaluation, matching what the
+ * dense `display` grid would hold — including the `#ERROR` substitution.
+ */
+export function sparseDisplayAt(
+  evaluation: SheetSparseEvaluation,
+  row: number,
+  column: number
+): string {
+  const cell = evaluation.byAddress[encodeCellAddress(row, column)];
+  if (!cell) return '';
+  return cell.error ? '#ERROR' : cell.display;
 }
 
 // Internal helper functions
