@@ -2,6 +2,7 @@ import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { sheetTabs } from '@pagespace/db/schema/sheets';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { createPageVersion, computePageStateHash } from '@pagespace/lib/services/page-version-service';
@@ -65,6 +66,8 @@ export function planPageRestoreOps(
 type DbLike = {
   insert: (table: typeof pages) => { values: (values: Record<string, unknown>) => Promise<unknown> };
   update: (table: typeof pages) => { set: (values: Record<string, unknown>) => { where: (cond: unknown) => Promise<unknown> } };
+  /** Needed to clear a sheet's rows when the restored document is empty. */
+  delete: (table: typeof sheetTabs) => { where: (cond: unknown) => Promise<unknown> };
 };
 
 const CONTENT_CONCURRENCY = 10;
@@ -168,6 +171,14 @@ export async function applyPageRestoreOps(
           { userId, changeGroupId },
           tx as never
         );
+      } else {
+        // An empty restored document means the sheet WAS empty at backup time
+        // (or its blob could not be read). Leaving the existing rows in place
+        // would report a successful restore while the spreadsheet kept its
+        // current, post-backup data — the one page type where "restore"
+        // silently restores nothing. Clearing them makes the restore mean what
+        // it says.
+        await tx.delete(sheetTabs).where(eq(sheetTabs.pageId, op.pageId));
       }
       await tx.update(pages).set({ content: '' }).where(eq(pages.id, op.pageId));
     }

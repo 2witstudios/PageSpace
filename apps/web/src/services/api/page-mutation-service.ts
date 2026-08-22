@@ -203,7 +203,13 @@ export async function applyPageMutation({
   // the activity log. The sheet's own change log records the edit instead.
   const isSheetContentWrite = updates.content !== undefined && isSheetPage;
 
-  const shouldSnapshotBefore = updates.content !== undefined && !isSheetContentWrite;
+  // The inline snapshot is skipped for sheets; the blob REFERENCE is not.
+  //
+  // `contentSnapshot` is the multi-megabyte inline copy that caused the write
+  // amplification. `contentRef` is a 64-character hash of a content-addressed
+  // blob, and it is what `rollback/content-snapshot.ts` reads to rebuild a
+  // restore payload. Dropping both is what made Undo a silent no-op on sheets.
+  const shouldSnapshotBefore = updates.content !== undefined;
   let contentSnapshotRef: string | null = null;
   let contentSnapshotSize = 0;
 
@@ -220,10 +226,16 @@ export async function applyPageMutation({
   const newValues: Record<string, unknown> = {};
 
   for (const field of safeUpdatedFields) {
-    // A sheet's content is never carried in the activity log's value payloads.
-    // Two copies of a multi-megabyte document per edit is the write
+    // A sheet's content is never carried INLINE in the activity log's value
+    // payloads. Two copies of a multi-megabyte document per edit is the write
     // amplification that made a 1MB sheet fail its CHECK constraint and roll
-    // the user's write back; the change is described, not duplicated.
+    // the user's write back.
+    //
+    // The blob reference is still recorded (`contentRef`/`contentSize` below),
+    // which is what activity rollback resolves the restore payload from — so
+    // Undo on a sheet edit still has something to restore. Skipping both left
+    // `restoreFields(['content'], previousValues)` with nothing to find, and
+    // Undo returned 200 while doing nothing.
     if (isSheetContentWrite && field === 'content') continue;
     if (field in currentPage) {
       previousValues[field] = (currentPage as Record<string, unknown>)[field];
@@ -321,7 +333,7 @@ export async function applyPageMutation({
       resourceTitle: nextPageState.title ?? undefined,
       driveId: currentPage.driveId,
       pageId,
-      contentSnapshot: shouldSnapshotBefore ? previousContent : undefined,
+      contentSnapshot: shouldSnapshotBefore && !isSheetContentWrite ? previousContent : undefined,
       contentFormat: shouldSnapshotBefore ? contentFormatBefore : undefined,
       contentRef: contentSnapshotRef ?? undefined,
       contentSize: contentSnapshotSize || undefined,

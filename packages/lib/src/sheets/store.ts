@@ -797,7 +797,16 @@ export async function setCells(
     // holds.
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
     const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
-    await mergeMissingRows(working, tab.id, allRowIndexes, tx, true);
+
+    // Re-lock the FULL union in one sorted statement, including rows already
+    // cached. `mergeMissingRows` skips what is loaded, so it would lock only
+    // the closure-only remainder — leaving the real acquisition order as
+    // [touched asc] then [closure-only asc], which is not globally ascending.
+    // Two callers with mirrored sets (A touches row 5 whose dependent is row 1,
+    // B touches row 1 whose dependent is row 5) still deadlock, and Postgres
+    // aborts one with 40P01 — a 500 on an MCP or form write.
+    await lockRows(tab.id, allRowIndexes, tx);
+    await mergeMissingRows(working, tab.id, allRowIndexes, tx, false);
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.
     const toEvaluate = unique([...dirty, ...closure]);
@@ -807,7 +816,23 @@ export async function setCells(
     applyEvaluation(working, evaluated);
     const grown = growExtent(tab, normalized);
     await persistRows(tab.id, ref.pageId, working, tx);
-    if (grown) await updateExtent(tab.id, grown, tx);
+    if (grown) {
+      // Serialise on the tab row, as `appendRows` does. `updateExtent` writes an
+      // ABSOLUTE extent computed from a snapshot, so two concurrent growing
+      // writes lose one: A grows to 100 and commits, B (holding a 20-row
+      // snapshot) writes 50, and the declared extent ends up smaller than the
+      // data — an editor grid that cannot show rows already written.
+      await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
+      const current = await getTab(ref, tx);
+      await updateExtent(
+        tab.id,
+        {
+          rowCount: Math.max(grown.rowCount, current?.rowCount ?? 0),
+          columnCount: Math.max(grown.columnCount, current?.columnCount ?? 0),
+        },
+        tx
+      );
+    }
     await touchPage(ref.pageId, tx);
 
     if (!actor.suppressCellLog) {
@@ -1149,6 +1174,12 @@ function normalizeUpdates(updates: readonly SheetCellUpdate[]): NormalizedUpdate
     } catch {
       throw new Error(`Invalid cell address: ${update.address}`);
     }
+    // `A0` decodes to row -1 and passes every address regex, so without the
+    // lower bound it reached `persistRows` and tripped the non-negative CHECK —
+    // an opaque 500 where the caller deserved a 400.
+    if (position.row < 0 || position.column < 0) {
+      throw new Error(`Cell address out of range: ${update.address} (rows start at 1)`);
+    }
     if (position.row > MAX_ADDRESSABLE_ROW || position.column > MAX_ADDRESSABLE_COLUMN) {
       throw new Error(
         `Cell address out of range: ${update.address} (max row ${MAX_ADDRESSABLE_ROW + 1}, max column ZZZ)`
@@ -1270,9 +1301,11 @@ async function mergeMissingSpans(
       .orderBy(asc(sheetRows.rowIndex))
       .limit(MAX_INPUT_ROWS + 1);
 
-    // Same reasoning as the closure cap: a truncated input set makes a `SUM`
-    // quietly compute and persist the wrong number.
-    if (rows.length > MAX_INPUT_ROWS) {
+    // Cumulative across chunks, not per chunk. `target` accumulates, so a
+    // formula fanning out over many disjoint spans could load far past the
+    // ceiling without any single chunk tripping it — the memory blow-up the cap
+    // exists to prevent.
+    if (target.size + rows.length > MAX_INPUT_ROWS) {
       throw new Error(
         `Formula inputs reached ${MAX_INPUT_ROWS} rows; narrow the range or rebuild the sheet`
       );
@@ -1282,6 +1315,29 @@ async function mergeMissingSpans(
       if (target.has(row.rowIndex)) continue;
       target.set(row.rowIndex, { rowIndex: row.rowIndex, cells: { ...(row.cells ?? {}) } });
     }
+  }
+}
+
+/**
+ * Take row locks over `indexes` in ascending order, and nothing else.
+ *
+ * Separate from loading so the lock set is the whole union a call will write,
+ * not just the part it still needs to read. Lock ordering only prevents
+ * deadlock if every participant acquires the same set in the same order.
+ */
+async function lockRows(tabId: string, indexes: number[], exec: Executor): Promise<void> {
+  if (indexes.length === 0) return;
+  const ordered = [...indexes].sort((a, b) => a - b);
+
+  const CHUNK = 5_000;
+  for (let index = 0; index < ordered.length; index += CHUNK) {
+    const slice = ordered.slice(index, index + CHUNK);
+    await exec
+      .select({ rowIndex: sheetRows.rowIndex })
+      .from(sheetRows)
+      .where(and(eq(sheetRows.tabId, tabId), inArray(sheetRows.rowIndex, slice)))
+      .orderBy(asc(sheetRows.rowIndex))
+      .for('update');
   }
 }
 

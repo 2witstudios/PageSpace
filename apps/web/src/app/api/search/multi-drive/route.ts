@@ -112,8 +112,8 @@ export async function GET(request: Request) {
     // materialised sheet — without this every spreadsheet drops out of
     // cross-drive search by content.
     const searchCondition = searchType === 'regex'
-      ? sql`${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern} OR ${sheetCellsMatchRegex(regexPattern)}`
-      : sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)}`;
+      ? sql`(${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern} OR ${sheetCellsMatchRegex(regexPattern)})`
+      : sql`(${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)})`;
 
     const rankedMatches = db
       .select({

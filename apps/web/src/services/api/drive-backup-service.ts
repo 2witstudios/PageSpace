@@ -229,7 +229,10 @@ export async function createDriveBackup(
     const sheetDocuments = new Map<string, string>();
     for (const page of pagesToBackup) {
       if (!isSheetType(page.type as PageType)) continue;
-      const projected = await readSheetDocument(page.id);
+      // Through `tx`: the projection issues its own queries, so running it on
+      // the pool would read outside the backup's snapshot and a concurrent cell
+      // write could tear a sheet across the document it produces.
+      const projected = await readSheetDocument(page.id, tx as never);
       if (projected !== null) sheetDocuments.set(page.id, projected);
     }
 

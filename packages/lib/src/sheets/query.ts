@@ -178,7 +178,6 @@ function compileCondition(condition: SheetCondition): SQL {
     case 'lt':
     case 'lte': {
       const value = condition.value;
-      const operator = SQL_OPERATOR[op];
 
       if (typeof value === 'number') {
         if (!Number.isFinite(value)) {
@@ -210,7 +209,7 @@ function compileCondition(condition: SheetCondition): SQL {
         // in `sheet-query-execution`, this form returns the numeric rows.
         return sql`(CASE
           WHEN jsonb_typeof(${valueOf(condition.column)}) = 'number'
-          THEN (${valueOf(condition.column)})::numeric ${operator} ${value}
+          THEN ${compare(op, sql`(${valueOf(condition.column)})::numeric`, sql`${value}`)}
           ELSE false
         END)`;
       }
@@ -227,7 +226,7 @@ function compileCondition(condition: SheetCondition): SQL {
           return sql`(${valueOf(condition.column)} IS NULL
             OR (${valueOf(condition.column)}) <> to_jsonb(${value}::boolean))`;
         }
-        return sql`(${valueOf(condition.column)}) ${operator} to_jsonb(${value}::boolean)`;
+        return compare(op, sql`(${valueOf(condition.column)})`, sql`to_jsonb(${value}::boolean)`);
       }
 
       if (op === 'neq') {
@@ -238,7 +237,7 @@ function compileCondition(condition: SheetCondition): SQL {
         return sql`(${textOf(condition.column)} IS NULL OR ${textOf(condition.column)} <> ${scalarToText(value)})`;
       }
 
-      return sql`${textOf(condition.column)} ${operator} ${scalarToText(value)}`;
+      return compare(op, textOf(condition.column), sql`${scalarToText(value)}`);
     }
 
     default:
@@ -247,17 +246,27 @@ function compileCondition(condition: SheetCondition): SQL {
 }
 
 /**
- * Operator fragments are looked up from a fixed table and never built from
- * input, so `op` cannot carry SQL even if validation above were bypassed.
+ * Comparison built from a fixed `switch`, so `op` can never carry SQL even if
+ * the validation above were bypassed.
+ *
+ * A `switch` rather than a lookup table of `sql.raw` fragments, and evaluated
+ * at CALL time rather than module scope. The table version ran `sql.raw` during
+ * module initialisation, so importing this file — or anything that pulls in
+ * `store.ts` — threw `TypeError: sql.raw is not a function` in any test that
+ * mocks `@pagespace/db/operators`. That failed the CI job while all 10,277
+ * tests still reported passing, because it is an unhandled error rather than an
+ * assertion.
  */
-const SQL_OPERATOR: Record<'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte', SQL> = {
-  eq: sql.raw('='),
-  neq: sql.raw('<>'),
-  gt: sql.raw('>'),
-  gte: sql.raw('>='),
-  lt: sql.raw('<'),
-  lte: sql.raw('<='),
-};
+function compare(op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte', left: SQL, right: SQL): SQL {
+  switch (op) {
+    case 'eq': return sql`${left} = ${right}`;
+    case 'neq': return sql`${left} <> ${right}`;
+    case 'gt': return sql`${left} > ${right}`;
+    case 'gte': return sql`${left} >= ${right}`;
+    case 'lt': return sql`${left} < ${right}`;
+    case 'lte': return sql`${left} <= ${right}`;
+  }
+}
 
 export interface SheetOrderBy {
   column: string;
@@ -271,12 +280,14 @@ export function compileOrderBy(orderBy: SheetOrderBy[] | undefined): SQL | undef
   if (orderBy.length > 8) throw new SheetQueryError('At most 8 sort keys');
 
   const parts = orderBy.map((entry) => {
-    const direction = entry.direction === 'desc' ? sql.raw('DESC') : sql.raw('ASC');
-    if (entry.numeric) {
-      return sql`(CASE WHEN jsonb_typeof(${valueOf(entry.column)}) = 'number'
-                       THEN (${valueOf(entry.column)})::numeric END) ${direction} NULLS LAST`;
-    }
-    return sql`${textOf(entry.column)} ${direction} NULLS LAST`;
+    // Branching on the direction rather than splicing it in, for the same
+    // reason `compare` is a switch: no raw SQL construction anywhere here.
+    const numericKey = sql`(CASE WHEN jsonb_typeof(${valueOf(entry.column)}) = 'number'
+                       THEN (${valueOf(entry.column)})::numeric END)`;
+    const key = entry.numeric ? numericKey : textOf(entry.column);
+    return entry.direction === 'desc'
+      ? sql`${key} DESC NULLS LAST`
+      : sql`${key} ASC NULLS LAST`;
   });
 
   return sql.join(parts, sql`, `);

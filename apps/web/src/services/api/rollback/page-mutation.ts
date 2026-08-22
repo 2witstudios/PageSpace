@@ -41,7 +41,17 @@ export async function applyPageUpdateWithRevision(
     contentRefAfter,
     stateHashBefore,
     stateHashAfter,
-  } = computePageMutation(currentPage, updateData);
+  } = computePageMutation(
+    // A sheet's current content is its rows, not the empty column. Reading the
+    // column made EVERY rollback of a sheet — including a pure rename or move —
+    // compute `nextContent = ''`, write a zero-byte `page_versions` entry into
+    // the history that backup and restore read, and stamp `pages.stateHash`
+    // with the empty-document hash.
+    isSheetType(currentPage.type as PageType)
+      ? { ...currentPage, content: (await deps.readSheetDocument(pageId)) ?? currentPage.content }
+      : currentPage,
+    updateData
+  );
 
   const [updated] = await deps.db
     .update(pages)

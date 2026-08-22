@@ -69,7 +69,7 @@ export const searchTools = {
             // A sheet's text is in its rows; `pages.content` is empty for a
             // materialised one, so matching the column alone made every
             // spreadsheet invisible to an agent's search.
-            sql`${pages.content} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
+            sql`(${pages.content} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         } else if (searchIn === 'title') {
           whereConditions = and(
@@ -83,7 +83,7 @@ export const searchTools = {
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
             eq(pages.excludeFromSearch, false),
-            sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
+            sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
           );
         }
 
@@ -568,7 +568,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
+              sql`(${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)})`
             );
           } else {
             const searchPattern = `%${searchQuery}%`;
@@ -576,7 +576,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)}`
+              sql`(${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)})`
             );
           }
 
