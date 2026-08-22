@@ -119,7 +119,7 @@ export function workspaceSelectionWhere(ownerInList: string, conversationInList:
  *
  * `content_tags."pageId"` is notNull for every target kind, so the page filter
  * alone reaches page-, text-, cell- and message-anchored rows uniformly — that
- * is what the denormalization is for. The two extra arms exist because a
+ * is what the denormalization is for. The three extra arms exist because a
  * message-anchored row also carries a REAL foreign key onto `channel_messages`
  * or `messages`, and those two tables are selected by their own rules (a
  * channel message by page, an AI message by conversation AND author). A tag
