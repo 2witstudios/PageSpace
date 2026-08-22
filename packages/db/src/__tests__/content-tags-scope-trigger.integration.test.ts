@@ -45,6 +45,7 @@ const id = {
   channelA: createId(),
   otherChannelA: createId(),
   aiChatA: createId(),
+  sheetA: createId(),
   tagA: createId(),
   tagB: createId(),
   messageOnChannelA: createId(),
@@ -77,6 +78,7 @@ beforeAll(async () => {
     { id: id.channelA, title: 'Channel in A', type: 'CHANNEL', position: 2, driveId: id.driveA, createdAt: now, updatedAt: now },
     { id: id.otherChannelA, title: 'Other channel in A', type: 'CHANNEL', position: 3, driveId: id.driveA, createdAt: now, updatedAt: now },
     { id: id.aiChatA, title: 'AI chat in A', type: 'AI_CHAT', position: 4, driveId: id.driveA, createdAt: now, updatedAt: now },
+    { id: id.sheetA, title: 'Sheet in A', type: 'SHEET', position: 6, driveId: id.driveA, createdAt: now, updatedAt: now },
   ]);
   // The SAME normalized key in both drives — legal, and the reason the drive
   // check cannot be waved away as "the tag id already implies the drive".
@@ -132,6 +134,24 @@ describe('content_tags_target_scope trigger — refuses incoherent assignments',
   it('refuses a tag from another drive', async () => {
     await expectRefused(
       insert({ tagId: id.tagA, pageId: id.docB, targetKind: 'page' }),
+      /is in drive .*, but page .* is in drive/,
+    );
+  });
+
+  it('refuses a cross-drive tag on an ANCHORED kind too, not only on a page tag', async () => {
+    // The drive check is deliberately kind-agnostic — it runs before the
+    // `targetKind` branches — but every other case here exercises it through
+    // `page`, which would leave a rewrite that moved it inside the `page` branch
+    // undetected.
+    await expectRefused(
+      insert({
+        tagId: id.tagA,
+        pageId: id.docB,
+        targetKind: 'text',
+        anchor: { v: 1, exact: 'quoted', prefix: '', suffix: '', start: 0, end: 6, revision: 1, textHash: 'deadbeefdeadbeef' },
+        anchorStatus: 'exact',
+        source: 'ai',
+      }),
       /is in drive .*, but page .* is in drive/,
     );
   });
@@ -216,6 +236,21 @@ describe('content_tags_target_scope trigger — accepts every coherent shape', (
     // lock every API-managed thread out of being tagged.
     await expect(
       insert({ tagId: id.tagA, pageId: id.aiChatA, targetKind: 'ai_message', aiMessageId: id.aiMessageClientScoped }),
+    ).resolves.toBeDefined();
+  });
+
+  it('accepts a sheet_cell tag inside its own drive', async () => {
+    // The fifth target kind. It carries an anchor but no message reference, so
+    // only the drive leg applies to it — asserted so a future branch that
+    // accidentally demands a message id for every anchored kind is caught.
+    await expect(
+      insert({
+        tagId: id.tagA,
+        pageId: id.sheetA,
+        targetKind: 'sheet_cell',
+        anchor: { v: 1, sheet: 'Sheet1', address: 'A1' },
+        source: 'user',
+      }),
     ).resolves.toBeDefined();
   });
 
