@@ -10,10 +10,14 @@ vi.mock('@pagespace/lib/services/page-version-service', () => ({
   createPageVersion: vi.fn(),
   computePageStateHash: vi.fn().mockReturnValue('hash-xyz'),
 }));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  replaceFromDocument: vi.fn(),
+}));
 
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { applyPageRestoreOps } from '../restore-pages-service';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
 
 // ============================================================================
 // planPageRestoreOps — pure function tests (zero mocks, zero I/O)
@@ -127,6 +131,69 @@ const makeTx = () => ({
   update: vi.fn().mockReturnValue({
     set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
   }),
+  delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+});
+
+describe('applyPageRestoreOps — sheets restore into rows', () => {
+  const makeOp = (op: 'create' | 'overwrite', pageId: string, type: string) => ({
+    op, pageId, title: 'T', type, parentId: null, position: 0,
+    contentRef: 'ref-1', isTrashed: false, trashedAt: null,
+  });
+
+  const driveId = 'drive_1';
+  const userId = 'user_1';
+  const backupId = 'backup_1';
+  const changeGroupId = 'cg_1';
+  const changeGroupType = 'user' as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(createPageVersion).mockResolvedValue({
+      id: 'pv-new', contentRef: 'ref-new', contentSize: 1, compressed: false,
+      storedSize: 1, compressionRatio: 1,
+    } as never);
+  });
+
+  it('writes a restored sheet into its rows, not just the content column', async () => {
+    // `pages.content` is empty for a materialised sheet and no sheet read path
+    // consults it, so writing the document there restored nothing a user could
+    // see while reporting success.
+    vi.mocked(readPageContent).mockResolvedValue('#%PAGESPACE_SHEETDOC v1\npage_id = "p1"\n');
+    const ops = [makeOp('overwrite', 'p1', 'SHEET')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).toHaveBeenCalledTimes(1);
+    const [ref, content] = vi.mocked(replaceFromDocument).mock.calls[0];
+    expect(ref).toEqual({ pageId: 'p1' });
+    expect(content).toContain('PAGESPACE_SHEETDOC');
+  });
+
+  it('clears existing rows when the restored sheet was empty at backup time', async () => {
+    // Otherwise the restore reports success while the spreadsheet keeps its
+    // current, post-backup data — the one page type where restore silently
+    // restores nothing.
+    vi.mocked(readPageContent).mockResolvedValue('');
+    const ops = [makeOp('overwrite', 'p1', 'SHEET')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).toHaveBeenCalled();
+  });
+
+  it('leaves non-sheet pages on the document path', async () => {
+    vi.mocked(readPageContent).mockResolvedValue('<p>hello</p>');
+    const ops = [makeOp('overwrite', 'p1', 'DOCUMENT')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
+  });
 });
 
 describe('applyPageRestoreOps', () => {
