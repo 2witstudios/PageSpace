@@ -98,7 +98,40 @@ export interface FullValidationResult {
   fileResults: {
     passed: boolean;
     mismatches: { file: string; reason: string }[];
+    /**
+     * Blobs the validator declined to compare, mirroring a skip the export
+     * made. Reported because `passed: true` otherwise means only "everything I
+     * chose to compare matched", with no machine-readable record of how much
+     * was declined — and the skips exist precisely where the export and the
+     * validator could disagree about a file. A run that compared nothing now
+     * says so instead of looking identical to a run that compared everything.
+     */
+    skipped: { file: string; reason: string }[];
   };
+}
+
+/**
+ * The SOURCE storage root, derived exactly the way tenant-export.ts:692 and
+ * tenant-import.ts:137 derive theirs.
+ *
+ * Extracted and exported so the mirror is ASSERTED rather than assumed. This
+ * file used to read `getArg('source-file-path') || './uploads'`, omitting
+ * `FILE_STORAGE_PATH` — so in any deployment that sets the variable, which is
+ * the normal one, the export built its bundle from `/data/shared/files` while
+ * the validator compared `./uploads`. Mirroring the `resolvePathWithin` CALL
+ * while deriving its BASE differently is half a mirror, and the half that was
+ * missing is the one that decides which directory is being talked about.
+ *
+ * SOURCE only, deliberately: the export runs on the source host and the import
+ * on the target host, so each sees its own `FILE_STORAGE_PATH`. One variable
+ * cannot give a validator comparing both hosts its two roots, so
+ * `--target-file-path` stays explicit.
+ */
+export function resolveSourceStorageRoot(
+  argValue: string | undefined,
+  envValue: string | undefined,
+): string {
+  return argValue || envValue || './uploads';
 }
 
 /**
@@ -323,6 +356,40 @@ export async function validateData(
   );
   const fileStorageData = fileStorageRows.rows as Record<string, unknown>[];
 
+  // ONE ARM OF THE EXPORT'S FILE SKIPPING IS NOT MIRRORED, and cannot be from
+  // here: the export also skips a row whose DESTINATION path fails
+  // `resolvePathWithin(outputDir/files, storagePath)`, and `validateData` is
+  // not given the bundle directory, so it cannot ask that question. It is only
+  // reachable once the source resolve and the source `existsSync` have both
+  // passed.
+  //
+  // The durable fix for this whole comparison is to validate against
+  // `manifest.fileChecksums` — the export's own record of exactly what it
+  // carried, already written and already readable via `validateChecksums` —
+  // rather than re-deriving the decision from the source database and disk.
+  // That is the move the shared selection helpers made for the queries, and it
+  // needs the bundle dir in `ValidateOptions`, so it belongs to a change that
+  // owns that API rather than being smuggled in here.
+
+  // A missing storage ROOT is a MISCONFIGURATION, not a per-row skip.
+  //
+  // `resolvePathWithin` returns null for every path under a base that does not
+  // exist, so without this check a typo'd `--source-file-path` argument skips every
+  // row and reports `passed: true` with zero mismatches: a green validation
+  // that compared nothing. That is the false-PASS direction, which is the one
+  // that hides a real problem rather than merely crying wolf.
+  //
+  // The target root needs no equivalent: if it is missing, every `tgtPath`
+  // check already fails and each row is reported 'missing in target'.
+  const fileSkips: { file: string; reason: string }[] = [];
+
+  if (fileStorageData.length > 0 && !existsSync(sourceFileStoragePath)) {
+    fileMismatches.push({
+      file: sourceFileStoragePath,
+      reason: 'source file storage path does not exist — nothing could be compared',
+    });
+  }
+
   for (const file of fileStorageData) {
     const storagePath = file.storagePath as string;
     // `resolvePathWithin`, not `path.join`, because that is what the EXPORT
@@ -338,7 +405,8 @@ export async function validateData(
     // the exporter's.
     const resolvedSrc = await resolvePathWithin(sourceFileStoragePath, storagePath);
     if (!resolvedSrc) {
-      console.warn(`WARNING: unsafe storagePath, not compared (the export skipped it too): ${storagePath}`);
+      console.warn(`WARNING: storagePath does not resolve inside the storage root, not compared: ${storagePath}`);
+      fileSkips.push({ file: storagePath, reason: 'storagePath does not resolve inside the storage root' });
       continue;
     }
     const srcPath = resolvedSrc;
@@ -354,21 +422,9 @@ export async function validateData(
     // is why sweeping the query maps did not reach it. An orphaned `files` row
     // (row present, blob long gone) is common enough that this was not
     // hypothetical.
-    //
-    // NOT MIRRORED, and it cannot be from here: the export ALSO skips a row
-    // whose DESTINATION path fails the same check
-    // (`resolvePathWithin(outputDir/files, storagePath)`), and `validateData`
-    // is not given the bundle directory, so it cannot ask that question. It is
-    // only reachable when the source check passed and the destination one did
-    // not. The real fix for the whole file-blob comparison is to validate
-    // against `manifest.fileChecksums` — the export's own record of exactly
-    // what it carried, already written and already readable via
-    // `validateChecksums` — instead of re-deriving the decision from the source
-    // database and disk. That needs the bundle dir in ValidateOptions, so it is
-    // deliberately left for a change that owns that API rather than smuggled in
-    // here.
     if (!existsSync(srcPath)) {
       console.warn(`WARNING: source file not found, not compared: ${srcPath}`);
+      fileSkips.push({ file: storagePath, reason: 'source blob not on disk (the export skips these rows)' });
       continue;
     }
 
@@ -393,6 +449,7 @@ export async function validateData(
     fileResults: {
       passed: filesPassed,
       mismatches: fileMismatches,
+      skipped: fileSkips,
     },
   };
 }
@@ -409,7 +466,7 @@ async function main(): Promise<void> {
   const sourceDatabaseUrl = getArg('source-url');
   const targetDatabaseUrl = getArg('target-url');
   const usersArg = getArg('users');
-  const sourceFileStoragePath = getArg('source-file-path') || './uploads';
+  const sourceFileStoragePath = resolveSourceStorageRoot(getArg('source-file-path'), process.env.FILE_STORAGE_PATH);
   const targetFileStoragePath = getArg('target-file-path') || './uploads';
 
   if (!sourceDatabaseUrl || !targetDatabaseUrl || !usersArg) {
@@ -445,6 +502,16 @@ async function main(): Promise<void> {
   if (result.fileResults.mismatches.length > 0) {
     console.log('\n  File mismatches:');
     for (const m of result.fileResults.mismatches) {
+      console.log(`    ${m.file}: ${m.reason}`);
+    }
+  }
+
+  // Printed even on a PASS: "0 mismatches" over 400 skipped blobs is not the
+  // same result as "0 mismatches" over 400 compared ones, and the operator is
+  // the only one who can tell which they meant.
+  if (result.fileResults.skipped.length > 0) {
+    console.log(`\n  Files not compared (${result.fileResults.skipped.length}):`);
+    for (const m of result.fileResults.skipped) {
       console.log(`    ${m.file}: ${m.reason}`);
     }
   }
