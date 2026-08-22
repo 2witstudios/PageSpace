@@ -133,6 +133,29 @@ function isUsableDirectory(candidate: string): boolean {
 }
 
 /**
+ * Whether the two storage roots are the same directory.
+ *
+ * Extracted and exported so the guard is TESTABLE. `main()` has no test
+ * anywhere in this file, and the previous round of this work shipped an
+ * untestable guarantee that turned out to be theatre — an arity assertion a
+ * defaulted parameter walked straight past. A guard whose whole job is to stop
+ * a false pass should not itself be unverified.
+ *
+ * `realpathSync` rather than a string compare so two spellings of one directory
+ * — a symlink, a relative path, a trailing slash — cannot slip through. Falls
+ * back to string equality when either path does not resolve, since a
+ * nonexistent root is caught by the readable-directory check instead and this
+ * one should not throw on the way there.
+ */
+export function isSameStorageRoot(sourceRoot: string, targetRoot: string): boolean {
+  try {
+    return realpathSync(sourceRoot) === realpathSync(targetRoot);
+  } catch {
+    return sourceRoot === targetRoot;
+  }
+}
+
+/**
  * The SOURCE storage root.
  *
  * `FILE_STORAGE_PATH` is deliberately NOT in this chain, and that is the
@@ -528,14 +551,7 @@ async function main(): Promise<void> {
   //
   // `realpathSync` so two spellings of one directory — a symlink, a relative
   // path, a trailing slash — cannot slip through a string comparison.
-  const sameRoot = (() => {
-    try {
-      return realpathSync(sourceFileStoragePath) === realpathSync(targetFileStoragePath);
-    } catch {
-      return sourceFileStoragePath === targetFileStoragePath;
-    }
-  })();
-  if (sameRoot) {
+  if (isSameStorageRoot(sourceFileStoragePath, targetFileStoragePath)) {
     console.error(
       `Refusing to run: --source-file-path and --target-file-path resolve to the same directory `
       + `(${sourceFileStoragePath}). Comparing a directory against itself proves nothing about the `

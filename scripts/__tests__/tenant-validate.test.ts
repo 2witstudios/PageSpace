@@ -21,7 +21,7 @@ import {
   getTestDatabaseUrl,
   type TestDb,
 } from './setup';
-import { validateData, resolveSourceStorageRoot } from '../tenant-validate';
+import { validateData, resolveSourceStorageRoot, isSameStorageRoot } from '../tenant-validate';
 import { TABLE_IMPORT_ORDER } from '../lib/migration-types';
 import type { DbClient } from '../lib/migration-types';
 
@@ -109,6 +109,42 @@ describe('resolveSourceStorageRoot', () => {
       if (previous === undefined) delete process.env.FILE_STORAGE_PATH;
       else process.env.FILE_STORAGE_PATH = previous;
     }
+  });
+});
+
+describe('isSameStorageRoot', () => {
+  /**
+   * Both roots default to `./uploads`, so running the validator on the target
+   * host after an import with neither path flag points both sides at the same
+   * directory: every checksum matches, nothing is compared, success. This guard
+   * is what refuses that, and `main()` — where it is called — has no test, so it
+   * is asserted here instead of taken on faith.
+   */
+  it('detects the same directory reached by two different spellings', async () => {
+    const real = path.join(tmpDir, 'same-root-real');
+    await mkdir(real, { recursive: true });
+    const link = path.join(tmpDir, 'same-root-link');
+    await symlink(real, link, 'dir');
+
+    expect(isSameStorageRoot(real, real)).toBe(true);
+    expect(isSameStorageRoot(real, link), 'symlink to the same directory').toBe(true);
+    expect(isSameStorageRoot(real, real + path.sep), 'trailing separator').toBe(true);
+  });
+
+  it('does not fire for genuinely different roots', async () => {
+    const a = path.join(tmpDir, 'root-a');
+    const b = path.join(tmpDir, 'root-b');
+    await mkdir(a, { recursive: true });
+    await mkdir(b, { recursive: true });
+    expect(isSameStorageRoot(a, b)).toBe(false);
+  });
+
+  it('falls back to string equality when a root does not resolve', () => {
+    // A nonexistent root is the readable-directory check's job; this one must
+    // not throw on the way there.
+    const missing = path.join(tmpDir, 'not-here');
+    expect(isSameStorageRoot(missing, missing)).toBe(true);
+    expect(isSameStorageRoot(missing, path.join(tmpDir, 'also-not-here'))).toBe(false);
   });
 });
 
