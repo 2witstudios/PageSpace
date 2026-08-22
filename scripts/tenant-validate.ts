@@ -16,7 +16,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { existsSync } from 'fs';
+import { existsSync, statSync } from 'fs';
 import path from 'path';
 import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
@@ -110,28 +110,38 @@ export interface FullValidationResult {
   };
 }
 
+/** A path that exists AND is a directory we can list. Anything else cannot be a storage root. */
+function isUsableDirectory(candidate: string): boolean {
+  try {
+    return statSync(candidate).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The SOURCE storage root, derived exactly the way tenant-export.ts:692 and
- * tenant-import.ts:137 derive theirs.
+ * The SOURCE storage root.
  *
- * Extracted and exported so the mirror is ASSERTED rather than assumed. This
- * file used to read `getArg('source-file-path') || './uploads'`, omitting
- * `FILE_STORAGE_PATH` — so in any deployment that sets the variable, which is
- * the normal one, the export built its bundle from `/data/shared/files` while
- * the validator compared `./uploads`. Mirroring the `resolvePathWithin` CALL
- * while deriving its BASE differently is half a mirror, and the half that was
- * missing is the one that decides which directory is being talked about.
+ * `FILE_STORAGE_PATH` is deliberately NOT in this chain, and that is the
+ * opposite of what it looks like it should be. The export
+ * (tenant-export.ts:692) and the import (tenant-import.ts:137) both read it,
+ * and "mirror the export" argues for reading it here too — I made that change
+ * and it was wrong.
  *
- * SOURCE only, deliberately: the export runs on the source host and the import
- * on the target host, so each sees its own `FILE_STORAGE_PATH`. One variable
- * cannot give a validator comparing both hosts its two roots, so
- * `--target-file-path` stays explicit.
+ * The variable names the storage root of WHATEVER HOST YOU ARE STANDING ON. A
+ * validator needs TWO roots, source and target, and it naturally runs on the
+ * TARGET host after the import — where `FILE_STORAGE_PATH` is the target root
+ * that the import just used. Letting it fill the SOURCE slot there makes both
+ * sides read the same directory: every checksum matches, nothing is actually
+ * compared, and the run is green. A silent self-comparison is a worse outcome
+ * than the drift it was meant to fix, which surfaces as a loud failure via the
+ * nothing-was-compared check below.
+ *
+ * So the source root must be passed explicitly. Kept as a function, with tests
+ * asserting the env var is ignored, so this does not get "fixed" back.
  */
-export function resolveSourceStorageRoot(
-  argValue: string | undefined,
-  envValue: string | undefined,
-): string {
-  return argValue || envValue || './uploads';
+export function resolveSourceStorageRoot(argValue: string | undefined): string {
+  return argValue || './uploads';
 }
 
 /**
@@ -371,24 +381,7 @@ export async function validateData(
   // needs the bundle dir in `ValidateOptions`, so it belongs to a change that
   // owns that API rather than being smuggled in here.
 
-  // A missing storage ROOT is a MISCONFIGURATION, not a per-row skip.
-  //
-  // `resolvePathWithin` returns null for every path under a base that does not
-  // exist, so without this check a typo'd `--source-file-path` argument skips every
-  // row and reports `passed: true` with zero mismatches: a green validation
-  // that compared nothing. That is the false-PASS direction, which is the one
-  // that hides a real problem rather than merely crying wolf.
-  //
-  // The target root needs no equivalent: if it is missing, every `tgtPath`
-  // check already fails and each row is reported 'missing in target'.
   const fileSkips: { file: string; reason: string }[] = [];
-
-  if (fileStorageData.length > 0 && !existsSync(sourceFileStoragePath)) {
-    fileMismatches.push({
-      file: sourceFileStoragePath,
-      reason: 'source file storage path does not exist — nothing could be compared',
-    });
-  }
 
   for (const file of fileStorageData) {
     const storagePath = file.storagePath as string;
@@ -405,8 +398,8 @@ export async function validateData(
     // the exporter's.
     const resolvedSrc = await resolvePathWithin(sourceFileStoragePath, storagePath);
     if (!resolvedSrc) {
-      console.warn(`WARNING: storagePath does not resolve inside the storage root, not compared: ${storagePath}`);
-      fileSkips.push({ file: storagePath, reason: 'storagePath does not resolve inside the storage root' });
+      console.warn(`WARNING: did not resolve inside the source storage root, not compared: ${storagePath}`);
+      fileSkips.push({ file: storagePath, reason: 'did not resolve inside the source storage root' });
       continue;
     }
     const srcPath = resolvedSrc;
@@ -440,6 +433,35 @@ export async function validateData(
     }
   }
 
+  // AN UNUSABLE SOURCE ROOT is a failure, not a pass.
+  //
+  // The first attempt checked only `existsSync`, which closes one of three
+  // shapes. A root that is a REGULAR FILE also leaves every row skipped:
+  // `resolvePathWithin` walks up to the first existing ancestor, which is the
+  // base itself, returns non-null, and then `existsSync(srcPath)` fails. Both
+  // are ordinary operator error and both used to report `passed: true`.
+  // (Verified by running `validateData` against each.)
+  //
+  // The third shape — a root that exists, is a directory, but is the WRONG one
+  // — is NOT closed here, and deliberately so. Counting skips instead
+  // (`every row was skipped`) was the obvious generalisation and it is wrong:
+  // a bundle whose only blob was legitimately skipped, because the row is
+  // orphaned or its storagePath is genuinely unsafe, also skips every row. That
+  // rule fails correct migrations, which is the exact class this file is full
+  // of regressions for; two tests below assert those runs stay green.
+  //
+  // Nothing on disk distinguishes "wrong directory" from "right directory whose
+  // blobs are all legitimately absent". Only `manifest.fileChecksums` — the
+  // export's record of what it actually carried — does, which is the same
+  // reason it is the durable fix for this whole comparison. `fileResults.skipped`
+  // is the interim signal: a run that skipped everything says so.
+  if (fileStorageData.length > 0 && !isUsableDirectory(sourceFileStoragePath)) {
+    fileMismatches.push({
+      file: sourceFileStoragePath,
+      reason: 'source file storage path is not a readable directory — nothing could be compared',
+    });
+  }
+
   const allTablesPassed = tableResults.every((r) => r.passed);
   const filesPassed = fileMismatches.length === 0;
 
@@ -466,7 +488,7 @@ async function main(): Promise<void> {
   const sourceDatabaseUrl = getArg('source-url');
   const targetDatabaseUrl = getArg('target-url');
   const usersArg = getArg('users');
-  const sourceFileStoragePath = resolveSourceStorageRoot(getArg('source-file-path'), process.env.FILE_STORAGE_PATH);
+  const sourceFileStoragePath = resolveSourceStorageRoot(getArg('source-file-path'));
   const targetFileStoragePath = getArg('target-file-path') || './uploads';
 
   if (!sourceDatabaseUrl || !targetDatabaseUrl || !usersArg) {
