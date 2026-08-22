@@ -21,7 +21,7 @@ import {
   getTestDatabaseUrl,
   type TestDb,
 } from './setup';
-import { validateData } from '../tenant-validate';
+import { validateData, resolveSourceStorageRoot } from '../tenant-validate';
 import { TABLE_IMPORT_ORDER } from '../lib/migration-types';
 import type { DbClient } from '../lib/migration-types';
 
@@ -74,6 +74,31 @@ afterEach(async () => {
  * this file guards has lived. The file-blob comparison is the one check that
  * can genuinely differ, and only when a case passes two different paths.
  */
+describe('resolveSourceStorageRoot', () => {
+  /**
+   * The base `resolvePathWithin` is called with must be the one the EXPORT
+   * used, or mirroring the call achieves nothing. tenant-export.ts:692 and
+   * tenant-import.ts:137 both read `FILE_STORAGE_PATH`; this file did not, so
+   * a deployment that sets it had the export build from one directory and the
+   * validator compare another.
+   *
+   * Asserted here rather than through `runValidation`, whose arg parsing the
+   * integration cases bypass entirely — which is exactly why the omission
+   * survived.
+   */
+  it('prefers the explicit flag', () => {
+    expect(resolveSourceStorageRoot('/flag', '/env')).toBe('/flag');
+  });
+
+  it('falls back to FILE_STORAGE_PATH, as the export and import both do', () => {
+    expect(resolveSourceStorageRoot(undefined, '/data/shared/files')).toBe('/data/shared/files');
+  });
+
+  it('falls back to ./uploads only when neither is set', () => {
+    expect(resolveSourceStorageRoot(undefined, undefined)).toBe('./uploads');
+  });
+});
+
 describe('validateData', () => {
   it('reports success when source and target match', async () => {
     const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
@@ -346,6 +371,28 @@ describe('validateData', () => {
     expect(pagesResult!.sourceCount).toBe(2);
   });
 
+  it('FAILS when the source storage root does not exist, rather than passing vacuously', async () => {
+    // The false-PASS direction of the skip added alongside this test.
+    // `resolvePathWithin` returns null for every path under a base that does
+    // not exist, so a typo'd `--source-file-path` argument would skip every row and
+    // report zero mismatches — a green validation that compared nothing.
+    //
+    // Worth a case of its own precisely because the neighbouring tests assert
+    // that skipping is CORRECT: without this one, "skip more" always looks like
+    // an improvement.
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: path.join(tmpDir, 'source-that-does-not-exist'),
+      targetFileStoragePath: path.join(tmpDir, 'target-that-does-not-exist'),
+    });
+
+    expect(result.fileResults.passed).toBe(false);
+    expect(result.fileResults.mismatches).toHaveLength(1);
+    expect(result.fileResults.mismatches[0].reason).toMatch(/source file storage path does not exist/);
+  });
+
   it('does not fault a file whose storagePath escapes the storage root — the export skipped it', async () => {
     // The export resolves the source blob with `resolvePathWithin`, which
     // refuses a path escaping the storage root and SKIPS the row. A raw
@@ -376,6 +423,10 @@ describe('validateData', () => {
 
     expect(result.fileResults.mismatches).toEqual([]);
     expect(result.fileResults.passed).toBe(true);
+    // …and says so, rather than looking identical to a run that compared it.
+    expect(result.fileResults.skipped).toEqual([
+      { file: 'test_file_blob_001/data.txt', reason: 'storagePath does not resolve inside the storage root' },
+    ]);
   });
 
   it('does not fault a file whose SOURCE blob is gone — the export skipped it', async () => {
@@ -401,6 +452,9 @@ describe('validateData', () => {
 
     expect(result.fileResults.mismatches).toEqual([]);
     expect(result.fileResults.passed).toBe(true);
+    expect(result.fileResults.skipped).toEqual([
+      { file: 'test_file_blob_001/data.txt', reason: 'source blob not on disk (the export skips these rows)' },
+    ]);
   });
 
   it('detects missing file blob in target', async () => {
