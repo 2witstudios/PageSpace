@@ -13,7 +13,14 @@
 
 import type { StoredCell, CellFormat } from '@pagespace/db/schema';
 import type { SheetData, SheetEvaluation, CellFormat as LibCellFormat } from './types';
-import { decodeCellAddress, encodeCellAddress, encodeColumnLabel, columnLabelOf } from './address';
+import {
+  MAX_ADDRESSABLE_ROW,
+  MAX_ADDRESSABLE_COLUMN,
+  decodeCellAddress,
+  encodeCellAddress,
+  encodeColumnLabel,
+  columnLabelOf,
+} from './address';
 import { extractFormulaDependencies, type CellRect } from './deps';
 import { evaluateAddresses } from './evaluation';
 
@@ -182,6 +189,23 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
     } catch {
       // An address the engine cannot decode cannot be stored against a row.
       // Skipping beats throwing: one bad key must not fail a whole backfill.
+      continue;
+    }
+
+    // The same bound `normalizeUpdates` applies on the write path.
+    //
+    // A document is untrusted input here — it arrives from a restore, an
+    // import or a paste, not only from our own serializer. `A0` decodes to
+    // row -1 and `A99999999` to a row index no `sheet_rows` CHECK accepts, so
+    // without this an out-of-range address in one cell aborted the whole
+    // materialisation with an opaque constraint violation. Skip the cell, for
+    // the same reason an undecodable address is skipped.
+    if (
+      position.row < 0 ||
+      position.column < 0 ||
+      position.row > MAX_ADDRESSABLE_ROW ||
+      position.column > MAX_ADDRESSABLE_COLUMN
+    ) {
       continue;
     }
 

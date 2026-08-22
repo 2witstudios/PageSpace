@@ -188,8 +188,8 @@ export const sheetRangeDeps = pgTable('sheet_range_deps', {
  * cell edit.
  *
  * Every mutation appends here at near-zero cost, which is what makes per-cell
- * attribution and time travel affordable at all; `sheet_snapshots` exists so a
- * restore does not have to replay from origin.
+ * attribution affordable at all. The rows themselves hold current state, so
+ * nothing has to replay this log to answer a read; it is the audit trail.
  */
 export const sheetChanges = pgTable('sheet_changes', {
   id: text('id').primaryKey().$defaultFn(() => createId()),

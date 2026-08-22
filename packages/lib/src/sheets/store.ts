@@ -30,6 +30,8 @@ import {
 } from '@pagespace/db/schema';
 import type { SheetData, SheetCellUpdate } from './types';
 import {
+  MAX_ADDRESSABLE_ROW,
+  MAX_ADDRESSABLE_COLUMN,
   decodeCellAddress,
   encodeColumnLabel,
   decodeColumnLabel,
@@ -86,19 +88,6 @@ export const CHANGE_LOG_SUMMARY_THRESHOLD = 500;
  * batches well under that.
  */
 const INSERT_CHUNK_ROWS = 500;
-
-/**
- * Furthest addressable cell.
- *
- * `decodeCellAddress` accepts any digit run, so `A2000000000` would place a row
- * at index two billion, drive `growExtent` to set `rowCount` to the same, and
- * then make any rebuild attempt an evaluation over that extent. A longer run
- * overflows `integer` outright. Postgres's own spreadsheet-scale limits are
- * well below this; the point is that a single malformed address cannot render
- * a sheet unusable.
- */
-export const MAX_ADDRESSABLE_ROW = 5_000_000;
-export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
 
 /** Rows a single `query-rows`/read call will return without explicit paging. */
 export const DEFAULT_ROW_PAGE_SIZE = 200;

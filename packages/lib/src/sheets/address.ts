@@ -5,6 +5,19 @@
 
 import type { SheetCellAddress } from './types';
 
+/**
+ * Furthest addressable cell.
+ *
+ * `decodeCellAddress` accepts any digit run, so `A2000000000` would place a row
+ * at index two billion, drive `growExtent` to set `rowCount` to the same, and
+ * then make any rebuild attempt an evaluation over that extent. A longer run
+ * overflows `integer` outright. Postgres's own spreadsheet-scale limits are
+ * well below this; the point is that a single malformed address cannot render
+ * a sheet unusable.
+ */
+export const MAX_ADDRESSABLE_ROW = 5_000_000;
+export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
+
 // Regex patterns for cell address validation
 export const cellRegex = /^[A-Z]+\d+$/;
 export const numberRegex = /^-?(?:\d+\.?\d*|\.\d+)$/;

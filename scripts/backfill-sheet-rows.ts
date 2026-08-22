@@ -59,6 +59,11 @@ interface Report {
   skippedExisting: number;
   /** Pages already migrated whose document `--clear-content` emptied. */
   clearedExisting: number;
+  /**
+   * Pages with a tab but no rows, whose document `--clear-content` REFUSED to
+   * blank. Contradictory state — investigate before re-running.
+   */
+  clearSkippedNoRows: { pageId: string; title: string }[];
   skippedEmpty: number;
   unparseable: { pageId: string; title: string; reason: string }[];
   /** Pages whose migration threw. Reported, not fatal — see the loop. */
@@ -126,6 +131,7 @@ async function main() {
     migrated: 0,
     skippedExisting: 0,
     clearedExisting: 0,
+    clearSkippedNoRows: [],
     skippedEmpty: 0,
     unparseable: [],
     failed: [],
@@ -169,8 +175,26 @@ async function main() {
         // outright meant the flag cleared nothing on exactly the pages it was
         // meant for, and reported a clean run.
         if (options.clearContent && !options.dryRun && (page.content ?? '') !== '') {
-          await db.update(pages).set({ content: '' }).where(eq(pages.id, page.id));
-          report.clearedExisting++;
+          // Never blank a document the rows do not actually hold.
+          //
+          // A tab row alone does not prove materialisation succeeded: an
+          // interrupted earlier run, or a partial failure inside the per-tab
+          // loop, can leave the tab committed with no rows under it. Clearing
+          // on that evidence destroys the only surviving copy of the sheet.
+          // A non-empty document with zero rows is contradictory, so report it
+          // and leave the content alone rather than guess which side is right.
+          const [anyRow] = await db
+            .select({ id: sheetRows.id })
+            .from(sheetRows)
+            .where(eq(sheetRows.pageId, page.id))
+            .limit(1);
+
+          if (anyRow) {
+            await db.update(pages).set({ content: '' }).where(eq(pages.id, page.id));
+            report.clearedExisting++;
+          } else {
+            report.clearSkippedNoRows.push({ pageId: page.id, title: page.title });
+          }
         }
         report.skippedExisting++;
         continue;
@@ -304,6 +328,14 @@ async function main() {
         `Re-run with --page <id> after investigating.`
     );
     process.exitCode = 1;
+  }
+
+  if (report.clearSkippedNoRows.length > 0) {
+    console.warn(
+      `\n${report.clearSkippedNoRows.length} sheet(s) have a tab but no rows while still holding a ` +
+        `document. --clear-content left their content intact; re-run the migration for those pages ` +
+        `(--page <id>) and confirm the rows before clearing.`
+    );
   }
 
   if (report.unparseable.length > 0) {

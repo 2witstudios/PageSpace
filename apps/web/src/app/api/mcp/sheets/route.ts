@@ -375,7 +375,10 @@ export async function POST(req: NextRequest) {
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: 'Invalid request', details: error.issues }, { status: 400 });
     }
-    loggers.api.error('MCP sheet operation failed', { error });
+    loggers.api.error(
+      'MCP sheet operation failed',
+      error instanceof Error ? error : new Error(String(error)),
+    );
     return NextResponse.json({ error: 'Sheet operation failed' }, { status: 500 });
   }
 }
