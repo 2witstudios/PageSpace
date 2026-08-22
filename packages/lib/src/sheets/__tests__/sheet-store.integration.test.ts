@@ -921,6 +921,84 @@ describe('sheet store (integration)', () => {
     });
   });
 
+  describe('ordering', () => {
+    it('orders a number column numerically, not lexicographically', async () => {
+      // 290.5 / 28 / 250 is the exact case that exposed this: as text it sorts
+      // 290.5 > 28 > 250, which reads like a plausible descending result and is
+      // not one. `orderBy` is how an agent asks for "the top N rows", so a
+      // wrong order here is silently wrong analysis.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: '28' },
+          { address: 'A2', value: '250' },
+          { address: 'A3', value: '290.5' },
+          { address: 'A4', value: '7' },
+        ],
+        { userId: ownerId }
+      );
+
+      const desc = await queryRows({ pageId }, { orderBy: [{ column: 'A', direction: 'desc' }] });
+      expect(desc.rows.map((row) => row.cells.A.value)).toEqual([290.5, 250, 28, 7]);
+
+      const asc = await queryRows({ pageId }, { orderBy: [{ column: 'A', direction: 'asc' }] });
+      expect(asc.rows.map((row) => row.cells.A.value)).toEqual([7, 28, 250, 290.5]);
+    });
+
+    it('orders a text column lexicographically', async () => {
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: 'cherry' },
+          { address: 'A2', value: 'apple' },
+          { address: 'A3', value: 'banana' },
+        ],
+        { userId: ownerId }
+      );
+
+      const asc = await queryRows({ pageId }, { orderBy: [{ column: 'A', direction: 'asc' }] });
+      expect(asc.rows.map((row) => row.cells.A.value)).toEqual(['apple', 'banana', 'cherry']);
+    });
+
+    it('groups numbers away from text in a mixed column rather than interleaving them', async () => {
+      // Numbers first ascending, then text — the numeric key is NULL for text
+      // and NULLS LAST applies in both directions.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: 'pending' },
+          { address: 'A2', value: '30' },
+          { address: 'A3', value: '4' },
+          { address: 'A4', value: 'n/a' },
+        ],
+        { userId: ownerId }
+      );
+
+      const asc = await queryRows({ pageId }, { orderBy: [{ column: 'A', direction: 'asc' }] });
+      expect(asc.rows.map((row) => row.cells.A.value)).toEqual([4, 30, 'n/a', 'pending']);
+    });
+
+    it('orders on the computed value of a formula', async () => {
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: '2' },
+          { address: 'B1', value: '=A1*100' },
+          { address: 'A2', value: '3' },
+          { address: 'B2', value: '=A2*3' },
+        ],
+        { userId: ownerId }
+      );
+
+      const desc = await queryRows({ pageId }, { orderBy: [{ column: 'B', direction: 'desc' }] });
+      expect(desc.rows.map((row) => row.cells.B.value)).toEqual([200, 9]);
+    });
+  });
+
   describe('cascade', () => {
     it('drops rows with their page', async () => {
       const { pageId, ownerId } = await makeSheet();

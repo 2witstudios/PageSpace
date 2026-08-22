@@ -271,23 +271,47 @@ function compare(op: 'eq' | 'neq' | 'gt' | 'gte' | 'lt' | 'lte', left: SQL, righ
 export interface SheetOrderBy {
   column: string;
   direction?: 'asc' | 'desc';
-  /** Sort numerically. Non-numeric cells sort last rather than failing. */
+  /**
+   * Sort ONLY on the numeric value, placing every non-numeric cell last.
+   *
+   * Rarely what you want — the default already orders numbers numerically. Use
+   * this when a column is meant to be numeric and text in it is a data problem
+   * you want herded to the end, not interleaved.
+   */
   numeric?: boolean;
 }
 
+/**
+ * Sort keys for a row query.
+ *
+ * A number sorts as a NUMBER by default. Sorting on the text form alone put
+ * `290.5` above `28` above `250` — descending lexicographic order, silently
+ * returned as if it were descending numeric order. For a query surface whose
+ * whole purpose is "give me the top N rows by this column", that is the worst
+ * kind of wrong: plausible, ordered, and incorrect. It was invisible in tests
+ * and obvious the first time a real sheet was sorted through the API.
+ *
+ * Each key therefore compiles to TWO sort expressions: the numeric value, then
+ * the text. Non-numeric cells have a NULL numeric key and sort last within the
+ * key (`NULLS LAST` in both directions), where the text key orders them among
+ * themselves. So a numeric column sorts numerically, a text column
+ * lexicographically, and a mixed column groups its numbers away from its text
+ * rather than interleaving them by digit.
+ */
 export function compileOrderBy(orderBy: SheetOrderBy[] | undefined): SQL | undefined {
   if (!orderBy || orderBy.length === 0) return undefined;
   if (orderBy.length > 8) throw new SheetQueryError('At most 8 sort keys');
 
-  const parts = orderBy.map((entry) => {
+  const parts = orderBy.flatMap((entry) => {
     // Branching on the direction rather than splicing it in, for the same
     // reason `compare` is a switch: no raw SQL construction anywhere here.
     const numericKey = sql`(CASE WHEN jsonb_typeof(${valueOf(entry.column)}) = 'number'
                        THEN (${valueOf(entry.column)})::numeric END)`;
-    const key = entry.numeric ? numericKey : textOf(entry.column);
-    return entry.direction === 'desc'
-      ? sql`${key} DESC NULLS LAST`
-      : sql`${key} ASC NULLS LAST`;
+    const direction = entry.direction === 'desc' ? sql`DESC NULLS LAST` : sql`ASC NULLS LAST`;
+
+    const numericPart = sql`${numericKey} ${direction}`;
+    if (entry.numeric) return [numericPart];
+    return [numericPart, sql`${textOf(entry.column)} ${direction}`];
   });
 
   return sql.join(parts, sql`, `);

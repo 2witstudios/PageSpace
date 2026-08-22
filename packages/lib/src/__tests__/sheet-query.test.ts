@@ -23,6 +23,9 @@ import {
 
 const dialect = new PgDialect();
 
+/** A rendered SQL fragment, for the order-by tests. */
+const render = (fragment: Parameters<PgDialect['sqlToQuery']>[0]) => dialect.sqlToQuery(fragment).sql;
+
 /** The SQL string and its bound parameters, as the driver would receive them. */
 function build(where: SheetWhere) {
   const fragment = compileWhere(where);
@@ -184,6 +187,32 @@ describe('operator validation', () => {
 describe('compileOrderBy', () => {
   it('validates its columns like everything else', () => {
     expect(() => compileOrderBy([{ column: 'A; DROP TABLE x' }])).toThrow(SheetQueryError);
+  });
+
+  it('sorts a number column NUMERICALLY by default', () => {
+    // Text-only ordering put 290.5 above 28 above 250 — descending
+    // lexicographic order returned as if it were descending numeric order.
+    // Caught by sorting a real sheet through the API, not by a unit test.
+    const fragment = compileOrderBy([{ column: 'D', direction: 'desc' }]);
+    const rendered = render(fragment!);
+
+    expect(rendered).toContain('::numeric');
+    expect(rendered).toContain("jsonb_typeof");
+    // Text remains the tie-break, so a text column still sorts sensibly.
+    expect(rendered.match(/DESC NULLS LAST/g)).toHaveLength(2);
+  });
+
+  it('keeps both keys in the same direction', () => {
+    const rendered = render(compileOrderBy([{ column: 'A', direction: 'asc' }])!);
+    expect(rendered).not.toContain('DESC');
+    expect(rendered.match(/ASC NULLS LAST/g)).toHaveLength(2);
+  });
+
+  it('emits only the numeric key when numeric is requested explicitly', () => {
+    // The opt-in stays a distinct behaviour: text cells go last, not
+    // interleaved by a text tie-break.
+    const rendered = render(compileOrderBy([{ column: 'D', numeric: true, direction: 'desc' }])!);
+    expect(rendered.match(/DESC NULLS LAST/g)).toHaveLength(1);
   });
 
   it('sorts numerically without failing on text cells', () => {
