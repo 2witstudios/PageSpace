@@ -44,6 +44,7 @@ export * from './schema/drafts';
 export * from './schema/published-pages';
 export * from './schema/credits';
 export * from './schema/commands';
+export * from './schema/content-tags';
 export * from './schema/ai-compaction';
 export * from './schema/custom-domains';
 export * from './schema/incidents';
@@ -104,6 +105,7 @@ import * as drafts from './schema/drafts';
 import * as publishedPages from './schema/published-pages';
 import * as credits from './schema/credits';
 import * as commands from './schema/commands';
+import * as contentTags from './schema/content-tags';
 import * as aiCompaction from './schema/ai-compaction';
 import * as customDomains from './schema/custom-domains';
 import * as incidents from './schema/incidents';
@@ -165,6 +167,7 @@ export const schema = {
   ...publishedPages,
   ...credits,
   ...commands,
+  ...contentTags,
   ...aiCompaction,
   ...customDomains,
   ...incidents,

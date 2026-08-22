@@ -114,6 +114,59 @@ export function workspaceSelectionWhere(ownerInList: string, conversationInList:
 }
 
 /**
+ * WHICH TAG ASSIGNMENTS A BUNDLE CARRIES — the exporter's rule, in one place so
+ * the validator cannot ask a different question than the export answered.
+ *
+ * `content_tags."pageId"` is notNull for every target kind, so the page filter
+ * alone reaches page-, text-, cell- and message-anchored rows uniformly — that
+ * is what the denormalization is for. The three extra arms exist because a
+ * message-anchored row also carries a REAL foreign key onto `channel_messages`
+ * or `messages`, and those two tables are selected by their own rules (a
+ * channel message by page, an AI message by conversation AND author). A tag
+ * whose page travels while its message does not would be a dangling FK the
+ * import aborts on, so such a row is DROPPED rather than unbound — neither
+ * reference is nullable-with-meaning here, since an `ai_message` row with a
+ * NULL `aiMessageId` violates `content_tags_target_chk`.
+ *
+ * `messageAuthorInList` is load-bearing and was the bug this helper exists to
+ * prevent. `messages.userId` was relaxed to nullable in 0249 (NULL = agent- or
+ * system-authored) and tenant-export.ts filters on
+ * `("userId" IS NULL OR "userId" IN (...))` for that reason. The validator
+ * originally restated this predicate WITHOUT that clause, making its question
+ * wider than the export's answer: a tag on a message the export deliberately
+ * left behind would be reported as a MISSING row, i.e. a validation failure
+ * describing a correct bundle. Same shape as the `workspaceSelectionWhere`
+ * scar above, and the same fix — one string, two callers.
+ *
+ * The `tagId` arm exists for the same dangling-FK reason as the message arms,
+ * and it is NOT redundant with the page filter. `tags` is carried by DRIVE, but
+ * a page that was MOVED between drives can hold an assignment whose tag still
+ * belongs to the drive it came from (the trigger closes the write path, not the
+ * move — the cross-drive scrub is Phase 3's). Exporting the destination drive
+ * would then carry the row without its tag and the import, one BEGIN/COMMIT,
+ * aborts on `content_tags_tagId_tags_id_fk`. Every other reference on this row
+ * is constrained here; this one was not, which is exactly how it would have
+ * been missed.
+ *
+ * Pass the ALL-exported user set (requested plus discovered), not the requested
+ * users alone.
+ */
+export function contentTagSelectionWhere(
+  pageInList: string,
+  driveInList: string,
+  channelMessageInList: string,
+  conversationInList: string,
+  messageAuthorInList: string,
+): string {
+  return `"pageId" IN (${pageInList})`
+    + ` AND "tagId" IN (SELECT id FROM tags WHERE "driveId" IN (${driveInList}))`
+    + ` AND ("channelMessageId" IS NULL OR "channelMessageId" IN (${channelMessageInList}))`
+    + ` AND ("aiMessageId" IS NULL OR "aiMessageId" IN (`
+    + `SELECT id FROM messages WHERE "conversationId" IN (${conversationInList})`
+    + ` AND ("userId" IS NULL OR "userId" IN (${messageAuthorInList}))))`;
+}
+
+/**
  * Build an INSERT statement with ON CONFLICT DO NOTHING for idempotency.
  *
  * `conflictTarget` NARROWS which conflicts are forgiven, and the difference is

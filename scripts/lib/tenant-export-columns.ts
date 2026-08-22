@@ -157,9 +157,27 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
     ],
   },
 
-  tags: { columns: ['id', 'name', 'color'] },
+  // The drive-scoped tag VOCABULARY (reclaimed from the never-written 0000
+  // table). `normalizedKey` is carried rather than recomputed on import: it is
+  // what `UNIQUE (driveId, normalizedKey)` is taken on, and recomputing it in
+  // the importer would put a second implementation of `tagKey()` in the tenant
+  // pipeline, free to disagree with the one that wrote the rows.
+  tags: {
+    columns: [
+      'id', 'driveId', 'name', 'normalizedKey', 'color', 'description',
+      'createdBy', 'createdAt', 'updatedAt',
+    ],
+  },
 
-  page_tags: { columns: ['pageId', 'tagId'] },
+  // The tag ASSIGNMENTS. `pageId` is notNull on every row regardless of target
+  // kind, so the exporter's page filter reaches all five kinds uniformly.
+  content_tags: {
+    columns: [
+      'id', 'tagId', 'pageId', 'targetKind', 'anchor', 'anchorStatus',
+      'channelMessageId', 'aiMessageId', 'source', 'confidence',
+      'createdBy', 'createdAt', 'updatedAt',
+    ],
+  },
 
   channel_messages: {
     columns: [
