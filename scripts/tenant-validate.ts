@@ -163,11 +163,10 @@ export async function validateData(
   const convoIds = (convoRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
   const convoIn = toSqlInList(convoIds);
 
-  // The owners of those conversations, which is what the export scopes
-  // workspaces and shells on (`allExportedUserIdSet`) — the requested users
-  // PLUS the ones DISCOVERED through the page arms. Validating on the
-  // requested set alone left a discovered user's workspace, and its shells'
-  // `coldTail` terminal scrollback, carried but never checked.
+  // The export's `allExportedUserIdSet` — the requested users PLUS everyone
+  // DISCOVERED alongside them. Validating on the requested set alone left a
+  // discovered user's workspace, and its shells' `coldTail` terminal
+  // scrollback, carried but never checked.
   // BOTH discovery arms, which the comment above already claimed and the code
   // did not do: tenant-export.ts seeds `referencedUserIds` from the CHANNEL
   // MESSAGE authors as well as the conversation owners. Omitting the channel arm
@@ -191,7 +190,26 @@ export async function validateData(
   // happens when this is re-typed here instead.
   const contentTagWhere = contentTagSelectionWhere(pageIn, driveIn, channelMsgIn, convoIn, exportedUserIn);
 
-  // ID-based queries for tables with a single PK
+  /**
+   * ID-based queries for tables with a single PK.
+   *
+   * EVERY query here must carry the exporter's user filter as well as its
+   * structural one. Four of them did not — `messages`, `page_permissions`,
+   * `user_mentions` and `channel_message_reactions` selected purely on the
+   * parent (conversation, page, message) while tenant-export.ts additionally
+   * requires the row's user to be in `allExportedUserIdSet`.
+   *
+   * That asymmetry is not harmless: the source side then counts rows the bundle
+   * deliberately never carried, they show up as MISSING, and `allTablesPassed`
+   * turns a CORRECT migration into a reported failure. It is the same defect
+   * the shared `conversationSelectionWhere` / `workspaceSelectionWhere` /
+   * `contentTagSelectionWhere` helpers were introduced to stop, just in the
+   * queries that never got a helper.
+   *
+   * `exportedUserIn` is the exporter's `allExportedUserIdSet` — requested users
+   * plus everyone discovered with them — which is why it is built above rather
+   * than using the narrower requested-only `userIn`.
+   */
   const idQueries: Record<string, ReturnType<typeof sql>> = {
     users: sql.raw(`SELECT id FROM users WHERE id IN (${userIn})`),
     user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIn})`),
@@ -208,7 +226,10 @@ export async function validateData(
     tags: sql.raw(`SELECT id FROM tags WHERE "driveId" IN (${driveIn})`),
     content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagWhere}`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
-    channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
+    channel_message_reactions: sql.raw(
+      `SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`
+      + ` AND "userId" IN (${exportedUserIn})`,
+    ),
     // The export's rule, from the shared helper: the sessions the EXPORTED
     // conversations are bound to, owned by an EXPORTED user (requested or
     // discovered) — matching `allExportedUserIdSet` on the export side.
@@ -236,11 +257,20 @@ export async function validateData(
     conversations: sql.raw(
       `SELECT id FROM conversations WHERE ${conversationSelectionWhere(userIn, pageIn)}`,
     ),
-    messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
+    messages: sql.raw(
+      `SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`
+      + ` AND ("userId" IS NULL OR "userId" IN (${exportedUserIn}))`,
+    ),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
-    page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),
+    page_permissions: sql.raw(
+      `SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`
+      + ` AND "userId" IN (${exportedUserIn})`,
+    ),
     mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
-    user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`),
+    user_mentions: sql.raw(
+      `SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`
+      + ` AND "targetUserId" IN (${exportedUserIn})`,
+    ),
     favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIn})`),
   };
 

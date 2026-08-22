@@ -137,6 +137,52 @@ describe('validateData', () => {
       expect(result.passed).toBe(true);
       expect(result.tableResults.every((r) => r.passed)).toBe(true);
     });
+
+    /**
+     * The MIRROR of the bug above, and the one the widening left open.
+     *
+     * Eve is DISCOVERED — her chat sits on an exported page, so the export
+     * carries her and her message, and validating them is correct. This case is
+     * the opposite: an author reachable by NO discovery arm, writing inside a
+     * conversation the export does carry.
+     *
+     * tenant-export.ts filters `messages` on
+     * `("userId" IS NULL OR "userId" IN (allExportedUserIdSet))`, so that row is
+     * deliberately left behind. If the validator selects messages on
+     * `conversationId` alone it counts a row the bundle was never meant to hold,
+     * reports it MISSING, and `allTablesPassed` fails a CORRECT migration.
+     *
+     * Same shape for `page_permissions`, `user_mentions` and
+     * `channel_message_reactions`, which carry the same user filter on the
+     * export side.
+     */
+    it('does NOT count a message from an author outside the export set, so a correct bundle still passes', async () => {
+      const STRANGER = 'test_user_stranger_004';
+      const STRANGER_MSG = 'test_msg_stranger_001';
+      await db.execute(sql.raw(
+        `INSERT INTO users (id, name, email, "emailBidx", provider, "createdAt", "updatedAt")`
+        + ` VALUES ('${STRANGER}', 'Mallory Stranger', 'mallory@test.local', 'bidx_mallory_test_local', 'email', NOW(), NOW())`,
+      ));
+      // Inside the OWNER's conversation — which the export carries — but from an
+      // author no discovery arm reaches.
+      await db.execute(sql.raw(
+        `INSERT INTO messages (id, "conversationId", role, content, "userId", "createdAt")`
+        + ` VALUES ('${STRANGER_MSG}', '${FIXTURES.conversations.pageChat.id}', 'user', 'not carried by the bundle', '${STRANGER}', NOW())`,
+      ));
+
+      try {
+        const result = await validate();
+        const messagesResult = result.tableResults.find((r) => r.table === 'messages');
+        // Still 3 — the two owner messages plus Eve's. Mallory's is excluded on
+        // BOTH sides, which is what makes the migration report as correct.
+        expect(messagesResult!.sourceCount).toBe(3);
+        expect(messagesResult!.passed).toBe(true);
+        expect(result.passed).toBe(true);
+      } finally {
+        await db.execute(sql.raw(`DELETE FROM messages WHERE id = '${STRANGER_MSG}'`));
+        await db.execute(sql.raw(`DELETE FROM users WHERE id = '${STRANGER}'`));
+      }
+    });
   });
 
   it('detects missing page in target', async () => {
