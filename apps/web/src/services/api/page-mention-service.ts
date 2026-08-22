@@ -46,8 +46,13 @@ function findMentionNodes(content: unknown): MentionIds {
   const seenGroups = new Set<string>();
   const contentStr = Array.isArray(content) ? content.join('\n') : String(content);
 
+  // Every marker the HTML branch below selects on must appear here, or a
+  // document carrying only that kind of mention falls through to the markdown
+  // fallback, extracts nothing, and the sync treats the result as "no mentions"
+  // — which deletes the rows that were already there.
   const shouldParseHtml = contentStr.includes('<') && (
     contentStr.includes('data-page-id') ||
+    contentStr.includes('data-user-id') ||
     contentStr.includes('data-mention-type="everyone"') ||
     contentStr.includes('data-mention-type="role"')
   );

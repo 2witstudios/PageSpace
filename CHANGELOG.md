@@ -130,6 +130,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Mentions in a document survive being read back in** — a page mention was written as a link the
+  editor could not recognise on the way back, so anything that re-read a document's HTML turned its
+  mentions into ordinary links and the page quietly dropped out of the mention list on the pages it
+  referenced. Mentions of every kind now come back intact, and a mention of a person is finally its
+  own thing rather than being filed as a mention of a page with the person's id on it.
+
 - **Turning an uploaded file into a document no longer risks losing what you wrote in it** — file
   text extraction runs in the background, and a file converted to a document while that extraction
   was still queued could have the document you had started writing replaced by the raw extracted
