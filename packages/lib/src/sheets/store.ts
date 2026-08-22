@@ -632,40 +632,89 @@ function rowText(cells: Record<string, StoredCell> | null | undefined): string {
     .join(' ');
 }
 
+/** A matched row, rendered for a search result excerpt. */
+export interface MatchingRowText {
+  /** Zero-based; callers showing a row number add one. */
+  rowIndex: number;
+  text: string;
+}
+
+export type SheetRowMatch = { ilike: string | readonly string[] } | { regex: string };
+
 /**
- * The rows of a sheet that actually matched a search, as text.
+ * The rows that actually matched a search, for EVERY page at once.
  *
  * A result list needs to quote WHERE the query hit, and a bounded preview of
  * the first N rows cannot: a match at row 5,000, on a later tab, or past the
  * character cap falls outside it, so the search reported a spreadsheet as a hit
- * with nothing to show and a match count of zero. The match runs in SQL
- * against the same cell-value expression the page-level predicate uses, so the
- * rows returned are exactly the rows that made the page match.
+ * with nothing to show and a match count of zero. The match runs in SQL against
+ * the same cell-value expression the page-level predicate uses, so the rows
+ * returned are exactly the rows that made each page match.
  *
- * Bounded by `limit`: this feeds a result list, not a page read.
+ * Batched because the callers are result loops. One query per visible sheet
+ * meant search latency grew linearly with the number of matching spreadsheets —
+ * and multi-drive search allows up to 50 results per accessible drive. A
+ * window function applies the per-page cap inside the single query, so the
+ * bound is the same as the per-page form and the row count returned stays
+ * `pages × limit` no matter how large the sheets are.
  */
-export async function sheetMatchingRows(
-  pageId: string,
-  match: { ilike: string | readonly string[] } | { regex: string },
+export async function sheetMatchingRowsByPage(
+  pageIds: readonly string[],
+  match: SheetRowMatch,
   options: { limit?: number; maxChars?: number } = {},
   exec: Executor = db
-): Promise<{ rowIndex: number; text: string }[]> {
+): Promise<Map<string, MatchingRowText[]>> {
+  const byPage = new Map<string, MatchingRowText[]>();
+  if (pageIds.length === 0) return byPage;
+
   const limit = Math.min(Math.max(options.limit ?? 5, 1), 50);
   const maxChars = options.maxChars ?? 200;
 
   const predicate =
     'ilike' in match ? sheetRowMatchesIlike(match.ilike) : sheetRowMatchesRegex(match.regex);
 
-  const found = await exec
-    .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+  // `row_number()` rather than a per-page LIMIT: one statement, and the cap is
+  // applied per page rather than across the whole result, so one enormous sheet
+  // cannot crowd every other page out of the excerpts.
+  const ranked = exec
+    .select({
+      pageId: sheetRows.pageId,
+      rowIndex: sheetRows.rowIndex,
+      cells: sheetRows.cells,
+      rank: sql<number>`row_number() OVER (
+        PARTITION BY ${sheetRows.pageId} ORDER BY ${sheetRows.rowIndex} ASC
+      )`.as('rank'),
+    })
     .from(sheetRows)
-    .where(and(eq(sheetRows.pageId, pageId), predicate))
-    .orderBy(asc(sheetRows.rowIndex))
-    .limit(limit);
+    .where(and(inArray(sheetRows.pageId, [...pageIds]), predicate))
+    .as('ranked');
 
-  return found
-    .map((row) => ({ rowIndex: row.rowIndex, text: rowText(row.cells).slice(0, maxChars) }))
-    .filter((row) => row.text !== '');
+  const found = await exec
+    .select({ pageId: ranked.pageId, rowIndex: ranked.rowIndex, cells: ranked.cells })
+    .from(ranked)
+    .where(sql`${ranked.rank} <= ${limit}`)
+    .orderBy(asc(ranked.pageId), asc(ranked.rowIndex));
+
+  for (const row of found) {
+    const text = rowText(row.cells as Record<string, StoredCell>).slice(0, maxChars);
+    if (text === '') continue;
+    const existing = byPage.get(row.pageId);
+    if (existing) existing.push({ rowIndex: row.rowIndex, text });
+    else byPage.set(row.pageId, [{ rowIndex: row.rowIndex, text }]);
+  }
+
+  return byPage;
+}
+
+/** {@link sheetMatchingRowsByPage} for a single page. */
+export async function sheetMatchingRows(
+  pageId: string,
+  match: SheetRowMatch,
+  options: { limit?: number; maxChars?: number } = {},
+  exec: Executor = db
+): Promise<MatchingRowText[]> {
+  const byPage = await sheetMatchingRowsByPage([pageId], match, options, exec);
+  return byPage.get(pageId) ?? [];
 }
 
 /**

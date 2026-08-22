@@ -4,7 +4,7 @@ import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRowsByPage } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { userProfiles } from '@pagespace/db/schema/members';
@@ -348,6 +348,18 @@ export async function GET(request: Request) {
       const pageIds = pageResults.map(page => page.id);
       const permissionsMap = await getBatchPagePermissions(user.id, pageIds);
 
+      // One query for every visible sheet's excerpt, not one per sheet.
+      //
+      // Scoped to pages the caller may actually see, so a hidden page is never
+      // read for an excerpt nobody receives.
+      const sheetExcerpts = await sheetMatchingRowsByPage(
+        pageResults
+          .filter(page => isSheetType(page.type as PageType) && permissionsMap.get(page.id)?.canView)
+          .map(page => page.id),
+        { ilike: queryPatterns },
+        { limit: 5 },
+      );
+
       // Filter by permissions and calculate relevance
       for (const page of pageResults) {
         const permissions = permissionsMap.get(page.id);
@@ -362,9 +374,7 @@ export async function GET(request: Request) {
         // preview, which would score the page as a title-only match and show an
         // excerpt not containing the query.
         const searchableBody = isSheetType(page.type as PageType)
-          ? (await sheetMatchingRows(page.id, { ilike: queryPatterns }, { limit: 5 }))
-              .map((row) => row.text)
-              .join('\n') || page.content
+          ? (sheetExcerpts.get(page.id) ?? []).map((row) => row.text).join('\n') || page.content
           : page.content;
 
         const matchLocation = getMatchLocation(page.title, searchableBody, trimmedQuery);

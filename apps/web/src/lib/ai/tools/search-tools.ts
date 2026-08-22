@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRowsByPage } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
@@ -119,6 +119,21 @@ export const searchTools = {
           suggestedLineRange?: { start: number; end: number };
         }> = [];
 
+        // One query for every visible sheet's matching rows, not one per sheet.
+        const sheetExcerpts = searchIn === 'title'
+          ? new Map<string, { rowIndex: number; text: string }[]>()
+          : await sheetMatchingRowsByPage(
+              matchingPages
+                .filter(page => isSheetType(page.type as PageType) && accessiblePageIds.has(page.id))
+                .map(page => page.id),
+              { regex: pgPattern },
+              // Bounded at 50 rather than the 5 the list shows, so
+              // `totalMatches` is not silently pinned to the display cap — the
+              // document branch below counts every matching line and slices
+              // afterwards.
+              { limit: 50 },
+            );
+
         // Search documents if requested
         if (contentTypes.includes('documents')) {
           for (const page of matchingPages) {
@@ -155,16 +170,7 @@ export const searchTools = {
                   // 5,000, on a later tab, or past the character cap falls
                   // outside the preview, and the result still reports zero
                   // matching lines for a page the database says matched.
-                  // Bounded at 50 rather than the 5 the list shows, so
-                  // `totalMatches` is not silently pinned to the display cap —
-                  // the document branch below counts every matching line and
-                  // slices afterwards.
-                  const matched = await sheetMatchingRows(
-                    page.id,
-                    { regex: pgPattern },
-                    { limit: 50 },
-                  );
-                  for (const row of matched) {
+                  for (const row of sheetExcerpts.get(page.id) ?? []) {
                     // The spreadsheet row number, not an offset into a preview.
                     matchingLines.push({ lineNumber: row.rowIndex + 1, content: row.text });
                   }

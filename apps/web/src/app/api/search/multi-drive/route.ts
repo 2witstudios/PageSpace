@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRowsByPage } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -196,6 +196,18 @@ export async function GET(request: Request) {
     const allPageIds = allSearchResults.map(result => result.page.id);
     const permissionsMap = await getPrincipalBatchPagePermissions(auth, allPageIds);
 
+    // One query for every visible sheet's excerpt, not one per sheet — this
+    // endpoint returns up to 50 results PER accessible drive, so a per-page
+    // call made latency grow linearly with the number of matching spreadsheets.
+    const sheetExcerpts = await sheetMatchingRowsByPage(
+      allSearchResults
+        .filter(({ page }) =>
+          isSheetType(page.type as PageType) && permissionsMap.get(page.id)?.canView)
+        .map(({ page }) => page.id),
+      searchType === 'regex' ? { regex: regexPattern } : { ilike: searchPattern },
+      { limit: 3, maxChars: 150 },
+    );
+
     // Group results by drive and filter by permissions
     const driveResultsMap = new Map<string, Array<{
       pageId: string;
@@ -218,15 +230,7 @@ export async function GET(request: Request) {
         // when the hit is at row 5,000 or on a later tab. Bounded, not a full
         // projection — this is a result list.
         const body = isSheetType(page.type as PageType)
-          ? (
-              await sheetMatchingRows(
-                page.id,
-                searchType === 'regex' ? { regex: regexPattern } : { ilike: searchPattern },
-                { limit: 3, maxChars: 150 },
-              )
-            )
-              .map((row) => row.text)
-              .join(' · ') || page.content
+          ? (sheetExcerpts.get(page.id) ?? []).map((row) => row.text).join(' · ') || page.content
           : page.content;
 
         driveResultsMap.get(driveId)!.push({

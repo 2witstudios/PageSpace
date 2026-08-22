@@ -34,6 +34,7 @@ import {
   copySheetRows,
   listTabs,
   sheetMatchingRows,
+  sheetMatchingRowsByPage,
 } from '../store';
 import type { StoredRow } from '../projection';
 import { parseSheetContent, serializeSheetContent } from '../io';
@@ -918,6 +919,65 @@ describe('sheet store (integration)', () => {
 
       expect(matched).toHaveLength(3);
       expect(matched.map((row) => row.rowIndex)).toEqual([0, 1, 2]);
+    });
+  });
+
+  describe('batched matching rows', () => {
+    it('applies the row cap PER PAGE, so one big sheet cannot crowd out the others', async () => {
+      // The whole point of the window function. A plain LIMIT over the joined
+      // result would spend the entire budget on whichever page sorted first
+      // and return no excerpt at all for the rest.
+      const a = await makeSheet({ rowCount: 50 });
+      const b = await makeSheet({ rowCount: 50 });
+      await setCells(
+        { pageId: a.pageId },
+        Array.from({ length: 10 }, (_, i) => ({ address: `A${i + 1}`, value: 'needle' })),
+        { userId: a.ownerId }
+      );
+      await setCells(
+        { pageId: b.pageId },
+        [{ address: 'A40', value: 'needle' }],
+        { userId: b.ownerId }
+      );
+
+      const byPage = await sheetMatchingRowsByPage(
+        [a.pageId, b.pageId],
+        { ilike: '%needle%' },
+        { limit: 3 }
+      );
+
+      expect(byPage.get(a.pageId)).toHaveLength(3);
+      expect(byPage.get(b.pageId)).toHaveLength(1);
+      expect(byPage.get(b.pageId)![0].rowIndex).toBe(39);
+    });
+
+    it('omits a page with no match rather than returning it empty', async () => {
+      const a = await makeSheet({ rowCount: 10 });
+      const b = await makeSheet({ rowCount: 10 });
+      await setCells({ pageId: a.pageId }, [{ address: 'A1', value: 'needle' }], { userId: a.ownerId });
+      await setCells({ pageId: b.pageId }, [{ address: 'A1', value: 'other' }], { userId: b.ownerId });
+
+      const byPage = await sheetMatchingRowsByPage([a.pageId, b.pageId], { ilike: '%needle%' });
+
+      expect(byPage.has(a.pageId)).toBe(true);
+      expect(byPage.has(b.pageId)).toBe(false);
+    });
+
+    it('never reads a page it was not asked about', async () => {
+      // The caller filters to pages the viewer may see, so leaking a row from
+      // an unlisted page would be a permission bug, not just wasted work.
+      const a = await makeSheet({ rowCount: 10 });
+      const b = await makeSheet({ rowCount: 10 });
+      await setCells({ pageId: a.pageId }, [{ address: 'A1', value: 'needle' }], { userId: a.ownerId });
+      await setCells({ pageId: b.pageId }, [{ address: 'A1', value: 'needle' }], { userId: b.ownerId });
+
+      const byPage = await sheetMatchingRowsByPage([b.pageId], { ilike: '%needle%' });
+
+      expect([...byPage.keys()]).toEqual([b.pageId]);
+    });
+
+    it('returns nothing for an empty page list without touching the database', async () => {
+      expect(await sheetMatchingRowsByPage([], { ilike: '%x%' })).toEqual(new Map());
     });
   });
 
