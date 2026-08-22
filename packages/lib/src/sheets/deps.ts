@@ -37,10 +37,16 @@ export interface FormulaDependencies {
   /** Ranges the formula reads, kept whole rather than expanded. */
   ranges: CellRect[];
   /**
-   * References into other pages, kept verbatim in `@[label](id):A1` form.
-   * Cross-page recompute is not incremental — see `store.ts`.
+   * Whether the formula reads another page at all.
+   *
+   * A boolean, not a list. It used to hold `JSON.stringify(node).slice(0, 512)`
+   * per external node — truncated AST fragments that could lose the very page
+   * or address they were supposed to identify, that no caller read, and that no
+   * column stores. A cross-page edge is not walkable from this page's write
+   * path anyway (a change in the other page is not something this write
+   * observes), so the only fact worth keeping is that one exists.
    */
-  external: string[];
+  readsExternal: boolean;
 }
 
 /**
@@ -52,7 +58,7 @@ export interface FormulaDependencies {
 const EMPTY: FormulaDependencies = Object.freeze({
   cells: Object.freeze([]) as unknown as string[],
   ranges: Object.freeze([]) as unknown as CellRect[],
-  external: Object.freeze([]) as unknown as string[],
+  readsExternal: false,
 }) as FormulaDependencies;
 
 /**
@@ -76,8 +82,8 @@ export function extractFormulaDependencies(formula: string): FormulaDependencies
   }
 
   const cells = new Set<string>();
-  const external = new Set<string>();
   const ranges: CellRect[] = [];
+  let readsExternal = false;
 
   const visit = (node: ASTNode | undefined): void => {
     if (!node || typeof node !== 'object') return;
@@ -95,11 +101,9 @@ export function extractFormulaDependencies(formula: string): FormulaDependencies
       }
       case 'ExternalCellReference':
       case 'ExternalRange': {
-        // Cross-page edges are recorded flat: a change in another page is not
-        // something this page's write path observes, so there is nothing to
-        // walk incrementally. Recorded so the reference is not simply lost.
-        const raw = JSON.stringify(node);
-        external.add(raw.slice(0, 512));
+        // Flagged, not enumerated. A change in another page is not something
+        // this page's write path observes, so there is no edge to walk.
+        readsExternal = true;
         return;
       }
       default:
@@ -120,7 +124,7 @@ export function extractFormulaDependencies(formula: string): FormulaDependencies
   return {
     cells: Array.from(cells).sort(),
     ranges,
-    external: Array.from(external).sort(),
+    readsExternal,
   };
 }
 

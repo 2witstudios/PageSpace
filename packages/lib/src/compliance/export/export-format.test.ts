@@ -37,6 +37,12 @@ function makeData(overrides: Partial<AllUserData> = {}): AllUserData {
         tabName: 'Sheet1',
         rowCount: 2,
         columnCount: 2,
+        frozenRows: 1,
+        frozenColumns: null,
+        columnFormats: null,
+        columnWidths: { A: 180 },
+        rowHeights: null,
+        ranges: null,
         rows: [
           { rowIndex: 0, cells: { A: { raw: '10', value: 10 }, B: { raw: '=A1*2', value: 20 } } },
         ],

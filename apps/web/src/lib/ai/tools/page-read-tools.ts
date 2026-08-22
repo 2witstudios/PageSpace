@@ -185,7 +185,16 @@ export const pageReadTools = {
             for (const entry of textEntries) {
               const row = contentMap.get(entry.id);
               if (!row) continue;
-              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
+
+              // Sheets come from their rows here too. `isTextSerializablePageType`
+              // accepts SHEET, and this path reads `pages.content` directly —
+              // which is empty for a materialised sheet, so `include: "content"`
+              // returned a blank spreadsheet while `read_page` returned the data.
+              const readableRow = isSheetType(entry.type as PageType)
+                ? { ...row, content: (await readSheetDocument(entry.id)) ?? row.content }
+                : row;
+
+              const fullContent = serializePageContentForAI({ type: entry.type, ...readableRow });
               if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
                 // Cut at the last newline within the budget rather than an arbitrary
                 // character offset, so we don't split a UTF-16 surrogate pair or sever

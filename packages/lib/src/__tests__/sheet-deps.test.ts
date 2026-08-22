@@ -12,8 +12,8 @@ import { extractFormulaDependencies, rectContains } from '../sheets/deps';
 
 describe('extractFormulaDependencies', () => {
   it('returns nothing for a non-formula', () => {
-    expect(extractFormulaDependencies('hello')).toEqual({ cells: [], ranges: [], external: [] });
-    expect(extractFormulaDependencies('')).toEqual({ cells: [], ranges: [], external: [] });
+    expect(extractFormulaDependencies('hello')).toEqual({ cells: [], ranges: [], readsExternal: false });
+    expect(extractFormulaDependencies('')).toEqual({ cells: [], ranges: [], readsExternal: false });
   });
 
   it('collects individual cell references', () => {
@@ -48,14 +48,22 @@ describe('extractFormulaDependencies', () => {
 
   it('returns empty rather than throwing on an unparseable formula', () => {
     // One malformed cell must not fail a whole sheet's dependency rebuild.
-    expect(extractFormulaDependencies('=SUM(((')).toEqual({ cells: [], ranges: [], external: [] });
+    expect(extractFormulaDependencies('=SUM(((')).toEqual({ cells: [], ranges: [], readsExternal: false });
+  });
+
+  it('flags a cross-page reference without trying to enumerate it', () => {
+    // A change in another page is not something this page's write path
+    // observes, so there is no edge to walk — only the fact that one exists.
+    const deps = extractFormulaDependencies('=@[Other](p1):A1 + B2');
+    expect(deps.readsExternal).toBe(true);
+    expect(deps.cells).toEqual(['B2']);
   });
 
   it('treats an open-ended range as unsupported input, not a crash', () => {
     // `FormulaParser.parseRange` rejects non-address endpoints, so `D:D` never
     // reaches storage. Pinned so that if the parser later accepts it, this
     // test fails and the storage side gets revisited deliberately.
-    expect(extractFormulaDependencies('=SUM(D:D)')).toEqual({ cells: [], ranges: [], external: [] });
+    expect(extractFormulaDependencies('=SUM(D:D)')).toEqual({ cells: [], ranges: [], readsExternal: false });
   });
 });
 

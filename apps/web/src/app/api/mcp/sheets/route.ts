@@ -82,7 +82,9 @@ const requestSchema = z.object({
     numeric: z.boolean().optional(),
   })).max(8).optional(),
   select: z.array(columnSchema).max(64).optional(),
+  /** Page size for `query-rows` AND `get-rows`. Not to be confused with `count`. */
   limit: z.number().int().min(1).max(MAX_ROW_PAGE_SIZE).optional(),
+  /** `query-rows` only: rows to skip. `get-rows` pages with `fromRow`. */
   offset: z.number().int().min(0).optional(),
 
   /** append-rows: each entry maps column letter → cell text. */
@@ -95,13 +97,14 @@ const requestSchema = z.object({
   })).max(10_000).optional(),
 
   /**
-   * `get-rows`: the row index to start at. Named `fromRow` rather than
+   * `get-rows`: the row index to start at (its page SIZE is `limit`). Named `fromRow` rather than
    * `offset` because it is a POSITION, not a count of skipped rows — a sparse
    * tab (rows 0-9, then 500-509) would make an agent advancing `offset +=
    * rows.length` loop forever on the same rows. `query-rows` takes a true
    * `offset`. Also `delete-rows`.
    */
   fromRow: z.number().int().min(0).optional(),
+  /** `delete-rows` only: how many rows to remove. Never a page size. */
   count: z.number().int().min(1).max(100_000).optional(),
 });
 

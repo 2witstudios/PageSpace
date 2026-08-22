@@ -57,8 +57,12 @@ interface Report {
   scanned: number;
   migrated: number;
   skippedExisting: number;
+  /** Pages already migrated whose document `--clear-content` emptied. */
+  clearedExisting: number;
   skippedEmpty: number;
   unparseable: { pageId: string; title: string; reason: string }[];
+  /** Pages whose migration threw. Reported, not fatal — see the loop. */
+  failed: { pageId: string; title: string; error: string }[];
   rowsWritten: number;
 }
 
@@ -121,8 +125,10 @@ async function main() {
     scanned: 0,
     migrated: 0,
     skippedExisting: 0,
+    clearedExisting: 0,
     skippedEmpty: 0,
     unparseable: [],
+    failed: [],
     rowsWritten: 0,
   };
 
@@ -152,6 +158,16 @@ async function main() {
         .limit(1);
 
       if (existing) {
+        // Already migrated — but `--clear-content` still has work to do here.
+        //
+        // Clearing is a deliberate SECOND pass, run after the read paths are
+        // cut over, and by then every sheet has been materialised. Skipping
+        // outright meant the flag cleared nothing on exactly the pages it was
+        // meant for, and reported a clean run.
+        if (options.clearContent && !options.dryRun && (page.content ?? '') !== '') {
+          await db.update(pages).set({ content: '' }).where(eq(pages.id, page.id));
+          report.clearedExisting++;
+        }
         report.skippedExisting++;
         continue;
       }
@@ -187,7 +203,8 @@ async function main() {
         continue;
       }
 
-      await db.transaction(async (tx) => {
+      try {
+        await db.transaction(async (tx) => {
         for (const [tabIndex, sheet] of parsed.tabs.entries()) {
           const materialized = rowsFromSheetData(sheet, tabIndex);
 
@@ -248,15 +265,37 @@ async function main() {
         if (options.clearContent) {
           await tx.update(pages).set({ content: '' }).where(eq(pages.id, page.id));
         }
-      });
+        });
 
-      report.migrated++;
+        report.migrated++;
+      } catch (error) {
+        // One page must not abort the run.
+        //
+        // Each page migrates in its own transaction, so a failure here leaves
+        // that page untouched and every other page already committed. Aborting
+        // the whole backfill on the first bad row would mean an operator
+        // restarts from the beginning and hits the same page again; recording
+        // it lets the run finish and the failures be dealt with by id.
+        report.failed.push({
+          pageId: page.id,
+          title: page.title,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
 
     if (options.pageId) break;
   }
 
   console.log(JSON.stringify(report, null, 2));
+
+  if (report.failed.length > 0) {
+    console.error(
+      `\n${report.failed.length} sheet(s) failed to migrate and were left untouched. ` +
+        `Re-run with --page <id> after investigating.`
+    );
+    process.exitCode = 1;
+  }
 
   if (report.unparseable.length > 0) {
     console.error(

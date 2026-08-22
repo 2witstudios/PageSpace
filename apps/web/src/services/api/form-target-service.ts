@@ -83,6 +83,7 @@ export async function createFormTarget({
   }
 
   const generated = generateToken(FORM_TOKEN_PREFIX);
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   try {
     const [formTarget] = await db.transaction(async (tx) => {
@@ -108,7 +109,10 @@ export async function createFormTarget({
       // Provisioning a form overwrites row 1 of somebody's sheet. That used to
       // reach the page's activity timeline via `applyPageMutation`; without an
       // entry here it happened invisibly.
-      await logActivityWithTx(
+      // Captured and fired after commit, as `appendFormSubmission` does.
+      // Dropping it meant workflows wired to the target sheet never ran when a
+      // form was provisioned.
+      deferredTrigger = await logActivityWithTx(
         {
           userId: mutationContext.userId,
           actorEmail: mutationContext.actorEmail ?? 'unknown@system',
@@ -145,6 +149,7 @@ export async function createFormTarget({
         .returning();
     });
 
+    deferredTrigger?.();
     return { token: generated.token, formTarget };
   } catch (error) {
     if (isUniqueViolation(error)) {

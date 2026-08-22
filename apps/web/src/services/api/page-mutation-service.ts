@@ -9,7 +9,7 @@ import { writePageContent } from '@pagespace/lib/services/page-content-store';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
-import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { replaceFromDocument, readSheetDocument } from '@pagespace/lib/sheets/store';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
@@ -103,7 +103,19 @@ export async function applyPageMutation({
   const changeGroupId = context.changeGroupId ?? createChangeGroupId();
   const changeGroupType = context.changeGroupType ?? inferChangeGroupType({ isAiGenerated: context.isAiGenerated });
 
-  const previousContent = currentPage.content ?? '';
+  // A sheet's previous content is its rows, not its column.
+  //
+  // `pages.content` is empty for a materialised sheet, so hashing it produced a
+  // `stateHashBefore` over the empty string while `stateHashAfter` covered the
+  // real document — making the before/after pair in the activity chain
+  // meaningless for exactly the pages that change most. One projection read on
+  // the editor save path, which is already O(document).
+  const isSheetPage = isSheetType(currentPage.type as PageType);
+  const storedContent = currentPage.content ?? '';
+  const previousContent =
+    isSheetPage && updates.content !== undefined
+      ? (await readSheetDocument(pageId)) ?? storedContent
+      : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
@@ -181,8 +193,7 @@ export async function applyPageMutation({
   // sources of truth. It also removes the whole O(document) apparatus for
   // sheets: no blob snapshot, no page version, and no full-document payload in
   // the activity log. The sheet's own change log records the edit instead.
-  const isSheetContentWrite =
-    updates.content !== undefined && isSheetType(currentPage.type as PageType);
+  const isSheetContentWrite = updates.content !== undefined && isSheetPage;
 
   const shouldSnapshotBefore = updates.content !== undefined && !isSheetContentWrite;
   let contentSnapshotRef: string | null = null;

@@ -638,11 +638,28 @@ export async function replaceFromDocument(
       await tx.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tab.id));
       await insertDependencyRows(tab.id, materialized.cellDeps, materialized.rangeDeps, tx);
 
-      await updateExtent(
-        tab.id,
-        { rowCount: materialized.tab.rowCount, columnCount: materialized.tab.columnCount },
-        tx
-      );
+      // EVERY tab-level field, not just the extent.
+      //
+      // The document carries the sheet's name, freezes, column formats and
+      // widths, row heights and named ranges, and this is the path every editor
+      // save takes. Persisting only `rowCount`/`columnCount` meant renaming a
+      // sheet, freezing panes, resizing a column or setting a column format
+      // appeared to work and then reverted on reload.
+      await tx
+        .update(sheetTabs)
+        .set({
+          name: materialized.tab.name,
+          rowCount: materialized.tab.rowCount,
+          columnCount: materialized.tab.columnCount,
+          frozenRows: materialized.tab.frozenRows,
+          frozenColumns: materialized.tab.frozenColumns,
+          columnFormats: materialized.tab.columnFormats,
+          columnWidths: materialized.tab.columnWidths,
+          rowHeights: materialized.tab.rowHeights,
+          ranges: materialized.tab.ranges,
+          updatedAt: new Date(),
+        })
+        .where(eq(sheetTabs.id, tab.id));
 
       rowTotal += materialized.rows.length;
     }
@@ -915,6 +932,16 @@ export async function deleteRows(
   const run = async (tx: Executor) => {
     const tab = await getTab(ref, tx);
     if (!tab) throw new Error(`Sheet tab not found for page ${ref.pageId}`);
+
+    // Validated before anything shifts. A negative `fromRow` would make the
+    // scratch-range arithmetic below move rows to indexes the non-negative
+    // CHECK rejects, failing the statement halfway through a structural change.
+    if (!Number.isInteger(fromRow) || fromRow < 0) {
+      throw new Error(`Invalid fromRow: ${fromRow}`);
+    }
+    if (!Number.isInteger(count)) {
+      throw new Error(`Invalid count: ${count}`);
+    }
     if (count <= 0) return { deleted: 0, rowCount: tab.rowCount };
 
     const end = fromRow + count - 1;
@@ -1097,13 +1124,22 @@ async function loadRowsByIndex(
 
   // Chunked: `inArray` emits one bind parameter per index, and a caller with
   // tens of thousands of them would hit the 65535 ceiling as a protocol error.
+  // Ascending, always.
+  //
+  // `FOR UPDATE` takes row locks in the order rows are returned. Two callers
+  // touching an overlapping set in different orders can each hold a lock the
+  // other wants and deadlock; a single deterministic order makes that
+  // impossible. Sorting also makes the chunk boundaries stable.
+  const ordered = [...indexes].sort((a, b) => a - b);
+
   const CHUNK = 5_000;
-  for (let index = 0; index < indexes.length; index += CHUNK) {
-    const slice = indexes.slice(index, index + CHUNK);
+  for (let index = 0; index < ordered.length; index += CHUNK) {
+    const slice = ordered.slice(index, index + CHUNK);
     let query = exec
       .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
       .from(sheetRows)
       .where(and(eq(sheetRows.tabId, tabId), inArray(sheetRows.rowIndex, slice)))
+      .orderBy(asc(sheetRows.rowIndex))
       .limit(slice.length)
       .$dynamic();
 
@@ -1234,12 +1270,19 @@ async function rewriteDependencyEdges(
 ): Promise<void> {
   const addresses = updates.map((u) => u.address);
 
-  await exec
-    .delete(sheetCellDeps)
-    .where(and(eq(sheetCellDeps.tabId, tabId), inArray(sheetCellDeps.address, addresses)));
-  await exec
-    .delete(sheetRangeDeps)
-    .where(and(eq(sheetRangeDeps.tabId, tabId), inArray(sheetRangeDeps.formulaAddress, addresses)));
+  // Chunked, like every other multi-value statement here. `appendRows` routes
+  // each appended cell through `setCells`, so a bulk import puts tens of
+  // thousands of addresses in these `IN` lists and would overrun the 65535
+  // bind-parameter ceiling as protocol error 08P01.
+  for (let index = 0; index < addresses.length; index += INSERT_CHUNK_ROWS) {
+    const slice = addresses.slice(index, index + INSERT_CHUNK_ROWS);
+    await exec
+      .delete(sheetCellDeps)
+      .where(and(eq(sheetCellDeps.tabId, tabId), inArray(sheetCellDeps.address, slice)));
+    await exec
+      .delete(sheetRangeDeps)
+      .where(and(eq(sheetRangeDeps.tabId, tabId), inArray(sheetRangeDeps.formulaAddress, slice)));
+  }
 
   const cellRows: { address: string; dependsOn: string[]; dependents: string[] }[] = [];
   const rangeRows: {
@@ -1309,28 +1352,42 @@ async function resolveDependentClosure(
   let frontier = dirty.map((address) => address.toUpperCase());
 
   while (frontier.length > 0) {
-    const direct = await exec
-      .select({ address: sheetCellDeps.address })
-      .from(sheetCellDeps)
-      .where(
-        and(
-          eq(sheetCellDeps.tabId, tabId),
-          sql`${sheetCellDeps.dependsOn} && ${toTextArray(frontier)}`
-        )
-      )
-      .limit(MAX_RECOMPUTE_CLOSURE + 1);
+    // The frontier is chunked for the same bind-parameter reason: a bulk write
+    // makes it as large as the batch, and both of these statements scale their
+    // parameter count with it (the range query at four per address).
+    const FRONTIER_CHUNK = 500;
+    const found: { address: string }[] = [];
 
-    const positions = frontier.map((address) => decodeCellAddress(address));
-    const viaRange = positions.length
-      ? await exec
-          .select({ address: sheetRangeDeps.formulaAddress })
-          .from(sheetRangeDeps)
-          .where(and(eq(sheetRangeDeps.tabId, tabId), rangeCovers(positions)))
-          .limit(MAX_RECOMPUTE_CLOSURE + 1)
-      : [];
+    for (let index = 0; index < frontier.length; index += FRONTIER_CHUNK) {
+      const slice = frontier.slice(index, index + FRONTIER_CHUNK);
+
+      found.push(
+        ...(await exec
+          .select({ address: sheetCellDeps.address })
+          .from(sheetCellDeps)
+          .where(
+            and(
+              eq(sheetCellDeps.tabId, tabId),
+              sql`${sheetCellDeps.dependsOn} && ${toTextArray(slice)}`
+            )
+          )
+          .limit(MAX_RECOMPUTE_CLOSURE + 1))
+      );
+
+      const positions = slice.map((address) => decodeCellAddress(address));
+      if (positions.length > 0) {
+        found.push(
+          ...(await exec
+            .select({ address: sheetRangeDeps.formulaAddress })
+            .from(sheetRangeDeps)
+            .where(and(eq(sheetRangeDeps.tabId, tabId), rangeCovers(positions)))
+            .limit(MAX_RECOMPUTE_CLOSURE + 1))
+        );
+      }
+    }
 
     const next: string[] = [];
-    for (const { address } of [...direct, ...viaRange]) {
+    for (const { address } of found) {
       const normalized = address.toUpperCase();
       if (seen.has(normalized)) continue;
       seen.add(normalized);

@@ -95,7 +95,20 @@ export function decodeColumnLabel(label: string): number {
  * replaces in `evaluation.ts` and `format-ops.ts`.
  */
 export function columnLabelOf(address: string): string {
-  return address.replace(/\d+$/, '');
+  // Scanned, not `replace(/\d+$/, '')`.
+  //
+  // That pattern is unanchored at its start, so the engine retries `\d+$` from
+  // every position and degrades to O(n²) on a long run of digits that does not
+  // end the string — CodeQL flags it as a polynomial-time regex on uncontrolled
+  // input, and cell addresses reach here from user data. Walking back over the
+  // trailing digits is exactly equivalent for every input and linear.
+  let end = address.length;
+  while (end > 0) {
+    const code = address.charCodeAt(end - 1);
+    if (code < 48 || code > 57) break;
+    end--;
+  }
+  return address.slice(0, end);
 }
 
 /**

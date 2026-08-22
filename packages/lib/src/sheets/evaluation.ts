@@ -17,13 +17,19 @@ import type {
   SheetDocDependencyRecord,
 } from './types';
 import { LOCAL_PAGE_KEY } from './constants';
-import { encodeCellAddress, expandRange, numberRegex } from './address';
+import { encodeCellAddress, expandRange, numberRegex, columnLabelOf } from './address';
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
 import { applyNumberFormat, resolveCellFormat } from './format';
 
-/** Column letters of an A1 address, for column-default format lookup. */
-const columnLettersOf = (address: string): string => address.replace(/\d+$/, '');
+/**
+ * Column letters of an A1 address, for column-default format lookup.
+ *
+ * The shared scanner, not a local `replace(/\d+$/, '')`. That pattern is
+ * unanchored and retries from every position, which CodeQL flags as
+ * polynomial-time on uncontrolled input.
+ */
+const columnLettersOf = columnLabelOf;
 
 interface EvaluationEnvironment {
   options: SheetEvaluationOptions;

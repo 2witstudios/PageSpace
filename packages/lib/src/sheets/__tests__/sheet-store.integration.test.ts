@@ -35,6 +35,7 @@ import {
   listTabs,
 } from '../store';
 import type { StoredRow } from '../projection';
+import { parseSheetContent, serializeSheetContent } from '../io';
 
 /**
  * Ids this file created, so cleanup can be row-scoped.
@@ -640,6 +641,38 @@ describe('sheet store (integration)', () => {
       expect(document).toContain('First');
       expect(document).toContain('Second');
       expect(document).toContain('two');
+    });
+  });
+
+  describe('tab metadata survives a document save', () => {
+    it('persists name, freezes, widths and formats — not just the extent', async () => {
+      // `replaceFromDocument` is the path every editor save takes. Writing only
+      // rowCount/columnCount meant renaming a sheet, freezing panes, resizing a
+      // column or setting a column format appeared to work and then reverted on
+      // reload.
+      const { pageId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId });
+
+      const document = (await readSheetDocument(pageId))!;
+      const parsed = parseSheetContent(document);
+      const edited = serializeSheetContent(
+        {
+          ...parsed,
+          sheetName: 'Renamed',
+          frozenRows: 2,
+          columnWidths: { A: 240 },
+          columnFormats: { B: { bold: true } },
+        },
+        { pageId }
+      );
+
+      await replaceFromDocument({ pageId }, edited, { userId: ownerId });
+
+      const tab = (await getTab({ pageId }))!;
+      expect(tab.name).toBe('Renamed');
+      expect(tab.frozenRows).toBe(2);
+      expect(tab.columnWidths).toEqual({ A: 240 });
+      expect(tab.columnFormats).toEqual({ B: { bold: true } });
     });
   });
 

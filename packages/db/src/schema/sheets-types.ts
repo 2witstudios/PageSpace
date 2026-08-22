@@ -4,8 +4,9 @@
  * These live here rather than in `@pagespace/lib` because the dependency runs
  * the other way — `lib` depends on `db`, so `db` cannot import the sheet types
  * from it. To stop the two definitions drifting silently, `lib` asserts at
- * compile time that its `CellFormat` and these are mutually assignable; see
- * `packages/lib/src/sheets/storage-contract.ts`.
+ * compile time that its `CellFormat` and these are mutually assignable, on both
+ * keys and shape; see the `MutuallyAssignable`/`SameKeys` guard at the top of
+ * `packages/lib/src/sheets/projection.ts`.
  */
 
 export type StoredNumberFormatKind =

@@ -91,6 +91,18 @@ export interface UserSheetExport {
   tabName: string;
   rowCount: number;
   columnCount: number;
+  /**
+   * Tab-level state the subject authored: frozen panes, column formats and
+   * widths, row heights, named ranges. It is as much their work as the cell
+   * contents, and an export that returned only cells would be answering less
+   * than the sheet actually holds.
+   */
+  frozenRows: number | null;
+  frozenColumns: number | null;
+  columnFormats: unknown;
+  columnWidths: unknown;
+  rowHeights: unknown;
+  ranges: unknown;
   rows: {
     rowIndex: number;
     cells: Record<string, { raw: string; value?: string | number | boolean; error?: string }>;
@@ -558,6 +570,12 @@ export async function collectUserSheets(
       tabName: sheetTabs.name,
       rowCount: sheetTabs.rowCount,
       columnCount: sheetTabs.columnCount,
+      frozenRows: sheetTabs.frozenRows,
+      frozenColumns: sheetTabs.frozenColumns,
+      columnFormats: sheetTabs.columnFormats,
+      columnWidths: sheetTabs.columnWidths,
+      rowHeights: sheetTabs.rowHeights,
+      ranges: sheetTabs.ranges,
     })
     .from(sheetTabs)
     .innerJoin(pages, eq(sheetTabs.pageId, pages.id))
@@ -604,6 +622,12 @@ export async function collectUserSheets(
       tabName: tab.tabName,
       rowCount: tab.rowCount,
       columnCount: tab.columnCount,
+      frozenRows: tab.frozenRows,
+      frozenColumns: tab.frozenColumns,
+      columnFormats: tab.columnFormats,
+      columnWidths: tab.columnWidths,
+      rowHeights: tab.rowHeights,
+      ranges: tab.ranges,
       rows,
     });
   }
