@@ -16,7 +16,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { existsSync, statSync } from 'fs';
+import { existsSync, readdirSync, realpathSync } from 'fs';
 import path from 'path';
 import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
@@ -110,10 +110,23 @@ export interface FullValidationResult {
   };
 }
 
-/** A path that exists AND is a directory we can list. Anything else cannot be a storage root. */
+/**
+ * A path that exists, is a directory, AND can actually be listed.
+ *
+ * `readdirSync`, not `statSync`: stat needs no permission on the directory
+ * itself, so a mode-000 root passes an `isDirectory()` check while every row
+ * underneath it still fails to resolve — the same silent green as a missing
+ * root, one shape over. Not exotic: the canonical deployment root is a
+ * root-owned Docker volume (`infrastructure/docker-compose.tenant.yml`), and a
+ * validator run as a non-root user against it lands exactly here.
+ *
+ * This is also what the surrounding messages already claimed, so it closes the
+ * gap between what the code said and what it checked.
+ */
 function isUsableDirectory(candidate: string): boolean {
   try {
-    return statSync(candidate).isDirectory();
+    readdirSync(candidate);
+    return true;
   } catch {
     return false;
   }
@@ -137,8 +150,11 @@ function isUsableDirectory(candidate: string): boolean {
  * than the drift it was meant to fix, which surfaces as a loud failure via the
  * nothing-was-compared check below.
  *
- * So the source root must be passed explicitly. Kept as a function, with tests
- * asserting the env var is ignored, so this does not get "fixed" back.
+ * So the source root must be passed explicitly. Kept as a function so a test
+ * can set `FILE_STORAGE_PATH` and assert the result is unchanged — an arity
+ * check is not enough, because a DEFAULTED second parameter
+ * (`envValue = process.env.FILE_STORAGE_PATH`) reintroduces the bug and leaves
+ * `Function.length` at 1.
  */
 export function resolveSourceStorageRoot(argValue: string | undefined): string {
   return argValue || './uploads';
@@ -498,6 +514,35 @@ async function main(): Promise<void> {
 
   const userIds = usersArg.split(',').map((s) => s.trim()).filter(Boolean);
   validateIds(userIds, 'user ID');
+
+  // REFUSE A SELF-COMPARISON. Both roots default to `./uploads`, so running
+  // this on the target host after an import with neither path flag points both
+  // sides at the same directory: every checksum matches, nothing is compared,
+  // and the run reports success. Removing `FILE_STORAGE_PATH` from the source
+  // fallback closed one route to that; the defaults are the other.
+  //
+  // Checked here rather than inside `validateData` on purpose: identical roots
+  // are meaningless for an OPERATOR but are a legitimate harness pattern, and
+  // eight cases in the test suite rely on it. The operator error lives at the
+  // CLI boundary, which is where the bad defaults are.
+  //
+  // `realpathSync` so two spellings of one directory — a symlink, a relative
+  // path, a trailing slash — cannot slip through a string comparison.
+  const sameRoot = (() => {
+    try {
+      return realpathSync(sourceFileStoragePath) === realpathSync(targetFileStoragePath);
+    } catch {
+      return sourceFileStoragePath === targetFileStoragePath;
+    }
+  })();
+  if (sameRoot) {
+    console.error(
+      `Refusing to run: --source-file-path and --target-file-path resolve to the same directory `
+      + `(${sourceFileStoragePath}). Comparing a directory against itself proves nothing about the `
+      + `migration — pass both explicitly.`,
+    );
+    process.exit(1);
+  }
 
   console.log('Validating migration integrity...');
 

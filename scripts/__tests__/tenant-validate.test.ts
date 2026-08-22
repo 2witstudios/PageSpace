@@ -6,7 +6,7 @@
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm, symlink } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, rm, symlink, chmod } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -92,10 +92,23 @@ describe('resolveSourceStorageRoot', () => {
     expect(resolveSourceStorageRoot(undefined)).toBe('./uploads');
   });
 
-  it('takes only one argument, so FILE_STORAGE_PATH cannot reach it', () => {
-    // A signature check, not a behaviour check: the failure mode is someone
-    // re-adding an env parameter, and arity is what makes that visible.
-    expect(resolveSourceStorageRoot.length).toBe(1);
+  it('ignores FILE_STORAGE_PATH even when it is set', () => {
+    // BEHAVIOUR, not signature. The first version of this asserted
+    // `resolveSourceStorageRoot.length === 1`, which is theatre:
+    // `Function.length` counts parameters before the first defaulted one, so
+    // `(argValue, envValue = process.env.FILE_STORAGE_PATH)` passes the arity
+    // check, keeps every call site working, and reintroduces the self-comparison
+    // in full. Setting the variable and asserting the result is the only form
+    // that catches all three spellings.
+    const previous = process.env.FILE_STORAGE_PATH;
+    process.env.FILE_STORAGE_PATH = '/data/target-host/files';
+    try {
+      expect(resolveSourceStorageRoot(undefined)).toBe('./uploads');
+      expect(resolveSourceStorageRoot('/explicit')).toBe('/explicit');
+    } finally {
+      if (previous === undefined) delete process.env.FILE_STORAGE_PATH;
+      else process.env.FILE_STORAGE_PATH = previous;
+    }
   });
 });
 
@@ -380,20 +393,36 @@ describe('validateData', () => {
     const asFile = path.join(tmpDir, 'root-is-a-file');
     await writeFile(asFile, 'not a directory');
 
-    for (const [label, sourceRoot] of [
-      ['does not exist', path.join(tmpDir, 'nope')],
-      ['is a regular file', asFile],
-    ] as [string, string][]) {
-      const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
-        sourceDatabaseUrl: getTestDatabaseUrl(),
-        targetDatabaseUrl: getTestDatabaseUrl(),
-        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
-        sourceFileStoragePath: sourceRoot,
-        targetFileStoragePath: path.join(tmpDir, 'target-none'),
-      });
-      expect(result.fileResults.passed, label).toBe(false);
-      expect(result.fileResults.mismatches.map((m) => m.reason).join(), label)
-        .toMatch(/not a readable directory/);
+    // Third shape: a real directory with no read permission. `statSync`
+    // succeeds on it — stat needs no permission on the directory itself — so an
+    // `isDirectory()` check waves it through while every row underneath still
+    // fails to resolve. The canonical deployment root is a root-owned Docker
+    // volume, so a validator run as a non-root user lands exactly here.
+    const unreadable = path.join(tmpDir, 'root-unreadable');
+    await mkdir(unreadable, { recursive: true });
+    await chmod(unreadable, 0o000);
+
+    try {
+      for (const [label, sourceRoot] of [
+        ['does not exist', path.join(tmpDir, 'nope')],
+        ['is a regular file', asFile],
+        ['is an unreadable directory', unreadable],
+      ] as [string, string][]) {
+        const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+          sourceDatabaseUrl: getTestDatabaseUrl(),
+          targetDatabaseUrl: getTestDatabaseUrl(),
+          userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+          sourceFileStoragePath: sourceRoot,
+          targetFileStoragePath: path.join(tmpDir, 'target-none'),
+        });
+        expect(result.fileResults.passed, label).toBe(false);
+        expect(result.fileResults.mismatches.map((m) => m.reason).join(), label)
+          .toMatch(/not a readable directory/);
+      }
+    } finally {
+      // Restore before `afterEach`'s recursive rm, which cannot descend into a
+      // mode-000 directory.
+      await chmod(unreadable, 0o755);
     }
   });
 
