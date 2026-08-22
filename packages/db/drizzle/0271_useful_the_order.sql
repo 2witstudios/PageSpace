@@ -1,0 +1,16 @@
+-- Content Tags epic, Phase 2 — index `content_tags."createdBy"`.
+--
+-- Its FK is ON DELETE SET NULL, so erasing a user makes Postgres find every row
+-- that user ever tagged. Unindexed that is a sequential scan of what is designed
+-- to be one of the larger tables in the schema — one row per tag per target — on
+-- the Art 17 erasure path, which is the path least able to afford one.
+-- `collectUserContentTags` filters the same column for the Art 15 side.
+--
+-- Its own migration rather than folded into 0268 because 0268 is already wired
+-- into the journal with its snapshot; regenerating it would mint a new random
+-- name and force the snapshot chain to be rebuilt, for a strictly additive
+-- CREATE INDEX that costs nothing as its own step.
+--
+-- Precedent for indexing exactly this column: calendar_events, workflows,
+-- email_broadcasts.
+CREATE INDEX "content_tags_created_by_idx" ON "content_tags" USING btree ("createdBy");

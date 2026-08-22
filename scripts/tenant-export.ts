@@ -34,6 +34,7 @@ import {
   toSqlInList,
   validateIds,
   conversationSelectionWhere,
+  contentTagSelectionWhere,
 } from './lib/migration-utils';
 import {
   exportColumns as cols,
@@ -472,27 +473,17 @@ export async function exportData(
   nullifyOrphanedUserRefs(pagePermissionsData, allExportedUserIdSet, 'grantedBy');
 
   // Tag ASSIGNMENTS on exported pages, and the vocabulary rows they reference.
-  //
-  // `content_tags."pageId"` is notNull for every target kind, so this one page
-  // filter reaches page-, text-, cell- and message-anchored tags alike — which
-  // is exactly what that denormalization is for. But a message-anchored row
-  // also carries a real FK onto `channel_messages` or `messages`, and those two
-  // are selected by their OWN rules (a channel message by page, an AI message
-  // by conversation), so a tag whose page travels while its message does not
-  // would be a dangling FK the import aborts on. Neither reference is
-  // nullable-with-meaning here — an `ai_message` row with a NULL `aiMessageId`
-  // violates `content_tags_target_chk` — so the row is DROPPED rather than
-  // unbound, unlike the polymorphic pointers elsewhere in this file.
-  const exportedChannelMessageIdSet = new Set(channelMessageIds);
-  const exportedAiMessageIdSet = new Set(messagesData.map((r) => r.id as string));
-  const contentTagsData = (await queryRows(db, sql.raw(
-    `SELECT * FROM content_tags WHERE "pageId" IN (${pageIn})`,
-  ))).filter((r) => {
-    const channelMessageId = r.channelMessageId as string | null;
-    const aiMessageId = r.aiMessageId as string | null;
-    return (channelMessageId === null || exportedChannelMessageIdSet.has(channelMessageId))
-      && (aiMessageId === null || exportedAiMessageIdSet.has(aiMessageId));
-  });
+  // The selection rule lives in `contentTagSelectionWhere` so the validator asks
+  // exactly the question this answers; its docblock has the reasoning.
+  const contentTagsData = await queryRows(db, sql.raw(
+    `SELECT * FROM content_tags WHERE ${contentTagSelectionWhere(
+      pageIn,
+      driveIn,
+      toSqlInList(channelMessageIds),
+      toSqlInList(conversationIds),
+      allUserIn,
+    )}`,
+  ));
   nullifyOrphanedUserRefs(contentTagsData, allExportedUserIdSet, 'createdBy');
   // The vocabulary travels by DRIVE, not by which entries happen to be in use.
   // `tags` is drive-scoped now, so a drive's tag list is part of the drive —

@@ -25,6 +25,7 @@ import {
   toSqlInList,
   validateIds,
   conversationSelectionWhere,
+  contentTagSelectionWhere,
   workspaceSelectionWhere,
 } from './lib/migration-utils';
 
@@ -167,19 +168,28 @@ export async function validateData(
   // PLUS the ones DISCOVERED through the page arms. Validating on the
   // requested set alone left a discovered user's workspace, and its shells'
   // `coldTail` terminal scrollback, carried but never checked.
-  const convoOwnerRows = await sourceDb.execute(
-    sql.raw(`SELECT DISTINCT "userId" AS id FROM conversations WHERE id IN (${convoIn})`),
+  // BOTH discovery arms, which the comment above already claimed and the code
+  // did not do: tenant-export.ts seeds `referencedUserIds` from the CHANNEL
+  // MESSAGE authors as well as the conversation owners. Omitting the channel arm
+  // made this set strictly narrower than the one the exporter scopes on, so
+  // anything checked against it asks a narrower question than the bundle
+  // answers — the same drift the shared selection helpers exist to prevent.
+  const discoveredUserRows = await sourceDb.execute(
+    sql.raw(
+      `SELECT DISTINCT "userId" AS id FROM conversations WHERE id IN (${convoIn})`
+      + ` UNION SELECT DISTINCT "userId" AS id FROM channel_messages WHERE "pageId" IN (${pageIn})`,
+    ),
   );
   const exportedUserIds = new Set<string>(userIds);
-  for (const row of convoOwnerRows.rows as Record<string, unknown>[]) {
+  for (const row of discoveredUserRows.rows as Record<string, unknown>[]) {
     if (row.id) exportedUserIds.add(row.id as string);
   }
   const exportedUserIn = toSqlInList(exportedUserIds);
 
-  const contentTagSelectionWhere =
-    `"pageId" IN (${pageIn})`
-    + ` AND ("channelMessageId" IS NULL OR "channelMessageId" IN (${channelMsgIn}))`
-    + ` AND ("aiMessageId" IS NULL OR "aiMessageId" IN (SELECT id FROM messages WHERE "conversationId" IN (${convoIn})))`;
+  // The exporter's rule, IMPORTED rather than restated — see
+  // `contentTagSelectionWhere`, whose docblock records the divergence that
+  // happens when this is re-typed here instead.
+  const contentTagWhere = contentTagSelectionWhere(pageIn, driveIn, channelMsgIn, convoIn, exportedUserIn);
 
   // ID-based queries for tables with a single PK
   const idQueries: Record<string, ReturnType<typeof sql>> = {
@@ -196,7 +206,7 @@ export async function validateData(
     // The assignment rule is written as one shared predicate so the two files
     // cannot drift into disagreeing about what the bundle contains.
     tags: sql.raw(`SELECT id FROM tags WHERE "driveId" IN (${driveIn})`),
-    content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagSelectionWhere}`),
+    content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagWhere}`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
     channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
     // The export's rule, from the shared helper: the sessions the EXPORTED

@@ -130,6 +130,21 @@ export const contentTags = pgTable('content_tags', {
     pageIdx: index('content_tags_page_id_idx').on(table.pageId),
     tagIdx: index('content_tags_tag_id_idx').on(table.tagId),
     /**
+     * `createdBy` has two callers that scan on it, and this table is designed to
+     * be high-volume — one row per tag per target, so a busy drive's assignments
+     * outnumber its pages.
+     *
+     * The one that matters is DELETION: the FK is ON DELETE SET NULL, so erasing
+     * a user makes Postgres find every row they ever tagged. Unindexed that is a
+     * sequential scan of the whole table on the Art 17 path, which is the path
+     * least able to afford one. `collectUserContentTags` filters on the same
+     * column for the Art 15 side.
+     *
+     * Precedent for indexing exactly this column: `calendar_events`,
+     * `workflows`, `email_broadcasts`.
+     */
+    createdByIdx: index('content_tags_created_by_idx').on(table.createdBy),
+    /**
      * One page-level assignment of a tag to a page, ever. PARTIAL, so it
      * constrains only the kind whose identity is `(pageId, tagId)` and leaves
      * the anchored kinds free to repeat.
