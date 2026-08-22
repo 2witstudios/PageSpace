@@ -6,7 +6,7 @@
  * Run: docker compose -f docker-compose.test.yml up -d && cd scripts && npx vitest run
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
-import { mkdir, mkdtemp, writeFile, rm } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile, rm, symlink } from 'fs/promises';
 import { existsSync } from 'fs';
 import path from 'path';
 import os from 'os';
@@ -344,6 +344,38 @@ describe('validateData', () => {
     const pagesResult = result.tableResults.find((r) => r.table === 'pages');
     expect(pagesResult).toBeDefined();
     expect(pagesResult!.sourceCount).toBe(2);
+  });
+
+  it('does not fault a file whose storagePath escapes the storage root — the export skipped it', async () => {
+    // The export resolves the source blob with `resolvePathWithin`, which
+    // refuses a path escaping the storage root and SKIPS the row. A raw
+    // `path.join` here follows the symlink, finds the file, and then faults the
+    // row as 'missing in target' — failing a correct migration.
+    //
+    // A symlinked storage root is the practical trigger: `existsSync` follows
+    // symlinks, so the naive check sees a real file where the export saw an
+    // escape.
+    const realOutside = path.join(tmpDir, 'outside-root');
+    await mkdir(path.join(realOutside, 'test_file_blob_001'), { recursive: true });
+    await writeFile(path.join(realOutside, 'test_file_blob_001', 'data.txt'), 'escaped');
+
+    const linkedSource = path.join(tmpDir, 'linked-source');
+    await mkdir(linkedSource, { recursive: true });
+    await symlink(path.join(realOutside, 'test_file_blob_001'), path.join(linkedSource, 'test_file_blob_001'), 'dir');
+
+    const emptyTarget = path.join(tmpDir, 'target-escaped');
+    await mkdir(emptyTarget, { recursive: true });
+
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: linkedSource,
+      targetFileStoragePath: emptyTarget,
+    });
+
+    expect(result.fileResults.mismatches).toEqual([]);
+    expect(result.fileResults.passed).toBe(true);
   });
 
   it('does not fault a file whose SOURCE blob is gone — the export skipped it', async () => {
