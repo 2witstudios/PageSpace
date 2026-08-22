@@ -113,23 +113,36 @@ export async function applyPageMutation({
   const isSheetPage = isSheetType(currentPage.type as PageType);
   const storedContent = currentPage.content ?? '';
 
-  // Projected for EVERY sheet mutation, not only content writes.
+  // Projected only when the content participates in this mutation.
   //
-  // A rename, move or trash of a materialised sheet would otherwise hash
-  // `stateHashBefore` over the empty column while the preceding entry's
-  // `stateHashAfter` covered the real document — breaking the chain's
-  // before/after linkage and then overwriting `pages.stateHash` with the
-  // empty-content hash. Read through `database` so a caller-supplied
-  // transaction sees its own uncommitted writes rather than a stale snapshot.
-  const previousContent = isSheetPage
-    ? (await readSheetDocument(pageId, database as never)) ?? storedContent
-    : storedContent;
+  // The hash-chain problem is real — comparing `stateHashBefore` over an empty
+  // column against a predecessor's hash over the real document breaks the
+  // linkage — but projecting on EVERY sheet mutation meant renaming, moving or
+  // trashing a 100k-row sheet streamed and serialised the whole document for a
+  // hash nobody reads the content of.
+  //
+  // For a non-content mutation the page's existing `stateHash` already
+  // describes its content, and `computePageStateHash` is fed `contentRef`, so
+  // carrying the stored ref forward keeps the chain consistent without the
+  // projection. Read through `database` so a caller-supplied transaction sees
+  // its own uncommitted writes.
+  const previousContent =
+    isSheetPage && updates.content !== undefined
+      ? (await readSheetDocument(pageId, database as never)) ?? storedContent
+      : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
   const contentFormatAfter = detectPageContentFormat(nextContent);
 
-  const contentRefBefore = hashWithPrefix(contentFormatBefore, previousContent);
+  // For a sheet whose content is NOT part of this mutation, the column is empty
+  // and hashing it would claim the sheet is blank. The page's own `stateHash`
+  // already covers its content, so reuse it as the before-ref rather than
+  // re-deriving one from a column that is not the truth.
+  const contentRefBefore =
+    isSheetPage && updates.content === undefined && currentPage.stateHash
+      ? currentPage.stateHash
+      : hashWithPrefix(contentFormatBefore, previousContent);
   const contentRefAfter = hashWithPrefix(contentFormatAfter, nextContent);
 
   const stateHashBefore = computePageStateHash({

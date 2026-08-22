@@ -491,12 +491,17 @@ export async function regexSearchPages(
     // materialised sheet — reported "found this page, 0 matches" for exactly
     // the pages the row-aware WHERE clause was added to surface. Project the
     // sheet first so the preview describes what actually matched.
-    const previewText = isSheetType(page.type as PageType)
-      ? (await readSheetDocument(page.id)) ?? page.content
-      : page.content;
-
+    // Projected only when the preview is actually built. Computing it
+    // unconditionally streamed every row of every matching sheet and serialised
+    // a whole document that a literal-free regex search then discarded — the
+    // O(document) cost this design removes, reintroduced on a search request.
     const { matchingLines, totalMatches } = canExtractLiteralLineMatches
-      ? extractLiteralMatchingLines(previewText, pattern)
+      ? extractLiteralMatchingLines(
+          isSheetType(page.type as PageType)
+            ? (await readSheetDocument(page.id)) ?? page.content
+            : page.content,
+          pattern
+        )
       : { matchingLines: [], totalMatches: 0 };
 
     results.push({

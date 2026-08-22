@@ -12,6 +12,7 @@ import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { sheetTabs } from '@pagespace/db/schema/sheets';
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { SyncMentionsResult } from '@/services/api/page-mention-service';
 import { computePageMutation } from './page-mutation-plan';
@@ -48,7 +49,7 @@ export async function applyPageUpdateWithRevision(
     // the history that backup and restore read, and stamp `pages.stateHash`
     // with the empty-document hash.
     isSheetType(currentPage.type as PageType)
-      ? { ...currentPage, content: (await deps.readSheetDocument(pageId)) ?? currentPage.content }
+      ? { ...currentPage, content: (await deps.readSheetDocument(pageId, deps.db as never)) ?? currentPage.content }
       : currentPage,
     updateData
   );
@@ -81,6 +82,12 @@ export async function applyPageUpdateWithRevision(
         { userId: options?.userId ?? undefined },
         deps.db as never
       );
+    } else {
+      // Rolling back TO an empty sheet must empty it. Skipping the write and
+      // only blanking the column reported success, bumped the revision and left
+      // every row in place — so undoing the edit that first populated a blank
+      // sheet appeared to work and changed nothing.
+      await deps.db.delete(sheetTabs).where(eq(sheetTabs.pageId, pageId));
     }
     await deps.db.update(pages).set({ content: '' }).where(eq(pages.id, pageId));
   }

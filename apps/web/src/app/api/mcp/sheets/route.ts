@@ -17,6 +17,7 @@ import {
   MAX_ROW_PAGE_SIZE,
 } from '@pagespace/lib/sheets/store';
 import { SheetQueryError } from '@pagespace/lib/sheets/query';
+import { SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -204,7 +205,23 @@ export async function POST(req: NextRequest) {
       // a reader without edit rights gets the document-backed answer instead of
       // silently provisioning storage on someone else's sheet.
       if (accessLevel.canEdit) {
-        tab = await ensureTab({ pageId, tabIndex: 0 }).catch(() => null);
+        try {
+          tab = await ensureTab({ pageId, tabIndex: 0 });
+        } catch (error) {
+          // `materializeFromDocument` throws deliberately when the stored
+          // document cannot be read. Swallowing that produced "this sheet has
+          // not been initialised — append rows to create it", advice which then
+          // hits the same throw inside `appendRows` and returns 500. Report the
+          // real reason so it is actionable.
+          const message = error instanceof Error ? error.message : String(error);
+          if (message.includes('could not be read')) {
+            return NextResponse.json({
+              error: 'Sheet content could not be read',
+              message: `${message} The stored document needs repair before this sheet can be used.`,
+            }, { status: 409 });
+          }
+          throw error;
+        }
         if (tab && (ref.tabIndex ?? 0) !== 0) {
           tab = await getTab(ref);
         }
@@ -349,7 +366,10 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     // A malformed filter is the caller's problem, not a server fault; saying so
     // lets an agent correct itself instead of retrying the same bad query.
-    if (error instanceof SheetQueryError) {
+    if (error instanceof SheetQueryError || error instanceof SheetAddressError) {
+      // Caller's problem, not a server fault — an agent that gets 500 has no
+      // way to correct itself. `A0` and `A9999999999` both clear the route's
+      // address regex and only fail deeper in the store.
       return NextResponse.json({ error: error.message }, { status: 400 });
     }
     if (error instanceof z.ZodError) {

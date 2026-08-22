@@ -84,6 +84,8 @@ export async function applyPageRestoreOps(
   // Pre-fetch all S3 content before entering DB writes so the transaction loop
   // does not block on I/O.
   const contentCache = new Map<string, string>();
+  /** Pages whose stored content could not be read. Never treated as empty. */
+  const readFailed = new Set<string>();
   const opsNeedingContent = ops.filter(
     (op): op is Extract<PageRestoreOp, { op: 'create' | 'overwrite' }> => op.op !== 'soft-delete',
   );
@@ -96,6 +98,13 @@ export async function applyPageRestoreOps(
       try {
         contentCache.set(op.pageId, await readPageContent(op.contentRef));
       } catch {
+        // Recorded as a FAILURE, not as empty content.
+        //
+        // Collapsing the two is how a transient blob hiccup became destructive:
+        // the sheet branch below treats an empty document as "this sheet was
+        // empty at backup time" and clears its rows, so one unreadable blob
+        // would have permanently wiped a live spreadsheet during a restore.
+        readFailed.add(op.pageId);
         contentCache.set(op.pageId, '');
       }
     }
@@ -171,16 +180,20 @@ export async function applyPageRestoreOps(
           { userId, changeGroupId },
           tx as never
         );
-      } else {
-        // An empty restored document means the sheet WAS empty at backup time
-        // (or its blob could not be read). Leaving the existing rows in place
-        // would report a successful restore while the spreadsheet kept its
-        // current, post-backup data — the one page type where "restore"
-        // silently restores nothing. Clearing them makes the restore mean what
-        // it says.
+      } else if (!readFailed.has(op.pageId)) {
+        // Genuinely empty at backup time — the blob read succeeded and returned
+        // nothing, or there was no content to read. Leaving the rows would
+        // report a successful restore while the spreadsheet kept its current,
+        // post-backup data.
+        //
+        // Explicitly NOT reached when the read failed. Clearing rows on a
+        // transient blob error would destroy a live spreadsheet, which is far
+        // worse than a restore that leaves one page untouched.
         await tx.delete(sheetTabs).where(eq(sheetTabs.pageId, op.pageId));
       }
-      await tx.update(pages).set({ content: '' }).where(eq(pages.id, op.pageId));
+      if (!readFailed.has(op.pageId)) {
+        await tx.update(pages).set({ content: '' }).where(eq(pages.id, op.pageId));
+      }
     }
 
     await createPageVersion(

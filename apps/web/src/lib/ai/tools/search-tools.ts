@@ -4,6 +4,8 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
+import { sheetPreviewText } from '@pagespace/lib/sheets/store';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
@@ -143,7 +145,14 @@ export const searchTools = {
               // Extract matching lines if searching content
               const matchingLines: Array<{ lineNumber: number; content: string }> = [];
               if (searchIn !== 'title') {
-                const lines = page.content.split('\n');
+                // A sheet's text is in its rows. The WHERE clause now matches
+                // sheets, so without this a spreadsheet comes back as a hit with
+                // a blank excerpt. Bounded preview rather than the whole
+                // document — this is a result list, not a page read.
+                const searchable = isSheetType(page.type as PageType)
+                  ? (await sheetPreviewText(page.id, { maxRows: 50, maxChars: 4000 })) ?? page.content
+                  : page.content;
+                const lines = searchable.split('\n');
                 // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
                 lines.forEach((line, index) => {
                   if (jsRegex.test(line)) {

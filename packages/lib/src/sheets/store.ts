@@ -104,6 +104,21 @@ export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
 export const DEFAULT_ROW_PAGE_SIZE = 200;
 export const MAX_ROW_PAGE_SIZE = 5_000;
 
+/**
+ * A caller-supplied address that cannot be stored.
+ *
+ * Typed so the API layer can answer 400 rather than 500. `isValidCellAddress`
+ * accepts `A0` and `A9999999999` — both match `/^[A-Z]+\d+$/` — so they clear
+ * every route-level check and only fail here, and an agent that receives
+ * "Sheet operation failed" has no way to correct itself.
+ */
+export class SheetAddressError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SheetAddressError';
+  }
+}
+
 export interface SheetActor {
   userId?: string | null;
   actorEmail?: string | null;
@@ -600,6 +615,47 @@ export async function readSheetDocument(pageId: string, exec: Executor = db): Pr
 }
 
 /**
+ * A short, bounded text preview of a sheet — for snippets and digests.
+ *
+ * Deliberately NOT `readSheetDocument`. A search result list or a daily digest
+ * wants a line or two, and projecting the whole spreadsheet per row would put
+ * an O(sheet) cost on a list endpoint. This reads a fixed handful of rows and
+ * joins their cell values.
+ *
+ * Returns `null` when the sheet has no rows, so callers can fall back to
+ * whatever they were showing before.
+ */
+export async function sheetPreviewText(
+  pageId: string,
+  options: { maxRows?: number; maxChars?: number } = {},
+  exec: Executor = db
+): Promise<string | null> {
+  const maxRows = Math.min(options.maxRows ?? 10, 50);
+  const maxChars = options.maxChars ?? 300;
+
+  const tabs = await listTabs(pageId, exec);
+  if (tabs.length === 0) return null;
+
+  const rows = await readRows(tabs[0].id, { limit: maxRows }, exec);
+  if (rows.length === 0) return null;
+
+  const lines = rows.map((row) =>
+    Object.keys(row.cells ?? {})
+      .sort()
+      .map((label) => {
+        const cell = row.cells[label];
+        const value = cell.value !== undefined && cell.value !== '' ? cell.value : cell.raw;
+        return String(value ?? '');
+      })
+      .filter(Boolean)
+      .join(' ')
+  ).filter(Boolean);
+
+  const text = lines.join('\n').slice(0, maxChars);
+  return text || null;
+}
+
+/**
  * Replace a tab's contents with a document.
  *
  * The editor still sends a whole serialised sheet on save, so this is the
@@ -759,8 +815,14 @@ export async function setCells(
     // `persistRows` upserts the entire `cells` object: writing a row that was
     // only partially loaded would silently delete every column it did not know
     // about.
+    // Read UNLOCKED here. The lock comes later, over the full union, once the
+    // closure is known — see step 3. Taking `FOR UPDATE` on the touched rows
+    // first and the closure rows second is exactly the split acquisition order
+    // that deadlocks: with `A1 = C5*2` and `B5 = A1+1`, a caller writing C5
+    // locks row 4 then wants row 0, while a caller writing A1 locks row 0 then
+    // wants row 4 (40P01, surfacing as a 500 on an MCP or form write).
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
-    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx, true);
+    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx, false);
 
     const before: Record<string, StoredCell | undefined> = {};
     for (const update of normalized) {
@@ -789,24 +851,25 @@ export async function setCells(
     // 4. Load the rows holding those dependents, so recomputing a formula in an
     // untouched row rewrites that row with its other columns intact.
     //
-    // Re-locked as the UNION, ascending, in one pass. Locking the touched rows
-    // and then the closure rows as two ordered statements is not globally
-    // ordered: a closure row can sit below a touched one, so two callers can
-    // still take the same two locks in opposite orders and deadlock. Ascending
-    // over everything this call will write is the invariant that actually
-    // holds.
+    // THE only lock, over the whole union, ascending, in one statement.
+    //
+    // Every caller acquires the same set in the same order, which is what makes
+    // deadlock impossible — a property that only holds if there is a single
+    // acquisition point. The touched rows were read unlocked above precisely so
+    // this can be it.
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
     const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
-
-    // Re-lock the FULL union in one sorted statement, including rows already
-    // cached. `mergeMissingRows` skips what is loaded, so it would lock only
-    // the closure-only remainder — leaving the real acquisition order as
-    // [touched asc] then [closure-only asc], which is not globally ascending.
-    // Two callers with mirrored sets (A touches row 5 whose dependent is row 1,
-    // B touches row 1 whose dependent is row 5) still deadlock, and Postgres
-    // aborts one with 40P01 — a 500 on an MCP or form write.
     await lockRows(tab.id, allRowIndexes, tx);
-    await mergeMissingRows(working, tab.id, allRowIndexes, tx, false);
+
+    // Re-read the touched rows now the lock is held: the unlocked read above
+    // could have seen a row another transaction has since changed, and
+    // `persistRows` writes whole `cells` objects.
+    const fresh = await loadRowsByIndex(tab.id, allRowIndexes, tx, false);
+    for (const [index, row] of fresh) {
+      const pending = working.get(index);
+      // Keep this call's edits, on top of the freshly-read row.
+      working.set(index, pending ? { rowIndex: index, cells: { ...row.cells, ...pending.cells } } : row);
+    }
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.
     const toEvaluate = unique([...dirty, ...closure]);
@@ -1017,6 +1080,15 @@ export async function deleteRows(
 
     const end = fromRow + count - 1;
 
+    // Serialise on the tab, as `appendRows` and the grow path in `setCells` do.
+    //
+    // Without it a concurrent append can commit between the `max(rowIndex)`
+    // read and the second pass of the shift, so rows that were never parked by
+    // pass 1 get moved by `scratch + count` anyway — landing on colliding
+    // indexes, or negative ones that violate the non-negative CHECK, part-way
+    // through a structural change.
+    await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
+
     // Clamp to what exists. `count` arrives from a caller (an agent may send
     // 100,000) and the span can sit entirely past the end of the sheet, in
     // which case nothing is deleted and nothing should shift or shrink.
@@ -1175,16 +1247,16 @@ function normalizeUpdates(updates: readonly SheetCellUpdate[]): NormalizedUpdate
     try {
       position = decodeCellAddress(address);
     } catch {
-      throw new Error(`Invalid cell address: ${update.address}`);
+      throw new SheetAddressError(`Invalid cell address: ${update.address}`);
     }
     // `A0` decodes to row -1 and passes every address regex, so without the
     // lower bound it reached `persistRows` and tripped the non-negative CHECK —
     // an opaque 500 where the caller deserved a 400.
     if (position.row < 0 || position.column < 0) {
-      throw new Error(`Cell address out of range: ${update.address} (rows start at 1)`);
+      throw new SheetAddressError(`Cell address out of range: ${update.address} (rows start at 1)`);
     }
     if (position.row > MAX_ADDRESSABLE_ROW || position.column > MAX_ADDRESSABLE_COLUMN) {
-      throw new Error(
+      throw new SheetAddressError(
         `Cell address out of range: ${update.address} (max row ${MAX_ADDRESSABLE_ROW + 1}, max column ZZZ)`
       );
     }

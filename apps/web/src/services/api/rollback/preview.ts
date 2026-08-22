@@ -8,6 +8,9 @@
  */
 import { eq, and, gt, asc, not, inArray } from '@pagespace/db/operators';
 import { pages, drives } from '@pagespace/db/schema/core';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { activityLogs } from '@pagespace/db/schema/monitoring';
 import type { ActivityAction, ActivityActionPreview } from '@/types/activity-actions';
@@ -222,9 +225,20 @@ export async function previewFromActivity(
       }
     }
 
+    // A sheet's current content is its rows, not the column.
+    //
+    // `pages.content` is empty for a materialised sheet, so comparing it
+    // against an activity's recorded `newValues.content` made EVERY sheet
+    // activity from before the migration report a spurious content conflict and
+    // demand `force` — and showed the user a before/after summary in which the
+    // spreadsheet is blank.
+    const currentContent = isSheetType(currentPage[0].type as PageType)
+      ? (await readSheetDocument(activity.resourceId, deps.db as never)) ?? currentPage[0].content
+      : currentPage[0].content;
+
     currentValues = {
       title: currentPage[0].title,
-      content: currentPage[0].content,
+      content: currentContent,
       parentId: currentPage[0].parentId,
       position: currentPage[0].position,
       isTrashed: currentPage[0].isTrashed,
