@@ -17,6 +17,8 @@ export * from './schema/contact';
 export * from './schema/feedback';
 export * from './schema/storage';
 export * from './schema/tasks';
+export * from './schema/sheets';
+export * from './schema/sheets-types';
 export * from './schema/security-audit';
 export * from './schema/page-views';
 export * from './schema/hotkeys';
@@ -77,6 +79,7 @@ import * as contact from './schema/contact';
 import * as feedback from './schema/feedback';
 import * as storage from './schema/storage';
 import * as tasks from './schema/tasks';
+import * as sheets from './schema/sheets';
 import * as securityAudit from './schema/security-audit';
 import * as pageViews from './schema/page-views';
 import * as hotkeys from './schema/hotkeys';
@@ -138,6 +141,7 @@ export const schema = {
   ...feedback,
   ...storage,
   ...tasks,
+  ...sheets,
   ...securityAudit,
   ...pageViews,
   ...hotkeys,

@@ -21,6 +21,8 @@ import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monito
 import { logActivityWithTx, type DeferredWorkflowTrigger } from '@pagespace/lib/monitoring/activity-logger';
 import { createId } from '@paralleldrive/cuid2';
 import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { ensureTaskItemForPage, ensureTaskListForPage } from './task-sync-service';
 import {
   isProtectedMemoryPage,
@@ -465,11 +467,24 @@ export const pageService = {
     ]);
 
     const pageData = toPageData(page);
+
+    // A sheet's content is generated from its rows.
+    //
+    // `pages.content` is empty for a materialised sheet, and this endpoint is
+    // what `useSheetPersistence` refetches on every `content-updated` socket
+    // event. Returning the empty column made an open, non-dirty sheet adopt a
+    // blank document, render blank, and then write that blank sheet back on the
+    // next autosave — deleting every row. Cross-sheet `@[Sheet]:A1` references
+    // read this endpoint too, and resolved against an empty grid.
+    const content = isSheetType(page.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : sanitizeEmptyContent(pageData.content || '');
+
     return {
       success: true,
       page: {
         ...pageData,
-        content: sanitizeEmptyContent(pageData.content || ''),
+        content,
         children: children.map(toPageData),
         messages,
       },
@@ -582,10 +597,21 @@ export const pageService = {
     }
 
     const pageData = toPageData(updatedPage);
+
+    // Same projection as `getPage`. Without it a successful sheet save answers
+    // with `content: ""` — the blanked column — and any client that adopts the
+    // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
+    // empty. The web editor happens to read only `revision` off this, which is
+    // exactly the kind of accident that stops being true later.
+    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : pageData.content;
+
     return {
       success: true,
       page: {
         ...pageData,
+        content: responseContent,
         children: children.map(toPageData),
         messages,
       },

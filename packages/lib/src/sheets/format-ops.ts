@@ -13,14 +13,15 @@
 
 import type { CellFormat, SheetData } from './types';
 import { isEmptyFormat, resolveCellFormat } from './format';
-import { cellRegex, decodeCellAddress, encodeCellAddress } from './address';
+import { cellRegex, decodeCellAddress, encodeCellAddress, columnLabelOf } from './address';
 
 const normalizeAddress = (address: string): string | null => {
   const normalized = address.trim().toUpperCase();
   return cellRegex.test(normalized) ? normalized : null;
 };
 
-const columnLettersOf = (address: string): string => address.replace(/\d+$/, '');
+/** The shared scanner — see `columnLabelOf` for why this is not a regex. */
+const columnLettersOf = columnLabelOf;
 
 /** Keys that would touch a prototype rather than a property if assigned. */
 const FORBIDDEN_ADDRESSES = new Set(['__proto__', 'constructor', 'prototype']);

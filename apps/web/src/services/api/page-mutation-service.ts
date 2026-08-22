@@ -8,6 +8,9 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { writePageContent } from '@pagespace/lib/services/page-content-store';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument, readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { syncMentions, type SyncMentionsResult } from '@/services/api/page-mention-service';
 import { createMentionNotification } from '@pagespace/lib/notifications/notifications';
 
@@ -100,7 +103,30 @@ export async function applyPageMutation({
   const changeGroupId = context.changeGroupId ?? createChangeGroupId();
   const changeGroupType = context.changeGroupType ?? inferChangeGroupType({ isAiGenerated: context.isAiGenerated });
 
-  const previousContent = currentPage.content ?? '';
+  // A sheet's previous content is its rows, not its column.
+  //
+  // `pages.content` is empty for a materialised sheet, so hashing it produced a
+  // `stateHashBefore` over the empty string while `stateHashAfter` covered the
+  // real document — making the before/after pair in the activity chain
+  // meaningless for exactly the pages that change most. One projection read on
+  // the editor save path, which is already O(document).
+  const isSheetPage = isSheetType(currentPage.type as PageType);
+  const storedContent = currentPage.content ?? '';
+
+  // Projected for EVERY sheet mutation, including rename, move and trash.
+  //
+  // An earlier version skipped the projection for non-content mutations as an
+  // optimisation. That was wrong twice over: `nextContent` fell back to the
+  // empty column, so renaming a 100k-row sheet wrote a ZERO-BYTE
+  // `page_versions` entry that a restore would bring back blank, and the
+  // state-hash pair stopped describing the same content.
+  //
+  // Renames are rare and the projection is bounded by the sheet; correctness
+  // first. Read through `database` so a caller-supplied transaction sees its
+  // own uncommitted writes rather than a stale snapshot.
+  const previousContent = isSheetPage
+    ? (await readSheetDocument(pageId, database as never)) ?? storedContent
+    : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
@@ -169,6 +195,23 @@ export async function applyPageMutation({
 
   const stateHashAfter = computePageStateHash(nextPageState);
 
+  // A sheet's content lives in rows, so a content write to one takes a
+  // different path entirely.
+  //
+  // Everything that edits page content funnels through here — the editor, the
+  // AI write tools, `/api/mcp/documents`, the page service — so routing sheets
+  // once, here, is what stops rows and `pages.content` being two competing
+  // sources of truth. It also removes the whole O(document) apparatus for
+  // sheets: no blob snapshot, no page version, and no full-document payload in
+  // the activity log. The sheet's own change log records the edit instead.
+  const isSheetContentWrite = updates.content !== undefined && isSheetPage;
+
+  // The inline snapshot is skipped for sheets; the blob REFERENCE is not.
+  //
+  // `contentSnapshot` is the multi-megabyte inline copy that caused the write
+  // amplification. `contentRef` is a 64-character hash of a content-addressed
+  // blob, and it is what `rollback/content-snapshot.ts` reads to rebuild a
+  // restore payload. Dropping both is what made Undo a silent no-op on sheets.
   const shouldSnapshotBefore = updates.content !== undefined;
   let contentSnapshotRef: string | null = null;
   let contentSnapshotSize = 0;
@@ -186,6 +229,17 @@ export async function applyPageMutation({
   const newValues: Record<string, unknown> = {};
 
   for (const field of safeUpdatedFields) {
+    // A sheet's content is never carried INLINE in the activity log's value
+    // payloads. Two copies of a multi-megabyte document per edit is the write
+    // amplification that made a 1MB sheet fail its CHECK constraint and roll
+    // the user's write back.
+    //
+    // The blob reference is still recorded (`contentRef`/`contentSize` below),
+    // which is what activity rollback resolves the restore payload from — so
+    // Undo on a sheet edit still has something to restore. Skipping both left
+    // `restoreFields(['content'], previousValues)` with nothing to find, and
+    // Undo returned 200 while doing nothing.
+    if (isSheetContentWrite && field === 'content') continue;
     if (field in currentPage) {
       previousValues[field] = (currentPage as Record<string, unknown>)[field];
     }
@@ -197,6 +251,22 @@ export async function applyPageMutation({
   let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   const applyMutationInTx = async (transaction: typeof db) => {
+    // BEFORE the column is blanked below.
+    //
+    // `replaceFromDocument` goes through `ensureTab`, which materialises a
+    // never-migrated sheet from `pages.content`. Running it after the update
+    // would have it read the empty string this mutation just wrote and
+    // materialise a single blank tab — permanently losing every tab of a
+    // multi-tab sheet on its first save.
+    if (isSheetContentWrite) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: context.userId, actorEmail: context.actorEmail ?? undefined, changeGroupId },
+        transaction
+      );
+    }
+
     const updateWhere = expectedRevision !== undefined
       ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
       : eq(pages.id, pageId);
@@ -205,6 +275,8 @@ export async function applyPageMutation({
       .update(pages)
       .set({
         ...updates,
+        // Rows are the truth for a sheet; the column would be a stale copy.
+        ...(isSheetContentWrite ? { content: '' } : {}),
         revision: nextRevision,
         stateHash: stateHashAfter,
         updatedAt: new Date(),
@@ -229,6 +301,17 @@ export async function applyPageMutation({
 
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
+    //
+    // Sheets get versions too, and the content is the PROJECTED document
+    // (`nextContent`), not the blanked column. Skipping this removed sheet
+    // version history outright, which is what drive backup, drive restore and
+    // page rollback all read — a backup taken after the migration would store a
+    // zero-byte version for every spreadsheet, and restoring it would bring the
+    // sheet back empty.
+    //
+    // One content-addressed blob per DOCUMENT save. Addressed cell writes
+    // (MCP, the SDK, form submissions) never reach here, so they stay O(1) and
+    // are attributed through `sheet_changes` instead.
     await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
@@ -253,7 +336,7 @@ export async function applyPageMutation({
       resourceTitle: nextPageState.title ?? undefined,
       driveId: currentPage.driveId,
       pageId,
-      contentSnapshot: shouldSnapshotBefore ? previousContent : undefined,
+      contentSnapshot: shouldSnapshotBefore && !isSheetContentWrite ? previousContent : undefined,
       contentFormat: shouldSnapshotBefore ? contentFormatBefore : undefined,
       contentRef: contentSnapshotRef ?? undefined,
       contentSize: contentSnapshotSize || undefined,
