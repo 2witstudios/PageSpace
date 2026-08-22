@@ -78,8 +78,36 @@ export type ContentTagSource = (typeof contentTagSource.enumValues)[number];
  * `conversations.contextId`, which is polymorphic with no foreign key — NULL
  * for a global chat, a driveId for a drive chat, and a pageId only for a page
  * chat (see schema/conversations.ts). So `ai_message` tags are scoped to
- * conversations anchored to an AI_CHAT page, and the service is what enforces
- * that; the column cannot.
+ * conversations anchored to a page — which no foreign key can express.
+ *
+ * SCOPE COHERENCE IS ENFORCED, but by a TRIGGER rather than by the foreign keys
+ * above, because the keys below only prove each referenced row EXISTS, never
+ * that the referenced rows belong together. `content_tags_target_scope`
+ * (migration 0270) refuses, on INSERT and UPDATE:
+ *
+ *   - a tag whose drive is not the page's drive — otherwise
+ *     `UNIQUE (driveId, normalizedKey)` guards a boundary the assignments can
+ *     step straight over;
+ *   - a `channel_message` whose message sits on a different page than `pageId`;
+ *   - an `ai_message` whose conversation is not page-scoped to `pageId`, using
+ *     the two disjuncts `repositories/conversation-cleanup.ts` defines (a
+ *     `type='page'` thread whose `contextId` IS the page, or a `type='client'`
+ *     thread whose `agentPageId` is).
+ *
+ * The last two are not tidiness. `pageId` is what permissions and the delete
+ * cascade key on, so a row whose `pageId` disagrees with its message is
+ * PERMISSIONED AGAINST THE WRONG PAGE — readable by whoever can see the page it
+ * claims rather than the page its content is on.
+ *
+ * THE GAP THAT REMAINS, and it is Phase 3's to close: a trigger on this table
+ * cannot see a page move BETWEEN DRIVES afterwards
+ * (`page-cross-drive-move-service.ts` rewrites `pages."driveId"` for a whole
+ * subtree). A tag left behind in the source drive's vocabulary is then stale,
+ * exactly as a task's assignee agent is, and the house answer is an
+ * application-level scrub inside the move transaction —
+ * `scrubDriveScopedTaskAssociations` is the shape to copy. Nothing writes this
+ * table yet, so there is no row to scrub today; that scrub must land WITH the
+ * first writer, not after it.
  */
 export const contentTags = pgTable('content_tags', {
   id: text('id').primaryKey().$defaultFn(() => createId()),

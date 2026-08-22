@@ -1891,6 +1891,13 @@
       "when": 1787404847444,
       "tag": "0269_slow_norman_osborn",
       "breakpoints": true
+    },
+    {
+      "idx": 270,
+      "version": "7",
+      "when": 1787399577125,
+      "tag": "0270_content_tags_target_scope_trigger",
+      "breakpoints": true
     }
   ]
 }
