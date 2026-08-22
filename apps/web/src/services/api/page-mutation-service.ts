@@ -113,36 +113,26 @@ export async function applyPageMutation({
   const isSheetPage = isSheetType(currentPage.type as PageType);
   const storedContent = currentPage.content ?? '';
 
-  // Projected only when the content participates in this mutation.
+  // Projected for EVERY sheet mutation, including rename, move and trash.
   //
-  // The hash-chain problem is real — comparing `stateHashBefore` over an empty
-  // column against a predecessor's hash over the real document breaks the
-  // linkage — but projecting on EVERY sheet mutation meant renaming, moving or
-  // trashing a 100k-row sheet streamed and serialised the whole document for a
-  // hash nobody reads the content of.
+  // An earlier version skipped the projection for non-content mutations as an
+  // optimisation. That was wrong twice over: `nextContent` fell back to the
+  // empty column, so renaming a 100k-row sheet wrote a ZERO-BYTE
+  // `page_versions` entry that a restore would bring back blank, and the
+  // state-hash pair stopped describing the same content.
   //
-  // For a non-content mutation the page's existing `stateHash` already
-  // describes its content, and `computePageStateHash` is fed `contentRef`, so
-  // carrying the stored ref forward keeps the chain consistent without the
-  // projection. Read through `database` so a caller-supplied transaction sees
-  // its own uncommitted writes.
-  const previousContent =
-    isSheetPage && updates.content !== undefined
-      ? (await readSheetDocument(pageId, database as never)) ?? storedContent
-      : storedContent;
+  // Renames are rare and the projection is bounded by the sheet; correctness
+  // first. Read through `database` so a caller-supplied transaction sees its
+  // own uncommitted writes rather than a stale snapshot.
+  const previousContent = isSheetPage
+    ? (await readSheetDocument(pageId, database as never)) ?? storedContent
+    : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
   const contentFormatAfter = detectPageContentFormat(nextContent);
 
-  // For a sheet whose content is NOT part of this mutation, the column is empty
-  // and hashing it would claim the sheet is blank. The page's own `stateHash`
-  // already covers its content, so reuse it as the before-ref rather than
-  // re-deriving one from a column that is not the truth.
-  const contentRefBefore =
-    isSheetPage && updates.content === undefined && currentPage.stateHash
-      ? currentPage.stateHash
-      : hashWithPrefix(contentFormatBefore, previousContent);
+  const contentRefBefore = hashWithPrefix(contentFormatBefore, previousContent);
   const contentRefAfter = hashWithPrefix(contentFormatAfter, nextContent);
 
   const stateHashBefore = computePageStateHash({
@@ -309,6 +299,13 @@ export async function applyPageMutation({
       });
     }
 
+    // Only when the content actually changed.
+    //
+    // A rename, move or trash has nothing to version — the content is
+    // unchanged, so the entry would duplicate the previous one. For a sheet it
+    // was worse than redundant: `nextContent` came from the empty column, so
+    // the entry claimed the spreadsheet was blank.
+    //
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
     //
@@ -322,7 +319,7 @@ export async function applyPageMutation({
     // One content-addressed blob per DOCUMENT save. Addressed cell writes
     // (MCP, the SDK, form submissions) never reach here, so they stay O(1) and
     // are attributed through `sheet_changes` instead.
-    await createPageVersion({
+    if (updates.content !== undefined) await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
       createdBy: context.userId,

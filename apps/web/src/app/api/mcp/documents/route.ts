@@ -10,7 +10,7 @@ import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
 import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
-import { setCells, readSheetDocument } from '@pagespace/lib/sheets/store';
+import { setCells, readSheetDocument, SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
@@ -916,6 +916,26 @@ export async function POST(req: NextRequest) {
         { status: error.expectedRevision === undefined ? 428 : 409 }
       );
     }
+    // A caller-supplied address that cannot be stored is a 400, not a 500.
+    // `isValidCellAddress` accepts `A0` and `A9999999999`, so both clear this
+    // route's own validation and only fail inside the store — and an agent that
+    // receives "Failed to perform document operation" cannot correct itself.
+    if (error instanceof SheetAddressError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    // The sheet's stored document could not be read. This used to be an
+    // explicit 409 on `edit-cells` ("refusing to overwrite it"); the guard went
+    // away with the read-modify-write, but the condition still exists inside
+    // `materializeFromDocument` and deserves the same answer rather than a
+    // generic 500.
+    if (error instanceof Error && error.message.includes('could not be read')) {
+      return NextResponse.json({
+        error: error.message,
+        message: 'The stored sheet document needs repair before this sheet can be edited.',
+      }, { status: 409 });
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }

@@ -42,7 +42,15 @@ export async function logSheetCellActivity(input: {
         changeGroupId: input.changeGroupId ?? createChangeGroupId(),
         changeGroupType: input.isAiGenerated ? 'ai' : 'automation',
         isAiGenerated: input.isAiGenerated,
-        metadata: input.metadata,
+        metadata: {
+          ...input.metadata,
+          // Marks this entry as reversible from `sheet_changes` rather than
+          // from a content snapshot. A cell write deliberately persists no
+          // document, so the generic rollback machinery has nothing to restore
+          // from and Undo could only fail; `revertChangeGroup` replays the
+          // recorded `before` values for this group instead.
+          sheetChangeGroup: true,
+        },
       },
       tx
     )

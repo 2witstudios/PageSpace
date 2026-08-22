@@ -33,7 +33,16 @@ function restoreChangedFields(activity: ActivityLogForRollback): Values {
 
 export type PageRollbackPlan =
   | { kind: 'trash-created' }
-  | { kind: 'apply-update'; updateData: Values; restoreOrphanedChildren: boolean };
+  | { kind: 'apply-update'; updateData: Values; restoreOrphanedChildren: boolean }
+  /**
+   * Undo an addressed sheet cell write by replaying its change group.
+   *
+   * A cell write deliberately persists no document, so there is no content
+   * snapshot for `apply-update` to restore from. `sheet_changes` holds the
+   * before/after of each cell in the group, so the reversal is exact and costs
+   * one write rather than a document.
+   */
+  | { kind: 'sheet-change-group'; pageId: string; changeGroupId: string };
 
 /**
  * Plan a page rollback. A create is undone by trashing the page and orphaning
@@ -51,6 +60,19 @@ export function planPageRollback(
 
   if (activity.operation === 'create') {
     return { kind: 'trash-created' };
+  }
+
+  // Reversible from its change group rather than a content snapshot. A cell
+  // write persists no document, so `restoreChangedFields` finds nothing and the
+  // plan threw "No values to restore" — an Undo affordance that could only
+  // fail on every agent, MCP and form edit.
+  const metadata = activity.metadata as { sheetChangeGroup?: boolean } | null | undefined;
+  if (metadata?.sheetChangeGroup && activity.changeGroupId) {
+    return {
+      kind: 'sheet-change-group',
+      pageId: activity.pageId,
+      changeGroupId: activity.changeGroupId,
+    };
   }
 
   const updateData = restoreChangedFields(activity);

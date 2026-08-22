@@ -341,13 +341,14 @@ function pick(
  */
 export async function ensureTab(
   ref: TabRef,
-  exec: Executor = db
+  exec?: Executor
 ): Promise<StoredTab & { id: string }> {
-  const existing = await getTab(ref, exec);
+  const runner = exec ?? db;
+  const existing = await getTab(ref, runner);
   if (existing) return existing;
 
   const tabIndex = ref.tabIndex ?? 0;
-  const [page] = await exec
+  const [page] = await runner
     .select({ content: pages.content })
     .from(pages)
     .where(eq(pages.id, ref.pageId))
@@ -355,9 +356,23 @@ export async function ensureTab(
 
   if (!page) throw new Error(`Page ${ref.pageId} not found`);
 
+  // Materialisation must be ATOMIC.
+  //
+  // `materializeFromDocument` treats a supplied executor as "already inside a
+  // transaction". When `ensureTab` is called without one — the lazy-migration
+  // entry point for MCP reads — passing `db` made every statement autocommit:
+  // the `FOR UPDATE` on the page released immediately, so two concurrent reads
+  // could both pass the has-tabs check and the second died on the unique
+  // constraint; and a failure part-way through the per-tab loop committed a
+  // tab with partial rows. After that `getTab` succeeds, so every reader takes
+  // the row path and the intact document is never consulted again — a silent,
+  // permanent truncation.
+  //
+  // Passing `exec` only when the caller genuinely supplied one lets
+  // `materializeFromDocument` open its own transaction otherwise.
   await materializeFromDocument(ref.pageId, page.content ?? '', exec);
 
-  const created = await getTab({ pageId: ref.pageId, tabIndex }, exec);
+  const created = await getTab({ pageId: ref.pageId, tabIndex }, runner);
   if (created) return created;
 
   // The document had fewer tabs than the caller asked for.
@@ -835,6 +850,16 @@ export async function setCells(
     // reintroduced above it.
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
     const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
+
+    // TAB FIRST, THEN ROWS — the same order every function here uses.
+    //
+    // `appendRows` and `deleteRows` lock the tab and then reach row locks;
+    // `setCells` used to take row locks first and the tab lock later, only when
+    // the extent grew. That inversion deadlocks across functions: a `setCells`
+    // holding a row and wanting the tab, against an `appendRows` holding the
+    // tab and wanting that row. Taking the tab up front costs one row lock on a
+    // single-row table and makes the order global.
+    await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
     await lockRows(tab.id, allRowIndexes, tx);
 
     // `working` is the set of rows this call may WRITE, every one of them read
@@ -870,12 +895,11 @@ export async function setCells(
     const grown = growExtent(tab, normalized);
     await persistRows(tab.id, ref.pageId, working, tx);
     if (grown) {
-      // Serialise on the tab row, as `appendRows` does. `updateExtent` writes an
-      // ABSOLUTE extent computed from a snapshot, so two concurrent growing
-      // writes lose one: A grows to 100 and commits, B (holding a 20-row
-      // snapshot) writes 50, and the declared extent ends up smaller than the
-      // data — an editor grid that cannot show rows already written.
-      await tx.select({ id: sheetTabs.id }).from(sheetTabs).where(eq(sheetTabs.id, tab.id)).for('update');
+      // The tab lock is already held (taken before the row locks above), so the
+      // re-read below cannot race another growing write. `updateExtent` writes
+      // an ABSOLUTE extent computed from a snapshot, so without that
+      // serialisation two concurrent growing writes lose one and the declared
+      // extent ends up smaller than the data.
       const current = await getTab(ref, tx);
       await updateExtent(
         tab.id,
@@ -949,7 +973,14 @@ export async function appendRows(
   const run = async (tx: Executor): Promise<AppendRowsResult> => {
     const tab = await ensureTab(ref, tx);
     if (rows.length === 0) {
-      return { firstRowIndex: tab.rowCount, appended: 0, rowCount: tab.rowCount };
+      // `max(rowIndex) + 1`, not the declared extent — a caller that plans its
+      // next write from this would otherwise land hundreds of rows past the
+      // data on any tab whose extent exceeds its populated rows.
+      const [{ maxIndex } = { maxIndex: null }] = await tx
+        .select({ maxIndex: sql<number | null>`max(${sheetRows.rowIndex})` })
+        .from(sheetRows)
+        .where(eq(sheetRows.tabId, tab.id));
+      return { firstRowIndex: (maxIndex ?? -1) + 1, appended: 0, rowCount: tab.rowCount };
     }
 
     // Serialise appends to this tab.
@@ -1159,6 +1190,60 @@ export async function deleteRows(
     );
 
     return { deleted: effectiveCount, rowCount };
+  };
+
+  return exec ? run(exec) : db.transaction(run);
+}
+
+/**
+ * Undo one change group by replaying its recorded `before` values.
+ *
+ * This is what makes an addressed cell write undoable. A cell write does not
+ * persist the document — that is the whole point — so there is no content
+ * snapshot for the generic rollback machinery to restore from, and Undo on an
+ * agent or form edit could only ever fail.
+ *
+ * `sheet_changes` already holds the before/after of every cell in the group, so
+ * the reversal is exact and costs one write, not a document. It is also the
+ * first reader of that table, which until now was written and never consulted.
+ *
+ * Returns the number of cells restored; zero means the group recorded nothing
+ * cell-addressed (a bulk import logs a summary entry instead — see
+ * `CHANGE_LOG_SUMMARY_THRESHOLD` — and cannot be reversed this way).
+ */
+export async function revertChangeGroup(
+  pageId: string,
+  changeGroupId: string,
+  actor: SheetActor = {},
+  exec?: Executor
+): Promise<{ restored: number }> {
+  const run = async (tx: Executor) => {
+    const entries = await tx
+      .select({ address: sheetChanges.address, before: sheetChanges.before })
+      .from(sheetChanges)
+      .where(and(eq(sheetChanges.pageId, pageId), eq(sheetChanges.changeGroupId, changeGroupId)))
+      .orderBy(asc(sheetChanges.seq))
+      .limit(CHANGE_LOG_SUMMARY_THRESHOLD);
+
+    // Earliest entry per address wins: if the group touched a cell twice, the
+    // state to restore is what it held before the group began.
+    const restore = new Map<string, string>();
+    for (const entry of entries) {
+      if (!entry.address || restore.has(entry.address)) continue;
+      const before = entry.before as StoredCell | null;
+      restore.set(entry.address, before?.raw ?? '');
+    }
+
+    if (restore.size === 0) return { restored: 0 };
+
+    await setCells(
+      { pageId },
+      Array.from(restore.entries()).map(([address, value]) => ({ address, value })),
+      actor,
+      tx
+    );
+
+    return { restored: restore.size };
   };
 
   return exec ? run(exec) : db.transaction(run);

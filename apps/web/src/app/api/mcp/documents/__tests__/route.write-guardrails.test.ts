@@ -49,6 +49,9 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
 vi.mock('@pagespace/lib/sheets/store', () => ({
   setCells: (...args: unknown[]) => mockSetCells(...args),
   readSheetDocument: (...args: unknown[]) => mockReadSheetDocument(...args),
+  // The route uses this in an `instanceof` check to answer 400 rather than 500,
+  // so the mock has to provide a real class.
+  SheetAddressError: class SheetAddressError extends Error {},
 }));
 
 vi.mock('@/services/api/sheet-activity', () => ({

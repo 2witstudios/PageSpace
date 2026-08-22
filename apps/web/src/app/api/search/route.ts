@@ -4,6 +4,9 @@ import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
+import { sheetPreviewText } from '@pagespace/lib/sheets/store';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { verifyAuth } from '@/lib/auth';
@@ -331,7 +334,14 @@ export async function GET(request: Request) {
         const permissions = permissionsMap.get(page.id);
         if (!permissions?.canView) continue;
 
-        const matchLocation = getMatchLocation(page.title, page.content, trimmedQuery);
+        // A sheet's text is in its rows, so `page.content` is empty and the
+        // match would be attributed to the title alone — for a page the
+        // widened WHERE clause has just made matchable on its contents.
+        const searchableBody = isSheetType(page.type as PageType)
+          ? (await sheetPreviewText(page.id, { maxRows: 20, maxChars: 1000 })) ?? page.content
+          : page.content;
+
+        const matchLocation = getMatchLocation(page.title, searchableBody, trimmedQuery);
         const relevanceScore = calculateRelevanceScore(page.title, trimmedQuery, matchLocation);
 
         results.push({

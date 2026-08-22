@@ -29,6 +29,7 @@ import {
   readSheetData,
   getTab,
   rebuildTab,
+  revertChangeGroup,
   readSheetDocument,
   replaceFromDocument,
   copySheetRows,
@@ -840,6 +841,56 @@ describe('sheet store (integration)', () => {
         .from(pages)
         .where(and(eq(pages.id, pageId), sheetCellsMatchRegex('^raw$')));
       expect(structural).toHaveLength(0);
+    });
+  });
+
+  describe('revertChangeGroup', () => {
+    it('restores the values a change group overwrote', async () => {
+      // What makes an addressed cell write undoable. A cell write persists no
+      // document, so the generic rollback machinery has no snapshot to restore
+      // from and Undo could only fail; `sheet_changes` already holds the
+      // before/after of every cell in the group.
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'original-a' },
+        { address: 'B1', value: 'original-b' },
+      ], { userId: ownerId });
+
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'changed-a' },
+        { address: 'B1', value: 'changed-b' },
+      ], { userId: ownerId, changeGroupId: 'group-1' });
+
+      let rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'A')?.value).toBe('changed-a');
+
+      const { restored } = await revertChangeGroup(pageId, 'group-1', { userId: ownerId });
+      expect(restored).toBe(2);
+
+      rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'A')?.value).toBe('original-a');
+      expect(cellAt(rows, 0, 'B')?.value).toBe('original-b');
+    });
+
+    it('restores the state from before the group, not mid-group', async () => {
+      // A group that touched the same cell twice must roll back to what it held
+      // when the group began, not to the intermediate value.
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [{ address: 'A1', value: 'start' }], { userId: ownerId });
+
+      await setCells({ pageId }, [{ address: 'A1', value: 'middle' }], { userId: ownerId, changeGroupId: 'g2' });
+      await setCells({ pageId }, [{ address: 'A1', value: 'end' }], { userId: ownerId, changeGroupId: 'g2' });
+
+      await revertChangeGroup(pageId, 'g2', { userId: ownerId });
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'A')?.value).toBe('start');
+    });
+
+    it('reports zero for a group with nothing cell-addressed', async () => {
+      const { pageId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId });
+      expect((await revertChangeGroup(pageId, 'no-such-group', { userId: ownerId })).restored).toBe(0);
     });
   });
 
