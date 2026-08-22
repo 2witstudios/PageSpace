@@ -142,7 +142,22 @@ DROP TRIGGER IF EXISTS content_tags_target_scope ON content_tags;
 -- way in. FOR EACH ROW with no WHEN clause — every kind needs the drive check, and
 -- the two message checks are gated inside the body by `targetKind` instead, where
 -- the reason for each can be written down next to it.
+--
+-- `UPDATE OF <columns>` rather than a bare UPDATE, and the list is exactly the
+-- columns the invariant is a function of. Everything else on the row — `anchor`,
+-- `anchorStatus`, `confidence`, `updatedAt` — cannot make a coherent row
+-- incoherent, so an UPDATE touching only those is not worth three index lookups.
+--
+-- That is not micro-optimisation: `reanchorPageTags` is specified to forward-port
+-- every `text` anchor on a page on EVERY save, writing `anchor`/`anchorStatus` for
+-- each one. Under a bare `UPDATE` this trigger would sit in that loop for the life
+-- of the product, re-proving a fact none of those writes can change.
+--
+-- Adding a scope-bearing column later means adding it HERE too, or it silently
+-- stops being checked on update. That is the one hazard this form introduces, and
+-- it is why the list is spelled out rather than being written as an exclusion.
 CREATE TRIGGER content_tags_target_scope
-  BEFORE INSERT OR UPDATE ON content_tags
+  BEFORE INSERT OR UPDATE OF "tagId", "pageId", "targetKind", "channelMessageId", "aiMessageId"
+  ON content_tags
   FOR EACH ROW
   EXECUTE FUNCTION content_tags_enforce_target_scope();
