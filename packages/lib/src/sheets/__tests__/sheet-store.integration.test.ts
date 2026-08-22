@@ -33,7 +33,6 @@ import {
   replaceFromDocument,
   copySheetRows,
   listTabs,
-  sheetMatchingRows,
   sheetMatchingRowsByPage,
 } from '../store';
 import type { StoredRow } from '../projection';
@@ -86,6 +85,13 @@ async function makeUnmigratedSheet(content: string) {
   });
   return { ownerId: owner.id, pageId: page.id };
 }
+
+/** The batched matcher, narrowed to one page — most cases only care about one. */
+const matchingRowsFor = async (
+  pageId: string,
+  match: Parameters<typeof sheetMatchingRowsByPage>[1],
+  options?: Parameters<typeof sheetMatchingRowsByPage>[2]
+) => (await sheetMatchingRowsByPage([pageId], match, options)).get(pageId) ?? [];
 
 const cellAt = (rows: StoredRow[], rowIndex: number, column: string) =>
   rows.find((row) => row.rowIndex === rowIndex)?.cells[column];
@@ -859,7 +865,7 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
 
-      const matched = await sheetMatchingRows(pageId, { ilike: '%needle%' });
+      const matched = await matchingRowsFor(pageId, { ilike: '%needle%' });
 
       expect(matched).toHaveLength(1);
       expect(matched[0].rowIndex).toBe(3999);
@@ -880,7 +886,7 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
 
-      const matched = await sheetMatchingRows(pageId, { ilike: ['%alpha%', '%beta%'] });
+      const matched = await matchingRowsFor(pageId, { ilike: ['%alpha%', '%beta%'] });
 
       expect(matched.map((row) => row.rowIndex)).toEqual([9, 19]);
     });
@@ -899,7 +905,7 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
 
-      const matched = await sheetMatchingRows(pageId, { ilike: '%42%' });
+      const matched = await matchingRowsFor(pageId, { ilike: '%42%' });
 
       expect(matched.map((row) => row.rowIndex)).toEqual([2]);
     });
@@ -915,7 +921,7 @@ describe('sheet store (integration)', () => {
         { userId: ownerId }
       );
 
-      const matched = await sheetMatchingRows(pageId, { ilike: '%repeated%' }, { limit: 3 });
+      const matched = await matchingRowsFor(pageId, { ilike: '%repeated%' }, { limit: 3 });
 
       expect(matched).toHaveLength(3);
       expect(matched.map((row) => row.rowIndex)).toEqual([0, 1, 2]);

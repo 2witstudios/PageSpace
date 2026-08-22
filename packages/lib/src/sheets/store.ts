@@ -696,7 +696,7 @@ export async function sheetMatchingRowsByPage(
     .orderBy(asc(ranked.pageId), asc(ranked.rowIndex));
 
   for (const row of found) {
-    const text = rowText(row.cells as Record<string, StoredCell>).slice(0, maxChars);
+    const text = rowText(row.cells).slice(0, maxChars);
     if (text === '') continue;
     const existing = byPage.get(row.pageId);
     if (existing) existing.push({ rowIndex: row.rowIndex, text });
@@ -704,17 +704,6 @@ export async function sheetMatchingRowsByPage(
   }
 
   return byPage;
-}
-
-/** {@link sheetMatchingRowsByPage} for a single page. */
-export async function sheetMatchingRows(
-  pageId: string,
-  match: SheetRowMatch,
-  options: { limit?: number; maxChars?: number } = {},
-  exec: Executor = db
-): Promise<MatchingRowText[]> {
-  const byPage = await sheetMatchingRowsByPage([pageId], match, options, exec);
-  return byPage.get(pageId) ?? [];
 }
 
 /**
