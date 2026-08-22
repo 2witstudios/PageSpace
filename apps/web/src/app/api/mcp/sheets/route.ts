@@ -170,6 +170,23 @@ export async function POST(req: NextRequest) {
       }, { status: 400 });
     }
 
+    // Payload validation BEFORE any materialisation.
+    //
+    // `ensureTab` is a write — it can create tabs, rows and dependency edges
+    // for a sheet still living in `pages.content`. Running it ahead of the
+    // per-operation checks meant a malformed request against an unmigrated
+    // sheet mutated storage and then returned 400, with no write audit and no
+    // notification for the mutation it had just made.
+    if (operation === 'append-rows' && (!input.rows || input.rows.length === 0)) {
+      return NextResponse.json({ error: 'rows is required for append-rows' }, { status: 400 });
+    }
+    if (operation === 'update-cells' && (!input.cells || input.cells.length === 0)) {
+      return NextResponse.json({ error: 'cells is required for update-cells' }, { status: 400 });
+    }
+    if (operation === 'delete-rows' && (input.fromRow === undefined || input.count === undefined)) {
+      return NextResponse.json({ error: 'fromRow and count are required for delete-rows' }, { status: 400 });
+    }
+
     const ref = { pageId, tabIndex: input.tabIndex ?? 0 };
 
     // Reads materialise too, not only writes.

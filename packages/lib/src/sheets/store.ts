@@ -966,7 +966,10 @@ export async function appendRows(
       { rowCount, columnCount: current?.columnCount ?? tab.columnCount },
       tx
     );
-    await touchPage(ref.pageId, tx);
+    // No `touchPage` here: the `setCells` above already bumped the revision,
+    // and calling it twice advanced `pages.revision` by two per append,
+    // burning a value nothing ever holds. The empty-append case returns before
+    // reaching `setCells`, and correctly does not bump at all.
 
     await appendChanges(
       ref.pageId,
