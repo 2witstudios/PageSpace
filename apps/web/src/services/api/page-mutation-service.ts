@@ -299,13 +299,6 @@ export async function applyPageMutation({
       });
     }
 
-    // Only when the content actually changed.
-    //
-    // A rename, move or trash has nothing to version — the content is
-    // unchanged, so the entry would duplicate the previous one. For a sheet it
-    // was worse than redundant: `nextContent` came from the empty column, so
-    // the entry claimed the spreadsheet was blank.
-    //
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
     //
@@ -319,7 +312,7 @@ export async function applyPageMutation({
     // One content-addressed blob per DOCUMENT save. Addressed cell writes
     // (MCP, the SDK, form submissions) never reach here, so they stay O(1) and
     // are attributed through `sheet_changes` instead.
-    if (updates.content !== undefined) await createPageVersion({
+    await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
       createdBy: context.userId,

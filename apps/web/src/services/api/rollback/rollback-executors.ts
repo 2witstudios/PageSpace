@@ -6,7 +6,6 @@
  * logic lives in rollback-plans.ts.
  */
 import { eq, and } from '@pagespace/db/operators';
-import { revertChangeGroup } from '@pagespace/lib/sheets/store';
 import { pages, drives } from '@pagespace/db/schema/core';
 import { driveMembers, driveRoles, pagePermissions } from '@pagespace/db/schema/members';
 import { applyPageUpdateWithRevision } from './page-mutation';
@@ -60,17 +59,10 @@ export async function rollbackPageChange(
     return { restoredValues: { isTrashed: true }, pageMutationMeta };
   }
 
-  // A sheet cell write reverses by replaying its change group. It persists no
-  // document, so there is nothing for the field-restore path below to apply.
-  if (plan.kind === 'sheet-change-group') {
-    const { restored } = await revertChangeGroup(plan.pageId, plan.changeGroupId, {
-      userId: pageUpdateContext.userId,
-      changeGroupId: pageUpdateContext.changeGroupId,
-    });
-    return {
-      restoredValues: { sheetCellsRestored: restored },
-      pageMutationMeta: undefined,
-    };
+  if (plan.kind === 'not-rollbackable') {
+    // Refused, not silently no-op'd. Returning 200 having restored nothing is
+    // the failure mode this replaced.
+    throw new Error(plan.reason);
   }
 
   const { updateData, restoreOrphanedChildren } = plan;

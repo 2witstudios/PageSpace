@@ -94,7 +94,14 @@ export async function applyPageRestoreOps(
     while (queue.length > 0) {
       const op = queue.shift();
       if (!op) continue;
-      if (!op.contentRef) continue;
+      if (!op.contentRef) {
+        // No stored content ref — the backup's page version is gone (pruned by
+        // retention, say). That is UNKNOWN content, not empty content, so the
+        // sheet branch below must not read it as "this sheet was empty at
+        // backup time" and clear its rows. Same reasoning as a failed read.
+        readFailed.add(op.pageId);
+        continue;
+      }
       try {
         contentCache.set(op.pageId, await readPageContent(op.contentRef));
       } catch {

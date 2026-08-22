@@ -44,12 +44,12 @@ export async function logSheetCellActivity(input: {
         isAiGenerated: input.isAiGenerated,
         metadata: {
           ...input.metadata,
-          // Marks this entry as reversible from `sheet_changes` rather than
-          // from a content snapshot. A cell write deliberately persists no
-          // document, so the generic rollback machinery has nothing to restore
-          // from and Undo could only fail; `revertChangeGroup` replays the
-          // recorded `before` values for this group instead.
-          sheetChangeGroup: true,
+          // Marks this entry as an addressed cell write, which carries no
+          // content to restore. Rollback reports it as ineligible rather than
+          // throwing "No values to restore" — so no Undo affordance is offered
+          // that could only fail. `sheet_changes` holds the per-cell
+          // before/after for a future change that can replay it.
+          sheetCellWrite: true,
         },
       },
       tx

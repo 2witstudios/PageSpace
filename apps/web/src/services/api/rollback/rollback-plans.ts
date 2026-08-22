@@ -35,14 +35,19 @@ export type PageRollbackPlan =
   | { kind: 'trash-created' }
   | { kind: 'apply-update'; updateData: Values; restoreOrphanedChildren: boolean }
   /**
-   * Undo an addressed sheet cell write by replaying its change group.
+   * An addressed sheet cell write, which cannot be undone.
    *
-   * A cell write deliberately persists no document, so there is no content
-   * snapshot for `apply-update` to restore from. `sheet_changes` holds the
-   * before/after of each cell in the group, so the reversal is exact and costs
-   * one write rather than a document.
+   * A cell write deliberately persists no document, so there is no content to
+   * restore. `sheet_changes` records the per-cell before/after and a future
+   * change can replay it — but reversing a group correctly means threading a
+   * shared id through every write surface, scoping to the right tab, handling
+   * groups that span calls, and refusing the bulk operations that log only a
+   * summary. An earlier attempt here got all four wrong and returned 200
+   * having restored nothing, which is worse than saying so.
+   *
+   * Reported as ineligible so the UI offers no affordance that cannot work.
    */
-  | { kind: 'sheet-change-group'; pageId: string; changeGroupId: string };
+  | { kind: 'not-rollbackable'; reason: string };
 
 /**
  * Plan a page rollback. A create is undone by trashing the page and orphaning
@@ -62,16 +67,15 @@ export function planPageRollback(
     return { kind: 'trash-created' };
   }
 
-  // Reversible from its change group rather than a content snapshot. A cell
-  // write persists no document, so `restoreChangedFields` finds nothing and the
-  // plan threw "No values to restore" — an Undo affordance that could only
-  // fail on every agent, MCP and form edit.
-  const metadata = activity.metadata as { sheetChangeGroup?: boolean } | null | undefined;
-  if (metadata?.sheetChangeGroup && activity.changeGroupId) {
+  // An addressed sheet cell write records no content to restore, so say so
+  // rather than throwing "No values to restore" — which surfaced as a failing
+  // Undo affordance on every agent, MCP and form edit.
+  const metadata = activity.metadata as { sheetCellWrite?: boolean } | null | undefined;
+  if (metadata?.sheetCellWrite) {
     return {
-      kind: 'sheet-change-group',
-      pageId: activity.pageId,
-      changeGroupId: activity.changeGroupId,
+      kind: 'not-rollbackable',
+      reason:
+        'Individual sheet cell edits cannot be undone yet. Restore the page from version history instead.',
     };
   }
 
