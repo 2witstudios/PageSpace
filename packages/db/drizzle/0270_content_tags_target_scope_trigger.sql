@@ -145,13 +145,27 @@ DROP TRIGGER IF EXISTS content_tags_target_scope ON content_tags;
 --
 -- `UPDATE OF <columns>` rather than a bare UPDATE, and the list is exactly the
 -- columns the invariant is a function of. Everything else on the row — `anchor`,
--- `anchorStatus`, `confidence`, `updatedAt` — cannot make a coherent row
--- incoherent, so an UPDATE touching only those is not worth three index lookups.
+-- `anchorStatus`, `confidence`, `createdBy`, `updatedAt` — cannot make a coherent
+-- row incoherent.
 --
--- That is not micro-optimisation: `reanchorPageTags` is specified to forward-port
--- every `text` anchor on a page on EVERY save, writing `anchor`/`anchorStatus` for
--- each one. Under a bare `UPDATE` this trigger would sit in that loop for the life
--- of the product, re-proving a fact none of those writes can change.
+-- THIS IS A COMPLIANCE PROPERTY BEFORE IT IS A PERFORMANCE ONE, and it took
+-- running it to see that. `createdBy` is ON DELETE SET NULL, so erasing a user
+-- issues an UPDATE against every row they ever tagged. Under a bare `UPDATE`,
+-- if ANY of those rows had been left stale by a cross-drive page move (see
+-- below), the trigger refuses the SET NULL and the Art 17 erasure fails outright
+-- — the subject cannot be deleted at all. Verified directly against Postgres:
+-- the bare form raises `content_tags scope: tag ... is in drive ...` from inside
+-- `UPDATE ONLY "content_tags" SET "createdBy" = NULL` and leaves the user row in
+-- place. A guard that can block erasure is the failure mode 0256's header and
+-- the reclaim triggers are both written to avoid; this column list is what keeps
+-- this one off that path. `must never block Art 17 erasure` in the integration
+-- suite pins it.
+--
+-- The performance argument is real too, just secondary: `reanchorPageTags` is
+-- specified to forward-port every `text` anchor on a page on EVERY save, writing
+-- `anchor`/`anchorStatus` for each one. Under a bare `UPDATE` this trigger would
+-- sit in that loop for the life of the product, re-proving a fact none of those
+-- writes can change.
 --
 -- Adding a scope-bearing column later means adding it HERE too, or it silently
 -- stops being checked on update. That is the one hazard this form introduces, and
