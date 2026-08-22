@@ -45,16 +45,6 @@ CREATE TABLE "sheet_rows" (
 	CONSTRAINT "sheet_rows_row_index_non_negative" CHECK ("sheet_rows"."rowIndex" >= 0)
 );
 --> statement-breakpoint
-CREATE TABLE "sheet_snapshots" (
-	"id" text PRIMARY KEY NOT NULL,
-	"pageId" text NOT NULL,
-	"seq" bigint NOT NULL,
-	"contentRef" text NOT NULL,
-	"contentFormat" "content_format",
-	"contentSize" integer,
-	"createdAt" timestamp DEFAULT now() NOT NULL
-);
---> statement-breakpoint
 CREATE TABLE "sheet_tabs" (
 	"id" text PRIMARY KEY NOT NULL,
 	"pageId" text NOT NULL,
@@ -80,7 +70,6 @@ ALTER TABLE "sheet_changes" ADD CONSTRAINT "sheet_changes_actorUserId_users_id_f
 ALTER TABLE "sheet_range_deps" ADD CONSTRAINT "sheet_range_deps_tabId_sheet_tabs_id_fk" FOREIGN KEY ("tabId") REFERENCES "public"."sheet_tabs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sheet_rows" ADD CONSTRAINT "sheet_rows_tabId_sheet_tabs_id_fk" FOREIGN KEY ("tabId") REFERENCES "public"."sheet_tabs"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sheet_rows" ADD CONSTRAINT "sheet_rows_pageId_pages_id_fk" FOREIGN KEY ("pageId") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
-ALTER TABLE "sheet_snapshots" ADD CONSTRAINT "sheet_snapshots_pageId_pages_id_fk" FOREIGN KEY ("pageId") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 ALTER TABLE "sheet_tabs" ADD CONSTRAINT "sheet_tabs_pageId_pages_id_fk" FOREIGN KEY ("pageId") REFERENCES "public"."pages"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "sheet_cell_deps_tab_idx" ON "sheet_cell_deps" USING btree ("tabId");--> statement-breakpoint
 CREATE INDEX "sheet_changes_page_seq_idx" ON "sheet_changes" USING btree ("pageId","seq");--> statement-breakpoint
@@ -92,5 +81,4 @@ CREATE INDEX "sheet_range_deps_formula_idx" ON "sheet_range_deps" USING btree ("
 CREATE INDEX "sheet_rows_page_row_idx" ON "sheet_rows" USING btree ("pageId","rowIndex");--> statement-breakpoint
 CREATE INDEX "sheet_rows_tab_row_idx" ON "sheet_rows" USING btree ("tabId","rowIndex");--> statement-breakpoint
 CREATE INDEX "sheet_rows_cells_gin" ON "sheet_rows" USING gin ("cells");--> statement-breakpoint
-CREATE INDEX "sheet_snapshots_page_seq_idx" ON "sheet_snapshots" USING btree ("pageId","seq");--> statement-breakpoint
 CREATE INDEX "sheet_tabs_page_id_idx" ON "sheet_tabs" USING btree ("pageId");

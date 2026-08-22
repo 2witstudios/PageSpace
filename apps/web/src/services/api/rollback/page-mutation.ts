@@ -10,6 +10,9 @@
  */
 import { eq, and } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import type { SyncMentionsResult } from '@/services/api/page-mention-service';
 import { computePageMutation } from './page-mutation-plan';
 import type { RollbackDeps, PageMutationMeta, PageUpdateWithRevisionOptions } from './deps';
@@ -53,6 +56,23 @@ export async function applyPageUpdateWithRevision(
 
   if (!updated) {
     throw new Error('Page was modified while applying rollback');
+  }
+
+  // A sheet's content lives in its rows, so the UPDATE above restored nothing
+  // a reader consults. Rolling a spreadsheet back returned 200, bumped the
+  // revision, repopulated a column nothing reads, and changed nothing the user
+  // could see. Route the restored document into the rows, then clear the
+  // column so the two cannot disagree.
+  if (updateData.content !== undefined && isSheetType(currentPage.type as PageType)) {
+    if (nextContent.trim()) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: options?.userId ?? undefined },
+        deps.db as never
+      );
+    }
+    await deps.db.update(pages).set({ content: '' }).where(eq(pages.id, pageId));
   }
 
   let mentionsResult: SyncMentionsResult | undefined;

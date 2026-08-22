@@ -15,7 +15,7 @@ import type { StoredCell, CellFormat } from '@pagespace/db/schema';
 import type { SheetData, SheetEvaluation, CellFormat as LibCellFormat } from './types';
 import { decodeCellAddress, encodeCellAddress, encodeColumnLabel, columnLabelOf } from './address';
 import { extractFormulaDependencies, type CellRect } from './deps';
-import { evaluateSheet } from './evaluation';
+import { evaluateAddresses } from './evaluation';
 
 /**
  * `CellFormat` is defined twice — here as the `jsonb` column shape in
@@ -137,13 +137,19 @@ export function sheetDataFromRows(tab: StoredTab, rows: readonly StoredRow[]): S
  * `SheetData` → stored rows, with computed values materialised and dependency
  * edges extracted.
  *
- * This is the expensive direction — it evaluates the whole grid once — and is
- * therefore reserved for the paths that genuinely need a full rebuild: the
- * backfill, an import, and a repair. The steady-state write path in `store.ts`
- * recomputes only a dependency closure and never comes through here.
+ * This is the expensive direction and is reserved for the paths that genuinely
+ * need a full rebuild: the backfill, an import, and a repair. The steady-state
+ * write path in `store.ts` recomputes only a dependency closure and never comes
+ * through here.
+ *
+ * Expensive in the POPULATED cells, though, not in the declared extent. A
+ * dense `evaluateSheet` walks `rowCount × columnCount` and allocates two arrays
+ * that size, so rebuilding a 100k-row sheet after a row delete meant millions
+ * of evaluations of empty cells inside a transaction holding row locks — worse
+ * than the O(document) cost this storage model exists to remove, because the
+ * document path only ever touched cells that exist.
  */
 export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedTab {
-  const evaluation = evaluateSheet(sheet);
   const byRow = new Map<number, Record<string, StoredCell>>();
 
   const ensureRow = (rowIndex: number): Record<string, StoredCell> => {
@@ -159,6 +165,12 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
     ...Object.keys(sheet.cells ?? {}),
     ...Object.keys(sheet.formats ?? {}),
   ]);
+
+  // Only the cells that exist. Empty cells have nothing to materialise.
+  const evaluation = evaluateAddresses(
+    sheet,
+    Array.from(addresses).map((address) => address.toUpperCase())
+  );
 
   const cellDeps: StoredCellDep[] = [];
   const rangeDeps: StoredRangeDep[] = [];
@@ -176,7 +188,7 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
     const normalized = address.toUpperCase();
     const raw = sheet.cells?.[address] ?? '';
     const format = sheet.formats?.[address];
-    const evaluated = evaluation.byAddress[normalized];
+    const evaluated = evaluation[normalized];
 
     const stored: StoredCell = { raw };
     if (evaluated) {
@@ -190,12 +202,10 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
 
     if (raw.trim().startsWith('=')) {
       const deps = extractFormulaDependencies(raw);
-      const record = evaluation.dependencies[normalized];
-      cellDeps.push({
-        address: normalized,
-        dependsOn: deps.cells,
-        dependents: record?.dependents ?? [],
-      });
+      // `dependents` is not maintained — the closure walk resolves it by
+      // querying `dependsOn && frontier`, and filling it in would mean touching
+      // every cell that references this one.
+      cellDeps.push({ address: normalized, dependsOn: deps.cells, dependents: [] });
       for (const rect of deps.ranges) {
         rangeDeps.push({ formulaAddress: normalized, ...rect });
       }

@@ -1,5 +1,8 @@
 import { eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { createPageVersion, computePageStateHash } from '@pagespace/lib/services/page-version-service';
 import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
@@ -148,6 +151,25 @@ export async function applyPageRestoreOps(
           revision: sql`${pages.revision} + 1`,
         })
         .where(eq(pages.id, op.pageId));
+    }
+
+    // A sheet's content has to land in its ROWS.
+    //
+    // Both branches above write the document into `pages.content`, which no
+    // sheet read path consults any more — so restoring a drive reported success
+    // and left every spreadsheet exactly as it was. `replaceFromDocument`
+    // writes the rows the restored document describes and clears the column
+    // afterwards, so the two cannot disagree.
+    if (isSheetType(op.type as PageType)) {
+      if (content.trim()) {
+        await replaceFromDocument(
+          { pageId: op.pageId },
+          content,
+          { userId, changeGroupId },
+          tx as never
+        );
+      }
+      await tx.update(pages).set({ content: '' }).where(eq(pages.id, op.pageId));
     }
 
     await createPageVersion(

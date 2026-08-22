@@ -87,6 +87,19 @@ export const CHANGE_LOG_SUMMARY_THRESHOLD = 500;
  */
 const INSERT_CHUNK_ROWS = 500;
 
+/**
+ * Furthest addressable cell.
+ *
+ * `decodeCellAddress` accepts any digit run, so `A2000000000` would place a row
+ * at index two billion, drive `growExtent` to set `rowCount` to the same, and
+ * then make any rebuild attempt an evaluation over that extent. A longer run
+ * overflows `integer` outright. Postgres's own spreadsheet-scale limits are
+ * well below this; the point is that a single malformed address cannot render
+ * a sheet unusable.
+ */
+export const MAX_ADDRESSABLE_ROW = 5_000_000;
+export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
+
 /** Rows a single `query-rows`/read call will return without explicit paging. */
 export const DEFAULT_ROW_PAGE_SIZE = 200;
 export const MAX_ROW_PAGE_SIZE = 5_000;
@@ -94,6 +107,11 @@ export const MAX_ROW_PAGE_SIZE = 5_000;
 export interface SheetActor {
   userId?: string | null;
   actorEmail?: string | null;
+  actorDisplayName?: string | null;
+  driveId?: string | null;
+  resourceTitle?: string | null;
+  /** Free-form provenance for the activity entry (source, operation, counts). */
+  metadata?: Record<string, unknown> | null;
   changeGroupId?: string | null;
   /**
    * Set by a caller that logs the operation itself at a coarser grain — an
@@ -770,8 +788,16 @@ export async function setCells(
 
     // 4. Load the rows holding those dependents, so recomputing a formula in an
     // untouched row rewrites that row with its other columns intact.
+    //
+    // Re-locked as the UNION, ascending, in one pass. Locking the touched rows
+    // and then the closure rows as two ordered statements is not globally
+    // ordered: a closure row can sit below a touched one, so two callers can
+    // still take the same two locks in opposite orders and deadlock. Ascending
+    // over everything this call will write is the invariant that actually
+    // holds.
     const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
-    await mergeMissingRows(working, tab.id, closureRowIndexes, tx, true);
+    const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
+    await mergeMissingRows(working, tab.id, allRowIndexes, tx, true);
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.
     const toEvaluate = unique([...dirty, ...closure]);
@@ -875,8 +901,15 @@ export async function appendRows(
     // data actually ends.
     const firstRowIndex = (maxIndex ?? -1) + 1;
 
+    // An entry with no cells writes no row, so counting it would report an
+    // append that did not happen and leave a gap where the caller expects data.
+    const writable = rows.filter((cells) => Object.keys(cells).length > 0);
+    if (writable.length === 0) {
+      return { firstRowIndex, appended: 0, rowCount: tab.rowCount };
+    }
+
     const updates: NormalizedUpdate[] = [];
-    rows.forEach((cells, offset) => {
+    writable.forEach((cells, offset) => {
       for (const [label, value] of Object.entries(cells)) {
         const column = decodeColumnLabel(label);
         const row = firstRowIndex + offset;
@@ -902,7 +935,7 @@ export async function appendRows(
     // snapshot would revert that, leaving the editor rendering a grid too
     // narrow to show the data just written.
     const current = await getTab(ref, tx);
-    const rowCount = Math.max(current?.rowCount ?? tab.rowCount, firstRowIndex + rows.length);
+    const rowCount = Math.max(current?.rowCount ?? tab.rowCount, firstRowIndex + writable.length);
     await updateExtent(
       tab.id,
       { rowCount, columnCount: current?.columnCount ?? tab.columnCount },
@@ -914,11 +947,11 @@ export async function appendRows(
       ref.pageId,
       tab.id,
       actor,
-      [{ op: 'insert_rows', address: null, rowIndex: firstRowIndex, before: null, after: { appended: rows.length } }],
+      [{ op: 'insert_rows', address: null, rowIndex: firstRowIndex, before: null, after: { appended: writable.length } }],
       tx
     );
 
-    return { firstRowIndex, appended: rows.length, rowCount };
+    return { firstRowIndex, appended: writable.length, rowCount };
   };
 
   return exec ? run(exec) : db.transaction(run);
@@ -1116,6 +1149,12 @@ function normalizeUpdates(updates: readonly SheetCellUpdate[]): NormalizedUpdate
     } catch {
       throw new Error(`Invalid cell address: ${update.address}`);
     }
+    if (position.row > MAX_ADDRESSABLE_ROW || position.column > MAX_ADDRESSABLE_COLUMN) {
+      throw new Error(
+        `Cell address out of range: ${update.address} (max row ${MAX_ADDRESSABLE_ROW + 1}, max column ZZZ)`
+      );
+    }
+
     // Last write wins within one batch, matching the document path.
     byAddress.set(address, { address, value: update.value, position });
   }
@@ -1677,7 +1716,21 @@ function growExtent(
 async function touchPage(pageId: string, exec: Executor): Promise<void> {
   await exec
     .update(pages)
-    .set({ revision: sql`${pages.revision} + 1`, updatedAt: new Date() })
+    .set({
+      revision: sql`${pages.revision} + 1`,
+      // `stateHash` moves too. Restore-diff decides a page is unchanged by
+      // comparing a backup version's `stateHash` against the page's, so leaving
+      // it at whatever the last DOCUMENT write computed meant a sheet that had
+      // taken five hundred form submissions since the backup was reported as
+      // unmodified and skipped.
+      //
+      // Marked rather than recomputed: deriving the real content hash would
+      // mean projecting the whole sheet on every cell write, which is the
+      // O(document) cost this path exists to avoid. A distinct value per write
+      // is all the "has this changed" comparison needs.
+      stateHash: sql`md5(${pages.id} || '/' || (${pages.revision} + 1)::text)`,
+      updatedAt: new Date(),
+    })
     .where(eq(pages.id, pageId));
 }
 

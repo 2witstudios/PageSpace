@@ -282,11 +282,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'file_pages',
     'file_conversations',
     'page_versions',
-    // Prior states of sheet content that is exported in full under `sheets`:
-    // `sheet_changes` is the per-cell edit log and `sheet_snapshots` holds blob
-    // pointers to earlier versions of the same grid.
+    // The per-cell edit log for sheet content that is exported in full under
+    // `sheets`. (Sheet version history is `page_versions`, already excluded
+    // above for the same reason.)
     'sheet_changes',
-    'sheet_snapshots',
     'user_activities',
     'security_audit_log',
     'task_assignees',

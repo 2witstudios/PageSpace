@@ -15,6 +15,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
 import { isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { setCells } from '@pagespace/lib/sheets/store';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { logPageActivity, logDriveActivity, getActorInfo, type ActivityOperation } from '@pagespace/lib/monitoring/activity-logger';
 import { detectPageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -1535,6 +1536,19 @@ export const pageWriteTools = {
             changeGroupId: mutationContext.changeGroupId,
           }
         );
+
+        // Activity entry + workflow trigger, which `applyPageMutation` used to
+        // provide on this path.
+        await logSheetCellActivity({
+          pageId: page.id,
+          driveId: page.driveId,
+          pageTitle: page.title,
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail,
+          changeGroupId: mutationContext.changeGroupId,
+          isAiGenerated: true,
+          metadata: { source: 'ai-tool', tool: 'edit_sheet_cells', cellsUpdated: cells.length },
+        });
 
         // Broadcast content update event
         await broadcastPageEvent(

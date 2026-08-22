@@ -1,6 +1,9 @@
 import { db } from '@pagespace/db/db'
 import { eq, and, inArray, isNotNull, desc, sql } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { pagePermissions, driveMembers, driveRoles } from '@pagespace/db/schema/members'
 import { files } from '@pagespace/db/schema/storage'
 import { driveBackups, driveBackupPages, driveBackupPermissions, driveBackupMembers, driveBackupRoles, driveBackupFiles } from '@pagespace/db/schema/versioning';
@@ -217,9 +220,22 @@ export async function createDriveBackup(
       ? drivePages
       : drivePages.filter((page) => !page.isTrashed);
 
+    // A sheet's content is its rows.
+    //
+    // `pages.content` is empty for a materialised sheet, so snapshotting the
+    // column stored a zero-byte version for every spreadsheet — a backup that
+    // silently contained none of them, and a restore that brought them back
+    // empty.
+    const sheetDocuments = new Map<string, string>();
+    for (const page of pagesToBackup) {
+      if (!isSheetType(page.type as PageType)) continue;
+      const projected = await readSheetDocument(page.id);
+      if (projected !== null) sheetDocuments.set(page.id, projected);
+    }
+
     // Prepare page data for version creation
     const pageVersionData = pagesToBackup.map((page) => {
-      const content = page.content ?? '';
+      const content = sheetDocuments.get(page.id) ?? page.content ?? '';
       const contentFormat = detectPageContentFormat(content);
       const contentRef = hashWithPrefix(contentFormat, content);
       const stateHash = page.stateHash ?? computePageStateHash({

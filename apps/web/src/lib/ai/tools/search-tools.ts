@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
 import type { ToolExecutionContext } from '../core/types';
@@ -65,7 +66,10 @@ export const searchTools = {
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
             eq(pages.excludeFromSearch, false),
-            sql`${pages.content} ~ ${pgPattern}`
+            // A sheet's text is in its rows; `pages.content` is empty for a
+            // materialised one, so matching the column alone made every
+            // spreadsheet invisible to an agent's search.
+            sql`${pages.content} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
           );
         } else if (searchIn === 'title') {
           whereConditions = and(
@@ -79,7 +83,7 @@ export const searchTools = {
             eq(pages.driveId, driveId),
             eq(pages.isTrashed, false),
             eq(pages.excludeFromSearch, false),
-            sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+            sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
           );
         }
 
@@ -564,7 +568,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern}`
+              sql`${pages.content} ~ ${pgPattern} OR ${pages.title} ~ ${pgPattern} OR ${sheetCellsMatchRegex(pgPattern)}`
             );
           } else {
             const searchPattern = `%${searchQuery}%`;
@@ -572,7 +576,7 @@ export const searchTools = {
               eq(pages.driveId, drive.id),
               eq(pages.isTrashed, false),
               eq(pages.excludeFromSearch, false),
-              sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`
+              sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)}`
             );
           }
 

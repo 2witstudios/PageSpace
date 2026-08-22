@@ -11,6 +11,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
 import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { setCells, readSheetDocument } from '@pagespace/lib/sheets/store';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
@@ -843,6 +844,27 @@ export async function POST(req: NextRequest) {
           cells,
           { userId, actorEmail: actorInfo.actorEmail }
         );
+
+        // Still an activity entry and still a workflow trigger. Dropping
+        // `applyPageMutation` dropped both, so an agent's edit became invisible
+        // to page history and silently stopped firing workflows on the sheet.
+        await logSheetCellActivity({
+          pageId,
+          driveId: page.driveId,
+          pageTitle: page.title,
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          metadata: {
+            source: 'mcp',
+            mcpOperation: 'edit-cells',
+            cellsUpdated: cells.length,
+            valuesSet: valueCount,
+            formulasSet: formulaCount,
+            cellsCleared: clearCount,
+            recomputed: setResult.recomputed.length,
+          },
+        });
 
         // Broadcast content update event
         const driveId = await getDriveIdFromPage(pageId);

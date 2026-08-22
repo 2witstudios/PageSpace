@@ -62,6 +62,7 @@ vi.mock('@pagespace/lib/content/page-types.config', () => ({
 // `edit_sheet_cells` parses through the ok/failure API so it can refuse to
 // write over content it could not read; the mock has to expose that, or the
 // tool throws before it reaches the branch under test.
+const mockLogSheetCellActivity = vi.fn(async (..._args: unknown[]) => undefined);
 const mockSetCells = vi.fn(async (..._args: unknown[]) => ({
   changed: ['A1'],
   recomputed: [] as string[],
@@ -81,6 +82,9 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
 }));
 vi.mock('@pagespace/lib/sheets/store', () => ({
     setCells: (...args: unknown[]) => mockSetCells(...args as []),
+}));
+vi.mock('@/services/api/sheet-activity', () => ({
+    logSheetCellActivity: (...args: unknown[]) => mockLogSheetCellActivity(...args as []),
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
     loggers: {

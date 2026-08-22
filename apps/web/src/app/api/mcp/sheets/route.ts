@@ -17,6 +17,7 @@ import {
   MAX_ROW_PAGE_SIZE,
 } from '@pagespace/lib/sheets/store';
 import { SheetQueryError } from '@pagespace/lib/sheets/query';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
@@ -181,10 +182,23 @@ export async function POST(req: NextRequest) {
     // being slow. `ensureTab` is idempotent and only does work once.
     let tab = await getTab(ref);
     if (!tab) {
-      tab = await ensureTab({ pageId, tabIndex: 0 }).catch(() => null);
-      // `describe` enumerates tabs, so it must not fail on a tabIndex miss.
-      if (tab && (ref.tabIndex ?? 0) !== 0) {
-        tab = await getTab(ref);
+      // Materialising is a WRITE — it inserts tabs, rows and dependency edges
+      // and locks the page row. A view-only principal must not trigger it, so
+      // a reader without edit rights gets the document-backed answer instead of
+      // silently provisioning storage on someone else's sheet.
+      if (accessLevel.canEdit) {
+        tab = await ensureTab({ pageId, tabIndex: 0 }).catch(() => null);
+        if (tab && (ref.tabIndex ?? 0) !== 0) {
+          tab = await getTab(ref);
+        }
+      } else if (!WRITE_OPERATIONS.has(operation)) {
+        return NextResponse.json({
+          error: 'Sheet not materialised',
+          message:
+            'This sheet has not been migrated to row storage yet, and read-only access cannot ' +
+            'trigger the migration. Read it through /api/mcp/documents, or ask someone with ' +
+            'edit access to open it once.',
+        }, { status: 409 });
       }
     }
     if (!tab) {
@@ -258,6 +272,11 @@ export async function POST(req: NextRequest) {
           actorEmail: actorInfo.actorEmail,
         });
         await notify(page.driveId, pageId, page.title, page.parentId);
+        await logSheetCellActivity({
+          pageId, driveId: page.driveId, pageTitle: page.title, userId,
+          actorEmail: actorInfo.actorEmail, actorDisplayName: actorInfo.actorDisplayName,
+          metadata: { source: 'mcp', mcpOperation: operation, rows: input.rows.length, firstRowIndex: result.firstRowIndex },
+        });
         auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation, rows: input.rows.length } });
         return NextResponse.json({ pageId, pageTitle: page.title, ...result });
       }
@@ -272,6 +291,11 @@ export async function POST(req: NextRequest) {
           actorEmail: actorInfo.actorEmail,
         });
         await notify(page.driveId, pageId, page.title, page.parentId);
+        await logSheetCellActivity({
+          pageId, driveId: page.driveId, pageTitle: page.title, userId,
+          actorEmail: actorInfo.actorEmail, actorDisplayName: actorInfo.actorDisplayName,
+          metadata: { source: 'mcp', mcpOperation: operation, cells: input.cells.length, recomputed: result.recomputed.length },
+        });
         auditRequest(req, { eventType: 'data.write', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation, cells: input.cells.length } });
         return NextResponse.json({
           pageId,
@@ -293,6 +317,11 @@ export async function POST(req: NextRequest) {
           actorEmail: actorInfo.actorEmail,
         });
         await notify(page.driveId, pageId, page.title, page.parentId);
+        await logSheetCellActivity({
+          pageId, driveId: page.driveId, pageTitle: page.title, userId,
+          actorEmail: actorInfo.actorEmail, actorDisplayName: actorInfo.actorDisplayName,
+          metadata: { source: 'mcp', mcpOperation: operation, fromRow: input.fromRow, deleted: result.deleted },
+        });
         auditRequest(req, { eventType: 'data.delete', userId, resourceType: 'page', resourceId: pageId, details: { source: 'mcp', operation, fromRow: input.fromRow, count: input.count } });
         return NextResponse.json({ pageId, pageTitle: page.title, ...result });
       }

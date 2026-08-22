@@ -1,5 +1,5 @@
 {
-  "id": "5114b400-0495-4c22-97ef-14e12ef7a25f",
+  "id": "007f7835-c781-4350-9b0f-17a795e3a874",
   "prevId": "297eb422-6779-4e85-90ac-c949471db11b",
   "version": "7",
   "dialect": "postgresql",
@@ -11653,99 +11653,6 @@
           "value": "\"sheet_rows\".\"rowIndex\" >= 0"
         }
       },
-      "isRLSEnabled": false
-    },
-    "public.sheet_snapshots": {
-      "name": "sheet_snapshots",
-      "schema": "",
-      "columns": {
-        "id": {
-          "name": "id",
-          "type": "text",
-          "primaryKey": true,
-          "notNull": true
-        },
-        "pageId": {
-          "name": "pageId",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "seq": {
-          "name": "seq",
-          "type": "bigint",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "contentRef": {
-          "name": "contentRef",
-          "type": "text",
-          "primaryKey": false,
-          "notNull": true
-        },
-        "contentFormat": {
-          "name": "contentFormat",
-          "type": "content_format",
-          "typeSchema": "public",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "contentSize": {
-          "name": "contentSize",
-          "type": "integer",
-          "primaryKey": false,
-          "notNull": false
-        },
-        "createdAt": {
-          "name": "createdAt",
-          "type": "timestamp",
-          "primaryKey": false,
-          "notNull": true,
-          "default": "now()"
-        }
-      },
-      "indexes": {
-        "sheet_snapshots_page_seq_idx": {
-          "name": "sheet_snapshots_page_seq_idx",
-          "columns": [
-            {
-              "expression": "pageId",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            },
-            {
-              "expression": "seq",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        }
-      },
-      "foreignKeys": {
-        "sheet_snapshots_pageId_pages_id_fk": {
-          "name": "sheet_snapshots_pageId_pages_id_fk",
-          "tableFrom": "sheet_snapshots",
-          "tableTo": "pages",
-          "columnsFrom": [
-            "pageId"
-          ],
-          "columnsTo": [
-            "id"
-          ],
-          "onDelete": "cascade",
-          "onUpdate": "no action"
-        }
-      },
-      "compositePrimaryKeys": {},
-      "uniqueConstraints": {},
-      "policies": {},
-      "checkConstraints": {},
       "isRLSEnabled": false
     },
     "public.sheet_tabs": {

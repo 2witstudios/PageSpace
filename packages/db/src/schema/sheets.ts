@@ -5,7 +5,6 @@ import {
   integer,
   jsonb,
   bigserial,
-  bigint,
   index,
   unique,
   primaryKey,
@@ -15,7 +14,6 @@ import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { pages } from './core';
 import { users } from './auth';
-import { contentFormatEnum } from './monitoring';
 import type { CellFormat, StoredCell } from './sheets-types';
 
 /**
@@ -28,6 +26,12 @@ import type { CellFormat, StoredCell } from './sheets-types';
  * and both activity-log value payloads). These tables make a cell write touch
  * one row, and leave the SHEETDOC form as an on-demand projection for export,
  * publishing and download rather than the storage format.
+ *
+HISTORY: a sheet's version history is `page_versions`, same as every other
+ * page type — one content-addressed blob of the projected document per
+ * DOCUMENT save. That is what drive backup, drive restore and page rollback
+ * read. Addressed cell writes (MCP, SDK, form submissions) do not create a
+ * version; they are attributed per cell in `sheet_changes`.
  *
  * MIGRATION STATE — read this before assuming where a sheet's truth lives.
  *
@@ -223,38 +227,6 @@ export const sheetChanges = pgTable('sheet_changes', {
   createdAtIdx: index('sheet_changes_created_at_idx').on(table.createdAt),
 }));
 
-/**
- * Periodic whole-sheet snapshot, so restoring an old state is bounded work
- * rather than a replay of the entire change log.
- *
- * The bytes live in the content-addressed blob store via `writePageContent`,
- * the same path page versions use — a snapshot is a SHEETDOC projection.
- */
-export const sheetSnapshots = pgTable('sheet_snapshots', {
-  id: text('id').primaryKey().$defaultFn(() => createId()),
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  /**
-   * The change-log position this snapshot reflects.
-   *
-   * `bigint`, matching `sheet_changes.seq`. That sequence is shared by every
-   * page in the install, so it passes 2^31 long before any individual sheet is
-   * large — and an integer column would then fail the insert outright (22003)
-   * rather than truncating.
-   */
-  seq: bigint('seq', { mode: 'number' }).notNull(),
-  contentRef: text('contentRef').notNull(),
-  contentFormat: contentFormatEnum('contentFormat'),
-  /**
-   * Size of the blob behind `contentRef`, which is legitimately unbounded —
-   * see the CHECK on `activity_logs.contentSize` for why that distinction has
-   * teeth.
-   */
-  contentSize: integer('contentSize'),
-  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
-}, (table) => ({
-  pageSeqIdx: index('sheet_snapshots_page_seq_idx').on(table.pageId, table.seq),
-}));
-
 export const sheetTabsRelations = relations(sheetTabs, ({ one, many }) => ({
   page: one(pages, { fields: [sheetTabs.pageId], references: [pages.id] }),
   rows: many(sheetRows),
@@ -280,6 +252,3 @@ export const sheetChangesRelations = relations(sheetChanges, ({ one }) => ({
   actor: one(users, { fields: [sheetChanges.actorUserId], references: [users.id] }),
 }));
 
-export const sheetSnapshotsRelations = relations(sheetSnapshots, ({ one }) => ({
-  page: one(pages, { fields: [sheetSnapshots.pageId], references: [pages.id] }),
-}));

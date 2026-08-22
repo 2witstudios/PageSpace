@@ -17,6 +17,9 @@ import { eq, and, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { decryptField } from '@pagespace/lib/encryption/field-crypto'
 import { pages, drives } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { taskItems, taskLists, taskAssignees, taskStatusConfigs } from '@pagespace/db/schema/tasks'
 import { workflowRuns } from '@pagespace/db/schema/workflow-runs'
 import { workflowRunSteps } from '@pagespace/db/schema/workflow-run-steps'
@@ -488,7 +491,7 @@ async function runExecution(
     const contextPageIds = input.contextPageIds ?? [];
     if (contextPageIds.length > 0) {
       const validContextPages = await db
-        .select({ id: pages.id, title: pages.title, content: pages.content })
+        .select({ id: pages.id, type: pages.type, title: pages.title, content: pages.content })
         .from(pages)
         .where(
           and(
@@ -501,7 +504,13 @@ async function runExecution(
       if (validContextPages.length > 0) {
         userMessage += '\n\n--- Reference Documents ---';
         for (const page of validContextPages) {
-          userMessage += `\n\n## ${page.title}\n${page.content || '(empty)'}`;
+          // A sheet's content is generated from its rows; `pages.content` is
+          // empty for a materialised one, so injecting the column would hand
+          // the model "(empty)" for a spreadsheet full of data.
+          const body = isSheetType(page.type as PageType)
+            ? (await readSheetDocument(page.id)) ?? page.content
+            : page.content;
+          userMessage += `\n\n## ${page.title}\n${body || '(empty)'}`;
         }
       }
     }

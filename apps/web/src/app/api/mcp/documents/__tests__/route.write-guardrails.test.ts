@@ -19,6 +19,7 @@ const mockSetCells = vi.fn(async (..._args: unknown[]) => ({
   columnCount: 1,
 }));
 const mockReadSheetDocument = vi.fn(async (..._args: unknown[]) => null);
+const mockLogSheetCellActivity = vi.fn(async (..._args: unknown[]) => undefined);
 
 vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: vi.fn().mockResolvedValue({
@@ -48,6 +49,10 @@ vi.mock('@pagespace/lib/sheets/sheet', () => ({
 vi.mock('@pagespace/lib/sheets/store', () => ({
   setCells: (...args: unknown[]) => mockSetCells(...args),
   readSheetDocument: (...args: unknown[]) => mockReadSheetDocument(...args),
+}));
+
+vi.mock('@/services/api/sheet-activity', () => ({
+  logSheetCellActivity: (...args: unknown[]) => mockLogSheetCellActivity(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {

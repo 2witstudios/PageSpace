@@ -112,10 +112,18 @@ export async function applyPageMutation({
   // the editor save path, which is already O(document).
   const isSheetPage = isSheetType(currentPage.type as PageType);
   const storedContent = currentPage.content ?? '';
-  const previousContent =
-    isSheetPage && updates.content !== undefined
-      ? (await readSheetDocument(pageId)) ?? storedContent
-      : storedContent;
+
+  // Projected for EVERY sheet mutation, not only content writes.
+  //
+  // A rename, move or trash of a materialised sheet would otherwise hash
+  // `stateHashBefore` over the empty column while the preceding entry's
+  // `stateHashAfter` covered the real document — breaking the chain's
+  // before/after linkage and then overwriting `pages.stateHash` with the
+  // empty-content hash. Read through `database` so a caller-supplied
+  // transaction sees its own uncommitted writes rather than a stale snapshot.
+  const previousContent = isSheetPage
+    ? (await readSheetDocument(pageId, database as never)) ?? storedContent
+    : storedContent;
   const nextContent = updates.content !== undefined ? String(updates.content) : previousContent;
 
   const contentFormatBefore = detectPageContentFormat(previousContent);
@@ -278,7 +286,18 @@ export async function applyPageMutation({
 
     // Create page version BEFORE acquiring the activity chain lock,
     // so disk I/O (compression + fs.writeFile) doesn't hold the global lock.
-    if (!isSheetContentWrite) await createPageVersion({
+    //
+    // Sheets get versions too, and the content is the PROJECTED document
+    // (`nextContent`), not the blanked column. Skipping this removed sheet
+    // version history outright, which is what drive backup, drive restore and
+    // page rollback all read — a backup taken after the migration would store a
+    // zero-byte version for every spreadsheet, and restoring it would bring the
+    // sheet back empty.
+    //
+    // One content-addressed blob per DOCUMENT save. Addressed cell writes
+    // (MCP, the SDK, form submissions) never reach here, so they stay O(1) and
+    // are attributed through `sheet_changes` instead.
+    await createPageVersion({
       pageId,
       driveId: currentPage.driveId,
       createdBy: context.userId,
