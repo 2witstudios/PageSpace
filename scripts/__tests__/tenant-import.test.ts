@@ -105,6 +105,35 @@ describe('runImport', () => {
       `SELECT id, "parentId" FROM pages WHERE "driveId" = '${FIXTURES.drives.shared.id}' ORDER BY position`,
     ));
     expect(pagesResult.rows).toHaveLength(3);
+
+    // The tag vocabulary travels by DRIVE — BOTH entries, including the one with
+    // no assignment. Deriving the list from the surviving assignments instead
+    // would carry only `important` and lose `unused` in silence, which is
+    // exactly what this asserts cannot happen.
+    const tagsResult = await db.execute(sql.raw(
+      `SELECT id FROM tags WHERE "driveId" = '${FIXTURES.drives.shared.id}' ORDER BY id`,
+    ));
+    expect(tagsResult.rows.map((r) => (r as { id: string }).id)).toEqual([
+      FIXTURES.tags.tag1.id,
+      FIXTURES.tags.unusedTag.id,
+    ]);
+
+    // And the ASSIGNMENT survives the round trip. Worth pinning separately from
+    // "the import did not throw": `content_tags` carries real FKs onto
+    // `channel_messages` and `messages`, so a selection rule that exported a row
+    // whose message stayed behind would abort the whole bundle here — see
+    // `contentTagSelectionWhere`, which both the exporter and the validator use
+    // so neither can ask a different question than the other answered.
+    const contentTagsResult = await db.execute(sql.raw(
+      `SELECT id, "tagId", "pageId", "targetKind" FROM content_tags`,
+    ));
+    expect(contentTagsResult.rows).toHaveLength(1);
+    expect(contentTagsResult.rows[0]).toMatchObject({
+      id: FIXTURES.contentTags.ct1.id,
+      tagId: FIXTURES.tags.tag1.id,
+      pageId: FIXTURES.pages.root.id,
+      targetKind: 'page',
+    });
   });
 
   /**
