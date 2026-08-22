@@ -58,6 +58,22 @@ afterEach(async () => {
   }
 });
 
+/**
+ * HARNESS LIMITATION, stated once because three separate comments were arguing
+ * about it.
+ *
+ * Every case in this file passes the SAME `db` handle as source and target, and
+ * mostly the same storage path. `validateTable` runs one query object against
+ * both, so `missingIds`/`extraIds` are always empty: a table's `passed`, and
+ * therefore `result.passed`, is true for ANY predicate. Those assertions
+ * document intent; they cannot fail, and they must not be read as evidence that
+ * a predicate is right.
+ *
+ * `sourceCount` is the load-bearing assertion. It is a measurement of the
+ * SOURCE population, which is exactly where every exporter/validator asymmetry
+ * this file guards has lived. The file-blob comparison is the one check that
+ * can genuinely differ, and only when a case passes two different paths.
+ */
 describe('validateData', () => {
   it('reports success when source and target match', async () => {
     const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
@@ -186,13 +202,10 @@ describe('validateData', () => {
         const messagesResult = result.tableResults.find((r) => r.table === 'messages');
         // Still 3 — the two owner messages plus Eve's; Mallory's is excluded.
         //
-        // `sourceCount` is the only assertion worth making here. Source and
-        // target are the SAME db handle (see the note above), so every id-based
-        // table compares a query against itself and `passed` is true whatever
-        // the predicate says — asserting it would look like a guarantee this
-        // harness cannot give. The count is what moves: without the user arm it
-        // is 4, and the bundle would be reported as missing a row it was never
-        // meant to carry.
+        // `sourceCount` only — see HARNESS LIMITATION at the top of this file
+        // for why `passed` cannot move here. The count is what does: without
+        // the user arm it is 4, and the bundle would be reported as missing a
+        // row it was never meant to carry.
         expect(messagesResult!.sourceCount).toBe(3);
       } finally {
         await db.execute(sql.raw(`DELETE FROM messages WHERE id = '${STRANGER_MSG}'`));
@@ -283,6 +296,15 @@ describe('validateData', () => {
       return result.tableResults.find((r) => r.table === table)!.sourceCount;
     };
 
+    it('does not count a user the export never carries', async () => {
+      // The UPPER bound on `users`, paired with the lower bound in the block
+      // above. `users` is the one query here whose failure mode is a false
+      // PASS, so it needs both: too narrow and a carried row goes unchecked,
+      // too wide and a row the bundle never held is reported missing. The
+      // stranger has a `users` row and is reachable by no discovery arm.
+      expect(await countFor('users')).toBe(2);
+    });
+
     it('does not count a page permission granted to a user outside the export set', async () => {
       // Still the ONE seeded grant. Without the user arm this is 2.
       expect(await countFor('page_permissions')).toBe(1);
@@ -322,6 +344,31 @@ describe('validateData', () => {
     const pagesResult = result.tableResults.find((r) => r.table === 'pages');
     expect(pagesResult).toBeDefined();
     expect(pagesResult!.sourceCount).toBe(2);
+  });
+
+  it('does not fault a file whose SOURCE blob is gone — the export skipped it', async () => {
+    // tenant-export.ts skips a `files` row whose blob is not on disk, so the
+    // bundle legitimately does not carry it. Checking the target first reported
+    // that row as 'missing in target' and failed a correct migration.
+    //
+    // Both paths point at empty directories: source blob absent, target blob
+    // absent, which is exactly the orphaned-row state. Before the fix this
+    // produced `{ reason: 'missing in target' }` and `passed: false`.
+    const emptySource = path.join(tmpDir, 'source-orphaned');
+    const emptyTarget = path.join(tmpDir, 'target-orphaned');
+    await mkdir(emptySource, { recursive: true });
+    await mkdir(emptyTarget, { recursive: true });
+
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: emptySource,
+      targetFileStoragePath: emptyTarget,
+    });
+
+    expect(result.fileResults.mismatches).toEqual([]);
+    expect(result.fileResults.passed).toBe(true);
   });
 
   it('detects missing file blob in target', async () => {
