@@ -808,22 +808,42 @@ export async function setCells(
       return { changed: [], recomputed: [], rowCount: tab.rowCount, columnCount: tab.columnCount };
     }
 
-    // 1. Apply authored text to the rows the updates name.
+    // 1. Re-derive the dependency edges for the cells that changed.
     //
-    // `working` is the set of rows this call may WRITE, and every row in it is
-    // loaded whole before being modified. That invariant matters because
-    // `persistRows` upserts the entire `cells` object: writing a row that was
-    // only partially loaded would silently delete every column it did not know
-    // about.
-    // Read UNLOCKED here. The lock comes later, over the full union, once the
-    // closure is known — see step 3. Taking `FOR UPDATE` on the touched rows
-    // first and the closure rows second is exactly the split acquisition order
-    // that deadlocks: with `A1 = C5*2` and `B5 = A1+1`, a caller writing C5
-    // locks row 4 then wants row 0, while a caller writing A1 locks row 0 then
-    // wants row 4 (40P01, surfacing as a 500 on an MCP or form write).
+    // Nothing here needs the rows read first: the edges come from the incoming
+    // formula text, and the closure walk below from the dirty ADDRESSES. That
+    // is what lets every row be read once, under the lock, in step 3.
     const touchedRowIndexes = unique(normalized.map((u) => u.position.row));
-    const working = await loadRowsByIndex(tab.id, touchedRowIndexes, tx, false);
+    await rewriteDependencyEdges(tab.id, normalized, tx);
 
+    // 2. Walk to the closure of formulas whose inputs moved.
+    const dirty = normalized.map((u) => u.address);
+    const closure = await resolveDependentClosure(tab.id, dirty, tx);
+
+    // 3. Lock the whole union ascending — the ONE acquisition point — and only
+    // then read the rows this call will write.
+    //
+    // A single ordered acquisition is what makes deadlock impossible; two
+    // ordered statements are not globally ordered, because a closure row can
+    // sit below a touched one.
+    //
+    // Reading AFTER the lock also matters on its own. An earlier version read
+    // the touched rows first, unlocked, and merged the pending edits over the
+    // re-read — but the pending row carried the whole STALE row, so a column
+    // another transaction had written in between was overwritten by the stale
+    // copy. That is the lost update the row lock exists to prevent,
+    // reintroduced above it.
+    const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
+    const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
+    await lockRows(tab.id, allRowIndexes, tx);
+
+    // `working` is the set of rows this call may WRITE, every one of them read
+    // whole under the lock. `persistRows` upserts the entire `cells` object, so
+    // writing a row that was only partially loaded would delete every column it
+    // did not know about.
+    const working = await loadRowsByIndex(tab.id, allRowIndexes, tx, false);
+
+    // 4. Apply the authored text on top of what the lock guarantees is current.
     const before: Record<string, StoredCell | undefined> = {};
     for (const update of normalized) {
       const row = working.get(update.position.row) ?? { rowIndex: update.position.row, cells: {} };
@@ -839,36 +859,6 @@ export async function setCells(
       delete row.cells[label].error;
 
       working.set(update.position.row, row);
-    }
-
-    // 2. Re-derive dependency edges for the cells that changed.
-    await rewriteDependencyEdges(tab.id, normalized, tx);
-
-    // 3. Walk to the closure of formulas whose inputs moved.
-    const dirty = normalized.map((u) => u.address);
-    const closure = await resolveDependentClosure(tab.id, dirty, tx);
-
-    // 4. Load the rows holding those dependents, so recomputing a formula in an
-    // untouched row rewrites that row with its other columns intact.
-    //
-    // THE only lock, over the whole union, ascending, in one statement.
-    //
-    // Every caller acquires the same set in the same order, which is what makes
-    // deadlock impossible — a property that only holds if there is a single
-    // acquisition point. The touched rows were read unlocked above precisely so
-    // this can be it.
-    const closureRowIndexes = unique(closure.map((address) => decodeCellAddress(address).row));
-    const allRowIndexes = unique([...touchedRowIndexes, ...closureRowIndexes]);
-    await lockRows(tab.id, allRowIndexes, tx);
-
-    // Re-read the touched rows now the lock is held: the unlocked read above
-    // could have seen a row another transaction has since changed, and
-    // `persistRows` writes whole `cells` objects.
-    const fresh = await loadRowsByIndex(tab.id, allRowIndexes, tx, false);
-    for (const [index, row] of fresh) {
-      const pending = working.get(index);
-      // Keep this call's edits, on top of the freshly-read row.
-      working.set(index, pending ? { rowIndex: index, cells: { ...row.cells, ...pending.cells } } : row);
     }
 
     // 5. Evaluate the dirty cells and that closure, and nothing else.

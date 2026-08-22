@@ -299,6 +299,35 @@ describe('sheet store (integration)', () => {
     // NOTE: this one is a smoke test, not a race reproduction. Two `setCells`
     // calls in `Promise.all` do not reliably interleave their reads, so it
     // cannot demonstrate the row lock; it only asserts both appends survive.
+    it('preserves a column written out-of-band before the call', async () => {
+      // HONEST SCOPE: this does NOT prove the read happens under the lock.
+      //
+      // It cannot: the defect it relates to needs another transaction to commit
+      // BETWEEN this call's read and its write, and nothing here can force that
+      // interleaving. A mutation reintroducing the read-before-lock shape still
+      // passes this test.
+      //
+      // The lock/read ordering is verified instead by reading Postgres's
+      // statement log during a `setCells` (`log_statement=all`) and confirming
+      // the `FOR UPDATE` precedes every `sheet_rows` read — see the commit that
+      // removed the pre-lock read. What this test does cover is the weaker but
+      // still useful property that a foreign column survives a later write.
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [{ address: 'A1', value: 'a' }], { userId: ownerId });
+
+      await db
+        .update(sheetRows)
+        .set({ cells: sql`${sheetRows.cells} || '{"Z":{"raw":"concurrent","value":"concurrent"}}'::jsonb` })
+        .where(and(eq(sheetRows.tabId, tabId), eq(sheetRows.rowIndex, 0)));
+
+      await setCells({ pageId }, [{ address: 'B1', value: 'b' }], { userId: ownerId });
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'B')?.value).toBe('b');
+      expect(cellAt(rows, 0, 'A')?.value).toBe('a');
+      expect(cellAt(rows, 0, 'Z')?.value).toBe('concurrent');
+    });
+
     it('lands both rows when two appends run together', async () => {
       const { pageId, ownerId } = await makeSheet();
       const tab = (await getTab({ pageId }))!;
