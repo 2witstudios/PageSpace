@@ -13,17 +13,9 @@
 
 import type { StoredCell, CellFormat } from '@pagespace/db/schema';
 import type { SheetData, SheetEvaluation, CellFormat as LibCellFormat } from './types';
-import {
-  decodeCellAddress,
-  decodeColumnLabel,
-  encodeCellAddress,
-  encodeColumnLabel,
-  columnLabelOf,
-} from './address';
+import { decodeCellAddress, encodeCellAddress, encodeColumnLabel, columnLabelOf } from './address';
 import { extractFormulaDependencies, type CellRect } from './deps';
 import { evaluateSheet } from './evaluation';
-import { applyNumberFormat, resolveCellFormat } from './format';
-import { formatDisplayValue } from './functions';
 
 /**
  * `CellFormat` is defined twice — here as the `jsonb` column shape in
@@ -231,82 +223,6 @@ export function rowsFromSheetData(sheet: SheetData, tabIndex = 0): MaterializedT
     cellDeps,
     rangeDeps,
   };
-}
-
-/**
- * The display grid for a set of stored rows, without re-evaluating.
- *
- * Exports and the publisher want computed values, and the whole point of
- * materialising `value` on write is that they can have them for the cost of a
- * read. Cells with no stored value fall back to their raw text, which is what a
- * literal is anyway.
- */
-export function displayGridFromRows(
-  tab: StoredTab,
-  rows: readonly StoredRow[]
-): string[][] {
-  const grid: string[][] = Array.from({ length: tab.rowCount }, () =>
-    Array<string>(tab.columnCount).fill('')
-  );
-
-  for (const row of rows) {
-    if (row.rowIndex < 0 || row.rowIndex >= tab.rowCount) continue;
-    for (const [label, cell] of Object.entries(row.cells ?? {})) {
-      let column: number;
-      try {
-        column = decodeColumnLabel(label);
-      } catch {
-        continue;
-      }
-      if (column < 0 || column >= tab.columnCount) continue;
-      grid[row.rowIndex][column] = storedDisplay(cell, tab.columnFormats?.[label]);
-    }
-  }
-
-  return grid;
-}
-
-/**
- * What a stored cell shows: its error, else its formatted computed value, else
- * its raw text.
- *
- * Two distinctions that look pedantic and are not:
- *
- * `value === ''` is a COMPUTED empty string, not a missing value. Falling
- * through to `raw` for it would print the formula — `=IF(A1>0,"","x")` would
- * export as its own source text instead of as blank. Only `undefined` means
- * "nothing was materialised".
- *
- * The number format is re-applied here. `evaluateSheet` produces `display` by
- * running `applyNumberFormat` over the value, but only the unformatted `value`
- * is materialised on the row, so a currency cell would otherwise export as
- * `1234.5` rather than `$1,234.50`.
- */
-export function storedDisplay(cell: StoredCell, columnFormat?: CellFormat): string {
-  // The SPECIFIC token, not a flattened '#ERROR'. `evaluateCellInternal`
-  // produces `#DIV/0!`, `#REF!`, `#NAME?` and so on, and `StoredCell.error.type`
-  // carries it — collapsing them here would make an export disagree with the
-  // grid it came from, which is the divergence this function exists to avoid.
-  if (cell.error) return cell.error.type || '#ERROR';
-  if (cell.value === undefined) return cell.raw ?? '';
-
-  // Same two steps, in the same order, as `evaluateCellInternal`: format the
-  // value, then let a number format override. Diverging here would make an
-  // export disagree with the grid it was exported from.
-  const base = formatDisplayValue(cell.value);
-  const format = resolveCellFormat(cell.format, columnFormat);
-  if (!format) return base;
-
-  const formatted = applyNumberFormat(cell.value, format.number);
-  return formatted ?? base;
-}
-
-/**
- * Every address a stored row occupies, for callers that need to line rows up
- * against an evaluation keyed by A1 address.
- */
-export function addressesOfRow(row: StoredRow): string[] {
-  return Object.keys(row.cells ?? {}).map((label) => `${label}${row.rowIndex + 1}`);
 }
 
 // Re-exported so callers building rows do not each reimplement address maths.

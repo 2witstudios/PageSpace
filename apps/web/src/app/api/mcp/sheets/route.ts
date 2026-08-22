@@ -171,17 +171,25 @@ export async function POST(req: NextRequest) {
 
     const ref = { pageId, tabIndex: input.tabIndex ?? 0 };
 
-    // Write operations provision the tab themselves via `ensureTab`, which also
-    // materialises a sheet still living in `pages.content`. Refusing here
-    // blocked `append-rows` — the very remedy the old error message suggested —
-    // and made any sheet nobody had saved since the migration unreachable.
+    // Reads materialise too, not only writes.
+    //
+    // A sheet whose data still lives in `pages.content` — created before the
+    // row store, or never re-saved, and not covered by the backfill — would
+    // otherwise answer `query-rows`/`get-rows`/`describe` with a 409 saying it
+    // has no data. An agent reads that as "the spreadsheet is empty" while the
+    // data sits intact in the document column, which is a worse answer than
+    // being slow. `ensureTab` is idempotent and only does work once.
     let tab = await getTab(ref);
-    if (!tab && WRITE_OPERATIONS.has(operation)) {
-      tab = await ensureTab(ref);
+    if (!tab) {
+      tab = await ensureTab({ pageId, tabIndex: 0 }).catch(() => null);
+      // `describe` enumerates tabs, so it must not fail on a tabIndex miss.
+      if (tab && (ref.tabIndex ?? 0) !== 0) {
+        tab = await getTab(ref);
+      }
     }
     if (!tab) {
       return NextResponse.json({
-        error: 'Sheet has no data yet',
+        error: operation === 'describe' ? 'Sheet has no tabs yet' : `Sheet tab ${ref.tabIndex} not found`,
         message: 'This sheet has not been initialised. Append rows or edit a cell to create it.',
       }, { status: 409 });
     }

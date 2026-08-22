@@ -1008,6 +1008,11 @@
       "import": "./dist/sheets/query.js",
       "require": "./dist/sheets/query.js"
     },
+    "./sheets/search-sql": {
+      "types": "./dist/sheets/search-sql.d.ts",
+      "import": "./dist/sheets/search-sql.js",
+      "require": "./dist/sheets/search-sql.js"
+    },
     "./sheets/projection": {
       "types": "./dist/sheets/projection.d.ts",
       "import": "./dist/sheets/projection.js",

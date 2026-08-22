@@ -597,10 +597,21 @@ export const pageService = {
     }
 
     const pageData = toPageData(updatedPage);
+
+    // Same projection as `getPage`. Without it a successful sheet save answers
+    // with `content: ""` — the blanked column — and any client that adopts the
+    // response body (MCP, the SDK, an SWR cache write) sees the spreadsheet as
+    // empty. The web editor happens to read only `revision` off this, which is
+    // exactly the kind of accident that stops being true later.
+    const responseContent = isSheetType(updatedPage.type as PageTypeEnum)
+      ? (await readSheetDocument(pageId)) ?? pageData.content ?? ''
+      : pageData.content;
+
     return {
       success: true,
       page: {
         ...pageData,
+        content: responseContent,
         children: children.map(toPageData),
         messages,
       },

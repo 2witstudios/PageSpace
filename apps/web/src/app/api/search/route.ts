@@ -3,6 +3,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
+import { sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
 import { userProfiles } from '@pagespace/db/schema/members';
 import { decryptUserRows } from '@pagespace/lib/auth/user-repository';
 import { verifyAuth } from '@/lib/auth';
@@ -46,10 +47,15 @@ function buildMultiWordContentCondition(query: string): SQL | undefined {
   const words = query.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return undefined;
 
-  // For content, we search for any word (more lenient)
-  const conditions = words.map(word =>
-    ilike(pages.content, `%${escapeLikePattern(word)}%`)
-  );
+  // For content, we search for any word (more lenient).
+  //
+  // A sheet's text is in its rows — `pages.content` is empty once a sheet has
+  // been materialised — so matching the column alone made every spreadsheet
+  // unfindable from the search box.
+  const conditions = words.map(word => {
+    const pattern = `%${escapeLikePattern(word)}%`;
+    return or(ilike(pages.content, pattern), sheetCellsMatchIlike(pattern))!;
+  });
 
   return conditions.length === 1 ? conditions[0] : or(...conditions);
 }

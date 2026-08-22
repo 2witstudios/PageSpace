@@ -16,7 +16,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { factories } from '@pagespace/db/test/factories';
 import { db } from '@pagespace/db/db';
-import { eq, sql, inArray } from '@pagespace/db/operators';
+import { eq, and, sql, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { pages } from '@pagespace/db/schema/core';
 import { sheetTabs, sheetRows, sheetRangeDeps, sheetChanges } from '@pagespace/db/schema';
@@ -36,6 +36,7 @@ import {
 } from '../store';
 import type { StoredRow } from '../projection';
 import { parseSheetContent, serializeSheetContent } from '../io';
+import { sheetCellsMatchIlike, sheetCellsMatchRegex } from '../search-sql';
 
 /**
  * Ids this file created, so cleanup can be row-scoped.
@@ -765,6 +766,51 @@ describe('sheet store (integration)', () => {
 
       const rows = await readRows(tabId, { limit: 10 });
       expect(cellAt(rows, 0, 'B')?.value).toBe(expected);
+    });
+  });
+
+  describe('a sheet is findable by its contents', () => {
+    it('matches cell text through the shared search predicate', async () => {
+      // `pages.content` is empty for a materialised sheet, so a search that
+      // filters on that column alone stops finding spreadsheets entirely —
+      // the pages most likely to hold the string somebody typed.
+      const { pageId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'Quarterly Revenue' },
+        { address: 'B1', value: '=1+1' },
+      ], { userId: ownerId });
+
+      const found = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(and(eq(pages.id, pageId), sheetCellsMatchIlike('%quarterly%')));
+      expect(found).toHaveLength(1);
+
+      const missed = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(and(eq(pages.id, pageId), sheetCellsMatchIlike('%nowhere%')));
+      expect(missed).toHaveLength(0);
+    });
+
+    it('anchors work, because matching is per cell and not over raw JSON', async () => {
+      // Over `cells::text` the whole row is one string, so `^Total` could never
+      // match and any pattern containing a quote missed on JSON escaping.
+      const { pageId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [{ address: 'C3', value: 'Total' }], { userId: ownerId });
+
+      const anchored = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(and(eq(pages.id, pageId), sheetCellsMatchRegex('^Total$')));
+      expect(anchored).toHaveLength(1);
+
+      // A structural JSON key must NOT match.
+      const structural = await db
+        .select({ id: pages.id })
+        .from(pages)
+        .where(and(eq(pages.id, pageId), sheetCellsMatchRegex('^raw$')));
+      expect(structural).toHaveLength(0);
     });
   });
 

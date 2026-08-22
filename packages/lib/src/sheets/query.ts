@@ -219,6 +219,14 @@ function compileCondition(condition: SheetCondition): SQL {
         // `to_jsonb`, not `true::jsonb` — Postgres has no boolean-to-jsonb cast
         // and the latter raises "cannot cast type boolean to jsonb", failing
         // the whole query rather than the one comparison.
+        if (op === 'neq') {
+          // The third branch with the same three-valued problem: `NULL <> ...`
+          // is NULL for a row with no such cell, so "not false" dropped every
+          // blank row. `{op:'neq', value:false}` must return the same rows as
+          // `{op:'neq', value:'false'}`.
+          return sql`(${valueOf(condition.column)} IS NULL
+            OR (${valueOf(condition.column)}) <> to_jsonb(${value}::boolean))`;
+        }
         return sql`(${valueOf(condition.column)}) ${operator} to_jsonb(${value}::boolean)`;
       }
 

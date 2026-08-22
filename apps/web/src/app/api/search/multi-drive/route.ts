@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveIds, getP
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
@@ -107,9 +108,12 @@ export async function GET(request: Request) {
     const driveIds = accessibleDrives.map((drive) => drive.id);
     const regexPattern = searchQuery.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
     const searchPattern = `%${searchQuery}%`;
+    // Sheets match on their rows as well as the column, which is empty for any
+    // materialised sheet — without this every spreadsheet drops out of
+    // cross-drive search by content.
     const searchCondition = searchType === 'regex'
-      ? sql`${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern}`
-      : sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`;
+      ? sql`${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern} OR ${sheetCellsMatchRegex(regexPattern)}`
+      : sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)}`;
 
     const rankedMatches = db
       .select({

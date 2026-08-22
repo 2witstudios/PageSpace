@@ -7,7 +7,10 @@
 
 import { db } from '@pagespace/db/db';
 import { eq, and, inArray, sql } from '@pagespace/db/operators';
-import { sheetRows } from '@pagespace/db/schema/sheets';
+import { sheetCellsMatchRegex } from '../sheets/search-sql';
+import { isSheetType } from '../sheets/sheet';
+import { PageType } from '../utils/enums';
+import { readSheetDocument } from '../sheets/store';
 import { pages, drives, type PageTypeEnum } from '@pagespace/db/schema/core';
 import { getUserAccessLevel, getUserDriveAccess } from '../permissions/permissions';
 
@@ -392,12 +395,7 @@ export async function regexSearchPages(
   // what the person typing it expects.
   //
   // It remains a sequential scan; a searchable projection is the eventual fix.
-  const sheetContentMatch = sql`EXISTS (
-    SELECT 1
-    FROM ${sheetRows}, jsonb_each(${sheetRows.cells}) AS cell(label, payload)
-    WHERE ${sheetRows.pageId} = ${pages.id}
-      AND coalesce(payload ->> 'value', payload ->> 'raw', '') ~ ${pgPattern}
-  )`;
+  const sheetContentMatch = sheetCellsMatchRegex(pgPattern);
 
   const contentMatch = sql`(${pages.content} ~ ${pgPattern} OR ${sheetContentMatch})`;
 
@@ -487,9 +485,18 @@ export async function regexSearchPages(
 
     const semanticPath = `/${[...pathParts, ...parentChain, page.title].join('/')}`;
 
-    // Extract matching lines if searching content
+    // Extract matching lines if searching content.
+    //
+    // A sheet's text is in its rows, so previewing `page.content` — empty for a
+    // materialised sheet — reported "found this page, 0 matches" for exactly
+    // the pages the row-aware WHERE clause was added to surface. Project the
+    // sheet first so the preview describes what actually matched.
+    const previewText = isSheetType(page.type as PageType)
+      ? (await readSheetDocument(page.id)) ?? page.content
+      : page.content;
+
     const { matchingLines, totalMatches } = canExtractLiteralLineMatches
-      ? extractLiteralMatchingLines(page.content, pattern)
+      ? extractLiteralMatchingLines(previewText, pattern)
       : { matchingLines: [], totalMatches: 0 };
 
     results.push({

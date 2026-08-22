@@ -36,6 +36,9 @@ import {
   type ParsedCommandToken,
 } from './command-processor';
 import { serializePageContentForAI, isTextSerializablePageType } from './page-serializer';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 
 /** DB command ids are cuid2-style lowercase alphanumerics. */
 const COMMAND_ID_PATTERN = /^[a-z0-9]{10,40}$/;
@@ -203,8 +206,16 @@ export async function resolveCommandInjectionById(
   const canView = await canUserViewPage(senderId, entryPage.id);
   if (!canView) return skip(commandId, label, 'no_access');
 
+  // A sheet serialises from its rows. `pages.content` is empty for a
+  // materialised one, so injecting the column handed the model a blank grid —
+  // the same defect fixed in `page-read-tools` and `mcp/documents`, and this
+  // was the third caller.
+  const readableEntry = isSheetType(entryPage.type as PageType)
+    ? { ...entryPage, content: (await readSheetDocument(entryPage.id)) ?? entryPage.content }
+    : entryPage;
+
   const serializedContent = isTextSerializablePageType(entryPage.type)
-    ? serializePageContentForAI(entryPage)
+    ? serializePageContentForAI(readableEntry)
     : `(This entry page is a ${entryPage.type} page. Use read_page with pageId "${entryPage.id}" to read it.)`;
 
   const children = await loadViewableChildren(entryPage.id, senderId);

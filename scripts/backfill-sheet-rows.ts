@@ -138,8 +138,12 @@ async function main() {
       .select({ id: pages.id, title: pages.title, content: pages.content, driveId: pages.driveId })
       .from(pages)
       .where(
+        // The SHEET predicate applies to BOTH branches. Without it,
+        // `--page <id>` on a non-sheet page would insert a `sheet_tabs` row for
+        // it and, with `--clear-content`, blank a document this script has no
+        // business touching.
         options.pageId
-          ? eq(pages.id, options.pageId)
+          ? and(eq(pages.id, options.pageId), eq(pages.type, 'SHEET'))
           : and(eq(pages.type, 'SHEET'), gt(pages.id, cursor))
       )
       .orderBy(asc(pages.id))
@@ -285,6 +289,11 @@ async function main() {
     }
 
     if (options.pageId) break;
+  }
+
+  if (options.pageId && report.scanned === 0) {
+    console.error(`No SHEET page found with id ${options.pageId}.`);
+    process.exitCode = 1;
   }
 
   console.log(JSON.stringify(report, null, 2));

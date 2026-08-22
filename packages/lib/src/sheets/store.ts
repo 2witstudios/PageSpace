@@ -604,7 +604,17 @@ export async function replaceFromDocument(
     // path an editor save takes. Writing tab 0 alone silently discarded edits to
     // every other tab — and, for a sheet whose extra tabs existed only in the
     // document, deleted them outright.
-    await ensureTab(ref, tx);
+    // `getTab`, not `ensureTab`.
+    //
+    // The loop below writes every tab the incoming document describes, so
+    // materialising the OLD document first is pure waste — it parses,
+    // fully evaluates and inserts every row of the previous content only to
+    // delete and replace it, doubling the cost of the most expensive save
+    // there is (the first save of a large pre-migration sheet).
+    //
+    // It also made a sheet whose stored document no longer parses impossible
+    // to save over: `ensureTab` would throw on the old content and reject the
+    // very write that would have replaced it.
     const sheets = documentTabs(content);
 
     let rowTotal = 0;
