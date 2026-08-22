@@ -37,6 +37,7 @@ import {
   decodeColumnLabel,
 } from './address';
 import { extractFormulaDependencies } from './deps';
+import { sheetRowMatchesIlike, sheetRowMatchesRegex } from './search-sql';
 import {
   parseSheetContentSafe,
   serializeSheetContent,
@@ -618,45 +619,53 @@ export async function readSheetDocument(pageId: string, exec: Executor = db): Pr
   return serializeSheetContent(base, { pageId });
 }
 
+/** One row rendered as a line of text: computed values, else authored text. */
+function rowText(cells: Record<string, StoredCell> | null | undefined): string {
+  return Object.keys(cells ?? {})
+    .sort()
+    .map((label) => {
+      const cell = cells![label];
+      const value = cell.value !== undefined && cell.value !== '' ? cell.value : cell.raw;
+      return String(value ?? '');
+    })
+    .filter(Boolean)
+    .join(' ');
+}
+
 /**
- * A short, bounded text preview of a sheet — for snippets and digests.
+ * The rows of a sheet that actually matched a search, as text.
  *
- * Deliberately NOT `readSheetDocument`. A search result list or a daily digest
- * wants a line or two, and projecting the whole spreadsheet per row would put
- * an O(sheet) cost on a list endpoint. This reads a fixed handful of rows and
- * joins their cell values.
+ * A result list needs to quote WHERE the query hit, and a bounded preview of
+ * the first N rows cannot: a match at row 5,000, on a later tab, or past the
+ * character cap falls outside it, so the search reported a spreadsheet as a hit
+ * with nothing to show and a match count of zero. The match runs in SQL
+ * against the same cell-value expression the page-level predicate uses, so the
+ * rows returned are exactly the rows that made the page match.
  *
- * Returns `null` when the sheet has no rows, so callers can fall back to
- * whatever they were showing before.
+ * Bounded by `limit`: this feeds a result list, not a page read.
  */
-export async function sheetPreviewText(
+export async function sheetMatchingRows(
   pageId: string,
-  options: { maxRows?: number; maxChars?: number } = {},
+  match: { ilike: string | readonly string[] } | { regex: string },
+  options: { limit?: number; maxChars?: number } = {},
   exec: Executor = db
-): Promise<string | null> {
-  const maxRows = Math.min(options.maxRows ?? 10, 50);
-  const maxChars = options.maxChars ?? 300;
+): Promise<{ rowIndex: number; text: string }[]> {
+  const limit = Math.min(Math.max(options.limit ?? 5, 1), 50);
+  const maxChars = options.maxChars ?? 200;
 
-  const tabs = await listTabs(pageId, exec);
-  if (tabs.length === 0) return null;
+  const predicate =
+    'ilike' in match ? sheetRowMatchesIlike(match.ilike) : sheetRowMatchesRegex(match.regex);
 
-  const rows = await readRows(tabs[0].id, { limit: maxRows }, exec);
-  if (rows.length === 0) return null;
+  const found = await exec
+    .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+    .from(sheetRows)
+    .where(and(eq(sheetRows.pageId, pageId), predicate))
+    .orderBy(asc(sheetRows.rowIndex))
+    .limit(limit);
 
-  const lines = rows.map((row) =>
-    Object.keys(row.cells ?? {})
-      .sort()
-      .map((label) => {
-        const cell = row.cells[label];
-        const value = cell.value !== undefined && cell.value !== '' ? cell.value : cell.raw;
-        return String(value ?? '');
-      })
-      .filter(Boolean)
-      .join(' ')
-  ).filter(Boolean);
-
-  const text = lines.join('\n').slice(0, maxChars);
-  return text || null;
+  return found
+    .map((row) => ({ rowIndex: row.rowIndex, text: rowText(row.cells).slice(0, maxChars) }))
+    .filter((row) => row.text !== '');
 }
 
 /**

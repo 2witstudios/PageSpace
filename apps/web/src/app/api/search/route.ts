@@ -4,7 +4,7 @@ import { eq, and, or, ilike, inArray, SQL } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { pages, drives } from '@pagespace/db/schema/core'
 import { sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetPreviewText } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { userProfiles } from '@pagespace/db/schema/members';
@@ -46,6 +46,20 @@ function buildMultiWordTitleCondition(query: string): SQL | undefined {
   return conditions.length === 1 ? conditions[0] : and(...conditions);
 }
 
+/**
+ * The per-word LIKE patterns the content condition matches on.
+ *
+ * Shared with the excerpt builder below so a row can never satisfy the WHERE
+ * clause yet be missing from the text the result is scored and quoted from.
+ */
+function queryWordPatterns(query: string): string[] {
+  return query
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => `%${escapeLikePattern(word)}%`);
+}
+
 function buildMultiWordContentCondition(query: string): SQL | undefined {
   const words = query.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return undefined;
@@ -55,10 +69,9 @@ function buildMultiWordContentCondition(query: string): SQL | undefined {
   // A sheet's text is in its rows — `pages.content` is empty once a sheet has
   // been materialised — so matching the column alone made every spreadsheet
   // unfindable from the search box.
-  const conditions = words.map(word => {
-    const pattern = `%${escapeLikePattern(word)}%`;
-    return or(ilike(pages.content, pattern), sheetCellsMatchIlike(pattern))!;
-  });
+  const conditions = queryWordPatterns(query).map(
+    pattern => or(ilike(pages.content, pattern), sheetCellsMatchIlike(pattern))!
+  );
 
   return conditions.length === 1 ? conditions[0] : or(...conditions);
 }
@@ -299,6 +312,7 @@ export async function GET(request: Request) {
     if (allDriveIds.length > 0) {
       const titleCondition = buildMultiWordTitleCondition(trimmedQuery);
       const contentCondition = buildMultiWordContentCondition(trimmedQuery);
+      const queryPatterns = queryWordPatterns(trimmedQuery);
 
       const pageResults = await db.select({
         id: pages.id,
@@ -315,9 +329,14 @@ export async function GET(request: Request) {
           eq(pages.excludeFromSearch, false),
           or(
             titleCondition,
-            // Search content for documents
+            // Search content for documents AND sheets.
+            //
+            // The gate was `DOCUMENT` alone, so a sheet could never reach the
+            // content condition however well that condition matched — widening
+            // the predicate to search `sheet_rows` changed nothing here, and
+            // spreadsheets stayed findable by title only.
             and(
-              eq(pages.type, 'DOCUMENT'),
+              inArray(pages.type, [PageType.DOCUMENT, PageType.SHEET]),
               contentCondition
             )
           )
@@ -337,8 +356,15 @@ export async function GET(request: Request) {
         // A sheet's text is in its rows, so `page.content` is empty and the
         // match would be attributed to the title alone — for a page the
         // widened WHERE clause has just made matchable on its contents.
+        //
+        // Built from the rows that MATCHED rather than from a preview of the
+        // first N: a hit at row 5,000 or past a character cap is invisible to a
+        // preview, which would score the page as a title-only match and show an
+        // excerpt not containing the query.
         const searchableBody = isSheetType(page.type as PageType)
-          ? (await sheetPreviewText(page.id, { maxRows: 20, maxChars: 1000 })) ?? page.content
+          ? (await sheetMatchingRows(page.id, { ilike: queryPatterns }, { limit: 5 }))
+              .map((row) => row.text)
+              .join('\n') || page.content
           : page.content;
 
         const matchLocation = getMatchLocation(page.title, searchableBody, trimmedQuery);

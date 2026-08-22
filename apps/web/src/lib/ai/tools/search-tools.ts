@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, ne, sql, inArray, asc } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetPreviewText } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { getActorAccessiblePagesInDrive, canActorAccessDrive } from './actor-permissions';
@@ -145,23 +145,41 @@ export const searchTools = {
               // Extract matching lines if searching content
               const matchingLines: Array<{ lineNumber: number; content: string }> = [];
               if (searchIn !== 'title') {
-                // A sheet's text is in its rows. The WHERE clause now matches
-                // sheets, so without this a spreadsheet comes back as a hit with
-                // a blank excerpt. Bounded preview rather than the whole
-                // document — this is a result list, not a page read.
-                const searchable = isSheetType(page.type as PageType)
-                  ? (await sheetPreviewText(page.id, { maxRows: 50, maxChars: 4000 })) ?? page.content
-                  : page.content;
-                const lines = searchable.split('\n');
-                // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
-                lines.forEach((line, index) => {
-                  if (jsRegex.test(line)) {
-                    matchingLines.push({
-                      lineNumber: index + 1,
-                      content: line.substring(0, 200), // Truncate long lines
-                    });
+                if (isSheetType(page.type as PageType)) {
+                  // Quote the rows that MATCHED, found by the same predicate
+                  // that made the page a hit.
+                  //
+                  // A sheet's text is in its rows, so `page.content` is empty
+                  // and a spreadsheet came back as a hit with a blank excerpt.
+                  // A bounded preview does not fix that either: a match at row
+                  // 5,000, on a later tab, or past the character cap falls
+                  // outside the preview, and the result still reports zero
+                  // matching lines for a page the database says matched.
+                  // Bounded at 50 rather than the 5 the list shows, so
+                  // `totalMatches` is not silently pinned to the display cap —
+                  // the document branch below counts every matching line and
+                  // slices afterwards.
+                  const matched = await sheetMatchingRows(
+                    page.id,
+                    { regex: pgPattern },
+                    { limit: 50 },
+                  );
+                  for (const row of matched) {
+                    // The spreadsheet row number, not an offset into a preview.
+                    matchingLines.push({ lineNumber: row.rowIndex + 1, content: row.text });
                   }
-                });
+                } else {
+                  const lines = page.content.split('\n');
+                  // Use pre-validated jsRegex without /g flag to avoid lastIndex persistence bug
+                  lines.forEach((line, index) => {
+                    if (jsRegex.test(line)) {
+                      matchingLines.push({
+                        lineNumber: index + 1,
+                        content: line.substring(0, 200), // Truncate long lines
+                      });
+                    }
+                  });
+                }
               }
 
               results.push({

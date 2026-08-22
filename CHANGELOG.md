@@ -7,6 +7,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Spreadsheets hold real data now** — a sheet used to be stored as one document that was rewritten
+  from scratch on every cell edit, so a sheet with tens of thousands of rows took seconds to accept a
+  single change and eventually stopped saving at all. Sheets are stored row by row, and editing one
+  cell costs the same whether the sheet has a thousand rows or a hundred thousand. Formulas that
+  depend on the cell you changed are recalculated, and nothing else is.
+- **Agents can query a spreadsheet instead of reading all of it** — filter, sort, page, append rows,
+  update cells and delete rows, without pulling the whole sheet into the conversation. Filters run
+  against the values you see, so a formula column compares as its result.
+- **Spreadsheets are findable by what is in them again** — search now matches the contents of a
+  sheet's cells, and a result quotes the row that actually matched, wherever in the sheet it is.
 - **Environments: a place in a drive that stays** — a drive can now hold named environments, and a
   session can run inside one instead of in a sandbox that disappears when you close it. Everything
   in an environment — your files, what you installed, what you configured — is still there the next

@@ -33,6 +33,7 @@ import {
   replaceFromDocument,
   copySheetRows,
   listTabs,
+  sheetMatchingRows,
 } from '../store';
 import type { StoredRow } from '../projection';
 import { parseSheetContent, serializeSheetContent } from '../io';
@@ -840,6 +841,83 @@ describe('sheet store (integration)', () => {
         .from(pages)
         .where(and(eq(pages.id, pageId), sheetCellsMatchRegex('^raw$')));
       expect(structural).toHaveLength(0);
+    });
+
+    it('quotes the row that matched, however deep in the sheet it is', async () => {
+      // The excerpt used to come from a preview of the first N rows, so a
+      // search reported a spreadsheet as a hit with no matching lines and a
+      // match count of zero whenever the hit was past that bound.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 5000 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: 'header' },
+          { address: 'B4000', value: 'needle' },
+          { address: 'C4000', value: 'beside it' },
+        ],
+        { userId: ownerId }
+      );
+
+      const matched = await sheetMatchingRows(pageId, { ilike: '%needle%' });
+
+      expect(matched).toHaveLength(1);
+      expect(matched[0].rowIndex).toBe(3999);
+      expect(matched[0].text).toContain('needle');
+      // The whole row is quoted, not just the matching cell.
+      expect(matched[0].text).toContain('beside it');
+    });
+
+    it('finds a row by any of several patterns, and returns rows in order', async () => {
+      const { pageId, ownerId } = await makeSheet({ rowCount: 100 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A10', value: 'alpha' },
+          { address: 'A20', value: 'beta' },
+          { address: 'A30', value: 'gamma' },
+        ],
+        { userId: ownerId }
+      );
+
+      const matched = await sheetMatchingRows(pageId, { ilike: ['%alpha%', '%beta%'] });
+
+      expect(matched.map((row) => row.rowIndex)).toEqual([9, 19]);
+    });
+
+    it('matches the computed value of a formula, not its authored text', async () => {
+      // The same reason `query-rows` filters on `value`: a search for the
+      // number a user can see must find the cell showing it.
+      const { pageId, ownerId } = await makeSheet({ rowCount: 10 });
+      await setCells(
+        { pageId },
+        [
+          { address: 'A1', value: '40' },
+          { address: 'A2', value: '2' },
+          { address: 'A3', value: '=A1+A2' },
+        ],
+        { userId: ownerId }
+      );
+
+      const matched = await sheetMatchingRows(pageId, { ilike: '%42%' });
+
+      expect(matched.map((row) => row.rowIndex)).toEqual([2]);
+    });
+
+    it('honours the row limit', async () => {
+      const { pageId, ownerId } = await makeSheet({ rowCount: 20 });
+      await setCells(
+        { pageId },
+        Array.from({ length: 10 }, (_, index) => ({
+          address: `A${index + 1}`,
+          value: 'repeated',
+        })),
+        { userId: ownerId }
+      );
+
+      const matched = await sheetMatchingRows(pageId, { ilike: '%repeated%' }, { limit: 3 });
+
+      expect(matched).toHaveLength(3);
+      expect(matched.map((row) => row.rowIndex)).toEqual([0, 1, 2]);
     });
   });
 

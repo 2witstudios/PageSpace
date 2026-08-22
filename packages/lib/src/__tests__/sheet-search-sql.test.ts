@@ -16,7 +16,12 @@ import { describe, it, expect } from 'vitest';
 import { PgDialect } from 'drizzle-orm/pg-core';
 import { and, eq, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
-import { sheetCellsMatchIlike, sheetCellsMatchRegex } from '../sheets/search-sql';
+import {
+  sheetCellsMatchIlike,
+  sheetCellsMatchRegex,
+  sheetRowMatchesIlike,
+  sheetRowMatchesRegex,
+} from '../sheets/search-sql';
 
 const dialect = new PgDialect();
 const render = (fragment: Parameters<PgDialect['sqlToQuery']>[0]) => dialect.sqlToQuery(fragment).sql;
@@ -59,5 +64,30 @@ describe('sheet search predicates', () => {
     // Demonstrates the hazard this test exists for: the same expression without
     // parens leaves the OR at the top level of the AND chain.
     expect(render(unguarded!)).not.toMatch(/and \(.*OR EXISTS/s);
+  });
+
+  it('scopes the row-level predicate to the row, not the page', () => {
+    // Used to find WHICH rows matched, for a result excerpt — so it must not
+    // re-correlate on `pages.id`, which would make every row of a matching
+    // page look like a match.
+    const rendered = render(sheetRowMatchesRegex('^Total$'));
+
+    expect(rendered).toContain('jsonb_each');
+    expect(rendered).not.toContain('"pageId"');
+  });
+
+  it('parenthesises a multi-pattern row match', () => {
+    // The search endpoint's "any word matches" rule becomes an OR chain inside
+    // the EXISTS. Unparenthesised it would be one edit away from the same
+    // precedence trap the page-level predicate already fell into.
+    const rendered = render(sheetRowMatchesIlike(['%alpha%', '%beta%']));
+
+    expect(rendered).toMatch(/WHERE \(.*ILIKE.*OR.*ILIKE.*\)/s);
+  });
+
+  it('matches nothing for an empty pattern list', () => {
+    // An empty query must not degrade to "every row", which an empty OR chain
+    // would render as.
+    expect(render(sheetRowMatchesIlike([])).trim()).toBe('false');
   });
 });

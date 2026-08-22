@@ -4,7 +4,7 @@ import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
 import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
-import { sheetPreviewText } from '@pagespace/lib/sheets/store';
+import { sheetMatchingRows } from '@pagespace/lib/sheets/store';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { loggers } from '@pagespace/lib/logging/logger-config'
@@ -213,10 +213,20 @@ export async function GET(request: Request) {
 
         // A sheet's text is in its rows, so the column is empty and the
         // excerpt would be blank — for a page the widened WHERE clause above
-        // has just made matchable. Bounded preview, not a full projection:
-        // this is a result list.
+        // has just made matchable. Built from the rows that MATCHED, using the
+        // same predicate: a preview of the first N rows shows nothing relevant
+        // when the hit is at row 5,000 or on a later tab. Bounded, not a full
+        // projection — this is a result list.
         const body = isSheetType(page.type as PageType)
-          ? (await sheetPreviewText(page.id, { maxRows: 10, maxChars: 300 })) ?? page.content
+          ? (
+              await sheetMatchingRows(
+                page.id,
+                searchType === 'regex' ? { regex: regexPattern } : { ilike: searchPattern },
+                { limit: 3, maxChars: 150 },
+              )
+            )
+              .map((row) => row.text)
+              .join(' · ') || page.content
           : page.content;
 
         driveResultsMap.get(driveId)!.push({
