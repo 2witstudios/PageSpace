@@ -327,17 +327,30 @@ export async function validateData(
     const srcPath = path.join(sourceFileStoragePath, storagePath);
     const tgtPath = path.join(targetFileStoragePath, storagePath);
 
+    // SOURCE FIRST. If the source blob is not on disk, tenant-export.ts skipped
+    // this row outright ("WARNING: source file not found, skipping"), so the
+    // bundle legitimately does not carry it and there is nothing to compare.
+    //
+    // Testing the TARGET first reported exactly that row as 'missing in
+    // target' and failed a correct migration — the same false-failure class as
+    // the query asymmetries above, in the one check that is not a query, which
+    // is why sweeping the query maps did not reach it. An orphaned `files` row
+    // (row present, blob long gone) is common enough that this was not
+    // hypothetical.
+    if (!existsSync(srcPath)) {
+      console.warn(`WARNING: source file not found, not compared: ${srcPath}`);
+      continue;
+    }
+
     if (!existsSync(tgtPath)) {
       fileMismatches.push({ file: storagePath, reason: 'missing in target' });
       continue;
     }
 
-    if (existsSync(srcPath)) {
-      const srcHash = await fileChecksum(srcPath);
-      const tgtHash = await fileChecksum(tgtPath);
-      if (srcHash !== tgtHash) {
-        fileMismatches.push({ file: storagePath, reason: `checksum mismatch (source: ${srcHash}, target: ${tgtHash})` });
-      }
+    const srcHash = await fileChecksum(srcPath);
+    const tgtHash = await fileChecksum(tgtPath);
+    if (srcHash !== tgtHash) {
+      fileMismatches.push({ file: storagePath, reason: `checksum mismatch (source: ${srcHash}, target: ${tgtHash})` });
     }
   }
 
