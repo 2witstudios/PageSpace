@@ -268,14 +268,73 @@ describe('content_tags_target_scope trigger — accepts every coherent shape', (
   });
 });
 
+describe('content_tags_target_scope trigger — what it deliberately does NOT do', () => {
+  it('does not fire for updates that cannot break the invariant, and so cannot block re-anchoring after a cross-drive move', async () => {
+    // Two documented behaviours in one scenario, because they are the same fact.
+    //
+    // The trigger is `UPDATE OF` the scope-bearing columns only, so the anchor
+    // rewrites `reanchorPageTags` performs on every save never reach it. And a
+    // page MOVING between drives is invisible to a trigger on this table — it is
+    // a write to `pages`, not to `content_tags` — so an assignment that was
+    // coherent when written silently becomes cross-drive.
+    //
+    // Both are asserted here rather than only asserted in prose: after the move,
+    // an anchor-only UPDATE still succeeds (the row is stale but writable), while
+    // touching a scope-bearing column is refused. That is exactly why the
+    // cross-drive scrub belongs in the move transaction — see
+    // `scrubDriveScopedTaskAssociations`.
+    const movingPage = createId();
+    const rowId = createId();
+    await db.insert(pages).values({
+      id: movingPage, title: 'Moves later', type: 'DOCUMENT', position: 7,
+      driveId: id.driveA, createdAt: now, updatedAt: now,
+    });
+    await insert({
+      id: rowId, tagId: id.tagA, pageId: movingPage, targetKind: 'text',
+      anchor: { v: 1, exact: 'before', prefix: '', suffix: '', start: 0, end: 6, revision: 1, textHash: 'deadbeefdeadbeef' },
+      anchorStatus: 'exact', source: 'ai',
+    });
+
+    // The move. Nothing writes `content_tags`, so nothing validates it.
+    await db.update(pages).set({ driveId: id.driveB }).where(inArray(pages.id, [movingPage]));
+
+    // The row is now cross-drive — the state the Phase 3 scrub has to clean up.
+    const stale = await db.execute<{ tag_drive: string; page_drive: string }>(sql`
+      SELECT t."driveId" AS tag_drive, p."driveId" AS page_drive
+        FROM content_tags ct
+        JOIN tags t ON t.id = ct."tagId"
+        JOIN pages p ON p.id = ct."pageId"
+       WHERE ct.id = ${rowId}
+    `);
+    expect(stale.rows[0].tag_drive).not.toBe(stale.rows[0].page_drive);
+
+    // An anchor-only update still succeeds: none of its columns are scope-bearing.
+    await expect(
+      db.update(contentTags)
+        .set({ anchorStatus: 'shifted', anchor: { v: 1, exact: 'after', prefix: '', suffix: '', start: 3, end: 8, revision: 2, textHash: 'cafebabecafebabe' } })
+        .where(inArray(contentTags.id, [rowId])),
+    ).resolves.toBeDefined();
+
+    // Touching a scope-bearing column is still refused, on the now-stale row.
+    await expectRefused(
+      db.update(contentTags).set({ tagId: id.tagA }).where(inArray(contentTags.id, [rowId])),
+      /is in drive .*, but page .* is in drive/,
+    );
+
+    await db.delete(contentTags).where(inArray(contentTags.id, [rowId]));
+    await db.delete(pages).where(inArray(pages.id, [movingPage]));
+  });
+});
+
 describe('content_tags_target_scope trigger — installation', () => {
   it('is installed on content_tags for INSERT and UPDATE', async () => {
-    const result = await db.execute<{ tgname: string; timing: string; events: string }>(sql`
+    const result = await db.execute<{ tgname: string; timing: string; events: string; definition: string }>(sql`
       SELECT t.tgname,
              CASE WHEN (t.tgtype & 2) <> 0 THEN 'BEFORE' ELSE 'AFTER' END AS timing,
              concat_ws(',',
                CASE WHEN (t.tgtype & 4)  <> 0 THEN 'INSERT' END,
-               CASE WHEN (t.tgtype & 16) <> 0 THEN 'UPDATE' END) AS events
+               CASE WHEN (t.tgtype & 16) <> 0 THEN 'UPDATE' END) AS events,
+             pg_get_triggerdef(t.oid) AS definition
         FROM pg_trigger t
         JOIN pg_class c ON c.oid = t.tgrelid
        WHERE c.relname = 'content_tags' AND NOT t.tgisinternal
@@ -284,6 +343,10 @@ describe('content_tags_target_scope trigger — installation', () => {
     const row = result.rows.find((r) => r.tgname === 'content_tags_target_scope')!;
     expect(row.timing).toBe('BEFORE');
     expect(row.events).toBe('INSERT,UPDATE');
+    // The UPDATE arm is column-scoped. Pinned by name: dropping a column from the
+    // list silently stops that column being checked on update, which no
+    // behavioural test above would notice for a column nothing yet writes.
+    expect(row.definition).toContain('UPDATE OF "tagId", "pageId", "targetKind", "channelMessageId", "aiMessageId"');
   });
 
   it('pins search_path on the trigger function, and does NOT take SECURITY DEFINER', async () => {
