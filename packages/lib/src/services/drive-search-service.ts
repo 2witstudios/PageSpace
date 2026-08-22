@@ -382,12 +382,21 @@ export async function regexSearchPages(
   //
   // Once a sheet is materialised its content column is empty, so a regex over
   // that column alone silently drops every spreadsheet out of search — the
-  // pages most likely to contain the string somebody is looking for. This
-  // matches the row payloads too.
+  // pages most likely to contain the string somebody is looking for.
+  //
+  // Matched per CELL, not against `cells::text`. Running the regex over the raw
+  // JSON matched structural text (`raw`, `value`, `format`, `bold`), missed any
+  // search containing a quote or backslash because the data is JSON-escaped in
+  // there, and made anchors meaningless — `^Total` could never match, since the
+  // whole row is one string. Expanding to cell values makes the pattern mean
+  // what the person typing it expects.
+  //
+  // It remains a sequential scan; a searchable projection is the eventual fix.
   const sheetContentMatch = sql`EXISTS (
-    SELECT 1 FROM ${sheetRows}
+    SELECT 1
+    FROM ${sheetRows}, jsonb_each(${sheetRows.cells}) AS cell(label, payload)
     WHERE ${sheetRows.pageId} = ${pages.id}
-      AND ${sheetRows.cells}::text ~ ${pgPattern}
+      AND coalesce(payload ->> 'value', payload ->> 'raw', '') ~ ${pgPattern}
   )`;
 
   const contentMatch = sql`(${pages.content} ~ ${pgPattern} OR ${sheetContentMatch})`;

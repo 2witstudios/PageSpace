@@ -332,6 +332,110 @@ export async function ensureTab(
 }
 
 /**
+ * Clone every tab and row of one sheet page onto another.
+ *
+ * Copying a page copies `pages.content`, which is empty for a materialised
+ * sheet — so a duplicated spreadsheet came out blank. The rows have to travel
+ * with it.
+ */
+export async function copySheetRows(
+  fromPageId: string,
+  toPageId: string,
+  exec: Executor = db
+): Promise<{ tabs: number; rows: number }> {
+  const tabs = await listTabs(fromPageId, exec);
+  if (tabs.length === 0) return { tabs: 0, rows: 0 };
+
+  let rowTotal = 0;
+  for (const tab of tabs) {
+    const [created] = await exec
+      .insert(sheetTabs)
+      .values({
+        pageId: toPageId,
+        tabIndex: tab.tabIndex,
+        name: tab.name,
+        rowCount: tab.rowCount,
+        columnCount: tab.columnCount,
+        frozenRows: tab.frozenRows,
+        frozenColumns: tab.frozenColumns,
+        columnFormats: tab.columnFormats,
+        columnWidths: tab.columnWidths,
+        rowHeights: tab.rowHeights,
+        ranges: tab.ranges,
+      })
+      .returning({ id: sheetTabs.id });
+
+    const byIndex = new Map<number, StoredRow>();
+    for await (const row of streamRows(tab.id, exec)) {
+      byIndex.set(row.rowIndex, row);
+      // Flush in batches so a very large sheet does not build the whole copy
+      // in memory before writing any of it.
+      if (byIndex.size >= 2_000) {
+        await persistRows(created.id, toPageId, byIndex, exec, 'replace');
+        rowTotal += byIndex.size;
+        byIndex.clear();
+      }
+    }
+    if (byIndex.size > 0) {
+      await persistRows(created.id, toPageId, byIndex, exec, 'replace');
+      rowTotal += byIndex.size;
+    }
+
+    // Dependency edges are addresses, not ids, so they copy verbatim.
+    const cellDeps = await exec
+      .select()
+      .from(sheetCellDeps)
+      .where(eq(sheetCellDeps.tabId, tab.id));
+    const rangeDeps = await exec
+      .select()
+      .from(sheetRangeDeps)
+      .where(eq(sheetRangeDeps.tabId, tab.id));
+
+    await insertDependencyRows(
+      created.id,
+      cellDeps.map((dep) => ({ address: dep.address, dependsOn: dep.dependsOn, dependents: dep.dependents })),
+      rangeDeps.map((dep) => ({
+        formulaAddress: dep.formulaAddress,
+        rowStart: dep.rowStart,
+        rowEnd: dep.rowEnd,
+        colStart: dep.colStart,
+        colEnd: dep.colEnd,
+      })),
+      exec
+    );
+  }
+
+  return { tabs: tabs.length, rows: rowTotal };
+}
+
+/** The tab at `tabIndex`, created from `sheet`'s shape if it does not exist. */
+async function ensureTabAt(
+  pageId: string,
+  tabIndex: number,
+  sheet: SheetData,
+  exec: Executor
+): Promise<{ id: string }> {
+  const [existing] = await exec
+    .select({ id: sheetTabs.id })
+    .from(sheetTabs)
+    .where(and(eq(sheetTabs.pageId, pageId), eq(sheetTabs.tabIndex, tabIndex)))
+    .limit(1);
+  if (existing) return existing;
+
+  const [created] = await exec
+    .insert(sheetTabs)
+    .values({
+      pageId,
+      tabIndex,
+      name: sheet.sheetName ?? `Sheet${tabIndex + 1}`,
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount,
+    })
+    .returning({ id: sheetTabs.id });
+  return created;
+}
+
+/**
  * Materialise a `#%PAGESPACE_SHEETDOC` document into rows.
  *
  * Shared by lazy provisioning and by the bulk backfill script, so there is one
@@ -345,8 +449,15 @@ export async function materializeFromDocument(
   exec?: Executor
 ): Promise<{ tabs: number; rows: number }> {
   const run = async (tx: Executor) => {
-    // Re-check inside the transaction: two concurrent first-writes to the same
-    // sheet would otherwise both materialise it.
+    // Lock the page row first, THEN re-check.
+    //
+    // A bare SELECT under READ COMMITTED lets two concurrent first-writes both
+    // see no tabs and both insert; one then dies on
+    // `sheet_tabs_page_tab_unique`. That turns corruption into a failed write,
+    // which is better but still a failed write. Serialising on the page makes
+    // the second caller see the first one's tabs and return.
+    await tx.select({ id: pages.id }).from(pages).where(eq(pages.id, pageId)).for('update');
+
     const [already] = await tx
       .select({ id: sheetTabs.id })
       .from(sheetTabs)
@@ -487,53 +598,75 @@ export async function replaceFromDocument(
   exec?: Executor
 ): Promise<{ rows: number }> {
   const run = async (tx: Executor) => {
-    const tab = await ensureTab(ref, tx);
-    const [sheet] = documentTabs(content);
-    const materialized = rowsFromSheetData(sheet, tab.tabIndex);
+    // EVERY tab the document describes, not just the first.
+    //
+    // The document is the complete statement of the sheet, and this is the only
+    // path an editor save takes. Writing tab 0 alone silently discarded edits to
+    // every other tab — and, for a sheet whose extra tabs existed only in the
+    // document, deleted them outright.
+    await ensureTab(ref, tx);
+    const sheets = documentTabs(content);
 
-    const byIndex = new Map(materialized.rows.map((row) => [row.rowIndex, row]));
+    let rowTotal = 0;
+    for (const [tabIndex, sheet] of sheets.entries()) {
+      const tab = await ensureTabAt(ref.pageId, tabIndex, sheet, tx);
+      const materialized = rowsFromSheetData(sheet, tabIndex);
+      const byIndex = new Map(materialized.rows.map((row) => [row.rowIndex, row]));
 
-    const existing = await tx
-      .select({ rowIndex: sheetRows.rowIndex })
-      .from(sheetRows)
-      .where(eq(sheetRows.tabId, tab.id));
+      const existing = await tx
+        .select({ rowIndex: sheetRows.rowIndex })
+        .from(sheetRows)
+        .where(eq(sheetRows.tabId, tab.id));
 
-    const stale = existing.map((row) => row.rowIndex).filter((index) => !byIndex.has(index));
-    const DELETE_CHUNK = 5_000;
-    for (let index = 0; index < stale.length; index += DELETE_CHUNK) {
-      await tx
-        .delete(sheetRows)
-        .where(
-          and(
-            eq(sheetRows.tabId, tab.id),
-            inArray(sheetRows.rowIndex, stale.slice(index, index + DELETE_CHUNK))
-          )
-        );
+      const stale = existing.map((row) => row.rowIndex).filter((index) => !byIndex.has(index));
+      const DELETE_CHUNK = 5_000;
+      for (let index = 0; index < stale.length; index += DELETE_CHUNK) {
+        await tx
+          .delete(sheetRows)
+          .where(
+            and(
+              eq(sheetRows.tabId, tab.id),
+              inArray(sheetRows.rowIndex, stale.slice(index, index + DELETE_CHUNK))
+            )
+          );
+      }
+
+      // Replace, not merge: a cell absent from the document has been removed.
+      await persistRows(tab.id, ref.pageId, byIndex, tx, 'replace');
+
+      await tx.delete(sheetCellDeps).where(eq(sheetCellDeps.tabId, tab.id));
+      await tx.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tab.id));
+      await insertDependencyRows(tab.id, materialized.cellDeps, materialized.rangeDeps, tx);
+
+      await updateExtent(
+        tab.id,
+        { rowCount: materialized.tab.rowCount, columnCount: materialized.tab.columnCount },
+        tx
+      );
+
+      rowTotal += materialized.rows.length;
     }
 
-    // Replace, not merge: the document is the complete statement of this tab,
-    // so a cell absent from it has been removed.
-    await persistRows(tab.id, ref.pageId, byIndex, tx, 'replace');
-
-    await tx.delete(sheetCellDeps).where(eq(sheetCellDeps.tabId, tab.id));
-    await tx.delete(sheetRangeDeps).where(eq(sheetRangeDeps.tabId, tab.id));
-    await insertDependencyRows(tab.id, materialized.cellDeps, materialized.rangeDeps, tx);
-
-    await updateExtent(
-      tab.id,
-      { rowCount: materialized.tab.rowCount, columnCount: materialized.tab.columnCount },
-      tx
-    );
+    // Tabs the document no longer has were deleted in the editor.
+    const surplus = await tx
+      .select({ id: sheetTabs.id, tabIndex: sheetTabs.tabIndex })
+      .from(sheetTabs)
+      .where(eq(sheetTabs.pageId, ref.pageId));
+    for (const tab of surplus) {
+      if (tab.tabIndex >= sheets.length) {
+        await tx.delete(sheetTabs).where(eq(sheetTabs.id, tab.id));
+      }
+    }
 
     await appendChanges(
       ref.pageId,
-      tab.id,
+      null,
       actor,
-      [{ op: 'update_rows', address: null, rowIndex: null, before: null, after: { rows: materialized.rows.length } }],
+      [{ op: 'update_rows', address: null, rowIndex: null, before: null, after: { tabs: sheets.length, rows: rowTotal } }],
       tx
     );
 
-    return { rows: materialized.rows.length };
+    return { rows: rowTotal };
   };
 
   return exec ? run(exec) : db.transaction(run);
@@ -622,6 +755,7 @@ export async function setCells(
     const grown = growExtent(tab, normalized);
     await persistRows(tab.id, ref.pageId, working, tx);
     if (grown) await updateExtent(tab.id, grown, tx);
+    await touchPage(ref.pageId, tx);
 
     if (!actor.suppressCellLog) {
       const entries =
@@ -704,10 +838,15 @@ export async function appendRows(
       .from(sheetRows)
       .where(eq(sheetRows.tabId, tab.id));
 
-    // Append past whichever is further along: the declared extent, or the last
-    // row that actually exists. Trusting only one of them would either overwrite
-    // real data or leave a gap.
-    const firstRowIndex = Math.max(tab.rowCount, (maxIndex ?? -1) + 1);
+    // After the last POPULATED row, not the declared extent.
+    //
+    // A default sheet declares 20 rows with nothing in them, and an
+    // editor-grown sheet routinely declares hundreds past its last real row.
+    // Appending past the extent therefore dropped an agent's rows into row 21
+    // (or row 501) of a three-row table, leaving a block of blank rows above
+    // them. The extent is how big the grid looks; `max(rowIndex)` is where the
+    // data actually ends.
+    const firstRowIndex = (maxIndex ?? -1) + 1;
 
     const updates: NormalizedUpdate[] = [];
     rows.forEach((cells, offset) => {
@@ -742,6 +881,7 @@ export async function appendRows(
       { rowCount, columnCount: current?.columnCount ?? tab.columnCount },
       tx
     );
+    await touchPage(ref.pageId, tx);
 
     await appendChanges(
       ref.pageId,
@@ -837,6 +977,7 @@ export async function deleteRows(
 
     const rowCount = Math.max(0, tab.rowCount - effectiveCount);
     await updateExtent(tab.id, { rowCount, columnCount: tab.columnCount }, tx);
+    await touchPage(ref.pageId, tx);
 
     // Rebuild, and do not leave it to the caller.
     //
@@ -1112,6 +1253,12 @@ async function rewriteDependencyEdges(
   for (const update of updates) {
     if (!update.value.trim().startsWith('=')) continue;
     const deps = extractFormulaDependencies(update.value);
+    // `dependents` is deliberately not maintained here.
+    //
+    // The closure walk resolves dependents by querying `dependsOn && frontier`,
+    // so the column is never read. Populating it incrementally would mean
+    // touching every cell that references the one being edited — the O(sheet)
+    // write this design removes. See the schema note.
     cellRows.push({ address: update.address, dependsOn: deps.cells, dependents: [] });
     for (const rect of deps.ranges) {
       rangeRows.push({ formulaAddress: update.address, ...rect });
@@ -1323,6 +1470,16 @@ function frozenLiteral(cell: StoredCell): string {
   if (cell.value === undefined || cell.value === '') {
     return cell.raw?.trim().startsWith('=') ? '' : cell.raw ?? '';
   }
+
+  // Stringified, deliberately, and it round-trips.
+  //
+  // The worry is obvious — a value re-entering evaluation as text could be
+  // re-coerced into something else — but it does not happen with this engine.
+  // Checked against a full `evaluateSheet` pass for a numeric-looking string
+  // (`="7"`) and a boolean, through concatenation, arithmetic, equality and
+  // `IF`: every case agrees. The engine coerces on READ (`"7"` compares equal
+  // to 7, a literal `007` is already the number 7), so the round trip is
+  // lossless where it matters. `sheet-store.integration.test.ts` pins that.
   return String(cell.value);
 }
 
@@ -1440,6 +1597,23 @@ function growExtent(
     : { rowCount, columnCount };
 }
 
+/**
+ * Bump the page's revision and mtime after a row write.
+ *
+ * The sheet editor holds an `expectedRevision` and sends it on save. A row
+ * write that leaves the revision alone is therefore INVISIBLE to that guard: a
+ * form submission or an MCP cell write landing while somebody has the sheet
+ * open would pass the check, and `replaceFromDocument` would then delete every
+ * row absent from the editor's stale document. Bumping here restores the
+ * conflict the old document path produced.
+ */
+async function touchPage(pageId: string, exec: Executor): Promise<void> {
+  await exec
+    .update(pages)
+    .set({ revision: sql`${pages.revision} + 1`, updatedAt: new Date() })
+    .where(eq(pages.id, pageId));
+}
+
 async function updateExtent(
   tabId: string,
   extent: { rowCount: number; columnCount: number },
@@ -1453,7 +1627,7 @@ async function updateExtent(
 
 async function appendChanges(
   pageId: string,
-  tabId: string,
+  tabId: string | null,
   actor: SheetActor,
   entries: {
     op: 'set_cells' | 'insert_rows' | 'delete_rows' | 'update_rows' | 'format' | 'resize' | 'tab';

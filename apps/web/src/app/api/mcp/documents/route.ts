@@ -230,9 +230,17 @@ export async function POST(req: NextRequest) {
 
     // Sheets serialise from their rows — `pages.content` is empty for a
     // materialised sheet, so reading the column would return a blank grid.
-    const readablePage = isSheetType(page.type as PageType)
-      ? { ...page, content: (await readSheetDocument(pageId)) ?? page.content }
-      : page;
+    //
+    // Only for operations that actually read the text. Building the projection
+    // unconditionally made `edit-cells` stream every row and serialise the
+    // whole document just to compute line numbers it never looks at,
+    // reintroducing the O(document) cost per addressed write on exactly the
+    // large sheets this exists to avoid.
+    const needsDocumentText = operation !== 'edit-cells';
+    const readablePage =
+      needsDocumentText && isSheetType(page.type as PageType)
+        ? { ...page, content: (await readSheetDocument(pageId)) ?? page.content }
+        : page;
     const serializedContent = serializePageContentForAI(readablePage);
     const lines = serializedContent.split('\n');
 

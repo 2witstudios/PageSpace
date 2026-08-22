@@ -217,6 +217,22 @@ export async function applyPageMutation({
   let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   const applyMutationInTx = async (transaction: typeof db) => {
+    // BEFORE the column is blanked below.
+    //
+    // `replaceFromDocument` goes through `ensureTab`, which materialises a
+    // never-migrated sheet from `pages.content`. Running it after the update
+    // would have it read the empty string this mutation just wrote and
+    // materialise a single blank tab — permanently losing every tab of a
+    // multi-tab sheet on its first save.
+    if (isSheetContentWrite) {
+      await replaceFromDocument(
+        { pageId },
+        nextContent,
+        { userId: context.userId, actorEmail: context.actorEmail ?? undefined, changeGroupId },
+        transaction
+      );
+    }
+
     const updateWhere = expectedRevision !== undefined
       ? and(eq(pages.id, pageId), eq(pages.revision, expectedRevision))
       : eq(pages.id, pageId);
@@ -239,15 +255,6 @@ export async function applyPageMutation({
         'Page was modified while applying changes',
         currentPage.revision,
         expectedRevision
-      );
-    }
-
-    if (isSheetContentWrite) {
-      await replaceFromDocument(
-        { pageId },
-        nextContent,
-        { userId: context.userId, actorEmail: context.actorEmail ?? undefined, changeGroupId },
-        transaction
       );
     }
 

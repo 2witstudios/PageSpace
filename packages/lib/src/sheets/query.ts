@@ -184,6 +184,18 @@ function compileCondition(condition: SheetCondition): SQL {
         if (!Number.isFinite(value)) {
           throw new SheetQueryError('Numeric comparison needs a finite number');
         }
+
+        if (op === 'neq') {
+          // Same three-valued problem the text branch below handles: the CASE
+          // returns false for a blank or non-numeric cell, so "B is not 5"
+          // dropped every row where B was empty. Whether the caller passed `5`
+          // or `"5"` must not change which rows come back.
+          return sql`(NOT (CASE
+            WHEN jsonb_typeof(${valueOf(condition.column)}) = 'number'
+            THEN (${valueOf(condition.column)})::numeric = ${value}
+            ELSE false
+          END))`;
+        }
         // CASE, not `jsonb_typeof(...) = 'number' AND (...)::numeric`.
         //
         // Postgres does NOT guarantee that AND short-circuits — the planner is

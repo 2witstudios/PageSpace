@@ -12,6 +12,7 @@ import {
   deleteRows,
   readRows,
   getTab,
+  ensureTab,
   listTabs,
   MAX_ROW_PAGE_SIZE,
 } from '@pagespace/lib/sheets/store';
@@ -34,7 +35,10 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
  * this route is the tabular view of the same data.
  */
 
-const columnSchema = z.string().regex(/^[A-Za-z]{1,3}$/, 'Column must be letters, e.g. "A" or "AB"');
+// Seven letters, matching `assertColumn`. A three-letter cap here silently
+// re-imposed the limit that was removed there: every column past ZZZ becomes
+// unfilterable, unsortable and unprojectable, as a 400 on valid input.
+const columnSchema = z.string().regex(/^[A-Za-z]{1,7}$/, 'Column must be letters, e.g. "A" or "AB"');
 
 /**
  * `where` is recursive, and `z.lazy` needs the annotation to terminate. Depth
@@ -163,11 +167,19 @@ export async function POST(req: NextRequest) {
     }
 
     const ref = { pageId, tabIndex: input.tabIndex ?? 0 };
-    const tab = await getTab(ref);
+
+    // Write operations provision the tab themselves via `ensureTab`, which also
+    // materialises a sheet still living in `pages.content`. Refusing here
+    // blocked `append-rows` — the very remedy the old error message suggested —
+    // and made any sheet nobody had saved since the migration unreachable.
+    let tab = await getTab(ref);
+    if (!tab && WRITE_OPERATIONS.has(operation)) {
+      tab = await ensureTab(ref);
+    }
     if (!tab) {
       return NextResponse.json({
         error: 'Sheet has no data yet',
-        message: 'This sheet has not been initialised. Open it once, or append rows to create it.',
+        message: 'This sheet has not been initialised. Append rows or edit a cell to create it.',
       }, { status: 409 });
     }
 

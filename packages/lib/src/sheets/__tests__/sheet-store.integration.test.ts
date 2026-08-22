@@ -31,6 +31,8 @@ import {
   rebuildTab,
   readSheetDocument,
   replaceFromDocument,
+  copySheetRows,
+  listTabs,
 } from '../store';
 import type { StoredRow } from '../projection';
 
@@ -605,6 +607,131 @@ describe('sheet store (integration)', () => {
     it('returns null for a page with no rows, so callers can fall back', async () => {
       const { pageId } = await makeUnmigratedSheet('');
       expect(await readSheetDocument(pageId)).toBeNull();
+    });
+  });
+
+  describe('multi-tab documents', () => {
+    const TWO_TABS =
+      '#%PAGESPACE_SHEETDOC v1\npage_id = "x"\n\n' +
+      '[[sheets]]\nname = "First"\norder = 0\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "one"\n\n' +
+      '[[sheets]]\nname = "Second"\norder = 1\n\n[sheets.meta]\nrowCount = 5\ncolumnCount = 3\n\n[sheets.cells.A1]\nvalue = "two"\n';
+
+    it('a document save keeps every tab, not just the first', async () => {
+      // `replaceFromDocument` is the single path for every editor save. Writing
+      // only tab 0 silently discarded edits to the others — and for tabs that
+      // existed only in the document, deleted them outright.
+      const { pageId, ownerId } = await makeUnmigratedSheet(TWO_TABS);
+
+      await replaceFromDocument({ pageId }, TWO_TABS, { userId: ownerId });
+
+      const tabs = await listTabs(pageId);
+      expect(tabs).toHaveLength(2);
+      expect(tabs.map((tab) => tab.name)).toEqual(['First', 'Second']);
+
+      const second = await readSheetData({ pageId, tabIndex: 1 });
+      expect(second?.cells['A1']).toBe('two');
+    });
+
+    it('projects every tab back into the document', async () => {
+      const { pageId, ownerId } = await makeUnmigratedSheet(TWO_TABS);
+      await setCells({ pageId }, [{ address: 'B1', value: 'edited' }], { userId: ownerId });
+
+      const document = await readSheetDocument(pageId);
+      expect(document).toContain('First');
+      expect(document).toContain('Second');
+      expect(document).toContain('two');
+    });
+  });
+
+  describe('copySheetRows', () => {
+    it('clones tabs and rows onto another page', async () => {
+      // Copying a page copies `pages.content`, which is empty for a
+      // materialised sheet — so a duplicated spreadsheet came out blank.
+      const source = await makeSheet();
+      await setCells({ pageId: source.pageId }, [
+        { address: 'A1', value: 'original' },
+        { address: 'B1', value: '=1+1' },
+      ], { userId: source.ownerId });
+
+      const target = await makeSheet();
+      // The target's own tab would collide, so copy onto a fresh page.
+      await db.delete(sheetTabs).where(eq(sheetTabs.pageId, target.pageId));
+
+      await copySheetRows(source.pageId, target.pageId);
+
+      const copied = await readSheetData({ pageId: target.pageId });
+      expect(copied?.cells['A1']).toBe('original');
+      expect(copied?.cells['B1']).toBe('=1+1');
+    });
+  });
+
+  describe('page revision', () => {
+    it('bumps on a row write, so an open editor sees a conflict', async () => {
+      // The editor holds an `expectedRevision`. A row write that leaves it
+      // alone is invisible to that guard, and the editor's next save then
+      // deletes every row absent from its stale document.
+      const { pageId, ownerId } = await makeSheet();
+
+      const before = await db
+        .select({ revision: pages.revision })
+        .from(pages)
+        .where(eq(pages.id, pageId));
+
+      await setCells({ pageId }, [{ address: 'A1', value: 'x' }], { userId: ownerId });
+
+      const after = await db
+        .select({ revision: pages.revision })
+        .from(pages)
+        .where(eq(pages.id, pageId));
+
+      expect(after[0].revision).toBeGreaterThan(before[0].revision);
+    });
+  });
+
+  describe('appendRows placement', () => {
+    it('appends after the last populated row, not the declared extent', async () => {
+      // A default sheet declares 20 empty rows; appending past the extent
+      // dropped the rows into row 21 of a three-row table.
+      const { pageId, tabId, ownerId } = await makeSheet({ rowCount: 20 });
+      await setCells({ pageId }, [
+        { address: 'A1', value: 'r0' },
+        { address: 'A2', value: 'r1' },
+      ], { userId: ownerId });
+
+      const result = await appendRows({ pageId }, [{ A: 'r2' }], { userId: ownerId });
+
+      expect(result.firstRowIndex).toBe(2);
+      const rows = await readRows(tabId, { limit: 30 });
+      expect(cellAt(rows, 2, 'A')?.value).toBe('r2');
+    });
+  });
+
+  describe('incremental recompute agrees with a full pass', () => {
+    // Cells outside the recompute set enter evaluation as their stringified
+    // stored value. That could in principle be re-coerced into something else —
+    // a numeric-looking string becoming a number, a boolean becoming text — so
+    // these pin the cases where it would show. They all agree today; the tests
+    // exist so a change to the engine's coercion cannot quietly break the
+    // premise that an incremental write and a full evaluation produce the same
+    // sheet.
+    it.each([
+      ['numeric-looking string through concatenation', '="7"', '=A1&"x"', '7x'],
+      ['numeric-looking string through arithmetic', '="7"', '=SUM(A1,1)', 8],
+      ['boolean through IF', '=1=1', '=IF(A1,"yes","no")', 'yes'],
+      ['boolean through concatenation', '=1=1', '=A1&"y"', 'truey'],
+    ])('%s', async (_name, seed, dependent, expected) => {
+      const { pageId, tabId, ownerId } = await makeSheet();
+      await setCells({ pageId }, [
+        { address: 'A1', value: seed },
+        { address: 'B1', value: dependent },
+      ], { userId: ownerId });
+
+      // Recompute B1 with A1 frozen: touch a cell B1 does not read, then edit
+      // B1 itself so it is in the closure while A1 is not.
+      await setCells({ pageId }, [{ address: 'B1', value: dependent }], { userId: ownerId });
+
+      const rows = await readRows(tabId, { limit: 10 });
+      expect(cellAt(rows, 0, 'B')?.value).toBe(expected);
     });
   });
 
