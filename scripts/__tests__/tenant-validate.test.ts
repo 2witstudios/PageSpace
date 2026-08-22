@@ -76,26 +76,26 @@ afterEach(async () => {
  */
 describe('resolveSourceStorageRoot', () => {
   /**
-   * The base `resolvePathWithin` is called with must be the one the EXPORT
-   * used, or mirroring the call achieves nothing. tenant-export.ts:692 and
-   * tenant-import.ts:137 both read `FILE_STORAGE_PATH`; this file did not, so
-   * a deployment that sets it had the export build from one directory and the
-   * validator compare another.
-   *
-   * Asserted here rather than through `runValidation`, whose arg parsing the
-   * integration cases bypass entirely — which is exactly why the omission
-   * survived.
+   * `FILE_STORAGE_PATH` is deliberately NOT consulted, and these cases exist so
+   * that stays deliberate. The export and the import both read it, so "mirror
+   * the export" argues for reading it here — I made that change and it was
+   * wrong: the variable names the root of whatever host you are standing on,
+   * and a validator naturally runs on the TARGET host after the import. Letting
+   * it fill the SOURCE slot there points both sides at the same directory, so
+   * every checksum matches and the run is green having compared nothing.
    */
-  it('prefers the explicit flag', () => {
-    expect(resolveSourceStorageRoot('/flag', '/env')).toBe('/flag');
+  it('uses the explicit flag', () => {
+    expect(resolveSourceStorageRoot('/flag')).toBe('/flag');
   });
 
-  it('falls back to FILE_STORAGE_PATH, as the export and import both do', () => {
-    expect(resolveSourceStorageRoot(undefined, '/data/shared/files')).toBe('/data/shared/files');
+  it('falls back to ./uploads when the flag is absent', () => {
+    expect(resolveSourceStorageRoot(undefined)).toBe('./uploads');
   });
 
-  it('falls back to ./uploads only when neither is set', () => {
-    expect(resolveSourceStorageRoot(undefined, undefined)).toBe('./uploads');
+  it('takes only one argument, so FILE_STORAGE_PATH cannot reach it', () => {
+    // A signature check, not a behaviour check: the failure mode is someone
+    // re-adding an env parameter, and arity is what makes that visible.
+    expect(resolveSourceStorageRoot.length).toBe(1);
   });
 });
 
@@ -371,26 +371,46 @@ describe('validateData', () => {
     expect(pagesResult!.sourceCount).toBe(2);
   });
 
-  it('FAILS when the source storage root does not exist, rather than passing vacuously', async () => {
-    // The false-PASS direction of the skip added alongside this test.
-    // `resolvePathWithin` returns null for every path under a base that does
-    // not exist, so a typo'd `--source-file-path` argument would skip every row and
-    // report zero mismatches — a green validation that compared nothing.
-    //
-    // Worth a case of its own precisely because the neighbouring tests assert
-    // that skipping is CORRECT: without this one, "skip more" always looks like
-    // an improvement.
+  it('FAILS when the source root is unusable, rather than passing vacuously', async () => {
+    // The false-PASS direction of the skips the neighbouring tests assert are
+    // CORRECT. Two shapes, both ordinary operator error, both previously green:
+    // a root that does not exist, and a root that is a regular FILE — the
+    // latter slips past `existsSync` because `resolvePathWithin` walks up to
+    // the first existing ancestor and returns the base itself.
+    const asFile = path.join(tmpDir, 'root-is-a-file');
+    await writeFile(asFile, 'not a directory');
+
+    for (const [label, sourceRoot] of [
+      ['does not exist', path.join(tmpDir, 'nope')],
+      ['is a regular file', asFile],
+    ] as [string, string][]) {
+      const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+        sourceDatabaseUrl: getTestDatabaseUrl(),
+        targetDatabaseUrl: getTestDatabaseUrl(),
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        sourceFileStoragePath: sourceRoot,
+        targetFileStoragePath: path.join(tmpDir, 'target-none'),
+      });
+      expect(result.fileResults.passed, label).toBe(false);
+      expect(result.fileResults.mismatches.map((m) => m.reason).join(), label)
+        .toMatch(/not a readable directory/);
+    }
+  });
+
+  it('stays green when there are no file rows at all — nothing skipped is not nothing compared', async () => {
+    // Pins the `fileStorageData.length > 0` clause. Without it, a migration
+    // carrying no files trips the nothing-was-compared check (0 === 0) and a
+    // correct run fails — the exact regression class this branch is full of.
+    await db.execute(sql.raw(`DELETE FROM files`));
     const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
       sourceDatabaseUrl: getTestDatabaseUrl(),
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
-      sourceFileStoragePath: path.join(tmpDir, 'source-that-does-not-exist'),
-      targetFileStoragePath: path.join(tmpDir, 'target-that-does-not-exist'),
+      sourceFileStoragePath: path.join(tmpDir, 'also-nope'),
+      targetFileStoragePath: path.join(tmpDir, 'also-nope-target'),
     });
-
-    expect(result.fileResults.passed).toBe(false);
-    expect(result.fileResults.mismatches).toHaveLength(1);
-    expect(result.fileResults.mismatches[0].reason).toMatch(/source file storage path does not exist/);
+    expect(result.fileResults.passed).toBe(true);
+    expect(result.fileResults.mismatches).toEqual([]);
   });
 
   it('does not fault a file whose storagePath escapes the storage root — the export skipped it', async () => {
@@ -425,7 +445,7 @@ describe('validateData', () => {
     expect(result.fileResults.passed).toBe(true);
     // …and says so, rather than looking identical to a run that compared it.
     expect(result.fileResults.skipped).toEqual([
-      { file: 'test_file_blob_001/data.txt', reason: 'storagePath does not resolve inside the storage root' },
+      { file: 'test_file_blob_001/data.txt', reason: 'did not resolve inside the source storage root' },
     ]);
   });
 
