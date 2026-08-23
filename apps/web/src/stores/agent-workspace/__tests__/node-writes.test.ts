@@ -44,11 +44,7 @@ describe('emptyWrite / isEmptyWrite', () => {
 
 describe('makePending', () => {
   it('should record as MINTED only the ids absent from the tree the write was computed against', () => {
-    // A `column` split of a `row` root, so a container is genuinely minted: a
-    // same-axis split PACKS into the existing container (#2469) and puts only
-    // the newcomer, which would make this case indistinguishable from the
-    // `create` below.
-    const write = writeOf(split(twoPanes, { nodeId: 'a', axis: 'column', newNodeId: 'n', newSplitId: 's' }));
+    const write = writeOf(split(twoPanes, { nodeId: 'a', axis: 'row', newNodeId: 'n', newSplitId: 's' }));
     const entry = makePending('w1', twoPanes, write);
     // `split` puts the container, the moved pane and the new pane; only the
     // container and the new pane are new.

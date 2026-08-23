@@ -85,13 +85,11 @@ function shareOf(nodes: readonly WorkspaceNode[], id: string): number | undefine
 }
 
 describe('split', () => {
-  it('should put a container where the pane was when the DIRECTION CHANGES, with the pane and a new unbound one inside it', () => {
-    // The root runs `row`, so a `column` split is a direction the pane's own
-    // container cannot express: it needs one of its own.
+  it('should put a container where the pane was, with the pane and a new unbound one inside it', () => {
     const before = [root(), pane('a', 'root-1', 0)];
     const after = applied(
       before,
-      split(before, { nodeId: 'a', axis: 'column', newNodeId: 'fresh', newSplitId: 'box' }),
+      split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
     );
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['box']);
     expect(childrenOf(after, 'box').map((n) => n.id)).toEqual(['a', 'fresh']);
@@ -99,52 +97,20 @@ describe('split', () => {
     expect(validateTree(after)).toEqual({ ok: true });
   });
 
-  it('should PACK into the container the pane is already in when it runs the same way', () => {
-    // Issue #2469's structural half. Nesting here would mint a `row` container
-    // inside a `row` container — the identical picture, one level deeper, one
-    // node heavier, with a drag handle that resizes a group instead of the two
-    // panes either side of it.
-    const before = [root(), pane('a', 'root-1', 0)];
+  it('should NEVER pack, however the container is running — the toolbar divides the pane it was pointed at', () => {
+    // The counterpart of the placement path's packing (issue #2469, and the
+    // review that narrowed it). A user who points at a pane and asks to split
+    // it has not asked for their other panes to move, and joining a sibling
+    // group means being rebalanced into it — so this gesture always nests, even
+    // where the placement path would flatten.
+    const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1)];
     const after = applied(
       before,
       split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
     );
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'fresh']);
-    expect(findNode(after, 'box')).toBeUndefined();
-    expect(findNode(after, 'fresh')).toMatchObject({ nodeType: 'pane', target: null });
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['box', 'b']);
+    expect(childrenOf(after, 'box').map((n) => n.id)).toEqual(['a', 'fresh']);
     expect(validateTree(after)).toEqual({ ok: true });
-  });
-
-  it('should pack the newcomer BESIDE the pane it split, not at the end of the container', () => {
-    const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('c', 'root-1', 2)];
-    const after = applied(
-      before,
-      split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
-    );
-    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'fresh', 'b', 'c']);
-    expect(validateTree(after)).toEqual({ ok: true });
-  });
-
-  it('should pack a same-axis split however deep the container sits', () => {
-    // The rule is about the CONTAINER's axis, not about the root's.
-    const before = [root(), container('col', 'root-1', 0), pane('a', 'col', 0), pane('b', 'col', 1)];
-    const after = applied(
-      before,
-      split(before, { nodeId: 'a', axis: 'column', newNodeId: 'fresh', newSplitId: 'box' }),
-    );
-    expect(childrenOf(after, 'col').map((n) => n.id)).toEqual(['a', 'fresh', 'b']);
-    expect(validateTree(after)).toEqual({ ok: true });
-  });
-
-  it('should not reach the depth cap by repeating one gesture, because a same-axis split adds no depth', () => {
-    // The counterpart of the cap rejection below: eight `row` splits in a row
-    // used to nest eight containers and refuse; they now pack into one.
-    let nodes: WorkspaceNode[] = [root(), pane('a', 'root-1', 0)];
-    for (let n = 0; n < 12; n += 1) {
-      nodes = applied(nodes, split(nodes, { nodeId: 'a', axis: 'row', newNodeId: `p${n}`, newSplitId: `s${n}` }));
-    }
-    expect(childrenOf(nodes, 'root-1')).toHaveLength(13);
-    expect(validateTree(nodes)).toEqual({ ok: true });
   });
 
   it('should give the container the axis it was asked for, which is the whole of the old two verbs', () => {
@@ -161,7 +127,7 @@ describe('split', () => {
     const before = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('c', 'root-1', 2)];
     const after = applied(
       before,
-      split(before, { nodeId: 'b', axis: 'column', newNodeId: 'fresh', newSplitId: 'box' }),
+      split(before, { nodeId: 'b', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
     );
     expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['a', 'box', 'c']);
     expect(validateTree(after)).toEqual({ ok: true });
@@ -177,7 +143,7 @@ describe('split', () => {
     ];
     const after = applied(
       before,
-      split(before, { nodeId: 'a', axis: 'column', newNodeId: 'fresh', newSplitId: 'box' }),
+      split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
     );
     expect(shareOf(after, 'box')).toBeCloseTo(0.7, 5);
     expect(shareOf(after, 'b')).toBeCloseTo(0.3, 5);
@@ -194,7 +160,7 @@ describe('split', () => {
     ];
     const after = applied(
       before,
-      split(before, { nodeId: 'a', axis: 'column', newNodeId: 'fresh', newSplitId: 'box' }),
+      split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'box' }),
     );
     expect(shareOf(after, 'a')).toBeUndefined();
     expect(shareOf(after, 'fresh')).toBeUndefined();
@@ -240,12 +206,9 @@ describe('split rejections', () => {
   });
 
   it('should refuse a container id the workspace already holds', () => {
-    // A `column` split of a `row` container, so a container is genuinely minted:
-    // `newSplitId` is not read at all on the packing path, and a refusal for an
-    // id nothing uses would be a rule with no defect behind it.
     const before = [root(), pane('a', 'root-1', 0)];
     expect(
-      refusedWith(split(before, { nodeId: 'a', axis: 'column', newNodeId: 'fresh', newSplitId: 'a' })),
+      refusedWith(split(before, { nodeId: 'a', axis: 'row', newNodeId: 'fresh', newSplitId: 'a' })),
     ).toBe('duplicate_id');
   });
 
@@ -259,7 +222,7 @@ describe('split rejections', () => {
   it('should refuse two new ids that collide with each other rather than with the tree', () => {
     const before = [root(), pane('a', 'root-1', 0)];
     expect(
-      refusedWith(split(before, { nodeId: 'a', axis: 'column', newNodeId: 'same', newSplitId: 'same' })),
+      refusedWith(split(before, { nodeId: 'a', axis: 'row', newNodeId: 'same', newSplitId: 'same' })),
     ).toBe('duplicate_id');
   });
 
@@ -274,10 +237,10 @@ describe('split rejections', () => {
   });
 
   it('should refuse a split that would nest past the depth cap, rather than truncating it', () => {
-    // A split that CHANGES direction nests a container, so the cap is still
-    // reachable — by alternating directions, which is what the packing rule
-    // above leaves as the only way down. `container()` runs `column`, so this
-    // `row` split is that change.
+    // Every toolbar split NESTS a container, so the cap is reachable by
+    // repeating one gesture — see the report's note on `split_down`, which
+    // appended instead. The placement path packs where it can and does not walk
+    // down like this.
     const before: WorkspaceNode[] = [root()];
     let parent = 'root-1';
     for (let depth = 1; depth < 8; depth += 1) {
@@ -644,6 +607,77 @@ describe('openConversation', () => {
       openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' } }),
     );
     expect(childrenOf(beside, 'root-1').map((n) => n.id)).toEqual(['sh', 'fresh']);
+  });
+
+  it('should PACK into the container the pane is already in when it runs the same way', () => {
+    // Issue #2469's structural half, and it belongs to PLACEMENT rather than to
+    // the toolbar (see `split`'s own "never pack" case). Nesting here would mint
+    // a `row` container inside a `row` container — the identical picture, one
+    // level deeper, one node heavier, with a drag handle that resizes a group
+    // instead of the two panes either side of it.
+    const before = [root(), terminal('sh', 'root-1', 0)];
+    const after = applied(
+      before,
+      openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' } }),
+    );
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['sh', 'fresh']);
+    expect(findNode(after, 'box')).toBeUndefined();
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should pack the newcomer BESIDE the pane it split, not at the end of the container', () => {
+    const before = [root(), terminal('one', 'root-1', 0), pane('mid', 'root-1', 1), terminal('two', 'root-1', 2)];
+    const after = applied(
+      before,
+      // `axis` explicit, because three columns are each narrow enough that the
+      // layout would otherwise choose `column` and nest — which is the packing
+      // rule working, and not what this case is about.
+      openConversation(before, {
+        ...opening,
+        target: { kind: 'chat', id: 'conv-1' },
+        axis: 'row',
+        preferSplit: true,
+        activeNodeId: 'one',
+      }),
+    );
+    expect(childrenOf(after, 'root-1').map((n) => n.id)).toEqual(['one', 'fresh', 'mid', 'two']);
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should NOT pack into a container somebody has SIZED — it nests, so no sibling moves', () => {
+    // THE REVIEW FINDING, pinned. Joining a sibling group means being rebalanced
+    // into it: the newcomer takes an even share and the survivors keep their
+    // proportions inside what is left. On a grid a user has dragged that moves
+    // panes they sized and never touched. Nesting gives the newcomer the split
+    // pane's own slot AND its share, so `b` comes out of this at exactly the
+    // 0.3 it was dragged to.
+    const before: WorkspaceNode[] = [
+      root(),
+      { ...terminal('a', 'root-1', 0), fraction: 0.7 },
+      { ...terminal('b', 'root-1', 1), fraction: 0.3 },
+    ];
+    const after = applied(
+      before,
+      openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' }, activeNodeId: 'a' }),
+    );
+    expect(findNode(after, 'box')).toMatchObject({ nodeType: 'split' });
+    expect(childrenOf(after, 'box').map((n) => n.id)).toEqual(['a', 'fresh']);
+    expect(shareOf(after, 'b')).toBeCloseTo(0.3, 5);
+    expect(shareOf(after, 'box')).toBeCloseTo(0.7, 5);
+    expect(validateTree(after)).toEqual({ ok: true });
+  });
+
+  it('should leave an unsized container UNSIZED when it packs, because nobody chose those shares', () => {
+    // The other side of the same rule: an even split is the opening state and is
+    // deliberately not stored, so packing three panes into a row writes no
+    // fraction at all.
+    const before = [root(), terminal('sh', 'root-1', 0)];
+    const after = applied(
+      before,
+      openConversation(before, { ...opening, target: { kind: 'chat', id: 'conv-1' } }),
+    );
+    expect(shareOf(after, 'sh')).toBeUndefined();
+    expect(shareOf(after, 'fresh')).toBeUndefined();
   });
 
   it('should split from the ACTIVE pane when nothing is replaceable', () => {

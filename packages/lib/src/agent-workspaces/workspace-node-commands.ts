@@ -67,6 +67,7 @@ import {
   type SplitNode,
   type WorkspaceNode,
 } from './workspace-node';
+import { readFraction } from './workspace-fractions';
 import { splitAxisFor, splitHostPane } from './workspace-node-packing';
 
 /**
@@ -282,26 +283,43 @@ function stageContainer(pane: PaneNode, parentId: string, input: SplitInput): No
  * a target: a create-then-bind pair has a moment where the first landed and the
  * second did not, and that moment is the state production is in today.
  *
- * **IT PACKS BEFORE IT NESTS.** A pane whose container already runs along the
- * requested axis gets its sibling IN THAT CONTAINER, beside it; only a split
- * that changes direction mints a new one. That is the `split_down` behaviour
- * this model briefly lost — it appended to the existing column, and the flat
- * rewrite nested unconditionally, which is what made the depth cap reachable by
- * repeating one gesture and what turned four spawned shells into four levels of
- * nesting (issue #2469).
+ * **IT PACKS BEFORE IT NESTS — under two conditions, and both of them are
+ * about not moving something somebody chose.** A pane whose container already
+ * runs along the requested axis gets its sibling IN THAT CONTAINER; a split
+ * that changes direction still mints one. Two containers running the same way
+ * are ONE container as far as the renderer is concerned (`ContainerGroup` lays
+ * out any number of children), so the nested form is a strictly deeper spelling
+ * of the identical picture — deeper against `MAX_DEPTH`, one node heavier
+ * against `MAX_NODES`, and harder to drag, because a handle between two
+ * containers resizes a group rather than the panes either side of it. Four
+ * shells spawned into one session used to become four levels of that
+ * (issue #2469).
  *
- * Nesting on a same-axis split was never a fact about the data. Two containers
- * running the same way are ONE container as far as the renderer is concerned
- * (`ContainerGroup` lays out any number of children), so the nested form is a
- * strictly deeper spelling of the identical picture — deeper against
- * `MAX_DEPTH`, one node heavier against `MAX_NODES`, and harder to drag,
- * because a handle between two containers resizes a group rather than the panes
- * either side of it.
+ * **The conditions, and why packing is not simply better.** Joining a container
+ * means joining its sibling group, and `create` rebalances a group it joins:
+ * the newcomer takes an even share and the survivors keep their proportions
+ * inside what is left. So a packed split does not divide the pane it was
+ * pointed at — it divides the whole container. On an untouched grid that IS the
+ * intent (three shells become three equal columns, and no share is written,
+ * because an unsized group stays unsized). On a grid somebody has DRAGGED it is
+ * a change nobody asked for: splitting one of two panes would move the other.
+ * Hence:
+ *
+ *  - **`pack` is asked for by the PLACEMENT path only.** `split` — the toolbar's
+ *    two buttons — keeps nesting, so "split right" still divides the pane the
+ *    user pointed at and leaves its neighbours exactly where they were. The
+ *    accumulation issue #2469 reports is about panes an agent OPENS, which is
+ *    the path that asks.
+ *  - **and only into a container NOBODY HAS SIZED.** A group carrying stored
+ *    shares is one a user dragged; the nesting form gives the newcomer the split
+ *    pane's own slot and share (see {@link stageContainer}) and leaves every
+ *    sibling's share untouched, which is the honest answer there.
  */
 function splitInto(
   nodes: readonly WorkspaceNode[],
   input: SplitInput,
   target: PaneTarget | null,
+  pack = false,
 ): CommandResult {
   const node = findNode(nodes, input.nodeId);
   if (node === undefined) return refuse('unknown_node', `no node "${input.nodeId}" to split`);
@@ -312,17 +330,20 @@ function splitInto(
     return refuse('not_a_pane', `node "${input.nodeId}" is a split; a split divides space rather than occupying it`);
   }
 
-  // PACK: the container is already going this way, so the newcomer is a
-  // sibling. `newSplitId` is not consulted at all on this path — no container
-  // is minted, so an id for one is neither used nor required to be free, and
-  // the checks below belong with the mint they defend rather than with the
-  // command.
+  // PACK: the container is already going this way and nobody has sized it, so
+  // the newcomer is a sibling. `newSplitId` is not consulted at all on this
+  // path — no container is minted, so an id for one is neither used nor
+  // required to be free, and the checks below belong with the mint they defend
+  // rather than with the command.
   const parent = findNode(nodes, node.parentId);
-  if (parent !== undefined && parent.nodeType !== 'pane' && parent.axis === input.axis) {
-    const index = childrenOf(nodes, parent.id).findIndex((sibling) => sibling.id === node.id) + 1;
-    return compile(nodes, [
-      (current) => create(current, { nodeId: input.newNodeId, target, parentId: parent.id, index }),
-    ]);
+  if (pack && parent !== undefined && parent.nodeType !== 'pane' && parent.axis === input.axis) {
+    const group = childrenOf(nodes, parent.id);
+    if (isUnsizedGroup(group)) {
+      const index = group.findIndex((sibling) => sibling.id === node.id) + 1;
+      return compile(nodes, [
+        (current) => create(current, { nodeId: input.newNodeId, target, parentId: parent.id, index }),
+      ]);
+    }
   }
 
   // `create` catches a `newNodeId` the workspace already holds; the container's
@@ -346,6 +367,21 @@ function splitInto(
 }
 
 /**
+ * Has nobody sized this container? — the second half of the packing condition.
+ *
+ * "Nobody" is read the way the renderer reads it: `currentShares` falls back to
+ * an even split the moment ANY member is unsized, so a group that is not wholly
+ * sized is one no stored share is currently deciding. Packing into such a group
+ * rebalances numbers nobody chose into other numbers nobody chose, and writes
+ * none of them (an all-unsized group stays all-unsized through
+ * `rebalanceFractions`). Packing into a SIZED one would move a pane the user
+ * dragged, so that one nests instead.
+ */
+function isUnsizedGroup(group: readonly WorkspaceNode[]): boolean {
+  return group.every((member) => member.nodeType === 'root' || readFraction(member.fraction) === null);
+}
+
+/**
  * Split a pane: give it a sibling by putting a container where it was.
  *
  * Replaces `split_right` and `split_down`, which differed by an axis and
@@ -356,10 +392,10 @@ function splitInto(
  * user has not yet said anything about, and minting it bound to something would
  * be the toolbar deciding what the user meant.
  *
- * It NESTS only when the direction CHANGES. A pane whose container already runs
- * along the requested axis gets its sibling in that container — `split_down`'s
- * own behaviour, restored: see {@link splitInto}, which is where the reasoning
- * lives.
+ * It always NESTS, and that is deliberate rather than left over: this is the
+ * TOOLBAR's gesture, and a user who points at a pane and asks to divide it has
+ * not asked for their other panes to move. The placement path packs instead —
+ * see {@link splitInto} for both halves of that condition.
  */
 export function split(nodes: readonly WorkspaceNode[], input: SplitInput): CommandResult {
   return splitInto(nodes, input, null);
@@ -699,6 +735,10 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
     nodes,
     { nodeId: from.id, axis: input.axis ?? splitAxisFor(nodes, from.id), newNodeId, newSplitId },
     target,
+    // PACK. Placing is the path that accumulates — one pane per shell, per
+    // page, per thread an agent opens — and it is the path with no user gesture
+    // behind it whose meaning a rebalance could contradict.
+    true,
   );
 }
 
