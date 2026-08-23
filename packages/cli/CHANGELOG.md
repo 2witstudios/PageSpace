@@ -4,7 +4,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-08-23
+
 ### Added
+
+- **`pagespace sheets` — seven verbs that treat a spreadsheet as data.** `describe` shows a sheet's
+  tabs, row and column counts without reading a row. `query` filters and sorts **server-side**, so
+  asking a 100,000-row sheet for the twelve rows you want no longer means pulling the whole thing
+  down first. `rows` walks a tab in order, `append` adds rows, `update-cells` writes by A1 address
+  (and, unlike the older `edit-cells`, can reach a tab other than the first), and `delete-rows`
+  removes a range.
+
+  Filters match **the values you see**: a formula column compares as its result, not its `=` text.
+
+  `delete-rows` is the one irreversible verb, so it confirms before acting. `--yes` skips the
+  prompt; with no TTY and no `--yes` it fails closed rather than assuming consent — a script that
+  never meant to delete cannot delete by omission.
+
+  All seven honour `--json` for scripting, and the same six operations are served as MCP tools, so
+  an agent gets them without shelling out.
 
 - **`pagespace keys describe`** — reports the credential this invocation would use: its drives, the
   role granted in each, and the **effective** permissions that role resolves to
