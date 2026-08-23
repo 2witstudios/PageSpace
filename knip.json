@@ -119,6 +119,7 @@
         "src/schema/calendar.ts",
         "src/schema/chat.ts",
         "src/schema/commands.ts",
+        "src/schema/content-tags.ts",
         "src/schema/contact.ts",
         "src/schema/conversations.ts",
         "src/schema/core.ts",

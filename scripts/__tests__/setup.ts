@@ -55,7 +55,7 @@ export async function truncateAll(db: TestDb): Promise<void> {
       channel_read_status,
       channel_message_reactions,
       channel_messages,
-      page_tags,
+      content_tags,
       tags,
       pages,
       drive_members,
@@ -230,7 +230,25 @@ export const FIXTURES = {
     tag1: {
       id: 'test_tag_001',
       name: 'important',
+      normalizedKey: 'important',
       color: '#ff0000',
+    },
+    /**
+     * A vocabulary entry with NO assignment. It exists so the bundle's tag
+     * query is forced to select by drive: deriving the tag list from the
+     * surviving `content_tags` rows silently drops this one, and the tenant
+     * comes up missing a name and colour with nothing to say so.
+     */
+    unusedTag: {
+      id: 'test_tag_002',
+      name: 'unused',
+      normalizedKey: 'unused',
+      color: '#00ff00',
+    },
+  },
+  contentTags: {
+    ct1: {
+      id: 'test_content_tag_001',
     },
   },
 } as const;
@@ -240,7 +258,7 @@ export const FIXTURES = {
  * Call after truncateAll() in beforeEach.
  */
 export async function seedFixtures(db: TestDb): Promise<void> {
-  const { users, drives, pages, conversations, agentWorkspaces, agentWorkspaceShells, messages, files, pagePermissions, tags } = FIXTURES;
+  const { users, drives, pages, conversations, agentWorkspaces, agentWorkspaceShells, messages, files, pagePermissions, tags, contentTags } = FIXTURES;
   const now = new Date();
 
   // Users. `emailBidx` is seeded because it is the LOOKUP KEY for an encrypted
@@ -360,15 +378,17 @@ export async function seedFixtures(db: TestDb): Promise<void> {
     VALUES (${pagePermissions.pp1.id}, ${pages.child.id}, ${users.member.id}, ${pagePermissions.pp1.canView}, ${pagePermissions.pp1.canEdit}, ${pagePermissions.pp1.canShare}, ${pagePermissions.pp1.canDelete}, ${users.owner.id}, ${now})
   `);
 
-  // Tags + page tags
+  // Tag vocabulary + one page-level assignment
   await db.execute(sql`
-    INSERT INTO tags (id, name, color)
-    VALUES (${tags.tag1.id}, ${tags.tag1.name}, ${tags.tag1.color})
+    INSERT INTO tags (id, "driveId", name, "normalizedKey", color, "createdBy", "createdAt", "updatedAt")
+    VALUES
+      (${tags.tag1.id}, ${drives.shared.id}, ${tags.tag1.name}, ${tags.tag1.normalizedKey}, ${tags.tag1.color}, ${users.owner.id}, ${now}, ${now}),
+      (${tags.unusedTag.id}, ${drives.shared.id}, ${tags.unusedTag.name}, ${tags.unusedTag.normalizedKey}, ${tags.unusedTag.color}, ${users.owner.id}, ${now}, ${now})
   `);
 
   await db.execute(sql`
-    INSERT INTO page_tags ("pageId", "tagId")
-    VALUES (${pages.root.id}, ${tags.tag1.id})
+    INSERT INTO content_tags (id, "tagId", "pageId", "targetKind", source, "createdBy", "createdAt", "updatedAt")
+    VALUES (${contentTags.ct1.id}, ${tags.tag1.id}, ${pages.root.id}, 'page', 'user', ${users.owner.id}, ${now}, ${now})
   `);
 
   // Mentions (root page mentions child page)

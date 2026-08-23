@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, primaryKey, index, uniqueIndex, integer, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, index, uniqueIndex, unique, integer, check, type AnyPgColumn } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
@@ -100,18 +100,47 @@ export const pages = pgTable('pages', {
     }
 });
 
+/**
+ * The tag VOCABULARY — one row per distinct tag name per drive.
+ *
+ * Reclaimed rather than replaced. The table has existed since migration 0000
+ * and has never had a writer, but its original shape could not be used: `name`
+ * was `unique()` GLOBALLY, across every drive and every tenant, so the first
+ * drive to mint "roadmap" would have taken the name away from all the others —
+ * a multi-tenancy bug rather than a missing feature. `color` was `notNull` with
+ * no default besides, which blocked any insert that did not pick one.
+ *
+ * `normalizedKey` is `text`, NOT `varchar(64)`, and that is a decision rather
+ * than laziness. The 64-code-point limit (`MAX_TAG_NAME_LENGTH`) is on the
+ * display NAME; the key is derived through NFKC, which expands — the worst
+ * single character, U+FDFA, expands to 18 code points — so a legal name keys
+ * to as much as 1152 code points / 2112 bytes (`MAX_TAG_KEY_LENGTH`, exported
+ * from `@pagespace/lib/tags/tag-core` for exactly this choice). A `varchar(64)`
+ * mirroring the name limit would reject a legal tag at INSERT time. 2112 bytes
+ * still fits under Postgres's ~2704-byte btree tuple limit, so the unique index
+ * below is safe.
+ *
+ * `color` is nullable: a vocabulary entry is a NAME first, and forcing every
+ * writer to invent a colour is what made the original table unusable.
+ */
 export const tags = pgTable('tags', {
   id: text('id').primaryKey().$defaultFn(() => createId()),
-  name: text('name').unique().notNull(),
-  color: text('color').notNull(),
-});
-
-export const pageTags = pgTable('page_tags', {
-  pageId: text('pageId').notNull().references(() => pages.id, { onDelete: 'cascade' }),
-  tagId: text('tagId').notNull().references(() => tags.id, { onDelete: 'cascade' }),
+  driveId: text('driveId').notNull().references(() => drives.id, { onDelete: 'cascade' }),
+  /** Display form: NFC, whitespace-collapsed, stored as the first writer typed it. */
+  name: text('name').notNull(),
+  /** The casefolded NFKC dedupe key from `tagKey()` — what uniqueness is taken on. */
+  normalizedKey: text('normalizedKey').notNull(),
+  color: text('color'),
+  description: text('description'),
+  createdBy: text('createdBy').references(() => users.id, { onDelete: 'set null' }),
+  createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
+  updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => {
     return {
-        pk: primaryKey({ columns: [table.pageId, table.tagId] }),
+        driveIdx: index('tags_drive_id_idx').on(table.driveId),
+        // The dedupe rule, baked in. Two spellings that fold to the same key are
+        // ONE tag inside a drive and different tags across drives.
+        driveKeyKey: unique('tags_drive_id_normalized_key_key').on(table.driveId, table.normalizedKey),
     }
 });
 
@@ -207,7 +236,7 @@ export const pagesRelations = relations(pages, ({ one, many }) => ({
     restoredChildren: many(pages, {
         relationName: 'OriginalParent',
     }),
-    tags: many(pageTags),
+    // contentTags relation handled in schema/content-tags.ts to avoid a circular import
     favorites: many(favorites),
     mentionsFrom: many(mentions, { relationName: 'MentionsFrom' }),
     mentionsTo: many(mentions, { relationName: 'MentionsTo' }),
@@ -216,19 +245,17 @@ export const pagesRelations = relations(pages, ({ one, many }) => ({
 }));
 
 
-export const tagsRelations = relations(tags, ({ many }) => ({
-    pages: many(pageTags),
-}));
-
-export const pageTagsRelations = relations(pageTags, ({ one }) => ({
-    page: one(pages, {
-        fields: [pageTags.pageId],
-        references: [pages.id],
+export const tagsRelations = relations(tags, ({ one }) => ({
+    drive: one(drives, {
+        fields: [tags.driveId],
+        references: [drives.id],
     }),
-    tag: one(tags, {
-        fields: [pageTags.tagId],
-        references: [tags.id],
+    creator: one(users, {
+        fields: [tags.createdBy],
+        references: [users.id],
     }),
+    // The assignment side lives in schema/content-tags.ts, for the same
+    // circular-import reason page_permissions' does.
 }));
 
 export const favoritesRelations = relations(favorites, ({ one }) => ({
