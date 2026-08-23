@@ -458,10 +458,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   used to be told only that the call was invalid and that it should go look the schema up. That
   cost a wasted call and a second round trip on every first-use mistake. The rejection now carries
   the tool's own parameter schema, so the next call is the right one. Naming a tool that does not
-  exist now suggests the closest names that do — from the tools that caller can actually run, which
-  is what finally answers `read_file` when the tool is `readFile`. Errors say the same thing whether
-  the agent is typing or talking, and an unusually large schema is summarised to its parameter list
-  rather than dumped whole.
+  exist now suggests the closest names that do — but only when the match is a real one, like
+  `read_file` for `readFile`; where nothing genuinely matches it still says so rather than offering
+  a guess. Errors say the same thing whether the agent is typing or talking, and an unusually large
+  schema is summarised to its parameter list rather than dumped whole.
 
 - **Expanding a task now lists its sub-tasks instead of just counting them** — the drop-down under
   a task used to say "3 sub-tasks" as plain text and leave you to go find them: open the task, look

@@ -10,6 +10,8 @@ import {
 } from '../tool-error-schema';
 import { buildPageSpaceTools } from '../../core/ai-tools';
 import { createSafeToolName } from '../../core/mcp-tool-converter';
+import { buildRealtimeToolExposure } from '../../realtime/tools';
+import { splitToolsForExposure } from '../tool-exposure';
 
 /**
  * The longest name the product can actually register, built by the real
@@ -186,6 +188,21 @@ describe('describeToolSchema', () => {
     expect(rendered).not.toContain('…');
   });
 
+  it('given a name past the ceiling, should not emit a selector that selects nothing', () => {
+    // No fixed ceiling can rule this out: `buildIntegrationToolName` composes
+    // `int__{slug}__{toolId}` from an OpenAPI operationId that carries no cap,
+    // so an integration tool name can exceed whatever number is chosen here.
+    // A clipped name inside `select:` is worse than no pointer — it looks
+    // actionable and returns nothing.
+    const overLong = `int__provider__${'o'.repeat(300)}`;
+
+    const rendered = describeToolSchema(overLong, { notASchema: true });
+
+    expect(rendered).not.toContain('select:');
+    expect(rendered).toContain('too long to quote');
+    expect(rendered.length).toBeLessThan(400);
+  });
+
   it('given a maximal-length name and an oversized schema, should still fit the cap', () => {
     // The header grows with the name, so the outline reserve has to be sized
     // for a name at MAX_TOOL_NAME_CHARS, not for a typical one. An over-long
@@ -305,8 +322,31 @@ describe('suggestToolNames', () => {
     expect(suggestToolNames('read_file', ['read_files', 'readFile'])[0]).toBe('readFile');
   });
 
-  it('given a near-miss spelling, should suggest by edit distance', () => {
+  it('given a near-miss that shares real text, should suggest it', () => {
     expect(suggestToolNames('git_logs', ['git_log', 'git_status', 'bash'])).toContain('git_log');
+  });
+
+  it('must never point one tier of the registry at a different tool in the other', () => {
+    // THE REGISTRY IS TWO-TIER and each caller sees only its own tier, so a
+    // name from the other tier is not a typo but is still unknown here. Scored
+    // by edit distance it matched whatever same-tier name looked closest, and
+    // the model that asked to RENAME a page was told to call one that CREATES
+    // one. Built from the real registries, because the shape is the point.
+    const voicePool = Object.keys(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
+    const { nonCoreTools } = splitToolsForExposure(buildPageSpaceTools({ codeExecutionEnabled: true }));
+    const deferredPool = Object.keys(nonCoreTools);
+
+    // Real deferred tools spoken directly at the voice dispatcher.
+    for (const deferred of ['rename_page', 'create_task', 'list_panes', 'glob_search']) {
+      expect(voicePool).not.toContain(deferred);
+      expect(suggestToolNames(deferred, voicePool)).toEqual([]);
+    }
+
+    // Real core tools routed through execute_tool, whose pool is the deferred half.
+    for (const core of ['list_pages', 'create_page']) {
+      expect(deferredPool).not.toContain(core);
+      expect(suggestToolNames(core, deferredPool)).toEqual([]);
+    }
   });
 
   it('given a namespaced MCP name, should still be searched rather than skipped', () => {

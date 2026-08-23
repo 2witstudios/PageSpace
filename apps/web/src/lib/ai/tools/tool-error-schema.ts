@@ -151,7 +151,18 @@ export function describeToolSchema(toolName: string, schema: unknown): string {
   // would. The prompt now tells the model a rejection carries the schema and
   // that it therefore need not run a `tool_search` — so a degraded rendering
   // with no pointer leaves it with neither, and it retries blind.
-  const lookup = `Call tool_search("select:${clip(toolName, MAX_TOOL_NAME_CHARS)}") for the full schema.`;
+  //
+  // A CLIPPED NAME MAKES A SELECTOR THAT SELECTS NOTHING, so when the name did
+  // not fit, say so rather than emit a broken one. No fixed ceiling can rule
+  // this out: `buildIntegrationToolName` composes `int__{slug}__{toolId}` from
+  // an OpenAPI `operationId` (or a path-derived fallback) that carries no cap
+  // at all, so an integration tool name can exceed any number chosen here.
+  // Raising the ceiling a third time would not fix that; admitting the clip
+  // does.
+  const lookup =
+    toolName.length <= MAX_TOOL_NAME_CHARS
+      ? `Call tool_search("select:${toolName}") for the full schema.`
+      : 'The full name is too long to quote here — call tool_search with a distinctive part of it for the full schema.';
 
   const json = toJsonSchema(schema);
   if (json === undefined) {
@@ -232,14 +243,35 @@ export function formatUnknownToolError(
 /**
  * Names close enough to be what the caller meant, best first.
  *
+ * TWO RANKS, BOTH HIGH-PRECISION, AND DELIBERATELY NO EDIT DISTANCE.
+ *
  * The first rank is the one that actually bites in this codebase: the object
  * key in a tool module IS the wire name, and the sandbox tools are camelCase
  * (`readFile`, `writeFile`, `editFile`) while everything else is snake_case.
  * There is no mapping layer anywhere, so `read_file` is simply an unknown
  * tool — and normalising away case and separators turns that dead end into
- * the right answer. The second rank catches the rest of the near misses
- * (`git_log` vs `git_logs`, a forgotten prefix) by edit distance, scaled to
- * the name's length so short names are not matched to everything.
+ * the right answer. The second catches the rest of the near misses that share
+ * real text (`git_log` vs `git_logs`, `read_page` vs `read_pages`).
+ *
+ * A third rank scored by Levenshtein distance was here and has been REMOVED,
+ * because A WRONG SUGGESTION IS WORSE THAN NONE and it produced only wrong
+ * ones. The registry is two-tier — core tools are callable directly, the rest
+ * are deferred behind `execute_tool` — and each caller can only see its own
+ * tier, so a name from the OTHER tier is not a typo but it is still unknown
+ * HERE. Edit distance then matched it to whatever same-tier name looked
+ * closest. Measured against the real registries:
+ *
+ *     rename_page  (spoken on voice) -> "Did you mean: create_page?"
+ *     create_page  (via execute_tool) -> "Did you mean: create_task?"
+ *     list_pages   (via execute_tool) -> "Did you mean: list_panes?"
+ *
+ * The model asks to rename a page and is pointed at a tool that CREATES one.
+ * Before this module existed it got a neutral "use tool_search", which is
+ * safe; being misdirected to a side-effecting write is not. Every one of those
+ * came from the distance rank, and none from the two below — so the rank is
+ * gone rather than tuned. A genuine typo that shares no substring now falls
+ * through to the honest `tool_search` fallback, which is the correct trade:
+ * a missed suggestion costs a round trip, a wrong one costs a wrong write.
  */
 export function suggestToolNames(
   toolName: string,
@@ -247,8 +279,6 @@ export function suggestToolNames(
 ): string[] {
   const target = normalizeToolName(toolName);
   if (target.length === 0 || target.length > MAX_TOOL_NAME_CHARS) return [];
-
-  const threshold = Math.max(1, Math.floor(target.length / 3));
 
   const scored: { name: string; rank: number; distance: number }[] = [];
   for (const name of availableToolNames) {
@@ -268,15 +298,6 @@ export function suggestToolNames(
       Math.min(candidate.length, target.length) * 2 >= Math.max(candidate.length, target.length)
     ) {
       scored.push({ name, rank: 1, distance: Math.abs(candidate.length - target.length) });
-      continue;
-    }
-    // A length gap wider than the threshold cannot be closed by fewer edits
-    // than the gap itself, so the distance is already known to be too big.
-    // Skipping keeps the quadratic step off names that could never match.
-    if (Math.abs(candidate.length - target.length) > threshold) continue;
-    const distance = editDistance(target, candidate);
-    if (distance <= threshold) {
-      scored.push({ name, rank: 2, distance });
     }
   }
 
@@ -302,19 +323,6 @@ function normalizeToolName(name: string): string {
   return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
-/** Standard Levenshtein distance, two rows at a time. */
-function editDistance(a: string, b: string): number {
-  let previous = Array.from({ length: b.length + 1 }, (_, index) => index);
-  for (let i = 1; i <= a.length; i += 1) {
-    const current = [i];
-    for (let j = 1; j <= b.length; j += 1) {
-      const substitution = previous[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1);
-      current[j] = Math.min(current[j - 1] + 1, previous[j] + 1, substitution);
-    }
-    previous = current;
-  }
-  return previous[b.length];
-}
 
 /**
  * `z.toJSONSchema` in its most forgiving configuration, or `undefined` if the
