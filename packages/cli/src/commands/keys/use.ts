@@ -20,6 +20,7 @@ import { listMcpTokens } from '@pagespace/sdk';
 import type { z } from 'zod';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
 import { confirmIdentity } from '../../auth/confirm-identity.js';
+import { keysCommandNeedsLoginMessage } from '../../auth/credential-kind.js';
 import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
@@ -39,6 +40,7 @@ import type { HandlerContext } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import { buildKeyActivateScope, type TokensCreateHandlerDeps } from './create.js';
+import { describeKeyPermissions } from '../../auth/probe-permissions.js';
 import { parseKeysUseArgs } from './args.js';
 
 type ServerKeySummaries = z.infer<typeof listMcpTokens.outputSchema>;
@@ -217,6 +219,20 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
       return EXIT_SUCCESS;
     }
 
+    // Deliberately AFTER `--off`, which is purely local: it clears this
+    // machine's active-key map and never calls the server, so there is nothing
+    // for a credential to be insufficient for. Refusing it would leave whoever
+    // is running under a key unable to undo an activation at all.
+    //
+    // Activation itself is the same wall `keys list` hits, for the same reason:
+    // its server lookup rides the ambient `manage_keys` credential, which a
+    // scoped access key is not. Refused here so a live key is never reported as
+    // invalidated (issue #2464).
+    if (ctx.credentialKind === 'key') {
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use')}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
     const { name } = parsed.args;
     const store = deps.createCredentialStore();
     const credential = await store.get(host, name);
@@ -288,6 +304,7 @@ export const keysUseHandler: CommandHandler = createKeysUseHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  describeKeyPermissions,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   // Passed UNCALLED — see create.ts.

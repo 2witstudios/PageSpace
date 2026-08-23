@@ -8,6 +8,36 @@ import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeActiveKeyStore, createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import { createKeysUseHandler, findServerTokenId } from '../use.js';
 
+/**
+ * What `GET /api/auth/key` answers for the key the mint just produced. Stubbed
+ * rather than reaching the network: the mint flow's contract is that it PRINTS
+ * this readback, not that it can resolve permissions itself.
+ */
+const FAKE_KEY_DESCRIPTION = {
+  credential: {
+    type: 'mcp' as const,
+    scoped: true,
+    id: 'key_1',
+    name: 'agent',
+    tokenPrefix: 'mcp_abc12345',
+    createdAt: '2026-07-03T00:00:00.000Z',
+    lastUsed: null,
+  },
+  driveScopes: [
+    {
+      id: 'drv1',
+      name: 'Research',
+      role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      roleSource: 'explicit' as const,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    },
+  ],
+  page: null,
+};
+
+
 const HOST = 'https://pagespace.ai';
 
 const STATIC_KEY: HostCredential = {
@@ -127,6 +157,7 @@ function baseDeps(store: CredentialStore, fake = fakeLoopbackServer()) {
       waitMs: () => new Promise<void>(() => {}),
       exchangeCode: async () => ({ kind: 'mcp_activate' as const, tokenId: 'tok1', scope: 'activate_key:tok1' }),
       confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+      describeKeyPermissions: async () => FAKE_KEY_DESCRIPTION,
       requestDeviceAuthorization: async () => {
         throw new Error('device flow not exercised by this test — loopback transport expected');
       },
@@ -197,6 +228,41 @@ describe('createKeysUseHandler — argument validation', () => {
     expect(stderr.lines.join('')).toContain(
       '"default" is a login credential, not an access key — only keys minted by "pagespace keys" can be activated.',
     );
+  });
+});
+
+describe('createKeysUseHandler — under a scoped access key', () => {
+  // Issue #2464: the activation ceremony's server lookup rides the ambient
+  // manage_keys credential, which a key is not — and the refusal came back as
+  // the key having been invalidated.
+  it('refuses before argument parsing and says the key is fine', async () => {
+    const { deps } = baseDeps(fakeStore({ agent: STATIC_KEY }));
+    const handler = createKeysUseHandler(deps);
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, credentialKind: 'key' });
+
+    const code = await handler(ctx, commandIntent(['keys', 'use', 'agent']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    const output = stderr.lines.join('');
+    expect(output).toContain('That says nothing about the key');
+    expect(output).not.toMatch(/invalidated/i);
+  });
+
+  // `--off` is purely local — it clears this machine's active-key map and never
+  // calls the server — so there is nothing for a credential to be insufficient
+  // for. Refusing it would leave whoever runs under a key unable to undo an
+  // activation at all.
+  it('still deactivates with --off, which touches no server at all', async () => {
+    const { deps } = baseDeps(fakeStore({ agent: STATIC_KEY }));
+    const handler = createKeysUseHandler(deps);
+    const activeKeyStore = createFakeActiveKeyStore({ 'https://pagespace.ai': 'agent' });
+    const ctx = createFakeContext({ activeKeyStore, credentialKind: 'key' });
+
+    const code = await handler(ctx, commandIntent(['keys', 'use', '--off']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(activeKeyStore.entries.has('https://pagespace.ai')).toBe(false);
   });
 });
 

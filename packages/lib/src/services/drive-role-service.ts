@@ -164,6 +164,44 @@ export async function listDriveRoles(driveId: string): Promise<DriveRole[]> {
 }
 
 /**
+ * The `MemberRole` enum values (`packages/db/src/schema/members.ts`), lowercased.
+ *
+ * These are NOT rows in `drive_roles` and have no role id, so every lookup here
+ * — `getRoleById`, `list_drive_roles`, `GET /api/drives/:id/roles/:roleId` —
+ * misses them by construction. An agent that reasonably tried
+ * `get_drive_role "member"` got "not found in this drive", which reads as "that
+ * role does not exist" when the truth is "that role lives somewhere else"
+ * (issue #2470). {@link roleNotFoundMessage} is what every one of those lookups
+ * answers with instead.
+ */
+const SYSTEM_ROLE_NAMES: ReadonlySet<string> = new Set(['owner', 'admin', 'member']);
+
+export function isSystemRoleName(value: string): boolean {
+  return SYSTEM_ROLE_NAMES.has(value.trim().toLowerCase());
+}
+
+/**
+ * The single not-found wording for a drive-role lookup, shared by the REST
+ * route and the AI tool so the two cannot drift.
+ *
+ * For a system-role name it says where those actually live and what to run to
+ * see them, because "not found in this drive" is a dead end the caller has no
+ * way to act on. For anything else it stays the plain not-found it always was.
+ */
+export function roleNotFoundMessage(roleId: string): string {
+  if (!isSystemRoleName(roleId)) {
+    return `Role "${roleId}" not found in this drive`;
+  }
+  return (
+    `"${roleId}" is a system role, not a custom role defined in this drive, so it has no role id and cannot be ` +
+    'fetched here. System roles (OWNER/ADMIN/MEMBER) are held per member on the drive membership itself — list ' +
+    'them with the drive members surface. To see what a specific credential resolves to, describe that credential ' +
+    '("pagespace keys describe"), which reports the role and the effective view/edit/share/delete it grants. ' +
+    'This endpoint lists only the custom roles defined in this drive.'
+  );
+}
+
+/**
  * Get a specific role by ID
  */
 export async function getRoleById(

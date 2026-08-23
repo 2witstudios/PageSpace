@@ -40,6 +40,7 @@ import { createSigintFlag } from '../../auth/sigint.js';
 import { renderDeviceCodePrompt, runConsent } from '../../auth/run-consent.js';
 import type { ConsentResult } from '../../auth/run-consent.js';
 import type { DeviceAuthorization } from '../../auth/device-flow.js';
+import { keysCommandNeedsLoginMessage } from '../../auth/credential-kind.js';
 import { resolveConfig } from '../../config/resolve.js';
 import { credentialSecret } from '../../credentials/serialize.js';
 import type { HostCredential } from '../../credentials/serialize.js';
@@ -53,6 +54,8 @@ import type { DriveScopeArg } from './args.js';
 import { buildKeyUpdateScope, resolveNewKeyName, type TokensCreateHandlerDeps } from './create.js';
 import { findServerTokenId, runActivateCeremony } from './use.js';
 import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
+import { renderKeyDescription } from './describe.js';
+import { describeKeyPermissions } from '../../auth/probe-permissions.js';
 import {
   allDrivesDowngradeConfirmMessage,
   availableMenuChoices,
@@ -260,11 +263,31 @@ async function mintScopedKey(
 
   if (result.outcome === 'success') {
     s.stop(`Created key "${params.keyName}" on ${params.host}, scoped to: ${params.displayScope ?? params.scope}.`);
-    if (mintedToken !== null) {
+    const token: string | null = mintedToken;
+    if (token !== null) {
       const show = await clack.confirm({ message: SHOW_TOKEN_PROMPT, initialValue: false });
       if (!clack.isCancel(show) && show) {
-        clack.note(`${TOKEN_ENV_VAR_NAME}=${mintedToken}`, 'Copy it now — shown once');
+        clack.note(`${TOKEN_ENV_VAR_NAME}=${token}`, 'Copy it now — shown once');
       }
+      // Read back with the new key what it can actually do. The role the user
+      // just picked is a grant, not a capability (issue #2470), and this asks
+      // the resolver that will gate every later request rather than restating
+      // the choice. Non-fatal: the key is already minted and stored.
+      try {
+        clack.note(renderKeyDescription(await deps.describeKeyPermissions({ host: params.host, accessToken: token })).trimEnd(), 'What this key can do');
+      } catch (error) {
+        clack.note(
+          `The key was created. Its permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).`,
+          'What this key can do',
+        );
+      }
+    } else {
+      // No raw token to ask with — the same anomaly `--show-token` reports in
+      // `create.ts` (the server returned a refresh credential rather than a
+      // static one). Said out loud rather than skipped: falling silent leaves
+      // the mint with no answer to "what can it do" at all. The pointer to
+      // `keys describe` follows once, in the wiring note below.
+      clack.note('The key was created. Its permissions could not be read back here — it returned no raw token.', 'What this key can do');
     }
     clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {
@@ -628,13 +651,22 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
     // reporting the unrecognized subcommand.
     if (intent.args.length > 0) {
       ctx.stderr.write(
-        `Unknown "keys" subcommand: ${intent.args.join(' ')}. Did you mean "pagespace keys create", "pagespace keys list", "pagespace keys revoke", or "pagespace keys use"?\n`,
+        `Unknown "keys" subcommand: ${intent.args.join(' ')}. Did you mean "pagespace keys create", "pagespace keys list", "pagespace keys describe", "pagespace keys revoke", or "pagespace keys use"?\n`,
       );
       return EXIT_USAGE_ERROR;
     }
 
     if (!ctx.isTTY) {
       ctx.stderr.write(`${NON_INTERACTIVE_KEYS_MESSAGE}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
+    // Every menu item here (list, edit, revoke, set-active) reaches the
+    // key-management surface, which admits a full-user credential only — so a
+    // scoped access key would open the wizard and then fail on the very first
+    // fetch, historically claiming the key itself was invalidated (#2464).
+    if (ctx.credentialKind === 'key') {
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage()}\n`);
       return EXIT_RUNTIME_ERROR;
     }
 
@@ -693,6 +725,7 @@ export const keysHandler: CommandHandler = createKeysHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  describeKeyPermissions,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   // Passed UNCALLED — see create.ts.

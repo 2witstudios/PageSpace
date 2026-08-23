@@ -52,6 +52,8 @@ import type {
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
 import { renderAgentWiringGuidance } from './guidance.js';
+import { renderKeyDescription } from './describe.js';
+import { describeKeyPermissions, type DescribeKeyPermissions } from '../../auth/probe-permissions.js';
 
 const RESOURCE_ID_PATTERN = /^[a-z0-9]{1,32}$/;
 
@@ -250,6 +252,12 @@ export interface TokensCreateHandlerDeps {
   readonly waitMs: WaitMs;
   readonly exchangeCode: ExchangeCode;
   readonly confirmIdentity: ConfirmIdentity;
+  /**
+   * Reads the new key's effective permissions back FROM THE SERVER after a
+   * successful mint (see `probe-permissions.ts`). Injected like every other
+   * effect here so the mint flow stays testable without a network.
+   */
+  readonly describeKeyPermissions: DescribeKeyPermissions;
   readonly requestDeviceAuthorization: RequestDeviceAuthorization;
   readonly pollDeviceToken: PollDeviceToken;
   /**
@@ -268,6 +276,42 @@ export interface TokensCreateHandlerDeps {
   readonly now: () => number;
   readonly timeoutMs?: number;
   readonly maxPortAttempts?: number;
+}
+
+/**
+ * The mint's closing "and here is what it can actually do" block.
+ *
+ * Non-fatal by construction: the key is minted and stored before this runs, so
+ * a probe failure costs a summary, never the credential. It says so explicitly
+ * rather than falling silent — an agent reading only the tail of this output
+ * must not be left thinking the mint itself was the thing that went wrong.
+ *
+ * Both non-happy branches say only what went wrong. The pointer to
+ * `keys describe` is printed once, by `renderAgentWiringGuidance` at the end of
+ * every mint — repeating it here put the identical sentence on screen twice.
+ */
+async function writeEffectivePermissions(params: {
+  readonly info: OutputSink;
+  readonly host: string;
+  readonly token: string | null;
+  readonly describeKeyPermissions: DescribeKeyPermissions;
+}): Promise<void> {
+  const { info, host, token, describeKeyPermissions: describe } = params;
+  if (token === null) {
+    // Says only that the readback did not happen, not WHY. The cause — the
+    // server returned a refresh credential instead of a static token — is the
+    // `--show-token` branch's line a few lines below, and stating it in both
+    // places put two near-identical sentences back to back.
+    info.write('The key was created. Its permissions could not be read back here.\n');
+    return;
+  }
+  try {
+    info.write(`\n${renderKeyDescription(await describe({ host, accessToken: token }))}`);
+  } catch (error) {
+    info.write(
+      `The key was created. Its effective permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n`,
+    );
+  }
 }
 
 export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): CommandHandler {
@@ -414,6 +458,12 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     }
 
     info.write(`Created key "${keyName}" on ${host}, scoped to: ${scopeResult.driveScope}.\n`);
+    await writeEffectivePermissions({
+      info,
+      host,
+      token: mintedToken,
+      describeKeyPermissions: deps.describeKeyPermissions,
+    });
     if (parsedArgs.args.showToken) {
       if (mintedToken !== null) {
         // The ONLY stdout line in --show-token mode (see `info` above).
@@ -441,6 +491,7 @@ export const tokensCreateHandler: CommandHandler = createTokensCreateHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  describeKeyPermissions,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   // Passed UNCALLED — `runConsent` installs the SIGINT listener only if a

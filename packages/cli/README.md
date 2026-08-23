@@ -53,6 +53,10 @@ The model behind those four commands:
   `pagespace keys use --off` deactivates it.
 - **`pagespace mcp` is deliberately excluded** from the active key — MCP configs name their
   credential explicitly so they stay portable and self-describing (see below).
+- **A key can describe itself, but cannot manage keys.** `pagespace keys describe` reports the
+  credential in use — drives, role, and the permissions it actually resolves to — and works
+  under a key. `keys list`/`revoke`/`use` and the wizard manage the whole set of keys you hold,
+  so they need your login and refuse a key outright rather than failing halfway through.
 
 No browser on this machine (CI, container, remote box)? `pagespace login --device` prints a
 short code and URL you approve from any browser. Keys are different — their consent redirect
@@ -78,7 +82,8 @@ trust boundary.
 | `pagespace keys` | Interactive wizard: create, list, **edit** (re-scope in place, same secret), **set active**, and revoke keys. Needs a real terminal; in scripts use the subcommands below. |
 | `pagespace keys create --drive <id> [--role member\|admin\|<customRoleId>] [--drive … --role …] [--name <name>] [--show-token] [--yes]` | Mints a key scoped to the given drive(s) via browser consent, then stores it under `--name` (defaults to the drive id; required for multiple drives; `default` is reserved for your login). `--yes` overwrites an existing key of the same name. |
 | `pagespace keys use <name>` / `pagespace keys use --off` | Makes a stored key this machine's **active key** (browser approval), or deactivates it locally. See above. |
-| `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret). |
+| `pagespace keys list [--json]` | Lists your keys (prefix only — never the secret), with the role granted on each drive. Needs your login — a key cannot list keys; see `keys describe`. |
+| `pagespace keys describe [--page <pageId>] [--json]` | What the credential this machine would use actually is: its drives, the role granted in each, and the **effective** permissions that role resolves to (view/edit/share/delete). Drive-level permissions cover the drive itself (creating a top-level page, sharing or deleting it); a page inside can be narrower, so `--page` resolves that page too. The one `keys` verb a key can run about itself. |
 | `pagespace keys revoke <tokenId> [--yes]` | Revokes a key server-side. Irreversible. |
 
 `--role` binds to the `--drive` immediately before it, not to every `--drive` on the command
@@ -190,7 +195,7 @@ activity  <driveId>
 
 channels  send <channelId> <message>
 
-keys      (no args: guided wizard) · create · use · list · revoke   # see Credentials above
+keys      (no args: guided wizard) · create · use · list · describe · revoke
 
 mcp       serve the MCP stdio server                                # see below
 ```

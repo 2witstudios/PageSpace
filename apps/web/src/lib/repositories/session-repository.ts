@@ -148,6 +148,40 @@ export const sessionRepository = {
   },
 
   /**
+   * The metadata a key needs to describe ITSELF (`GET /api/auth/key`).
+   *
+   * Scoped by `userId` as well as `tokenId` for the same reason
+   * `findMcpTokenByIdAndUser` is: the id comes from a validated credential, so
+   * the owner check can only ever hold — and it stays here so a future caller
+   * that gets its id from somewhere less trustworthy cannot read another
+   * person's key row through this method. Deliberately narrow: no token hash,
+   * and nothing about the owning USER, since the whole point of keeping
+   * `/api/auth/me` closed to mcp_* tokens is that holding a key must not yield
+   * the person behind it.
+   *
+   * `isScoped` is deliberately NOT selected. It records what the key was minted
+   * as; whether the key is confined RIGHT NOW is `isDriveScopedPrincipal`, read
+   * off the same `allowedDriveIds` every authorization decision uses. Returning
+   * the stored flag beside a live answer derived from something else would
+   * invite the two to disagree in the response — and the one case where they
+   * could (a scoped key whose drives were all deleted) never reaches any route
+   * at all: `validateMCPToken` fails it closed before authentication succeeds.
+   */
+  async findMcpTokenSelfById(tokenId: string, userId: string) {
+    const token = await db.query.mcpTokens.findFirst({
+      where: and(eq(mcpTokens.id, tokenId), eq(mcpTokens.userId, userId)),
+      columns: {
+        id: true,
+        name: true,
+        tokenPrefix: true,
+        createdAt: true,
+        lastUsed: true,
+      },
+    });
+    return token ?? null;
+  },
+
+  /**
    * Find an MCP token by ID and user (ownership check).
    */
   async findMcpTokenByIdAndUser(

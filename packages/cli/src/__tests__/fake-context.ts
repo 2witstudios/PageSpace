@@ -56,6 +56,9 @@ export function createFakeContext(overrides: Partial<HandlerContext> = {}): Hand
     stderr: createRecordingSink(),
     env: {},
     credentialStore: createFakeCredentialStore(),
+    // 'login' by default: the ambient credential a human running a command has.
+    // Tests that exercise the scoped-key refusals override it explicitly.
+    credentialKind: 'login',
     activeKeyStore: createFakeActiveKeyStore(),
     isTTY: false,
     prompt: async () => '',
