@@ -22,6 +22,7 @@ import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 
@@ -157,7 +158,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error: 'Write permission required',
-          details: `The '${operation}' operation requires edit access to this sheet`,
+          details: writeDeniedDetails(operation, 'sheet'),
         },
         { status: 403 }
       );

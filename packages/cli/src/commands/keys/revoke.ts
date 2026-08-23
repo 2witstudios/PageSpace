@@ -15,12 +15,21 @@
  * tests can call the plain function without going through the router.
  */
 import { revokeMcpToken } from '@pagespace/sdk';
+import { keysCommandNeedsLoginMessage } from '../../auth/credential-kind.js';
 import { confirmationFailureMessage, confirmDestructive } from '../../confirm.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
 import { parseTokensRevokeArgs } from './args.js';
 
 export const tokensRevoke: CommandHandler = async (ctx, intent) => {
+  // Refused before the confirmation prompt: asking a human to confirm a
+  // revocation this credential can never perform wastes the confirmation, and
+  // the server's refusal used to arrive as "your key was invalidated" (#2464).
+  if (ctx.credentialKind === 'key') {
+    ctx.stderr.write(`${keysCommandNeedsLoginMessage('revoke')}\n`);
+    return EXIT_RUNTIME_ERROR;
+  }
+
   const parsed = parseTokensRevokeArgs(intent.args);
   if (!parsed.ok) {
     ctx.stderr.write(`${parsed.message}\n`);

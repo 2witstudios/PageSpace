@@ -172,7 +172,7 @@ const SAMPLE_KEYS: readonly KeySummary[] = [
     id: 'tok1',
     name: 'CI bot',
     tokenPrefix: 'mcp_abcdefghijk',
-    driveScopes: [{ id: 'drv1', name: 'Engineering' }],
+    driveScopes: [{ id: 'drv1', name: 'Engineering', role: 'MEMBER', customRoleId: null, customRoleName: null }],
     createdAt: '2026-07-01T00:00:00.000Z',
     lastUsed: null,
     isScoped: true,
@@ -192,7 +192,7 @@ describe('renderKeysTable', () => {
   it('renders each key as a short vertical block with date-only timestamps, blank-line separated', () => {
     expect(renderKeysTable(SAMPLE_KEYS)).toEqual([
       'CI bot  mcp_abcdefghijk',
-      '  scopes: Engineering',
+      '  scopes: Engineering (member)',
       '  created 2026-07-01 · last used never',
       '',
       'All-drives key  mcp_zzzzzzzzzzz',
@@ -224,11 +224,11 @@ describe('renderKeysTable', () => {
       name: 'Everything key',
       tokenPrefix: 'mcp_qqqqqqqqqqq',
       driveScopes: [
-        { id: 'drv1', name: 'AIDD Agents' },
-        { id: 'drv2', name: 'PageSpace' },
-        { id: 'drv3', name: 'AI Agent Hub' },
-        { id: 'drv4', name: 'Marketing' },
-        { id: 'drv5', name: 'Engineering' },
+        { id: 'drv1', name: 'AIDD Agents', role: 'ADMIN', customRoleId: null, customRoleName: null },
+        { id: 'drv2', name: 'PageSpace', role: null, customRoleId: null, customRoleName: null },
+        { id: 'drv3', name: 'AI Agent Hub', role: null, customRoleId: 'role1', customRoleName: 'Researcher' },
+        { id: 'drv4', name: 'Marketing', role: 'MEMBER', customRoleId: null, customRoleName: null },
+        { id: 'drv5', name: 'Engineering', role: 'MEMBER', customRoleId: null, customRoleName: null },
       ],
       createdAt: '2026-04-30T16:15:07.553Z',
       lastUsed: '2026-07-06T09:00:00.000Z',
@@ -236,7 +236,7 @@ describe('renderKeysTable', () => {
     };
     expect(renderKeysTable([manyScopes])).toEqual([
       'Everything key  mcp_qqqqqqqqqqq',
-      '  scopes: AIDD Agents, PageSpace, AI Agent Hub +2 more',
+      '  scopes: AIDD Agents (admin), PageSpace (inherits your access), AI Agent Hub (Researcher) +2 more',
       '  created 2026-04-30 · last used 2026-07-06',
     ]);
   });
@@ -249,14 +249,14 @@ describe('renderKeysTable', () => {
 describe('keySelectOptions', () => {
   it('maps keys to select options, hinting their drive scopes', () => {
     expect(keySelectOptions(SAMPLE_KEYS)).toEqual([
-      { value: 'tok1', label: 'CI bot', hint: 'Engineering' },
+      { value: 'tok1', label: 'CI bot', hint: 'Engineering (member)' },
       { value: 'tok2', label: 'All-drives key', hint: 'all drives' },
     ]);
   });
 
   it('prefixes the currently active key\'s hint with "active" when its id is known', () => {
     expect(keySelectOptions(SAMPLE_KEYS, 'tok1')).toEqual([
-      { value: 'tok1', label: 'CI bot', hint: 'active · Engineering' },
+      { value: 'tok1', label: 'CI bot', hint: 'active · Engineering (member)' },
       { value: 'tok2', label: 'All-drives key', hint: 'all drives' },
     ]);
   });

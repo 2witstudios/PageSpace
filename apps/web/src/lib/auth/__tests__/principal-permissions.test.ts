@@ -12,6 +12,10 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   getDriveIdsForUser: vi.fn(),
   getUserAccessiblePagesInDriveWithDetails: vi.fn(),
   getBatchPagePermissions: vi.fn(),
+  getUserDrivePermissions: vi.fn(),
+}));
+vi.mock('@pagespace/lib/permissions/membership-queries', () => ({
+  getMemberCustomRoleId: vi.fn(),
 }));
 vi.mock('@pagespace/lib/permissions/app-permissions', () => ({
   getAppAccessLevel: vi.fn(),
@@ -48,6 +52,8 @@ import {
   getPrincipalAccessiblePagesInDrive,
   getPrincipalBatchPagePermissions,
   canManagePageWebhooks,
+  getPrincipalDriveAccessLevel,
+  getPrincipalDriveMembership,
 } from '../principal-permissions';
 import type { AuthResult } from '../index';
 import {
@@ -62,10 +68,14 @@ import {
   getDriveIdsForUser,
   getUserAccessiblePagesInDriveWithDetails,
   getBatchPagePermissions,
+  getUserDrivePermissions,
 } from '@pagespace/lib/permissions/permissions';
+import { getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 import {
   getAppAccessLevel,
+  getAppDriveAccessLevel,
   getAppDriveMembership,
+  getScopedDriveAccessLevel,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
   getScopedAccessLevel,
@@ -599,5 +609,78 @@ describe('a dispatched worker is authorized as the credential that STARTED the c
 
     expect(await canManagePageWebhooks(serviceFromScopedToken, PAGE_ID)).toBe(false);
     expect(isDriveOwnerOrAdmin).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The drive-level pair behind `GET /api/auth/key` (issue #2470). What matters
+ * is that each credential class routes to the resolver its CONTENT requests
+ * already go through — if this file grew its own permission arithmetic, the
+ * self-description could tell an agent it may write while the write path said
+ * otherwise.
+ */
+describe('getPrincipalDriveAccessLevel', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('resolves a scoped MCP token through the app-member resolver, keyed by the TOKEN', async () => {
+    vi.mocked(getAppDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
+    await expect(getPrincipalDriveAccessLevel(scopedMcpAuth, DRIVE_ID)).resolves.toEqual(VIEW_ONLY);
+    expect(getAppDriveAccessLevel).toHaveBeenCalledWith(TOKEN_ID, DRIVE_ID);
+    expect(getUserAccessLevel).not.toHaveBeenCalled();
+  });
+
+  it('resolves a drive-scoped OAuth token through the scope resolver', async () => {
+    vi.mocked(getScopedDriveAccessLevel).mockResolvedValue(VIEW_ONLY);
+    await expect(getPrincipalDriveAccessLevel(scopedOAuthAuth, DRIVE_ID)).resolves.toEqual(VIEW_ONLY);
+    expect(getScopedDriveAccessLevel).toHaveBeenCalledWith(DRIVE_SCOPES, USER_ID, DRIVE_ID);
+  });
+
+  it('resolves a session, an unscoped key and an account OAuth token as the user (drive-as-root-node)', async () => {
+    for (const auth of [sessionAuth, unscopedMcpAuth, accountOAuthAuth]) {
+      vi.mocked(getUserAccessLevel).mockResolvedValue(FULL);
+      await expect(getPrincipalDriveAccessLevel(auth, DRIVE_ID)).resolves.toEqual(FULL);
+      expect(getUserAccessLevel).toHaveBeenCalledWith(USER_ID, DRIVE_ID);
+    }
+  });
+});
+
+describe('getPrincipalDriveMembership', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the scoped key\'s own mcp_token_drives grant', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: 'MEMBER', customRoleId: null, ownerUserId: USER_ID });
+    await expect(getPrincipalDriveMembership(scopedMcpAuth, DRIVE_ID)).resolves.toEqual({ role: 'MEMBER', customRoleId: null });
+  });
+
+  it('preserves a null role as INHERIT rather than collapsing it to "no membership"', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue({ role: null, customRoleId: null, ownerUserId: USER_ID });
+    await expect(getPrincipalDriveMembership(scopedMcpAuth, DRIVE_ID)).resolves.toEqual({ role: null, customRoleId: null });
+  });
+
+  it('returns null when a scoped key has no grant in the drive', async () => {
+    vi.mocked(getAppDriveMembership).mockResolvedValue(null);
+    await expect(getPrincipalDriveMembership(scopedMcpAuth, DRIVE_ID)).resolves.toBeNull();
+  });
+
+  it('reads a drive-scoped OAuth token\'s membership from its scope rows', async () => {
+    vi.mocked(getScopedDriveMembership).mockReturnValue({ role: 'ADMIN', customRoleId: null });
+    await expect(getPrincipalDriveMembership(scopedOAuthAuth, DRIVE_ID)).resolves.toEqual({ role: 'ADMIN', customRoleId: null });
+  });
+
+  it('maps a user principal through getUserDrivePermissions, pairing it with the member\'s custom role', async () => {
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: false, isAdmin: false, isMember: true, canEdit: true });
+    vi.mocked(getMemberCustomRoleId).mockResolvedValue('role-1');
+    await expect(getPrincipalDriveMembership(sessionAuth, DRIVE_ID)).resolves.toEqual({ role: 'MEMBER', customRoleId: 'role-1' });
+  });
+
+  it('reports a drive owner as OWNER and never looks for a custom role', async () => {
+    vi.mocked(getUserDrivePermissions).mockResolvedValue({ hasAccess: true, isOwner: true, isAdmin: false, isMember: false, canEdit: true });
+    await expect(getPrincipalDriveMembership(sessionAuth, DRIVE_ID)).resolves.toEqual({ role: 'OWNER', customRoleId: null });
+    expect(getMemberCustomRoleId).not.toHaveBeenCalled();
+  });
+
+  it('returns null for a user with no drive access', async () => {
+    vi.mocked(getUserDrivePermissions).mockResolvedValue(null);
+    await expect(getPrincipalDriveMembership(sessionAuth, DRIVE_ID)).resolves.toBeNull();
   });
 });

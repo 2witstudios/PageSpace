@@ -31,18 +31,22 @@ import {
   getDriveIdsForUser,
   getUserAccessiblePagesInDriveWithDetails,
   getBatchPagePermissions,
+  getUserDrivePermissions,
   type PermissionLevel,
   type PageWithPermissions,
 } from '@pagespace/lib/permissions/permissions';
+import { getMemberCustomRoleId } from '@pagespace/lib/permissions/membership-queries';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import {
   getAppAccessLevel,
+  getAppDriveAccessLevel,
   getAppDriveMembership,
   getAppAccessiblePagesInDrive,
   hasAppDriveMembership,
   getScopedAccessLevel,
+  getScopedDriveAccessLevel,
   getScopedDriveMembership,
   getScopedAccessiblePagesInDrive,
   hasScopedDriveMembership,
@@ -262,6 +266,73 @@ export async function canManagePageWebhooks(auth: AuthResult, pageId: string): P
   if (!page?.driveId) return false;
 
   return isDriveOwnerOrAdmin(auth.userId, page.driveId);
+}
+
+/**
+ * The principal's DRIVE-level access — the four-flag answer for the drive as a
+ * whole, the same shape `getPrincipalAccessLevel` gives for a page.
+ *
+ * Exists so a credential can be told what it may do without having to find out
+ * by attempting a write and reading the refusal (issue #2470). Every branch
+ * delegates to the resolver the matching content route already authorizes
+ * through — `getAppDriveAccessLevel` for a scoped key, `getScopedDriveAccessLevel`
+ * for a drive-scoped OAuth token, `getUserAccessLevel` (drive-as-root-node) for a
+ * user principal — so what this reports and what a request is actually allowed to
+ * do cannot drift apart. Nothing here computes a permission itself.
+ */
+export async function getPrincipalDriveAccessLevel(
+  auth: AuthResult,
+  driveId: string,
+): Promise<PermissionLevel | null> {
+  auth = resolveDispatchedPrincipal(auth);
+  if (isManageKeysOnly(auth)) return null;
+  if (isScopedMCPAuth(auth)) {
+    return getAppDriveAccessLevel(auth.tokenId, driveId);
+  }
+  if (isScopedOAuthAuth(auth)) {
+    return getScopedDriveAccessLevel(auth.driveScopes, auth.userId, driveId);
+  }
+  return getUserAccessLevel(auth.userId, driveId);
+}
+
+/**
+ * How the principal holds its access in a drive, as granted rather than as
+ * resolved — the input side of {@link getPrincipalDriveAccessLevel}.
+ *
+ * `role: null` means INHERIT for a scoped credential (the key acts as its owner
+ * there); for a USER principal it means no drive-level membership at all. The
+ * two are told apart by the caller having asked for a drive the principal can
+ * reach in the first place — `getPrincipalDriveAccessLevel` returns null for a
+ * drive it cannot reach, which is the check worth branching on.
+ */
+export interface PrincipalDriveMembership {
+  readonly role: 'OWNER' | 'ADMIN' | 'MEMBER' | null;
+  readonly customRoleId: string | null;
+}
+
+export async function getPrincipalDriveMembership(
+  auth: AuthResult,
+  driveId: string,
+): Promise<PrincipalDriveMembership | null> {
+  auth = resolveDispatchedPrincipal(auth);
+  if (isManageKeysOnly(auth)) return null;
+  if (isScopedMCPAuth(auth)) {
+    const membership = await getAppDriveMembership(auth.tokenId, driveId);
+    return membership && { role: membership.role, customRoleId: membership.customRoleId };
+  }
+  if (isScopedOAuthAuth(auth)) {
+    const membership = getScopedDriveMembership(auth.driveScopes, driveId);
+    return membership && { role: membership.role, customRoleId: membership.customRoleId };
+  }
+
+  // User principal: the system role lives on `drive_members.role` (or on the
+  // drive's `ownerId`), which is what getUserDrivePermissions reads. Its result
+  // carries no custom-role id, so that comes from the one query that answers
+  // exactly this — never a second membership lookup written here.
+  const permissions = await getUserDrivePermissions(auth.userId, driveId);
+  if (!permissions?.hasAccess) return null;
+  const role = permissions.isOwner ? 'OWNER' : permissions.isAdmin ? 'ADMIN' : 'MEMBER';
+  return { role, customRoleId: role === 'OWNER' ? null : await getMemberCustomRoleId(driveId, auth.userId) };
 }
 
 /**
