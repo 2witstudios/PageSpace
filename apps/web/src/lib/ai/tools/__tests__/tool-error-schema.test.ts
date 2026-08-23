@@ -38,6 +38,42 @@ describe('describeToolSchema', () => {
     expect(parsed.required.sort()).toEqual(['newString', 'oldString']);
   });
 
+  it('must hand back the same payload the tool_search round trip would have', () => {
+    // THE PR'S ACTUAL CLAIM, asserted rather than described: the schema in a
+    // rejection IS the one the extra call would have fetched, so skipping that
+    // call loses nothing. Checked against `tool-search-tool.ts`'s own
+    // conversion over the whole registry — the only permitted difference is
+    // `required`, which is narrowed to what both rendering modes agree on
+    // (see `describeToolSchema`), and narrowing it can only ever REMOVE keys.
+    const tools = buildPageSpaceTools({ codeExecutionEnabled: true });
+    const divergent: string[] = [];
+
+    for (const [name, tool] of Object.entries(tools)) {
+      const rendered = describeToolSchema(name, tool.inputSchema);
+      let mine: Record<string, unknown>;
+      try {
+        mine = JSON.parse(rendered) as Record<string, unknown>;
+      } catch {
+        continue; // degraded rendering; covered by its own test
+      }
+      const theirs = z.toJSONSchema(tool.inputSchema as z.ZodType) as Record<string, unknown>;
+
+      const mineRequired = (mine.required as string[] | undefined) ?? [];
+      const theirsRequired = (theirs.required as string[] | undefined) ?? [];
+      if (!mineRequired.every((key) => theirsRequired.includes(key))) {
+        divergent.push(`${name}: required ${JSON.stringify(mineRequired)} is not a subset of ${JSON.stringify(theirsRequired)}`);
+      }
+
+      // Everything else — properties, types, patterns, enums, min/max — must be
+      // byte-identical, because that is the part the model builds the call from.
+      const strip = (o: Record<string, unknown>): string =>
+        JSON.stringify({ ...o, required: undefined });
+      if (strip(mine) !== strip(theirs)) divergent.push(`${name}: schema body differs from tool_search`);
+    }
+
+    expect(divergent).toEqual([]);
+  });
+
   it('must never report a field as required that the caller does not have to send', () => {
     // THE PART THAT CAN CAUSE A WRONG WRITE. Neither of zod's rendering modes
     // is right alone: the default marks `.default()` fields required, and
