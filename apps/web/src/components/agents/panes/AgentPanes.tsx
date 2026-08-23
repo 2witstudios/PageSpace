@@ -624,7 +624,8 @@ export default function AgentPanes({
 
   /**
    * Close a shell: kill the PTY, drop the row, and — since #2462 — take its
-   * pane with it, all in the route's one write.
+   * pane with it. The route kills the process first and then writes the row and
+   * the node together (see `killShellById` for why those are the two halves).
    *
    * **404 IS SUCCESS, because the route says so.** Its own doc states the
    * contract verbatim: "A shell that does not exist (or lives under a different
