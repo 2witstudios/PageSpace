@@ -80,6 +80,33 @@ Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input*
 |---|---|---|---|---|
 | `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns},recomputed}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
 
+### 2.6b Sheet rows (6 SDK operations)
+
+Not from the original `tools.js` inventory — the tabular surface added when sheets became
+row-backed, over `POST /api/mcp/sheets` (`apps/web/src/app/api/mcp/sheets/route.ts`). SDK
+namespace `sheets.*`; CLI verbs `pagespace sheets <verb>`. Each method is the camelCase of its
+wire `operation`, so the facade name and the request body cannot drift.
+
+Filters and sorts run against the MATERIALISED cell value, so a formula column compares as its
+result rather than its source. Row indexes are 0-based everywhere, matching the store.
+
+| SDK | CLI | Input | Response (route truth) |
+|---|---|---|---|
+| `sheets.queryRows` | `sheets query` | `pageId*`, `tabIndex`, `where`, `orderBy[]`, `select[]`, `limit`, `offset` | `{pageId, pageTitle, tabIndex, rows[]{rowIndex,cells}, total, hasMore}` |
+| `sheets.getRows` | `sheets rows` | `pageId*`, `tabIndex`, `fromRow`, `limit` | `{pageId, pageTitle, tabIndex, rows[], rowCount, columnCount, nextFromRow, hasMore}` |
+| `sheets.describe` | `sheets describe` | `pageId*`, `tabIndex` | `{pageId, pageTitle, tabs[]{tabIndex,name,rowCount,columnCount,frozenRows}}` |
+| `sheets.appendRows` | `sheets append` | `pageId*`, `tabIndex`, `rows*[]` (column letter → text) | `{pageId, pageTitle, firstRowIndex, appended, rowCount}` |
+| `sheets.updateCells` | `sheets update-cells` | `pageId*`, `tabIndex`, `cells*[]{address*,value*}` | `{pageId, pageTitle, cellsUpdated, recomputed, rowCount, columnCount}` |
+| `sheets.deleteRows` | `sheets delete-rows` | `pageId*`, `tabIndex`, `fromRow*`, `count*` | `{pageId, pageTitle, deleted, rowCount}` |
+
+`sheets.updateCells` and `pages.editCells` (§2.6) overlap deliberately: `editCells` reports richer
+per-cell stats but only ever addresses tab 0, while `updateCells` takes `tabIndex` and is therefore
+the only way to write to a second tab. `deleteRows` requires both bounds — neither is defaulted,
+because a guessed `count` deletes the wrong rows irreversibly.
+
+`nextFromRow` is a POSITION, not a count. A caller advancing by `rows.length` loops forever on a
+sparse tab (rows 0-9, then 500-509); following `nextFromRow` terminates.
+
 ### 2.7 Task management (6 tools)
 
 | Tool | Input | Call | Route | Response (route truth) |

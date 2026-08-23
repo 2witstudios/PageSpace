@@ -307,7 +307,24 @@ describe('pages.editCells — request shape', () => {
 });
 
 describe('pages.editCells — response contract', () => {
-  it('parses the edit-cells result', () => {
+  it('parses the edit-cells result, surfacing the recompute count', () => {
+    // The shape a current server sends. `recomputed` went unmodelled when
+    // sheets became row-backed, so `z.object` stripped it and a caller could
+    // not tell whether an edit had recalculated anything.
+    const fixture = {
+      pageId: 's1abc',
+      pageTitle: 'Budget',
+      cellsUpdated: 1,
+      operation: 'edit-cells',
+      stats: { valuesSet: 0, formulasSet: 1, cellsCleared: 0, sheetDimensions: { rows: 10, columns: 5 }, recomputed: 3 },
+      updatedCells: [{ address: 'A1', type: 'formula' }],
+    };
+    const result = parseResponse(editSheetCells, 200, new Headers(), JSON.stringify(fixture));
+    expect(result).toEqual(fixture);
+  });
+
+  it('still parses a server that predates the recompute count', () => {
+    // Mid-rolling-deploy. A required field would reject this valid response.
     const fixture = {
       pageId: 's1abc',
       pageTitle: 'Budget',

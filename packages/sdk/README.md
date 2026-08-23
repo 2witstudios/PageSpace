@@ -79,6 +79,7 @@ hand-written wrappers, no second-class tier. One example per namespace:
 |---|---|
 | `client.drives` | `client.drives.list({})` |
 | `client.pages` | `client.pages.create({ driveId, title, type: 'DOCUMENT' })` |
+| `client.sheets` | `client.sheets.queryRows({ pageId, where: { column: 'A', op: 'eq', value: 'open' } })` |
 | `client.roles` | `client.roles.setPagePermissions({ driveId, roleId, permissionsPatch })` |
 | `client.tasks` | `client.tasks.create({ pageId, title })` |
 | `client.agents` | `client.agents.ask({ agentId, question })` |

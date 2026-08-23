@@ -316,6 +316,17 @@ export const editSheetCells = defineOperation({
       formulasSet: z.number(),
       cellsCleared: z.number(),
       sheetDimensions: z.object({ rows: z.number(), columns: z.number() }),
+      /**
+       * Formula cells re-evaluated because an input moved — the transitive
+       * closure, not the sheet. Added to the route when sheets became
+       * row-backed; unmodelled here, `z.object` stripped it silently and
+       * callers could not see that an edit had recalculated anything.
+       *
+       * Optional because it is newer than the SDK's minimum server: a server
+       * mid-rolling-deploy still answers without it, and a required field
+       * would reject that otherwise-valid response outright.
+       */
+      recomputed: z.number().optional(),
     }),
     updatedCells: z.array(
       z.object({

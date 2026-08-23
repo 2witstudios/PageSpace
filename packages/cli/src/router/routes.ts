@@ -57,7 +57,15 @@ import {
   pagesTrashHandler,
   pagesTreeHandler,
 } from '../commands/pages.js';
-import { sheetsEditCellsHandler } from '../commands/sheets.js';
+import {
+  sheetsAppendHandler,
+  sheetsDeleteRowsHandler,
+  sheetsDescribeHandler,
+  sheetsEditCellsHandler,
+  sheetsQueryHandler,
+  sheetsRowsHandler,
+  sheetsUpdateCellsHandler,
+} from '../commands/sheets.js';
 import {
   tasksAssignedHandler,
   tasksCreateHandler,
@@ -133,6 +141,12 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['pages', 'read'], handler: pagesReadHandler, summary: 'Read page content' },
   { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler, summary: 'Replace a line range in a page' },
   { path: ['pages', 'export'], handler: pagesExportHandler, summary: 'Export a page to a file' },
+  { path: ['sheets', 'describe'], handler: sheetsDescribeHandler, summary: 'Show a sheet\'s tabs and dimensions' },
+  { path: ['sheets', 'query'], handler: sheetsQueryHandler, summary: 'Filter and sort sheet rows' },
+  { path: ['sheets', 'rows'], handler: sheetsRowsHandler, summary: 'Read sheet rows by position' },
+  { path: ['sheets', 'append'], handler: sheetsAppendHandler, summary: 'Append rows to a sheet' },
+  { path: ['sheets', 'update-cells'], handler: sheetsUpdateCellsHandler, summary: 'Write sheet cells by address (supports --tab)' },
+  { path: ['sheets', 'delete-rows'], handler: sheetsDeleteRowsHandler, summary: 'Delete a range of sheet rows' },
   { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler, summary: 'Edit sheet cells' },
   { path: ['trash', 'list'], handler: trashListHandler, summary: 'List trashed pages/drives' },
   { path: ['tasks', 'list'], handler: tasksListHandler, summary: 'List tasks' },

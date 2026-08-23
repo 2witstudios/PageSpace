@@ -7,6 +7,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
+  and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
+  sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
+  walks it in order, `append` adds rows, `update-cells` writes by address (and, unlike the older
+  `edit-cells`, can reach a second tab), and `delete-rows` removes a range. Filters match the values
+  you see, so a formula column compares as its result. Agents get the same six as MCP tools, and
+  they are on the SDK as `sheets.*` for anything building on top.
+
 - **Spreadsheets hold real data now** — a sheet used to be stored as one document that was rewritten
   from scratch on every cell edit, so a sheet with tens of thousands of rows took seconds to accept a
   single change and eventually stopped saving at all. Sheets are stored row by row, and editing one
