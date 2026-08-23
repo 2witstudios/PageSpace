@@ -28,6 +28,17 @@ import type { DbClient } from '../lib/migration-types';
 let db: TestDb;
 let tmpDir: string;
 let fileStoragePath: string;
+/**
+ * A SECOND, REAL storage root — not an alias of the first.
+ *
+ * Every case in this file used to pass `fileStoragePath` as BOTH roots, so the
+ * blob comparison hashed each file against itself: the one check here that can
+ * genuinely differ was, in every such case, guaranteed to match. Those
+ * assertions had never compared anything. This root holds an independent copy
+ * of the same fixture blobs, so a green result now means two directory trees
+ * actually agreed.
+ */
+let targetFileStoragePath: string;
 
 beforeAll(async () => {
   db = createTestDb();
@@ -50,6 +61,12 @@ beforeEach(async () => {
   const blobDir = path.join(fileStoragePath, 'test_file_blob_001');
   await mkdir(blobDir, { recursive: true });
   await writeFile(path.join(blobDir, 'data.txt'), '0123456789');
+
+  // The matching TARGET tree: same relative paths, same bytes, different root.
+  targetFileStoragePath = path.join(tmpDir, 'target-files');
+  const targetBlobDir = path.join(targetFileStoragePath, 'test_file_blob_001');
+  await mkdir(targetBlobDir, { recursive: true });
+  await writeFile(path.join(targetBlobDir, 'data.txt'), '0123456789');
 });
 
 afterEach(async () => {
@@ -62,17 +79,21 @@ afterEach(async () => {
  * HARNESS LIMITATION, stated once because three separate comments were arguing
  * about it.
  *
- * Every case in this file passes the SAME `db` handle as source and target, and
- * mostly the same storage path. `validateTable` runs one query object against
- * both, so `missingIds`/`extraIds` are always empty: a table's `passed`, and
- * therefore `result.passed`, is true for ANY predicate. Those assertions
- * document intent; they cannot fail, and they must not be read as evidence that
- * a predicate is right.
+ * Every case in this file passes the SAME `db` handle as source and target.
+ * `validateTable` runs one query object against both, so `missingIds`/
+ * `extraIds` are always empty: a table's `passed`, and therefore
+ * `result.passed`, is true for ANY predicate. Those assertions document intent;
+ * they cannot fail, and they must not be read as evidence that a predicate is
+ * right.
  *
  * `sourceCount` is the load-bearing assertion. It is a measurement of the
  * SOURCE population, which is exactly where every exporter/validator asymmetry
- * this file guards has lived. The file-blob comparison is the one check that
- * can genuinely differ, and only when a case passes two different paths.
+ * this file guards has lived.
+ *
+ * The file-blob comparison is the one check that CAN genuinely differ — and it
+ * only does when a case passes two different roots. It used to pass one root
+ * twice, hashing every blob against itself, so it differed nowhere. Cases now
+ * use `fileStoragePath` against `targetFileStoragePath`, two real trees.
  */
 describe('resolveSourceStorageRoot', () => {
   /**
@@ -117,8 +138,10 @@ describe('isSameStorageRoot', () => {
    * Both roots default to `./uploads`, so running the validator on the target
    * host after an import with neither path flag points both sides at the same
    * directory: every checksum matches, nothing is compared, success. This guard
-   * is what refuses that, and `main()` — where it is called — has no test, so it
-   * is asserted here instead of taken on faith.
+   * is what detects that. `validateData` calls it — gated on there actually
+   * being `files` rows to compare — and these cases pin its resolution rules
+   * directly, because the two-spellings behaviour is not visible from the
+   * end-to-end cases below.
    */
   it('detects the same directory reached by two different spellings', async () => {
     const real = path.join(tmpDir, 'same-root-real');
@@ -155,7 +178,7 @@ describe('validateData', () => {
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       sourceFileStoragePath: fileStoragePath,
-      targetFileStoragePath: fileStoragePath,
+      targetFileStoragePath,
     });
 
     expect(result.passed).toBe(true);
@@ -203,7 +226,7 @@ describe('validateData', () => {
         targetDatabaseUrl: getTestDatabaseUrl(),
         userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
         sourceFileStoragePath: fileStoragePath,
-        targetFileStoragePath: fileStoragePath,
+        targetFileStoragePath,
       });
 
     it('counts the DISCOVERED user themselves, not just the requested ones', async () => {
@@ -362,7 +385,7 @@ describe('validateData', () => {
         targetDatabaseUrl: getTestDatabaseUrl(),
         userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
         sourceFileStoragePath: fileStoragePath,
-        targetFileStoragePath: fileStoragePath,
+        targetFileStoragePath,
       });
 
     const countFor = async (table: string) => {
@@ -412,7 +435,7 @@ describe('validateData', () => {
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       sourceFileStoragePath: fileStoragePath,
-      targetFileStoragePath: fileStoragePath,
+      targetFileStoragePath,
     });
 
     const pagesResult = result.tableResults.find((r) => r.table === 'pages');
@@ -476,6 +499,62 @@ describe('validateData', () => {
     });
     expect(result.fileResults.passed).toBe(true);
     expect(result.fileResults.mismatches).toEqual([]);
+  });
+
+  it('passes with no file rows even when both roots are the SAME defaulted path', async () => {
+    // The regression this guard's PLACEMENT caused. Both CLI flags default to
+    // `./uploads`, so a file-less migration validated without either flag hands
+    // `validateData` one path twice. While the self-comparison check sat
+    // unconditionally in `main()` — before any query ran — that invocation
+    // exited(1) having validated NOT ONE TABLE, even though `validateData`
+    // deliberately passes a zero-file population two lines up.
+    //
+    // With the check gated on `fileStorageData.length > 0` there is nothing
+    // that could self-compare, so the run is green and the tables are checked.
+    await db.execute(sql.raw(`DELETE FROM files`));
+    const bothRoots = resolveSourceStorageRoot(undefined);
+    expect(bothRoots, 'the CLI default both flags fall back to').toBe('./uploads');
+
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: bothRoots,
+      targetFileStoragePath: bothRoots,
+    });
+
+    expect(result.fileResults.mismatches).toEqual([]);
+    expect(result.passed).toBe(true);
+    // …and the tables were actually validated, which is what the old placement
+    // skipped entirely.
+    expect(result.tableResults).toHaveLength(TABLE_IMPORT_ORDER.length);
+  });
+
+  it('FAILS when there ARE file rows and both roots resolve to one directory', async () => {
+    // The false pass the guard exists for: every blob hashed against itself,
+    // every checksum equal, nothing compared, green. Two spellings of the one
+    // directory, because a string compare would wave the second through.
+    const asLink = path.join(tmpDir, 'self-compare-link');
+    await symlink(fileStoragePath, asLink, 'dir');
+
+    for (const [label, targetRoot] of [
+      ['the identical path', fileStoragePath],
+      ['a symlink to it', asLink],
+      ['a trailing separator', fileStoragePath + path.sep],
+    ] as [string, string][]) {
+      const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+        sourceDatabaseUrl: getTestDatabaseUrl(),
+        targetDatabaseUrl: getTestDatabaseUrl(),
+        userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+        sourceFileStoragePath: fileStoragePath,
+        targetFileStoragePath: targetRoot,
+      });
+
+      expect(result.fileResults.passed, label).toBe(false);
+      expect(result.passed, label).toBe(false);
+      expect(result.fileResults.mismatches.map((m) => m.reason).join(), label)
+        .toMatch(/resolve to the same directory/);
+    }
   });
 
   it('does not fault a file whose storagePath escapes the storage root — the export skipped it', async () => {
@@ -583,7 +662,7 @@ describe('validateData', () => {
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       sourceFileStoragePath: fileStoragePath,
-      targetFileStoragePath: fileStoragePath,
+      targetFileStoragePath,
     });
 
     const tableNames = result.tableResults.map((r) => r.table);
@@ -600,7 +679,7 @@ describe('validateData', () => {
       targetDatabaseUrl: getTestDatabaseUrl(),
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
       sourceFileStoragePath: fileStoragePath,
-      targetFileStoragePath: fileStoragePath,
+      targetFileStoragePath,
     });
 
     const find = (t: string) => result.tableResults.find((r) => r.table === t)!;

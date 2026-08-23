@@ -135,11 +135,11 @@ function isUsableDirectory(candidate: string): boolean {
 /**
  * Whether the two storage roots are the same directory.
  *
- * Extracted and exported so the guard is TESTABLE. `main()` has no test
- * anywhere in this file, and the previous round of this work shipped an
- * untestable guarantee that turned out to be theatre — an arity assertion a
- * defaulted parameter walked straight past. A guard whose whole job is to stop
- * a false pass should not itself be unverified.
+ * Extracted and exported so the guard is TESTABLE in isolation. Its resolution
+ * rules are subtle enough to deserve their own cases, and the previous round of
+ * this work shipped an untestable guarantee that turned out to be theatre — an
+ * arity assertion a defaulted parameter walked straight past. A guard whose
+ * whole job is to stop a false pass should not itself be unverified.
  *
  * `realpathSync` rather than a string compare so two spellings of one directory
  * — a symlink, a relative path, a trailing slash — cannot slip through. Falls
@@ -501,6 +501,31 @@ export async function validateData(
     });
   }
 
+  // A SELF-COMPARISON is the same false pass, reached from the other side.
+  //
+  // Both CLI roots default to `./uploads`, so running the validator on the
+  // target host after an import with neither path flag points both sides at one
+  // directory: every checksum matches itself and the run reports success having
+  // compared nothing. Removing `FILE_STORAGE_PATH` from the source fallback
+  // closed one route to that; the defaults are the other.
+  //
+  // Gated on `fileStorageData.length > 0` for the same reason as the check
+  // above, and this is the whole point of it living HERE rather than at the CLI
+  // boundary: with no `files` rows there is nothing that could self-compare, so
+  // an identical pair proves nothing and hides nothing. Refusing it at the CLI
+  // made a file-less migration exit(1) having validated not one table.
+  //
+  // Reported as a file mismatch rather than thrown or exited, so the caller
+  // gets the same machine-readable verdict as every other file finding and the
+  // TABLE results still get computed and printed.
+  if (fileStorageData.length > 0 && isSameStorageRoot(sourceFileStoragePath, targetFileStoragePath)) {
+    fileMismatches.push({
+      file: sourceFileStoragePath,
+      reason: 'source and target file storage paths resolve to the same directory — '
+        + 'comparing a directory against itself proves nothing about the migration',
+    });
+  }
+
   const allTablesPassed = tableResults.every((r) => r.passed);
   const filesPassed = fileMismatches.length === 0;
 
@@ -538,28 +563,13 @@ async function main(): Promise<void> {
   const userIds = usersArg.split(',').map((s) => s.trim()).filter(Boolean);
   validateIds(userIds, 'user ID');
 
-  // REFUSE A SELF-COMPARISON. Both roots default to `./uploads`, so running
-  // this on the target host after an import with neither path flag points both
-  // sides at the same directory: every checksum matches, nothing is compared,
-  // and the run reports success. Removing `FILE_STORAGE_PATH` from the source
-  // fallback closed one route to that; the defaults are the other.
-  //
-  // Checked here rather than inside `validateData` on purpose: identical roots
-  // are meaningless for an OPERATOR but are a legitimate harness pattern, and
-  // eight cases in the test suite rely on it. The operator error lives at the
-  // CLI boundary, which is where the bad defaults are.
-  //
-  // `realpathSync` so two spellings of one directory — a symlink, a relative
-  // path, a trailing slash — cannot slip through a string comparison.
-  if (isSameStorageRoot(sourceFileStoragePath, targetFileStoragePath)) {
-    console.error(
-      `Refusing to run: --source-file-path and --target-file-path resolve to the same directory `
-      + `(${sourceFileStoragePath}). Comparing a directory against itself proves nothing about the `
-      + `migration — pass both explicitly.`,
-    );
-    process.exit(1);
-  }
-
+  // NO SELF-COMPARISON GUARD HERE. It used to live at this boundary, where it
+  // ran unconditionally and BEFORE any database work: a migration scope with no
+  // `files` rows, validated with neither path flag, exited(1) with both roots
+  // defaulted to `./uploads` having checked not one table — while `validateData`
+  // deliberately passes a zero-file population. The guard now sits beside the
+  // readable-directory check in `validateData`, gated on the same
+  // `fileStorageData.length > 0` condition, and reports as a file mismatch.
   console.log('Validating migration integrity...');
 
   const result = await runValidation({
