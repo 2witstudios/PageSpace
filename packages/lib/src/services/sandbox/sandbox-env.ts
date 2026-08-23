@@ -68,11 +68,22 @@ export const SANDBOX_BASE_ENV = {
  */
 const SANDBOX_ENV_ALLOWLIST: readonly (keyof ServerEnv)[] = [];
 
+/**
+ * @param allowlist Injected ONLY so the forwarding rule stays testable while the
+ * production allowlist is empty. With nothing to forward, a test against the
+ * real allowlist proves nothing — every "this secret does not reach the sandbox"
+ * assertion passes vacuously, and deleting the loop outright would keep the
+ * suite green — so the tests hand in a fixture allowlist and check the rule that
+ * will matter the day a key is added back: allowlisted keys pass, everything
+ * else stays out, and a sandbox-owned value still wins. Production never passes
+ * it.
+ */
 export function buildSandboxEnv({
   env,
-}: { env: Partial<ServerEnv> }): Record<string, string> {
+  allowlist = SANDBOX_ENV_ALLOWLIST,
+}: { env: Partial<ServerEnv>; allowlist?: readonly (keyof ServerEnv)[] }): Record<string, string> {
   const forwarded: Record<string, string> = {};
-  for (const key of SANDBOX_ENV_ALLOWLIST) {
+  for (const key of allowlist) {
     const value = env[key];
     if (typeof value === 'string') {
       forwarded[key] = value;

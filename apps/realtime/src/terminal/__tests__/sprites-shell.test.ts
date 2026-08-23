@@ -319,11 +319,15 @@ describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
 
     expect(sprite.createSession).toHaveBeenCalledTimes(1);
     const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
+    // Built in the implementation's own precedence — base first, this surface's
+    // tty settings last — so that if a `TERM`/`LANG` is ever added to the base,
+    // this expectation follows the documented ownership instead of firing as a
+    // false alarm against code doing exactly what it promises.
     expect(options.env).toEqual({
+      ...SANDBOX_BASE_ENV,
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LANG: 'en_US.UTF-8',
-      ...SANDBOX_BASE_ENV,
     });
     // Guards the DIRECTION that matters: a key the sandbox base gains and the
     // PTY does not fails here. (It cannot prove the PTY references the shared
@@ -1120,7 +1124,7 @@ describe('openPtyShell', () => {
       tty: true,
       cols: 80,
       rows: 24,
-      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8', ...SANDBOX_BASE_ENV },
+      env: { ...SANDBOX_BASE_ENV, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
     });
   });
 
@@ -1136,7 +1140,7 @@ describe('openPtyShell', () => {
         tty: true,
         cols: 80,
         rows: 24,
-        env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8', ...SANDBOX_BASE_ENV },
+        env: { ...SANDBOX_BASE_ENV, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
       },
     );
   });
