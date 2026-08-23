@@ -37,6 +37,15 @@ import type { ServerEnv } from '../../config/env-validation';
  * behaviour (every `NODE_ENV` branch in this repo — logging, cookies, checkpoint
  * policy, rate limits — evaluates on the host, never in a sandbox).
  *
+ * It does of course reach OTHER people's code, which is the point and also the
+ * cost: a cloned repo whose bundler keys off `NODE_ENV` (`mode: process.env
+ * .NODE_ENV || 'production'` is everywhere) now produces a DEVELOPMENT build —
+ * unminified, React in dev mode — where it used to produce a production one. That
+ * is the right default for a machine whose whole job is to install a toolchain
+ * and run tests, and it is recoverable per command (`NODE_ENV=production npm run
+ * build`), whereas the failure it replaces was silent: an install that reported
+ * success and left nothing to run.
+ *
  * `PYTHONUNBUFFERED=1`: CPython block-buffers stdout when it is a pipe rather
  * than a tty, so a long python job behind a filter (`… | grep -v noise`) shows
  * NOTHING in the terminal pane until it exits (#2468). It is set HERE, rather
@@ -56,8 +65,19 @@ export const SANDBOX_BASE_ENV = {
 } as const satisfies Record<string, string>;
 
 /**
- * Host env keys forwarded verbatim into a sandbox. Each must be non-secret and
- * safe to expose to untrusted code. Adding a key here is a security decision.
+ * The host env keys that are ELIGIBLE to be forwarded into a sandbox — reviewed,
+ * one at a time, as non-secret and safe to hand to untrusted code.
+ *
+ * This union is the security decision, and it is deliberately a TYPE: the
+ * allowlist below is typed by it, and so is the test seam on
+ * {@link buildSandboxEnv}, so no caller anywhere — test, future refactor, or
+ * mistake — can name `ENCRYPTION_KEY` or `DATABASE_URL` and have it compile. A
+ * secret reaches a sandbox only by someone widening this union in a diff.
+ */
+type ForwardableEnvKey = Extract<keyof ServerEnv, 'NODE_ENV' | 'SENTRY_DSN' | 'WEB_APP_URL'>;
+
+/**
+ * Host env keys actually forwarded verbatim into a sandbox.
  *
  * Deliberately EMPTY: no property of the host process is currently a fact the
  * sandbox needs (`NODE_ENV` was the last one, and it was actively wrong — see
@@ -66,7 +86,7 @@ export const SANDBOX_BASE_ENV = {
  * non-secret key is added here explicitly, and everything else stays excluded by
  * construction.
  */
-const SANDBOX_ENV_ALLOWLIST: readonly (keyof ServerEnv)[] = [];
+const SANDBOX_ENV_ALLOWLIST: readonly ForwardableEnvKey[] = [];
 
 /**
  * @param allowlist Injected ONLY so the forwarding rule stays testable while the
@@ -76,12 +96,13 @@ const SANDBOX_ENV_ALLOWLIST: readonly (keyof ServerEnv)[] = [];
  * suite green — so the tests hand in a fixture allowlist and check the rule that
  * will matter the day a key is added back: allowlisted keys pass, everything
  * else stays out, and a sandbox-owned value still wins. Production never passes
- * it.
+ * it, and {@link ForwardableEnvKey} means it could not be abused to forward a
+ * secret if it did.
  */
 export function buildSandboxEnv({
   env,
   allowlist = SANDBOX_ENV_ALLOWLIST,
-}: { env: Partial<ServerEnv>; allowlist?: readonly (keyof ServerEnv)[] }): Record<string, string> {
+}: { env: Partial<ServerEnv>; allowlist?: readonly ForwardableEnvKey[] }): Record<string, string> {
   const forwarded: Record<string, string> = {};
   for (const key of allowlist) {
     const value = env[key];

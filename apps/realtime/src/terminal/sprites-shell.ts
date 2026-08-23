@@ -6,7 +6,8 @@ import type {
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { isAgentActive } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
-import { SANDBOX_BASE_ENV } from '@pagespace/lib/services/sandbox/sandbox-env';
+import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
+import type { ServerEnv } from '@pagespace/lib/config/env-validation';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   EMPTY_SEEN,
@@ -533,8 +534,12 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * The interactive shell's environment.
  *
  * The tty settings are this surface's own (a batch `runCommand` has no terminal
- * to describe), but everything else comes from {@link SANDBOX_BASE_ENV} — the
- * same base the `bash` tool builds on (`buildSandboxEnv`). The two surfaces used
+ * to describe); everything else is whatever `buildSandboxEnv` says, called here
+ * exactly as the `bash` tool calls it. Deliberately the FUNCTION and not a copy
+ * of {@link SANDBOX_BASE_ENV}: the parity is then structural, so a host key
+ * added to the forwarding allowlist later reaches both surfaces at once instead
+ * of reaching the tool and quietly skipping every terminal — which is #2466's
+ * failure mode returning under a different key. The two surfaces used
  * to disagree: the tool forwarded the host's `NODE_ENV` while the PTY set none,
  * so the same sandbox answered `env | grep NODE_ENV` differently depending on
  * which tool asked, and an agent that debugged a failing `npm install` in the
@@ -549,10 +554,17 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * sessions do not survive a Sprite pause either, so the window closes on its own.
  */
 const TERMINAL_ENV = {
-  // Base first, tty settings last: the ownership the docblock describes has to
-  // hold at runtime too, so a `TERM`/`LANG` added to the sandbox base for the
-  // batch tool can never quietly reset this surface's terminal type or locale.
-  ...SANDBOX_BASE_ENV,
+  // Sandbox env first, tty settings last: the ownership the docblock describes
+  // has to hold at runtime too, so a `TERM`/`LANG` that ever reaches the sandbox
+  // env can never quietly reset this surface's terminal type or locale.
+  //
+  // The source is the raw `process.env`, NOT `getValidatedEnv()`, for the same
+  // reason `resolveSpritesToken` reads it raw: this service's lean env does not
+  // satisfy the full web schema, so validating here would throw and take every
+  // terminal down. Nothing is trusted about the shape — `buildSandboxEnv` reads
+  // only the keys its allowlist names and ignores non-string values — so the
+  // wider input cannot widen what a sandbox receives.
+  ...buildSandboxEnv({ env: process.env as Partial<ServerEnv> }),
   TERM: 'xterm-256color',
   COLORTERM: 'truecolor',
   LANG: 'en_US.UTF-8',

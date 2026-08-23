@@ -5,6 +5,7 @@ import { buildSandboxEnv, SANDBOX_BASE_ENV } from '../sandbox-env';
 // leak into an untrusted sandbox.
 const hostEnv = {
   NODE_ENV: 'production' as const,
+  SENTRY_DSN: 'https://public@sentry.example/42',
   DATABASE_URL: 'postgresql://user:supersecret@db.internal:5432/app',
   CSRF_SECRET: 'csrf-secret-value-that-is-long-enough-aaaaa',
   ENCRYPTION_KEY: 'encryption-key-value-that-is-long-enough-bbbb',
@@ -106,19 +107,36 @@ describe('buildSandboxEnv', () => {
   // — is actually exercised.
 
   it('given a non-empty allowlist, should forward exactly those keys and no others', () => {
-    const env = buildSandboxEnv({ env: hostEnv, allowlist: ['SENTRY_DSN', 'CRON_SECRET'] });
-    expect(env.CRON_SECRET).toBe(hostEnv.CRON_SECRET);
-    // Every other host key — secrets included — is still excluded by construction.
+    const env = buildSandboxEnv({ env: hostEnv, allowlist: ['SENTRY_DSN'] });
+    expect(env.SENTRY_DSN).toBe(hostEnv.SENTRY_DSN);
+    // Every other host key — every secret in the fixture — is still excluded by
+    // construction, which is the assertion that was vacuous while the production
+    // allowlist (and therefore the loop's input) was empty.
     expect(env).not.toHaveProperty('DATABASE_URL');
     expect(env).not.toHaveProperty('ENCRYPTION_KEY');
     expect(env).not.toHaveProperty('STRIPE_SECRET_KEY');
-    expect(Object.keys(env).sort()).toEqual(['CRON_SECRET', 'NODE_ENV', 'PYTHONUNBUFFERED']);
+    expect(env).not.toHaveProperty('CRON_SECRET');
+    expect(Object.keys(env).sort()).toEqual(['NODE_ENV', 'PYTHONUNBUFFERED', 'SENTRY_DSN']);
   });
 
   it('given an allowlisted key absent from the host env, should omit it rather than copy an undefined', () => {
     const env = buildSandboxEnv({ env: { DATABASE_URL: 'x' } as never, allowlist: ['SENTRY_DSN'] });
     expect(env).not.toHaveProperty('SENTRY_DSN');
     expect(Object.values(env).every((value) => typeof value === 'string')).toBe(true);
+  });
+
+  it('should not even let a caller NAME a secret as forwardable', () => {
+    // A TYPE-level assertion, and deliberately so: `allowlist` is typed by
+    // ForwardableEnvKey, a reviewed union of non-secret keys, so a test, a
+    // refactor, or a mistake cannot turn this seam into a leak. The runtime does
+    // not enforce it (the loop forwards whatever it is handed) — `tsc` does, and
+    // `@ts-expect-error` IS the check: if the union ever widens far enough to
+    // admit a secret, this directive becomes unused and the typecheck FAILS.
+    type Allowlist = NonNullable<Parameters<typeof buildSandboxEnv>[0]['allowlist']>;
+    // @ts-expect-error ENCRYPTION_KEY is not a forwardable key
+    const forbidden: Allowlist = ['ENCRYPTION_KEY'];
+    const allowed: Allowlist = ['SENTRY_DSN'];
+    expect([forbidden, allowed]).toHaveLength(2);
   });
 
   it('given a sandbox-owned key ON the allowlist, should still refuse the host value', () => {

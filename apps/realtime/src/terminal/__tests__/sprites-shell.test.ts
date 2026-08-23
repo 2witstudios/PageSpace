@@ -3,7 +3,7 @@ import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, planWatchdogResponse, planTeardown, sessionIds } from '../sprites-shell';
 import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
-import { SANDBOX_BASE_ENV, buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
+import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
 import { TASK_HOLD_AGENT_IDLE_MS } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -319,21 +319,20 @@ describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
 
     expect(sprite.createSession).toHaveBeenCalledTimes(1);
     const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
-    // Built in the implementation's own precedence — base first, this surface's
-    // tty settings last — so that if a `TERM`/`LANG` is ever added to the base,
-    // this expectation follows the documented ownership instead of firing as a
-    // false alarm against code doing exactly what it promises.
+    // Built from the same CALL the implementation makes, in the same precedence
+    // (sandbox env first, this surface's tty settings last). Deriving it from
+    // `buildSandboxEnv` rather than from a literal is what makes this a parity
+    // test: a key that starts reaching the bash tool has to reach the terminal
+    // too, or this fails.
     expect(options.env).toEqual({
-      ...SANDBOX_BASE_ENV,
+      ...buildSandboxEnv({ env: process.env as never }),
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',
       LANG: 'en_US.UTF-8',
     });
-    // Guards the DIRECTION that matters: a key the sandbox base gains and the
-    // PTY does not fails here. (It cannot prove the PTY references the shared
-    // constant rather than repeating its values — a hardcoded literal would
-    // pass both assertions — but a divergence in content is what breaks agents.)
-    expect(options.env).toMatchObject(buildSandboxEnv({ env: { NODE_ENV: 'production' } }));
+    // And specifically: a host running in production cannot make this terminal
+    // say so — the sandbox owns NODE_ENV on both surfaces (#2466).
+    expect(options.env.NODE_ENV).toBe('development');
   });
 });
 
@@ -1124,7 +1123,7 @@ describe('openPtyShell', () => {
       tty: true,
       cols: 80,
       rows: 24,
-      env: { ...SANDBOX_BASE_ENV, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+      env: { ...buildSandboxEnv({ env: process.env as never }), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
     });
   });
 
@@ -1140,7 +1139,7 @@ describe('openPtyShell', () => {
         tty: true,
         cols: 80,
         rows: 24,
-        env: { ...SANDBOX_BASE_ENV, TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+        env: { ...buildSandboxEnv({ env: process.env as never }), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
       },
     );
   });
