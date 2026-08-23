@@ -1756,7 +1756,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     close_pane: tool({
       description:
-        'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
+        'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. A TERMINAL pane is the one to think twice about: closing it takes the pane, NOT the shell. The process keeps running and you can still reach it with send_shell/read_shell, but nobody watching this workspace can see it any more — use kill_shell when you mean to be done with it, which closes its pane for you. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
       inputSchema: closePaneInputSchema,
       execute: async ({ nodeId }, options) =>
         runLayoutCommand(readContext(options), { type: 'close', nodeId }),
