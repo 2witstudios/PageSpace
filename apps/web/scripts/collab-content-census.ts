@@ -31,17 +31,24 @@
  * Trashed pages are included: a restored page is seeded like any other, so its
  * content is as much at stake.
  *
+ * TEMPORARY BY DESIGN: this is Phase B input. Once COLLAB_SCHEMA_VERSION v1 is
+ * frozen and the decision recorded, this script and src/lib/editor/census/
+ * should be deleted rather than maintained — the drift guard, not a re-run of
+ * the census, is what keeps the schema honest afterwards.
+ *
  * Lives under apps/web/scripts/ rather than repo-root scripts/ because it needs
  * apps/web's own @tiptap deps and the live extension list, neither of which the
  * root workspace can resolve (same constraint as redteam-sandbox-injection.ts).
  *
- * Run from the repo root, with DATABASE_URL pointing at the database to census:
+ * Run from apps/web, with DATABASE_URL pointing at the database to census:
  *
- *   bun --tsconfig-override apps/web/scripts/tsconfig.census.json \
- *     apps/web/scripts/collab-content-census.ts
+ *   cd apps/web && bun run census
  *
- * The tsconfig override is what teaches bun the `@/*` alias that apps/web
- * source uses; without it the extension list's own imports do not resolve.
+ * (`bun run --filter web census` from the repo root works too, but turbo-style
+ * line prefixes end up in the report; the report is the whole output here.)
+ * That script wraps a `--tsconfig-override` — see tsconfig.census.json for why
+ * bun needs to be told about the `@/*` alias. Only the report goes to stdout,
+ * so `> census.txt` captures it and nothing else.
  *
  * Options:
  *   --limit N           stop after N documents (a smoke run before the full one)
@@ -54,8 +61,9 @@
 import { getMigrationDb, getMigrationPool } from '@pagespace/db/db';
 import { pages } from '@pagespace/db/schema/core';
 import { and, asc, eq, gt, sql } from '@pagespace/db/operators';
+import { getSchema } from '@tiptap/core';
 import { buildRichEditorExtensions } from '../src/lib/editor/rich-editor-extensions';
-import { createConstructScanner } from '../src/lib/editor/census/constructs';
+import { createDomWorkspace } from '../src/lib/editor/census/constructs';
 import { analyzeHtmlDocument } from '../src/lib/editor/census/round-trip';
 import { markdownConstructs } from '../src/lib/editor/census/markdown';
 import { createCensusAccumulator, formatCensusReport } from '../src/lib/editor/census/report';
@@ -97,8 +105,12 @@ async function main(): Promise<void> {
   const db = getMigrationDb();
   assertReadOnlySession((await db.execute(sql`SHOW default_transaction_read_only`)).rows);
 
-  const extensions = buildRichEditorExtensions({ readOnly: false, isPaginated: false });
-  const scanner = createConstructScanner();
+  // isPaginated: false — PaginationPlus decorates the view for printing and
+  // contributes nothing to what is stored, so a paginated page's CONTENT is the
+  // same content. readOnly only adds the placeholder, which has no schema.
+  // round-trip.test.ts holds all four combinations to one schema.
+  const schema = getSchema(buildRichEditorExtensions({ readOnly: false, isPaginated: false }));
+  const workspace = createDomWorkspace();
   const census = createCensusAccumulator();
 
   let interrupted = false;
@@ -121,19 +133,23 @@ async function main(): Promise<void> {
       const batch = await db
         .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode })
         .from(pages)
-        .where(after === null ? eq(pages.type, 'DOCUMENT') : and(eq(pages.type, 'DOCUMENT'), gt(pages.id, after)))
+        // `and()` drops an undefined operand, so the first batch and every
+        // batch after it state the DOCUMENT filter once.
+        .where(and(eq(pages.type, 'DOCUMENT'), after === null ? undefined : gt(pages.id, after)))
         .orderBy(asc(pages.id))
         .limit(Math.min(options.batchSize, remaining));
 
       if (batch.length === 0) break;
 
       for (const page of batch) {
-        if (page.content.trim() === '') {
+        // /\S/ rather than trim(): a whole-string copy per document, for a
+        // question answered by the first non-space character.
+        if (!/\S/.test(page.content)) {
           census.recordEmpty(page.contentMode);
         } else if (page.contentMode === 'markdown') {
           census.recordMarkdown(page.id, markdownConstructs(page.content));
         } else {
-          census.recordHtml(page.id, analyzeHtmlDocument(page.content, extensions, scanner));
+          census.recordHtml(page.id, analyzeHtmlDocument(page.content, schema, workspace));
         }
 
         scanned += 1;
@@ -146,7 +162,7 @@ async function main(): Promise<void> {
     }
   } finally {
     process.off('SIGINT', onInterrupt);
-    scanner.close();
+    workspace.close();
     await getMigrationPool().end();
   }
 

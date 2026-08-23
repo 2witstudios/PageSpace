@@ -1,6 +1,7 @@
-import type { Extensions } from '@tiptap/core';
-import { generateHTML, generateJSON } from '@tiptap/html/server';
-import { droppedConstructs, type ConstructScanner } from './constructs';
+import type { Schema } from '@tiptap/pm/model';
+import { DOMParser as ProseMirrorDOMParser, DOMSerializer } from '@tiptap/pm/model';
+import { projectContent } from '@pagespace/lib/content/anchoring/text-projection';
+import { collectConstructs, droppedConstructs, type DomWorkspace } from './constructs';
 
 export type HtmlDocumentAnalysis =
   | {
@@ -27,32 +28,55 @@ export type HtmlDocumentAnalysis =
     };
 
 /**
- * Runs one stored document through HTML -> ProseMirror -> HTML against the live
- * editor schema and reports what did not survive.
+ * One stored document through HTML -> ProseMirror -> HTML against the live
+ * editor schema, returned as markup.
  *
- * `@tiptap/html/server` rather than the browser build: it drives happy-dom
- * internally, which is the DOM `@tiptap/html@3` declares as its peer, so this
- * needs no global DOM shim and no headless browser.
+ * This is what `@tiptap/html`'s `generateJSON` + `generateHTML` do, minus the
+ * per-call schema build, the two throwaway windows and the JSON hop the census
+ * never reads — see `DomWorkspace`. Exported so the test can hold it against
+ * the wrapper's own output.
  */
+export function roundTripHtml(html: string, schema: Schema, workspace: DomWorkspace): string {
+  return roundTrip(workspace.parse(html), schema, workspace).innerHTML;
+}
+
+function roundTrip(source: ReturnType<DomWorkspace['parse']>, schema: Schema, workspace: DomWorkspace) {
+  const parsed = ProseMirrorDOMParser.fromSchema(schema).parse(source as unknown as Node);
+  const output = workspace.empty();
+  DOMSerializer.fromSchema(schema).serializeFragment(
+    parsed.content,
+    { document: workspace.document },
+    output as unknown as HTMLElement,
+  );
+  return output;
+}
+
 export function analyzeHtmlDocument(
   html: string,
-  extensions: Extensions,
-  scanner: ConstructScanner,
+  schema: Schema,
+  workspace: DomWorkspace,
 ): HtmlDocumentAnalysis {
   try {
-    // An empty document has nothing to lose. Round-tripping it would compare
-    // '' against TipTap's `<p></p>` and report every empty page as changed.
-    if (html.trim() === '') {
+    // Defence for callers other than the CLI, which routes empty content to the
+    // `empty` tally before it gets here. Round-tripping '' would compare it
+    // against TipTap's `<p></p>` and report every empty page as changed.
+    if (!/\S/.test(html)) {
       return { status: 'analysed', dropped: [], textPreserved: true };
     }
 
-    const source = scanner.scan(html);
-    const output = scanner.scan(generateHTML(generateJSON(html, extensions), extensions));
+    const source = workspace.parse(html);
+    const constructs = collectConstructs(source);
+    const output = roundTrip(source, schema, workspace);
 
     return {
       status: 'analysed',
-      dropped: droppedConstructs(source, output),
-      textPreserved: output.text === source.text,
+      dropped: droppedConstructs(constructs, collectConstructs(output)),
+      // projectContent is the repo's shared page-text flattener: it ends a run
+      // of text at every block boundary and drops <script>/<style> bodies.
+      // Element.textContent does neither, so two paragraphs merging into one
+      // would read as "no text lost" — exactly the loss this signal exists to
+      // catch.
+      textPreserved: projectContent(output.innerHTML, 'html') === projectContent(html, 'html'),
     };
   } catch (error) {
     return {

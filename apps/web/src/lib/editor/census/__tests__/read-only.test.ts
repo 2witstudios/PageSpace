@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { READ_ONLY_SESSION_SQL, assertReadOnlySession, enforceReadOnlySession } from '../read-only-session';
@@ -41,13 +41,15 @@ describe('enforceReadOnlySession', () => {
  * no census source may contain a write.
  */
 describe('the census is read-only by construction', () => {
+  // Globbed, not listed: a hand-written inventory is how a file ends up
+  // unscanned while the test stays green (the same lesson scripts/vitest.config.ts
+  // records). Opting a file out has to be a visible edit here.
+  const censusDir = 'src/lib/editor/census';
   const sources = [
     'scripts/collab-content-census.ts',
-    'src/lib/editor/census/constructs.ts',
-    'src/lib/editor/census/round-trip.ts',
-    'src/lib/editor/census/markdown.ts',
-    'src/lib/editor/census/report.ts',
-    'src/lib/editor/census/read-only-session.ts',
+    ...readdirSync(path.join(appRoot, censusDir))
+      .filter((entry) => entry.endsWith('.ts'))
+      .map((entry) => `${censusDir}/${entry}`),
   ];
 
   // Comments are stripped first: the script's own header explains that it never
@@ -71,6 +73,11 @@ describe('the census is read-only by construction', () => {
     for (const write of writes) {
       expect(code).not.toMatch(write);
     }
+  });
+
+  it('scans every census module, not a list that can go stale', () => {
+    expect(sources).toContain(`${censusDir}/round-trip.ts`);
+    expect(sources.length).toBeGreaterThan(5);
   });
 
   it('strips comments before scanning, but not code that follows one', () => {

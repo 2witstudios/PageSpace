@@ -38,13 +38,8 @@ export interface ConstructTally {
   examplePageIds: string[];
 }
 
-export interface FailureTally {
-  errorName: string;
-  pages: number;
-  examplePageIds: string[];
-}
-
 export interface CensusTotals {
+  /** Derived in `snapshot()` from html + markdown, never counted by hand. */
   documents: number;
   html: number;
   markdown: number;
@@ -64,7 +59,8 @@ export interface CensusSnapshot {
   totals: CensusTotals;
   htmlConstructs: ConstructTally[];
   markdownConstructs: ConstructTally[];
-  failures: FailureTally[];
+  /** Keyed by error type rather than construct — see `recordHtml`. */
+  failures: ConstructTally[];
 }
 
 export interface CensusAccumulator {
@@ -98,8 +94,7 @@ export function createCensusAccumulator(): CensusAccumulator {
   const htmlTallies: Tallies = new Map(TRACKED_HTML_CONSTRUCTS.map((construct) => [construct, { pages: 0, examplePageIds: [] }]));
   const markdownTallies: Tallies = new Map();
   const failureTallies: Tallies = new Map();
-  const totals: CensusTotals = {
-    documents: 0,
+  const totals: Omit<CensusTotals, 'documents'> = {
     html: 0,
     markdown: 0,
     empty: 0,
@@ -110,7 +105,6 @@ export function createCensusAccumulator(): CensusAccumulator {
 
   return {
     recordHtml(pageId, analysis) {
-      totals.documents += 1;
       totals.html += 1;
 
       if (analysis.status === 'failed') {
@@ -121,6 +115,8 @@ export function createCensusAccumulator(): CensusAccumulator {
 
       // A page carrying three <img> is one page for this count. The census is
       // asked how many DOCUMENTS a v1 omission would damage, not how many tags.
+      // `droppedConstructs` already returns a de-duplicated list; the Set here
+      // makes that a guarantee of this counter rather than of its caller.
       for (const construct of new Set(analysis.dropped)) {
         tally(htmlTallies, construct, pageId);
       }
@@ -134,7 +130,6 @@ export function createCensusAccumulator(): CensusAccumulator {
     },
 
     recordMarkdown(pageId, constructs) {
-      totals.documents += 1;
       totals.markdown += 1;
       for (const construct of new Set(constructs)) {
         tally(markdownTallies, construct, pageId);
@@ -142,7 +137,6 @@ export function createCensusAccumulator(): CensusAccumulator {
     },
 
     recordEmpty(contentMode) {
-      totals.documents += 1;
       totals.empty += 1;
       if (contentMode === 'markdown') {
         totals.markdown += 1;
@@ -153,14 +147,10 @@ export function createCensusAccumulator(): CensusAccumulator {
 
     snapshot() {
       return {
-        totals: { ...totals },
+        totals: { ...totals, documents: totals.html + totals.markdown },
         htmlConstructs: rows(htmlTallies),
         markdownConstructs: rows(markdownTallies),
-        failures: rows(failureTallies).map(({ construct, pages, examplePageIds }) => ({
-          errorName: construct,
-          pages,
-          examplePageIds,
-        })),
+        failures: rows(failureTallies),
       };
     },
   };
@@ -203,7 +193,7 @@ export function formatCensusReport(snapshot: CensusSnapshot, { partial }: { part
   if (snapshot.failures.length > 0) {
     lines.push(
       'Documents the round trip could not process (error type only — never content)',
-      ...snapshot.failures.map((row) => `  ${row.errorName}  ${row.pages}  ${row.examplePageIds.join(' ')}`),
+      ...snapshot.failures.map((row) => `  ${row.construct}  ${row.pages}  ${row.examplePageIds.join(' ')}`),
       '',
     );
   }

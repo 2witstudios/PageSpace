@@ -15,17 +15,42 @@ export interface DocumentConstructs {
   elements: Set<string>;
   /** Tag name -> attribute construct keys carried by that tag. */
   attributesByElement: Map<string, Set<string>>;
-  /**
-   * The document's visible text, whitespace-collapsed, for comparing a document
-   * against its own round trip. It never leaves the process: only the boolean
-   * "was any text lost" reaches the report.
-   */
-  text: string;
 }
 
-export interface ConstructScanner {
-  scan(html: string): DocumentConstructs;
+/**
+ * The DOM the census parses into, serializes back out of, and walks — one
+ * window for the whole run.
+ *
+ * happy-dom rather than jsdom or zeed-dom: it is the DOM `@tiptap/html@3`
+ * declares as its peer, so the census works with the same implementation
+ * TipTap's own server-side round trip uses. The census drives ProseMirror
+ * directly instead of calling that wrapper, because `generateJSON`/
+ * `generateHTML` rebuild the schema and stand up a fresh window on every call —
+ * ~2.5ms per document of setup the census would pay tens of thousands of times.
+ * `round-trip.test.ts` pins the two paths to the same output.
+ */
+export interface DomWorkspace {
+  /** Parses stored markup into a detached element. */
+  parse(html: string): DomElement;
+  /** A detached element to serialize a round-tripped document into. */
+  empty(): DomElement;
+  /** The document ProseMirror's `DOMSerializer` creates its nodes from. */
+  document: Document;
   close(): void;
+}
+
+/**
+ * happy-dom's `Element` is structurally the DOM's, but its `Window` is not
+ * `lib.dom`'s, so the two type universes do not meet. The census only ever
+ * needs these members; naming them beats casting the whole tree to `any`.
+ */
+export interface DomElement {
+  innerHTML: string;
+  querySelectorAll(selector: string): Iterable<{
+    tagName: string;
+    getAttributeNames(): string[];
+    getAttribute(name: string): string | null;
+  }>;
 }
 
 /**
@@ -60,27 +85,13 @@ function attributeKeys(name: string, value: string): string[] {
 }
 
 /**
- * Whitespace is not content: TipTap re-indents its output, so comparing raw
- * text would report every document as changed for the same reason comparing
- * raw markup does. Non-breaking spaces collapse too — a `&nbsp;` that comes
- * back as a plain space has not lost anything a reader would miss.
- */
-function normalizeText(text: string): string {
-  return text.replace(/[\s\u00a0]+/g, ' ').trim();
-}
-
-/**
  * One happy-dom `Window` reused across every document in the run. The census
- * streams tens of thousands of pages and parses each one twice (source and
- * round trip); a window per parse is the difference between a scan and an
- * afternoon. Each scan parses into a fresh detached element, so nothing leaks
+ * streams tens of thousands of pages and handles each one twice (source and
+ * round trip); a window per document is the difference between a scan and an
+ * afternoon. Every parse gets a fresh detached element, so nothing leaks
  * between documents.
- *
- * happy-dom rather than jsdom or zeed-dom: it is the DOM `@tiptap/html@3`
- * declares as its peer, so the census parses HTML with the same implementation
- * the round trip serializes it with.
  */
-export function createConstructScanner(): ConstructScanner {
+export function createDomWorkspace(): DomWorkspace {
   const window = new Window({
     settings: {
       disableJavaScriptEvaluation: true,
@@ -91,38 +102,45 @@ export function createConstructScanner(): ConstructScanner {
     },
   });
 
+  const empty = (): DomElement => window.document.createElement('div') as unknown as DomElement;
+
   return {
-    scan(html: string): DocumentConstructs {
-      const elements = new Set<string>();
-      const attributesByElement = new Map<string, Set<string>>();
-      const container = window.document.createElement('div');
+    empty,
+    parse(html: string): DomElement {
+      const container = empty();
       container.innerHTML = html;
-
-      for (const element of container.querySelectorAll('*')) {
-        const tag = element.tagName.toLowerCase();
-        elements.add(tag);
-
-        let attributes = attributesByElement.get(tag);
-        for (const name of element.getAttributeNames()) {
-          const value = element.getAttribute(name) ?? '';
-          for (const key of attributeKeys(name.toLowerCase(), value)) {
-            if (!attributes) {
-              attributes = new Set<string>();
-              attributesByElement.set(tag, attributes);
-            }
-            attributes.add(key);
-          }
-        }
-      }
-
-      return { elements, attributesByElement, text: normalizeText(container.textContent) };
+      return container;
     },
-
+    document: window.document as unknown as Document,
     close(): void {
-      void window.happyDOM.abort();
+      // close() aborts the window's async tasks on its way out; abort() as well
+      // would just be the older, narrower half of the same call.
       void window.happyDOM.close();
     },
   };
+}
+
+export function collectConstructs(container: DomElement): DocumentConstructs {
+  const elements = new Set<string>();
+  const attributesByElement = new Map<string, Set<string>>();
+
+  for (const element of container.querySelectorAll('*')) {
+    const tag = element.tagName.toLowerCase();
+    elements.add(tag);
+
+    const names = element.getAttributeNames();
+    if (names.length === 0) continue;
+
+    const attributes = attributesByElement.get(tag) ?? new Set<string>();
+    attributesByElement.set(tag, attributes);
+    for (const name of names) {
+      for (const key of attributeKeys(name.toLowerCase(), element.getAttribute(name) ?? '')) {
+        attributes.add(key);
+      }
+    }
+  }
+
+  return { elements, attributesByElement };
 }
 
 /**

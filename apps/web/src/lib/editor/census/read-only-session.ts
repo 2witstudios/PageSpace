@@ -16,6 +16,12 @@ interface ReadOnlyCapablePool {
 }
 
 /**
+ * Nothing in `packages/db` advertises that a caller can flip the shared
+ * migration pool read-only, so this stays local to the census while it is the
+ * only read-only consumer. A second one is the signal to promote it to a
+ * `getReadOnlyDb()` beside `getMigrationDb()`, where import order cannot
+ * bypass it — a move, not a rewrite.
+ *
  * Registers the guard on a `pg.Pool` BEFORE it opens its first connection.
  * node-postgres queues queries per client, so the `SET` issued from `connect`
  * always runs ahead of whatever the census asks that connection for.

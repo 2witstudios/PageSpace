@@ -9,6 +9,7 @@
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
+    "census": "bun --tsconfig-override scripts/tsconfig.census.json scripts/collab-content-census.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },

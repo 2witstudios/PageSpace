@@ -75,7 +75,7 @@ describe('createCensusAccumulator', () => {
     accumulator.recordHtml('p2', { status: 'failed', errorName: 'RangeError' });
 
     const snapshot = accumulator.snapshot();
-    expect(snapshot.failures).toEqual([{ errorName: 'RangeError', pages: 2, examplePageIds: ['p1', 'p2'] }]);
+    expect(snapshot.failures).toEqual([{ construct: 'RangeError', pages: 2, examplePageIds: ['p1', 'p2'] }]);
     expect(snapshot.totals.failed).toBe(2);
   });
 

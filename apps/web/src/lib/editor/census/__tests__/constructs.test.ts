@@ -1,17 +1,18 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { createConstructScanner, droppedConstructs } from '../constructs';
+import { collectConstructs, createDomWorkspace, droppedConstructs } from '../constructs';
 
-const scanner = createConstructScanner();
-afterAll(() => scanner.close());
+const workspace = createDomWorkspace();
+afterAll(() => workspace.close());
+const scan = (html: string) => collectConstructs(workspace.parse(html));
 
-describe('createConstructScanner', () => {
+describe('collectConstructs', () => {
   it('collects every element tag name in the document', () => {
-    const constructs = scanner.scan('<p>a</p><figure><img src="x.png"></figure>');
+    const constructs = scan('<p>a</p><figure><img src="x.png"></figure>');
     expect([...constructs.elements].sort()).toEqual(['figure', 'img', 'p']);
   });
 
   it('collects inline style properties as style: keys, per element', () => {
-    const constructs = scanner.scan('<p style="text-align: center; color: red">a</p>');
+    const constructs = scan('<p style="text-align: center; color: red">a</p>');
     expect([...(constructs.attributesByElement.get('p') ?? [])].sort()).toEqual([
       'style:color',
       'style:text-align',
@@ -19,13 +20,13 @@ describe('createConstructScanner', () => {
   });
 
   it('keeps the value of data-type, because taskList is a value not an attribute', () => {
-    const constructs = scanner.scan('<ul data-type="taskList"><li data-checked="true">a</li></ul>');
+    const constructs = scan('<ul data-type="taskList"><li data-checked="true">a</li></ul>');
     expect(constructs.attributesByElement.get('ul')).toContain('attr:data-type=taskList');
     expect(constructs.attributesByElement.get('li')).toContain('attr:data-checked');
   });
 
   it('normalises style property names, so one construct is not counted as three', () => {
-    const constructs = scanner.scan('<p style="TEXT-ALIGN: center; ;  color:red;">a</p>');
+    const constructs = scan('<p style="TEXT-ALIGN: center; ;  color:red;">a</p>');
     expect([...(constructs.attributesByElement.get('p') ?? [])].sort()).toEqual([
       'style:color',
       'style:text-align',
@@ -33,29 +34,22 @@ describe('createConstructScanner', () => {
   });
 
   it('records no attribute keys for an element that carries none', () => {
-    const constructs = scanner.scan('<p>a</p>');
+    const constructs = scan('<p>a</p>');
     expect(constructs.attributesByElement.has('p')).toBe(false);
   });
 
   it('returns nothing for empty content', () => {
-    const constructs = scanner.scan('');
+    const constructs = scan('');
     expect(constructs.elements.size).toBe(0);
     expect(constructs.attributesByElement.size).toBe(0);
-    expect(constructs.text).toBe('');
   });
 
-  it('collapses whitespace in the text it captures, so re-indentation is not a change', () => {
-    expect(scanner.scan('<p>one\n   two</p><p>\tthree </p>').text).toBe('one two three');
-  });
 
-  it('collapses a non-breaking space too', () => {
-    expect(scanner.scan('<p>one&nbsp;two</p>').text).toBe('one two');
-  });
 });
 
 describe('droppedConstructs', () => {
   const dropped = (source: string, output: string) =>
-    droppedConstructs(scanner.scan(source), scanner.scan(output));
+    droppedConstructs(scan(source), scan(output));
 
   it('reports an element present in the source and absent from the round trip', () => {
     expect(dropped('<p>a</p><img src="x.png">', '<p>a</p>')).toEqual(['<img>']);

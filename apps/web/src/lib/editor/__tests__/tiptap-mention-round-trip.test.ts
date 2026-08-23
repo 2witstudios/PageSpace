@@ -21,25 +21,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import { generateHTML, generateJSON } from '@tiptap/core';
-import StarterKit from '@tiptap/starter-kit';
 import * as cheerio from 'cheerio';
-import { PageMention } from '../tiptap-mention-config';
+import { buildRichEditorExtensions } from '../rich-editor-extensions';
 
-// The schema-affecting subset of RichEditor.tsx's list that this behaviour
-// depends on: StarterKit contributes the `link` mark that used to win the `<a>`.
-const extensions = [
-  StarterKit.configure({
-    heading: { levels: [1, 2, 3] },
-    link: {
-      openOnClick: true,
-      autolink: true,
-      linkOnPaste: true,
-      defaultProtocol: 'https',
-    },
-    codeBlock: false,
-  }),
-  PageMention,
-];
+// The list RichEditor actually mounts, not a subset of it: the bug these tests
+// cover is one extension's parse rule beating another's, so a schema assembled
+// here from the parts we think matter is a schema that cannot reproduce it.
+const extensions = buildRichEditorExtensions({ readOnly: false, isPaginated: false });
 
 interface MentionAttrs {
   id: string | null;

@@ -18,8 +18,12 @@ describe('markdownConstructs', () => {
     expect(markdownConstructs('### a\n')).toEqual([]);
   });
 
-  it('finds a raw HTML block', () => {
-    expect(markdownConstructs('<figure><img src="a.png"></figure>\n')).toContain('md:html-block');
+  it('finds raw HTML', () => {
+    expect(markdownConstructs('<figure><img src="a.png"></figure>\n')).toContain('md:raw-html');
+  });
+
+  it('finds constructs inside a table cell, which hangs off no token list', () => {
+    expect(markdownConstructs('| a | b |\n| --- | --- |\n| ![alt](a.png) | x |\n')).toContain('md:image');
   });
 
   it('finds highlight, footnote and strikethrough syntax', () => {
@@ -32,8 +36,8 @@ describe('markdownConstructs', () => {
     expect(markdownConstructs('```md\n![alt](a.png)\n- [ ] todo\n```\n')).toEqual([]);
   });
 
-  it('closes a fence only on a fence line, so an unterminated fence swallows the rest', () => {
-    expect(markdownConstructs('```\n![alt](a.png)\n')).toEqual([]);
+  it('ignores syntax inside an indented code block and a backtick span', () => {
+    expect(markdownConstructs('    ![alt](a.png)\n\nInline `![alt](b.png)` here.\n')).toEqual([]);
   });
 
   it('returns a sorted list, so the report is stable between runs', () => {
