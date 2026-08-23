@@ -6,17 +6,6 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **The `keys describe` hint printed after a mint is now runnable.** It omitted `--key`, so with a
-  personal login and no active key — the state you are in right after `keys create` — the printed
-  command hit `run.ts`'s explicit-credential gate and was refused. It also interpolated the key name
-  into a shell command unquoted, so `--name "lead gen"` printed `--key lead gen`. It now emits
-  `--key=<name>`, shell-quoted: the equals form is required because a name beginning with `-`
-  survives quote-stripping as an argv word `parseArgv` rejects as a flag value.
-- **The mint no longer swallows why a permission readback was skipped.** When the server returns a
-  refresh credential instead of a static token there is no bearer to ask with; without
-  `--show-token` that path had stopped saying so.
-- **`keys describe`'s usage line and the README** now state that it needs a content credential
-  named — it is the one `keys` verb that reports on one.
 - **`keys create --name ""` is refused instead of minting an unusable key.** A blank name arrived as
   an empty string rather than as "absent", so the key was stored under `""` — and `--key`, the key
   env var and `keys use` all treat a blank name as no name, so nothing could ever select it again.
@@ -33,6 +22,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   "reads fine, every write fails" shape #2470 was about. It is the one `keys` verb a key can run,
   and it describes only itself — never the other keys you hold. The same summary now closes `keys create` and the
   `pagespace keys` wizard's Create flow, and it is served as an MCP tool (`tokens.describeSelf`).
+  Unlike its `keys` siblings it reports on a *content* credential, so it needs one named —
+  `--key=<name>`, `--token`, the env vars, or an active key — which is what the hint printed after a
+  mint now gives you, shell-quoted so a key named with a space or a leading dash still pastes.
 - **`pagespace keys list` shows the role granted on each drive**, including custom roles by name and
   inherit scopes spelled out, instead of the drive name alone.
 

@@ -5,14 +5,6 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ## [Unreleased]
 
-### Fixed
-
-- **The command printed after minting a key now works when you paste it.** `pagespace keys create`
-  ends by telling you how to see what the new key can do, and that line was wrong twice over: it
-  omitted the key's name, so with only a personal login it was refused outright, and a key named
-  with a space or a leading dash produced a command the shell took apart. It now names the key and
-  quotes it.
-
 ### Added
 
 - **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
