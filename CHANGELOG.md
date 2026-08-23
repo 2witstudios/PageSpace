@@ -188,8 +188,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
   watching the terminal exactly nothing. The holding happens inside the programs themselves, not in
   PageSpace, so the shell tools now explain it and say what to type instead of guessing that the job
-  died; Python programs, the commonest offender, now flush as they go in a sandbox without anyone
-  having to ask.
+  died; Python programs, the commonest offender, flush as they go in every shell opened from here on,
+  without anyone having to ask. A shell that was already running when this shipped keeps the
+  environment it started with — close it and open a new one to pick up the change.
 - **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
   agent sandboxes and environments were all refused, because the gate asked which subscription plan
   the account was on and a dedicated deployment has no plan to be on: the deployment itself is what

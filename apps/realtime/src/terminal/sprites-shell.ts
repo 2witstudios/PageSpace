@@ -539,7 +539,14 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * so the same sandbox answered `env | grep NODE_ENV` differently depending on
  * which tool asked, and an agent that debugged a failing `npm install` in the
  * terminal was looking at a different environment from the one that ran it
- * (#2466). They are now one env by construction.
+ * (#2466). They are now one env for every shell this process STARTS.
+ *
+ * Reattach is the exception, and it cannot be otherwise: `attachSession` joins a
+ * process that is already running, and a running process's environment is fixed
+ * at spawn. So a shell created before this shipped keeps the env it was born
+ * with — including the old `NODE_ENV=production` — for as long as it lives, and
+ * the way out is to kill it and open a fresh one, not to reconnect. Exec
+ * sessions do not survive a Sprite pause either, so the window closes on its own.
  */
 const TERMINAL_ENV = {
   TERM: 'xterm-256color',

@@ -68,6 +68,21 @@ describe('session + shell + layout tools — frozen wire contract', () => {
     ]);
   });
 
+  it('no tool description exceeds the 1024-character ceiling every hosted provider enforces', () => {
+    // A tool description is not free-form room: OpenAI rejects a
+    // `tools[n].function.description` over 1024 characters outright, and the
+    // cloud models here are served through OpenRouter, which forwards the tool
+    // definitions to the vendor verbatim. Crossing it does not degrade THIS
+    // tool — the whole request 400s, so every turn in a conversation that
+    // registers session tools fails, for a reason no error message ties back to
+    // a description. Guidance that does not fit belongs in the tool's RESULT or
+    // in the system prompt, not here.
+    const overLong = Object.entries(wireSurface())
+      .map(([name, { description }]) => ({ name, length: description?.length ?? 0 }))
+      .filter((entry) => entry.length > 1024);
+    expect(overLong).toEqual([]);
+  });
+
   it('every tool description and JSON input schema is byte-identical to the pinned contract', () => {
     expect(wireSurface()).toEqual({
       list_sessions: {
@@ -150,7 +165,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       spawn_shell: {
         description:
-          'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell. Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes. LONG JOB YOU INTEND TO POLL — how you launch it decides whether read_shell can see it: NEVER end the pipeline in `| tail -N` (tail prints nothing until its input ENDS, so the pane stays empty however healthy the job is — read_shell already returns only the tail), and unbuffer every stage EXCEPT the last one (the last stage writes to this terminal and flushes on its own; every earlier stage writes to a PIPE and block-buffers). Simplest reliable shape: `stdbuf -oL cmd 2>&1 | grep -v noise` — `stdbuf -oL` works on ordinary C/stdio programs, python needs `-u` instead (`python3 -u …`; PYTHONUNBUFFERED is already set in this sandbox) and node needs nothing. Or drop the pipeline entirely: `cmd > /workspace/job.log 2>&1 &` and poll it from the bash tool with `tail -n 50 /workspace/job.log` (a flushing producer is still required — a block-buffered one fills the file just as late).',
+          'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell. Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes. For a long job you mean to POLL, launch it so read_shell can see it: never end the pipeline in `| tail -N` (tail prints nothing until its input ENDS), and unbuffer every stage but the last — only the last writes to this terminal, the rest write to a PIPE and block-buffer. So `stdbuf -oL cmd 2>&1 | grep -v noise` (stdbuf works on C/stdio programs; python needs `python3 -u` instead; node needs nothing), or skip the pipeline entirely with `cmd > /workspace/job.log 2>&1 &` and poll it from the bash tool via `tail -n 50 /workspace/job.log`.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',

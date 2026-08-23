@@ -313,29 +313,6 @@ describe('sessionIds (pure)', () => {
  * returned, so the id is known authoritatively and cannot be confused with a
  * sibling terminal's — no `listSessions()` diffing, no `is_active` guessing.
  */
-describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
-  it('given a fresh shell, spawns it with the SAME sandbox base env the bash tool builds, plus this surface\'s tty settings', () => {
-    // The two surfaces used to disagree — the bash tool forwarded the host's
-    // NODE_ENV while the PTY set none — so the same sandbox answered
-    // `env | grep NODE_ENV` differently depending on which tool asked.
-    const cmd = buildFakeCommand();
-    const sprite = buildFakeSprite(cmd);
-
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
-
-    expect(sprite.createSession).toHaveBeenCalledTimes(1);
-    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
-    expect(options.env).toEqual({
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      LANG: 'en_US.UTF-8',
-      ...SANDBOX_BASE_ENV,
-    });
-    // Not a copy of the values: whatever the sandbox base says, the terminal says.
-    expect(options.env).toMatchObject(buildSandboxEnv({ env: { NODE_ENV: 'production' } }));
-  });
-});
-
 describe('openPtyShell session identity (from create, not list-diffing)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
@@ -414,6 +391,29 @@ describe('openPtyShell session identity (from create, not list-diffing)', () => 
  * detached shell must not FOLLOW every trip with a fresh exec connection, and
  * must reattach lazily the moment a viewer actually returns.
  */
+describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
+  it('given a fresh shell, spawns it with the SAME sandbox base env the bash tool builds, plus this surface\'s tty settings', () => {
+    // The two surfaces used to disagree — the bash tool forwarded the host's
+    // NODE_ENV while the PTY set none — so the same sandbox answered
+    // `env | grep NODE_ENV` differently depending on which tool asked.
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.createSession).toHaveBeenCalledTimes(1);
+    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
+    expect(options.env).toEqual({
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'en_US.UTF-8',
+      ...SANDBOX_BASE_ENV,
+    });
+    // Not a copy of the values: whatever the sandbox base says, the terminal says.
+    expect(options.env).toMatchObject(buildSandboxEnv({ env: { NODE_ENV: 'production' } }));
+  });
+});
+
 describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
