@@ -323,7 +323,8 @@ describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
 
     openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
 
-    const options = sprite.createSession.mock.calls[0]?.at(-1) as { env: Record<string, string> };
+    expect(sprite.createSession).toHaveBeenCalledTimes(1);
+    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
     expect(options.env).toEqual({
       TERM: 'xterm-256color',
       COLORTERM: 'truecolor',

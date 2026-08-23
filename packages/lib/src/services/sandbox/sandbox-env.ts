@@ -47,10 +47,10 @@ import type { ServerEnv } from '../../config/env-validation';
  *
  * These are sandbox-owned: a forwarded host key can never override one.
  */
-export const SANDBOX_BASE_ENV: Readonly<Record<string, string>> = {
+export const SANDBOX_BASE_ENV = {
   NODE_ENV: 'development',
   PYTHONUNBUFFERED: '1',
-};
+} as const satisfies Record<string, string>;
 
 /**
  * Host env keys forwarded verbatim into a sandbox. Each must be non-secret and
