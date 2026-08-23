@@ -282,7 +282,7 @@ export async function resolveShellById(shellId: string): Promise<ResolveSessionS
 }
 
 /**
- * Close a shell — the PTY, the ROW and the PANE, in one transaction.
+ * Close a shell — the PTY first, then the ROW and the PANE in one transaction.
  *
  * **THE MIRROR OF {@link spawnShell}, and it was missing.** Spawn wrapped the
  * row and the node that shows it in one membership write; kill terminated the
@@ -344,14 +344,14 @@ export async function killShellById(input: {
   // why this is not inside the transaction. A failure here means we learned
   // NOTHING about the process, so nothing is written at all: the row and the
   // pane both stay, and the caller retries.
-  const process = await killShellProcess({
+  const ptyKill = await killShellProcess({
     row,
     deps: {
       host,
       resolveSessionSandboxId: async (workspaceId) => resolveOwningSandboxId(sessionStore, workspaceId),
     },
   });
-  if (!process.ok) return { ok: false, reason: 'error' };
+  if (!ptyKill.ok) return { ok: false, reason: 'error' };
 
   let killed: KillSessionShellResult = { ok: false, reason: 'error' };
   // The pane this kill closes, read from the tree the decision ran against —
@@ -393,8 +393,9 @@ export async function killShellById(input: {
     // tidy up — and `nodeId` is the pane this kill took off the screen.
     return killedWithPanes(killed, written.snapshot.nodes, closedNodeId);
   } catch (error) {
-    // The kill was refused and the node write went back with it. Nothing was
-    // removed and nothing was left half-removed; the caller retries.
+    // The ROW drop was refused and the node write went back with it, so the
+    // workspace still holds the shell and still shows it. The process is
+    // already dead — see the residue note above, which this is the path to.
     if (error instanceof ShellKillRefused) return { ok: false, reason: 'error' };
     throw error;
   }

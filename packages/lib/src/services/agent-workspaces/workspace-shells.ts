@@ -284,8 +284,8 @@ export async function killSessionShellById({
   if (!plan.ok) return { ok: false, reason: 'error' };
   if (plan.action === 'noop' || !row) return { ok: true, killed: false };
 
-  const process = await killShellProcess({ row, deps });
-  if (!process.ok) return process;
+  const ptyKill = await killShellProcess({ row, deps });
+  if (!ptyKill.ok) return ptyKill;
 
   return dropSessionShellRow({ shellId, deps });
 }

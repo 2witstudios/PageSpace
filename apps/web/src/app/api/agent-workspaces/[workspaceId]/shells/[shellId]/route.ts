@@ -2,8 +2,9 @@
  * One shell — kill it.
  *
  * DELETE → 200 { ok: true, killed } — terminate the PTY (if one was ever
- * launched), drop the row, and REMOVE THE PANE bound to it, all in one
- * transaction; the session's SANDBOX is untouched. The pane's removal is what
+ * launched), then drop the row and REMOVE THE PANE bound to it in one
+ * transaction (the process dies first and outside the workspace lock — see
+ * `killShellById`); the session's SANDBOX is untouched. The pane's removal is what
  * makes this the inverse of the spawn (issue #2462): it broadcasts, so every
  * browser watching the workspace loses the tab, rather than each of them
  * keeping a pane bound to a terminal that no longer exists. A shell that
