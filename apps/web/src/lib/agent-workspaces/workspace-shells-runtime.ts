@@ -381,7 +381,15 @@ export async function killShellById(input: {
       within: async (tx) => {
         // The ROW, on the transaction that is writing the node — the pair this
         // function exists to keep together. Nothing here leaves the database.
-        killed = await dropSessionShellRow({ shellId, deps: { store: await createDbSessionShellStore(tx) } });
+        killed = await dropSessionShellRow({
+          shellId,
+          // The pointer the process decision above was made against. A PTY that
+          // started in the meantime makes this row a different shell than the
+          // one that was killed, and dropping it would orphan the exec — see
+          // `dropSessionShellRow`.
+          expectedSpriteExecId: row.spriteExecId,
+          deps: { store: await createDbSessionShellStore(tx) },
+        });
         // A row that could not be dropped has to take the node with it, so it
         // UNWINDS rather than returns: a pane removed for a shell the workspace
         // still holds is the inverse of the defect this closes.

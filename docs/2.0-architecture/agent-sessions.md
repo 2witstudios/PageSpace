@@ -175,10 +175,12 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
     there and the session that filed #2469 never called it: nothing gave it a
     reason to look. `close_pane` now says what it does to a TERMINAL pane — it
     takes the pane and leaves the process running, reachable by
-    `send_shell`/`read_shell` and invisible to everyone watching the workspace —
-    because the tidy-up note points agents at that verb, and because the
-    browser's own close of a terminal tab kills the shell instead (a human has
-    no way to reach one with no pane; an agent does).
+    `send_shell`/`read_shell` and off the grid until someone reopens it from the
+    session's shell list — because the tidy-up note points agents at that verb.
+    The browser's own close of a terminal tab still kills the shell, and that
+    asymmetry is a product choice rather than a claim about reachability: a
+    person closing a tab means they are done with it, and the sidebar row is
+    there either way.
 
 ## 2. Authorization axioms (PR #2336 — product-locked)
 

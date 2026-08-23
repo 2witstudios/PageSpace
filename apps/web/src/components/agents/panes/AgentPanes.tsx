@@ -649,8 +649,14 @@ export default function AgentPanes({
    * apart). A client cannot separate them either — that is the point of the
    * family policy — so this swallows a revoked user's failed close too. It
    * still LOGS, because "nothing happened at all" is the one thing a support
-   * conversation cannot work with, and a revoked user is about to be stopped by
-   * every other action on the page anyway.
+   * conversation cannot work with.
+   *
+   * That user is not left in silence, though, and the reason is the OTHER
+   * writer: the same close queues a node drop, `/nodes` answers it with the
+   * same denial, and a non-409 4xx there abandons the queue and raises
+   * `queueErrors: 'refused'` — "That can't be shown in this workspace. The
+   * layout has been put back to what the server has." Which is the accurate
+   * account of what happened, from the write that owns the pane.
    *
    * Everything else still toasts. A 502 means the kill genuinely failed and the
    * process may still be running — see {@link handleClosePane} for what that

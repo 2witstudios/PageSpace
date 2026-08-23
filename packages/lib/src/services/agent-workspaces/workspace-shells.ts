@@ -231,24 +231,44 @@ export async function killShellProcess({
 }
 
 /**
- * THE ROW HALF: drop it, idempotently.
+ * THE ROW HALF: drop it, idempotently — and only if the process decision still
+ * describes it.
  *
  * Re-reads rather than trusting the row the caller already holds, because the
  * caller's read and this write are deliberately not in the same transaction —
  * see {@link killShellProcess}. `killed: false` is a row that is already gone,
  * which is success for the same reason it is below.
+ *
+ * **`expectedSpriteExecId` is what makes the gap between the two halves safe.**
+ * A shell's `spriteExecId` is written LAZILY, by the realtime bridge, when the
+ * PTY first starts — not at spawn. So a kill decided against a row that had
+ * none ("nothing to kill") can arrive here after a PTY has started, and
+ * dropping the row then leaves that exec running in the session's Sprite with
+ * nothing addressing it. Comparing the pointer the decision was made against to
+ * the one the row holds NOW catches exactly that, and answers `error` rather
+ * than orphaning a process: the caller unwinds, the retry reads the new
+ * pointer, and the kill lands on the process that actually exists.
+ *
+ * It does not close the window entirely — a PTY that starts between this read
+ * and the commit still loses its pointer update to the delete — and it is not
+ * meant to. That remainder is one statement wide; the one this closes is as
+ * wide as a caller's wait for the workspace lock.
  */
 export async function dropSessionShellRow({
   shellId,
+  expectedSpriteExecId,
   deps,
 }: {
   shellId: string;
+  /** The row's `spriteExecId` as the process decision saw it — see above. */
+  expectedSpriteExecId: string | null;
   deps: { store: Pick<SessionShellStore, 'findById' | 'remove'> };
 }): Promise<KillSessionShellResult> {
   const row = await deps.store.findById(shellId);
   const plan = planKillTarget({ knownIds: row ? [row.id] : [], targetId: shellId });
   if (!plan.ok) return { ok: false, reason: 'error' };
   if (plan.action === 'noop' || !row) return { ok: true, killed: false };
+  if (row.spriteExecId !== expectedSpriteExecId) return { ok: false, reason: 'error' };
 
   await deps.store.remove(row.id);
   return { ok: true, killed: true };
@@ -287,7 +307,7 @@ export async function killSessionShellById({
   const ptyKill = await killShellProcess({ row, deps });
   if (!ptyKill.ok) return ptyKill;
 
-  return dropSessionShellRow({ shellId, deps });
+  return dropSessionShellRow({ shellId, expectedSpriteExecId: row.spriteExecId, deps });
 }
 
 export interface ListSessionShellsDeps {

@@ -299,11 +299,19 @@ function stageContainer(pane: PaneNode, parentId: string, input: SplitInput): No
  * means joining its sibling group, and `create` rebalances a group it joins:
  * the newcomer takes an even share and the survivors keep their proportions
  * inside what is left. So a packed split does not divide the pane it was
- * pointed at — it divides the whole container. On an untouched grid that IS the
- * intent (three shells become three equal columns, and no share is written,
- * because an unsized group stays unsized). On a grid somebody has DRAGGED it is
- * a change nobody asked for: splitting one of two panes would move the other.
- * Hence:
+ * pointed at — it divides the whole container. Where nobody has sized that
+ * container that IS the intent (its members were sharing it evenly anyway, and
+ * an unsized group stays unsized through the rebalance, so no share nobody
+ * chose is written). Where somebody has DRAGGED it, it is a change nobody asked
+ * for: splitting one of two panes would move the other. Hence:
+ *
+ * How often this fires is worth knowing, because the direction is chosen from
+ * the RECTANGLE (`splitAxisFor`) rather than from the container: on a fresh
+ * workspace it is the first split of a lone pane, and after that it is whenever
+ * a pane's longer edge happens to agree with the way its container already runs
+ * — a narrow pane in a column, a short one in a row. Every other placement
+ * nests, which is why the depth that matters is bounded by
+ * {@link splitHostPane} choosing the roomiest pane rather than by this.
  *
  *  - **`pack` is asked for by the PLACEMENT path only.** `split` — the toolbar's
  *    two buttons — keeps nesting, so "split right" still divides the pane the

@@ -188,6 +188,30 @@ describe('killShellById', () => {
     expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeDefined();
   });
 
+  it('REFUSES to drop a row whose PTY started after the kill was decided', async () => {
+    // `spriteExecId` is written lazily by the realtime bridge when the PTY first
+    // starts, not at spawn — so a close clicked at the same moment an agent's
+    // first `send_shell` opens the terminal decides "nothing to kill" against a
+    // row that acquires a live exec before the transaction gets the lock.
+    // Dropping it then would leave that exec running in the session's Sprite
+    // with nothing addressing it, and the caller would be told it was killed.
+    shellStore.findById
+      // The pre-lock read: no PTY, so nothing is killed.
+      .mockResolvedValueOnce({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: null })
+      // The read inside the transaction: one started in between.
+      .mockResolvedValue({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: 'exec-late' });
+
+    await expect(killShellById({ shellId: SHELL, actingUserId: ACTOR })).resolves.toEqual({
+      ok: false,
+      reason: 'error',
+    });
+
+    // Nothing was dropped and nothing was expelled, so the retry finds a shell
+    // it can kill properly — and the pane is still there to close.
+    expect(shellStore.remove).not.toHaveBeenCalled();
+    expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeDefined();
+  });
+
   it('still removes the row and the pane when the sandbox has VANISHED', async () => {
     // A null handle is not a failure: there is nothing left running, so the
     // shell goes exactly as it would after a successful kill.
