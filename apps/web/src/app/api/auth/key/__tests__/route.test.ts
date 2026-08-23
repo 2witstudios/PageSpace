@@ -290,6 +290,48 @@ describe('GET /api/auth/key', () => {
     expect(peak).toBeGreaterThan(1);
   });
 
+  // A non-positive limit would start zero workers and resolve an array of
+  // HOLES with no work done and no error — serialized as a list of nulls, a
+  // status readout quietly reporting every drive as garbage.
+  it('never returns holes: every requested drive is present and populated', async () => {
+    arrangeScopedMemberKey();
+    const driveIds = Array.from({ length: 12 }, (_, index) => `drv${index}`);
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue(driveIds);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue(driveIds.map((id) => ({ id, name: id })));
+
+    const body = await (await GET(request())).json();
+
+    expect(body.driveScopes).toHaveLength(12);
+    expect(body.driveScopes.every((scope: unknown) => scope !== null && typeof scope === 'object')).toBe(true);
+    expect(body.driveScopes.map((scope: { id: string }) => scope.id)).toEqual(driveIds);
+  });
+
+  // Promise.all rejects on the first failure but does not cancel its siblings,
+  // so without a stop flag the remaining workers would keep spending the very
+  // fan-out the bound exists to contain, on a response that has already failed.
+  it('stops resolving the rest once one drive fails, and answers 500', async () => {
+    arrangeScopedMemberKey();
+    const driveIds = Array.from({ length: 40 }, (_, index) => `drv${index}`);
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue(driveIds);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue(driveIds.map((id) => ({ id, name: id })));
+
+    let started = 0;
+    vi.mocked(getPrincipalDriveAccessLevel).mockImplementation(async () => {
+      // Captured BEFORE the await: siblings bump the counter while this one is
+      // suspended, so re-reading it after would never see 1.
+      const mine = ++started;
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      if (mine === 1) throw new Error('db down');
+      return MEMBER_LEVEL;
+    });
+
+    const response = await GET(request());
+    expect(response.status).toBe(500);
+    // Let any un-cancelled stragglers run before counting.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(started).toBeLessThan(driveIds.length);
+  });
+
   it('describes an unscoped credential with no key row, leaving the key fields null', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...SCOPED_KEY, tokenType: 'oauth' } as never);
     vi.mocked(isAuthError).mockReturnValue(false);

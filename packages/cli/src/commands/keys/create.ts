@@ -298,9 +298,11 @@ async function writeEffectivePermissions(params: {
 }): Promise<void> {
   const { info, host, token, describeKeyPermissions: describe } = params;
   if (token === null) {
-    // The same anomaly `--show-token` reports: the server returned a refresh
-    // credential instead of a static one, so there is no bearer to ask with.
-    info.write('The key was created. It returned no raw token, so its permissions could not be read back here.\n');
+    // Says only that the readback did not happen, not WHY. The cause — the
+    // server returned a refresh credential instead of a static token — is the
+    // `--show-token` branch's line a few lines below, and stating it in both
+    // places put two near-identical sentences back to back.
+    info.write('The key was created. Its permissions could not be read back here.\n');
     return;
   }
   try {

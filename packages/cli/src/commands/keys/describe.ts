@@ -66,15 +66,28 @@ function formatPermissions(permissions: DescribedScope['permissions']): string {
  * How the grant was arrived at, spelled out — a null role is meaningful, not
  * "unset", and it means two different things.
  *
- * `'none'` is a drive reachable with no drive-level role in it at all: your
- * drive list includes the drives of pages shared with you, not only drives you
- * belong to. Calling that "inherits your own access" would read as the opposite
+ * `'none'` is a drive reachable with no drive-level role in it at all, and it
+ * arises two different ways, so the reason is only stated where it is known:
+ *
+ * - unscoped credential → a page shared with you. Your drive list is every
+ *   drive you can reach, which includes the drives of pages shared with you,
+ *   not only drives you belong to.
+ * - scoped key → the scope row for that drive is gone. The drive list came
+ *   from those rows when the key authenticated, so a row that no longer
+ *   resolves was removed in between. A scoped key reaches nothing through page
+ *   shares, so borrowing the other explanation here would be simply false.
+ *
+ * Either way, calling it "inherits your own access" would read as the opposite
  * of what the accompanying permissions line says.
  */
-function formatGrant(scope: DescribedScope): string {
+function formatGrant(scope: DescribedScope, scoped: boolean): string {
   if (scope.roleSource === 'custom') return `custom role "${scope.customRoleName ?? scope.customRoleId ?? 'unknown'}"`;
   if (scope.roleSource === 'inherited') return 'inherits your own access in this drive';
-  if (scope.roleSource === 'none') return 'no drive-level role (reached through a page shared with you)';
+  if (scope.roleSource === 'none') {
+    return scoped
+      ? 'no drive-level role (this key\'s scope for this drive is gone)'
+      : 'no drive-level role (reached through a page shared with you)';
+  }
   return `role ${(scope.role ?? 'unknown').toLowerCase()}`;
 }
 
@@ -117,7 +130,7 @@ export function renderKeyDescription(description: KeyDescription): string {
   }
   for (const scope of driveScopes) {
     lines.push(`${scope.name}  (${scope.id})`);
-    lines.push(`  granted:      ${formatGrant(scope)}`);
+    lines.push(`  granted:      ${formatGrant(scope, credential.scoped)}`);
     // Labelled, not bare: this is the drive-as-root-node answer, and an
     // unqualified "can: view edit" would be read as "I can edit the pages".
     lines.push(`  on the drive: ${formatPermissions(scope.permissions)}`);

@@ -74,6 +74,18 @@ const DRIVE_RESOLUTION_CONCURRENCY = 8;
  * `Promise.all` over `items`, at most `limit` in flight, preserving input
  * order. Order matters: this is a report a human diffs between runs, and a
  * settle-as-they-finish result would reshuffle it for no reason.
+ *
+ * `Math.max(1, …)` is a guard against a returned array of HOLES rather than a
+ * style flourish: a non-positive limit would start zero workers, and this
+ * function would then resolve `new Array(n)` — typed `TResult[]`, actually
+ * empty — with no work done and no error, which the route would serialize as a
+ * list of nulls. A status readout quietly reporting every drive as garbage is
+ * the worst failure this endpoint could have.
+ *
+ * The first rejection stops the queue as well as propagating. `Promise.all`
+ * rejects immediately but does not cancel its siblings, so without the flag the
+ * remaining workers would keep draining — spending the full fan-out this bound
+ * exists to contain on a response that has already failed.
  */
 async function mapWithConcurrency<TItem, TResult>(
   items: readonly TItem[],
@@ -82,9 +94,15 @@ async function mapWithConcurrency<TItem, TResult>(
 ): Promise<TResult[]> {
   const results: TResult[] = new Array(items.length);
   let next = 0;
-  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
-    for (let index = next++; index < items.length; index = next++) {
-      results[index] = await resolve(items[index]);
+  let failed = false;
+  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
+    for (let index = next++; index < items.length && !failed; index = next++) {
+      try {
+        results[index] = await resolve(items[index]);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
     }
   });
   await Promise.all(workers);
@@ -98,14 +116,17 @@ async function mapWithConcurrency<TItem, TResult>(
  * The distinction that matters is between NO membership and a membership whose
  * role is null:
  *
- * - `membership === null` → no drive-level role at all (`'none'`). Reachable
- *   for a USER principal, and not an edge case: `getDriveIdsForUser` unions the
- *   drives you are a member of with the drives of any page shared with you, so
- *   a page-collaborator-only drive appears in the list while
- *   `getUserDrivePermissions` correctly reports no drive membership for it.
- *   Labelling that `'inherited'` would attach scoped-key inherit semantics to a
- *   plain user and read as "you have your own access here", which is the
- *   opposite of true — its `permissions` are all-false.
+ * - `membership === null` → no drive-level role at all (`'none'`), which BOTH
+ *   principal shapes can reach, by different routes. For a USER principal it is
+ *   not even an edge case: `getDriveIdsForUser` unions the drives you belong to
+ *   with the drives of any page shared with you, so a page-collaborator-only
+ *   drive appears in the list while `getUserDrivePermissions` correctly reports
+ *   no drive membership for it. For a SCOPED key it means the `mcp_token_drives`
+ *   row is gone — the drive list came from those rows at authentication, so one
+ *   that no longer resolves was removed in between (the same class of state the
+ *   all-false `permissions` fallback below covers). Labelling either
+ *   `'inherited'` would read as "you have your own access here", the opposite of
+ *   what the all-false `permissions` say.
  * - `membership.role === null` → INHERIT: a scoped credential resolving with
  *   its owner's access in that drive.
  */
@@ -183,8 +204,10 @@ export async function GET(req: NextRequest) {
     // universe is every drive its owner can reach, so a user in fifty drives
     // would open ~300 connections at once from a single GET. Nothing here feeds
     // anything else — the permission and the membership are independent reads
-    // of the same drive — so batching costs nothing but keeps the pool bounded.
+    // of the same drive — so batching costs nothing but keeps the peak bounded.
     // Query COUNT is the same either way; only the waiting and the peak differ.
+    // The bound is on DRIVES: each one fans out to two concurrent resolvers, so
+    // the real ceiling is roughly double this number of queries in flight.
     const driveScopes = await mapWithConcurrency(driveIds, DRIVE_RESOLUTION_CONCURRENCY, async (driveId) => {
         const [permissions, membership] = await Promise.all([
           getPrincipalDriveAccessLevel(auth, driveId),

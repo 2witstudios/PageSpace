@@ -135,9 +135,11 @@ export const describeSelfKey = defineOperation({
         /**
          * How `role` was arrived at, since `null` is meaningful rather than
          * missing. `'inherited'` is a scoped credential resolving with its
-         * owner's access; `'none'` is no drive-level role at all — reachable
-         * for a user principal, whose drive list includes the drives of pages
-         * shared with them, not only drives they are a member of.
+         * owner's access; `'none'` is no drive-level role at all, which both
+         * principal shapes reach by different routes — an unscoped credential
+         * through a page shared with it (its drive list is every drive it can
+         * reach, not only drives it belongs to), a scoped key when the scope
+         * row for that drive is gone. `permissions` is all-false either way.
          */
         roleSource: z.enum(['explicit', 'custom', 'inherited', 'none']),
         permissions: effectivePermissionsSchema,

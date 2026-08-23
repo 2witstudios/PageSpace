@@ -287,7 +287,7 @@ async function mintScopedKey(
       // static one). Said out loud rather than skipped: falling silent leaves
       // the mint with no answer to "what can it do" at all. The pointer to
       // `keys describe` follows once, in the wiring note below.
-      clack.note('It returned no raw token, so its permissions could not be read back here.', 'What this key can do');
+      clack.note('The key was created. Its permissions could not be read back here — it returned no raw token.', 'What this key can do');
     }
     clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {

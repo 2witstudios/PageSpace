@@ -99,6 +99,36 @@ describe('renderKeyDescription', () => {
     expect(renderKeyDescription(MEMBER_KEY)).not.toMatch(/@|e-?mail/i);
   });
 
+  // `'none'` arises two different ways and the reason is only stated where it
+  // is known. A scoped key reaches nothing through page shares, so borrowing
+  // the unscoped explanation there would be simply false.
+  it('explains a roleless drive by the route that actually produced it', () => {
+    const noneScope = { ...MEMBER_KEY.driveScopes[0], role: null, roleSource: 'none' as const };
+
+    const scoped = renderKeyDescription({ ...MEMBER_KEY, driveScopes: [noneScope] });
+    expect(scoped).toContain("no drive-level role (this key's scope for this drive is gone)");
+    expect(scoped).not.toContain('page shared with you');
+
+    const unscoped = renderKeyDescription({
+      ...MEMBER_KEY,
+      credential: { ...MEMBER_KEY.credential, scoped: false },
+      driveScopes: [noneScope],
+    });
+    expect(unscoped).toContain('no drive-level role (reached through a page shared with you)');
+    expect(unscoped).not.toContain('scope for this drive is gone');
+  });
+
+  it('never calls a roleless drive "inherits your own access", whichever shape it is', () => {
+    for (const scoped of [true, false]) {
+      const output = renderKeyDescription({
+        ...MEMBER_KEY,
+        credential: { ...MEMBER_KEY.credential, scoped },
+        driveScopes: [{ ...MEMBER_KEY.driveScopes[0], role: null, roleSource: 'none' as const }],
+      });
+      expect(output).not.toContain('inherits your own access');
+    }
+  });
+
   it('spells out an inherit grant instead of showing a blank role', () => {
     const output = renderKeyDescription({
       ...MEMBER_KEY,

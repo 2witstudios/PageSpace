@@ -732,6 +732,10 @@ describe('createTokensCreateHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stderr.lines.join('')).toMatch(/no raw token to show/i);
+    // The readback says only that it did not happen; the reason is stated once,
+    // by the --show-token line above, not twice back to back.
+    expect(stderr.lines.join('')).toContain('The key was created. Its permissions could not be read back here.');
+    expect(stderr.lines.join('').match(/no raw token/gi)).toHaveLength(1);
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
