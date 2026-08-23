@@ -96,11 +96,16 @@ export type SpawnShellResult =
   | { ok: true; shell: ShellDTO; panes: WorkspacePaneState }
   | Extract<SpawnSessionShellResult, { ok: false }>;
 
-function paneStateOf(nodes: readonly WorkspaceNode[], target: PaneTarget): WorkspacePaneState {
-  return {
-    paneCount: nodes.filter((node) => node.nodeType === 'pane').length,
-    nodeId: memberNode(nodes, target)?.id ?? null,
-  };
+/**
+ * The layout after a write, with the pane this shell owns named by the CALLER.
+ *
+ * The id is a parameter rather than a lookup because the two callers know it at
+ * different moments: a spawn reads it out of the tree the write produced, and a
+ * kill has to have read it BEFORE — by the time these nodes exist, the pane it
+ * is reporting is gone from them.
+ */
+function paneStateOf(nodes: readonly WorkspaceNode[], nodeId: string | null): WorkspacePaneState {
+  return { paneCount: nodes.filter((node) => node.nodeType === 'pane').length, nodeId };
 }
 
 /**
@@ -120,25 +125,17 @@ function spawnedWithPanes(
   target: PaneTarget,
 ): SpawnShellResult {
   if (!spawned.ok) return spawned;
-  return { ok: true, shell: spawned.shell, panes: paneStateOf(nodes, target) };
+  return { ok: true, shell: spawned.shell, panes: paneStateOf(nodes, memberNode(nodes, target)?.id ?? null) };
 }
 
-/**
- * {@link spawnedWithPanes}'s counterpart, for the same reason — and it is
- * handed the CLOSED node id rather than looking one up, because by the time
- * these nodes exist the pane it is reporting has been removed from them.
- */
+/** {@link spawnedWithPanes}'s counterpart, for the same reason. */
 function killedWithPanes(
   killed: KillSessionShellResult,
   nodes: readonly WorkspaceNode[],
   closedNodeId: string | null,
 ): KillShellResult {
   if (!killed.ok) return killed;
-  return {
-    ok: true,
-    killed: killed.killed,
-    panes: { paneCount: nodes.filter((node) => node.nodeType === 'pane').length, nodeId: closedNodeId },
-  };
+  return { ok: true, killed: killed.killed, panes: paneStateOf(nodes, closedNodeId) };
 }
 
 /**
@@ -305,6 +302,14 @@ export async function resolveShellById(shellId: string): Promise<ResolveSessionS
  * failed kill leaves a live PTY with no surface and no pane pointing at it.
  * Neither is recoverable by a reconciler, because a shell has no id-keyed
  * external record to reap — the row IS the record.
+ *
+ * **What is left is one residue, and it self-heals.** The PTY kill is external,
+ * so a transaction that rolls back AFTER it cannot take it back: the row and
+ * the pane survive, pointing at a dead process. That state is indistinguishable
+ * from a shell whose process exited on its own, it is visible (the pane is
+ * there), and the next close of it runs this function again —
+ * `killSession` against an already-dead id is idempotent, so the retry lands.
+ * The predecessor's failure mode was the opposite one: invisible.
  */
 export async function killShellById(input: {
   shellId: string;
