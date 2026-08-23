@@ -61,8 +61,12 @@ export function keysDescribeHint(keyName: string, host: string): string {
  * — so `--key '-prod'` is a usage error no amount of quoting can rescue.
  * `--key=-prod` is exactly the ambiguity the equals form exists to resolve
  * (see `parse.ts`, which documents it for `--host=-looks-like-a-flag`).
+ *
+ * Exported because the hint is not the only command this CLI prints with a key
+ * name in it — `keys create`'s "already exists" message suggests a `logout`
+ * command the same way, and had the same hole.
  */
-function shellQuote(value: string): string {
+export function shellQuote(value: string): string {
   if (/^[A-Za-z0-9._@%+=:,/-]+$/.test(value)) return value;
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }

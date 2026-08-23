@@ -828,6 +828,33 @@ describe('createTokensCreateHandler', () => {
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
   });
 
+  // The other command this CLI prints with a key name in it. A name like
+  // `-prod` made the suggested logout unpasteable in exactly the way the
+  // post-mint hint was — `--key` takes the next word, or rejects a value
+  // starting with `-` outright.
+  it('suggests a logout command that survives an awkward key name', async () => {
+    const store = fakeStore();
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'static', token: 'mcp_existing', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
+      '-prod key',
+    );
+    const handler = createTokensCreateHandler(baseHandlerDeps(store));
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--name', '-prod key']),
+    );
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    const output = stderr.lines.join('');
+    expect(output).toContain(`--key='-prod key'`);
+    expect(output).not.toContain('--key -prod key');
+  });
+
   it('overwrites an existing stored key when --yes is passed', async () => {
     const store = fakeStore();
     await store.set(

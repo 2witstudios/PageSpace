@@ -51,7 +51,7 @@ import type {
   WaitMs,
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
-import { renderAgentWiringGuidance } from './guidance.js';
+import { renderAgentWiringGuidance, shellQuote } from './guidance.js';
 import { renderKeyDescription } from './describe.js';
 import { describeKeyPermissions, type DescribeKeyPermissions } from '../../auth/probe-permissions.js';
 
@@ -421,7 +421,11 @@ export function createTokensCreateHandler(deps: TokensCreateHandlerDeps): Comman
     const existing = await store.get(host, keyName);
     if (existing && !intent.flags.yes) {
       ctx.stderr.write(
-        `A stored credential for ${host} (key "${keyName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host} --key ${keyName}" first.\n`,
+        // Equals-joined and quoted for the same reason the post-mint hint is
+        // (see `guidance.ts`'s `shellQuote`): this suggests a command with a
+        // key name in it, and a name like `-prod` or `lead gen` made it
+        // unpasteable — `--key` would take the next word, or none at all.
+        `A stored credential for ${host} (key "${keyName}") already exists. Re-run with --yes to overwrite it, or "pagespace logout --host=${shellQuote(host)} --key=${shellQuote(keyName)}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }

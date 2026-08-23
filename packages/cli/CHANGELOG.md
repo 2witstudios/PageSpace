@@ -20,6 +20,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   returns a refresh credential instead of a static token there is no bearer to ask with; 1.8.0 said
   the readback had failed but not that. (The `pagespace keys` wizard already gave the reason — the
   two surfaces now match.)
+- **The `logout` command suggested when a key name is already taken is pasteable too.** It printed
+  `--key <name>` space-separated with the name interpolated, so a key called `-prod` produced a
+  command the parser rejects and `lead gen` one that logs out of the wrong key. Same fix as the
+  post-mint hint, which is where the hole was first found.
 - **`keys describe`'s usage line and the README** now say it needs a content credential named — it
   is the one `keys` verb that reports on one rather than managing keys, and the README's summary
   paragraph previously said the opposite.
