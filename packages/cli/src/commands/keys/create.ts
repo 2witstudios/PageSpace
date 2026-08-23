@@ -336,7 +336,7 @@ async function writeEffectivePermissions(params: {
     info.write(`\n${renderKeyDescription(await describe({ host, accessToken: token }))}`);
   } catch (error) {
     info.write(
-      `The key was created. Its effective permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n`,
+      `The key was created. Its permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n`,
     );
   }
 }
