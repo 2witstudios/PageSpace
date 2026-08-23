@@ -11,19 +11,26 @@ import type {
   SheetEvaluation,
   SheetEvaluationCell,
   SheetEvaluationOptions,
+  SheetCellAddress,
   SheetSparseEvaluation,
   SheetExternalReferenceToken,
   SheetExternalReferenceResolution,
   SheetDocDependencyRecord,
 } from './types';
 import { LOCAL_PAGE_KEY } from './constants';
-import { encodeCellAddress, expandRange, numberRegex } from './address';
+import { encodeCellAddress, expandRange, numberRegex, columnLabelOf } from './address';
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
 import { applyNumberFormat, resolveCellFormat } from './format';
 
-/** Column letters of an A1 address, for column-default format lookup. */
-const columnLettersOf = (address: string): string => address.replace(/\d+$/, '');
+/**
+ * Column letters of an A1 address, for column-default format lookup.
+ *
+ * The shared scanner, not a local `replace(/\d+$/, '')`. That pattern is
+ * unanchored and retries from every position, which CodeQL flags as
+ * polynomial-time on uncontrolled input.
+ */
+const columnLettersOf = columnLabelOf;
 
 interface EvaluationEnvironment {
   options: SheetEvaluationOptions;
@@ -471,6 +478,50 @@ function evaluateCellInternal(
 /**
  * Evaluate a sheet and return all cell values, displays, and errors
  */
+/**
+ * Evaluate only the named addresses.
+ *
+ * `evaluateSheet` walks every cell of the grid and allocates three dense
+ * structures the size of the whole sheet, which is precisely the cost the row
+ * store exists to avoid: after a single cell write, the only values that can
+ * have changed are that cell and its dependency closure. This evaluates that
+ * closure and nothing else.
+ *
+ * The environment, cache and ancestor-set cycle detection are exactly the ones
+ * `evaluateSheet` uses, so `value`, `display`, `type` and `error` agree with a
+ * full pass — including on a cycle. Cells outside `addresses` are still
+ * readable as inputs; they are simply not returned.
+ *
+ * The dependency fields do NOT agree, and cannot: `evaluateSheet` fills in
+ * `dependents` and de-duplicates `dependsOn` in a post-pass over the whole
+ * grid, which is exactly the work this function exists to skip. Nothing here
+ * can know which cells outside the closure point at one inside it. Treat
+ * `dependsOn`/`dependents` from this function as unset, and derive persisted
+ * edges from `extractFormulaDependencies` (as `store.ts` does) instead.
+ */
+export function evaluateAddresses(
+  sheet: SheetData,
+  addresses: Iterable<string>,
+  options: SheetEvaluationOptions = {}
+): Record<SheetCellAddress, SheetEvaluationCell> {
+  const pageKey = options.pageId ?? LOCAL_PAGE_KEY;
+  const env: EvaluationEnvironment = {
+    options,
+    caches: new Map([[pageKey, new Map()]]),
+    sheets: new Map([[pageKey, sheet]]),
+    pageTitles: new Map([[pageKey, options.pageTitle ?? 'Sheet']]),
+    resolutionCache: new Map(),
+  };
+
+  const result: Record<SheetCellAddress, SheetEvaluationCell> = {};
+  for (const address of addresses) {
+    const normalized = address.toUpperCase();
+    result[normalized] = evaluateCellInternal(normalized, pageKey, env, new Set());
+  }
+
+  return result;
+}
+
 export function evaluateSheet(
   sheet: SheetData,
   options: SheetEvaluationOptions = {}
@@ -532,6 +583,18 @@ export function evaluateSheet(
 
 /**
  * Evaluate only the cells that exist.
+ *
+ * Not to be confused with `evaluateAddresses` above, which the row store uses.
+ * The two answer different questions and are not interchangeable:
+ *
+ * - `evaluateAddresses` takes a caller-chosen set — the closure affected by one
+ *   write — and deliberately leaves `dependsOn`/`dependents` unset, because
+ *   computing them means a pass over the whole grid.
+ * - this takes the whole sheet and returns a correct dependency graph, which is
+ *   what `sheetDataToSheetDoc` persists and what the editor renders from.
+ *
+ * Reach for `evaluateAddresses` after a targeted write; reach for this when you
+ * need the sheet as a whole without paying for the empty cells.
  *
  * `evaluateSheet` walks the whole `rowCount × columnCount` rectangle and
  * allocates an entry per grid position, empty ones included. For the 10,000-row

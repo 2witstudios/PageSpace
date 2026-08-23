@@ -17,6 +17,7 @@ import { logRollbackActivity, getActorInfo } from '@pagespace/lib/monitoring/act
 import { createChangeGroupId, inferChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service';
 import type { ChangeGroupType } from '@pagespace/lib/monitoring/change-group';
 import type { PageContentFormat } from '@pagespace/lib/content/page-content-format';
@@ -32,6 +33,11 @@ export interface RollbackDeps {
   genChangeGroupId: typeof createChangeGroupId;
   inferChangeGroupType: typeof inferChangeGroupType;
   readContent: typeof readPageContent;
+  /**
+   * Projects a sheet's rows back into a document. Injected like everything
+   * else here so the rollback shell stays testable without a database.
+   */
+  readSheetDocument: typeof readSheetDocument;
   syncMentions: typeof syncMentions;
   createPageVersion: typeof createPageVersion;
   getActorInfo: typeof getActorInfo;
@@ -50,6 +56,7 @@ export function defaultRollbackDeps(): RollbackDeps {
     genChangeGroupId: createChangeGroupId,
     inferChangeGroupType,
     readContent: readPageContent,
+    readSheetDocument,
     syncMentions,
     createPageVersion,
     getActorInfo,

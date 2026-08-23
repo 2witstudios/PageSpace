@@ -10,10 +10,14 @@ vi.mock('@pagespace/lib/services/page-version-service', () => ({
   createPageVersion: vi.fn(),
   computePageStateHash: vi.fn().mockReturnValue('hash-xyz'),
 }));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  replaceFromDocument: vi.fn(),
+}));
 
 import { readPageContent } from '@pagespace/lib/services/page-content-store';
 import { createPageVersion } from '@pagespace/lib/services/page-version-service';
 import { applyPageRestoreOps } from '../restore-pages-service';
+import { replaceFromDocument } from '@pagespace/lib/sheets/store';
 
 // ============================================================================
 // planPageRestoreOps — pure function tests (zero mocks, zero I/O)
@@ -127,6 +131,107 @@ const makeTx = () => ({
   update: vi.fn().mockReturnValue({
     set: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
   }),
+  delete: vi.fn().mockReturnValue({ where: vi.fn().mockResolvedValue([]) }),
+});
+
+describe('applyPageRestoreOps — sheets restore into rows', () => {
+  const makeOp = (
+    op: 'create' | 'overwrite',
+    pageId: string,
+    type: string,
+    contentRef: string | null = 'ref-1',
+  ) => ({
+    op, pageId, title: 'T', type, parentId: null, position: 0,
+    contentRef, isTrashed: false, trashedAt: null,
+  });
+
+  const driveId = 'drive_1';
+  const userId = 'user_1';
+  const backupId = 'backup_1';
+  const changeGroupId = 'cg_1';
+  const changeGroupType = 'user' as const;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(createPageVersion).mockResolvedValue({
+      id: 'pv-new', contentRef: 'ref-new', contentSize: 1, compressed: false,
+      storedSize: 1, compressionRatio: 1,
+    } as never);
+  });
+
+  it('writes a restored sheet into its rows, not just the content column', async () => {
+    // `pages.content` is empty for a materialised sheet and no sheet read path
+    // consults it, so writing the document there restored nothing a user could
+    // see while reporting success.
+    vi.mocked(readPageContent).mockResolvedValue('#%PAGESPACE_SHEETDOC v1\npage_id = "p1"\n');
+    const ops = [makeOp('overwrite', 'p1', 'SHEET')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).toHaveBeenCalledTimes(1);
+    const [ref, content] = vi.mocked(replaceFromDocument).mock.calls[0];
+    expect(ref).toEqual({ pageId: 'p1' });
+    expect(content).toContain('PAGESPACE_SHEETDOC');
+  });
+
+  it('clears existing rows when the restored sheet was empty at backup time', async () => {
+    // Otherwise the restore reports success while the spreadsheet keeps its
+    // current, post-backup data — the one page type where restore silently
+    // restores nothing.
+    vi.mocked(readPageContent).mockResolvedValue('');
+    const ops = [makeOp('overwrite', 'p1', 'SHEET')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).toHaveBeenCalled();
+  });
+
+  it('aborts the whole restore when the stored content cannot be read', async () => {
+    // A read failure is UNKNOWN content, not empty content. Tolerating it wrote
+    // the empty string into `pages.content` for every page type and cleared the
+    // rows of every sheet — one transient blob hiccup silently emptying real
+    // data under the banner of a successful restore. A restore is deliberate
+    // and retryable, so it fails loudly instead.
+    vi.mocked(readPageContent).mockRejectedValue(new Error('S3 error'));
+    const ops = [makeOp('overwrite', 'p1', 'SHEET')];
+    const tx = makeTx();
+
+    await expect(
+      applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never),
+    ).rejects.toThrow('S3 error');
+
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
+    expect(tx.update).not.toHaveBeenCalled();
+  });
+
+  it('leaves sheet rows alone when the backup has no content ref', async () => {
+    // A pruned page version and a genuinely empty page are indistinguishable
+    // here, so the content is unknown — clearing the rows on that evidence
+    // would destroy a live spreadsheet to "restore" data we never read.
+    const ops = [makeOp('overwrite', 'p1', 'SHEET', null)];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(readPageContent).not.toHaveBeenCalled();
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
+  });
+
+  it('leaves non-sheet pages on the document path', async () => {
+    vi.mocked(readPageContent).mockResolvedValue('<p>hello</p>');
+    const ops = [makeOp('overwrite', 'p1', 'DOCUMENT')];
+    const tx = makeTx();
+
+    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+
+    expect(replaceFromDocument).not.toHaveBeenCalled();
+    expect(tx.delete).not.toHaveBeenCalled();
+  });
 });
 
 describe('applyPageRestoreOps', () => {
@@ -238,16 +343,20 @@ describe('applyPageRestoreOps', () => {
     expect(createPageVersion).not.toHaveBeenCalled();
   });
 
-  it('readPageContent rejects during prefetch → uses empty content (S3 failures are tolerated)', async () => {
+  it('readPageContent rejects during prefetch → the restore aborts, nothing is written', async () => {
+    // Previously tolerated: the failure cached `''` and the page was restored
+    // WITH EMPTY CONTENT, which is data loss dressed as success. Nothing has
+    // been written at the point the prefetch runs, so throwing leaves the
+    // backup fully re-runnable.
     vi.mocked(readPageContent).mockRejectedValue(new Error('S3 error'));
     const ops = [makeOp({ op: 'create', pageId: 'p5', contentRef: 'ref-5' })];
     const tx = makeTx();
 
-    await applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never);
+    await expect(
+      applyPageRestoreOps(ops, driveId, userId, backupId, changeGroupId, changeGroupType, tx as never),
+    ).rejects.toThrow('S3 error');
 
-    expect(createPageVersion).toHaveBeenCalledWith(
-      expect.objectContaining({ pageId: 'p5', content: '' }),
-      expect.anything(),
-    );
+    expect(createPageVersion).not.toHaveBeenCalled();
+    expect(tx.insert).not.toHaveBeenCalled();
   });
 });

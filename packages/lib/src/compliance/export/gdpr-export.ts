@@ -1,10 +1,11 @@
-import { eq, inArray, or, and, ne, isNull } from 'drizzle-orm';
+import { eq, inArray, or, and, ne, isNull, gte, asc } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages } from '@pagespace/db/schema/core';
+import { sheetTabs, sheetRows } from '@pagespace/db/schema/sheets';
 import { aiUsageLogs, activityLogs, systemLogs, apiMetrics, errorLogs, errorResolutions } from '@pagespace/db/schema/monitoring';
 import { files, filePages } from '@pagespace/db/schema/storage';
 import { driveMembers } from '@pagespace/db/schema/members';
@@ -67,6 +68,45 @@ export interface UserPageExport {
   driveId: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One tab of a spreadsheet, with its cells.
+ *
+ * Sheets stopped living in `pages.content` when they moved to a row store, so
+ * the `pages` collector — which reads that column — now returns an empty body
+ * for every SHEET page. Without this collector a subject access request would
+ * silently answer LESS than before the change, which is exactly the Art 15
+ * failure `gdpr-export-coverage.ts` was written to prevent.
+ *
+ * Both halves of each cell are carried: `raw` is what the person authored (a
+ * literal, or a formula) and `value` is what it evaluated to. Exporting only
+ * one would either hide their work or hide its result.
+ */
+export interface UserSheetExport {
+  pageId: string;
+  pageTitle: string;
+  driveId: string;
+  tabIndex: number;
+  tabName: string;
+  rowCount: number;
+  columnCount: number;
+  /**
+   * Tab-level state the subject authored: frozen panes, column formats and
+   * widths, row heights, named ranges. It is as much their work as the cell
+   * contents, and an export that returned only cells would be answering less
+   * than the sheet actually holds.
+   */
+  frozenRows: number | null;
+  frozenColumns: number | null;
+  columnFormats: unknown;
+  columnWidths: unknown;
+  rowHeights: unknown;
+  ranges: unknown;
+  rows: {
+    rowIndex: number;
+    cells: Record<string, { raw: string; value?: string | number | boolean; error?: string }>;
+  }[];
 }
 
 export interface UserMessageExport {
@@ -393,6 +433,7 @@ export interface AllUserData {
   profile: UserProfileExport;
   drives: UserDriveExport[];
   pages: UserPageExport[];
+  sheets: UserSheetExport[];
   messages: UserMessageExport[];
   files: UserFileExport[];
   activity: UserActivityExport[];
@@ -501,6 +542,97 @@ export async function collectUserPages(
     })
     .from(pages)
     .where(inArray(pages.driveId, driveIds));
+}
+
+/**
+ * Every sheet in the subject's drives, tab by tab.
+ *
+ * Rows are read in pages rather than one query: a sheet is now allowed to hold
+ * hundreds of thousands of rows, and an unbounded select over all of them would
+ * be the kind of memory spike that takes the export down. Nothing is truncated
+ * — an Art 15 response that silently drops rows is worse than a slow one.
+ */
+export async function collectUserSheets(
+  database: DB,
+  userId: string,
+  preloadedDriveIds?: string[],
+): Promise<UserSheetExport[]> {
+  const driveIds = preloadedDriveIds ?? (await collectUserDrives(database, userId)).map(d => d.id);
+  if (driveIds.length === 0) return [];
+
+  const tabs = await database
+    .select({
+      tabId: sheetTabs.id,
+      pageId: sheetTabs.pageId,
+      pageTitle: pages.title,
+      driveId: pages.driveId,
+      tabIndex: sheetTabs.tabIndex,
+      tabName: sheetTabs.name,
+      rowCount: sheetTabs.rowCount,
+      columnCount: sheetTabs.columnCount,
+      frozenRows: sheetTabs.frozenRows,
+      frozenColumns: sheetTabs.frozenColumns,
+      columnFormats: sheetTabs.columnFormats,
+      columnWidths: sheetTabs.columnWidths,
+      rowHeights: sheetTabs.rowHeights,
+      ranges: sheetTabs.ranges,
+    })
+    .from(sheetTabs)
+    .innerJoin(pages, eq(sheetTabs.pageId, pages.id))
+    .where(inArray(pages.driveId, driveIds));
+
+  const PAGE_SIZE = 2000;
+  const out: UserSheetExport[] = [];
+
+  for (const tab of tabs) {
+    const rows: UserSheetExport['rows'] = [];
+    let cursor = 0;
+
+    for (;;) {
+      const batch = await database
+        .select({ rowIndex: sheetRows.rowIndex, cells: sheetRows.cells })
+        .from(sheetRows)
+        .where(and(eq(sheetRows.tabId, tab.tabId), gte(sheetRows.rowIndex, cursor)))
+        .orderBy(asc(sheetRows.rowIndex))
+        .limit(PAGE_SIZE);
+
+      if (batch.length === 0) break;
+
+      for (const row of batch) {
+        const cells: UserSheetExport['rows'][number]['cells'] = {};
+        for (const [label, cell] of Object.entries(row.cells ?? {})) {
+          cells[label] = {
+            raw: cell.raw,
+            ...(cell.value !== undefined ? { value: cell.value } : {}),
+            ...(cell.error ? { error: cell.error.type } : {}),
+          };
+        }
+        rows.push({ rowIndex: row.rowIndex, cells });
+      }
+
+      cursor = batch[batch.length - 1].rowIndex + 1;
+      if (batch.length < PAGE_SIZE) break;
+    }
+
+    out.push({
+      pageId: tab.pageId,
+      pageTitle: tab.pageTitle,
+      driveId: tab.driveId,
+      tabIndex: tab.tabIndex,
+      tabName: tab.tabName,
+      rowCount: tab.rowCount,
+      columnCount: tab.columnCount,
+      frozenRows: tab.frozenRows,
+      frozenColumns: tab.frozenColumns,
+      columnFormats: tab.columnFormats,
+      columnWidths: tab.columnWidths,
+      rowHeights: tab.rowHeights,
+      ranges: tab.ranges,
+      rows,
+    });
+  }
+
+  return out;
 }
 
 export async function collectUserMessages(database: DB, userId: string): Promise<UserMessageExport[]> {
@@ -1286,8 +1418,9 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState] = await Promise.all([
     collectUserPages(database, userId, driveIds),
+    collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
     collectUserFiles(database, userId),
     collectUserActivity(database, userId),
@@ -1310,6 +1443,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     profile,
     drives: userDrives,
     pages: userPages,
+    sheets: userSheets,
     messages: userMessages,
     files: userFiles,
     activity,

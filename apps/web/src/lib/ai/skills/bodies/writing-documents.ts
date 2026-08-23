@@ -107,12 +107,13 @@ There are two mention representations, and which one works depends on the surfac
 - Page link: \`<a class="mention" data-mention-type="page" data-page-id="PAGE_ID">@Page Title</a>\`
 - Everyone: \`<span class="mention" data-mention-type="everyone" data-drive-id="DRIVE_ID">@everyone</span>\` — notifies the drive's owner and members; take the driveId from your LOCATION context if present, otherwise resolve via \`list_drives\`.
 - Role: \`<span class="mention" data-mention-type="role" data-role-id="ROLE_ID" data-drive-id="DRIVE_ID">@Role Name</span>\` — notifies drive members holding that role.
+- User: \`<a class="mention" data-mention-type="user" data-user-id="USER_ID">@Name</a>\` — deliberately has no \`href\`; there is no user page to link to.
 
 When editing around existing mention elements, **preserve them verbatim** — rewriting them as plain text destroys the link.
 
 **The \`@[Label](id:type)\` syntax belongs to chat and channel messages** (types: \`(pageId:page)\`, \`(userId:user)\`, \`(roleId:role)\`, \`(driveId:everyone)\`). Message surfaces render it as a chip and notify. When a user @mentions a page at you in a message, read it with \`read_page\` before responding.
 
-In documents that syntax is only a **fallback**: it is parsed solely when the page contains no HTML mention markers at all — one existing mention element switches extraction to HTML-only and every \`@[..](..)\` in the page is ignored. In html-mode documents it also renders to readers as literal text, not a chip. So in documents, write the HTML elements. There is no working HTML form for a **user** mention in documents; if you need to notify a specific user reliably, do it from a chat/channel message rather than document content. Mention extraction skips \`<pre>\`/\`<code>\` regions, so literal syntax examples are never parsed as real mentions.
+In documents that syntax is only a **fallback**: it is parsed solely when the page contains no HTML mention markers at all — one existing mention element switches extraction to HTML-only and every \`@[..](..)\` in the page is ignored. In html-mode documents it also renders to readers as literal text, not a chip. So in documents, write the HTML elements — all four types, user included, have a working HTML form. Mention extraction skips \`<pre>\`/\`<code>\` regions, so literal syntax examples are never parsed as real mentions.
 
 Notification mechanics: the mention author is never notified, and only **newly added** mentions notify (re-saving the same mention does not). On chat/channel surfaces recipients are filtered to users who can view the page; on document saves they are **not** — a role/everyone mention in a page some drive members cannot view still notifies them, so mention deliberately. Mentioning someone never grants access. Use page mentions for cross-references.
 

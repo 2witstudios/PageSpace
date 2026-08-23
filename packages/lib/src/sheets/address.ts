@@ -5,6 +5,19 @@
 
 import type { SheetCellAddress } from './types';
 
+/**
+ * Furthest addressable cell.
+ *
+ * `decodeCellAddress` accepts any digit run, so `A2000000000` would place a row
+ * at index two billion, drive `growExtent` to set `rowCount` to the same, and
+ * then make any rebuild attempt an evaluation over that extent. A longer run
+ * overflows `integer` outright. Postgres's own spreadsheet-scale limits are
+ * well below this; the point is that a single malformed address cannot render
+ * a sheet unusable.
+ */
+export const MAX_ADDRESSABLE_ROW = 5_000_000;
+export const MAX_ADDRESSABLE_COLUMN = 18_277; // ZZZ
+
 // Regex patterns for cell address validation
 export const cellRegex = /^[A-Z]+\d+$/;
 export const numberRegex = /^-?(?:\d+\.?\d*|\.\d+)$/;
@@ -51,6 +64,64 @@ export function decodeCellAddress(address: SheetCellAddress): { row: number; col
     row: parseInt(rowPart, 10) - 1,
     column: column - 1,
   };
+}
+
+/**
+ * Column index to its letters ("A", "AB"). The row store keys a row's cells by
+ * column label, so this is the hot path for every row read and write.
+ */
+export function encodeColumnLabel(columnIndex: number): string {
+  if (columnIndex < 0) {
+    throw new Error('Column index must be non-negative');
+  }
+
+  let column = '';
+  let index = columnIndex;
+
+  while (index >= 0) {
+    column = String.fromCharCode((index % 26) + 65) + column;
+    index = Math.floor(index / 26) - 1;
+  }
+
+  return column;
+}
+
+/** Inverse of `encodeColumnLabel`. Throws on anything that is not letters. */
+export function decodeColumnLabel(label: string): number {
+  const normalized = label.trim().toUpperCase();
+  if (!/^[A-Z]+$/.test(normalized)) {
+    throw new Error(`Invalid column label: ${label}`);
+  }
+
+  let column = 0;
+  for (let i = 0; i < normalized.length; i++) {
+    column *= 26;
+    column += normalized.charCodeAt(i) - 64;
+  }
+
+  return column - 1;
+}
+
+/**
+ * The letters of an A1 address, without its row. Returns '' for anything that
+ * does not start with letters, matching the lenient local helpers this
+ * replaces in `evaluation.ts` and `format-ops.ts`.
+ */
+export function columnLabelOf(address: string): string {
+  // Scanned, not `replace(/\d+$/, '')`.
+  //
+  // That pattern is unanchored at its start, so the engine retries `\d+$` from
+  // every position and degrades to O(n²) on a long run of digits that does not
+  // end the string — CodeQL flags it as a polynomial-time regex on uncontrolled
+  // input, and cell addresses reach here from user data. Walking back over the
+  // trailing digits is exactly equivalent for every input and linear.
+  let end = address.length;
+  while (end > 0) {
+    const code = address.charCodeAt(end - 1);
+    if (code < 48 || code > 57) break;
+    end--;
+  }
+  return address.slice(0, end);
 }
 
 /**
