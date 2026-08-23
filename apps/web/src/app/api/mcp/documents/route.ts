@@ -9,7 +9,9 @@ import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatu
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
-import { isSheetType, parseSheetContentSafe, serializeSheetContent, updateSheetCells, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
+import { setCells, readSheetDocument, SheetAddressError } from '@pagespace/lib/sheets/store';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { z } from 'zod/v4';
 import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
 import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
@@ -220,15 +222,27 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const rawContent = page.content || '';
-
     // CODE and markdown pages have natural line structure (and CODE may
     // contain raw HTML/XML that addLineBreaksForAI would mangle); HTML
     // documents are normalized. Shared with the internal read_page/
     // replace_lines tools via serializePageContentForAI so both surfaces
     // agree on line numbers.
     const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-    const serializedContent = serializePageContentForAI(page);
+
+    // Sheets serialise from their rows — `pages.content` is empty for a
+    // materialised sheet, so reading the column would return a blank grid.
+    //
+    // Only for operations that actually read the text. Building the projection
+    // unconditionally made `edit-cells` stream every row and serialise the
+    // whole document just to compute line numbers it never looks at,
+    // reintroducing the O(document) cost per addressed write on exactly the
+    // large sheets this exists to avoid.
+    const needsDocumentText = operation !== 'edit-cells';
+    const readablePage =
+      needsDocumentText && isSheetType(page.type as PageType)
+        ? { ...page, content: (await readSheetDocument(pageId)) ?? page.content }
+        : page;
+    const serializedContent = serializePageContentForAI(readablePage);
     const lines = serializedContent.split('\n');
 
     switch (operation) {
@@ -813,46 +827,42 @@ export async function POST(req: NextRequest) {
           }, { status: 400 });
         }
 
-        // Parse existing sheet content. Aborting on a parse failure is the
-        // point: writing the empty sheet the unsafe parse returns would
-        // replace the whole spreadsheet with just the cells in this request.
-        const parsedSheet = parseSheetContentSafe(rawContent);
-        if (!parsedSheet.ok) {
-          return NextResponse.json({
-            error: `Sheet content could not be read (${parsedSheet.reason}); refusing to overwrite it.`,
-          }, { status: 409 });
-        }
-
-        // Apply cell updates
-        const updatedSheet = updateSheetCells(parsedSheet.sheet, cells);
-
-        // Serialize back to TOML format
-        const newContent = serializeSheetContent(updatedSheet, { pageId });
-
-        // Summarize changes for response and metadata
+        // Addressed cell writes, not a document rewrite.
+        //
+        // This used to parse the whole sheet, splice the cells in and
+        // re-serialise all of it — O(document) per call, and it needed a guard
+        // against an unreadable parse replacing the spreadsheet with just these
+        // cells. `setCells` writes the named cells and recomputes only what
+        // depended on them; there is no document to misread.
         const formulaCount = cells.filter(c => c.value.trim().startsWith('=')).length;
         const valueCount = cells.filter(c => c.value.trim() !== '' && !c.value.trim().startsWith('=')).length;
         const clearCount = cells.filter(c => c.value.trim() === '').length;
 
         const actorInfo = await getActorInfo(userId);
-        await applyPageMutation({
+        const setResult = await setCells(
+          { pageId },
+          cells,
+          { userId, actorEmail: actorInfo.actorEmail }
+        );
+
+        // Still an activity entry and still a workflow trigger. Dropping
+        // `applyPageMutation` dropped both, so an agent's edit became invisible
+        // to page history and silently stopped firing workflows on the sheet.
+        await logSheetCellActivity({
           pageId,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: {
-            userId,
-            actorEmail: actorInfo.actorEmail,
-            actorDisplayName: actorInfo.actorDisplayName,
-            metadata: {
-              source: 'mcp',
-              mcpOperation: 'edit-cells',
-              cellsUpdated: cells.length,
-              valuesSet: valueCount,
-              formulasSet: formulaCount,
-              cellsCleared: clearCount,
-            },
+          driveId: page.driveId,
+          pageTitle: page.title,
+          userId,
+          actorEmail: actorInfo.actorEmail,
+          actorDisplayName: actorInfo.actorDisplayName,
+          metadata: {
+            source: 'mcp',
+            mcpOperation: 'edit-cells',
+            cellsUpdated: cells.length,
+            valuesSet: valueCount,
+            formulasSet: formulaCount,
+            cellsCleared: clearCount,
+            recomputed: setResult.recomputed.length,
           },
         });
 
@@ -879,9 +889,10 @@ export async function POST(req: NextRequest) {
             formulasSet: formulaCount,
             cellsCleared: clearCount,
             sheetDimensions: {
-              rows: updatedSheet.rowCount,
-              columns: updatedSheet.columnCount,
+              rows: setResult.rowCount,
+              columns: setResult.columnCount,
             },
+            recomputed: setResult.recomputed.length,
           },
           updatedCells: cells.map(c => ({
             address: c.address.toUpperCase(),
@@ -905,6 +916,26 @@ export async function POST(req: NextRequest) {
         { status: error.expectedRevision === undefined ? 428 : 409 }
       );
     }
+    // A caller-supplied address that cannot be stored is a 400, not a 500.
+    // `isValidCellAddress` accepts `A0` and `A9999999999`, so both clear this
+    // route's own validation and only fail inside the store — and an agent that
+    // receives "Failed to perform document operation" cannot correct itself.
+    if (error instanceof SheetAddressError) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
+
+    // The sheet's stored document could not be read. This used to be an
+    // explicit 409 on `edit-cells` ("refusing to overwrite it"); the guard went
+    // away with the read-modify-write, but the condition still exists inside
+    // `materializeFromDocument` and deserves the same answer rather than a
+    // generic 500.
+    if (error instanceof Error && error.message.includes('could not be read')) {
+      return NextResponse.json({
+        error: error.message,
+        message: 'The stored sheet document needs repair before this sheet can be edited.',
+      }, { status: 409 });
+    }
+
     if (error instanceof z.ZodError) {
       return NextResponse.json({ error: error.issues }, { status: 400 });
     }

@@ -12,6 +12,14 @@ const mockFindFirstPage = vi.fn();
 const mockApplyPageMutation = vi.fn();
 const mockGetActorInfo = vi.fn();
 const mockIsSheetType = vi.fn((..._args: unknown[]) => false);
+const mockSetCells = vi.fn(async (..._args: unknown[]) => ({
+  changed: ['A1'],
+  recomputed: [] as string[],
+  rowCount: 1,
+  columnCount: 1,
+}));
+const mockReadSheetDocument = vi.fn(async (..._args: unknown[]) => null);
+const mockLogSheetCellActivity = vi.fn(async (..._args: unknown[]) => undefined);
 
 vi.mock('@/lib/auth', () => ({
   authenticateMCPRequest: vi.fn().mockResolvedValue({
@@ -35,12 +43,19 @@ vi.mock('@/lib/auth', () => ({
 
 vi.mock('@pagespace/lib/sheets/sheet', () => ({
   isSheetType: (...args: unknown[]) => mockIsSheetType(...args),
-  // The route refuses to write when existing content cannot be read, so it
-  // parses through the ok/failure API rather than the lossy one.
-  parseSheetContentSafe: vi.fn(),
-  serializeSheetContent: vi.fn(),
-  updateSheetCells: vi.fn(),
   isValidCellAddress: vi.fn(() => true),
+}));
+
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  setCells: (...args: unknown[]) => mockSetCells(...args),
+  readSheetDocument: (...args: unknown[]) => mockReadSheetDocument(...args),
+  // The route uses this in an `instanceof` check to answer 400 rather than 500,
+  // so the mock has to provide a real class.
+  SheetAddressError: class SheetAddressError extends Error {},
+}));
+
+vi.mock('@/services/api/sheet-activity', () => ({
+  logSheetCellActivity: (...args: unknown[]) => mockLogSheetCellActivity(...args),
 }));
 
 vi.mock('@pagespace/lib/logging/logger-config', () => {
@@ -282,14 +297,6 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
         content: '[cells]\nA1 = "1"',
       });
 
-      const sheetModule = await import('@pagespace/lib/sheets/sheet');
-      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
-        ok: true,
-        sheet: { cells: {}, rowCount: 1, columnCount: 1 },
-      });
-      (sheetModule.updateSheetCells as ReturnType<typeof vi.fn>).mockReturnValue({ cells: {}, rowCount: 1, columnCount: 1 });
-      (sheetModule.serializeSheetContent as ReturnType<typeof vi.fn>).mockReturnValue('[cells]\nA1 = "2"');
-
       const { POST } = await import('../route');
       const response = await POST(makeRequest({
         operation: 'edit-cells',
@@ -298,19 +305,20 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
       }));
 
       expect(response.status).toBe(200);
-      expect(mockApplyPageMutation).toHaveBeenCalledTimes(1);
+      // Addressed cell writes now, not a document mutation.
+      expect(mockSetCells).toHaveBeenCalledTimes(1);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 
-    it('refuses edit-cells when the sheet content could not be read', async () => {
-      // The lossy parse would yield an empty sheet, so writing would replace
-      // the whole spreadsheet with just the cells in this request.
+    it('writes only the addressed cells, never the rest of the sheet', async () => {
+      // Replaces "refuses edit-cells when the sheet content could not be read".
+      // That 409 guarded a read-modify-write of the whole document: a lossy
+      // parse would have yielded an empty sheet and the write would have
+      // replaced the spreadsheet with just these cells. The route addresses
+      // cells now — there is no document read to fail, so the stronger property
+      // (only the named cells are written) is asserted instead.
       mockIsSheetType.mockReturnValue(true);
-      const sheetModule = await import('@pagespace/lib/sheets/sheet');
-      (sheetModule.parseSheetContentSafe as ReturnType<typeof vi.fn>).mockReturnValue({
-        ok: false,
-        reason: 'toml',
-        message: 'Key without value at row 3',
-      });
+      mockFindFirstPage.mockResolvedValue({ ...BASE_PAGE, type: 'SHEET', content: '' });
 
       const { POST } = await import('../route');
       const response = await POST(
@@ -321,9 +329,9 @@ describe('MCP Documents API — write guardrails (#1761)', () => {
         })
       );
 
-      expect(response.status).toBe(409);
-      const body = await response.json();
-      expect(body.error).toMatch(/could not be read/);
+      expect(response.status).toBe(200);
+      const [, cells] = mockSetCells.mock.calls[0];
+      expect(cells).toEqual([{ address: 'A1', value: '2' }]);
     });
   });
 

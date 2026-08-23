@@ -78,7 +78,7 @@ Column key — **Tool**: MCP tool name (`tools.js` line of its schema). **Input*
 
 | Tool | Input | Call | Route | Response (route truth) |
 |---|---|---|---|---|
-| `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns}}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
+| `edit_sheet_cells` (tools.js:308) | `pageId*`, `cells*[]{address*,value*}` | POST `/api/mcp/documents` `{operation:'edit-cells', pageId, cells}` (page.js:379–385) | `mcp/documents/route.ts:85` (see §3) | `{pageId, pageTitle, cellsUpdated, operation:'edit-cells', stats{valuesSet,formulasSet,cellsCleared,sheetDimensions{rows,columns},recomputed}, updatedCells[{address,type}]}` (`:538–556`). Non-sheet page → 400 with `pageType` (`:469–473`); invalid A1 address → 400 (`:481–487`). |
 
 ### 2.7 Task management (6 tools)
 
@@ -200,7 +200,7 @@ Input schema (zod, `:76–83`): `{operation: 'read'|'replace'|'insert'|'delete'|
 | `replace` (`:282`) | `startLine`, `content` (`endLine` defaults to `startLine`) | `{…, operation:'replace', affectedLines:'s-e'}` (`:335–342`) | 400 missing/out-of-range (`:283–291`); 409/428 revision mismatch (`:564–572`) |
 | `insert` (`:345`) | `startLine`, `content` (insert index clamps to EOF) | `{…, operation:'insert', insertedAt}` (`:394–401`) | 400 missing |
 | `delete` (`:404`) | `startLine` (`endLine` optional) | `{…, operation:'delete', deletedLines:'s-e'}` (`:456–463`) | 400 missing/out-of-range |
-| `edit-cells` (`:466`) | `cells[]` non-empty; page must be SHEET | `{pageId,pageTitle,cellsUpdated,operation,stats{valuesSet,formulasSet,cellsCleared,sheetDimensions},updatedCells[]}` (`:538–556`) | 400 non-sheet (`:469`), invalid A1 address (`:481–487`) |
+| `edit-cells` (`:466`) | `cells[]` non-empty; page must be SHEET | `{pageId,pageTitle,cellsUpdated,operation,stats{valuesSet,formulasSet,cellsCleared,sheetDimensions,recomputed},updatedCells[]}` (`:538–556`) | 400 non-sheet (`:469`), invalid A1 address (`:481–487`) |
 
 All mutations go through `applyPageMutation` with `expectedRevision` (optimistic concurrency), emit websocket `content-updated`, and audit-log with `source:'mcp'` (`:302–342` etc.). Zod failure → 400 `{error: issues}` (`:574–576`).
 

@@ -125,6 +125,7 @@ import type { PaneTarget, WorkspaceNode } from '@pagespace/lib/agent-workspaces/
 import type { WorkspaceNodeTarget } from '@pagespace/lib/agent-workspaces/workspace-node-wire';
 import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
+import { useEditingStore } from '@/stores/useEditingStore';
 
 const driveFixture = (id: string, name: string, overrides: Partial<Drive> = {}): Drive => ({
   id,
@@ -309,6 +310,12 @@ beforeEach(() => {
   // Same leak risk for the tree: two tests opening the same workspace id would
   // otherwise see each other's nodes, since nothing else clears this store.
   __resetWorkspaceQueuesForTests();
+  // Same reason, one store over: the environment dialogs register an editing
+  // session while open, and a test that unmounts mid-dialog leaves it
+  // registered. A leaked session is not inert — `isEditingActive()` gates the
+  // quick-create hotkey handler, so the next test's keypress would silently do
+  // nothing.
+  useEditingStore.getState().clearAllSessions();
   // Deliberately a PLAIN, non-admin user: sessions/chat/panes are open to
   // every authenticated user now, so every test in this file that relies on
   // this default doubles as proof a non-admin gets full access too.
@@ -1792,6 +1799,7 @@ describe('AgentsSidebar', () => {
     });
 
     test('offers no environment management to a member who cannot administer the drive', async () => {
+      const user = userEvent.setup();
       useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isOwned: false, role: 'MEMBER' })] });
       respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
       renderSidebar();
@@ -1801,21 +1809,375 @@ describe('AgentsSidebar', () => {
       const envRow = await screen.findByTestId('sidebar-env-env-1');
       expect(within(envRow).getByText('staging')).toBeDefined();
       expect(within(envRow).queryByLabelText('Environment actions')).toBeNull();
-      expect(screen.queryByLabelText('New environment')).toBeNull();
+
+      // Creating one is not offered anywhere either — not as a sidebar button
+      // (there is no longer one for anybody) and not in the palette, which is
+      // where the act moved to.
+      await user.click(screen.getByLabelText('New session'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+      expect(screen.queryByText('New environment')).toBeNull();
     });
 
-    test('an admin gets the "New environment" affordance, and creating one POSTs just a name', async () => {
+    /**
+     * ENVIRONMENT CREATION LIVES IN THE PALETTE, NOT IN AN ICON BUTTON.
+     *
+     * The sidebar used to carry a `Boxes` button beside each "+". It is gone:
+     * the selector that already offers environments as somewhere to run is
+     * where making one belongs, and it is reachable from BOTH steps that talk
+     * about them — the target step (which exists even in a drive with no
+     * environments, where the env step never renders) and the env step (where
+     * the environment just created is the answer to the question being asked).
+     */
+    test('no icon button creates an environment any more — the sidebar has none for an admin either', async () => {
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'none' }]);
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      expect(screen.queryByLabelText('New environment')).toBeNull();
+      expect(screen.queryByLabelText('New environment in Alpha')).toBeNull();
+    });
+
+    test('an admin creates one from the palette\'s target step, and lands back on that step with it offered', async () => {
       const user = userEvent.setup();
       respondWithSessions([], []);
       mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
       renderSidebar();
 
-      await user.click(await screen.findByLabelText('New environment'));
-      await user.type(await screen.findByLabelText('Name'), 'dev');
-      await user.click(screen.getByRole('button', { name: 'Create' }));
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
 
       await waitFor(() =>
         expect(mockPost).toHaveBeenCalledWith('/api/drives/drive-1/envs', { name: 'dev' }),
+      );
+      // Said out loud: the palette covers the sidebar, so the new row appearing
+      // there is no longer the confirmation it used to be.
+      expect(mockToastSuccess).toHaveBeenCalledWith('Created “dev”');
+      // Back on the target step — the session it came here to start is still
+      // unstarted, and the environment now exists for the step that asks where.
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('creating from the environment step goes straight on to naming, with the new environment selected', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValueOnce({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      mockPost.mockResolvedValueOnce({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('Researcher'));
+      await user.click(await screen.findByText('New environment…'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // No second trip through the environment step: what the user just made is
+      // the answer to it.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-new',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    /**
+     * THE WINDOW BETWEEN CREATING ONE AND THE LISTING SAYING SO.
+     *
+     * `mutate(key)` alone is a revalidation, and while it is in flight the
+     * cache still holds the listing from before — with `isLoading` false, since
+     * that flags a first load and not a refresh. The step machine reads exactly
+     * those two things, so for the width of that request it would answer "this
+     * drive has no environments" about a drive that just got one, and spawn
+     * ephemerally into it.
+     *
+     * The environments endpoint here never answers after the create, which is
+     * that window held open: what the palette offers next can only have come
+     * from the cache write.
+     */
+    test('the environment created from the target step is offered before the listing catches up', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      envsHang = true;
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // Back on the target step. Picking an agent now must reach the question
+      // "where should it run?" — not skip it as though the drive had none.
+      await user.click(await screen.findByText('Researcher'));
+      expect(await screen.findByText('in dev')).toBeDefined();
+    });
+
+    test('making a new environment from a row-opened flow asks again rather than using the row\'s', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      // The listing never catches up after the create — the same held-open
+      // window the target-step test uses, so the new environment can only be
+      // here via the cache write rather than a revalidation that happened to
+      // win.
+      let envsHang = false;
+      const listing = mockFetchWithAuth.getMockImplementation()!;
+      mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+        if (typeof url === 'string' && url.includes('/envs') && envsHang) return new Promise<never>(() => {});
+        return listing(url, init);
+      });
+      mockPost.mockResolvedValue({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      renderSidebar();
+
+      // Opened from staging's "+", which pre-answers "where should it run?".
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      envsHang = true;
+      // Then the user makes a DIFFERENT environment — a newer intent than the
+      // row's, which must not be silently overruled by it.
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await user.click(await screen.findByText('Researcher'));
+
+      // Asked once, with both to choose between — rather than spawning into
+      // staging as though the last minute had not happened.
+      expect(await screen.findByText('in dev')).toBeDefined();
+      expect(screen.getByText('in staging')).toBeDefined();
+    });
+
+    test('the create step registers with the editing store, as the dialog it replaced did', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+
+      await user.click(await screen.findByText('New environment'));
+
+      // Registered while the form is up: a background revalidation or an auth
+      // refresh landing mid-type must not tear down what is being named.
+      await screen.findByLabelText('Environment name');
+      expect(useEditingStore.getState().isAnyActive()).toBe(true);
+
+      // And released when it closes, rather than leaving the app thinking
+      // someone is forever typing.
+      await user.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(useEditingStore.getState().isAnyActive()).toBe(false);
+    });
+
+    /**
+     * A CREATE THAT LANDS AFTER ITS FLOW IS GONE.
+     *
+     * The POST is a round trip, and Escape closes the palette while it is still
+     * out. Whatever the user opens next is a different flow with its own
+     * answers — so the late continuation must not write into it: not select the
+     * environment it made, not drop the row preset the new flow carries, not
+     * close a step being typed in.
+     */
+    test('a create that resolves after its flow closed does not touch the flow that replaced it', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      let resolveCreate: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveCreate = resolve; }));
+      renderSidebar();
+
+      // Flow A: start creating an environment from the target step…
+      await screen.findByTestId('sidebar-env-env-1');
+      await user.click(screen.getByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      // …then abandon it while the POST is still out.
+      await user.keyboard('{Escape}');
+
+      // Flow B: opened from staging's "+", which pre-answers where it runs.
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+
+      // Flow A's answer lands now.
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      await act(async () => {
+        resolveCreate?.({ env: { id: 'env-new', name: 'dev', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // Flow B is untouched: still bound to staging, still going straight to
+      // naming rather than being asked again.
+      await user.click(await screen.findByText('Researcher'));
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenLastCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
+      );
+    });
+
+    /**
+     * TWO CREATES IN FLIGHT AT ONCE.
+     *
+     * `creatingEnv` is what holds this form closed while its POST is out, and
+     * the request that settles is not necessarily the one on screen: abandon a
+     * create, start another, and the FIRST landing would re-enable the form
+     * over a POST still in flight — a second, non-idempotent create one
+     * keystroke away.
+     */
+    test('an abandoned create landing later does not re-enable the form over a live request', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      let resolveFirst: ((value: unknown) => void) | undefined;
+      mockPost.mockImplementationOnce(() => new Promise((resolve) => { resolveFirst = resolve; }));
+      mockPost.mockImplementationOnce(() => new Promise(() => {}));
+      renderSidebar();
+
+      // Attempt A, abandoned while its POST is still out.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'a');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      await user.keyboard('{Escape}');
+
+      // Attempt B, still in flight.
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'b');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+
+      // A lands now.
+      await act(async () => {
+        resolveFirst?.({ env: { id: 'env-a', name: 'a', driveId: 'drive-1', status: 'none' } });
+      });
+
+      // B's request is still out, so B's form stays closed.
+      expect(screen.getByRole('button', { name: 'Creating…' })).toBeDefined();
+      expect(screen.queryByRole('button', { name: 'Create environment' })).toBeNull();
+    });
+
+    test('a name already taken keeps the create step open with what was typed', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], []);
+      mockPost.mockRejectedValueOnce(
+        new ApiRequestError('An environment with this name already exists', 409, {}),
+      );
+      renderSidebar();
+
+      await user.click(await screen.findByLabelText('New session'));
+      await user.click(await screen.findByText('New environment'));
+      await user.type(await screen.findByLabelText('Environment name'), 'dev');
+      await user.click(screen.getByRole('button', { name: 'Create environment' }));
+
+      await waitFor(() => expect(mockPost).toHaveBeenCalled());
+      // Still the create step, still holding the name — the one refusal
+      // retyping can actually fix.
+      expect((await screen.findByLabelText('Environment name') as HTMLInputElement).value).toBe('dev');
+    });
+
+    /**
+     * THE QUICK-CREATE HOTKEY MEANS THIS SURFACE'S "NEW".
+     *
+     * Elsewhere `Alt+N` opens the page-type palette. On the Agents routes "new"
+     * is a session — or the environment to run one in, which the spawn palette
+     * now offers — so the sidebar answers the binding and
+     * `QuickCreatePalette` stands down (its own guard, tested at its own site).
+     */
+    test('the quick-create hotkey opens the spawn palette on a drive-scoped agents route', async () => {
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('New session');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('on the global console the hotkey asks which drive, then goes on into the same palette', async () => {
+      const user = userEvent.setup();
+      mockUseParams.mockReturnValue({});
+      mockUsePathname.mockReturnValue('/dashboard/agents');
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // Not the New Drive dialog: creating a drive is a different act, and it
+      // never reaches a session or an environment.
+      const picker = await screen.findByRole('dialog', { name: 'Choose a destination' });
+      expect(within(picker).getByText('Global Assistant')).toBeDefined();
+
+      await user.click(within(picker).getByText('Alpha'));
+      expect(await screen.findByText('Researcher')).toBeDefined();
+    });
+
+    test('a trashed drive is offered nothing new — not by the hotkey, and not by the header', async () => {
+      useDriveStore.setState({ drives: [driveFixture('drive-1', 'Alpha', { isTrashed: true })] });
+      respondWithSessions([], []);
+      renderSidebar();
+
+      await screen.findByLabelText('Search sessions');
+      expect(screen.queryByLabelText('New session')).toBeNull();
+
+      fireEvent.keyDown(document, { key: 'Dead', code: 'KeyN', altKey: true });
+
+      // And it does not fall through to drive creation, which would answer a
+      // question nobody asked.
+      expect(screen.queryByText('Researcher')).toBeNull();
+      expect(screen.queryByText('Global Assistant')).toBeNull();
+    });
+
+    test('the environment row\'s "+" spawns INSIDE it — the row already answered where', async () => {
+      const user = userEvent.setup();
+      respondWithSessions([], [{ id: 'env-1', name: 'staging', status: 'running' }]);
+      mockPost.mockResolvedValue({
+        session: { workspaceId: 'ses-new', sessionId: 'ses-new' },
+        conversationId: 'conv-new',
+      });
+      renderSidebar();
+
+      const envRow = await screen.findByTestId('sidebar-env-env-1');
+      await user.click(within(envRow).getByLabelText('New session in staging'));
+      await user.click(await screen.findByText('Researcher'));
+
+      // Straight to naming: the environment step is not asked a question the
+      // row already answered.
+      const nameInput = await screen.findByPlaceholderText('Researcher');
+      expect(screen.queryByText('New sandbox')).toBeNull();
+      fireEvent.submit(nameInput.closest('form')!);
+
+      await waitFor(() =>
+        expect(mockPost).toHaveBeenCalledWith('/api/agent-workspaces', {
+          driveId: 'drive-1',
+          envId: 'env-1',
+          agentPageId: 'agent-1',
+          name: '',
+        }),
       );
     });
 

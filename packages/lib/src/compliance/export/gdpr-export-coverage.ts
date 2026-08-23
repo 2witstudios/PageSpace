@@ -59,6 +59,8 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   drives: 'drives',
   drive_members: 'drives',
   pages: 'pages',
+  sheet_tabs: 'sheets',
+  sheet_rows: 'sheets',
   channel_messages: 'messages',
   conversations: 'messages',
   messages: 'messages',
@@ -280,6 +282,10 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'file_pages',
     'file_conversations',
     'page_versions',
+    // The per-cell edit log for sheet content that is exported in full under
+    // `sheets`. (Sheet version history is `page_versions`, already excluded
+    // above for the same reason.)
+    'sheet_changes',
     'user_activities',
     'security_audit_log',
     'task_assignees',
@@ -290,6 +296,11 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // A monotonic per-workspace mutation counter and nothing else — one bigint
     // whose only job is to let a client tell a stale snapshot from a fresh one.
     // The rows it counts ARE exported (`agent_workspace_nodes`).
+    // Formula dependency edges — derived wholly from the formula text, which is
+    // exported verbatim as each cell's `raw` under `sheets`. They are a
+    // recompute index, not something the subject authored.
+    'sheet_cell_deps',
+    'sheet_range_deps',
     'agent_workspace_node_revs',
     'ai_pending_abort_intents',
     'conversation_compactions',

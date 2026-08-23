@@ -36,6 +36,34 @@ describe('planPageRollback', () => {
   it('throws without a pageId', () => {
     assert({ given: 'no pageId', should: 'throw', actual: thrown(() => planPageRollback(act({ pageId: null }), null)), expected: 'Page ID not found in activity' });
   });
+  it('reports an addressed sheet cell write as not-rollbackable', () => {
+    // A cell write persists no document, so `restoreChangedFields` finds
+    // nothing and the old path threw "No values to restore" — surfacing as a
+    // failing Undo affordance on every agent, MCP and form edit.
+    assert({
+      given: 'an activity stamped as a sheet cell write',
+      should: 'plan not-rollbackable with a reason the UI can show',
+      actual: planPageRollback(act({ operation: 'update', metadata: { sheetCellWrite: true } }), null),
+      expected: {
+        kind: 'not-rollbackable',
+        reason:
+          'Individual sheet cell edits cannot be undone yet. Restore the page from version history instead.',
+      },
+    });
+  });
+  it('does not treat an ordinary sheet page update as a cell write', () => {
+    // The flag, not the page type, decides — a whole-document sheet save still
+    // carries content and stays rollbackable.
+    assert({
+      given: 'metadata without the sheetCellWrite flag',
+      should: 'plan an ordinary update',
+      actual: planPageRollback(
+        act({ operation: 'update', metadata: { source: 'mcp' }, updatedFields: ['title'], previousValues: { title: 'old' } }),
+        null,
+      ),
+      expected: { kind: 'apply-update', updateData: { title: 'old' }, restoreOrphanedChildren: false },
+    });
+  });
   it('plans trash-created for a create', () => {
     assert({ given: 'a create', should: 'plan trash-created', actual: planPageRollback(act({ operation: 'create' }), null), expected: { kind: 'trash-created' } });
   });

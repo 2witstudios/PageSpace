@@ -187,6 +187,14 @@
       "types": "./dist/schema/sessions.d.ts",
       "default": "./dist/schema/sessions.js"
     },
+    "./schema/sheets": {
+      "types": "./dist/schema/sheets.d.ts",
+      "default": "./dist/schema/sheets.js"
+    },
+    "./schema/sheets-types": {
+      "types": "./dist/schema/sheets-types.d.ts",
+      "default": "./dist/schema/sheets-types.js"
+    },
     "./schema/social": {
       "types": "./dist/schema/social.d.ts",
       "default": "./dist/schema/social.js"

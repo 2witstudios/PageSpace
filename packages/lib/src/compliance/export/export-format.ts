@@ -77,6 +77,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // the subject's work into these two tables. They are first-class
     // categories, not an appendix: the shells' scrollback and the streams'
     // checkpointed `parts` are content nothing else in this bundle carries.
+    { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
     { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
     // Inferences the memory cron drew about the subject, with the quotes of
@@ -195,6 +196,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'settings', value: data.settings },
       { '@type': 'PropertyValue', name: 'personalization', value: data.personalization },
       { '@type': 'PropertyValue', name: 'personalizationCandidates', value: data.personalizationCandidates },
+      { '@type': 'PropertyValue', name: 'sheets', value: data.sheets },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
     ],

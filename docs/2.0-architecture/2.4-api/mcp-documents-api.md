@@ -114,9 +114,16 @@ re-normalized with `addLineBreaksForAI` after the splice.
 
 ## `edit-cells` — sheet editing
 
-This is the intended, cell-aware way to edit `SHEET` page content over the
-MCP HTTP API. There is no separate `/api/mcp/sheets` or similar route —
-sheet edits go through `/api/mcp/documents` with `operation: 'edit-cells'`.
+The cell-aware way to edit `SHEET` page content through THIS route:
+`/api/mcp/documents` with `operation: 'edit-cells'`. It remains supported and
+writes through the same row store as everything else.
+
+For anything beyond addressing cells by name — filtering, sorting, paging,
+appending or deleting rows — use **`/api/mcp/sheets`**, which treats a sheet as
+a table rather than a document: `query-rows`, `append-rows`, `update-cells`,
+`delete-rows`, `get-rows`, `describe`. It is the route to reach for when a
+sheet is large enough that reading the whole document is the wrong move.
+See `apps/web/src/app/api/mcp/sheets/route.ts`.
 
 The `replace`/`insert`/`delete` branches check `isSheetType(page.type)` before
 touching content and reject with `400` on a `SHEET` page:

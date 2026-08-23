@@ -16,6 +16,8 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { readSheetDocument } from '@pagespace/lib/sheets/store';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
@@ -183,7 +185,16 @@ export const pageReadTools = {
             for (const entry of textEntries) {
               const row = contentMap.get(entry.id);
               if (!row) continue;
-              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
+
+              // Sheets come from their rows here too. `isTextSerializablePageType`
+              // accepts SHEET, and this path reads `pages.content` directly —
+              // which is empty for a materialised sheet, so `include: "content"`
+              // returned a blank spreadsheet while `read_page` returned the data.
+              const readableRow = isSheetType(entry.type as PageType)
+                ? { ...row, content: (await readSheetDocument(entry.id)) ?? row.content }
+                : row;
+
+              const fullContent = serializePageContentForAI({ type: entry.type, ...readableRow });
               if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
                 // Cut at the last newline within the budget rather than an arbitrary
                 // character offset, so we don't split a UTF-16 surrogate pair or sever
@@ -824,10 +835,17 @@ export const pageReadTools = {
           };
         }
 
+        // A sheet's content is generated from its rows. `pages.content` is
+        // empty once a sheet has been materialised, so serialising the page as
+        // stored would hand the model a blank spreadsheet.
+        const readable = isSheetType(page.type as PageType)
+          ? { ...page, content: (await readSheetDocument(page.id)) ?? page.content }
+          : page;
+
         // Format content for AI line-based editing, then split into lines.
         // Shared with command injection (page-serializer) so both surfaces
         // serialize page content identically.
-        const formattedContent = serializePageContentForAI(page);
+        const formattedContent = serializePageContentForAI(readable);
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 

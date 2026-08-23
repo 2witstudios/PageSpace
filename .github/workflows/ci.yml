@@ -146,6 +146,23 @@ jobs:
           ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
         run: bun run --filter '@pagespace/db' test:integration
 
+      # packages/lib had the same gap: a `vitest.integration.config.ts` existed
+      # but there was no script invoking it and no job running it, so ~25 suites
+      # sat dead in the tree. The sheet row store is the reason it matters now —
+      # every serious defect in that layer (whole-row jsonb upserts deleting
+      # columns, AND binding tighter than OR, Postgres declining to
+      # short-circuit a type guard beside a cast) was invisible to unit tests
+      # and only reproducible against a real database.
+      #
+      # These suites assume a UTC server: several assert on write-time clocks,
+      # and a non-UTC session timezone makes them fail by exactly the offset.
+      - name: Run packages/lib integration suites
+        env:
+          TZ: UTC
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_test
+          ADMIN_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/pagespace_admin_test
+        run: bun run --filter '@pagespace/lib' test:integration
+
       # infrastructure/ is not a bun workspace (see infrastructure/vitest.config.ts
       # for why it should not become one), so turbo never sees it and its ~15 test
       # files — including upgrade-doc.test.ts, the only check on the operator
