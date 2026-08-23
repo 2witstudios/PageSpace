@@ -278,6 +278,12 @@ async function mintScopedKey(
       } catch {
         clack.note(keysDescribeHint(), 'What this key can do');
       }
+    } else {
+      // No raw token to ask with — the same anomaly `--show-token` reports in
+      // `create.ts` (the server returned a refresh credential rather than a
+      // static one). The pointer still has to be printed: falling silent here
+      // would leave the mint with no answer to "what can it do" at all.
+      clack.note(keysDescribeHint(), 'What this key can do');
     }
     clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {

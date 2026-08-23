@@ -31,7 +31,7 @@ describe('tokensRevokeHandler', () => {
     expect(invoke).not.toHaveBeenCalled();
     expect(prompt).not.toHaveBeenCalled();
     const output = stderr.lines.join('');
-    expect(output).toContain('Your key is not invalid');
+    expect(output).toContain('That says nothing about the key');
     expect(output).not.toMatch(/invalidated/i);
   });
 

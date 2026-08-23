@@ -54,9 +54,10 @@ export async function GET(
     const role = await getRoleById(driveId, roleId);
 
     if (!role) {
-      // `roleNotFoundMessage`, not a bare 'Role not found': asking for a SYSTEM
-      // role name here (member/admin/owner) can only ever miss, and the caller
-      // needs to be told where those live instead of being left at a dead end.
+      // `roleNotFoundMessage`, not a bare 'Role not found' — here and in PATCH
+      // and DELETE below: asking for a SYSTEM role name (member/admin/owner)
+      // can only ever miss whichever verb it arrives at, and the caller needs
+      // to be told where those live instead of being left at a dead end.
       return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
@@ -97,7 +98,7 @@ export async function PATCH(
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     const body = await request.json();
@@ -206,7 +207,7 @@ export async function DELETE(
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     await deleteDriveRole(driveId, roleId);

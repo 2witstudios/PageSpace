@@ -48,12 +48,29 @@ describe('credentialKindOf', () => {
 describe('keysCommandNeedsLoginMessage', () => {
   // Issue #2464: the message this replaces said the key had been invalidated,
   // which is the one thing that was not true.
-  it('says the key is fine, names the real limitation, and gives a next step', () => {
+  it('refuses without claiming anything about the key, names the real limitation, and gives a next step', () => {
     const message = keysCommandNeedsLoginMessage('list');
-    expect(message).toContain('Your key is not invalid');
+    expect(message).toContain('That says nothing about the key');
     expect(message).not.toMatch(/invalidated|revoked|expired/i);
     expect(message).toContain('pagespace login');
     expect(message).toContain('pagespace keys describe');
+  });
+
+  // Nothing has been validated when this fires — the classification is a
+  // prefix check on a credential no request has been made with, so a revoked
+  // token reaches this branch too. Asserting the key is VALID would swap one
+  // unearned claim for its mirror image.
+  it('never asserts that the key is valid, only that this refusal is not about it', () => {
+    expect(keysCommandNeedsLoginMessage('list')).not.toMatch(/key is (still )?(valid|fine|not invalid|working)/i);
+  });
+
+  // `pagespace login` alone is not enough while the key is still in the
+  // environment: an explicit --token/env credential outranks the stored login
+  // (auth/resolve.ts), so the caller would log in and hit this same refusal.
+  it('tells the caller to remove the overriding credential, not just to log in', () => {
+    const message = keysCommandNeedsLoginMessage('list');
+    expect(message).toMatch(/--token\/env credential removed/);
+    expect(message).toMatch(/outranks/);
   });
 
   it('names the verb the caller actually ran', () => {

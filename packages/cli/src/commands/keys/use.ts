@@ -196,15 +196,6 @@ export async function runActivateCeremony(
 
 export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
-    // Same wall `keys list` hits, same reason: the activation ceremony's server
-    // lookup rides the ambient `manage_keys` credential, which a scoped access
-    // key is not. Refused here so a live key is never reported as invalidated
-    // (issue #2464).
-    if (ctx.credentialKind === 'key') {
-      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use')}\n`);
-      return EXIT_RUNTIME_ERROR;
-    }
-
     const parsed = parseKeysUseArgs(intent.args);
     if (!parsed.ok) {
       ctx.stderr.write(`${parsed.message}\n`);
@@ -226,6 +217,20 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
       }
       ctx.stdout.write(`${deactivationMessage(host)}\n`);
       return EXIT_SUCCESS;
+    }
+
+    // Deliberately AFTER `--off`, which is purely local: it clears this
+    // machine's active-key map and never calls the server, so there is nothing
+    // for a credential to be insufficient for. Refusing it would leave whoever
+    // is running under a key unable to undo an activation at all.
+    //
+    // Activation itself is the same wall `keys list` hits, for the same reason:
+    // its server lookup rides the ambient `manage_keys` credential, which a
+    // scoped access key is not. Refused here so a live key is never reported as
+    // invalidated (issue #2464).
+    if (ctx.credentialKind === 'key') {
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use')}\n`);
+      return EXIT_RUNTIME_ERROR;
     }
 
     const { name } = parsed.args;

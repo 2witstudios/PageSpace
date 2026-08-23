@@ -158,6 +158,14 @@ export const sessionRepository = {
    * and nothing about the owning USER, since the whole point of keeping
    * `/api/auth/me` closed to mcp_* tokens is that holding a key must not yield
    * the person behind it.
+   *
+   * `isScoped` is deliberately NOT selected. It records what the key was minted
+   * as; whether the key is confined RIGHT NOW is `isDriveScopedPrincipal`, read
+   * off the same `allowedDriveIds` every authorization decision uses. Returning
+   * the stored flag beside a live answer derived from something else would
+   * invite the two to disagree in the response — and the one case where they
+   * could (a scoped key whose drives were all deleted) never reaches any route
+   * at all: `validateMCPToken` fails it closed before authentication succeeds.
    */
   async findMcpTokenSelfById(tokenId: string, userId: string) {
     const token = await db.query.mcpTokens.findFirst({
@@ -168,7 +176,6 @@ export const sessionRepository = {
         tokenPrefix: true,
         createdAt: true,
         lastUsed: true,
-        isScoped: true,
       },
     });
     return token ?? null;

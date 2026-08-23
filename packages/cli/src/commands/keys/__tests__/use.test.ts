@@ -245,8 +245,24 @@ describe('createKeysUseHandler — under a scoped access key', () => {
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     const output = stderr.lines.join('');
-    expect(output).toContain('Your key is not invalid');
+    expect(output).toContain('That says nothing about the key');
     expect(output).not.toMatch(/invalidated/i);
+  });
+
+  // `--off` is purely local — it clears this machine's active-key map and never
+  // calls the server — so there is nothing for a credential to be insufficient
+  // for. Refusing it would leave whoever runs under a key unable to undo an
+  // activation at all.
+  it('still deactivates with --off, which touches no server at all', async () => {
+    const { deps } = baseDeps(fakeStore({ agent: STATIC_KEY }));
+    const handler = createKeysUseHandler(deps);
+    const activeKeyStore = createFakeActiveKeyStore({ 'https://pagespace.ai': 'agent' });
+    const ctx = createFakeContext({ activeKeyStore, credentialKind: 'key' });
+
+    const code = await handler(ctx, commandIntent(['keys', 'use', '--off']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(activeKeyStore.entries.has('https://pagespace.ai')).toBe(false);
   });
 });
 

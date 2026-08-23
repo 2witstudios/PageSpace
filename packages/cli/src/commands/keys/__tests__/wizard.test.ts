@@ -210,7 +210,7 @@ describe('createKeysHandler — under a scoped access key', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(introMock).not.toHaveBeenCalled();
     const output = stderr.lines.join('');
-    expect(output).toContain('Your key is not invalid');
+    expect(output).toContain('That says nothing about the key');
     expect(output).not.toMatch(/invalidated/i);
   });
 });

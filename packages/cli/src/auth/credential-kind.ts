@@ -55,20 +55,33 @@ export function credentialKindOf(source: AuthSource): CredentialKind {
  * What `pagespace keys <verb>` says when the resolved credential is a scoped
  * key rather than a login.
  *
- * Three things it must do, in order: say the key is FINE (the old message
- * claimed the opposite, and an agent that believes its credential died will
- * throw it away and re-mint for nothing), name the real limitation, and give
- * the command that answers the question the caller probably had. `keys
- * describe` is offered for every verb because "what is this key, and what can
- * it do" is precisely the thing a key CAN ask about itself.
+ * Three things it must do, and one it must NOT.
+ *
+ * It says this refusal is not evidence about the key, names the real
+ * limitation, and gives the commands that get the caller somewhere. What it
+ * deliberately does not say is that the key is VALID: nothing has been
+ * validated at this point — the classification is a prefix check on a
+ * credential no request has yet been made with, so a revoked token would
+ * reach exactly this branch too. The bug being fixed was an unearned claim in
+ * the other direction ("Static token was invalidated"), and replacing it with
+ * an equally unearned claim would only move the lie. `keys describe` is
+ * offered for every verb because it is both the question a key CAN ask about
+ * itself and the call that would actually prove the key still works.
+ *
+ * The login line carries the precedence caveat because without it the advice
+ * misfires in the exact case that motivated this message: `pagespace login`
+ * stores a personal credential, but an explicit `--token`/env credential
+ * outranks it (`auth/resolve.ts`), so an agent with the key still in its
+ * environment would log in and hit this same refusal again.
  */
 export function keysCommandNeedsLoginMessage(verb?: string): string {
   const command = verb === undefined ? 'pagespace keys' : `pagespace keys ${verb}`;
   return (
     `"${command}" needs your personal login, and this invocation resolved a scoped access key.\n` +
-    'Your key is not invalid — key management is simply not something a key can do: a key reads and writes drive ' +
-    'content, while listing, minting and revoking keys is reserved for the person who owns them.\n' +
+    'That says nothing about the key: key management is simply not something a key can do. A key reads and writes ' +
+    'drive content, while listing, minting and revoking keys is reserved for the person who owns them.\n' +
     '  pagespace keys describe   — what THIS key is, and the permissions it actually resolves to\n' +
-    `  pagespace login           — then re-run "${command}"`
+    `  pagespace login           — then re-run "${command}" with the key's --token/env credential removed,\n` +
+    '                              since an explicit credential outranks your stored login.'
   );
 }

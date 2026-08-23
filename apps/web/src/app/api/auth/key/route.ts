@@ -164,7 +164,8 @@ export async function GET(req: NextRequest) {
     // than flattened to all-false: "this page is not yours to see" and "you may
     // do nothing with this page" are different answers, and an agent choosing
     // where to write needs to tell them apart.
-    const pageId = req.nextUrl.searchParams.get('pageId');
+    const { searchParams } = new URL(req.url);
+    const pageId = searchParams.get('pageId');
     const page = pageId === null ? null : { id: pageId, permissions: await getPrincipalAccessLevel(auth, pageId) };
 
     auditRequest(req, {

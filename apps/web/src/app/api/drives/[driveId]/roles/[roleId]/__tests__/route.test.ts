@@ -609,7 +609,7 @@ describe('PATCH /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
     });
 
     it('should return updated role on success', async () => {
@@ -820,7 +820,7 @@ describe('DELETE /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
     });
 
     it('should return success=true on successful deletion', async () => {

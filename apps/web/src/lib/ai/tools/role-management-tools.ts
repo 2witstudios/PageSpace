@@ -312,7 +312,7 @@ export const roleManagementTools = {
 
       try {
         const role = await getRoleById(driveId, roleId);
-        if (!role) return { success: false, error: `Role "${roleId}" not found in this drive` };
+        if (!role) return { success: false, error: roleNotFoundMessage(roleId) };
 
         const page = await db.query.pages.findFirst({
           where: and(eq(pages.id, pageId), eq(pages.driveId, driveId)),
@@ -396,7 +396,7 @@ export const roleManagementTools = {
 
       try {
         const role = await getRoleById(driveId, roleId);
-        if (!role) return { success: false, error: `Role "${roleId}" not found in this drive` };
+        if (!role) return { success: false, error: roleNotFoundMessage(roleId) };
 
         if (!(pageId in role.permissions)) {
           return {
