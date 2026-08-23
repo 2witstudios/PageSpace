@@ -333,8 +333,14 @@ export const dispatchRealtimeToolCall = async (
       tool: request.name,
     });
     // `deps.tools` IS the set this session advertised, so every suggestion is
-    // a tool the model can actually call next. Wording stays a sentence
-    // because a voice turn may end up reading it out.
+    // a tool the model can actually call next — which on voice means the core
+    // tools, since every non-core one is deferred behind `execute_tool`. A
+    // deferred name spoken directly therefore gets no suggestion here, and
+    // should not: this dispatcher could not run it. `createExecuteTool` holds
+    // the deferred half and makes the same suggestion on that path, which is
+    // the path the discovery prompt sends the model down.
+    //
+    // Wording stays a sentence because a voice turn may end up reading it out.
     const suggestions = suggestToolNames(request.name, Object.keys(deps.tools));
     const didYouMean = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : '';
     return failure(

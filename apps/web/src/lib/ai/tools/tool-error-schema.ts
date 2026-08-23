@@ -53,19 +53,66 @@ export const MAX_SCHEMA_CHARS = 4_000;
  */
 const MAX_VALIDATION_CHARS = 2_000;
 
-/**
- * The longest an invalid-parameters error can be — the two caps above plus
- * the fixed framing around them. Exported so the bound is asserted against a
- * named number rather than a magic one.
- */
-export const MAX_PARAMETER_ERROR_CHARS =
-  MAX_VALIDATION_CHARS + MAX_SCHEMA_CHARS + 200;
-
 /** How many near-miss names an unknown-tool error offers. */
 const MAX_SUGGESTIONS = 3;
 
+/**
+ * Longest name `suggestToolNames` will run its edit-distance pass over.
+ *
+ * THE NAME IS MODEL-CONTROLLED AND UNBOUNDED. `execute_tool` declares
+ * `tool_name: z.string()` and the voice bridge declares `name: z.string().min(1)`
+ * — neither carries a `.max()`, so the string that lands here is whatever the
+ * model emitted. Levenshtein is O(n·m), so a degenerate name (a model looping
+ * on a repeated token, or one induced by page content) turns a formerly O(1)
+ * error path into seconds of SYNCHRONOUS CPU — which blocks the Node event
+ * loop for the whole web tier, not just that request. Measured before this
+ * bound: a single 200,000-character name against ~200 candidates took 31
+ * seconds.
+ *
+ * 128 is double the 64-character ceiling `mcp-tool-converter` enforces on any
+ * real tool name, so nothing legitimate is turned away; past it there is no
+ * near miss to find, only a bill to pay.
+ */
+const MAX_SUGGESTION_NAME_CHARS = 128;
+
+/**
+ * Longest tool name echoed back inside an error.
+ *
+ * The name is whatever the model emitted, and every message below quotes it —
+ * twice, in the invalid-parameters case. Echoing it unclipped would make the
+ * error as large as the caller chose to make it, which is the same unbounded
+ * payload `MAX_SCHEMA_CHARS` exists to prevent, arriving by a different door.
+ * (The old messages echoed it unclipped too; the difference is that the bound
+ * is now claimed, so it has to be true.) 96 is comfortably above the
+ * 64-character ceiling any real tool name obeys.
+ */
+const MAX_TOOL_NAME_CHARS = 96;
+
+/**
+ * The longest an invalid-parameters error can be — the caps above plus the
+ * two echoed tool names and the fixed framing around them. Exported so the
+ * bound is asserted against a named number rather than a magic one.
+ *
+ * Declared after every cap it sums: a `const` initialised from a `const`
+ * declared further down the module hits the temporal dead zone and throws on
+ * import, which is a crash at load, not a test failure.
+ */
+export const MAX_PARAMETER_ERROR_CHARS =
+  MAX_VALIDATION_CHARS + MAX_SCHEMA_CHARS + 2 * MAX_TOOL_NAME_CHARS + 200;
+
 /** Longest description kept per parameter when a schema degrades to an outline. */
 const MAX_OUTLINE_DESCRIPTION_CHARS = 80;
+
+/**
+ * Longest rendered TYPE kept per parameter in an outline.
+ *
+ * The outline's per-line budget check skips a line that will not fit, so the
+ * overall cap holds either way — but one parameter with a 500-value enum would
+ * otherwise render as a single multi-thousand-character line and crowd out
+ * every other parameter name, which is exactly what the outline exists to
+ * preserve. Clipping the type keeps the line list readable and roughly even.
+ */
+const MAX_OUTLINE_TYPE_CHARS = 120;
 
 /**
  * The JSON Schema shape we read back out of `z.toJSONSchema`. Only the members
@@ -93,21 +140,27 @@ type JsonSchemaLike = {
  * become `$ref`s for the same reason — throwing here would replace a helpful
  * error with an unhelpful one.
  */
-export function describeToolSchema(schema: unknown): string {
+export function describeToolSchema(toolName: string, schema: unknown): string {
+  // EVERY path that does not return a schema must hand back the lookup that
+  // would. The prompt now tells the model a rejection carries the schema and
+  // that it therefore need not run a `tool_search` — so a degraded rendering
+  // with no pointer leaves it with neither, and it retries blind.
+  const lookup = `Call tool_search("select:${clip(toolName, MAX_TOOL_NAME_CHARS)}") for the full schema.`;
+
   const json = toJsonSchema(schema);
   if (json === undefined) {
     // Nothing at all could be derived — a non-Zod `inputSchema`, or a
     // conversion that failed even in its most forgiving mode. Say so plainly;
     // a made-up schema would be worse than none.
-    return 'Parameter schema unavailable for this tool.';
+    return `Parameter schema unavailable for this tool. ${lookup}`;
   }
 
   const full = safeStringify(json);
   if (full !== undefined && full.length <= MAX_SCHEMA_CHARS) return full;
 
-  const outline = outlineParameters(json);
+  const outline = outlineParameters(json, lookup);
   if (outline === undefined) {
-    return `Parameter schema is too large to include (over ${MAX_SCHEMA_CHARS} characters) and could not be summarised.`;
+    return `Parameter schema is too large to include (over ${MAX_SCHEMA_CHARS} characters) and could not be summarised. ${lookup}`;
   }
   return outline;
 }
@@ -129,9 +182,10 @@ export function formatInvalidParametersError(
     validationMessage.length <= MAX_VALIDATION_CHARS
       ? validationMessage
       : `${validationMessage.slice(0, MAX_VALIDATION_CHARS)}… [further validation issues omitted]`;
+  const name = clip(toolName, MAX_TOOL_NAME_CHARS);
   return [
-    `Invalid parameters for "${toolName}". Validation errors: ${issues}`,
-    `Input schema for "${toolName}": ${describeToolSchema(schema)}`,
+    `Invalid parameters for "${name}". Validation errors: ${issues}`,
+    `Input schema for "${name}": ${describeToolSchema(toolName, schema)}`,
   ].join('\n');
 }
 
@@ -149,10 +203,11 @@ export function formatUnknownToolError(
   availableToolNames: readonly string[]
 ): string {
   const suggestions = suggestToolNames(toolName, availableToolNames);
+  const name = clip(toolName, MAX_TOOL_NAME_CHARS);
   if (suggestions.length === 0) {
-    return `Unknown tool "${toolName}". Call tool_search("keyword") to discover available tools.`;
+    return `Unknown tool "${name}". Call tool_search("keyword") to discover available tools.`;
   }
-  return `Unknown tool "${toolName}". Did you mean: ${suggestions.join(', ')}? Otherwise call tool_search("keyword") to discover available tools.`;
+  return `Unknown tool "${name}". Did you mean: ${suggestions.join(', ')}? Otherwise call tool_search("keyword") to discover available tools.`;
 }
 
 /**
@@ -172,7 +227,9 @@ export function suggestToolNames(
   availableToolNames: readonly string[]
 ): string[] {
   const target = normalizeToolName(toolName);
-  if (target.length === 0) return [];
+  if (target.length === 0 || target.length > MAX_SUGGESTION_NAME_CHARS) return [];
+
+  const threshold = Math.max(1, Math.floor(target.length / 3));
 
   const scored: { name: string; rank: number; distance: number }[] = [];
   for (const name of availableToolNames) {
@@ -185,8 +242,12 @@ export function suggestToolNames(
       scored.push({ name, rank: 1, distance: Math.abs(candidate.length - target.length) });
       continue;
     }
+    // A length gap wider than the threshold cannot be closed by fewer edits
+    // than the gap itself, so the distance is already known to be too big.
+    // Skipping keeps the quadratic step off names that could never match.
+    if (Math.abs(candidate.length - target.length) > threshold) continue;
     const distance = editDistance(target, candidate);
-    if (distance <= Math.max(1, Math.floor(target.length / 3))) {
+    if (distance <= threshold) {
       scored.push({ name, rank: 2, distance });
     }
   }
@@ -242,7 +303,7 @@ function toJsonSchema(schema: unknown): JsonSchemaLike | undefined {
  * collapses to `object`; the model that needs its interior can still ask for
  * the full schema, and the line says so.
  */
-function outlineParameters(json: JsonSchemaLike): string | undefined {
+function outlineParameters(json: JsonSchemaLike, lookup: string): string | undefined {
   const properties = json.properties;
   if (properties === undefined) return undefined;
 
@@ -257,7 +318,7 @@ function outlineParameters(json: JsonSchemaLike): string | undefined {
   const budget = MAX_SCHEMA_CHARS - OUTLINE_RESERVE;
 
   for (const [name, property] of entries) {
-    const line = `  ${name}${required.has(name) ? '' : '?'}: ${describeType(property)}${describeSuffix(property)}`;
+    const line = `  ${name}${required.has(name) ? '' : '?'}: ${clip(describeType(property), MAX_OUTLINE_TYPE_CHARS)}${describeSuffix(property)}`;
     if (used + line.length + 1 > budget) {
       omitted += 1;
       continue;
@@ -268,15 +329,20 @@ function outlineParameters(json: JsonSchemaLike): string | undefined {
 
   if (lines.length === 0) return undefined;
 
-  const header = `Parameters (summarised — the full schema is over ${MAX_SCHEMA_CHARS} characters; call tool_search("select:<tool>") for it):`;
+  const header = `Parameters (summarised — the full schema is over ${MAX_SCHEMA_CHARS} characters. ${lookup}):`;
   const footer = omitted > 0 ? `\n  …and ${omitted} more parameter(s) not shown.` : '';
-  return `${header}\n${lines.join('\n')}${footer}`;
+  return `${clip(header, OUTLINE_RESERVE - 60)}\n${lines.join('\n')}${footer}`;
 }
 
 /**
  * Characters held back from the outline budget for its header and footer.
- * Both are fixed-length apart from the digits in the counts, so a round 250 is
- * comfortably above the worst case.
+ *
+ * The footer is fixed apart from a count, but the header now embeds the tool
+ * name via the `tool_search` pointer — and the name is model-supplied on the
+ * way in, so it is bounded here rather than assumed short. `outlineParameters`
+ * clips the header to this reserve before emitting it, which is what keeps
+ * `MAX_SCHEMA_CHARS` a real ceiling rather than one that holds for the names
+ * we happened to test.
  */
 const OUTLINE_RESERVE = 250;
 
@@ -297,16 +363,17 @@ function describeType(property: JsonSchemaLike): string {
   return 'unknown';
 }
 
+/** `text`, or its first `limit` characters with an ellipsis standing in for the rest. */
+function clip(text: string, limit: number): string {
+  return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
 /** The parameter's own description, clipped — it is the part most likely to be long. */
 function describeSuffix(property: JsonSchemaLike): string {
   const description = property.description;
   if (typeof description !== 'string' || description.trim().length === 0) return '';
   const single = description.replace(/\s+/g, ' ').trim();
-  const clipped =
-    single.length > MAX_OUTLINE_DESCRIPTION_CHARS
-      ? `${single.slice(0, MAX_OUTLINE_DESCRIPTION_CHARS - 1)}…`
-      : single;
-  return ` — ${clipped}`;
+  return ` — ${clip(single, MAX_OUTLINE_DESCRIPTION_CHARS)}`;
 }
 
 /**

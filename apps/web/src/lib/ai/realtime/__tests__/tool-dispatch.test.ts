@@ -359,17 +359,42 @@ describe('dispatchRealtimeToolCall', () => {
     expect(output).toContain('tool_search');
   });
 
-  it('given a near-miss tool name, should name the tool that was advertised', async () => {
-    // camelCase sandbox tools against a snake_case guess — the wire name IS the
-    // object key, so `read_file` is simply not a tool and only a suggestion
-    // gets the model to the one that is.
+  it('given a near-miss tool name, should name one the session ACTUALLY advertised', async () => {
+    // Built from the real exposure, not a hand-made map. A voice session
+    // advertises only the core tools plus tool_search/execute_tool — every
+    // sandbox tool is deferred behind execute_tool — so a test that injects
+    // `readFile` here proves nothing about production: the dispatcher could
+    // never be handed that name in the first place. The near miss that IS
+    // reachable is one against a core tool.
+    const advertised = buildRealtimeToolExposure(buildPageSpaceTools()).tools;
+    expect(Object.keys(advertised)).toContain('read_page');
+    expect(Object.keys(advertised)).not.toContain('readFile');
+
     const { output } = await dispatchRealtimeToolCall(
-      deps({ readFile: spyTool(() => 'ok'), read_page: spyTool(() => 'ok') }),
-      request({ name: 'read_file' }),
+      deps(advertised),
+      request({ name: 'read_pages' }),
       'gpt-realtime-2.1',
     );
 
-    expect(output).toContain('Did you mean: readFile');
+    expect(output).toContain('Did you mean: read_page');
+  });
+
+  it('given a deferred tool name spoken directly, should not invent a suggestion it cannot run', async () => {
+    // `readFile` is real, but it lives behind execute_tool — suggesting it here
+    // would send the model to a name this dispatcher cannot execute. The
+    // discovery prompt already routes non-core tools through execute_tool, and
+    // that path (createExecuteTool) is where the readFile suggestion belongs.
+    const advertised = buildRealtimeToolExposure(buildPageSpaceTools()).tools;
+
+    const { output } = await dispatchRealtimeToolCall(
+      deps(advertised),
+      request({ name: 'readFile' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('no tool called "readFile"');
+    expect(output).not.toContain('Did you mean');
+    expect(output).toContain('tool_search');
   });
 
   it('given a tool with no implementation, should say so rather than hang', async () => {
