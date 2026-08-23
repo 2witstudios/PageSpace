@@ -97,6 +97,19 @@ function parseIntFlag(
   return { ok: true, value: parsed };
 }
 
+/**
+ * Pure: no I/O. `{ tabIndex: 2 }` for a value, `{}` for `undefined`.
+ *
+ * Cosmetic, not load-bearing — checked rather than assumed: zod accepts an
+ * explicit `undefined` for an optional key (`strictObject` rejects UNKNOWN
+ * keys, which is a different thing), and `JSON.stringify` drops it before it
+ * reaches the wire regardless. This exists so a call site with six optional
+ * fields reads as six named fields instead of six copies of one ternary.
+ */
+function optional<K extends string, V>(key: K, value: V | undefined): Partial<Record<K, V>> {
+  return value === undefined ? {} : ({ [key]: value } as Record<K, V>);
+}
+
 /** Pure: no I/O. `A,B,C` -> `['A','B','C']`; empty entries dropped so a trailing comma is not an error. */
 function parseColumnList(raw: string | undefined): string[] | undefined {
   if (raw === undefined) return undefined;
@@ -312,6 +325,8 @@ export const sheetsQueryHandler: CommandHandler = async (ctx, intent) => {
     return EXIT_USAGE_ERROR;
   }
 
+  const select = parseColumnList(scan.values.get('--select'));
+
   const rawWhere = scan.values.get('--where');
   let where: unknown;
   if (rawWhere !== undefined) {
@@ -327,12 +342,12 @@ export const sheetsQueryHandler: CommandHandler = async (ctx, intent) => {
     ctx.sdk.sheets.queryRows({
       operation: 'query-rows',
       pageId,
-      ...(tabIndex.value === undefined ? {} : { tabIndex: tabIndex.value }),
-      ...(where === undefined ? {} : { where: where as never }),
-      ...(orderBy.value === undefined ? {} : { orderBy: orderBy.value }),
-      ...(parseColumnList(scan.values.get('--select')) === undefined ? {} : { select: parseColumnList(scan.values.get('--select')) }),
-      ...(limit.value === undefined ? {} : { limit: limit.value }),
-      ...(offset.value === undefined ? {} : { offset: offset.value }),
+      ...optional('tabIndex', tabIndex.value),
+      ...optional('where', where as never),
+      ...optional('orderBy', orderBy.value),
+      ...optional('select', select),
+      ...optional('limit', limit.value),
+      ...optional('offset', offset.value),
     }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -379,9 +394,9 @@ export const sheetsRowsHandler: CommandHandler = async (ctx, intent) => {
     ctx.sdk.sheets.getRows({
       operation: 'get-rows',
       pageId,
-      ...(tabIndex.value === undefined ? {} : { tabIndex: tabIndex.value }),
-      ...(fromRow.value === undefined ? {} : { fromRow: fromRow.value }),
-      ...(limit.value === undefined ? {} : { limit: limit.value }),
+      ...optional('tabIndex', tabIndex.value),
+      ...optional('fromRow', fromRow.value),
+      ...optional('limit', limit.value),
     }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
@@ -439,7 +454,7 @@ export function createSheetsAppendHandler(deps: SheetsStdinDeps): CommandHandler
       ctx.sdk.sheets.appendRows({
         operation: 'append-rows',
         pageId,
-        ...(tabIndex.value === undefined ? {} : { tabIndex: tabIndex.value }),
+        ...optional('tabIndex', tabIndex.value),
         rows: rows as Array<Record<string, string>>,
       }),
     );
@@ -503,7 +518,7 @@ export function createSheetsUpdateCellsHandler(deps: SheetsStdinDeps): CommandHa
       ctx.sdk.sheets.updateCells({
         operation: 'update-cells',
         pageId,
-        ...(tabIndex.value === undefined ? {} : { tabIndex: tabIndex.value }),
+        ...optional('tabIndex', tabIndex.value),
         cells: cells as Array<{ address: string; value: string }>,
       }),
     );
@@ -558,6 +573,11 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
     ctx.stderr.write(usage);
     return EXIT_USAGE_ERROR;
   }
+  // Bound to locals: the `await` below resets TypeScript's narrowing of these
+  // properties, and a cast at the call site would assert what the guard has
+  // already proven.
+  const firstRow = fromRow.value;
+  const rowsToDelete = count.value;
 
   // The same gate every other destructive verb uses. This one needs it MOST:
   // `pages trash` is reversible and still confirms, while deleting rows is not
@@ -565,7 +585,7 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
   // page, tab, start or count destroyed data with no prompt, and a non-TTY
   // caller was not required to pass `--yes`.
   const confirmation = await confirmDestructive(
-    `Delete ${count.value} row(s) from ${pageId} starting at row ${fromRow.value}${tabIndex.value === undefined ? '' : ` (tab ${tabIndex.value})`}? This cannot be undone. [y/N] `,
+    `Delete ${rowsToDelete} row(s) from ${pageId} starting at row ${firstRow}${tabIndex.value === undefined ? '' : ` (tab ${tabIndex.value})`}? This cannot be undone. [y/N] `,
     { isTTY: ctx.isTTY, yes: intent.flags.yes, prompt: ctx.prompt },
   );
   if (!confirmation.ok) {
@@ -577,9 +597,9 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
     ctx.sdk.sheets.deleteRows({
       operation: 'delete-rows',
       pageId,
-      ...(tabIndex.value === undefined ? {} : { tabIndex: tabIndex.value }),
-      fromRow: fromRow.value as number,
-      count: count.value as number,
+      ...optional('tabIndex', tabIndex.value),
+      fromRow: firstRow,
+      count: rowsToDelete,
     }),
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
