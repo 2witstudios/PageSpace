@@ -295,6 +295,16 @@ describe('resolveNewKeyName', () => {
     });
   });
 
+  // `--name ""` arrives as an empty STRING, not as absent — `??` only falls
+  // through on null/undefined — so it used to mint a key the keychain stores
+  // under "", which `--key=`, the key env var and `keys use` all refuse
+  // (blank reads as absent). Nothing could ever name it again.
+  it.each([[''], ['   '], ['\t']])('rejects a blank --name (%j), which would mint an unusable key', (name) => {
+    const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('must not be blank');
+  });
+
   it('rejects "default" as an explicit --name — that slot is reserved for "pagespace login", and says so in key vocabulary', () => {
     const result = resolveNewKeyName({ name: 'default', drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);

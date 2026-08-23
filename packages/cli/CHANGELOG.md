@@ -17,6 +17,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `--show-token` that path had stopped saying so.
 - **`keys describe`'s usage line and the README** now state that it needs a content credential
   named — it is the one `keys` verb that reports on one.
+- **`keys create --name ""` is refused instead of minting an unusable key.** A blank name arrived as
+  an empty string rather than as "absent", so the key was stored under `""` — and `--key`, the key
+  env var and `keys use` all treat a blank name as no name, so nothing could ever select it again.
 
 ### Added
 

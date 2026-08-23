@@ -234,6 +234,20 @@ export function resolveNewKeyName({
     };
   }
   const resolvedName = name ?? drives[0].id;
+  // `--name ""` reaches here as an empty string, not as "absent": `??` only
+  // falls through on null/undefined. A key is selected BY its name everywhere
+  // it is used — `--key=<name>`, the key env var, `keys use <name>` — and a
+  // blank one is refused by all three (`presentToken` treats blank as absent),
+  // so minting it produces a credential in the keychain that nothing can ever
+  // name again. Refused loudly rather than silently renamed after the drive:
+  // an explicit blank `--name` is a mistake, and quietly picking a different
+  // name would hide it.
+  if (resolvedName.trim().length === 0) {
+    return {
+      ok: false,
+      message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',
+    };
+  }
   if (resolvedName === DEFAULT_PROFILE_NAME) {
     return {
       ok: false,
