@@ -157,7 +157,13 @@ pages     list --drive <driveId> [parentId]
           trash <pageId> [--all] [--yes]
           restore <pageId>
 
-sheets    edit-cells <pageId> [--json-input <json>]
+sheets    describe <pageId>                  # tabs and sizes, reads no rows
+          query <pageId> [--where <json>] [--select A,B] [--order-by A:desc] [--limit N] [--offset N] [--tab N]
+          rows <pageId> [--from-row N] [--limit N] [--tab N]
+          append <pageId> [--json-input <json>] [--tab N]
+          update-cells <pageId> [--json-input <json>] [--tab N]
+          delete-rows <pageId> --from-row N --count N [--tab N] [--yes]
+          edit-cells <pageId> [--json-input <json>]
 
 trash     list --drive <driveId>
 
