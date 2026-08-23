@@ -64,6 +64,7 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
+import { formatInvalidParametersError, suggestToolNames } from '../tools/tool-error-schema';
 import type {
   VoiceAssistant,
   VoiceLocationContext,
@@ -331,8 +332,13 @@ export const dispatchRealtimeToolCall = async (
       userId: request.userId,
       tool: request.name,
     });
+    // `deps.tools` IS the set this session advertised, so every suggestion is
+    // a tool the model can actually call next. Wording stays a sentence
+    // because a voice turn may end up reading it out.
+    const suggestions = suggestToolNames(request.name, Object.keys(deps.tools));
+    const didYouMean = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : '';
     return failure(
-      `There is no tool called "${request.name}". Use tool_search to find the right one.`,
+      `There is no tool called "${request.name}".${didYouMean} Use tool_search to find the right one.`,
     );
   }
   if (!tool.execute) {
@@ -351,8 +357,12 @@ export const dispatchRealtimeToolCall = async (
 
   const validated = (tool.inputSchema as z.ZodType).safeParse(parsed.args);
   if (!validated.success) {
+    // Same bounded rendering the text stack uses. The ceiling matters more
+    // here than anywhere: a realtime session has 32k tokens total and this
+    // string stays in it, so `MAX_SCHEMA_CHARS` is a third of the per-result
+    // ceiling above and an error can never be the biggest thing in the call.
     return failure(
-      `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`,
+      formatInvalidParametersError(request.name, tool.inputSchema, validated.error.message),
     );
   }
 

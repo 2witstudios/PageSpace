@@ -29,7 +29,7 @@ STYLE:
 
 export const TOOL_DISCOVERY_PROMPT = `TOOLS:
 Core tools (list/read drives and pages, search, create, edit content) can be called directly.
-All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first.`;
+All other tools are listed below — call execute_tool({tool_name, parameters}) to run them. Use tool_search("select:tool_name") to get parameter schemas first; if you guess instead and get the parameters wrong, the rejection carries the schema, so correct it and call again without a tool_search.`;
 
 const CATEGORY_MAP: Record<string, string> = {
   create_drive: 'drive', rename_drive: 'drive', update_drive_context: 'drive',
@@ -70,7 +70,7 @@ export function buildNonCoreToolNamesPrompt(toolNames: string[]): string {
     .map(([category, names]) => `  ${category}: ${names.join(', ')}`)
     .join('\n');
 
-  return `NON-CORE TOOLS (use execute_tool to call; use tool_search("select:tool_name") for parameter schemas):\n${lines}`;
+  return `NON-CORE TOOLS (use execute_tool to call; use tool_search("select:tool_name") for parameter schemas, or read the schema off a rejected call):\n${lines}`;
 }
 
 /**

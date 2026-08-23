@@ -359,6 +359,19 @@ describe('dispatchRealtimeToolCall', () => {
     expect(output).toContain('tool_search');
   });
 
+  it('given a near-miss tool name, should name the tool that was advertised', async () => {
+    // camelCase sandbox tools against a snake_case guess — the wire name IS the
+    // object key, so `read_file` is simply not a tool and only a suggestion
+    // gets the model to the one that is.
+    const { output } = await dispatchRealtimeToolCall(
+      deps({ readFile: spyTool(() => 'ok'), read_page: spyTool(() => 'ok') }),
+      request({ name: 'read_file' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('Did you mean: readFile');
+  });
+
   it('given a tool with no implementation, should say so rather than hang', async () => {
     const { output } = await dispatchRealtimeToolCall(
       deps({
@@ -393,7 +406,39 @@ describe('dispatchRealtimeToolCall', () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(output).toContain('Invalid parameters');
-    expect(output).toContain('select:read_page');
+    // The schema itself, not a pointer to `tool_search` — a voice session has
+    // 32k tokens for the whole call, so a wasted discovery round trip is
+    // expensive here in a way it is not on the text stack.
+    // Read off the SCHEMA section, not the whole string: the zod message names
+    // the offending key as well, so searching the whole output would pass even
+    // with the schema gone.
+    const marker = 'Input schema for "read_page": ';
+    const schemaSection = output.slice(output.indexOf(marker) + marker.length);
+    expect(JSON.parse(schemaSection)).toMatchObject({
+      properties: { pageId: { type: 'string' } },
+      required: ['pageId'],
+    });
+    expect(output).not.toContain('select:read_page');
+  });
+
+  it('given a rejected call on a real tool, should stay far inside the result ceiling', async () => {
+    const { output } = await dispatchRealtimeToolCall(
+      deps(buildPageSpaceTools()),
+      request({ name: 'create_calendar_event', argumentsJson: '{}' }),
+      'gpt-realtime-2.1',
+    );
+
+    // Measured against the largest schema in the product, not a synthetic one.
+    const marker = 'Input schema for "create_calendar_event": ';
+    expect(output).toContain(marker);
+    expect(
+      Object.keys(
+        (JSON.parse(output.slice(output.indexOf(marker) + marker.length)) as {
+          properties: Record<string, unknown>;
+        }).properties,
+      ).length,
+    ).toBeGreaterThan(3);
+    expect(output.length).toBeLessThan(MAX_RESULT_CHARS);
   });
 
   it('given the tool validates the arguments, should pass the PARSED value through', async () => {
