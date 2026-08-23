@@ -79,6 +79,7 @@ import {
 import { trashListHandler } from '../commands/trash.js';
 import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
+import { keysDescribeHandler } from '../commands/keys/describe.js';
 import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
@@ -104,6 +105,11 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
   { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key (--device for a headless machine)' },
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
+  // The one keys verb a KEY itself can run: it describes the credential this
+  // machine would use, never the other keys its owner holds — so it resolves
+  // like a content command (active key included) rather than riding the
+  // ambient login the management verbs need.
+  { path: ['keys', 'describe'], handler: keysDescribeHandler, summary: "Show this credential's drives, role and effective permissions" },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },

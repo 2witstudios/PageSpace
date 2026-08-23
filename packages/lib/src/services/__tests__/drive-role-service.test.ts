@@ -67,6 +67,8 @@ import {
   validateRolePermissions,
   validateDriveWidePermissions,
   mergeRolePermissionsPatch,
+  isSystemRoleName,
+  roleNotFoundMessage,
 } from '../drive-role-service';
 
 type MockFn = ReturnType<typeof vi.fn>;
@@ -576,5 +578,38 @@ describe('drive-role-service', () => {
       mergeRolePermissionsPatch(existing, { 'page-b': { canView: true, canEdit: true, canShare: false } });
       expect(existing).toEqual({ 'page-a': { canView: true, canEdit: false, canShare: false } });
     });
+  });
+});
+
+/**
+ * Issue #2470. `get_drive_role "member"` answered "not found in this drive",
+ * which reads as "that role does not exist" when the truth is that system roles
+ * are not rows here at all and never will be. A caller has no way to act on the
+ * old wording; these lock in that the new one names where they live.
+ */
+describe('roleNotFoundMessage', () => {
+  it('leaves an ordinary missing role id as a plain not-found', () => {
+    expect(roleNotFoundMessage('role_abc')).toBe('Role "role_abc" not found in this drive');
+  });
+
+  it.each(['member', 'admin', 'owner', 'MEMBER', ' Member '])('explains where the system role %j actually lives', (name) => {
+    const message = roleNotFoundMessage(name);
+    expect(message).toMatch(/system role/i);
+    expect(message).toMatch(/drive membership/i);
+    expect(message).toContain('pagespace keys describe');
+    expect(message).not.toBe(`Role "${name}" not found in this drive`);
+  });
+});
+
+describe('isSystemRoleName', () => {
+  it('matches the MemberRole enum values case- and whitespace-insensitively', () => {
+    for (const name of ['owner', 'ADMIN', ' Member ']) {
+      expect(isSystemRoleName(name)).toBe(true);
+    }
+  });
+
+  it('does not match a custom role name that merely contains one', () => {
+    expect(isSystemRoleName('members')).toBe(false);
+    expect(isSystemRoleName('role_admin')).toBe(false);
   });
 });

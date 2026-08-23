@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
+  the machine is using: which drives it reaches, the role it holds in each, and what that role
+  actually resolves to — can it read, write, share, delete. That answer comes from the same
+  permission code that decides real requests, so it cannot quietly disagree with them. Drive-level
+  and page-level are separate answers and both are shown: any member can create a page at a drive's
+  top level while still being read-only on a document inside it, so `--page <pageId>` asks about the
+  exact place you are about to write. The same
+  summary is printed at the end of `pagespace keys create` and the `pagespace keys` wizard, so a new
+  key never leaves you to find out by attempting a write and reading the refusal. Agents get it as
+  an MCP tool too. A key describes only itself — it still cannot see, list or revoke the other keys
+  you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
+  drive name alone.
+
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
   sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
@@ -174,6 +187,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the only hint was a count inside the expanded row.
 
 ### Fixed
+
+- **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
+  `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
+  path", which reads as "your key was revoked" — while the very same key kept reading and writing
+  drive content perfectly. Managing keys was never something a key could do; only your personal
+  login can, and the refusal simply lost the server's own words on the way back. Those commands now
+  say what is actually true: the key is fine, key management needs `pagespace login`, and
+  `pagespace keys describe` is what a key can ask about itself. Nothing gets re-minted for nothing.
+
+- **Asking about a built-in role no longer dead-ends** — looking up `member` or `admin` among a
+  drive's roles answered "not found in this drive", which reads as though the role does not exist.
+  Those are built-in roles held per person on their drive membership, not entries in a drive's own
+  role list, so a lookup there can only ever miss. The answer now says so and points at where they
+  actually live — and at `pagespace keys describe` for what a specific credential resolves to.
 
 - **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
   agent sandboxes and environments were all refused, because the gate asked which subscription plan

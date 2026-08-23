@@ -413,6 +413,12 @@ describe('MCP Documents API - Security Tests', () => {
         const data = await response.json();
         expect(data.error).toBe('Write permission required');
         expect(data.details).toContain(operation);
+        // Issue #2470's actual complaint was not the refusal — that is correct
+        // for a view-only grant — but that it pointed nowhere, so the only way
+        // to learn the grant was one failed write at a time. `error` stays the
+        // stable string clients branch on; the pointer rides in `details`.
+        expect(data.details).toContain('tokens.describeSelf');
+        expect(data.details).toContain('pagespace keys describe --page');
       }
     });
   });

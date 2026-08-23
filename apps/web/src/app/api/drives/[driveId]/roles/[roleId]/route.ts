@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log'
-import { checkDriveAccessForRoles, getRoleById, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
+import { checkDriveAccessForRoles, getRoleById, roleNotFoundMessage, updateDriveRole, deleteDriveRole, validateRolePermissions, validateRolePermissionsPatch } from '@pagespace/lib/services/drive-role-service';
 import { getActorInfo, logRoleActivity } from '@pagespace/lib/monitoring/activity-logger';
 import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-service';
 import { broadcastDriveEvent, createDriveEventPayload } from '@/lib/websocket';
@@ -54,7 +54,11 @@ export async function GET(
     const role = await getRoleById(driveId, roleId);
 
     if (!role) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      // `roleNotFoundMessage`, not a bare 'Role not found' — here and in PATCH
+      // and DELETE below: asking for a SYSTEM role name (member/admin/owner)
+      // can only ever miss whichever verb it arrives at, and the caller needs
+      // to be told where those live instead of being left at a dead end.
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     return NextResponse.json({ role });
@@ -94,7 +98,7 @@ export async function PATCH(
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     const body = await request.json();
@@ -203,7 +207,7 @@ export async function DELETE(
     const existingRole = await getRoleById(driveId, roleId);
 
     if (!existingRole) {
-      return NextResponse.json({ error: 'Role not found' }, { status: 404 });
+      return NextResponse.json({ error: roleNotFoundMessage(roleId) }, { status: 404 });
     }
 
     await deleteDriveRole(driveId, roleId);
