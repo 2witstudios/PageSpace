@@ -119,16 +119,17 @@
     "zustand": "^5.0.6"
   },
   "devDependencies": {
-    "@pagespace/sdk": "workspace:*",
     "@capacitor/app": "^7.1.1",
-    "@capawesome/capacitor-badge": "^7.0.0",
     "@capacitor/browser": "^7.0.3",
     "@capacitor/core": "^7.0.0",
     "@capacitor/preferences": "^7.0.0",
+    "@capawesome/capacitor-badge": "^7.0.0",
     "@capgo/capacitor-social-login": "^7.0.5",
     "@eslint/eslintrc": "^3",
     "@next/eslint-plugin-next": "15.5.18",
+    "@pagespace/sdk": "workspace:*",
     "@tailwindcss/postcss": "^4",
+    "@tiptap/html": "3.23.5",
     "@types/jsdom": "^21.1.7",
     "@types/node": "^20",
     "@types/react": "^19",
@@ -139,6 +140,7 @@
     "eslint": "^9",
     "eslint-config-next": "15.5.18",
     "eslint-plugin-react-hooks": "^5.2.0",
+    "happy-dom": "^20.8.9",
     "tailwindcss": "^4",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
