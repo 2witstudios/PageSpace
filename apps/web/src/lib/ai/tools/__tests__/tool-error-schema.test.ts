@@ -74,18 +74,40 @@ describe('describeToolSchema', () => {
     expect(describeToolSchema({ notASchema: true })).toContain('unavailable');
   });
 
-  it('given every real PageSpace tool schema, should stay inside the cap', () => {
+  it('given every real PageSpace tool schema, should render it WHOLE, not summarised', () => {
     const tools = buildPageSpaceTools({ codeExecutionEnabled: true });
     const names = Object.keys(tools);
     expect(names.length).toBeGreaterThan(0);
 
-    const oversized = names.filter(
-      (name) => describeToolSchema(tools[name]?.inputSchema).length > MAX_SCHEMA_CHARS
+    // Asserting the RENDERED length against the cap would be vacuous —
+    // `describeToolSchema` enforces that bound by construction, so the
+    // predicate can never fire and a tool that outgrew the cap would slip
+    // through green. The claim worth guarding is the other one: that no
+    // shipping tool needs the degraded rendering at all. A summarised or
+    // unavailable rendering is not JSON, so parsing is the check.
+    const degraded = names.filter((name) => {
+      const rendered = describeToolSchema(tools[name]?.inputSchema);
+      try {
+        JSON.parse(rendered);
+        return false;
+      } catch {
+        return true;
+      }
+    });
+
+    expect(degraded).toEqual([]);
+  });
+
+  it('given the largest real tool schema, should leave real headroom under the cap', () => {
+    // The companion to the test above: it says nothing degrades, this says by
+    // how much. If a schema grows past the cap, the test above turns red and
+    // this one names the number to re-derive the cap from.
+    const tools = buildPageSpaceTools({ codeExecutionEnabled: true });
+    const largest = Math.max(
+      ...Object.values(tools).map((tool) => describeToolSchema(tool.inputSchema).length)
     );
 
-    // The bound is proved against the real corpus, not a synthetic schema —
-    // the largest tool schema in the product is the one that has to fit.
-    expect(oversized).toEqual([]);
+    expect(largest).toBeLessThan(MAX_SCHEMA_CHARS);
   });
 });
 
