@@ -180,14 +180,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   existed. The pane now goes with the shell, in the same write, so every browser watching the
   session loses the tab at once instead of accumulating dead rectangles until somebody closes them
   by hand.
-- **Panes pack into a grid instead of marching sideways** — every pane an agent opened split the
-  screen beside the last one, so a session that started three shells ended up with three ever-thinner
-  columns. A pane that opens for you now takes the roomiest space and divides it along its longer
-  edge — beside when there is width to spare, below when there is not — and joins the row or column
-  it lands in rather than nesting a new one inside it. Panes you have resized are left alone: an
-  opening pane never redistributes a layout you set by hand, and the split buttons still divide only
-  the pane you pointed at. Agents are told how many panes their session is showing when they open or
-  close a shell, so they can tidy up after themselves.
+- **Panes fill the screen as a grid instead of marching sideways** — every pane an agent opened
+  split the screen beside the last one, so a session that started three shells ended up with three
+  ever-thinner columns. A pane that opens for you now takes the roomiest space on screen and divides
+  it along its longer edge: beside when there is width to spare, below when there is not. Four
+  shells and the conversation that opened them share the screen as a grid, with the smallest pane an
+  eighth of it instead of a sixteenth, and repeated opening no longer makes the layout deeper and
+  harder to drag. Panes you have resized are left alone — an opening pane never redistributes a
+  layout you set by hand — and the split buttons still divide only the pane you pointed at. Agents are told how many panes their session is showing when they open or close a
+  shell, so they can tidy up after themselves.
 - **No more "Shell not found" when closing a shell pane** — closing the tab of a shell that was
   already gone, or one whose session had expired, raised an error toast for a close that had in fact
   succeeded. Closing something already closed is success and says nothing; a close that genuinely
