@@ -28,8 +28,10 @@
  * remaining workers keep draining — spending the whole fan-out the limit exists
  * to contain on a result that has already failed. `failed` is set synchronously
  * in `catch` before the rethrow, so no worker can claim a new index afterwards;
- * a worker already suspended mid-await still completes the index it claimed, so
- * the claimed prefix is never left holed.
+ * a worker already suspended mid-await still completes the index it claimed.
+ * The index that FAILED is of course left unwritten, which is why a rejection
+ * must propagate rather than be swallowed — the array is never returned in that
+ * state, and there is no path where `Promise.all` resolves over a hole.
  */
 function resolveWorkerCount(limit: number, itemCount: number): number {
   // `Infinity` means "no ceiling", so it resolves to one worker per item.

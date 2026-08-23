@@ -247,16 +247,20 @@ export function resolveNewKeyName({
   //
   // Only reachable through the flag path — `wizard.ts` trims before it gets
   // here.
+  // Blank FIRST, deliberately. An all-whitespace name satisfies both
+  // conditions, and taking the padding branch made the message suggest the
+  // trimmed form — which for "   " is the empty string the next guard rejects,
+  // i.e. advice to do the one other thing that cannot work.
+  if (resolvedName.trim().length === 0) {
+    return {
+      ok: false,
+      message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',
+    };
+  }
   if (resolvedName !== resolvedName.trim()) {
     return {
       ok: false,
       message: `--name "${resolvedName}" has leading or trailing whitespace: keys are looked up by their trimmed name, so this one could be created and never found again. Use "${resolvedName.trim()}".`,
-    };
-  }
-  if (resolvedName.length === 0) {
-    return {
-      ok: false,
-      message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',
     };
   }
   if (resolvedName === DEFAULT_PROFILE_NAME) {

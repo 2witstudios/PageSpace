@@ -299,10 +299,15 @@ describe('resolveNewKeyName', () => {
   // through on null/undefined — so it used to mint a key the keychain stores
   // under "", which `--key=`, the key env var and `keys use` all refuse
   // (blank reads as absent). Nothing could ever name it again.
-  it.each([[''], ['   '], ['\t']])('rejects a blank --name (%j), which would mint an unusable key', (name) => {
+  // Asserted as the BLANK message specifically, not "blank or whitespace". An
+  // all-whitespace name satisfies both guards, and when the padding guard won
+  // the race the advice became `Use ""` — the empty name the other guard
+  // rejects. A regex accepting either message hid that entirely.
+  it.each([[''], ['   '], ['\t'], ['\n ']])('rejects a blank-or-whitespace --name (%j) as blank', (name) => {
     const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.message).toMatch(/must not be blank|whitespace/);
+    expect(result.ok === false && result.message).toContain('must not be blank');
+    expect(result.ok === false && result.message).not.toMatch(/Use ""/);
   });
 
   // The same failure short of its limit: a key is STORED under its name

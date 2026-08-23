@@ -21,7 +21,7 @@ export const SHOW_TOKEN_PROMPT = "Show the token now for .env/CI use? It won't b
  * `keys describe` asks the server, which resolves it the same way every content
  * request will (issue #2470).
  *
- * `--key <name>` is load-bearing, not decoration. `keys describe` reports the
+ * `--key=<name>` is load-bearing, not decoration. `keys describe` reports the
  * credential a CONTENT command would use, so unlike its `keys` siblings it is
  * not auth-exempt and is subject to `run.ts`'s explicit-credential gate: with
  * a personal login and no active key — the state a user is in immediately
@@ -43,7 +43,8 @@ export function keysDescribeHint(keyName: string, host: string): string {
  * Makes `value` safe to paste into a shell as one word.
  *
  * Key names are close to free-form — `resolveNewKeyName` refuses only the
- * reserved `"default"` — so `--name "lead gen"` is legal and printing it bare
+ * reserved `"default"` and names that cannot be looked up (blank, or padded
+ * with whitespace) — so `--name "lead gen"` is legal and printing it bare
  * gave `--key lead gen`, where the shell hands `--key` the word `lead` and
  * drops `gen` into the command as a stray positional. A hint that cannot be
  * pasted is worse than no hint, since the reader has no way to tell it apart

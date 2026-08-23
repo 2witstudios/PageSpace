@@ -14,10 +14,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`keys create` refuses a blank or whitespace-padded `--name` instead of minting an unfindable
   key.** A key is stored under its name verbatim, but every lookup trims first — so `--name "  x  "`
   wrote the store under `"  x  "` while `--key` resolved `"x"` and missed, and `--name ""` wrote a
-  key no lookup could ever produce. Both are now refused at mint, with the trimmed form suggested.
-- **A mint that returns no raw token says so.** When the server returns a refresh credential instead
-  of a static token there is no bearer to read the new key's permissions back with; without
-  `--show-token` that path printed nothing about why the summary was missing.
+  key no lookup could ever produce. A padded name is now refused with the trimmed spelling
+  suggested; a blank or all-whitespace one is refused as blank.
+- **`keys create` now says WHY it could not read a new key's permissions back.** When the server
+  returns a refresh credential instead of a static token there is no bearer to ask with; 1.8.0 said
+  the readback had failed but not that. (The `pagespace keys` wizard already gave the reason — the
+  two surfaces now match.)
 - **`keys describe`'s usage line and the README** now say it needs a content credential named — it
   is the one `keys` verb that reports on one rather than managing keys, and the README's summary
   paragraph previously said the opposite.
