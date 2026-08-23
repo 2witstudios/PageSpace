@@ -51,7 +51,7 @@ import type {
   WaitMs,
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
-import { keysDescribeHint, renderAgentWiringGuidance } from './guidance.js';
+import { renderAgentWiringGuidance } from './guidance.js';
 import { renderKeyDescription } from './describe.js';
 import { describeKeyPermissions, type DescribeKeyPermissions } from '../../auth/probe-permissions.js';
 
@@ -286,10 +286,9 @@ export interface TokensCreateHandlerDeps {
  * rather than falling silent — an agent reading only the tail of this output
  * must not be left thinking the mint itself was the thing that went wrong.
  *
- * Skipped when there is no raw token to ask with. That branch is the same
- * anomaly `--show-token` reports (the server returned a refresh credential
- * instead of a static one); `keys describe` still answers the question, so the
- * pointer is printed in its place.
+ * Both non-happy branches say only what went wrong. The pointer to
+ * `keys describe` is printed once, by `renderAgentWiringGuidance` at the end of
+ * every mint — repeating it here put the identical sentence on screen twice.
  */
 async function writeEffectivePermissions(params: {
   readonly info: OutputSink;
@@ -299,15 +298,16 @@ async function writeEffectivePermissions(params: {
 }): Promise<void> {
   const { info, host, token, describeKeyPermissions: describe } = params;
   if (token === null) {
-    info.write(`${keysDescribeHint()}\n`);
+    // The same anomaly `--show-token` reports: the server returned a refresh
+    // credential instead of a static one, so there is no bearer to ask with.
+    info.write('The key was created. It returned no raw token, so its permissions could not be read back here.\n');
     return;
   }
   try {
     info.write(`\n${renderKeyDescription(await describe({ host, accessToken: token }))}`);
   } catch (error) {
     info.write(
-      `The key was created. Its effective permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n` +
-        `${keysDescribeHint()}\n`,
+      `The key was created. Its effective permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).\n`,
     );
   }
 }

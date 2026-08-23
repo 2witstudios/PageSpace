@@ -390,7 +390,11 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     // summary must never read as losing the key.
     expect(await handler(ctx, commandIntent(['keys']))).toBe(EXIT_SUCCESS);
     const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
-    expect(notes.some((note) => note.includes('pagespace keys describe'))).toBe(true);
+    // The failure is named where the summary would have been, and the pointer
+    // appears once, in the wiring note, naming the key.
+    expect(notes.some((note) => note.includes('could not be read back just now'))).toBe(true);
+    expect(notes.filter((note) => note.includes('pagespace keys describe'))).toHaveLength(1);
+    expect(notes.some((note) => note.includes('pagespace keys describe --key my-key'))).toBe(true);
   });
 
   it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {

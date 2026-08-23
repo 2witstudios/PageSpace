@@ -43,6 +43,7 @@
  */
 import { NextRequest, NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, type AuthResult } from '@/lib/auth';
+import type { PrincipalDriveMembership } from '@/lib/auth/principal-permissions';
 import {
   getPrincipalAccessLevel,
   getPrincipalDriveAccessLevel,
@@ -63,18 +64,58 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 const AUTH_OPTIONS_READ = { allow: ['mcp', 'oauth', 'session'] as const, requireCSRF: false };
 
 /**
- * `role: null` is not "no role" — for a scoped credential it is INHERIT (the key
- * resolves with its owner's access in that drive), and for a user principal it
- * cannot occur at all, since `getPrincipalDriveMembership` returns null rather
- * than a roleless membership. Naming the three cases explicitly keeps a reader
- * of the output from having to know that.
+ * How many drives resolve at once. Small on purpose: this is a status readout,
+ * and the ceiling exists to keep one call's connection use bounded, not to make
+ * it fast.
+ */
+const DRIVE_RESOLUTION_CONCURRENCY = 8;
+
+/**
+ * `Promise.all` over `items`, at most `limit` in flight, preserving input
+ * order. Order matters: this is a report a human diffs between runs, and a
+ * settle-as-they-finish result would reshuffle it for no reason.
+ */
+async function mapWithConcurrency<TItem, TResult>(
+  items: readonly TItem[],
+  limit: number,
+  resolve: (item: TItem) => Promise<TResult>,
+): Promise<TResult[]> {
+  const results: TResult[] = new Array(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    for (let index = next++; index < items.length; index = next++) {
+      results[index] = await resolve(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+/**
+ * How the principal holds this drive, spelled out so a reader never has to
+ * decode a null.
+ *
+ * The distinction that matters is between NO membership and a membership whose
+ * role is null:
+ *
+ * - `membership === null` → no drive-level role at all (`'none'`). Reachable
+ *   for a USER principal, and not an edge case: `getDriveIdsForUser` unions the
+ *   drives you are a member of with the drives of any page shared with you, so
+ *   a page-collaborator-only drive appears in the list while
+ *   `getUserDrivePermissions` correctly reports no drive membership for it.
+ *   Labelling that `'inherited'` would attach scoped-key inherit semantics to a
+ *   plain user and read as "you have your own access here", which is the
+ *   opposite of true — its `permissions` are all-false.
+ * - `membership.role === null` → INHERIT: a scoped credential resolving with
+ *   its owner's access in that drive.
  */
 function describeRoleSource(
-  role: 'OWNER' | 'ADMIN' | 'MEMBER' | null,
+  membership: PrincipalDriveMembership | null,
   customRoleId: string | null,
-): 'explicit' | 'custom' | 'inherited' {
+): 'explicit' | 'custom' | 'inherited' | 'none' {
+  if (membership === null) return 'none';
   if (customRoleId !== null) return 'custom';
-  return role === null ? 'inherited' : 'explicit';
+  return membership.role === null ? 'inherited' : 'explicit';
 }
 
 /**
@@ -136,15 +177,15 @@ export async function GET(req: NextRequest) {
       ]),
     );
 
-    // Per drive, and concurrently: an unscoped credential's universe is every
-    // drive its owner can reach, and each drive costs a handful of queries, so
-    // a sequential walk would multiply one status call's latency by the drive
-    // count for no reason. Nothing here feeds anything else — the permission
-    // and the membership are independent reads of the same drive — which is
-    // the same shape `commands/whoami.ts` resolves concurrently for the same
-    // reason. Query COUNT is unchanged; only the waiting is.
-    const driveScopes = await Promise.all(
-      driveIds.map(async (driveId) => {
+    // Per drive, in bounded batches. A sequential walk multiplied one status
+    // call's latency by the drive count, but an unbounded fan-out is no better
+    // a trade: each drive costs ~6 queries and an UNSCOPED credential's
+    // universe is every drive its owner can reach, so a user in fifty drives
+    // would open ~300 connections at once from a single GET. Nothing here feeds
+    // anything else — the permission and the membership are independent reads
+    // of the same drive — so batching costs nothing but keeps the pool bounded.
+    // Query COUNT is the same either way; only the waiting and the peak differ.
+    const driveScopes = await mapWithConcurrency(driveIds, DRIVE_RESOLUTION_CONCURRENCY, async (driveId) => {
         const [permissions, membership] = await Promise.all([
           getPrincipalDriveAccessLevel(auth, driveId),
           getPrincipalDriveMembership(auth, driveId),
@@ -159,7 +200,7 @@ export async function GET(req: NextRequest) {
           role,
           customRoleId,
           customRoleName: customRole?.name ?? null,
-          roleSource: describeRoleSource(role, customRoleId),
+          roleSource: describeRoleSource(membership, customRoleId),
           // A scope whose drive resolves to no access at all — a dangling
           // inherit row whose owner lost the drive, a custom role deleted out
           // from under the key — is reported as an all-false entry rather than
@@ -168,8 +209,7 @@ export async function GET(req: NextRequest) {
           // access.
           permissions: permissions ?? { canView: false, canEdit: false, canShare: false, canDelete: false },
         };
-      }),
-    );
+      });
 
     // Only when asked. `permissions: null` (out of reach) is preserved rather
     // than flattened to all-false: "this page is not yours to see" and "you may

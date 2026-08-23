@@ -62,10 +62,19 @@ function formatPermissions(permissions: DescribedScope['permissions']): string {
   return granted.map((flag) => flag.slice(3).toLowerCase()).join(' ');
 }
 
-/** How the role was arrived at, spelled out — `role: null` means inherit, not "unset". */
+/**
+ * How the grant was arrived at, spelled out — a null role is meaningful, not
+ * "unset", and it means two different things.
+ *
+ * `'none'` is a drive reachable with no drive-level role in it at all: your
+ * drive list includes the drives of pages shared with you, not only drives you
+ * belong to. Calling that "inherits your own access" would read as the opposite
+ * of what the accompanying permissions line says.
+ */
 function formatGrant(scope: DescribedScope): string {
   if (scope.roleSource === 'custom') return `custom role "${scope.customRoleName ?? scope.customRoleId ?? 'unknown'}"`;
   if (scope.roleSource === 'inherited') return 'inherits your own access in this drive';
+  if (scope.roleSource === 'none') return 'no drive-level role (reached through a page shared with you)';
   return `role ${(scope.role ?? 'unknown').toLowerCase()}`;
 }
 

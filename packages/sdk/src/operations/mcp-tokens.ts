@@ -132,8 +132,14 @@ export const describeSelfKey = defineOperation({
     }),
     driveScopes: z.array(
       driveScopeOutputSchema.extend({
-        /** How `role` was arrived at, since `null` is meaningful rather than missing. */
-        roleSource: z.enum(['explicit', 'custom', 'inherited']),
+        /**
+         * How `role` was arrived at, since `null` is meaningful rather than
+         * missing. `'inherited'` is a scoped credential resolving with its
+         * owner's access; `'none'` is no drive-level role at all — reachable
+         * for a user principal, whose drive list includes the drives of pages
+         * shared with them, not only drives they are a member of.
+         */
+        roleSource: z.enum(['explicit', 'custom', 'inherited', 'none']),
         permissions: effectivePermissionsSchema,
       }),
     ),

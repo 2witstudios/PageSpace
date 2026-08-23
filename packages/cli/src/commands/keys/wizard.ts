@@ -53,7 +53,7 @@ import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js
 import type { DriveScopeArg } from './args.js';
 import { buildKeyUpdateScope, resolveNewKeyName, type TokensCreateHandlerDeps } from './create.js';
 import { findServerTokenId, runActivateCeremony } from './use.js';
-import { keysDescribeHint, renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
+import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from './guidance.js';
 import { renderKeyDescription } from './describe.js';
 import { describeKeyPermissions } from '../../auth/probe-permissions.js';
 import {
@@ -275,15 +275,19 @@ async function mintScopedKey(
       // the choice. Non-fatal: the key is already minted and stored.
       try {
         clack.note(renderKeyDescription(await deps.describeKeyPermissions({ host: params.host, accessToken: token })).trimEnd(), 'What this key can do');
-      } catch {
-        clack.note(keysDescribeHint(), 'What this key can do');
+      } catch (error) {
+        clack.note(
+          `The key was created. Its permissions could not be read back just now (${error instanceof Error ? error.message : String(error)}).`,
+          'What this key can do',
+        );
       }
     } else {
       // No raw token to ask with — the same anomaly `--show-token` reports in
       // `create.ts` (the server returned a refresh credential rather than a
-      // static one). The pointer still has to be printed: falling silent here
-      // would leave the mint with no answer to "what can it do" at all.
-      clack.note(keysDescribeHint(), 'What this key can do');
+      // static one). Said out loud rather than skipped: falling silent leaves
+      // the mint with no answer to "what can it do" at all. The pointer to
+      // `keys describe` follows once, in the wiring note below.
+      clack.note('It returned no raw token, so its permissions could not be read back here.', 'What this key can do');
     }
     clack.note(renderAgentWiringGuidance({ keyName: params.keyName, host: params.host }).join('\n'), 'Wire up an agent');
   } else {

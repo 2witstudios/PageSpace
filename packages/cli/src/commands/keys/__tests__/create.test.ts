@@ -688,7 +688,11 @@ describe('createTokensCreateHandler', () => {
     expect(await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']))).toBe(EXIT_SUCCESS);
     const output = stdout.lines.join('');
     expect(output).toContain('The key was created.');
-    expect(output).toContain('pagespace keys describe');
+    // The pointer is printed once, by the wiring guidance, and names the key —
+    // a bare `keys describe` would be refused by run.ts's credential gate in
+    // exactly the state a user is in right after a mint.
+    expect(output).toContain('pagespace keys describe --key');
+    expect(output.split('pagespace keys describe').length - 1).toBe(1);
   });
 
   it('without --show-token the raw mcp_* token appears nowhere in the output', async () => {

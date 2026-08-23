@@ -236,6 +236,60 @@ describe('GET /api/auth/key', () => {
     expect(body.driveScopes.map((scope: { name: string }) => scope.name)).toEqual(['First', 'Second', 'Third']);
   });
 
+  // `getDriveIdsForUser` unions the drives you belong to with the drives of any
+  // page shared with you, so a page-collaborator-only drive appears in the list
+  // while `getUserDrivePermissions` correctly reports no membership for it.
+  // Labelling that 'inherited' would read as "you have your own access here",
+  // the opposite of what its all-false permissions say.
+  it('labels a drive reached with no membership as "none", not "inherited"', async () => {
+    arrangeScopedMemberKey();
+    vi.mocked(getPrincipalDriveMembership).mockResolvedValue(null);
+    vi.mocked(getPrincipalDriveAccessLevel).mockResolvedValue(null);
+
+    const body = await (await GET(request())).json();
+
+    expect(body.driveScopes[0].roleSource).toBe('none');
+    expect(body.driveScopes[0].role).toBeNull();
+    expect(body.driveScopes[0].permissions).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  // A scoped credential's null role is INHERIT, which is a different thing and
+  // must keep its own label.
+  it('still labels a scoped credential\'s null role as "inherited"', async () => {
+    arrangeScopedMemberKey();
+    vi.mocked(getPrincipalDriveMembership).mockResolvedValue({ role: null, customRoleId: null });
+
+    const body = await (await GET(request())).json();
+
+    expect(body.driveScopes[0].roleSource).toBe('inherited');
+  });
+
+  // An unscoped credential's universe is every drive its owner can reach, at
+  // ~6 queries each; an unbounded fan-out would open hundreds of connections
+  // from one GET.
+  it('resolves drives in bounded batches rather than all at once', async () => {
+    arrangeScopedMemberKey();
+    const driveIds = Array.from({ length: 25 }, (_, index) => `drv${index}`);
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue(driveIds);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue(driveIds.map((id) => ({ id, name: id })));
+
+    let inFlight = 0;
+    let peak = 0;
+    vi.mocked(getPrincipalDriveAccessLevel).mockImplementation(async () => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      inFlight--;
+      return MEMBER_LEVEL;
+    });
+
+    const body = await (await GET(request())).json();
+
+    expect(body.driveScopes).toHaveLength(25);
+    expect(peak).toBeLessThanOrEqual(8);
+    // ...and it is genuinely concurrent, not a sequential walk in disguise.
+    expect(peak).toBeGreaterThan(1);
+  });
+
   it('describes an unscoped credential with no key row, leaving the key fields null', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...SCOPED_KEY, tokenType: 'oauth' } as never);
     vi.mocked(isAuthError).mockReturnValue(false);

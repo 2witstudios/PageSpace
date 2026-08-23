@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_HOST } from '../../../config/resolve.js';
-import { renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from '../guidance.js';
+import { keysDescribeHint, renderAgentWiringGuidance, SHOW_TOKEN_PROMPT, WIZARD_INTRO_HINT } from '../guidance.js';
 
 function embeddedJson(lines: readonly string[]): unknown {
   const start = lines.indexOf('{');
@@ -61,5 +61,25 @@ describe('wizard copy constants', () => {
 
   it('the show-token prompt warns it is shown once', () => {
     expect(SHOW_TOKEN_PROMPT).toMatch(/won't be shown again/i);
+  });
+});
+
+/**
+ * `keys describe` is the one `keys` verb that is NOT auth-exempt, so it faces
+ * `run.ts`'s explicit-credential gate. With a personal login and no active key
+ * — the state a user is in immediately after `keys create` — a bare
+ * `pagespace keys describe` is refused outright, which made the hint printed by
+ * every mint name a command the reader could not run.
+ */
+describe('keysDescribeHint', () => {
+  it('names the key that was just minted, so the printed command is runnable', () => {
+    expect(keysDescribeHint('lead-gen')).toContain('pagespace keys describe --key lead-gen');
+  });
+
+  it('is printed exactly once per mint, by the wiring guidance', () => {
+    const output = renderAgentWiringGuidance({ keyName: 'lead-gen', host: DEFAULT_HOST }).join('\n');
+    const occurrences = output.split('pagespace keys describe').length - 1;
+    expect(occurrences).toBe(1);
+    expect(output).toContain('--key lead-gen');
   });
 });
