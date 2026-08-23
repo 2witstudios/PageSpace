@@ -67,6 +67,7 @@ import {
   type SplitNode,
   type WorkspaceNode,
 } from './workspace-node';
+import { splitAxisFor, splitHostPane } from './workspace-node-packing';
 
 /**
  * Why a command was refused.
@@ -280,6 +281,22 @@ function stageContainer(pane: PaneNode, parentId: string, input: SplitInput): No
  * Binding at the MINT rather than after it is the whole reason `create` carries
  * a target: a create-then-bind pair has a moment where the first landed and the
  * second did not, and that moment is the state production is in today.
+ *
+ * **IT PACKS BEFORE IT NESTS.** A pane whose container already runs along the
+ * requested axis gets its sibling IN THAT CONTAINER, beside it; only a split
+ * that changes direction mints a new one. That is the `split_down` behaviour
+ * this model briefly lost — it appended to the existing column, and the flat
+ * rewrite nested unconditionally, which is what made the depth cap reachable by
+ * repeating one gesture and what turned four spawned shells into four levels of
+ * nesting (issue #2469).
+ *
+ * Nesting on a same-axis split was never a fact about the data. Two containers
+ * running the same way are ONE container as far as the renderer is concerned
+ * (`ContainerGroup` lays out any number of children), so the nested form is a
+ * strictly deeper spelling of the identical picture — deeper against
+ * `MAX_DEPTH`, one node heavier against `MAX_NODES`, and harder to drag,
+ * because a handle between two containers resizes a group rather than the panes
+ * either side of it.
  */
 function splitInto(
   nodes: readonly WorkspaceNode[],
@@ -294,6 +311,20 @@ function splitInto(
   if (node.nodeType !== 'pane') {
     return refuse('not_a_pane', `node "${input.nodeId}" is a split; a split divides space rather than occupying it`);
   }
+
+  // PACK: the container is already going this way, so the newcomer is a
+  // sibling. `newSplitId` is not consulted at all on this path — no container
+  // is minted, so an id for one is neither used nor required to be free, and
+  // the checks below belong with the mint they defend rather than with the
+  // command.
+  const parent = findNode(nodes, node.parentId);
+  if (parent !== undefined && parent.nodeType !== 'pane' && parent.axis === input.axis) {
+    const index = childrenOf(nodes, parent.id).findIndex((sibling) => sibling.id === node.id) + 1;
+    return compile(nodes, [
+      (current) => create(current, { nodeId: input.newNodeId, target, parentId: parent.id, index }),
+    ]);
+  }
+
   // `create` catches a `newNodeId` the workspace already holds; the container's
   // id has no operation to catch it, and an id already in the set would be
   // UPSERTED over its sitting node rather than minted beside it.
@@ -325,11 +356,10 @@ function splitInto(
  * user has not yet said anything about, and minting it bound to something would
  * be the toolbar deciding what the user meant.
  *
- * It always NESTS, even when the pane's parent already runs along the requested
- * axis — where `split_down` appended to the existing column instead. That is a
- * deliberate consequence of compiling one gesture into the data model's own
- * terms, and it is why the depth cap is reachable by repeating one gesture; see
- * the report.
+ * It NESTS only when the direction CHANGES. A pane whose container already runs
+ * along the requested axis gets its sibling in that container — `split_down`'s
+ * own behaviour, restored: see {@link splitInto}, which is where the reasoning
+ * lives.
  */
 export function split(nodes: readonly WorkspaceNode[], input: SplitInput): CommandResult {
   return splitInto(nodes, input, null);
@@ -499,7 +529,15 @@ export interface OpenInput<Kind extends PaneTargetKind> {
   newNodeId: string;
   /** The container minted if the placement has to split. */
   newSplitId: string;
-  /** The split's direction when it comes to that. Defaults to `row` — beside, as `split_right` was. */
+  /**
+   * The split's direction when it comes to that. OMIT IT, and the placement
+   * picks the direction from the layout it is placing into
+   * (`splitAxisFor` — along the host pane's longer edge). It is here for a
+   * caller that genuinely means one direction, which in practice is the human
+   * toolbar's two split buttons; every server-side admission leaves it unset,
+   * and a `row` default is what made every agent-opened pane a new column
+   * (issue #2469).
+   */
   axis?: NodeAxis;
   /**
    * Where the user is looking. A PREFERENCE and never the subject of the
@@ -646,10 +684,22 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
     ]);
   }
 
-  // Nothing may be given up, so ADD instead: split beside the pane the user is
-  // looking at, and mint the newcomer already showing what was asked for.
-  const from = active ?? panes[0];
-  return splitInto(nodes, { nodeId: from.id, axis: input.axis ?? 'row', newNodeId, newSplitId }, target);
+  // Nothing may be given up, so ADD instead: split the pane with the most room
+  // — the one the user is looking at whenever that is one of them — and mint
+  // the newcomer already showing what was asked for.
+  //
+  // Both halves of that choice live in `workspace-node-packing.ts`, and both
+  // used to be constants here: `active ?? panes[0]` for the host and `'row'`
+  // for the direction. A constant direction is what gave a session that spawned
+  // three shells three columns; a constant host is what made every one of those
+  // splits subdivide the SAME pane. See that module for why the rule is the
+  // rectangle rather than the count.
+  const from = splitHostPane(nodes, panes, input.activeNodeId) ?? panes[0];
+  return splitInto(
+    nodes,
+    { nodeId: from.id, axis: input.axis ?? splitAxisFor(nodes, from.id), newNodeId, newSplitId },
+    target,
+  );
 }
 
 /** Place a conversation. See {@link open} for the policy, which is shared with {@link openPage}. */

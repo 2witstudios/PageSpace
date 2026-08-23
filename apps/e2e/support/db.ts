@@ -7,6 +7,7 @@ import { creditBalances, creditLedger, creditHolds } from '@pagespace/db/schema/
 import { aiUsageLogs } from '@pagespace/db/schema/monitoring';
 import { mcpTokens } from '@pagespace/db/schema/auth';
 import { conversations } from '@pagespace/db/schema/conversations';
+import { agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
 import { sessionService } from '../../../packages/lib/src/auth/session-service';
 import { generateCSRFToken } from '../../../packages/lib/src/auth/csrf-utils';
 import { hashToken } from '../../../packages/lib/src/auth/token-utils';
@@ -293,6 +294,39 @@ export async function createMcpToken(userId: string): Promise<string> {
     isScoped: false,
   });
   return raw;
+}
+
+/**
+ * A shell row inside an agent session, WITHOUT a sandbox.
+ *
+ * The product path (`POST …/shells`) provisions a Sprite first, which makes it
+ * unavailable to a local e2e run and irrelevant to a layout question anyway —
+ * the same reason `createSession` in the grid spec asks for a sandbox-less
+ * session. `spriteExecId` stays NULL, which is the honest state for a shell
+ * whose PTY was never opened: `killSessionShellById` then has no process to
+ * reach and drops the row, so the kill path under test runs end to end without
+ * infrastructure.
+ */
+export async function seedSessionShell(
+  workspaceId: string,
+  ownerId: string,
+  name: string,
+): Promise<string> {
+  const [row] = await db
+    .insert(agentWorkspaceShells)
+    .values({ workspaceId, ownerId, name, agentType: 'shell' })
+    .returning({ id: agentWorkspaceShells.id });
+  return row.id;
+}
+
+/**
+ * Delete a shell ROW behind the app's back — the state a user is in when the
+ * shell went with an ended session, or when a close already succeeded and the
+ * pane is still on screen. The DELETE they then send answers 404, which the
+ * route documents as success and the client used to toast about (#2473).
+ */
+export async function removeSessionShell(shellId: string): Promise<void> {
+  await db.delete(agentWorkspaceShells).where(eq(agentWorkspaceShells.id, shellId));
 }
 
 /**

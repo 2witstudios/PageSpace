@@ -51,7 +51,7 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 import type { Cache } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { ApiRequestError, fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
@@ -622,10 +622,34 @@ export default function AgentPanes({
   // torn down once — and only once — the DELETE has actually succeeded.
   const [pendingEnd, setPendingEnd] = useState<{ nodeId: string } | null>(null);
 
+  /**
+   * Close a shell: kill the PTY, drop the row, and — since #2462 — take its
+   * pane with it, all in the route's one write.
+   *
+   * **404 IS SUCCESS, because the route says so.** Its own doc states the
+   * contract verbatim: "A shell that does not exist (or lives under a different
+   * session than the URL claims) is a 404, which the client treats as success —
+   * killing something already gone IS success (`planKillTarget`)." This did not
+   * honour it: every non-2xx toasted, so closing the tab of a shell whose row
+   * had already gone — with an ended session, or a close the user clicked twice
+   * — reported "Could not close the shell / Shell not found" for a close that
+   * had in fact happened (#2473).
+   *
+   * That is the same shape as the phantom conversation toast documented on
+   * {@link closeChatPane} below, and it is settled the same way: the LOSER of a
+   * race that reached the state it wanted is not an error. What it is NOT
+   * settled by is making the route answer 200 for a shell it never found —
+   * "already gone" and "killed it" are different facts, and the DELETE is the
+   * only place that can still tell them apart.
+   *
+   * Everything else still toasts. A 502 means the kill genuinely failed and the
+   * process may still be running, which is exactly what the user needs told.
+   */
   const closeShell = useCallback(
     (shellId: string) => {
       void del(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
         (error) => {
+          if (error instanceof ApiRequestError && error.status === 404) return;
           console.error('Failed to close shell:', error);
           toast.error('Could not close the shell', {
             description: error instanceof Error ? error.message : 'It may still be running.',
@@ -716,6 +740,15 @@ export default function AgentPanes({
         // binding are gone with the close, so the PTY has no surface left and
         // nothing that could reattach to it — it goes too, rather than being
         // left running for a row that no longer exists.
+        //
+        // BOTH of these now destroy this node — the drop above locally and
+        // optimistically, the DELETE's `expel` server-side (#2462) — and unlike
+        // the chat double-write below that is not a fact with two writers. It is
+        // ONE idempotent removal reached from two directions, which is the rule
+        // the kill path is built on: "killing something already gone IS
+        // success". Whichever takes the workspace lock second finds the node
+        // gone and writes nothing. The optimistic drop is what keeps the pane
+        // from sitting there until the round trip and the broadcast come back.
         if (node.target?.kind === 'terminal') closeShell(node.target.id);
         return;
       }

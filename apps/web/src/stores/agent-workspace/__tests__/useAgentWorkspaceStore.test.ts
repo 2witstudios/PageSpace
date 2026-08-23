@@ -200,7 +200,9 @@ describe('applyRemoteUpdate', () => {
 describe('local writes survive new server truth', () => {
   it('should replay a pending split on top of an adopted snapshot', () => {
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
-    store().splitPane(WS, 'p1', 'row');
+    // A `column` split of a `row` root, so the write mints a CONTAINER in p1's
+    // own slot. See the packed case below for why the direction matters here.
+    store().splitPane(WS, 'p1', 'column');
     expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
 
     // Somebody else adds a pane; our split has not been acked.
@@ -214,6 +216,34 @@ describe('local writes survive new server truth', () => {
     // p1, the split's new pane, and the remote one.
     expect(panes).toHaveLength(3);
     expect(panes.some((n) => n.id === 'remote')).toBe(true);
+  });
+
+  it('should DROP a pending PACKED split whose slot the server filled, and say so', () => {
+    // THE COST OF PACKING (#2469), stated rather than discovered. A same-axis
+    // split no longer mints a container in the splitter's own slot: it puts one
+    // pane into the container, at the slot after it. A remote insert into that
+    // same container takes the same slot, and two members of one group cannot
+    // share a position — so the replay produces a tree the validator refuses and
+    // the write is dropped WHOLE rather than partly applied.
+    //
+    // That is the model's existing rule for a write that no longer applies, and
+    // it is loud: `queueErrors` becomes `superseded`, which `AgentPanes` toasts
+    // as "That pane changed somewhere else while you were editing it". The
+    // nesting split above survives the same race because its container lands in
+    // a slot the remote pane did not take. A rarer, announced loss on a
+    // concurrent split is the trade for a grid that packs on every ordinary one.
+    store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
+    store().splitPane(WS, 'p1', 'row');
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
+
+    store().applyRemoteUpdate({
+      workspaceId: WS,
+      rev: 2,
+      nodes: [root, pane('p1', WS, 0, 'c1'), pane('remote', WS, 1, 'c2')],
+    });
+
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
+    expect(useAgentWorkspaceStore.getState().queueErrors[WS]?.reason).toBe('superseded');
   });
 
   /**
@@ -471,7 +501,10 @@ describe('the wire', () => {
       .mockImplementationOnce(() => new Promise<Response>(() => {}));
 
     store().hydrateFromServer(WS, snapshot(1, [root, pane('p1', WS, 0, 'c1')]));
-    store().splitPane(WS, 'p1', 'row');
+    // `column`, so the split mints a container rather than packing into the
+    // slot the server's own `remote` pane already took — see "should DROP a
+    // pending PACKED split" for that case, which is the same rebase refusing.
+    store().splitPane(WS, 'p1', 'column');
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(tree().rev).toBe(7);

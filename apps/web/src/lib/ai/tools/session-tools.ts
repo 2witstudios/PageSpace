@@ -94,6 +94,18 @@ export const MAX_TRANSCRIPT_MESSAGE_CHARS = 4000;
 export const DEFAULT_SHELL_TAIL_LINES = 100;
 
 /**
+ * The pane count at which a spawn says something about it.
+ *
+ * Not a cap and not a refusal — the layout packs now
+ * (`workspace-node-packing.ts`), so six panes is a usable grid rather than six
+ * slivers, and an agent with six things to watch is entitled to six panes. It
+ * is the point at which a HUMAN sharing the screen starts to mind, which is who
+ * the note is really for: the session behind issue #2469 left every pane it
+ * opened standing, and a user closed them by hand mid-session.
+ */
+export const CROWDED_PANE_COUNT = 6;
+
+/**
  * The framing every transcript is wrapped in. A worker's transcript is written
  * by ANOTHER agent and by whatever its tools read off a disk — it is data, and
  * the reading model must not treat it as instruction.
@@ -575,13 +587,13 @@ export interface SessionToolsDeps {
     userId: string;
     agentPageId: string | null;
   }) => Promise<{ ok: true } | { ok: false; error: string }>;
-  /** Reserve a shell row (auto-label via the pure planner). Never starts a PTY. */
+  /** Reserve a shell row (auto-label via the pure planner) AND the pane that shows it. Never starts a PTY. */
   spawnShell: (input: {
     /** The CALLER's conversation — the runtime resolves its workspace; shells hang off that. */
     conversationId: string;
     ownerId: string;
     name?: string;
-  }) => Promise<{ ok: true; shell: ShellDTO } | { ok: false; reason: string }>;
+  }) => Promise<{ ok: true; shell: ShellDTO; panes: ToolPaneState } | { ok: false; reason: string }>;
   /** A shell's identity + cold-tail record, or null. */
   findShell: (shellId: string) => Promise<{
     shellId: string;
@@ -589,8 +601,18 @@ export interface SessionToolsDeps {
     name: string;
     cold?: { tail: string; at: Date; hasOutput: boolean };
   } | null>;
-  /** Kill a shell's PTY and drop its row. Already-gone is success. */
-  killShell: (shellId: string) => Promise<{ ok: true; killed: boolean } | { ok: false; reason: string }>;
+  /**
+   * Kill a shell's PTY, drop its row AND remove its pane — one transaction, the
+   * inverse of the spawn (issue #2462). Already-gone is success.
+   *
+   * `actingUserId` is the HUMAN whose session this is: the pane removal goes
+   * through the same membership funnel a browser's close does, and that funnel
+   * takes an acting user rather than a model's word for one.
+   */
+  killShell: (input: {
+    shellId: string;
+    actingUserId: string;
+  }) => Promise<{ ok: true; killed: boolean; panes: ToolPaneState | null } | { ok: false; reason: string }>;
   /** PTY IO against the realtime service that owns the stream — see shell-io.ts. */
   shellIo: {
     read: (input: {
@@ -673,6 +695,26 @@ export interface PaneGridNodeEntry {
 /** The caller's whole layout: one flat list, in which `parentId` says everything. */
 export interface PaneGridListing {
   nodes: PaneGridNodeEntry[];
+}
+
+/**
+ * THE LAYOUT, IN TWO NUMBERS — what a spawn or a kill leaves behind, reported
+ * on the response the agent is already reading.
+ *
+ * `list_panes` has been available all along and issue #2469's reporter did not
+ * call it once in a session that opened several shells: nothing they read ever
+ * mentioned panes, so there was never a moment at which looking at the layout
+ * was the obvious next move. This is that moment, and it is deliberately the
+ * SMALLEST thing that could be — a count and the pane this shell owns. An agent
+ * that sees the count climbing has both the trigger and the address it needs to
+ * clean up after itself (`close_pane`, `kill_shell`), and one that does not care
+ * pays two numbers for the privilege of ignoring it.
+ */
+export interface ToolPaneState {
+  /** Every pane the workspace holds. Every pane is on screen. */
+  paneCount: number;
+  /** The pane bound to the shell this response is about — `null` when it has none, which is what a kill leaves. */
+  nodeId: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,7 +1535,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     spawn_shell: tool({
       description:
-        'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell. Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes.',
+        'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell — plus the pane it opened in (paneNodeId) and how many panes this workspace is now showing (paneCount). Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes. A shell you open is on a human\'s screen until you close it, so close the ones you are done with.',
       inputSchema: spawnShellInputSchema,
       execute: async ({ name }, options) => {
         const context = readContext(options);
@@ -1539,7 +1581,20 @@ export function createSessionTools(deps: SessionToolsDeps): {
             reason: spawned.reason,
           };
         }
-        return { success: true, shellId: spawned.shell.shellId, name: spawned.shell.name };
+        return {
+          success: true,
+          shellId: spawned.shell.shellId,
+          name: spawned.shell.name,
+          // The layout, so the agent knows what its own spawning is doing to the
+          // screen — see {@link ToolPaneState}.
+          paneNodeId: spawned.panes.nodeId,
+          paneCount: spawned.panes.paneCount,
+          ...(spawned.panes.paneCount >= CROWDED_PANE_COUNT
+            ? {
+                note: `This workspace is now showing ${spawned.panes.paneCount} panes. Close the ones you are done with (kill_shell closes a shell's pane with it; close_pane closes any other).`,
+              }
+            : {}),
+        };
       },
     }),
 
@@ -1595,7 +1650,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
     kill_shell: tool({
       description:
-        'Close one of this session\'s shells (by shellId): its process is terminated and its record removed. The session\'s sandbox (and every other shell) is untouched. Closing an already-gone shell succeeds.',
+        'Close one of this session\'s shells (by shellId): its process is terminated, its record removed, AND ITS PANE CLOSED — every browser watching this workspace loses the tab. The session\'s sandbox (and every other shell) is untouched. Returns paneNodeId (the pane that closed) and paneCount, the panes this workspace is still showing. Closing an already-gone shell succeeds.',
       inputSchema: killShellInputSchema,
       execute: async ({ shellId }, options) => {
         const context = readContext(options);
@@ -1624,7 +1679,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           return { success: true, shellId, killed: false, note: 'That shell was already gone.' };
         }
 
-        const killed = await deps.killShell(shellId);
+        const killed = await deps.killShell({ shellId, actingUserId: actor.userId });
         if (!killed.ok) {
           return {
             success: false,
@@ -1632,7 +1687,17 @@ export function createSessionTools(deps: SessionToolsDeps): {
             reason: killed.reason,
           };
         }
-        return { success: true, shellId, killed: killed.killed };
+        return {
+          success: true,
+          shellId,
+          killed: killed.killed,
+          // Its pane went with it: `paneNodeId` is the one that closed and
+          // `paneCount` is what is LEFT — the same number `list_panes` would
+          // answer, without the second call.
+          ...(killed.panes === null
+            ? {}
+            : { paneNodeId: killed.panes.nodeId, paneCount: killed.panes.paneCount }),
+        };
       },
     }),
 

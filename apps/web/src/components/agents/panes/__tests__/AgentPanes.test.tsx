@@ -439,6 +439,54 @@ describe('AgentPanes — closing a pane', () => {
     expect(nodeById('n1')).toBeUndefined();
   });
 
+  it('raises NO toast when the shell was already gone — a 404 is what success looks like here', async () => {
+    // Issue #2473, and the route already said so: "A shell that does not exist
+    // (or lives under a different session than the URL claims) is a 404, which
+    // the client treats as success." It did not — every non-2xx toasted, so a
+    // user closing the tab of a shell whose row had gone with an ended session
+    // read "Could not close the shell / Shell not found" for a close that had
+    // in fact happened.
+    mockDel.mockRejectedValueOnce(new ApiRequestError('Shell not found', 404));
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(nodeById('n1')).toBeUndefined());
+    expect(mockToast.error).not.toHaveBeenCalled();
+  });
+
+  it('still raises a toast when the kill genuinely failed, because the process may still be running', async () => {
+    // The other half of the same rule: 404 is "already gone", 502 is "it may
+    // still be running", and silencing the second to fix the first would be the
+    // crippled-agent trade this change exists to refuse.
+    mockDel.mockRejectedValueOnce(new ApiRequestError('Could not close this shell', 502));
+    seat(
+      [
+        rootNode,
+        paneNode('n1', WS, 0, { kind: 'terminal', id: 'shell-1' }),
+        chatNode('n2', WS, 1, 'conv-2'),
+      ],
+      [],
+    );
+    const user = userEvent.setup();
+    renderPanes({ initialConversation: null });
+
+    await screen.findByTestId('pane-shell');
+    await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
+
+    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Could not close the shell', expect.anything()));
+  });
+
   it('does nothing while the directory has not resolved — a close never acts on an unverified fact', async () => {
     // A tree this browser SEEDED and no server answer has confirmed:
     // `runCommand` mints a root locally so the first click composes into one

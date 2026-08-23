@@ -175,6 +175,23 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Closing a shell closes its pane** — killing a shell in an agent session terminated the process
+  and removed the shell, and left its pane sitting on screen bound to a terminal that no longer
+  existed. The pane now goes with the shell, in the same write, so every browser watching the
+  session loses the tab at once instead of accumulating dead rectangles until somebody closes them
+  by hand.
+- **Panes pack into a grid instead of marching sideways** — every pane an agent opened split the
+  screen beside the last one, so a session that started three shells ended up with three ever-thinner
+  columns. A new pane now splits the roomiest one along its longer edge — beside it when there is
+  width to spare, below it when there is not — and panes going the same way share a container rather
+  than nesting a new one each time, which is also what stopped the layout from getting deeper every
+  time you split. Agents are told how many panes their session is showing when they open or close a
+  shell, so they can tidy up after themselves.
+- **No more "Shell not found" when closing a shell pane** — closing the tab of a shell that was
+  already gone, or one whose session had expired, raised an error toast for a close that had in fact
+  succeeded. Closing something already closed is success and says nothing; a close that genuinely
+  failed still tells you, because the process may still be running.
+
 - **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
   agent sandboxes and environments were all refused, because the gate asked which subscription plan
   the account was on and a dedicated deployment has no plan to be on: the deployment itself is what

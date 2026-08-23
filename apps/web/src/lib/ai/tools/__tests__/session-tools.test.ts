@@ -28,6 +28,9 @@ const SHELL = {
   createdAt: '2026-07-28T00:00:00.000Z',
 };
 
+/** The layout a spawn reports back: the pane it landed in, and how many the workspace holds. */
+const PANES = { paneCount: 2, nodeId: 'pane-shell' };
+
 function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
   return {
     findOwnWorkspace: vi.fn(async () => ({ workspaceId: WORKSPACE_ID, driveId: null })),
@@ -55,9 +58,9 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     readTranscript: vi.fn(async () => []),
     killWorker: vi.fn(async () => ({ ok: true as const, spriteTornDown: true })),
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
-    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL })),
+    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL, panes: PANES })),
     findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: WORKSPACE_ID, name: SHELL.name })),
-    killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
+    killShell: vi.fn(async () => ({ ok: true as const, killed: true, panes: { paneCount: 2, nodeId: 'pane-shell' } })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: true, output: 'hello' })),
       send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),
@@ -782,12 +785,18 @@ describe('spawn_shell', () => {
       }),
       spawnShell: vi.fn(async () => {
         order.push('spawn');
-        return { ok: true as const, shell: SHELL };
+        return { ok: true as const, shell: SHELL, panes: PANES };
       }),
     });
     const tools = createSessionTools(deps);
     const result = await run(tools.spawn_shell, {}, contextOptions());
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, name: SHELL.name });
+    expect(result).toEqual({
+      success: true,
+      shellId: SHELL.shellId,
+      name: SHELL.name,
+      paneNodeId: PANES.nodeId,
+      paneCount: PANES.paneCount,
+    });
     expect(order).toEqual(['ensure', 'spawn']);
     expect(deps.ensureOwnSessionSandbox).toHaveBeenCalledWith({
       conversationId: CALLER_CONVERSATION,
@@ -867,7 +876,10 @@ describe('kill_shell', () => {
     const deps = makeDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true });
+    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true, paneNodeId: 'pane-shell', paneCount: 2 });
+    // The pane went with the process, in the kill's own write — so this is the
+    // acting HUMAN's id, never the model's word for one (issue #2462).
+    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actingUserId: USER_ID });
   });
 
   it('given an already-gone shell, should SUCCEED — teardown callers retry', async () => {

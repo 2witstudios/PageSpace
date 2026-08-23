@@ -150,7 +150,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       spawn_shell: {
         description:
-          'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell. Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes.',
+          'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it if this is the session\'s first touch). Returns the shellId — the address for send_shell/read_shell/kill_shell — plus the pane it opened in (paneNodeId) and how many panes this workspace is now showing (paneCount). Omit name for an auto label. The PTY starts on first use; bash covers one-shot commands, a shell is for interactive or long-running processes. A shell you open is on a human\'s screen until you close it, so close the ones you are done with.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -190,7 +190,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       kill_shell: {
         description:
-          'Close one of this session\'s shells (by shellId): its process is terminated and its record removed. The session\'s sandbox (and every other shell) is untouched. Closing an already-gone shell succeeds.',
+          'Close one of this session\'s shells (by shellId): its process is terminated, its record removed, AND ITS PANE CLOSED — every browser watching this workspace loses the tab. The session\'s sandbox (and every other shell) is untouched. Returns paneNodeId (the pane that closed) and paneCount, the panes this workspace is still showing. Closing an already-gone shell succeeds.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',

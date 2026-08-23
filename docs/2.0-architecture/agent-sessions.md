@@ -144,6 +144,32 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
   lock, and op memory the verbs route uses — and derive their `opId` from the
   tool call id so an SDK retry replays instead of rearranging twice.
 
+- **Pane lifecycle (issues #2462, #2469, #2473): SHIPPED.** Three corrections
+  from one real working session, all in the same subsystem, all found by USING
+  it:
+  - **A shell's pane goes with the shell.** `kill_shell` — and the DELETE the
+    tab's close button sends — expels the node bound to `{kind: 'terminal', id}`
+    in the SAME transaction that kills the PTY and drops the row, mirroring
+    `spawnShell`'s admission. It used to write to the tree not at all, so a
+    killed shell left a pane bound to a terminal that no longer existed, with
+    no broadcast and no repair short of a human closing it. A kill that cannot
+    reach the process unwinds the node write rather than removing a live PTY's
+    only surface.
+  - **Placement chooses its direction from the layout.** `OpenInput.axis`
+    defaulted to `row` and no production caller ever supplied one, so every
+    agent-opened pane became another column. A split now takes the pane with the
+    most room and divides it along its longer edge
+    (`workspace-node-packing.ts`), and a split whose direction matches the
+    container it is in PACKS into that container instead of nesting a new one —
+    which is also what stopped repeated splits from walking toward `MAX_DEPTH`.
+    The cost is named where it is paid: a packed split and a concurrent remote
+    insert want the same slot, so the loser's optimistic write is dropped whole
+    and announced (`queueErrors: 'superseded'`), where a nesting split survived.
+  - **`spawn_shell` and `kill_shell` report the layout.** `paneNodeId` (the
+    pane opened, or the one closed) and `paneCount` (and, past six panes, a
+    note) ride the responses an agent already reads. `list_panes` was always there and the session that filed
+    #2469 never called it: nothing gave it a reason to look.
+
 ## 2. Authorization axioms (PR #2336 — product-locked)
 
 These are product decisions, not implementation accidents. They supersede issue #2262
