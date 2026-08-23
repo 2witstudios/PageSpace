@@ -5,44 +5,8 @@
  * positions and the mobile-breakpoint decision.
  */
 
-export interface Viewport {
-  width: number;
-  height: number;
-}
-
-/** A structural rectangle (DOMRect is compatible). */
-export interface Bounds {
-  left: number;
-  top: number;
-  right: number;
-  bottom: number;
-}
-
 /** The mobile breakpoint (Tailwind `sm`). */
 export const MOBILE_BREAKPOINT = 640;
-
-const MENU_WIDTH = 180; // min-w-[160px] + padding buffer
-const MENU_HEIGHT = 200; // approximate rendered height
-
-/**
- * Clamp a context-menu position so it stays within `bounds` (falling back to the
- * viewport edges) minus the menu's footprint.
- */
-export const clampContextMenuPosition = (
-  x: number,
-  y: number,
-  bounds: Bounds | undefined,
-  viewport: Viewport,
-): { left: string; top: string } => {
-  const minLeft = bounds?.left ?? 0;
-  const minTop = bounds?.top ?? 0;
-  const maxLeft = (bounds?.right ?? viewport.width) - MENU_WIDTH;
-  const maxTop = (bounds?.bottom ?? viewport.height) - MENU_HEIGHT;
-  return {
-    left: `${Math.max(minLeft, Math.min(x, Math.max(minLeft, maxLeft)))}px`,
-    top: `${Math.max(minTop, Math.min(y, Math.max(minTop, maxTop)))}px`,
-  };
-};
 
 /**
  * Whether to use the mobile layout: prefer the measured container width, falling

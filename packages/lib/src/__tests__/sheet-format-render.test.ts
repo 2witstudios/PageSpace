@@ -8,6 +8,8 @@ import {
   evaluateSheet,
   encodeCellAddress,
   numberFormatToExcelCode,
+  cellFormatToStyle,
+  cellFormatToInlineCss,
   type SheetData,
 } from '../sheets/sheet';
 import { renderSheetPage } from '../publish/render-sheet-page';
@@ -290,4 +292,40 @@ describe('xlsx export', () => {
     expect(worksheet.A2?.v).toBe(30);
   });
 
+});
+
+describe('automatic contrast on a filled cell', () => {
+  it('puts dark text on a pale fill', () => {
+    // Without this, a fill applied in light mode becomes white-on-pale the
+    // moment the reader switches to dark: the value is still there and
+    // completely unreadable. The fill is an absolute colour (that is what
+    // makes the export and the published page match), but the text colour of
+    // an unstyled cell is not stored — it inherits the theme.
+    expect(cellFormatToStyle({ background: '#dbeafe' }).color).toBe('#000000');
+  });
+
+  it('puts light text on a deep fill', () => {
+    expect(cellFormatToStyle({ background: '#1d4ed8' }).color).toBe('#ffffff');
+  });
+
+  it('never overrides a colour the user chose', () => {
+    // Even a poor choice is theirs; silently replacing it would be worse.
+    expect(cellFormatToStyle({ background: '#1d4ed8', color: '#000000' }).color).toBe('#000000');
+  });
+
+  it('leaves an unfilled cell inheriting the theme', () => {
+    expect(cellFormatToStyle({ bold: true }).color).toBeUndefined();
+  });
+
+  it('ignores an invalid fill rather than deriving a colour from it', () => {
+    const style = cellFormatToStyle({ background: 'red' } as never);
+    expect(style.backgroundColor).toBeUndefined();
+    expect(style.color).toBeUndefined();
+  });
+
+  it('carries the derived colour into the published page CSS', () => {
+    // The published snapshot is static HTML with no theme bridge, so it needs
+    // the same treatment or a dashboard reads differently once shared.
+    expect(cellFormatToInlineCss({ background: '#1d4ed8' })).toContain('color:#ffffff');
+  });
 });

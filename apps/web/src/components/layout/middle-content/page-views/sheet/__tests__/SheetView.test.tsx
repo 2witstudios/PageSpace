@@ -1,7 +1,12 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
-import { createEmptySheet, serializeSheetContent } from '@pagespace/lib/sheets/sheet';
+import {
+  createEmptySheet,
+  serializeSheetContent,
+  setCellFormats,
+  setColumnFormat,
+} from '@pagespace/lib/sheets/sheet';
 
 // `serializeSheetContent` refuses to emit content it cannot parse back, so it
 // can throw on an edit. Spying lets a test force that without a contrived
@@ -89,10 +94,6 @@ vi.mock('@/components/ui/pull-to-refresh', () => ({
   PullToRefresh: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
 }));
 
-vi.mock('@/components/ui/custom-scroll-area', () => ({
-  CustomScrollArea: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
-}));
-
 const toastError = vi.fn();
 vi.mock('sonner', () => ({ toast: { error: (...a: unknown[]) => toastError(...a) } }));
 
@@ -121,6 +122,10 @@ const contentWith = (cells: Record<string, string>) => {
   return serializeSheetContent(sheet);
 };
 
+/** The rendered text of one grid cell, by address. */
+const cellText = (address: string): string =>
+  document.querySelector(`[data-cell="${address}"]`)?.textContent ?? '';
+
 describe('SheetView', () => {
   beforeEach(() => {
     lacksEditPermission.current = false;
@@ -135,7 +140,7 @@ describe('SheetView', () => {
     render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
 
     expect(screen.getByRole('grid')).toBeTruthy();
-    expect(screen.getByText('hello')).toBeTruthy();
+    expect(cellText('A1')).toBe('hello');
   });
 
   it('shows no load-failure banner when the sheet reads fine', () => {
@@ -186,6 +191,46 @@ describe('SheetView', () => {
     expect(cellAt('A1').getAttribute('aria-selected')).toBe('false');
   });
 
+  it('paints a cell that has a fill but no value', () => {
+    // The dashboard case, and the one nothing else covers: `setCellFormats`
+    // writes to `sheet.formats`, not `sheet.cells`, so a blank coloured cell has
+    // no entry in the sparse evaluation. It was persisted and invisible.
+    const sheet = createEmptySheet();
+    const content = serializeSheetContent(setCellFormats(sheet, ['C3'], { background: '#dbeafe' }));
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('C3').style.backgroundColor).toBe('rgb(219, 234, 254)');
+  });
+
+  it('applies a column default to the empty cells of that column', () => {
+    const content = serializeSheetContent(setColumnFormat(createEmptySheet(), 1, {
+      background: '#fee2e2',
+    }));
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('B4').style.backgroundColor).toBe('rgb(254, 226, 226)');
+  });
+
+  it('extends the selection on shift-click', () => {
+    // Dragging was the only way to select a range, which makes formatting a
+    // wide block of a large sheet impractical. Every other spreadsheet binds
+    // shift-click, and the formatting toolbar is only useful with it.
+    render(<SheetView page={makePage(contentWith({ A1: 'hello' }))} />);
+
+    fireEvent.mouseDown(cellAt('A1'));
+    fireEvent.mouseDown(cellAt('C3'), { shiftKey: true });
+
+    for (const address of ['A1', 'B2', 'C3', 'A3', 'C1']) {
+      expect(cellAt(address).getAttribute('aria-selected'), address).toBe('true');
+    }
+    // ...and nothing beyond the rectangle.
+    expect(cellAt('D4').getAttribute('aria-selected')).toBe('false');
+  });
+
   it('lets a view-only user drag out a range', () => {
     lacksEditPermission.current = true;
 
@@ -228,7 +273,7 @@ describe('SheetView', () => {
 
     // And the view survived, still showing the last good value.
     expect(screen.getByRole('grid')).toBeTruthy();
-    expect(screen.getByText('hello')).toBeTruthy();
+    expect(cellText('A1')).toBe('hello');
   });
 
   it('renders a formatted value the way the engine computed it', () => {

@@ -47,6 +47,33 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   into a single "Unattributed agent" line, which named the wrong thing and skewed the share each
   agent appeared to account for; both are now right.
 
+- **The spreadsheet has been rebuilt** — the grid was a plain table with a heavy border drawn on
+  every side of every cell, which is why it read as a picture of a spreadsheet rather than part of
+  PageSpace. It now uses the same hairline seams, header treatment, focus ring and glass toolbar as
+  the rest of the product, numbers right-align in aligned figures the way a spreadsheet should, and
+  the whole surface is windowed so a sheet with tens of thousands of rows scrolls and types without
+  lag.
+- **A formatting toolbar, and the controls to build a dashboard** — bold, italic, underline and
+  strikethrough; text and fill colour from the same twelve colours the rest of PageSpace uses, plus
+  any hex you like; alignment and text wrapping; font size; currency, percent, date and plain-number
+  formats with buttons to add or remove decimal places; and freeze for the first row or column.
+  Ctrl/Cmd+B, I and U work in the grid — previously every keyboard shortcut with a modifier was
+  swallowed before it could do anything.
+- **Column widths, row heights and frozen panes** — drag a column or row edge to resize it, or
+  double-click a column edge to fit it to its contents. Freeze the top row or first column and it
+  stays put while the rest scrolls. Row density (compact, normal, relaxed) is in the status bar.
+- **A filled cell stays readable when you switch to dark mode** — a cell's fill is a fixed colour,
+  so that a published page and an exported workbook look like what you built; its text colour was
+  not, so a pale fill applied in daylight turned into white-on-pale and the value vanished at night.
+  Filled cells now pick a readable text colour automatically, unless you chose one yourself.
+- **Selecting a range with shift-click** — dragging was previously the only way, which made
+  formatting a wide block of a large sheet impractical.
+- **Editing a cell survives scrolling away from it** — starting to type in a cell and then scrolling
+  used to discard what you had typed.
+- **The right-click menu is a real menu** — reachable from the keyboard, with copy, copy values,
+  paste, paste values, clear formatting and clear contents.
+- **Multi-tab workbooks show their tabs** — the other tabs were already preserved when saving; now
+  you can see they are there. Opening them is still to come.
 - **Spreadsheet cells can carry formatting** — number formats (currency, percent, decimals, dates),
   bold and italic, text and fill colour, alignment, borders, column widths, and frozen rows and
   columns are now stored with the sheet and survive saving, publishing and export. Clearing a

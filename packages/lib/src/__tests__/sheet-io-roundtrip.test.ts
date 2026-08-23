@@ -345,3 +345,36 @@ describe('parseSheetContentSafe', () => {
     }
   });
 });
+
+describe('cells outside the current rectangle', () => {
+  it('survives a save instead of being silently deleted', () => {
+    // The serializer used to walk `rowCount × columnCount` grid positions and
+    // emit what it found there, so any cell beyond the rectangle — left behind
+    // by shrinking the sheet, or written through the API — was dropped on the
+    // next save with no error and no warning. It now walks the cells that
+    // exist, so shrinking a sheet no longer destroys what falls outside.
+    const sheet = createEmptySheet();
+    sheet.rowCount = 5;
+    sheet.columnCount = 5;
+    sheet.cells.A1 = 'inside';
+    sheet.cells.Z99 = 'outside';
+
+    const restored = parseSheetContent(serializeSheetContent(sheet));
+
+    expect(restored.cells.A1).toBe('inside');
+    expect(restored.cells.Z99).toBe('outside');
+  });
+
+  it('keeps a formula that references a cell beyond the rectangle', () => {
+    const sheet = createEmptySheet();
+    sheet.rowCount = 3;
+    sheet.columnCount = 3;
+    sheet.cells.A1 = '=Z99*2';
+    sheet.cells.Z99 = '21';
+
+    const restored = parseSheetContent(serializeSheetContent(sheet));
+
+    expect(restored.cells.A1).toBe('=Z99*2');
+    expect(restored.cells.Z99).toBe('21');
+  });
+});

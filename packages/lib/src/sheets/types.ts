@@ -198,6 +198,18 @@ export interface SheetEvaluation {
   dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
 }
 
+/**
+ * An evaluation of only the cells that exist, with no materialized grids.
+ *
+ * A missing entry means an empty cell — the same thing the dense
+ * `SheetEvaluation` stores an explicit empty record for. Consumers that already
+ * guard the lookup (`byAddress[addr]?.display`) need no change to accept one.
+ */
+export interface SheetSparseEvaluation {
+  byAddress: Record<SheetCellAddress, SheetEvaluationCell>;
+  dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
+}
+
 export interface SheetCellUpdate {
   address: string;
   value: string;
