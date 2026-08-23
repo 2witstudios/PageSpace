@@ -549,10 +549,13 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * sessions do not survive a Sprite pause either, so the window closes on its own.
  */
 const TERMINAL_ENV = {
+  // Base first, tty settings last: the ownership the docblock describes has to
+  // hold at runtime too, so a `TERM`/`LANG` added to the sandbox base for the
+  // batch tool can never quietly reset this surface's terminal type or locale.
+  ...SANDBOX_BASE_ENV,
   TERM: 'xterm-256color',
   COLORTERM: 'truecolor',
   LANG: 'en_US.UTF-8',
-  ...SANDBOX_BASE_ENV,
 };
 
 export function openPtyShell({

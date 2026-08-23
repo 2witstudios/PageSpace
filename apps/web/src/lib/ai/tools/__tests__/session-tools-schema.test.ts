@@ -68,19 +68,31 @@ describe('session + shell + layout tools — frozen wire contract', () => {
     ]);
   });
 
-  it('no tool description exceeds the 1024-character ceiling every hosted provider enforces', () => {
-    // A tool description is not free-form room: OpenAI rejects a
-    // `tools[n].function.description` over 1024 characters outright, and the
-    // cloud models here are served through OpenRouter, which forwards the tool
-    // definitions to the vendor verbatim. Crossing it does not degrade THIS
-    // tool — the whole request 400s, so every turn in a conversation that
-    // registers session tools fails, for a reason no error message ties back to
-    // a description. Guidance that does not fit belongs in the tool's RESULT or
-    // in the system prompt, not here.
-    const overLong = Object.entries(wireSurface())
+  it('keeps every description in this family inside the 1024-character budget', () => {
+    // A size budget for THIS family, not a proven provider rule. Two things are
+    // true and neither is quite the story the first draft of this comment told:
+    //
+    //  - OpenAI DOCUMENTS a 1024-character cap on
+    //    `tools[n].function.description`, and the cloud models here are served
+    //    through OpenRouter, which forwards tool definitions to the vendor
+    //    verbatim. If that cap is enforced, an over-long description does not
+    //    degrade one tool — the whole request fails, for a reason no error text
+    //    ties back to a description.
+    //  - But `update_task` (1629 chars) and `get_activity` (1608) have been
+    //    shipping in the SAME payload for a long time, so the cap is plainly not
+    //    enforced the way that reading implies. Whether it bites at all, and on
+    //    which providers, is an open question (issue #2480) — not something
+    //    this suite gets to assert.
+    //
+    // What survives without that argument: these strings ride on every single
+    // request, so an unbounded one is a permanent token cost and a diluted
+    // instruction. 1024 is the budget this family already lived inside (its
+    // largest was 822 before the shell docs grew). Guidance that does not fit
+    // belongs in the tool's RESULT or in the system prompt.
+    const overBudget = Object.entries(wireSurface())
       .map(([name, { description }]) => ({ name, length: description?.length ?? 0 }))
       .filter((entry) => entry.length > 1024);
-    expect(overLong).toEqual([]);
+    expect(overBudget).toEqual([]);
   });
 
   it('every tool description and JSON input schema is byte-identical to the pinned contract', () => {

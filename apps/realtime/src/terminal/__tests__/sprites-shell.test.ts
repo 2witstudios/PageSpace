@@ -307,6 +307,32 @@ describe('sessionIds (pure)', () => {
   });
 });
 
+describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
+  it('given a fresh shell, spawns it with the SAME sandbox base env the bash tool builds, plus this surface\'s tty settings', () => {
+    // The two surfaces used to disagree — the bash tool forwarded the host's
+    // NODE_ENV while the PTY set none — so the same sandbox answered
+    // `env | grep NODE_ENV` differently depending on which tool asked.
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.createSession).toHaveBeenCalledTimes(1);
+    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
+    expect(options.env).toEqual({
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'en_US.UTF-8',
+      ...SANDBOX_BASE_ENV,
+    });
+    // Guards the DIRECTION that matters: a key the sandbox base gains and the
+    // PTY does not fails here. (It cannot prove the PTY references the shared
+    // constant rather than repeating its values — a hardcoded literal would
+    // pass both assertions — but a divergence in content is what breaks agents.)
+    expect(options.env).toMatchObject(buildSandboxEnv({ env: { NODE_ENV: 'production' } }));
+  });
+});
+
 /**
  * Session identity comes from the create handle itself: the server sends a
  * `session_info` frame carrying `session_id` on the very socket `createSession()`
@@ -391,29 +417,6 @@ describe('openPtyShell session identity (from create, not list-diffing)', () => 
  * detached shell must not FOLLOW every trip with a fresh exec connection, and
  * must reattach lazily the moment a viewer actually returns.
  */
-describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
-  it('given a fresh shell, spawns it with the SAME sandbox base env the bash tool builds, plus this surface\'s tty settings', () => {
-    // The two surfaces used to disagree — the bash tool forwarded the host's
-    // NODE_ENV while the PTY set none — so the same sandbox answered
-    // `env | grep NODE_ENV` differently depending on which tool asked.
-    const cmd = buildFakeCommand();
-    const sprite = buildFakeSprite(cmd);
-
-    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
-
-    expect(sprite.createSession).toHaveBeenCalledTimes(1);
-    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
-    expect(options.env).toEqual({
-      TERM: 'xterm-256color',
-      COLORTERM: 'truecolor',
-      LANG: 'en_US.UTF-8',
-      ...SANDBOX_BASE_ENV,
-    });
-    // Not a copy of the values: whatever the sandbox base says, the terminal says.
-    expect(options.env).toMatchObject(buildSandboxEnv({ env: { NODE_ENV: 'production' } }));
-  });
-});
-
 describe('viewer attach/detach gates the watchdog reconnect (leaf 3-2)', () => {
   beforeEach(() => { vi.useFakeTimers(); });
   afterEach(() => { vi.useRealTimers(); });
