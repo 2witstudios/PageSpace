@@ -27,7 +27,7 @@ Or run it without installing:
 npx -y -p @pagespace/cli pagespace <command>
 \`\`\`
 
-The current version is **1.6.1**. Installing gives you two binaries: \`pagespace\` (the CLI) and \`pagespace-mcp\` (the MCP server).
+The current version is **1.8.0**. Installing gives you two binaries: \`pagespace\` (the CLI) and \`pagespace-mcp\` (the MCP server).
 
 ## Sign in
 
@@ -97,6 +97,30 @@ pagespace pages trash <pageId> --yes
 
 Page types are \`FOLDER\`, \`DOCUMENT\`, \`CHANNEL\`, \`AI_CHAT\`, \`CANVAS\`, \`FILE\`, \`SHEET\`, \`TASK_LIST\`, and \`CODE\`.
 
+**Sheets** — a spreadsheet as rows you can query, not a file you download.
+
+\`\`\`bash
+# tabs, rows, columns — without reading a row
+pagespace sheets describe <pageId>
+
+# filter and sort server-side; --where takes JSON
+pagespace sheets query <pageId> --where '{"column":"C","op":"eq","value":"open"}' \
+  --select A,C,F --order-by F:desc --limit 20 --json
+
+# walk a tab by position
+pagespace sheets rows <pageId> --from-row 0 --limit 50 --json
+
+# payloads come from --json-input or stdin
+echo '[{"A":"widget","B":"12"}]' | pagespace sheets append <pageId>
+pagespace sheets update-cells <pageId> --json-input '[{"address":"A1","value":"Hello"}]'
+
+pagespace sheets delete-rows <pageId> --from-row 10 --count 5 --yes
+\`\`\`
+
+\`--where\` also nests: \`{"and":[{"column":"C","op":"eq","value":"open"},{"column":"F","op":"gt","value":1000}]}\`. Every verb takes \`--tab <n>\` for a sheet with more than one tab.
+
+Filters match the values you **see** — a formula column compares as its result, not its \`=\` text. \`delete-rows\` is the one irreversible verb, so it confirms first; \`--yes\` skips the prompt, and with no TTY and no \`--yes\` it refuses rather than assuming consent.
+
 **Search**
 
 \`\`\`bash
@@ -123,7 +147,7 @@ pagespace agents ask <agentPageId> "Follow up" --conversation-id <convId>
 pagespace agents config <agentPageId> --set model=gpt-4o
 \`\`\`
 
-Also available: \`pagespace channels send\`, \`pagespace activity\`, \`pagespace trash list\`, \`pagespace sheets edit-cells\`, and \`pagespace models list\`.
+Also available: \`pagespace channels send\`, \`pagespace activity\`, \`pagespace trash list\`, \`pagespace sheets edit-cells\` (the older single-tab form), \`pagespace keys describe\` (what the active credential can actually do), and \`pagespace models list\`.
 
 Because \`--json\` is clean on stdout, commands compose:
 
