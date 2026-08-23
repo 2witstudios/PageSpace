@@ -29,6 +29,7 @@
  */
 import process from 'node:process';
 import type { PageSpaceClient } from '@pagespace/sdk';
+import { confirmationFailureMessage, confirmDestructive } from '../confirm.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
 import { callSdk } from './sdk-error.js';
@@ -132,20 +133,37 @@ function parseOrderBy(
 type RenderableRow = { readonly rowIndex: number; readonly cells: Record<string, { raw: string; value?: unknown }> };
 
 /**
- * Pure: no I/O. One line per row, columns in letter order.
+ * Pure: no I/O. Spreadsheet column order, which is not lexicographic.
+ *
+ * Labels are bijective base-26, so `AA` follows `Z` — but as strings `AA` sorts
+ * before `B`. Length first, then letters, which is exactly the numeric order of
+ * the underlying column index for any valid label. A plain `.sort()` printed
+ * `AA` before `B` on any sheet wider than 26 columns.
+ */
+export function compareColumns(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length;
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Pure: no I/O. One line per row, columns in spreadsheet order.
  *
  * Prints the COMPUTED value where a cell has one, so a formula column reads as
  * its result rather than its source — the same value the filters matched on.
+ * Only a genuinely ABSENT value falls back to `raw`: a formula that evaluates
+ * to the empty string (an `IF` branch returning blank, say) has a real
+ * materialised value of `''`, and printing its source instead made the human
+ * output disagree with what the filter had matched.
  */
 export function renderRows(rows: readonly RenderableRow[]): string {
   if (rows.length === 0) return 'No rows.\n';
   return `${rows
     .map((row) => {
       const cells = Object.keys(row.cells)
-        .sort()
+        .sort(compareColumns)
         .map((column) => {
           const cell = row.cells[column]!;
-          const shown = cell.value === undefined || cell.value === null || cell.value === '' ? cell.raw : String(cell.value);
+          const shown = cell.value === undefined || cell.value === null ? cell.raw : String(cell.value);
           return `${column}=${shown}`;
         })
         .join('  ');
@@ -501,7 +519,7 @@ export function createSheetsUpdateCellsHandler(deps: SheetsStdinDeps): CommandHa
 }
 
 export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
-  const usage = 'Usage: pagespace sheets delete-rows <pageId> --from-row <n> --count <n> [--tab <n>]\n';
+  const usage = 'Usage: pagespace sheets delete-rows <pageId> --from-row <n> --count <n> [--tab <n>] [--yes]\n';
   const [pageId, ...rest0] = intent.args;
   if (!pageId) {
     ctx.stderr.write(usage);
@@ -539,6 +557,20 @@ export const sheetsDeleteRowsHandler: CommandHandler = async (ctx, intent) => {
   if (fromRow.value === undefined || count.value === undefined) {
     ctx.stderr.write(usage);
     return EXIT_USAGE_ERROR;
+  }
+
+  // The same gate every other destructive verb uses. This one needs it MOST:
+  // `pages trash` is reversible and still confirms, while deleting rows is not
+  // — the rows are gone and everything below them shifts up. A typo in the
+  // page, tab, start or count destroyed data with no prompt, and a non-TTY
+  // caller was not required to pass `--yes`.
+  const confirmation = await confirmDestructive(
+    `Delete ${count.value} row(s) from ${pageId} starting at row ${fromRow.value}${tabIndex.value === undefined ? '' : ` (tab ${tabIndex.value})`}? This cannot be undone. [y/N] `,
+    { isTTY: ctx.isTTY, yes: intent.flags.yes, prompt: ctx.prompt },
+  );
+  if (!confirmation.ok) {
+    ctx.stderr.write(`${confirmationFailureMessage(confirmation)}\n`);
+    return EXIT_RUNTIME_ERROR;
   }
 
   const result = await callSdk(ctx.stderr, () =>

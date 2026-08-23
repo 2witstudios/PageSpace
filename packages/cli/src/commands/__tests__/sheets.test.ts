@@ -3,7 +3,9 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR, parseArgv } from '@
 import type { CommandIntent } from '@pagespace/cli';
 import { createFakeContext, createRecordingSink, fakeSdk } from '../../__tests__/fake-context.js';
 import {
+  compareColumns,
   createSheetsAppendHandler,
+  renderRows,
   createSheetsEditCellsHandler,
   createSheetsUpdateCellsHandler,
   sheetsDeleteRowsHandler,
@@ -260,6 +262,27 @@ describe('sheets update-cells', () => {
   });
 });
 
+describe('renderRows', () => {
+  it('orders columns as a spreadsheet does, not lexicographically', () => {
+    // A plain .sort() puts AA before B on any sheet wider than 26 columns.
+    expect(['B', 'AA', 'Z', 'A', 'AB'].sort(compareColumns)).toEqual(['A', 'B', 'Z', 'AA', 'AB']);
+    expect(renderRows([{ rowIndex: 0, cells: { AA: { raw: '1' }, B: { raw: '2' } } }])).toContain('B=2  AA=1');
+  });
+
+  it('prints a formula that evaluates to empty as empty, not as its source', () => {
+    // `=IF(A1>5,"","big")` returning blank has a real materialised value of ''.
+    // Printing the formula instead made human output disagree with the value
+    // the filter had matched on.
+    const rendered = renderRows([{ rowIndex: 0, cells: { A: { raw: '=IF(B1>5,"","big")', value: '' } } }]);
+    expect(rendered).toContain('A=');
+    expect(rendered).not.toContain('IF(');
+  });
+
+  it('falls back to raw only when the value is genuinely absent', () => {
+    expect(renderRows([{ rowIndex: 0, cells: { A: { raw: '=PENDING()' } } }])).toContain('A==PENDING()');
+  });
+});
+
 describe('sheets delete-rows', () => {
   it('refuses to guess either bound', async () => {
     // A guessed --count deletes the wrong rows, and there is no undo.
@@ -271,12 +294,47 @@ describe('sheets delete-rows', () => {
     expect(deleteRows).not.toHaveBeenCalled();
   });
 
-  it('deletes a range when both bounds are given', async () => {
-    const deleteRows = vi.fn(async () => ({ pageId: 'pg_1', pageTitle: 'Ledger', deleted: 3, rowCount: 7 }));
-    const stdout = createRecordingSink();
-    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ sheets: { deleteRows } }) });
+  it('refuses in a non-TTY session without --yes, never touching the sheet', async () => {
+    // Deleting rows is irreversible — `pages trash` is reversible and still
+    // gates. Failing closed here is what stops a scripted typo destroying data.
+    const deleteRows = vi.fn();
+    const ctx = createFakeContext({ isTTY: false, sdk: fakeSdk({ sheets: { deleteRows } }) });
 
-    expect(await sheetsDeleteRowsHandler(ctx, commandIntent(['pg_1', '--from-row', '3', '--count', '3']))).toBe(EXIT_SUCCESS);
+    expect(await sheetsDeleteRowsHandler(ctx, commandIntent(['pg_1', '--from-row', '3', '--count', '3']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(deleteRows).not.toHaveBeenCalled();
+  });
+
+  it('aborts when an interactive caller declines', async () => {
+    const deleteRows = vi.fn();
+    const prompt = vi.fn(async (_message: string) => 'n');
+    const ctx = createFakeContext({ isTTY: true, prompt, sdk: fakeSdk({ sheets: { deleteRows } }) });
+
+    expect(await sheetsDeleteRowsHandler(ctx, commandIntent(['pg_1', '--from-row', '3', '--count', '3']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(prompt).toHaveBeenCalled();
+    expect(deleteRows).not.toHaveBeenCalled();
+  });
+
+  it('names what it is about to destroy in the prompt', async () => {
+    const deleteRows = vi.fn(async () => ({ pageId: 'pg_1', pageTitle: 'Ledger', deleted: 3, rowCount: 7 }));
+    const prompt = vi.fn(async (_message: string) => 'y');
+    const ctx = createFakeContext({ isTTY: true, prompt, sdk: fakeSdk({ sheets: { deleteRows } }) });
+
+    expect(await sheetsDeleteRowsHandler(ctx, commandIntent(['pg_1', '--from-row', '3', '--count', '3', '--tab', '2']))).toBe(EXIT_SUCCESS);
+    const asked = prompt.mock.calls[0]![0] as string;
+    expect(asked).toContain('3 row(s)');
+    expect(asked).toContain('starting at row 3');
+    expect(asked).toContain('tab 2');
+    expect(asked).toContain('cannot be undone');
+  });
+
+  it('deletes a range when both bounds are given and --yes skips the prompt', async () => {
+    const deleteRows = vi.fn(async () => ({ pageId: 'pg_1', pageTitle: 'Ledger', deleted: 3, rowCount: 7 }));
+    const prompt = vi.fn(async (_message: string): Promise<string> => { throw new Error('must not prompt when --yes is given'); });
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, isTTY: false, prompt, sdk: fakeSdk({ sheets: { deleteRows } }) });
+
+    expect(await sheetsDeleteRowsHandler(ctx, commandIntent(['pg_1', '--from-row', '3', '--count', '3', '--yes']))).toBe(EXIT_SUCCESS);
+    expect(prompt).not.toHaveBeenCalled();
     expect(deleteRows).toHaveBeenCalledWith({ operation: 'delete-rows', pageId: 'pg_1', fromRow: 3, count: 3 });
     expect(stdout.lines.join('')).toContain('Deleted 3 row(s)');
   });

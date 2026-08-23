@@ -127,6 +127,25 @@ describe('sheets.getRows — positional paging', () => {
   });
 });
 
+describe('sheets.describe — input contract', () => {
+  it('refuses a tabIndex, which could only make tab discovery fail', () => {
+    // The route resolves getTab({pageId, tabIndex}) before dispatching, so a
+    // non-existent index 409s before the describe branch — which lists every
+    // tab and ignores the index. Accepting the field would break discovery for
+    // exactly the caller who does not yet know which tabs exist.
+    expect(() => describeSheet.inputSchema.parse({ pageId: 'p1' })).not.toThrow();
+    expect(() => describeSheet.inputSchema.parse({ pageId: 'p1', tabIndex: 3 })).toThrow();
+  });
+
+  it('still takes tabIndex on every operation that actually uses it', () => {
+    for (const operation of [queryRows, getRows]) {
+      expect(() => operation.inputSchema.parse({ pageId: 'p1', tabIndex: 3 })).not.toThrow();
+    }
+    expect(() => appendRows.inputSchema.parse({ pageId: 'p1', tabIndex: 3, rows: [{ A: 'x' }] })).not.toThrow();
+    expect(() => deleteRows.inputSchema.parse({ pageId: 'p1', tabIndex: 3, fromRow: 0, count: 1 })).not.toThrow();
+  });
+});
+
 describe('sheets.describe — response contract', () => {
   it('parses tabs with a null frozen-row count', () => {
     const fixture = {

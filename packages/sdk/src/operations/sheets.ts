@@ -200,6 +200,13 @@ export const getRows = defineOperation({
  * A sheet's shape without any of its data — tabs, their names and extents.
  * The cheap first call for a caller that does not yet know what it is looking
  * at, or which `tabIndex` it wants.
+ *
+ * Takes NO `tabIndex`, unlike every other operation here. The branch lists
+ * every tab and ignores the index entirely, but the route resolves
+ * `getTab({pageId, tabIndex})` before dispatching, so passing an index that
+ * does not exist 409s before `describe` ever runs. Accepting the field would
+ * offer a parameter whose only possible effect is to make tab DISCOVERY fail
+ * for exactly the caller who does not yet know which tabs exist.
  */
 export const describeSheet = defineOperation({
   name: 'sheets.describe',
@@ -208,7 +215,6 @@ export const describeSheet = defineOperation({
   inputSchema: z.strictObject({
     operation: z.literal('describe').default('describe'),
     pageId: z.string(),
-    tabIndex: tabIndexSchema,
   }),
   outputSchema: z.object({
     pageId: z.string(),
