@@ -67,6 +67,14 @@ import {
   trashPage,
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+import {
+  appendRows as appendSheetRows,
+  deleteRows as deleteSheetRows,
+  describeSheet,
+  getRows as getSheetRows,
+  queryRows as querySheetRows,
+  updateCells as updateSheetCells,
+} from './operations/sheets.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
 import { listDriveMembers } from './operations/members.js';
 import {
@@ -125,6 +133,23 @@ const DEFAULT_OPERATIONS_MAP = {
     insertLines: insertLines,
     deleteLines: deleteLines,
     editCells: editSheetCells,
+  },
+  /**
+   * Sheet ROWS — the tabular view. `pages.editCells` remains the A1-addressed
+   * editing verb on the documents endpoint; these treat the same sheet as a
+   * table to filter, sort, page and append to.
+   *
+   * Each method is the camelCase of its wire operation (`query-rows` →
+   * `queryRows`), so the facade name and the `operation` field on the request
+   * never drift apart.
+   */
+  sheets: {
+    queryRows: querySheetRows,
+    getRows: getSheetRows,
+    describe: describeSheet,
+    appendRows: appendSheetRows,
+    updateCells: updateSheetCells,
+    deleteRows: deleteSheetRows,
   },
   roles: {
     list: listDriveRoles,

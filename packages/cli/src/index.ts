@@ -170,8 +170,23 @@ export {
   pagesReplaceLinesHandler,
 } from './commands/content.js';
 export type { ContentSourceDeps } from './commands/content.js';
-export { createSheetsEditCellsHandler, sheetsEditCellsHandler } from './commands/sheets.js';
-export type { SheetsEditCellsDeps } from './commands/sheets.js';
+export {
+  createSheetsAppendHandler,
+  createSheetsEditCellsHandler,
+  createSheetsUpdateCellsHandler,
+  renderDescribe,
+  renderGetRows,
+  renderQueryRows,
+  renderRows,
+  sheetsAppendHandler,
+  sheetsDeleteRowsHandler,
+  sheetsDescribeHandler,
+  sheetsEditCellsHandler,
+  sheetsQueryHandler,
+  sheetsRowsHandler,
+  sheetsUpdateCellsHandler,
+} from './commands/sheets.js';
+export type { SheetsStdinDeps } from './commands/sheets.js';
 export { createPagesExportHandler, pagesExportHandler } from './commands/export.js';
 export type { PagesExportDeps } from './commands/export.js';
 export {
