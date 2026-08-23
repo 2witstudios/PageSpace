@@ -16,8 +16,9 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { existsSync } from 'fs';
+import { existsSync, readdirSync, realpathSync } from 'fs';
 import path from 'path';
+import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
 import { TABLE_IMPORT_ORDER } from './lib/migration-types';
 import {
@@ -97,7 +98,89 @@ export interface FullValidationResult {
   fileResults: {
     passed: boolean;
     mismatches: { file: string; reason: string }[];
+    /**
+     * Blobs the validator declined to compare, mirroring a skip the export
+     * made. Reported because `passed: true` otherwise means only "everything I
+     * chose to compare matched", with no machine-readable record of how much
+     * was declined — and the skips exist precisely where the export and the
+     * validator could disagree about a file. A run that compared nothing now
+     * says so instead of looking identical to a run that compared everything.
+     */
+    skipped: { file: string; reason: string }[];
   };
+}
+
+/**
+ * A path that exists, is a directory, AND can actually be listed.
+ *
+ * `readdirSync`, not `statSync`: stat needs no permission on the directory
+ * itself, so a mode-000 root passes an `isDirectory()` check while every row
+ * underneath it still fails to resolve — the same silent green as a missing
+ * root, one shape over. Not exotic: the canonical deployment root is a
+ * root-owned Docker volume (`infrastructure/docker-compose.tenant.yml`), and a
+ * validator run as a non-root user against it lands exactly here.
+ *
+ * This is also what the surrounding messages already claimed, so it closes the
+ * gap between what the code said and what it checked.
+ */
+function isUsableDirectory(candidate: string): boolean {
+  try {
+    readdirSync(candidate);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the two storage roots are the same directory.
+ *
+ * Extracted and exported so the guard is TESTABLE in isolation. Its resolution
+ * rules are subtle enough to deserve their own cases, and the previous round of
+ * this work shipped an untestable guarantee that turned out to be theatre — an
+ * arity assertion a defaulted parameter walked straight past. A guard whose
+ * whole job is to stop a false pass should not itself be unverified.
+ *
+ * `realpathSync` rather than a string compare so two spellings of one directory
+ * — a symlink, a relative path, a trailing slash — cannot slip through. Falls
+ * back to string equality when either path does not resolve, since a
+ * nonexistent root is caught by the readable-directory check instead and this
+ * one should not throw on the way there.
+ */
+export function isSameStorageRoot(sourceRoot: string, targetRoot: string): boolean {
+  try {
+    return realpathSync(sourceRoot) === realpathSync(targetRoot);
+  } catch {
+    return sourceRoot === targetRoot;
+  }
+}
+
+/**
+ * The SOURCE storage root.
+ *
+ * `FILE_STORAGE_PATH` is deliberately NOT in this chain, and that is the
+ * opposite of what it looks like it should be. The export
+ * (tenant-export.ts:692) and the import (tenant-import.ts:137) both read it,
+ * and "mirror the export" argues for reading it here too — I made that change
+ * and it was wrong.
+ *
+ * The variable names the storage root of WHATEVER HOST YOU ARE STANDING ON. A
+ * validator needs TWO roots, source and target, and it naturally runs on the
+ * TARGET host after the import — where `FILE_STORAGE_PATH` is the target root
+ * that the import just used. Letting it fill the SOURCE slot there makes both
+ * sides read the same directory: every checksum matches, nothing is actually
+ * compared, and the run is green. A silent self-comparison is a worse outcome
+ * than the drift it was meant to fix, which surfaces as a loud failure via the
+ * nothing-was-compared check below.
+ *
+ * So the source root must be passed explicitly. Kept as a function so a test
+ * can set `FILE_STORAGE_PATH` and assert the result is unchanged — an arity
+ * check is not enough, because a DEFAULTED second parameter
+ * (`envValue = process.env.FILE_STORAGE_PATH`) reintroduces the bug and leaves
+ * `Function.length` at 1.
+ */
+export function resolveSourceStorageRoot(argValue: string | undefined): string {
+  return argValue || './uploads';
 }
 
 /**
@@ -163,11 +246,10 @@ export async function validateData(
   const convoIds = (convoRows.rows as Record<string, unknown>[]).map((r) => r.id as string);
   const convoIn = toSqlInList(convoIds);
 
-  // The owners of those conversations, which is what the export scopes
-  // workspaces and shells on (`allExportedUserIdSet`) — the requested users
-  // PLUS the ones DISCOVERED through the page arms. Validating on the
-  // requested set alone left a discovered user's workspace, and its shells'
-  // `coldTail` terminal scrollback, carried but never checked.
+  // The export's `allExportedUserIdSet` — the requested users PLUS everyone
+  // DISCOVERED alongside them. Validating on the requested set alone left a
+  // discovered user's workspace, and its shells' `coldTail` terminal
+  // scrollback, carried but never checked.
   // BOTH discovery arms, which the comment above already claimed and the code
   // did not do: tenant-export.ts seeds `referencedUserIds` from the CHANNEL
   // MESSAGE authors as well as the conversation owners. Omitting the channel arm
@@ -191,9 +273,43 @@ export async function validateData(
   // happens when this is re-typed here instead.
   const contentTagWhere = contentTagSelectionWhere(pageIn, driveIn, channelMsgIn, convoIn, exportedUserIn);
 
-  // ID-based queries for tables with a single PK
+  /**
+   * ID-based queries for tables with a single PK.
+   *
+   * EVERY query here must reproduce its counterpart in tenant-export.ts IN
+   * FULL — not "plus the user filter", which is how the first sweep was framed
+   * and is why it missed two of these.
+   *
+   * Six were wrong. Five under-filtered relative to the export
+   * (`messages`, `page_permissions`, `user_mentions`,
+   * `channel_message_reactions` on the row's USER; `mentions` on its TARGET
+   * PAGE), so the source side counted rows the bundle deliberately never
+   * carried, they showed up as MISSING, and `allTablesPassed` turned a CORRECT
+   * migration into a reported failure.
+   *
+   * `users` was wrong in the OPPOSITE and more dangerous direction: it checked
+   * only the REQUESTED users while the bundle carries the discovered ones too,
+   * so a discovered user's row was compared on neither side and a dropped row
+   * would still have printed [PASS].
+   *
+   * Same defect the shared `conversationSelectionWhere` /
+   * `workspaceSelectionWhere` / `contentTagSelectionWhere` helpers exist to
+   * stop, in the queries that never got a helper. When adding a query here,
+   * read the exporter's line for that table and copy every arm of it.
+   *
+   * `exportedUserIn` is the exporter's `allExportedUserIdSet` — requested users
+   * plus everyone discovered with them — which is why it is built above rather
+   * than using the narrower requested-only `userIn`.
+   */
   const idQueries: Record<string, ReturnType<typeof sql>> = {
-    users: sql.raw(`SELECT id FROM users WHERE id IN (${userIn})`),
+    // `exportedUserIn`, NOT `userIn`. The bundle carries the requested users
+    // PLUS everyone discovered with them, so checking only the requested set
+    // leaves a discovered user's row compared on NEITHER side: if the import
+    // dropped it, this still prints [PASS]. That is the opposite and more
+    // dangerous direction from the rest of this map — a false pass rather than
+    // a false failure — and it is the same scar `workspaceSelectionWhere`
+    // records for `agent_workspaces`.
+    users: sql.raw(`SELECT id FROM users WHERE id IN (${exportedUserIn})`),
     user_profiles: sql.raw(`SELECT "userId" AS id FROM user_profiles WHERE "userId" IN (${userIn})`),
     drives: sql.raw(`SELECT id FROM drives WHERE id IN (${driveIn})`),
     drive_roles: sql.raw(`SELECT id FROM drive_roles WHERE "driveId" IN (${driveIn})`),
@@ -208,7 +324,10 @@ export async function validateData(
     tags: sql.raw(`SELECT id FROM tags WHERE "driveId" IN (${driveIn})`),
     content_tags: sql.raw(`SELECT id FROM content_tags WHERE ${contentTagWhere}`),
     channel_messages: sql.raw(`SELECT id FROM channel_messages WHERE "pageId" IN (${pageIn})`),
-    channel_message_reactions: sql.raw(`SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`),
+    channel_message_reactions: sql.raw(
+      `SELECT id FROM channel_message_reactions WHERE "messageId" IN (${channelMsgIn})`
+      + ` AND "userId" IN (${exportedUserIn})`,
+    ),
     // The export's rule, from the shared helper: the sessions the EXPORTED
     // conversations are bound to, owned by an EXPORTED user (requested or
     // discovered) — matching `allExportedUserIdSet` on the export side.
@@ -236,11 +355,28 @@ export async function validateData(
     conversations: sql.raw(
       `SELECT id FROM conversations WHERE ${conversationSelectionWhere(userIn, pageIn)}`,
     ),
-    messages: sql.raw(`SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`),
+    messages: sql.raw(
+      `SELECT id FROM messages WHERE "conversationId" IN (${convoIn})`
+      + ` AND ("userId" IS NULL OR "userId" IN (${exportedUserIn}))`,
+    ),
     files: sql.raw(`SELECT id FROM files WHERE "driveId" IN (${driveIn})`),
-    page_permissions: sql.raw(`SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`),
-    mentions: sql.raw(`SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`),
-    user_mentions: sql.raw(`SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`),
+    page_permissions: sql.raw(
+      `SELECT id FROM page_permissions WHERE "pageId" IN (${pageIn})`
+      + ` AND "userId" IN (${exportedUserIn})`,
+    ),
+    // Both endpoints, as the exporter requires. A mention pointing OUT of the
+    // exported page set is deliberately not carried, so selecting on the source
+    // page alone counts a row the bundle never held and fails a correct
+    // migration. This one is a PAGE filter, which is why framing the previous
+    // sweep as "the exporter's user filter" missed it.
+    mentions: sql.raw(
+      `SELECT id FROM mentions WHERE "sourcePageId" IN (${pageIn})`
+      + ` AND "targetPageId" IN (${pageIn})`,
+    ),
+    user_mentions: sql.raw(
+      `SELECT id FROM user_mentions WHERE "sourcePageId" IN (${pageIn})`
+      + ` AND "targetUserId" IN (${exportedUserIn})`,
+    ),
     favorites: sql.raw(`SELECT id FROM favorites WHERE "userId" IN (${userIn})`),
   };
 
@@ -269,23 +405,125 @@ export async function validateData(
   );
   const fileStorageData = fileStorageRows.rows as Record<string, unknown>[];
 
+  // ONE ARM OF THE EXPORT'S FILE SKIPPING IS NOT MIRRORED, and cannot be from
+  // here: the export also skips a row whose DESTINATION path fails
+  // `resolvePathWithin(outputDir/files, storagePath)`, and `validateData` is
+  // not given the bundle directory, so it cannot ask that question. It is only
+  // reachable once the source resolve and the source `existsSync` have both
+  // passed.
+  //
+  // The durable fix for this whole comparison is to validate against
+  // `manifest.fileChecksums` — the export's own record of exactly what it
+  // carried, already written and already readable via `validateChecksums` —
+  // rather than re-deriving the decision from the source database and disk.
+  // That is the move the shared selection helpers made for the queries, and it
+  // needs the bundle dir in `ValidateOptions`, so it belongs to a change that
+  // owns that API rather than being smuggled in here.
+
+  const fileSkips: { file: string; reason: string }[] = [];
+
   for (const file of fileStorageData) {
     const storagePath = file.storagePath as string;
-    const srcPath = path.join(sourceFileStoragePath, storagePath);
+    // `resolvePathWithin`, not `path.join`, because that is what the EXPORT
+    // uses to resolve the source blob. It returns null for `..`/`.` segments,
+    // absolute paths, malformed encodings, and — the case that actually bites —
+    // a symlink escaping the storage root, and the export SKIPS such a row
+    // ("WARNING: skipping file with path traversal in storagePath").
+    //
+    // A raw join here follows the symlink, finds the file, and then faults the
+    // row as 'missing in target': the bundle correctly did not carry it, and
+    // the migration is reported as broken. Same class as everything else in
+    // this file — the validator re-deriving a decision instead of reproducing
+    // the exporter's.
+    const resolvedSrc = await resolvePathWithin(sourceFileStoragePath, storagePath);
+    if (!resolvedSrc) {
+      console.warn(`WARNING: did not resolve inside the source storage root, not compared: ${storagePath}`);
+      fileSkips.push({ file: storagePath, reason: 'did not resolve inside the source storage root' });
+      continue;
+    }
+    const srcPath = resolvedSrc;
     const tgtPath = path.join(targetFileStoragePath, storagePath);
+
+    // SOURCE FIRST. If the source blob is not on disk, tenant-export.ts skipped
+    // this row outright ("WARNING: source file not found, skipping"), so the
+    // bundle legitimately does not carry it and there is nothing to compare.
+    //
+    // Testing the TARGET first reported exactly that row as 'missing in
+    // target' and failed a correct migration — the same false-failure class as
+    // the query asymmetries above, in the one check that is not a query, which
+    // is why sweeping the query maps did not reach it. An orphaned `files` row
+    // (row present, blob long gone) is common enough that this was not
+    // hypothetical.
+    if (!existsSync(srcPath)) {
+      console.warn(`WARNING: source file not found, not compared: ${srcPath}`);
+      fileSkips.push({ file: storagePath, reason: 'source blob not on disk (the export skips these rows)' });
+      continue;
+    }
 
     if (!existsSync(tgtPath)) {
       fileMismatches.push({ file: storagePath, reason: 'missing in target' });
       continue;
     }
 
-    if (existsSync(srcPath)) {
-      const srcHash = await fileChecksum(srcPath);
-      const tgtHash = await fileChecksum(tgtPath);
-      if (srcHash !== tgtHash) {
-        fileMismatches.push({ file: storagePath, reason: `checksum mismatch (source: ${srcHash}, target: ${tgtHash})` });
-      }
+    const srcHash = await fileChecksum(srcPath);
+    const tgtHash = await fileChecksum(tgtPath);
+    if (srcHash !== tgtHash) {
+      fileMismatches.push({ file: storagePath, reason: `checksum mismatch (source: ${srcHash}, target: ${tgtHash})` });
     }
+  }
+
+  // AN UNUSABLE SOURCE ROOT is a failure, not a pass.
+  //
+  // The first attempt checked only `existsSync`, which closes one of three
+  // shapes. A root that is a REGULAR FILE also leaves every row skipped:
+  // `resolvePathWithin` walks up to the first existing ancestor, which is the
+  // base itself, returns non-null, and then `existsSync(srcPath)` fails. Both
+  // are ordinary operator error and both used to report `passed: true`.
+  // (Verified by running `validateData` against each.)
+  //
+  // The third shape — a root that exists, is a directory, but is the WRONG one
+  // — is NOT closed here, and deliberately so. Counting skips instead
+  // (`every row was skipped`) was the obvious generalisation and it is wrong:
+  // a bundle whose only blob was legitimately skipped, because the row is
+  // orphaned or its storagePath is genuinely unsafe, also skips every row. That
+  // rule fails correct migrations, which is the exact class this file is full
+  // of regressions for; two tests below assert those runs stay green.
+  //
+  // Nothing on disk distinguishes "wrong directory" from "right directory whose
+  // blobs are all legitimately absent". Only `manifest.fileChecksums` — the
+  // export's record of what it actually carried — does, which is the same
+  // reason it is the durable fix for this whole comparison. `fileResults.skipped`
+  // is the interim signal: a run that skipped everything says so.
+  if (fileStorageData.length > 0 && !isUsableDirectory(sourceFileStoragePath)) {
+    fileMismatches.push({
+      file: sourceFileStoragePath,
+      reason: 'source file storage path is not a readable directory — nothing could be compared',
+    });
+  }
+
+  // A SELF-COMPARISON is the same false pass, reached from the other side.
+  //
+  // Both CLI roots default to `./uploads`, so running the validator on the
+  // target host after an import with neither path flag points both sides at one
+  // directory: every checksum matches itself and the run reports success having
+  // compared nothing. Removing `FILE_STORAGE_PATH` from the source fallback
+  // closed one route to that; the defaults are the other.
+  //
+  // Gated on `fileStorageData.length > 0` for the same reason as the check
+  // above, and this is the whole point of it living HERE rather than at the CLI
+  // boundary: with no `files` rows there is nothing that could self-compare, so
+  // an identical pair proves nothing and hides nothing. Refusing it at the CLI
+  // made a file-less migration exit(1) having validated not one table.
+  //
+  // Reported as a file mismatch rather than thrown or exited, so the caller
+  // gets the same machine-readable verdict as every other file finding and the
+  // TABLE results still get computed and printed.
+  if (fileStorageData.length > 0 && isSameStorageRoot(sourceFileStoragePath, targetFileStoragePath)) {
+    fileMismatches.push({
+      file: sourceFileStoragePath,
+      reason: 'source and target file storage paths resolve to the same directory — '
+        + 'comparing a directory against itself proves nothing about the migration',
+    });
   }
 
   const allTablesPassed = tableResults.every((r) => r.passed);
@@ -297,6 +535,7 @@ export async function validateData(
     fileResults: {
       passed: filesPassed,
       mismatches: fileMismatches,
+      skipped: fileSkips,
     },
   };
 }
@@ -313,7 +552,7 @@ async function main(): Promise<void> {
   const sourceDatabaseUrl = getArg('source-url');
   const targetDatabaseUrl = getArg('target-url');
   const usersArg = getArg('users');
-  const sourceFileStoragePath = getArg('source-file-path') || './uploads';
+  const sourceFileStoragePath = resolveSourceStorageRoot(getArg('source-file-path'));
   const targetFileStoragePath = getArg('target-file-path') || './uploads';
 
   if (!sourceDatabaseUrl || !targetDatabaseUrl || !usersArg) {
@@ -324,6 +563,13 @@ async function main(): Promise<void> {
   const userIds = usersArg.split(',').map((s) => s.trim()).filter(Boolean);
   validateIds(userIds, 'user ID');
 
+  // NO SELF-COMPARISON GUARD HERE. It used to live at this boundary, where it
+  // ran unconditionally and BEFORE any database work: a migration scope with no
+  // `files` rows, validated with neither path flag, exited(1) with both roots
+  // defaulted to `./uploads` having checked not one table — while `validateData`
+  // deliberately passes a zero-file population. The guard now sits beside the
+  // readable-directory check in `validateData`, gated on the same
+  // `fileStorageData.length > 0` condition, and reports as a file mismatch.
   console.log('Validating migration integrity...');
 
   const result = await runValidation({
@@ -349,6 +595,16 @@ async function main(): Promise<void> {
   if (result.fileResults.mismatches.length > 0) {
     console.log('\n  File mismatches:');
     for (const m of result.fileResults.mismatches) {
+      console.log(`    ${m.file}: ${m.reason}`);
+    }
+  }
+
+  // Printed even on a PASS: "0 mismatches" over 400 skipped blobs is not the
+  // same result as "0 mismatches" over 400 compared ones, and the operator is
+  // the only one who can tell which they meant.
+  if (result.fileResults.skipped.length > 0) {
+    console.log(`\n  Files not compared (${result.fileResults.skipped.length}):`);
+    for (const m of result.fileResults.skipped) {
       console.log(`    ${m.file}: ${m.reason}`);
     }
   }
