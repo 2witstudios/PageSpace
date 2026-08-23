@@ -299,6 +299,13 @@ export async function createMcpToken(userId: string): Promise<string> {
 /**
  * A shell row inside an agent session, WITHOUT a sandbox.
  *
+ * `spriteExecId` is the pointer the realtime bridge writes when a PTY first
+ * starts. Pass one to seed a shell that HAS opened a terminal at some point:
+ * the kill path then runs its process half and its `expectedSpriteExecId`
+ * comparison for real, instead of short-circuiting on "no PTY was ever
+ * launched". With no sandbox on the session there is still nothing to reach
+ * for, which is what keeps this infrastructure-free.
+ *
  * The product path (`POST …/shells`) provisions a Sprite first, which makes it
  * unavailable to a local e2e run and irrelevant to a layout question anyway —
  * the same reason `createSession` in the grid spec asks for a sandbox-less
@@ -311,6 +318,7 @@ export async function seedSessionShell(
   workspaceId: string,
   ownerId: string,
   name: string,
+  spriteExecId: string | null = null,
 ): Promise<string> {
   // `createdAt`/`updatedAt` explicitly, the way the production writer sets them
   // (`createDbSessionShellStore.create` takes an injected clock). Drizzle's
@@ -321,7 +329,7 @@ export async function seedSessionShell(
   const now = new Date();
   const [row] = await db
     .insert(agentWorkspaceShells)
-    .values({ workspaceId, ownerId, name, agentType: 'shell', createdAt: now, updatedAt: now })
+    .values({ workspaceId, ownerId, name, agentType: 'shell', spriteExecId, createdAt: now, updatedAt: now })
     .returning({ id: agentWorkspaceShells.id });
   return row.id;
 }

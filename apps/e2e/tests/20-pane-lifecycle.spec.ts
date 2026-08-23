@@ -187,7 +187,11 @@ test.describe('pane lifecycle — the shell, its pane, and where the next one la
     const user = await seedUser();
     const session = await createSession(request, user);
     await seedSessionShell(session.sessionId, user.userId, 'keeper');
-    const shellId = await seedSessionShell(session.sessionId, user.userId, 'probe-alpha');
+    // WITH a `spriteExecId`, so the kill runs its process half and the
+    // `expectedSpriteExecId` comparison for real rather than short-circuiting
+    // on "no PTY was ever launched" — the shape every kill of a shell somebody
+    // actually used takes.
+    const shellId = await seedSessionShell(session.sessionId, user.userId, 'probe-alpha', 'exec-seeded');
 
     // TWO shells, so the one being killed is not the workspace's LAST pane —
     // closing the last pane is a session-lifecycle act (it raises the end
