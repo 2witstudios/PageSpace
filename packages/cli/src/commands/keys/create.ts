@@ -234,15 +234,26 @@ export function resolveNewKeyName({
     };
   }
   const resolvedName = name ?? drives[0].id;
-  // `--name ""` reaches here as an empty string, not as "absent": `??` only
-  // falls through on null/undefined. A key is selected BY its name everywhere
-  // it is used — `--key=<name>`, the key env var, `keys use <name>` — and a
-  // blank one is refused by all three (`presentToken` treats blank as absent),
-  // so minting it produces a credential in the keychain that nothing can ever
-  // name again. Refused loudly rather than silently renamed after the drive:
-  // an explicit blank `--name` is a mistake, and quietly picking a different
-  // name would hide it.
-  if (resolvedName.trim().length === 0) {
+  // A key is stored under its name VERBATIM, but every lookup trims first
+  // (`auth/resolve.ts`'s `presentToken`/`resolveKeyName`). So any name that is
+  // not equal to its own trimmed form can be minted and then never found
+  // again: `--name "  x  "` writes the store under `"  x  "` while `--key`
+  // resolves `"x"` and misses. A fully blank name is the same failure at its
+  // limit — it trims to nothing, so no lookup can ever produce it.
+  //
+  // Both are refused rather than silently trimmed: an explicit `--name` with
+  // padding is a typo, and quietly storing something other than what was asked
+  // for is how the mismatch got created in the first place.
+  //
+  // Only reachable through the flag path — `wizard.ts` trims before it gets
+  // here.
+  if (resolvedName !== resolvedName.trim()) {
+    return {
+      ok: false,
+      message: `--name "${resolvedName}" has leading or trailing whitespace: keys are looked up by their trimmed name, so this one could be created and never found again. Use "${resolvedName.trim()}".`,
+    };
+  }
+  if (resolvedName.length === 0) {
     return {
       ok: false,
       message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',

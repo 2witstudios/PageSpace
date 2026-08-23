@@ -10,10 +10,12 @@
  * non-positive one, and the guard that was supposed to prevent a hole-filled
  * array could be deleted with every test still green.
  *
- * `resolveWorkerCount` is the whole subtlety. It stays module-private and is
- * exercised through `mapWithConcurrency` rather than directly: knip ignores
- * `src/**/__tests__/**`, so an export whose only consumer is a test counts as
- * dead code and fails the unused-code gate. Going through the real entry point
+ * `resolveWorkerCount` carries the whole subtlety. It stays module-private and is
+ * exercised through `mapWithConcurrency` rather than directly: knip ignores this
+ * app's `__tests__` directories, so an export whose only consumer is a test
+ * counts as dead code and fails the unused-code gate. (Spelling that ignore
+ * pattern out as a glob here would end this comment early — it contains the
+ * close-comment sequence.) Going through the real entry point
  * is the better test anyway — the edge cases below still turn red if the guard
  * is removed. A non-positive — or non-finite —
  * limit would start zero workers, and this function would then resolve
@@ -30,9 +32,16 @@
  * the claimed prefix is never left holed.
  */
 function resolveWorkerCount(limit: number, itemCount: number): number {
-  if (itemCount === 0) return 0;
-  const requested = Number.isFinite(limit) ? Math.floor(limit) : 1;
-  return Math.min(Math.max(1, requested), itemCount);
+  // `Infinity` means "no ceiling", so it resolves to one worker per item.
+  // Anything else non-finite (`NaN`) is a caller bug rather than an intent, and
+  // falls back to serial — the slowest correct answer, never a wrong one.
+  if (!Number.isFinite(limit)) return limit === Number.POSITIVE_INFINITY ? itemCount : Math.min(1, itemCount);
+  // The `Math.min` is an allocation guard with NO observable behaviour: extra
+  // workers past `itemCount` would immediately see `index >= items.length` and
+  // exit, so results and call counts are identical either way. Deliberately
+  // untested for that reason — there is nothing a test could assert that would
+  // distinguish it, and a test that cannot fail is worse than none.
+  return Math.min(Math.max(1, Math.floor(limit)), itemCount);
 }
 
 export async function mapWithConcurrency<TItem, TResult>(

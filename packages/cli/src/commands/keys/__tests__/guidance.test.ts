@@ -73,7 +73,7 @@ describe('wizard copy constants', () => {
  */
 describe('keysDescribeHint', () => {
   it('names the key that was just minted, so the printed command is runnable', () => {
-    expect(keysDescribeHint('lead-gen')).toContain('pagespace keys describe --key=lead-gen');
+    expect(keysDescribeHint('lead-gen', DEFAULT_HOST)).toContain('pagespace keys describe --key=lead-gen');
   });
 
   // Key names are close to free-form (`resolveNewKeyName` refuses only the
@@ -95,7 +95,18 @@ describe('keysDescribeHint', () => {
     ['-prod', '--key=-prod'],
     ['--json', '--key=--json'],
   ])('prints %j as a word a shell hands back intact', (keyName, expected) => {
-    expect(keysDescribeHint(keyName)).toContain(expected);
+    expect(keysDescribeHint(keyName, DEFAULT_HOST)).toContain(expected);
+  });
+
+  // The key is stored under the host it was minted against, and the credential
+  // store is keyed by host — so a hint that omits --host resolves against the
+  // default and misses a key minted anywhere else. Same reason the MCP config
+  // block carries PAGESPACE_API_URL.
+  it('carries --host for a non-default host, and omits it for the default', () => {
+    expect(keysDescribeHint('k', 'https://tenant.example.com')).toContain(
+      '--key=k --host=https://tenant.example.com',
+    );
+    expect(keysDescribeHint('k', DEFAULT_HOST)).not.toContain('--host');
   });
 
   it('is printed exactly once per mint, by the wiring guidance', () => {

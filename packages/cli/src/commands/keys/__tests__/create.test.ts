@@ -302,7 +302,26 @@ describe('resolveNewKeyName', () => {
   it.each([[''], ['   '], ['\t']])('rejects a blank --name (%j), which would mint an unusable key', (name) => {
     const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);
-    expect(result.ok === false && result.message).toContain('must not be blank');
+    expect(result.ok === false && result.message).toMatch(/must not be blank|whitespace/);
+  });
+
+  // The same failure short of its limit: a key is STORED under its name
+  // verbatim but every lookup trims first, so `--name "  x  "` writes the store
+  // under "  x  " while `--key` resolves "x" and misses. Trimming to decide and
+  // storing untrimmed is what created the mismatch.
+  it.each([['  x  '], ['x '], [' x'], ['\tx']])('rejects a whitespace-padded --name (%j)', (name) => {
+    const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toMatch(/whitespace/);
+    // Names the usable form rather than leaving the caller to guess.
+    expect(result.ok === false && result.message).toContain(`"${name.trim()}"`);
+  });
+
+  it('still accepts a name with INTERNAL spaces, which look up fine', () => {
+    expect(resolveNewKeyName({ name: 'lead gen', drives: [{ id: 'drv1', role: null }] })).toEqual({
+      ok: true,
+      name: 'lead gen',
+    });
   });
 
   it('rejects "default" as an explicit --name — that slot is reserved for "pagespace login", and says so in key vocabulary', () => {

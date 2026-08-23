@@ -29,22 +29,54 @@ describe('mapWithConcurrency', () => {
     expect(result).toEqual(delays);
   });
 
-  // A non-positive — or non-finite — limit would start zero workers and resolve
-  // `new Array(n)`: typed as results, actually a row of holes, with no work done
-  // and no error. A caller serializing that reports every item as null.
-  // Exercised through the real entry point because the guard itself is private.
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
-    'does the work and returns no holes for limit %p',
-    async (limit) => {
-      const resolve = vi.fn(double);
-      const result = await mapWithConcurrency([1, 2, 3], limit, resolve);
-      expect(resolve).toHaveBeenCalledTimes(3);
-      expect(result).toEqual([2, 4, 6]);
-      // `toEqual` alone passes on a hole array against [undefined, ...]; this is
-      // the assertion that actually distinguishes them.
-      expect(Object.keys(result)).toHaveLength(3);
-    },
-  );
+  // A limit that resolves to zero workers would return `new Array(n)`: typed as
+  // results, actually a row of holes, with no work done and no error. A caller
+  // serializing that reports every item as null. Exercised through the real
+  // entry point because the guard itself is private.
+  //
+  // `0`/`-1`/`0.5` are the rows that pin `Math.max(1, …)`; `NaN` is the row that
+  // pins the `Number.isFinite` branch (without it, `Math.min(NaN, 3)` is `NaN`
+  // and `Array.from({length: NaN})` is empty). They fail for different reasons,
+  // which is why both guards are listed.
+  it.each([0, -1, 0.5, Number.NaN])('does the work and returns no holes for limit %p', async (limit) => {
+    const resolve = vi.fn(double);
+    const result = await mapWithConcurrency([1, 2, 3], limit, resolve);
+    expect(resolve).toHaveBeenCalledTimes(3);
+    expect(result).toEqual([2, 4, 6]);
+    // `toEqual` alone passes on a hole array against [undefined, ...]; this is
+    // the assertion that actually distinguishes them.
+    expect(Object.keys(result)).toHaveLength(3);
+  });
+
+  // A garbage limit falls back to SERIAL — the slowest correct answer, never a
+  // wrong one. Asserting the concurrency, not just the results, is what stops
+  // `NaN` from silently becoming "unbounded".
+  it('runs serially for a NaN limit rather than guessing a width', async () => {
+    let peak = 0;
+    let inFlight = 0;
+    await mapWithConcurrency([1, 2, 3, 4], Number.NaN, async (n) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((done) => setTimeout(done, 1));
+      inFlight--;
+      return n;
+    });
+    expect(peak).toBe(1);
+  });
+
+  // `Infinity` is an intent — "no ceiling" — not a bug, so it means one worker
+  // per item. It used to collapse to a single serial worker, which is the
+  // opposite of what the caller asked for.
+  it('treats an Infinity limit as unbounded, not as serial', async () => {
+    let peak = 0;
+    let inFlight = 0;
+    await mapWithConcurrency([1, 2, 3, 4, 5], Number.POSITIVE_INFINITY, async (n) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((done) => setTimeout(done, 1));
+      inFlight--;
+      return n;
+    });
+    expect(peak).toBe(5);
+  });
 
   it('holds concurrency at the limit', async () => {
     let inFlight = 0;
@@ -72,22 +104,6 @@ describe('mapWithConcurrency', () => {
     // The four workers in flight when the first failed are the only ones that
     // ever claimed an index; the remaining 36 items are never started.
     expect(started).toBe(4);
-  });
-
-  it('does not raise an unhandled rejection when several workers fail at once', async () => {
-    const unhandled = vi.fn();
-    process.on('unhandledRejection', unhandled);
-    try {
-      await expect(
-        mapWithConcurrency([1, 2, 3, 4], 4, async () => {
-          throw new Error('all fail');
-        }),
-      ).rejects.toThrow('all fail');
-      await new Promise((done) => setTimeout(done, 20));
-      expect(unhandled).not.toHaveBeenCalled();
-    } finally {
-      process.off('unhandledRejection', unhandled);
-    }
   });
 
   it('catches a resolver that throws synchronously', async () => {

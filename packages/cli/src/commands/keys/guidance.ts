@@ -29,8 +29,14 @@ export const SHOW_TOKEN_PROMPT = "Show the token now for .env/CI use? It won't b
  * Naming the key that was just minted is what makes the printed command one
  * the reader can actually run.
  */
-export function keysDescribeHint(keyName: string): string {
-  return `Run "pagespace keys describe --key=${shellQuote(keyName)}" at any time to see this key's drives, role and effective permissions.`;
+export function keysDescribeHint(keyName: string, host: string): string {
+  // `--host` for the same reason the MCP config block below carries
+  // PAGESPACE_API_URL: the key was stored under THIS host, and the credential
+  // store is keyed by host, so a command that omits it resolves against the
+  // default and misses a key minted anywhere else. Omitted for the default
+  // host, where it would be noise.
+  const hostFlag = host === DEFAULT_HOST ? '' : ` --host=${shellQuote(host)}`;
+  return `Run "pagespace keys describe --key=${shellQuote(keyName)}${hostFlag}" at any time to see this key's drives, role and effective permissions.`;
 }
 
 /**
@@ -113,6 +119,6 @@ export function renderAgentWiringGuidance(params: AgentWiringGuidanceParams): re
     // The ONE place this sentence is printed. The mint's permission summary
     // above it already shows the answer inline; repeating the pointer there
     // (and again here) put the same line on screen twice.
-    keysDescribeHint(params.keyName),
+    keysDescribeHint(params.keyName, params.host),
   ];
 }

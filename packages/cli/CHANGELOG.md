@@ -6,9 +6,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **`keys create --name ""` is refused instead of minting an unusable key.** A blank name arrived as
-  an empty string rather than as "absent", so the key was stored under `""` — and `--key`, the key
-  env var and `keys use` all treat a blank name as no name, so nothing could ever select it again.
+- **`keys create` refuses a blank or whitespace-padded `--name` instead of minting an unfindable
+  key.** A key is stored under its name verbatim, but every lookup trims first — so `--name "  x  "`
+  wrote the store under `"  x  "` while `--key` resolved `"x"` and missed, and `--name ""` wrote a
+  key no lookup could ever produce. Both are now refused at mint, with the trimmed form suggested.
 
 ### Added
 
