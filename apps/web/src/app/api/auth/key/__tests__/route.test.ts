@@ -212,6 +212,30 @@ describe('GET /api/auth/key', () => {
     });
   });
 
+  // The per-drive resolution runs concurrently; `Promise.all` preserves order,
+  // but a future refactor to a settle-as-they-finish shape would not, and a
+  // status readout that reorders between calls is hard to diff.
+  it('reports drives in a stable order regardless of how fast each resolves', async () => {
+    arrangeScopedMemberKey();
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue(['drv1', 'drv2', 'drv3']);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([
+      { id: 'drv3', name: 'Third' },
+      { id: 'drv1', name: 'First' },
+      { id: 'drv2', name: 'Second' },
+    ]);
+    // First drive resolves slowest, so a completion-ordered result would invert.
+    const delays: Record<string, number> = { drv1: 20, drv2: 10, drv3: 0 };
+    vi.mocked(getPrincipalDriveAccessLevel).mockImplementation(
+      async (_auth, driveId: string) =>
+        new Promise((resolve) => setTimeout(() => resolve(MEMBER_LEVEL), delays[driveId])),
+    );
+
+    const body = await (await GET(request())).json();
+
+    expect(body.driveScopes.map((scope: { id: string }) => scope.id)).toEqual(['drv1', 'drv2', 'drv3']);
+    expect(body.driveScopes.map((scope: { name: string }) => scope.name)).toEqual(['First', 'Second', 'Third']);
+  });
+
   it('describes an unscoped credential with no key row, leaving the key fields null', async () => {
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...SCOPED_KEY, tokenType: 'oauth' } as never);
     vi.mocked(isAuthError).mockReturnValue(false);

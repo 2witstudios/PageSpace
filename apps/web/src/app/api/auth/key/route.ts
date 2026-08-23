@@ -136,29 +136,40 @@ export async function GET(req: NextRequest) {
       ]),
     );
 
-    const driveScopes = [];
-    for (const driveId of driveIds) {
-      const permissions = await getPrincipalDriveAccessLevel(auth, driveId);
-      const membership = await getPrincipalDriveMembership(auth, driveId);
-      const role = membership?.role ?? null;
-      const customRoleId = membership?.customRoleId ?? null;
-      const customRole = customRoleId ? await getRoleById(driveId, customRoleId) : null;
+    // Per drive, and concurrently: an unscoped credential's universe is every
+    // drive its owner can reach, and each drive costs a handful of queries, so
+    // a sequential walk would multiply one status call's latency by the drive
+    // count for no reason. Nothing here feeds anything else — the permission
+    // and the membership are independent reads of the same drive — which is
+    // the same shape `commands/whoami.ts` resolves concurrently for the same
+    // reason. Query COUNT is unchanged; only the waiting is.
+    const driveScopes = await Promise.all(
+      driveIds.map(async (driveId) => {
+        const [permissions, membership] = await Promise.all([
+          getPrincipalDriveAccessLevel(auth, driveId),
+          getPrincipalDriveMembership(auth, driveId),
+        ]);
+        const role = membership?.role ?? null;
+        const customRoleId = membership?.customRoleId ?? null;
+        const customRole = customRoleId ? await getRoleById(driveId, customRoleId) : null;
 
-      driveScopes.push({
-        id: driveId,
-        name: driveNames.get(driveId) ?? driveId,
-        role,
-        customRoleId,
-        customRoleName: customRole?.name ?? null,
-        roleSource: describeRoleSource(role, customRoleId),
-        // A scope whose drive resolves to no access at all — a dangling inherit
-        // row whose owner lost the drive, a custom role deleted out from under
-        // the key — is reported as an all-false entry rather than dropped.
-        // "You hold a grant here that currently gets you nothing" is the honest
-        // answer; omitting the row would read as never having had access.
-        permissions: permissions ?? { canView: false, canEdit: false, canShare: false, canDelete: false },
-      });
-    }
+        return {
+          id: driveId,
+          name: driveNames.get(driveId) ?? driveId,
+          role,
+          customRoleId,
+          customRoleName: customRole?.name ?? null,
+          roleSource: describeRoleSource(role, customRoleId),
+          // A scope whose drive resolves to no access at all — a dangling
+          // inherit row whose owner lost the drive, a custom role deleted out
+          // from under the key — is reported as an all-false entry rather than
+          // dropped. "You hold a grant here that currently gets you nothing" is
+          // the honest answer; omitting the row would read as never having had
+          // access.
+          permissions: permissions ?? { canView: false, canEdit: false, canShare: false, canDelete: false },
+        };
+      }),
+    );
 
     // Only when asked. `permissions: null` (out of reach) is preserved rather
     // than flattened to all-false: "this page is not yours to see" and "you may
