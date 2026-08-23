@@ -190,7 +190,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       kill_shell: {
         description:
-          'Close one of this session\'s shells (by shellId): its process is terminated, its record removed, AND ITS PANE CLOSED — every browser watching this workspace loses the tab. The session\'s sandbox (and every other shell) is untouched. Returns paneNodeId (the pane that closed) and paneCount, the panes this workspace is still showing. Closing an already-gone shell succeeds.',
+          'Close one of this session\'s shells (by shellId): its process is terminated, its record removed, AND ITS PANE CLOSED — every browser watching this workspace loses the tab. The session\'s sandbox (and every other shell) is untouched. Returns paneNodeId (the pane that closed) and paneCount (the panes this workspace is still showing) whenever there was a shell to kill; a shell that was already gone reports killed: false and no pane numbers, because there was no workspace to count. Closing an already-gone shell succeeds.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',

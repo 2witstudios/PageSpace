@@ -170,8 +170,8 @@ Shipped invariants (source: `packages/db/src/schema/agent-workspaces.ts`,
     slot, so the loser's optimistic write is dropped whole and announced
     (`queueErrors: 'superseded'`), where a nesting split survived.
   - **`spawn_shell` and `kill_shell` report the layout.** `paneNodeId` (the
-    pane opened, or the one closed) and `paneCount` (and, past six panes, a
-    note) ride the responses an agent already reads. `list_panes` was always
+    pane opened, or the one closed) and `paneCount` (and, at six panes or more,
+    a note) ride the responses an agent already reads. `list_panes` was always
     there and the session that filed #2469 never called it: nothing gave it a
     reason to look. `close_pane` now says what it does to a TERMINAL pane — it
     takes the pane and leaves the process running, reachable by

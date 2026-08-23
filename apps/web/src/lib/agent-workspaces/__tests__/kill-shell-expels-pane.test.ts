@@ -16,10 +16,17 @@
  *  - the kill EXPELS the shell's pane, addressed by target;
  *  - a pane a human already closed is `not_a_member`, which is the state the
  *    kill wanted — not a failure;
- *  - a kill that could not reach the process UNWINDS the node write, because a
- *    pane removed for a live PTY is the inverse defect;
+ *  - the PROCESS dies before any lock is taken, and a ROW that cannot be
+ *    dropped unwinds the node write, because a pane removed for a shell the
+ *    workspace still holds is the inverse defect;
  *  - the layout the write left behind rides home on the result, which is what
  *    gives an agent a reason to look (issue #2469).
+ *
+ * **The shell service is NOT mocked here.** `killShellProcess` and
+ * `dropSessionShellRow` run for real against a stubbed store and Sprites host,
+ * because the property under test is WHERE each of them runs relative to the
+ * workspace lock — and a mocked service cannot be caught touching the network
+ * in the wrong place.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import type { WorkspaceNode } from '@pagespace/lib/agent-workspaces/workspace-node';
@@ -29,12 +36,16 @@ const WORKSPACE = 'ws-1';
 const SHELL = 'shell-1';
 const ACTOR = 'user-1';
 
-const { shellStore, killSessionShellById, membershipWrite, tree } = vi.hoisted(() => ({
+const { shellStore, membershipWrite, tree, host, killSession, order } = vi.hoisted(() => ({
   shellStore: { findById: vi.fn(), remove: vi.fn(), list: vi.fn(), create: vi.fn() },
-  killSessionShellById: vi.fn(),
   membershipWrite: vi.fn(),
   /** The workspace's nodes, as the funnel would read them under the lock. */
   tree: { nodes: [] as WorkspaceNode[] },
+  /** The Sprites host. `attach` is the call with no timeout of its own — see the lock-order case. */
+  host: { attach: vi.fn(), provision: vi.fn(), kill: vi.fn() },
+  killSession: vi.fn(),
+  /** What happened, in the order it happened — the only way to see WHERE a call was made. */
+  order: [] as string[],
 }));
 
 vi.mock('@pagespace/db/db', () => ({ db: {} }));
@@ -45,16 +56,9 @@ vi.mock('@pagespace/db/schema/agent-workspaces', () => ({
 vi.mock('@pagespace/lib/services/agent-workspaces/workspace-shells-store', () => ({
   createDbSessionShellStore: async () => shellStore,
 }));
-vi.mock('@pagespace/lib/services/agent-workspaces/workspace-shells', () => ({
-  spawnSessionShell: vi.fn(),
-  listSessionShells: vi.fn(),
-  resolveSessionShellById: vi.fn(),
-  toShellDTO: vi.fn(),
-  killSessionShellById: (...args: unknown[]) => killSessionShellById(...args),
-}));
 vi.mock('../agent-workspaces-runtime', () => ({
   getAgentSessionStore: async () => ({ findById: async () => ({ id: WORKSPACE, sandboxId: 'sbx-1' }) }),
-  getSandboxHost: async () => ({ attach: vi.fn() }),
+  getSandboxHost: async () => host,
   resolveSessionLiveSandboxId: () => 'sbx-1',
 }));
 vi.mock('../workspace-node-runtime', () => ({
@@ -74,6 +78,7 @@ function fakeFunnel() {
     run: (nodes: readonly WorkspaceNode[]) => MembershipResult;
     within?: (tx: unknown) => Promise<void>;
   }) => {
+    order.push('lock');
     const decided = input.run(tree.nodes);
     if (!decided.ok) return { status: 'refused' as const, code: decided.code, detail: decided.detail };
     await input.within?.({});
@@ -95,14 +100,24 @@ function seatShellPane(): void {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  order.length = 0;
   seatShellPane();
   shellStore.findById.mockResolvedValue({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: 'exec-1' });
-  killSessionShellById.mockResolvedValue({ ok: true, killed: true });
+  shellStore.remove.mockImplementation(async () => {
+    order.push('remove');
+  });
+  killSession.mockImplementation(async () => {
+    order.push('killSession');
+  });
+  host.attach.mockImplementation(async () => {
+    order.push('attach');
+    return { killSession };
+  });
   membershipWrite.mockImplementation(fakeFunnel());
 });
 
 describe('killShellById', () => {
-  it('EXPELS the pane bound to the shell, in the write that kills the process', async () => {
+  it('EXPELS the pane bound to the shell, in the write that drops its row', async () => {
     const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
 
     expect(result).toEqual({ ok: true, killed: true, panes: { paneCount: 1, nodeId: 'n-shell' } });
@@ -121,6 +136,20 @@ describe('killShellById', () => {
     expect(tree.nodes.map((node) => node.id)).toEqual([WORKSPACE, 'n-chat']);
   });
 
+  it('kills the PROCESS before it takes the lock, and drops the ROW inside it', async () => {
+    // The lock-order property (CodeRabbit Major, and this branch's own review
+    // pass). `killSpriteSession` retries three times at 10s apiece with
+    // backoff, and its own doc says the REST call may be what WAKES a
+    // hibernating Sprite — so half a minute is a normal slow path. Inside
+    // `pg_advisory_xact_lock` that is every layout write in the workspace
+    // queued behind a sleepy VM, which is exactly what `destroyWorkspaceTree`
+    // refuses to do. The database half stays inside, because the row and the
+    // node agreeing is what the transaction is actually for.
+    await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+
+    expect(order).toEqual(['attach', 'killSession', 'lock', 'remove']);
+  });
+
   it('succeeds when the pane is already gone, because that is the state it wanted', async () => {
     // THE ORDINARY PATH, not an edge case: closing a terminal tab drops the
     // node from the client and THEN sends this DELETE, so `expel` answering
@@ -129,22 +158,55 @@ describe('killShellById', () => {
 
     const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
 
-    // `nodeId` is null because there was no pane left to close — not because the
-    // kill failed to name the one it closed.
+    // `nodeId` is null because there was no pane left to close — not because
+    // the kill failed to name the one it closed.
     expect(result).toEqual({ ok: true, killed: true, panes: { paneCount: 1, nodeId: null } });
-    expect(killSessionShellById).toHaveBeenCalled();
+    expect(order).toContain('remove');
   });
 
-  it('UNWINDS the node write when the process could not be killed', async () => {
-    // The inverse defect, and the reason the kill throws from inside `within`
-    // rather than returning: a pane removed for a PTY that is still running
-    // leaves a live process with no surface, no pane and nothing to reattach.
-    killSessionShellById.mockResolvedValue({ ok: false, reason: 'error' });
+  it('writes NOTHING AT ALL when the process could not be killed', async () => {
+    // We learned nothing about the process, so the row stays (a retry has to be
+    // able to find it) and the pane stays with it. Under the old shape this
+    // reached the transaction and unwound; it no longer gets that far.
+    host.attach.mockRejectedValue(new Error('control plane unreachable'));
 
     const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
 
     expect(result).toEqual({ ok: false, reason: 'error' });
+    expect(membershipWrite).not.toHaveBeenCalled();
+    expect(shellStore.remove).not.toHaveBeenCalled();
     expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeDefined();
+  });
+
+  it('UNWINDS the node write when the ROW could not be dropped', async () => {
+    // The other half of the pair: the process is dead, but if its row survives
+    // the write, taking the pane would leave the workspace holding a shell it
+    // cannot show — the defect this function closes, mirrored.
+    shellStore.remove.mockRejectedValue(new Error('write failed'));
+
+    await expect(killShellById({ shellId: SHELL, actingUserId: ACTOR })).rejects.toThrow('write failed');
+    expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeDefined();
+  });
+
+  it('still removes the row and the pane when the sandbox has VANISHED', async () => {
+    // A null handle is not a failure: there is nothing left running, so the
+    // shell goes exactly as it would after a successful kill.
+    host.attach.mockResolvedValue(null);
+
+    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+
+    expect(result).toMatchObject({ ok: true, killed: true });
+    expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeUndefined();
+  });
+
+  it('never reaches for the sandbox when no PTY was ever opened', async () => {
+    shellStore.findById.mockResolvedValue({ id: SHELL, workspaceId: WORKSPACE, spriteExecId: null });
+
+    const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
+
+    expect(result).toMatchObject({ ok: true, killed: true });
+    expect(host.attach).not.toHaveBeenCalled();
+    expect(tree.nodes.find((node) => node.id === 'n-shell')).toBeUndefined();
   });
 
   it('never SEEDS a root in order to remove something, because an ended session would get its tree back', async () => {
@@ -167,18 +229,22 @@ describe('killShellById', () => {
 
     expect(result).toEqual({ ok: true, killed: false, panes: null });
     expect(membershipWrite).not.toHaveBeenCalled();
-    expect(killSessionShellById).not.toHaveBeenCalled();
+    expect(host.attach).not.toHaveBeenCalled();
   });
 
   it('reports the layout it left behind, so an agent has something to act on', async () => {
     // Issue #2469's other half: `list_panes` was always there, and the session
     // that filed it never called one — because nothing it read mentioned panes.
-    tree.nodes.push(
-      { nodeType: 'pane', id: 'n-extra', parentId: WORKSPACE, position: 2, target: { kind: 'page', id: 'page-1' } },
-    );
+    tree.nodes.push({
+      nodeType: 'pane',
+      id: 'n-extra',
+      parentId: WORKSPACE,
+      position: 2,
+      target: { kind: 'page', id: 'page-1' },
+    });
 
     const result = await killShellById({ shellId: SHELL, actingUserId: ACTOR });
 
-    expect(result).toMatchObject({ panes: { paneCount: 2 } });
+    expect(result).toMatchObject({ panes: { paneCount: 2, nodeId: 'n-shell' } });
   });
 });

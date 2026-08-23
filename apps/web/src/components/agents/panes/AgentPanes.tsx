@@ -642,17 +642,34 @@ export default function AgentPanes({
    * "already gone" and "killed it" are different facts, and the DELETE is the
    * only place that can still tell them apart.
    *
+   * **The 404 is WIDER than "already gone", and that is accepted rather than
+   * unnoticed.** `workspaceNotFoundOrDenied` answers the same 404 for a caller
+   * whose access was revoked while the session was open (its own doc: not-found
+   * and every denial land on the SAME status, so a prober cannot tell them
+   * apart). A client cannot separate them either — that is the point of the
+   * family policy — so this swallows a revoked user's failed close too. It
+   * still LOGS, because "nothing happened at all" is the one thing a support
+   * conversation cannot work with, and a revoked user is about to be stopped by
+   * every other action on the page anyway.
+   *
    * Everything else still toasts. A 502 means the kill genuinely failed and the
-   * process may still be running, which is exactly what the user needs told.
+   * process may still be running — see {@link handleClosePane} for what that
+   * leaves on screen, and why the message says where to find it.
    */
   const closeShell = useCallback(
     (shellId: string) => {
       void del(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
         (error) => {
-          if (error instanceof ApiRequestError && error.status === 404) return;
+          if (error instanceof ApiRequestError && error.status === 404) {
+            console.debug('Close shell: nothing to close (already gone, or no longer permitted).', shellId);
+            return;
+          }
           console.error('Failed to close shell:', error);
           toast.error('Could not close the shell', {
-            description: error instanceof Error ? error.message : 'It may still be running.',
+            // The pane is already gone from this window — the close was applied
+            // optimistically and nothing rolls it back — so the useful half of
+            // this message is where the thing they were looking at went.
+            description: 'The process may still be running. Reopen it from this session in the sidebar to check.',
           });
         },
       );
@@ -749,6 +766,18 @@ export default function AgentPanes({
         // success". Whichever takes the workspace lock second finds the node
         // gone and writes nothing. The optimistic drop is what keeps the pane
         // from sitting there until the round trip and the broadcast come back.
+        //
+        // **WHERE THAT LEAVES A FAILED KILL, stated because the two directions
+        // do not agree there.** If the DELETE answers 502 the server has
+        // deliberately unwound its own `expel` to keep the pane — but this
+        // window's drop is already queued and will remove it anyway, so the
+        // pane goes and the PTY may not. Deferring the drop until the DELETE
+        // answered would fix that and cost the close its optimism: the kill
+        // retries a sleepy Sprite for up to half a minute, and a Close button
+        // that hangs that long is a worse product than a rare wrong outcome.
+        // What is owed instead is the truth and a way back, which is why
+        // `closeShell`'s toast names the sidebar — the shell ROW survives the
+        // unwind, so reopening it there is a real recovery rather than advice.
         if (node.target?.kind === 'terminal') closeShell(node.target.id);
         return;
       }

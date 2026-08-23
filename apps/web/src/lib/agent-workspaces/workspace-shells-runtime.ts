@@ -12,7 +12,8 @@ import {
 import {
   spawnSessionShell,
   listSessionShells,
-  killSessionShellById,
+  dropSessionShellRow,
+  killShellProcess,
   resolveSessionShellById,
   toShellDTO,
   type SpawnSessionShellResult,
@@ -46,10 +47,14 @@ class ShellSpawnRefused extends Error {
 }
 
 /**
- * The PTY could not be killed, so the pane must stay. Thrown for the same
- * reason {@link ShellSpawnRefused} is: the membership transaction UNWINDS, and
- * a pane removed for a process that is still running is the inverse of the
- * dangling pane this chokepoint prevents.
+ * The shell's ROW could not be dropped, so its pane must stay. Thrown for the
+ * same reason {@link ShellSpawnRefused} is: the membership transaction UNWINDS,
+ * and a pane removed for a shell the workspace still holds is the inverse of
+ * the dangling pane this chokepoint prevents.
+ *
+ * The PROCESS is not what this defends — that is killed before the transaction
+ * opens, precisely so a slow provider cannot hold the lock (see
+ * {@link killShellById}).
  */
 class ShellKillRefused extends Error {
   constructor() {
@@ -291,25 +296,30 @@ export async function resolveShellById(shellId: string): Promise<ResolveSessionS
  * `expel` is the removal `admit` is the arrival of, so this is that function
  * pointed the other way rather than a second removal beside it.
  *
- * **The Sprite call is INSIDE the lock here, and that is a departure from
- * {@link destroyWorkspaceTree}'s rule** — which argues, correctly, that a
- * network call to the sandbox provider inside the workspace's advisory lock
- * lets a hanging teardown block every layout write for that workspace. The
- * difference is what is being waited on. Ending a session tears down a VM;
- * killing a shell is one `killSession` against a sandbox that is already up,
- * and the alternative is worse in the case that actually happens: kill first
- * and the pane survives a crash between the two writes, expel first and a
- * failed kill leaves a live PTY with no surface and no pane pointing at it.
- * Neither is recoverable by a reconciler, because a shell has no id-keyed
- * external record to reap — the row IS the record.
+ * **THE SPRITE CALL IS OUTSIDE THE LOCK, and the two DATABASE facts are inside
+ * it.** That split is the whole shape of this function, and it is
+ * {@link destroyWorkspaceTree}'s rule rather than an exception to it: a network
+ * call to the sandbox provider inside a workspace's advisory lock lets a slow
+ * provider block every layout write for that workspace. "Slow" is not
+ * hypothetical here — `killSpriteSession` retries three times at 10s apiece
+ * with backoff, and its own doc says the REST call may itself be what WAKES a
+ * hibernating Sprite, so half a minute is a normal slow path. An earlier cut of
+ * this function held the lock across it, on the argument that the row and the
+ * process should be atomic; a review (CodeRabbit, and the branch's own review
+ * pass) priced that argument correctly, and it was not worth what it cost.
  *
- * **What is left is one residue, and it self-heals.** The PTY kill is external,
- * so a transaction that rolls back AFTER it cannot take it back: the row and
- * the pane survive, pointing at a dead process. That state is indistinguishable
- * from a shell whose process exited on its own, it is visible (the pane is
- * there), and the next close of it runs this function again —
- * `killSession` against an already-dead id is idempotent, so the retry lands.
- * The predecessor's failure mode was the opposite one: invisible.
+ * What atomicity actually has to buy is the row and the NODE agreeing, because
+ * a row without a node is the dangling pane this exists to close and a node
+ * without a row is the same defect mirrored. Those are both database facts and
+ * they are still one transaction.
+ *
+ * **What is left is one residue, and it self-heals.** The PTY kill is external
+ * and comes first, so a transaction that fails after it cannot take it back:
+ * the row and the pane survive, pointing at a dead process. That state is
+ * indistinguishable from a shell whose process exited on its own, it is VISIBLE
+ * (the pane is there), and the next close runs this again — `killSession`
+ * against an already-dead id is idempotent, so the retry lands. The
+ * predecessor's failure mode was the opposite one: invisible.
  */
 export async function killShellById(input: {
   shellId: string;
@@ -330,20 +340,18 @@ export async function killShellById(input: {
   const row = await store.findById(shellId);
   if (!row) return { ok: true, killed: false, panes: null };
 
-  // The owning session's live sandbox, ALSO read before the lock — and that
-  // placement is the point rather than an optimization. The transaction below
-  // holds a pooled connection for its whole life; a read issued from INSIDE it
-  // on the global `db` asks the same pool for a SECOND one, so enough
-  // concurrent kills would each hold one connection while waiting for another
-  // and the pool would deadlock on itself. Nothing inside the lock touches the
-  // database except the transaction it was handed.
-  //
-  // Unconditional, even though `killSessionShellById` consults it only for a
-  // shell whose PTY has been opened: deciding that HERE would read
-  // `spriteExecId` a moment before the transaction re-reads it, and a PTY that
-  // started in between would then be killed against a sandbox id nobody
-  // resolved. One indexed read is the cheaper half of that trade.
-  const sandboxId = await resolveOwningSandboxId(sessionStore, row.workspaceId);
+  // THE PROCESS, killed before anything takes a lock — see the doc above for
+  // why this is not inside the transaction. A failure here means we learned
+  // NOTHING about the process, so nothing is written at all: the row and the
+  // pane both stay, and the caller retries.
+  const process = await killShellProcess({
+    row,
+    deps: {
+      host,
+      resolveSessionSandboxId: async (workspaceId) => resolveOwningSandboxId(sessionStore, workspaceId),
+    },
+  });
+  if (!process.ok) return { ok: false, reason: 'error' };
 
   let killed: KillSessionShellResult = { ok: false, reason: 'error' };
   // The pane this kill closes, read from the tree the decision ran against —
@@ -371,20 +379,12 @@ export async function killShellById(input: {
         return result;
       },
       within: async (tx) => {
-        killed = await killSessionShellById({
-          shellId,
-          deps: {
-            store: await createDbSessionShellStore(tx),
-            host,
-            // Already resolved, above the lock — see `sandboxId`'s own comment
-            // for why this is not a query.
-            resolveSessionSandboxId: async () => sandboxId,
-          },
-        });
-        // The kill's own failures — an unreachable control plane, a `killSession`
-        // that threw — have to take the node with them, so they UNWIND rather
-        // than return. A pane removed for a process that is still running is the
-        // inverse of the defect this function exists to close.
+        // The ROW, on the transaction that is writing the node — the pair this
+        // function exists to keep together. Nothing here leaves the database.
+        killed = await dropSessionShellRow({ shellId, deps: { store: await createDbSessionShellStore(tx) } });
+        // A row that could not be dropped has to take the node with it, so it
+        // UNWINDS rather than returns: a pane removed for a shell the workspace
+        // still holds is the inverse of the defect this closes.
         if (!killed.ok) throw new ShellKillRefused();
       },
     });

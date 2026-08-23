@@ -312,9 +312,16 @@ export async function seedSessionShell(
   ownerId: string,
   name: string,
 ): Promise<string> {
+  // `createdAt`/`updatedAt` explicitly, the way the production writer sets them
+  // (`createDbSessionShellStore.create` takes an injected clock). Drizzle's
+  // `$onUpdate` does fill `updatedAt` on insert — verified against a real
+  // Postgres, and this helper ran green before the line existed — so this is
+  // not a fix for a broken insert; it is a test fixture not depending on a
+  // subtlety of the ORM for a column the schema declares NOT NULL.
+  const now = new Date();
   const [row] = await db
     .insert(agentWorkspaceShells)
-    .values({ workspaceId, ownerId, name, agentType: 'shell' })
+    .values({ workspaceId, ownerId, name, agentType: 'shell', createdAt: now, updatedAt: now })
     .returning({ id: agentWorkspaceShells.id });
   return row.id;
 }

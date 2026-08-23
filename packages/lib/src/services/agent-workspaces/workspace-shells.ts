@@ -171,6 +171,89 @@ export type KillSessionShellResult =
   | { ok: true; killed: boolean }
   | { ok: false; reason: 'error' };
 
+/** What {@link killShellProcess} learned. `ok: false` means we learned NOTHING and the row must stay. */
+export type KillShellProcessResult =
+  /** `nothingToKill` — no PTY was ever launched, or its sandbox is gone. Success, and the row still goes. */
+  | { ok: true; nothingToKill: boolean }
+  | { ok: false; reason: 'error' };
+
+/**
+ * THE PTY HALF, on its own — the only part of a kill that leaves the database.
+ *
+ * Separated from the row so a caller can put the two in the right places
+ * relative to a lock. `killShellById` (apps/web) does exactly that: this runs
+ * OUTSIDE the workspace's advisory lock and {@link dropSessionShellRow} runs
+ * inside it, beside the node write. That is not a stylistic split. The kill is
+ * `killSpriteSession`, which retries `MAX_EXEC_ATTEMPTS` times at 10s apiece
+ * with backoff, and whose own doc says the REST call "may itself be what wakes
+ * a hibernating Sprite" — so half a minute is a NORMAL slow path, not a fault,
+ * and half a minute of `pg_advisory_xact_lock` is every layout write in that
+ * workspace queued behind a sleepy VM.
+ *
+ * Takes the ROW rather than an id: the caller has already read it (that is how
+ * it knows which workspace to lock), and a second read here would be a second
+ * chance to disagree with itself.
+ */
+export async function killShellProcess({
+  row,
+  deps,
+}: {
+  row: Pick<SessionShellRecord, 'workspaceId' | 'spriteExecId'>;
+  deps: Pick<KillSessionShellDeps, 'host' | 'resolveSessionSandboxId'>;
+}): Promise<KillShellProcessResult> {
+  // No PTY was ever opened, so there is no process and nothing to reach for.
+  if (row.spriteExecId === null) return { ok: true, nothingToKill: true };
+
+  const sandboxId = await deps.resolveSessionSandboxId(row.workspaceId);
+  if (sandboxId === null) return { ok: true, nothingToKill: true };
+
+  let handle;
+  try {
+    handle = await deps.host.attach({ sandboxId });
+  } catch {
+    // The control plane itself is unreachable — we learned NOTHING about the
+    // process. The caller keeps the row so a retry can find it again; dropping
+    // it now would leave a possibly-running process with nothing pointing at it.
+    return { ok: false, reason: 'error' };
+  }
+  // A vanished sandbox has nothing left running; the row is still dropped.
+  if (!handle) return { ok: true, nothingToKill: true };
+
+  try {
+    // The kill-by-id endpoint reaches this session whether or not we hold a
+    // live stream to it, and is idempotent against an already-dead id — so
+    // anything that throws here is a real unknown, not "already gone".
+    await handle.killSession(row.spriteExecId);
+  } catch {
+    return { ok: false, reason: 'error' };
+  }
+  return { ok: true, nothingToKill: false };
+}
+
+/**
+ * THE ROW HALF: drop it, idempotently.
+ *
+ * Re-reads rather than trusting the row the caller already holds, because the
+ * caller's read and this write are deliberately not in the same transaction —
+ * see {@link killShellProcess}. `killed: false` is a row that is already gone,
+ * which is success for the same reason it is below.
+ */
+export async function dropSessionShellRow({
+  shellId,
+  deps,
+}: {
+  shellId: string;
+  deps: { store: Pick<SessionShellStore, 'findById' | 'remove'> };
+}): Promise<KillSessionShellResult> {
+  const row = await deps.store.findById(shellId);
+  const plan = planKillTarget({ knownIds: row ? [row.id] : [], targetId: shellId });
+  if (!plan.ok) return { ok: false, reason: 'error' };
+  if (plan.action === 'noop' || !row) return { ok: true, killed: false };
+
+  await deps.store.remove(row.id);
+  return { ok: true, killed: true };
+}
+
 /**
  * Kill a shell: terminate its PTY process (if one was ever launched) and drop
  * the row. The session's SANDBOX is untouched — every other shell in it keeps
@@ -181,6 +264,13 @@ export type KillSessionShellResult =
  * spawn all retry, and making "already gone" an error forces every one of them
  * to special-case it — which is exactly what the predecessor's in-flight-kill
  * bookkeeping (`killsInFlight`) existed to paper over.
+ *
+ * **The two halves in the ordinary order.** Production's only kill path
+ * (`killShellById`, apps/web) does NOT call this — it holds a workspace lock
+ * and therefore needs the halves apart (see {@link killShellProcess}). What
+ * this keeps is the ORDER itself, stated once and pinned by this module's own
+ * tests: process first, row second, and a process we could not reach stops the
+ * row from going. A caller with no lock to keep short gets that for free.
  */
 export async function killSessionShellById({
   shellId,
@@ -194,34 +284,10 @@ export async function killSessionShellById({
   if (!plan.ok) return { ok: false, reason: 'error' };
   if (plan.action === 'noop' || !row) return { ok: true, killed: false };
 
-  if (row.spriteExecId !== null) {
-    const sandboxId = await deps.resolveSessionSandboxId(row.workspaceId);
-    if (sandboxId !== null) {
-      let handle;
-      try {
-        handle = await deps.host.attach({ sandboxId });
-      } catch {
-        // The control plane itself is unreachable — we learned NOTHING about the
-        // process. Keep the row so a retry can find it again; dropping it now
-        // would leave a possibly-running process with nothing pointing at it.
-        return { ok: false, reason: 'error' };
-      }
-      if (handle) {
-        try {
-          // The kill-by-id endpoint reaches this session whether or not we hold a
-          // live stream to it, and is idempotent against an already-dead id — so
-          // anything that throws here is a real unknown, not "already gone".
-          await handle.killSession(row.spriteExecId);
-        } catch {
-          return { ok: false, reason: 'error' };
-        }
-      }
-      // A vanished sandbox has nothing left running; the row is still dropped.
-    }
-  }
+  const process = await killShellProcess({ row, deps });
+  if (!process.ok) return process;
 
-  await deps.store.remove(row.id);
-  return { ok: true, killed: true };
+  return dropSessionShellRow({ shellId, deps });
 }
 
 export interface ListSessionShellsDeps {

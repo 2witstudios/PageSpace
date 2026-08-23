@@ -484,7 +484,16 @@ describe('AgentPanes — closing a pane', () => {
     await screen.findByTestId('pane-shell');
     await user.click(within(screen.getAllByTestId('pane-bar')[0]).getByLabelText('Close pane'));
 
-    await waitFor(() => expect(mockToast.error).toHaveBeenCalledWith('Could not close the shell', expect.anything()));
+    // The message names the way back, and that is the load-bearing half: the
+    // pane is already gone from this window (the close is optimistic and
+    // nothing rolls it back) while the server has kept the shell ROW, so the
+    // sidebar really can reopen it.
+    await waitFor(() =>
+      expect(mockToast.error).toHaveBeenCalledWith(
+        'Could not close the shell',
+        expect.objectContaining({ description: expect.stringContaining('sidebar') }),
+      ),
+    );
   });
 
   it('does nothing while the directory has not resolved — a close never acts on an unverified fact', async () => {
