@@ -10,7 +10,12 @@
  * non-positive one, and the guard that was supposed to prevent a hole-filled
  * array could be deleted with every test still green.
  *
- * `resolveWorkerCount` is the whole subtlety. A non-positive — or non-finite —
+ * `resolveWorkerCount` is the whole subtlety. It stays module-private and is
+ * exercised through `mapWithConcurrency` rather than directly: knip ignores
+ * `src/**/__tests__/**`, so an export whose only consumer is a test counts as
+ * dead code and fails the unused-code gate. Going through the real entry point
+ * is the better test anyway — the edge cases below still turn red if the guard
+ * is removed. A non-positive — or non-finite —
  * limit would start zero workers, and this function would then resolve
  * `new Array(n)`: typed `TResult[]`, actually a row of holes, with no work done
  * and no error raised. A caller serializing that reports every item as null,
@@ -24,7 +29,7 @@
  * a worker already suspended mid-await still completes the index it claimed, so
  * the claimed prefix is never left holed.
  */
-export function resolveWorkerCount(limit: number, itemCount: number): number {
+function resolveWorkerCount(limit: number, itemCount: number): number {
   if (itemCount === 0) return 0;
   const requested = Number.isFinite(limit) ? Math.floor(limit) : 1;
   return Math.min(Math.max(1, requested), itemCount);

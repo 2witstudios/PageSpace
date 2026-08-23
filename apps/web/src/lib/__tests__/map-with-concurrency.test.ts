@@ -5,30 +5,9 @@
  * deleted with every route test still green.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { mapWithConcurrency, resolveWorkerCount } from '../map-with-concurrency';
+import { mapWithConcurrency } from '../map-with-concurrency';
 
 const double = async (n: number) => n * 2;
-
-describe('resolveWorkerCount', () => {
-  it('honours a sane limit, capped by the item count', () => {
-    expect(resolveWorkerCount(8, 25)).toBe(8);
-    expect(resolveWorkerCount(8, 3)).toBe(3);
-  });
-
-  it('does nothing for no items', () => {
-    expect(resolveWorkerCount(8, 0)).toBe(0);
-  });
-
-  // Zero workers would resolve `new Array(n)` — typed as results, actually a
-  // row of holes — with no work done and no error, which a caller serializes
-  // as every item being null.
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
-    'never starts zero workers for limit %p when there is work',
-    (limit) => {
-      expect(resolveWorkerCount(limit, 5)).toBeGreaterThanOrEqual(1);
-    },
-  );
-});
 
 describe('mapWithConcurrency', () => {
   it('maps every item, in input order', async () => {
@@ -50,13 +29,22 @@ describe('mapWithConcurrency', () => {
     expect(result).toEqual(delays);
   });
 
-  it.each([0, -1, Number.NaN])('returns no holes for limit %p', async (limit) => {
-    const result = await mapWithConcurrency([1, 2, 3], limit, double);
-    expect(result).toEqual([2, 4, 6]);
-    // `toEqual` alone passes on a hole array against [undefined,...]; this is
-    // the assertion that actually distinguishes them.
-    expect(Object.keys(result)).toHaveLength(3);
-  });
+  // A non-positive — or non-finite — limit would start zero workers and resolve
+  // `new Array(n)`: typed as results, actually a row of holes, with no work done
+  // and no error. A caller serializing that reports every item as null.
+  // Exercised through the real entry point because the guard itself is private.
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, 0.5])(
+    'does the work and returns no holes for limit %p',
+    async (limit) => {
+      const resolve = vi.fn(double);
+      const result = await mapWithConcurrency([1, 2, 3], limit, resolve);
+      expect(resolve).toHaveBeenCalledTimes(3);
+      expect(result).toEqual([2, 4, 6]);
+      // `toEqual` alone passes on a hole array against [undefined, ...]; this is
+      // the assertion that actually distinguishes them.
+      expect(Object.keys(result)).toHaveLength(3);
+    },
+  );
 
   it('holds concurrency at the limit', async () => {
     let inFlight = 0;
