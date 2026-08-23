@@ -16,7 +16,7 @@
 import { drizzle } from 'drizzle-orm/node-postgres';
 import { Pool } from 'pg';
 import { sql } from 'drizzle-orm';
-import { existsSync, readdirSync, realpathSync } from 'fs';
+import { accessSync, constants, existsSync, readdirSync, realpathSync, statSync } from 'fs';
 import path from 'path';
 import { resolvePathWithin } from '@pagespace/lib/security/path-validator';
 import type { ValidateOptions, ValidationResult, DbClient } from './lib/migration-types';
@@ -111,7 +111,7 @@ export interface FullValidationResult {
 }
 
 /**
- * A path that exists, is a directory, AND can actually be listed.
+ * A path that exists, is a directory, and can actually be listed AND descended.
  *
  * `readdirSync`, not `statSync`: stat needs no permission on the directory
  * itself, so a mode-000 root passes an `isDirectory()` check while every row
@@ -120,12 +120,24 @@ export interface FullValidationResult {
  * root-owned Docker volume (`infrastructure/docker-compose.tenant.yml`), and a
  * validator run as a non-root user against it lands exactly here.
  *
+ * `accessSync` as well as `readdirSync`, because listing and descending are
+ * different permissions — see the comment on the call.
+ *
  * This is also what the surrounding messages already claimed, so it closes the
  * gap between what the code said and what it checked.
  */
 function isUsableDirectory(candidate: string): boolean {
   try {
     readdirSync(candidate);
+    // READ IS NOT SEARCH. `readdirSync` needs only r on the directory, but
+    // every `existsSync`/`open` of a descendant needs x (search) as well. A
+    // mode-0444 root therefore LISTS fine while every blob under it fails to
+    // resolve — each row is recorded as a skip, this check calls the root
+    // usable, and the run reports success having compared nothing. Same
+    // false-PASS class as a missing root, one permission bit over, and it is
+    // exactly what a non-root validator hits against a root-owned volume whose
+    // execute bits were dropped.
+    accessSync(candidate, constants.R_OK | constants.X_OK);
     return true;
   } catch {
     return false;
@@ -142,14 +154,36 @@ function isUsableDirectory(candidate: string): boolean {
  * whole job is to stop a false pass should not itself be unverified.
  *
  * `realpathSync` rather than a string compare so two spellings of one directory
- * — a symlink, a relative path, a trailing slash — cannot slip through. Falls
- * back to string equality when either path does not resolve, since a
- * nonexistent root is caught by the readable-directory check instead and this
- * one should not throw on the way there.
+ * — a symlink, a relative path, a trailing slash — cannot slip through, and
+ * then (st_dev, st_ino) for the aliases realpath CANNOT collapse, such as two
+ * bind mounts of one volume. Falls back to string equality when either path
+ * does not resolve, since a nonexistent root is caught by the
+ * readable-directory check instead and this one should not throw on the way
+ * there.
  */
 export function isSameStorageRoot(sourceRoot: string, targetRoot: string): boolean {
   try {
-    return realpathSync(sourceRoot) === realpathSync(targetRoot);
+    if (realpathSync(sourceRoot) === realpathSync(targetRoot)) return true;
+  } catch {
+    return sourceRoot === targetRoot;
+  }
+
+  // RESOLVED PATHS ARE NOT IDENTITY. Two bind mounts of one Docker volume —
+  // the canonical tenant topology, `infrastructure/docker-compose.tenant.yml`
+  // mounts the storage volume by name — are two distinct mount-point pathnames
+  // that `realpathSync` has no reason to collapse. The string compare above
+  // returns false, the loop then hashes every blob through two aliases of the
+  // same directory, and the migration is reported as verified against an
+  // independent target copy that does not exist.
+  //
+  // (st_dev, st_ino) is the filesystem's own answer to "is this the same
+  // directory", and it sees through mounts, firmlinks, and any other aliasing
+  // that leaves the pathnames different. Wrapped separately so an unresolvable
+  // root still falls back to the string compare rather than throwing.
+  try {
+    const source = statSync(sourceRoot);
+    const target = statSync(targetRoot);
+    return source.dev === target.dev && source.ino === target.ino;
   } catch {
     return sourceRoot === targetRoot;
   }
@@ -465,8 +499,24 @@ export async function validateData(
       continue;
     }
 
-    const srcHash = await fileChecksum(srcPath);
-    const tgtHash = await fileChecksum(tgtPath);
+    // A BLOB THAT WILL NOT READ IS ONE FINDING, NOT THE END OF THE RUN.
+    // `fileChecksum` streams the file and rejects on any read error — EACCES on
+    // a root-owned blob inside a readable directory, EISDIR, EIO. Letting that
+    // reject escape `validateData` threw away every table result and every file
+    // finding already computed, so an operator chasing one unreadable file lost
+    // the entire verdict. Recorded as a mismatch (it is emphatically not a
+    // clean comparison) and the loop carries on.
+    let srcHash: string;
+    let tgtHash: string;
+    try {
+      srcHash = await fileChecksum(srcPath);
+      tgtHash = await fileChecksum(tgtPath);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      fileMismatches.push({ file: storagePath, reason: `could not be read for comparison: ${reason}` });
+      continue;
+    }
+
     if (srcHash !== tgtHash) {
       fileMismatches.push({ file: storagePath, reason: `checksum mismatch (source: ${srcHash}, target: ${tgtHash})` });
     }
@@ -497,7 +547,7 @@ export async function validateData(
   if (fileStorageData.length > 0 && !isUsableDirectory(sourceFileStoragePath)) {
     fileMismatches.push({
       file: sourceFileStoragePath,
-      reason: 'source file storage path is not a readable directory — nothing could be compared',
+      reason: 'source file storage path is not a readable, searchable directory — nothing could be compared',
     });
   }
 

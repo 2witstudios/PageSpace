@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, beforeAll, afterAll, beforeEach, afterEach } from 'vitest';
 import { mkdir, mkdtemp, writeFile, rm, symlink, chmod } from 'fs/promises';
-import { existsSync } from 'fs';
+import { existsSync, realpathSync, statSync } from 'fs';
 import path from 'path';
 import os from 'os';
 import { sql } from 'drizzle-orm';
@@ -168,6 +168,37 @@ describe('isSameStorageRoot', () => {
     const missing = path.join(tmpDir, 'not-here');
     expect(isSameStorageRoot(missing, missing)).toBe(true);
     expect(isSameStorageRoot(missing, path.join(tmpDir, 'also-not-here'))).toBe(false);
+  });
+
+  it('detects one directory reached through an alias realpath does NOT collapse', async () => {
+    // The shape a resolved-path compare cannot see: two bind mounts of one
+    // Docker volume are two real mount-point pathnames, and `realpathSync`
+    // canonicalises each to ITSELF. Only (dev, ino) says they are one
+    // directory — and hashing every blob through two aliases of one tree
+    // reports a verified migration against a target copy that does not exist.
+    //
+    // A bind mount needs privileges no test has. macOS firmlinks are the same
+    // shape and free: `/System/Volumes/Data/private/tmp/x` and
+    // `/private/tmp/x` are one directory with two non-collapsing realpaths.
+    // Where no such alias exists the case says so out loud rather than
+    // pretending; `tenant-validate-same-root.test.ts` covers the same branch
+    // portably by pinning realpath to the identity.
+    const created = path.join(tmpDir, 'alias-root');
+    await mkdir(created, { recursive: true });
+    const real = realpathSync(created);
+    const alias = path.join('/System/Volumes/Data', real);
+
+    const isGenuineAlias = existsSync(alias)
+      && realpathSync(alias) !== realpathSync(real)
+      && statSync(alias).ino === statSync(real).ino
+      && statSync(alias).dev === statSync(real).dev;
+
+    if (!isGenuineAlias) {
+      console.warn('SKIPPED (no non-collapsing directory alias on this platform): isSameStorageRoot firmlink case');
+      return;
+    }
+
+    expect(isSameStorageRoot(real, alias), 'firmlink alias of the same directory').toBe(true);
   });
 });
 
@@ -461,11 +492,39 @@ describe('validateData', () => {
     await mkdir(unreadable, { recursive: true });
     await chmod(unreadable, 0o000);
 
+    // FOURTH shape, and the one a `readdirSync` probe alone waves through:
+    // readable but NOT SEARCHABLE. `readdirSync` needs only r, while every
+    // `existsSync` of a blob underneath needs x, so a mode-0444 root lists
+    // cleanly and skips every single row — success having compared nothing.
+    const unsearchable = path.join(tmpDir, 'root-unsearchable');
+    await mkdir(unsearchable, { recursive: true });
+    await chmod(unsearchable, 0o444);
+
+    // PERMISSION BITS DO NOT BIND uid 0. root reads and searches a directory
+    // regardless of its mode, so the two permission shapes would report the
+    // root usable and these cases would fail on the runner rather than on the
+    // code — and many CI containers run as uid 0. Gated, loudly, so a skip is
+    // never mistaken for a pass.
+    //
+    // (`accessSync(X_OK)` is in fact specified to fail even for root when NO
+    // execute bit is set, so both cases may well hold as root; that is not
+    // verifiable from a non-root run, and guessing is what this file keeps
+    // getting punished for.)
+    const permissionsBind = process.getuid?.() !== 0;
+    if (!permissionsBind) {
+      console.warn('SKIPPED (running as uid 0): unreadable / unsearchable source-root cases');
+    }
+
     try {
       for (const [label, sourceRoot] of [
         ['does not exist', path.join(tmpDir, 'nope')],
         ['is a regular file', asFile],
-        ['is an unreadable directory', unreadable],
+        ...(permissionsBind
+          ? ([
+            ['is an unreadable directory', unreadable],
+            ['is readable but not searchable', unsearchable],
+          ] as [string, string][])
+          : []),
       ] as [string, string][]) {
         const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
           sourceDatabaseUrl: getTestDatabaseUrl(),
@@ -476,12 +535,13 @@ describe('validateData', () => {
         });
         expect(result.fileResults.passed, label).toBe(false);
         expect(result.fileResults.mismatches.map((m) => m.reason).join(), label)
-          .toMatch(/not a readable directory/);
+          .toMatch(/not a readable, searchable directory/);
       }
     } finally {
       // Restore before `afterEach`'s recursive rm, which cannot descend into a
       // mode-000 directory.
       await chmod(unreadable, 0o755);
+      await chmod(unsearchable, 0o755);
     }
   });
 
@@ -654,6 +714,40 @@ describe('validateData', () => {
 
     expect(result.fileResults.passed).toBe(false);
     expect(result.fileResults.mismatches[0].reason).toContain('checksum mismatch');
+  });
+
+  it('records an unreadable blob as a mismatch instead of losing the whole run', async () => {
+    // `fileChecksum` streams the file and rejects on ANY read error. Unguarded,
+    // that rejection escaped `validateData` entirely: the caller lost every
+    // table result and every file finding already computed, over one bad blob.
+    //
+    // A DIRECTORY where the blob should be, rather than a chmod, because the
+    // failure has to be uid-independent — root reads a mode-000 file, but
+    // nobody reads a directory as a byte stream (EISDIR). `existsSync` is happy
+    // with it on both sides, so the run reaches the checksum and fails there,
+    // which is exactly the shape being guarded.
+    const badSource = path.join(tmpDir, 'source-unreadable-blob');
+    const badTarget = path.join(tmpDir, 'target-unreadable-blob');
+    await mkdir(path.join(badSource, 'test_file_blob_001', 'data.txt'), { recursive: true });
+    await mkdir(path.join(badTarget, 'test_file_blob_001', 'data.txt'), { recursive: true });
+
+    const result = await validateData(db as unknown as DbClient, db as unknown as DbClient, {
+      sourceDatabaseUrl: getTestDatabaseUrl(),
+      targetDatabaseUrl: getTestDatabaseUrl(),
+      userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
+      sourceFileStoragePath: badSource,
+      targetFileStoragePath: badTarget,
+    });
+
+    expect(result.fileResults.passed).toBe(false);
+    expect(result.fileResults.mismatches).toHaveLength(1);
+    expect(result.fileResults.mismatches[0].file).toBe('test_file_blob_001/data.txt');
+    expect(result.fileResults.mismatches[0].reason).toMatch(/could not be read for comparison/);
+
+    // …and the verdict SURVIVED: every table was still compared and returned.
+    // This is the assertion the fix exists for — before it, the rejection took
+    // the whole result with it.
+    expect(result.tableResults).toHaveLength(TABLE_IMPORT_ORDER.length);
   });
 
   it('validates every table in TABLE_IMPORT_ORDER', async () => {
