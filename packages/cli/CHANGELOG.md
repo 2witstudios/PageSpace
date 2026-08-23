@@ -2,6 +2,37 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`pagespace keys describe`** — reports the credential this invocation would use: its drives, the
+  role granted in each, and the **effective** permissions that role resolves to
+  (view/edit/share/delete). Resolved server-side by the same code that authorizes real requests, so
+  it cannot disagree with them. Drive-level permissions answer the drive-as-root-node question
+  (creating a top-level page, sharing or deleting the drive), where any membership grants edit; a
+  page inside can be strictly narrower, so `--page <pageId>` resolves that page too — a plain
+  `member` key may create at the drive root and still be view-only on a document, which is the
+  "reads fine, every write fails" shape #2470 was about. It is the one `keys` verb a key can run,
+  and it describes only itself — never the other keys you hold. The same summary now closes `keys create` and the
+  `pagespace keys` wizard's Create flow, and it is served as an MCP tool (`tokens.describeSelf`).
+- **`pagespace keys list` shows the role granted on each drive**, including custom roles by name and
+  inherit scopes spelled out, instead of the drive name alone.
+
+### Fixed
+
+- **`pagespace keys list`/`revoke`/`use` and the wizard no longer report a live key as invalidated.**
+  Run under an `mcp_` key, they answered "Static token was invalidated and has no refresh path" —
+  indistinguishable from a revoked key, while that key kept working on every content command. The
+  key-management API only ever accepted a personal login; a key hitting it gets a refusal it can do
+  nothing about. These commands now detect the credential class up front and say so: the key is
+  fine, key management needs `pagespace login`, and `keys describe` is what a key can ask about
+  itself. No round trip, no re-mint. (#2464)
+- **`pagespace roles get <driveId> member` now explains itself.** It answered "not found in this
+  drive", which reads as "no such role" — but `member`/`admin`/`owner` are system roles held per
+  member on the drive membership, not rows in a drive's role list, so that lookup can only ever
+  miss. The error now names where they live and points at `keys describe`. (#2470)
+
 ## [1.7.1] — 2026-08-10
 
 ### Fixed

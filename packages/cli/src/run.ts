@@ -7,6 +7,7 @@
 import { PageSpaceClient } from '@pagespace/sdk';
 import { parseArgv } from './argv/parse.js';
 import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
+import { credentialKindOf } from './auth/credential-kind.js';
 import { createDiscoverMetadata } from './auth/discover.js';
 import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
@@ -182,6 +183,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     stderr: deps.stderr,
     env: deps.env,
     credentialStore: deps.credentialStore,
+    credentialKind: credentialKindOf(source),
     activeKeyStore,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),

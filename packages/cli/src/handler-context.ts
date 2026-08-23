@@ -1,4 +1,5 @@
 import type { PageSpaceClient } from '@pagespace/sdk';
+import type { CredentialKind } from './auth/credential-kind.js';
 import type { ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 
@@ -14,6 +15,14 @@ export interface HandlerContext {
   readonly stderr: OutputSink;
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly credentialStore: CredentialStore;
+  /**
+   * What CLASS of credential `ctx.sdk` is authenticating with — a scoped access
+   * key, a personal login, an unrecognized bearer, or nothing. The secret-free
+   * projection of `run.ts`'s resolved `AuthSource`: enough for a command to
+   * refuse accurately BEFORE a round trip the server can only answer with a
+   * refusal (see `auth/credential-kind.ts`), never enough to read a token.
+   */
+  readonly credentialKind: CredentialKind;
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */

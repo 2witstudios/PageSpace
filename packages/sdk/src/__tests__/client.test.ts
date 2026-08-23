@@ -4,6 +4,7 @@ import { AuthenticationError, IncompatibleServerError, NetworkError, TimeoutErro
 import { defineOperation } from '../registry/define.js';
 import { PageSpaceClient } from '../client.js';
 import type { AuthProvider } from '../auth/provider.js';
+import { StaticTokenProvider } from '../auth/static.js';
 import type { RetryPolicy } from '../retry.js';
 
 const API_VERSION = '1.0.0';
@@ -158,6 +159,45 @@ describe('PageSpaceClient — 401 handling', () => {
     await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toBeInstanceOf(AuthenticationError);
     expect(auth.invalidate).toHaveBeenCalledTimes(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  // Issue #2464. `/api/auth/mcp-tokens` answers a perfectly live mcp_* key with
+  // a 401 that refuses the credential CLASS, not the credential. Retrying a
+  // provider that cannot refresh re-sends the identical bearer, and the second
+  // pass fails INSIDE the provider — so the provider's error replaced the
+  // server's, and a working key was reported dead.
+  it('does not invalidate or retry a 401 for a provider that cannot refresh', async () => {
+    const auth = fakeAuth({ canRefresh: false });
+    const fetchMock = vi.fn(async () => jsonResponse(401, { error: 'MCP tokens are not permitted for this endpoint' }));
+    const client = makeClient({ auth, fetch: fetchMock });
+
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toThrow(
+      'MCP tokens are not permitted for this endpoint',
+    );
+    expect(auth.invalidate).not.toHaveBeenCalled();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('still retries a provider that declares nothing, so pre-canRefresh providers keep their behaviour', async () => {
+    const auth = fakeAuth();
+    expect(auth.canRefresh).toBeUndefined();
+    const fetchMock = vi.fn(async () => jsonResponse(401, { error: 'expired' }));
+    const client = makeClient({ auth, fetch: fetchMock });
+
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toBeInstanceOf(AuthenticationError);
+    expect(auth.invalidate).toHaveBeenCalledTimes(1);
+  });
+
+  // The end-to-end shape of #2464, with the REAL StaticTokenProvider rather
+  // than a double: the server's own words must be what reaches the caller.
+  it('surfaces the server\'s refusal verbatim through a real StaticTokenProvider', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(401, { error: 'MCP tokens are not permitted for this endpoint' }));
+    const client = makeClient({ auth: new StaticTokenProvider('mcp_live_key'), fetch: fetchMock });
+
+    await expect(client.invoke(getWidget, { widgetId: 'w1' })).rejects.toThrow(
+      'MCP tokens are not permitted for this endpoint',
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 

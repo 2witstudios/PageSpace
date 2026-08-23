@@ -19,6 +19,7 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { authenticateMCPRequest, isAuthError, isMCPAuthResult, getPrincipalAccessLevel } from '@/lib/auth';
+import { writeDeniedDetails } from '../write-denied-details';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
 
@@ -183,7 +184,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json(
           {
             error: 'Write permission required',
-            details: `The '${operation}' operation requires edit access to this document`
+            details: writeDeniedDetails(operation, 'document')
           },
           { status: 403 }
         );
