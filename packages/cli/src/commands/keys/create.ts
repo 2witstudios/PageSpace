@@ -298,11 +298,13 @@ async function writeEffectivePermissions(params: {
 }): Promise<void> {
   const { info, host, token, describeKeyPermissions: describe } = params;
   if (token === null) {
-    // Says only that the readback did not happen, not WHY. The cause — the
-    // server returned a refresh credential instead of a static token — is the
-    // `--show-token` branch's line a few lines below, and stating it in both
-    // places put two near-identical sentences back to back.
-    info.write('The key was created. Its permissions could not be read back here.\n');
+    // The cause belongs HERE, not deferred to the `--show-token` branch below:
+    // that line only runs when `--show-token` was passed, so on the ordinary
+    // path deferring left a bare "could not be read back" with nothing to act
+    // on. The two lines do sit next to each other under `--show-token`, but
+    // they answer different questions — this one is about the permissions, that
+    // one is about the token you asked to see.
+    info.write('The key was created. Its permissions could not be read back here — it returned no raw token.\n');
     return;
   }
   try {

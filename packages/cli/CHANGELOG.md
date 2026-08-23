@@ -4,6 +4,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `keys describe` hint printed after a mint is now runnable.** It omitted `--key`, so with a
+  personal login and no active key — the state you are in right after `keys create` — the printed
+  command hit `run.ts`'s explicit-credential gate and was refused. It also interpolated the key name
+  into a shell command unquoted, so `--name "lead gen"` printed `--key lead gen`. It now emits
+  `--key=<name>`, shell-quoted: the equals form is required because a name beginning with `-`
+  survives quote-stripping as an argv word `parseArgv` rejects as a flag value.
+- **The mint no longer swallows why a permission readback was skipped.** When the server returns a
+  refresh credential instead of a static token there is no bearer to ask with; without
+  `--show-token` that path had stopped saying so.
+- **`keys describe`'s usage line and the README** now state that it needs a content credential
+  named — it is the one `keys` verb that reports on one.
+
 ### Added
 
 - **`pagespace keys describe`** — reports the credential this invocation would use: its drives, the

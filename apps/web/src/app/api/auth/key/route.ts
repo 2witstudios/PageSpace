@@ -51,6 +51,7 @@ import {
   getPrincipalDriveMembership,
   isDriveScopedPrincipal,
 } from '@/lib/auth/principal-permissions';
+import { mapWithConcurrency } from '@/lib/map-with-concurrency';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { getRoleById } from '@pagespace/lib/services/drive-role-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -69,45 +70,6 @@ const AUTH_OPTIONS_READ = { allow: ['mcp', 'oauth', 'session'] as const, require
  * it fast.
  */
 const DRIVE_RESOLUTION_CONCURRENCY = 8;
-
-/**
- * `Promise.all` over `items`, at most `limit` in flight, preserving input
- * order. Order matters: this is a report a human diffs between runs, and a
- * settle-as-they-finish result would reshuffle it for no reason.
- *
- * `Math.max(1, …)` is a guard against a returned array of HOLES rather than a
- * style flourish: a non-positive limit would start zero workers, and this
- * function would then resolve `new Array(n)` — typed `TResult[]`, actually
- * empty — with no work done and no error, which the route would serialize as a
- * list of nulls. A status readout quietly reporting every drive as garbage is
- * the worst failure this endpoint could have.
- *
- * The first rejection stops the queue as well as propagating. `Promise.all`
- * rejects immediately but does not cancel its siblings, so without the flag the
- * remaining workers would keep draining — spending the full fan-out this bound
- * exists to contain on a response that has already failed.
- */
-async function mapWithConcurrency<TItem, TResult>(
-  items: readonly TItem[],
-  limit: number,
-  resolve: (item: TItem) => Promise<TResult>,
-): Promise<TResult[]> {
-  const results: TResult[] = new Array(items.length);
-  let next = 0;
-  let failed = false;
-  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    for (let index = next++; index < items.length && !failed; index = next++) {
-      try {
-        results[index] = await resolve(items[index]);
-      } catch (error) {
-        failed = true;
-        throw error;
-      }
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 /**
  * How the principal holds this drive, spelled out so a reader never has to

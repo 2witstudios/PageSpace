@@ -236,21 +236,38 @@ describe('GET /api/auth/key', () => {
     expect(body.driveScopes.map((scope: { name: string }) => scope.name)).toEqual(['First', 'Second', 'Third']);
   });
 
-  // `getDriveIdsForUser` unions the drives you belong to with the drives of any
-  // page shared with you, so a page-collaborator-only drive appears in the list
-  // while `getUserDrivePermissions` correctly reports no membership for it.
-  // Labelling that 'inherited' would read as "you have your own access here",
-  // the opposite of what its all-false permissions say.
-  it('labels a drive reached with no membership as "none", not "inherited"', async () => {
+  // Both principal shapes reach "no drive-level role", by different routes, and
+  // both must be labelled 'none' rather than 'inherited' — the latter reads as
+  // "you have your own access here", the opposite of the all-false permissions
+  // alongside it. Arranged separately because an earlier version of this test
+  // described the USER route while arranging the SCOPED one.
+  it('labels an UNSCOPED credential\'s roleless drive as "none" (a page shared with it)', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ ...SCOPED_KEY, allowedDriveIds: [] } as never);
+    vi.mocked(isAuthError).mockReturnValue(false);
+    vi.mocked(isDriveScopedPrincipal).mockReturnValue(false);
+    vi.mocked(sessionRepository.findMcpTokenSelfById).mockResolvedValue(KEY_ROW as never);
+    vi.mocked(getPrincipalDriveIds).mockResolvedValue(['drv1']);
+    vi.mocked(sessionRepository.findDrivesByIds).mockResolvedValue([{ id: 'drv1', name: 'Engineering' }]);
+    vi.mocked(getPrincipalDriveMembership).mockResolvedValue(null);
+    vi.mocked(getPrincipalDriveAccessLevel).mockResolvedValue(null);
+
+    const body = await (await GET(request())).json();
+
+    expect(body.credential.scoped).toBe(false);
+    expect(body.driveScopes[0].roleSource).toBe('none');
+    expect(body.driveScopes[0].role).toBeNull();
+    expect(body.driveScopes[0].permissions).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
+  });
+
+  it('labels a SCOPED key\'s roleless drive as "none" (its scope row is gone)', async () => {
     arrangeScopedMemberKey();
     vi.mocked(getPrincipalDriveMembership).mockResolvedValue(null);
     vi.mocked(getPrincipalDriveAccessLevel).mockResolvedValue(null);
 
     const body = await (await GET(request())).json();
 
+    expect(body.credential.scoped).toBe(true);
     expect(body.driveScopes[0].roleSource).toBe('none');
-    expect(body.driveScopes[0].role).toBeNull();
-    expect(body.driveScopes[0].permissions).toEqual({ canView: false, canEdit: false, canShare: false, canDelete: false });
   });
 
   // A scoped credential's null role is INHERIT, which is a different thing and
@@ -329,7 +346,9 @@ describe('GET /api/auth/key', () => {
     expect(response.status).toBe(500);
     // Let any un-cancelled stragglers run before counting.
     await new Promise((resolve) => setTimeout(resolve, 50));
-    expect(started).toBeLessThan(driveIds.length);
+    // Exactly the batch that was in flight when the first failed — 8, not
+    // "fewer than 40", which would have passed at 39 and proven nothing.
+    expect(started).toBe(8);
   });
 
   it('describes an unscoped credential with no key row, leaving the key fields null', async () => {

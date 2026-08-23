@@ -695,6 +695,24 @@ describe('createTokensCreateHandler', () => {
     expect(output.split('pagespace keys describe').length - 1).toBe(1);
   });
 
+  // The cause has to be stated here rather than deferred to the --show-token
+  // branch, which does not run on this path: deferring left a bare "could not
+  // be read back" with nothing for the reader to act on.
+  it('names WHY the readback did not happen even without --show-token', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    expect(await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']))).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('')).toContain('Its permissions could not be read back here — it returned no raw token.');
+  });
+
   it('without --show-token the raw mcp_* token appears nowhere in the output', async () => {
     const store = fakeStore();
     const fake = fakeServer();
@@ -732,10 +750,7 @@ describe('createTokensCreateHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stderr.lines.join('')).toMatch(/no raw token to show/i);
-    // The readback says only that it did not happen; the reason is stated once,
-    // by the --show-token line above, not twice back to back.
-    expect(stderr.lines.join('')).toContain('The key was created. Its permissions could not be read back here.');
-    expect(stderr.lines.join('').match(/no raw token/gi)).toHaveLength(1);
+    expect(stderr.lines.join('')).toContain('Its permissions could not be read back here — it returned no raw token.');
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
