@@ -39,11 +39,14 @@ import type { ServerEnv } from '../../config/env-validation';
  *
  * `PYTHONUNBUFFERED=1`: CPython block-buffers stdout when it is a pipe rather
  * than a tty, so a long python job behind a filter (`… | grep -v noise`) shows
- * NOTHING in the terminal pane until it exits (#2468). One env var makes python
- * — the single most common long-job interpreter here — visible as it goes. It
- * cannot fix the general case (that is libc buffering inside whatever binary the
- * agent ran, and the `spawn_shell`/`read_shell` tool docs carry the `stdbuf -oL`
- * workaround for it), but it costs nothing and removes the commonest instance.
+ * NOTHING in the terminal pane until it exits (#2468). It is set HERE, rather
+ * than left to the caller, because python is the one case the documented
+ * workaround cannot reach: `stdbuf` retunes libc's stdio buffers, and CPython
+ * buffers in its own io layer ABOVE libc, so `stdbuf -oL python3 …` changes
+ * nothing (measured against a live sandbox — see the PR). Every other common
+ * producer is already reachable: `stdbuf -oL` for C/stdio programs, nothing
+ * needed for node. The `spawn_shell`/`send_shell`/`read_shell` descriptions carry
+ * that guidance for the stages this variable cannot cover.
  *
  * These are sandbox-owned: a forwarded host key can never override one.
  */
