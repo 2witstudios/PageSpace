@@ -339,7 +339,11 @@ export const dispatchRealtimeToolCall = async (
     deps.logger.warn('Realtime voice tool call named an unadvertised tool', {
       callId: request.callId,
       userId: request.userId,
-      tool: request.name,
+      // Clipped for the same reason the response below is: the bridge contract
+      // puts no ceiling on this, and an unbounded name written verbatim into
+      // structured logs on every unknown-tool call is the same payload problem
+      // one layer down.
+      tool: clipToolName(request.name),
     });
     // `deps.tools` IS the set this session advertised, so every suggestion is
     // a tool the model can actually call next — which on voice means the core
@@ -380,10 +384,14 @@ export const dispatchRealtimeToolCall = async (
 
   const validated = (tool.inputSchema as z.ZodType).safeParse(parsed.args);
   if (!validated.success) {
-    // Same bounded rendering the text stack uses. The ceiling matters more
-    // here than anywhere: a realtime session has 32k tokens total and this
-    // string stays in it, so `MAX_SCHEMA_CHARS` is a third of the per-result
-    // ceiling above and an error can never be the biggest thing in the call.
+    // Same bounded rendering the text stack uses, and the bound matters more
+    // here than anywhere: a realtime session has 32k tokens total, this string
+    // stays in it, and `failure()` does NOT pass through `formatToolResult`, so
+    // `MAX_RESULT_CHARS` never applies to it. What holds it is
+    // `MAX_PARAMETER_ERROR_CHARS` (~6.6k characters, ~1.6k tokens) — roughly
+    // half the per-result ceiling above rather than a small fraction of it, so
+    // it is bounded but not negligible: a call that omits many required fields
+    // on a large schema is the expensive case.
     return failure(
       formatInvalidParametersError(request.name, tool.inputSchema, validated.error.message),
     );

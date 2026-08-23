@@ -3,10 +3,19 @@ import type { Tool, ToolSet } from 'ai';
 import type { ToolExecutionContext } from '../core/types';
 import { formatInvalidParametersError, formatUnknownToolError } from './tool-error-schema';
 
+/**
+ * Exported because the admin prompt viewer renders "the complete AI request
+ * payload exactly as it would be sent to the LLM" and had a hand-typed copy of
+ * this sentence in two places. They drifted the moment this one changed, so an
+ * admin inspecting the context window saw an instruction the model is no longer
+ * given — the exact opposite of what that screen is for.
+ */
+export const EXECUTE_TOOL_DESCRIPTION =
+  'Execute any PageSpace tool by name. Use tool_search to discover what exists; you do not need it for parameter schemas, because a call rejected for bad parameters comes back with the schema.';
+
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {
-    description:
-      'Execute any PageSpace tool by name. Use tool_search to discover what exists; you do not need it for parameter schemas, because a call rejected for bad parameters comes back with the schema.',
+    description: EXECUTE_TOOL_DESCRIPTION,
     inputSchema: z.object({
       tool_name: z.string(),
       parameters: z.record(z.string(), z.unknown()).default({}),

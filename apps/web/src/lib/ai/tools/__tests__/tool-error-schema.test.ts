@@ -9,6 +9,16 @@ import {
   suggestToolNames,
 } from '../tool-error-schema';
 import { buildPageSpaceTools } from '../../core/ai-tools';
+import { createSafeToolName } from '../../core/mcp-tool-converter';
+
+/**
+ * The longest name the product can actually register, built by the real
+ * namespacing function rather than asserted from memory. `createSafeToolName`
+ * caps each half at 64 INDEPENDENTLY, which is how the ceiling in
+ * `tool-error-schema` came to be set too low twice — the tests below pin the
+ * module's bound against this, so the two cannot drift apart again.
+ */
+const toolNameCeiling = createSafeToolName('s'.repeat(64), 't'.repeat(64));
 
 describe('describeToolSchema', () => {
   it('given an ordinary schema, should inline it as JSON Schema', () => {
@@ -161,7 +171,6 @@ describe('describeToolSchema', () => {
     const rendered = describeToolSchema('n'.repeat(50_000), { notASchema: true });
     expect(rendered.length).toBeLessThan(300);
   });
-});
 
   it('given a namespaced MCP tool name, should keep the lookup selectable', () => {
     // `createSafeToolName` builds `mcp:${server}:${tool}` with EACH half capped
@@ -169,13 +178,52 @@ describe('describeToolSchema', () => {
     // below that corrupts the pointer into `tool_search("select:mcp:ssss…")`,
     // which selects nothing — stranding exactly the tools whose names are
     // hardest to guess right first time.
-    const mcpName = `mcp:${'s'.repeat(64)}:${'t'.repeat(64)}`;
+    const mcpName = toolNameCeiling;
     expect(mcpName.length).toBe(133);
 
     const rendered = describeToolSchema(mcpName, { notASchema: true });
     expect(rendered).toContain(`tool_search("select:${mcpName}")`);
     expect(rendered).not.toContain('…');
   });
+
+  it('given a maximal-length name and an oversized schema, should still fit the cap', () => {
+    // The header grows with the name, so the outline reserve has to be sized
+    // for a name at MAX_TOOL_NAME_CHARS, not for a typical one. An over-long
+    // name is clipped to that maximum, which is the worst case the reserve has
+    // to absorb — at the old 250 the header plus a full line budget overran
+    // MAX_SCHEMA_CHARS.
+    const huge = z.object(
+      Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`field_${i}`, z.string().describe('q'.repeat(100))])
+      )
+    );
+
+    const rendered = describeToolSchema('L'.repeat(400), huge);
+
+    expect(rendered).toContain('summarised');
+    expect(rendered.length).toBeLessThanOrEqual(MAX_SCHEMA_CHARS);
+  });
+
+  it('given a long MCP name AND an oversized schema, should keep the header pointer whole', () => {
+    // The combination, which neither neighbouring test covered on its own: the
+    // long-name test used the tiny "unavailable" output (no header) and the
+    // summarised test used a 20-character name. Together they are the single
+    // case the outline path exists for — a third-party MCP tool with a big
+    // schema — and the header was being clipped straight through the name,
+    // leaving a pointer that selects nothing.
+    const huge = z.object(
+      Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`field_${i}`, z.string().describe('q'.repeat(100))])
+      )
+    );
+
+    const rendered = describeToolSchema(toolNameCeiling, huge);
+
+    expect(rendered).toContain('summarised');
+    expect(rendered).toContain(`tool_search("select:${toolNameCeiling}")`);
+    expect(rendered.length).toBeLessThanOrEqual(MAX_SCHEMA_CHARS);
+  });
+});
 
 describe('formatInvalidParametersError', () => {
   it('given a rejected call, should carry both the offending keys and the schema', () => {
@@ -268,7 +316,7 @@ describe('suggestToolNames', () => {
     // Both halves at their independent 64-character ceiling: 133 raw, 131 once
     // normalization drops the colons. Anything shorter would pass under an
     // undersized bound and prove nothing.
-    const real = `mcp:${'s'.repeat(64)}:${'t'.repeat(64)}`;
+    const real = toolNameCeiling;
     expect(real.toLowerCase().replace(/[^a-z0-9]/g, '')).toHaveLength(131);
 
     const typo = real.replace('mcp:', 'MCP_');

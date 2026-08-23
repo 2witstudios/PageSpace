@@ -403,14 +403,22 @@ describe('dispatchRealtimeToolCall', () => {
     // The bridge contract declares `name: z.string().min(1)` with no ceiling,
     // so echoing whole would drop a model-chosen payload straight into a
     // 32k-token realtime session — one call could end the conversation.
+    const d = deps({ read_page: spyTool(() => 'ok') });
     const { output } = await dispatchRealtimeToolCall(
-      deps({ read_page: spyTool(() => 'ok') }),
+      d,
       request({ name: 'x'.repeat(200_000) }),
       'gpt-realtime-2.1',
     );
 
     expect(output.length).toBeLessThan(500);
     expect(output).toContain('no tool called');
+
+    // The LOG is the other echo, and it is written on every unknown-tool call.
+    // Bounding the response while writing the same payload verbatim into
+    // structured logs just moves the problem one layer down.
+    const logged = (d.logger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    const meta = logged[1] as { tool: string };
+    expect(meta.tool.length).toBeLessThan(500);
   });
 
   it('given a prototype key spoken as a tool name, should call it unknown', async () => {

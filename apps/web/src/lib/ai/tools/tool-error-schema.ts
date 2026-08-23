@@ -63,46 +63,36 @@ const MAX_SUGGESTIONS = 3;
 const MIN_SUBSTRING_MATCH_CHARS = 3;
 
 /**
- * Longest name `suggestToolNames` will run its edit-distance pass over.
+ * THE ONE CEILING FOR A TOOL NAME — how long a name may be to be echoed back
+ * in an error, and to be worth searching for a near miss.
  *
- * THE NAME IS MODEL-CONTROLLED AND UNBOUNDED. `execute_tool` declares
- * `tool_name: z.string()` and the voice bridge declares `name: z.string().min(1)`
- * — neither carries a `.max()`, so the string that lands here is whatever the
- * model emitted. Levenshtein is O(n·m), so a degenerate name (a model looping
- * on a repeated token, or one induced by page content) turns a formerly O(1)
- * error path into seconds of SYNCHRONOUS CPU — which blocks the Node event
- * loop for the whole web tier, not just that request. Measured before this
- * bound: a single 200,000-character name against ~200 candidates took 31
- * seconds.
+ * Deliberately a single constant. It was two, and both were set to "double the
+ * 64 characters any real tool name obeys" — which is wrong, and wrong in the
+ * direction that hurts: `createSafeToolName` namespaces an MCP tool as
+ * `mcp:${server}:${tool}` with each half capped at 64 INDEPENDENTLY, so a
+ * legitimately registered name runs to 133 characters (131 once normalization
+ * drops the colons). Under-sized, the echo clip corrupted the
+ * `tool_search("select:…")` pointer into one that selects nothing, and the
+ * search bound withheld suggestions — both from exactly the tools whose names
+ * are hardest to guess right first time. Two constants meant two chances to
+ * get the same number wrong, and both were taken. `toolNameCeiling` in the
+ * tests asserts this against what `createSafeToolName` actually produces, so
+ * the relationship cannot drift.
  *
- * The bound has to clear the longest LEGITIMATE name, and that is not 64.
- * `createSafeToolName` builds `mcp:${server}:${tool}` with each half capped at
- * 64 independently, so a real registered MCP tool reaches 133 characters — 131
- * once normalization drops the colons. A bound below that would silently
- * withhold suggestions from exactly the tools whose names are hardest to type.
- * 192 clears it with room, and still caps the quadratic step at ~37k cells per
- * candidate, which is nothing.
+ * The bound exists at all because THE NAME IS MODEL-CONTROLLED AND UNBOUNDED:
+ * `execute_tool` declares `tool_name: z.string()` and the voice bridge
+ * `name: z.string().min(1)`, neither with a `.max()`. Every message quotes the
+ * name — twice, in the invalid-parameters case — so echoing it whole rebuilds
+ * the unbounded payload `MAX_SCHEMA_CHARS` exists to prevent, by another door.
+ * And Levenshtein is O(n·m), so a degenerate name turns a formerly O(1) error
+ * path into seconds of SYNCHRONOUS CPU, blocking the Node event loop for the
+ * whole web tier rather than one request: measured at 31 seconds for a single
+ * 200,000-character name against ~200 candidates.
+ *
+ * 192 clears the real 133 with room, and still caps the quadratic step at ~37k
+ * cells per candidate, which is nothing.
  */
-const MAX_SUGGESTION_NAME_CHARS = 192;
-
-/**
- * Longest tool name echoed back inside an error.
- *
- * The name is whatever the model emitted, and every message below quotes it —
- * twice, in the invalid-parameters case. Echoing it unclipped would make the
- * error as large as the caller chose to make it, which is the same unbounded
- * payload `MAX_SCHEMA_CHARS` exists to prevent, arriving by a different door.
- * (The old messages echoed it unclipped too; the difference is that the bound
- * is now claimed, so it has to be true.)
- *
- * 160, not the 64 a single tool name obeys: `createSafeToolName` namespaces an
- * MCP tool as `mcp:${server}:${tool}` with each half capped at 64 separately,
- * so a legitimate name runs to 133 characters. Clipping below that would
- * corrupt the `tool_search("select:…")` pointer into one that selects nothing
- * — putting the agent back in the blind-retry loop this module exists to end,
- * for the tools least likely to be guessed right first time.
- */
-const MAX_TOOL_NAME_CHARS = 160;
+const MAX_TOOL_NAME_CHARS = 192;
 
 /**
  * The longest an invalid-parameters error can be — the caps above plus the
@@ -175,10 +165,21 @@ export function describeToolSchema(toolName: string, schema: unknown): string {
   if (full !== undefined && full.length <= MAX_SCHEMA_CHARS) return full;
 
   const outline = outlineParameters(json, lookup);
-  if (outline === undefined) {
-    return `Parameter schema is too large to include (over ${MAX_SCHEMA_CHARS} characters) and could not be summarised. ${lookup}`;
-  }
-  return outline;
+  if (outline !== undefined) return outline;
+
+  // Two different failures reach here and they are not interchangeable. Saying
+  // "too large" when the schema could not be SERIALIZED at all sends the model
+  // to a `tool_search` expecting something smaller, when the lookup would
+  // return the same unserializable thing.
+  //
+  // The serialization arm is DEFENSIVE and currently unreachable: `toJsonSchema`
+  // returns plain JSON, which `JSON.stringify` neither throws on nor drops. It
+  // is deliberately left untested rather than covered by a test that fakes the
+  // condition — a wrong reason in an error message is cheap to prevent and the
+  // alternative is a test that proves nothing.
+  return full === undefined
+    ? `Parameter schema could not be serialized and could not be summarised. ${lookup}`
+    : `Parameter schema is too large to include (over ${MAX_SCHEMA_CHARS} characters) and could not be summarised. ${lookup}`;
 }
 
 /**
@@ -245,7 +246,7 @@ export function suggestToolNames(
   availableToolNames: readonly string[]
 ): string[] {
   const target = normalizeToolName(toolName);
-  if (target.length === 0 || target.length > MAX_SUGGESTION_NAME_CHARS) return [];
+  if (target.length === 0 || target.length > MAX_TOOL_NAME_CHARS) return [];
 
   const threshold = Math.max(1, Math.floor(target.length / 3));
 
@@ -369,20 +370,25 @@ function outlineParameters(json: JsonSchemaLike, lookup: string): string | undef
 
   const header = `Parameters (summarised — the full schema is over ${MAX_SCHEMA_CHARS} characters. ${lookup}):`;
   const footer = omitted > 0 ? `\n  …and ${omitted} more parameter(s) not shown.` : '';
-  return `${clip(header, OUTLINE_RESERVE - 60)}\n${lines.join('\n')}${footer}`;
+  return `${header}\n${lines.join('\n')}${footer}`;
 }
 
 /**
- * Characters held back from the outline budget for its header and footer.
+ * Characters held back from the outline budget for the header and footer.
  *
- * The footer is fixed apart from a count, but the header now embeds the tool
- * name via the `tool_search` pointer — and the name is model-supplied on the
- * way in, so it is bounded here rather than assumed short. `outlineParameters`
- * clips the header to this reserve before emitting it, which is what keeps
- * `MAX_SCHEMA_CHARS` a real ceiling rather than one that holds for the names
- * we happened to test.
+ * Sized to fit a MAXIMUM-LENGTH name, not a typical one. The header embeds the
+ * `tool_search("select:…")` pointer, so its length grows with the tool name —
+ * and at 250 with the header additionally clipped to 190, any name of 97
+ * characters or more was cut THROUGH THE NAME, producing a pointer that
+ * selects nothing. That hit precisely the case `MAX_TOOL_NAME_CHARS` was
+ * raised to 192 to protect: a namespaced MCP tool with a large schema, which
+ * is the one situation the outline path exists for.
+ *
+ * Fixed framing is ~66 + ~55 + 2 for the header and ~45 for the footer; with
+ * the name bounded at `MAX_TOOL_NAME_CHARS` the worst case is ~370, so 400
+ * covers it and the header is emitted whole.
  */
-const OUTLINE_RESERVE = 250;
+const OUTLINE_RESERVE = 400;
 
 /** A parameter's type as a short phrase: `string`, `"a" | "b"`, `string[]`, `object`. */
 function describeType(property: JsonSchemaLike): string {
