@@ -18,3 +18,5 @@ export * from './evaluation';
 export * from './io';
 export * from './external';
 export * from './update';
+export * from './deps';
+export * from './projection';

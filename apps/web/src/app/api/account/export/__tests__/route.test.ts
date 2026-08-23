@@ -83,6 +83,7 @@ const mockUserData = {
   profile: { id: 'user-1', email: 'test@example.com' },
   drives: [{ id: 'drive-1', name: 'My Drive' }],
   pages: [{ id: 'page-1', title: 'Page 1' }],
+  sheets: [],
   messages: [],
   files: [],
   activity: [],

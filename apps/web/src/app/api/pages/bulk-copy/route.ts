@@ -6,6 +6,9 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db'
 import { and, eq, inArray, desc, isNull, isNotNull } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core'
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { copySheetRows } from '@pagespace/lib/sheets/store';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { driveMembers } from '@pagespace/db/schema/members';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope, getAllowedDriveIds, isMCPAuthResult, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
@@ -203,6 +206,12 @@ export async function POST(request: Request) {
           contentHash: page.contentHash,
         });
 
+        // A sheet's cells live in rows; `content` is empty for a materialised
+        // one, so copying the column alone produced a blank spreadsheet.
+        if (isSheetType(page.type as PageType)) {
+          await copySheetRows(page.id, newPageId, tx);
+        }
+
         // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
         await ensureTaskItemForPage(tx, {
           pageId: newPageId,
@@ -329,6 +338,10 @@ async function copyChildrenRecursively(
       extractionMetadata: child.extractionMetadata,
       contentHash: child.contentHash,
     });
+
+    if (isSheetType(child.type as PageType)) {
+      await copySheetRows(child.id, newChildId, tx);
+    }
 
     // A TASK_LIST copied under a TASK_LIST parent must appear as a task.
     await ensureTaskItemForPage(tx, {

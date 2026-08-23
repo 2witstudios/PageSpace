@@ -3,6 +3,10 @@ import { authenticateRequestWithOptions, isAuthError, getPrincipalDriveIds, getP
 import { db } from '@pagespace/db/db'
 import { eq, and, sql, inArray } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { sheetCellsMatchRegex, sheetCellsMatchIlike } from '@pagespace/lib/sheets/search-sql';
+import { sheetMatchingRowsByPage } from '@pagespace/lib/sheets/store';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { PageType } from '@pagespace/lib/utils/enums';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { buildSearchAuditDetails } from '@pagespace/lib/audit/search-audit-details';
@@ -107,9 +111,12 @@ export async function GET(request: Request) {
     const driveIds = accessibleDrives.map((drive) => drive.id);
     const regexPattern = searchQuery.replace(/\\(?![dDwWsSbBntrvfAZzGQE])/g, '\\\\');
     const searchPattern = `%${searchQuery}%`;
+    // Sheets match on their rows as well as the column, which is empty for any
+    // materialised sheet — without this every spreadsheet drops out of
+    // cross-drive search by content.
     const searchCondition = searchType === 'regex'
-      ? sql`${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern}`
-      : sql`${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern}`;
+      ? sql`(${pages.content} ~ ${regexPattern} OR ${pages.title} ~ ${regexPattern} OR ${sheetCellsMatchRegex(regexPattern)})`
+      : sql`(${pages.content} ILIKE ${searchPattern} OR ${pages.title} ILIKE ${searchPattern} OR ${sheetCellsMatchIlike(searchPattern)})`;
 
     const rankedMatches = db
       .select({
@@ -189,6 +196,18 @@ export async function GET(request: Request) {
     const allPageIds = allSearchResults.map(result => result.page.id);
     const permissionsMap = await getPrincipalBatchPagePermissions(auth, allPageIds);
 
+    // One query for every visible sheet's excerpt, not one per sheet — this
+    // endpoint returns up to 50 results PER accessible drive, so a per-page
+    // call made latency grow linearly with the number of matching spreadsheets.
+    const sheetExcerpts = await sheetMatchingRowsByPage(
+      allSearchResults
+        .filter(({ page }) =>
+          isSheetType(page.type as PageType) && permissionsMap.get(page.id)?.canView)
+        .map(({ page }) => page.id),
+      searchType === 'regex' ? { regex: regexPattern } : { ilike: searchPattern },
+      { limit: 3, maxChars: 150 },
+    );
+
     // Group results by drive and filter by permissions
     const driveResultsMap = new Map<string, Array<{
       pageId: string;
@@ -204,11 +223,21 @@ export async function GET(request: Request) {
           driveResultsMap.set(driveId, []);
         }
 
+        // A sheet's text is in its rows, so the column is empty and the
+        // excerpt would be blank — for a page the widened WHERE clause above
+        // has just made matchable. Built from the rows that MATCHED, using the
+        // same predicate: a preview of the first N rows shows nothing relevant
+        // when the hit is at row 5,000 or on a later tab. Bounded, not a full
+        // projection — this is a result list.
+        const body = isSheetType(page.type as PageType)
+          ? (sheetExcerpts.get(page.id) ?? []).map((row) => row.text).join(' · ') || page.content
+          : page.content;
+
         driveResultsMap.get(driveId)!.push({
           pageId: page.id,
           title: page.title,
           type: page.type,
-          excerpt: page.content.substring(0, 150) + '...',
+          excerpt: body.substring(0, 150) + '...',
         });
       }
     }

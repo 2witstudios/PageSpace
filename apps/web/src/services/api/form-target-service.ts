@@ -6,17 +6,20 @@ import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
   isSheetType,
-  parseSheetContentSafe,
-  serializeSheetContent,
-  updateSheetCells,
 } from '@pagespace/lib/sheets/sheet';
 import { generateToken, hashToken } from '@pagespace/lib/auth/token-utils';
 import { buildHeaderRowUpdates, buildSubmissionRowUpdates } from '@pagespace/lib/forms/cell-mapping';
-import { applyPageMutation, PageRevisionMismatchError, type PageMutationContext } from './page-mutation-service';
+import { setCells } from '@pagespace/lib/sheets/store';
+import { createChangeGroupId } from '@pagespace/lib/monitoring/change-group';
+import {
+  logActivityWithTx,
+  type DeferredWorkflowTrigger,
+} from '@pagespace/lib/monitoring/activity-logger';
+import type { PageMutationContext } from './page-mutation-service';
 
 const FORM_TOKEN_PREFIX = 'pft';
 const HEADER_ROW = 1;
-const MAX_APPEND_ATTEMPTS = 3;
+
 
 export class FormTargetPageNotSheetError extends Error {}
 
@@ -80,33 +83,52 @@ export async function createFormTarget({
   }
 
   const generated = generateToken(FORM_TOKEN_PREFIX);
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
   try {
     const [formTarget] = await db.transaction(async (tx) => {
-      // Refuse to write if the existing content could not be read: appending
-      // to the empty sheet the unsafe parse returns would replace the whole
-      // spreadsheet with just these header cells.
-      const parsedSheet = parseSheetContentSafe(page.content);
-      if (!parsedSheet.ok) {
-        throw new Error(
-          `Sheet "${page.id}" could not be read (${parsedSheet.reason}); refusing to overwrite it.`
-        );
-      }
-      const updatedSheet = updateSheetCells(
-        parsedSheet.sheet,
-        buildHeaderRowUpdates(fields, HEADER_ROW)
-      );
-      const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
+      // Writes the header cells directly. The read-modify-write of the whole
+      // document that stood here could not express "set these cells" — it had
+      // to reparse and re-serialise the entire sheet, and needed a guard
+      // against an unreadable parse silently replacing the spreadsheet with
+      // just these headers. Addressing cells removes the failure mode with the
+      // code path.
+      const headerGroupId = createChangeGroupId();
 
-      await applyPageMutation({
-        pageId: page.id,
-        operation: 'update',
-        updates: { content: newContent },
-        updatedFields: ['content'],
-        expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-        context: mutationContext,
-        tx,
-      });
+      await setCells(
+        { pageId: page.id },
+        buildHeaderRowUpdates(fields, HEADER_ROW),
+        {
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail,
+          changeGroupId: headerGroupId,
+        },
+        tx
+      );
+
+      // Provisioning a form overwrites row 1 of somebody's sheet. That used to
+      // reach the page's activity timeline via `applyPageMutation`; without an
+      // entry here it happened invisibly.
+      // Captured and fired after commit, as `appendFormSubmission` does.
+      // Dropping it meant workflows wired to the target sheet never ran when a
+      // form was provisioned.
+      deferredTrigger = await logActivityWithTx(
+        {
+          userId: mutationContext.userId,
+          actorEmail: mutationContext.actorEmail ?? 'unknown@system',
+          operation: 'update',
+          resourceType: 'page',
+          resourceId: page.id,
+          resourceTitle: page.title ?? undefined,
+          driveId: page.driveId,
+          pageId: page.id,
+          updatedFields: ['content'],
+          changeGroupId: headerGroupId,
+          changeGroupType: 'automation',
+          metadata: { source: 'form-target-provision', headerRow: HEADER_ROW },
+        },
+        tx
+      );
 
       return tx
         .insert(formTargets)
@@ -127,6 +149,7 @@ export async function createFormTarget({
         .returning();
     });
 
+    deferredTrigger?.();
     return { token: generated.token, formTarget };
   } catch (error) {
     if (isUniqueViolation(error)) {
@@ -268,83 +291,114 @@ export interface AppendFormSubmissionInput {
 /**
  * Appends one submission row. Locks the form_targets row (`FOR UPDATE`) so
  * concurrent submissions to THIS form serialize on `nextRow`; the page write
- * itself rides in the same transaction via `applyPageMutation`'s `tx` param,
- * attributed to the token's owning `createdBy` with `changeGroupType:
- * 'automation'` so it's audit-logged like any other page mutation, not a
- * bolt-on log. Retries a bounded number of times on `PageRevisionMismatchError`
- * — a genuine edge case when a second form targets the same sheet.
+ * itself rides in the same transaction via `setCells`'s `tx` param, attributed
+ * to the token's owning `createdBy` and grouped under the form target's id, so
+ * it lands in the sheet change log like any other write rather than as a
+ * bolt-on.
+ *
+ * There is no retry loop any more, and nothing to retry. It existed because
+ * the append re-serialised the whole document under an `expectedRevision`
+ * check, so a second form targeting the same sheet could lose the race and
+ * need another attempt. Addressed cell writes do not contend: two forms
+ * writing different rows of one sheet no longer conflict at all, and the
+ * `FOR UPDATE` lock on `form_targets` already serialises submissions to the
+ * same form so `nextRow` cannot be handed out twice.
  */
 export async function appendFormSubmission({
   formTargetId,
   values,
   submitterIpHash,
 }: AppendFormSubmissionInput): Promise<void> {
-  for (let attempt = 1; attempt <= MAX_APPEND_ATTEMPTS; attempt++) {
-    try {
-      await db.transaction(async (tx) => {
-        const [formTarget] = await tx
-          .select()
-          .from(formTargets)
-          .where(eq(formTargets.id, formTargetId))
-          .for('update');
+  let deferredTrigger: DeferredWorkflowTrigger | undefined;
 
-        if (!formTarget) {
-          throw new Error(`Form target "${formTargetId}" not found`);
-        }
+  await db.transaction(async (tx) => {
+    const [formTarget] = await tx
+      .select()
+      .from(formTargets)
+      .where(eq(formTargets.id, formTargetId))
+      .for('update');
 
-        const [page] = await tx.select().from(pages).where(eq(pages.id, formTarget.pageId)).limit(1);
-        if (!page) {
-          throw new Error(`Page "${formTarget.pageId}" not found`);
-        }
-
-        // Same guard on the submission path — and this one takes anonymous
-        // public input, so an unreadable sheet must fail the submission rather
-        // than replace the sheet with a single submitted row.
-        const parsedSheet = parseSheetContentSafe(page.content);
-        if (!parsedSheet.ok) {
-          throw new Error(
-            `Sheet "${page.id}" could not be read (${parsedSheet.reason}); refusing to overwrite it.`
-          );
-        }
-        const rowUpdates = buildSubmissionRowUpdates(formTarget.fields, formTarget.nextRow, values);
-        const updatedSheet = updateSheetCells(parsedSheet.sheet, rowUpdates);
-        const newContent = serializeSheetContent(updatedSheet, { pageId: page.id });
-
-        await applyPageMutation({
-          pageId: page.id,
-          operation: 'update',
-          updates: { content: newContent },
-          updatedFields: ['content'],
-          expectedRevision: typeof page.revision === 'number' ? page.revision : undefined,
-          context: {
-            userId: formTarget.createdBy,
-            changeGroupType: 'automation',
-            isAiGenerated: false,
-            resourceType: 'page',
-            metadata: {
-              source: 'public-form-submission',
-              formTargetId: formTarget.id,
-              submitterIpHash,
-            },
-          },
-          tx,
-        });
-
-        await tx
-          .update(formTargets)
-          .set({
-            nextRow: formTarget.nextRow + 1,
-            submissionCount: formTarget.submissionCount + 1,
-            lastSubmittedAt: new Date(),
-          })
-          .where(eq(formTargets.id, formTarget.id));
-      });
-      return;
-    } catch (error) {
-      if (error instanceof PageRevisionMismatchError && attempt < MAX_APPEND_ATTEMPTS) {
-        continue;
-      }
-      throw error;
+    if (!formTarget) {
+      throw new Error(`Form target "${formTargetId}" not found`);
     }
-  }
+
+    const [page] = await tx.select().from(pages).where(eq(pages.id, formTarget.pageId)).limit(1);
+    if (!page) {
+      throw new Error(`Page "${formTarget.pageId}" not found`);
+    }
+
+    // One row write, not a rewrite of the sheet.
+    //
+    // This used to reparse the whole document, splice in the submitted row
+    // and re-serialise all of it, which made a submission cost O(sheet) —
+    // seconds of CPU once the sheet held tens of thousands of responses,
+    // which is precisely when a form is working. The cells are addressed
+    // directly now, so cost is independent of how many submissions came
+    // before.
+    const rowUpdates = buildSubmissionRowUpdates(formTarget.fields, formTarget.nextRow, values);
+    // A change group per SUBMISSION, not per form.
+    //
+    // `activity-diff-utils` groups activities into one edit session by
+    // (pageId, changeGroupId), and version resolution keys off the same pair.
+    // Pinning the group to the form target id would collapse five thousand
+    // submissions into a single history entry and leave version resolution
+    // able to find only one of them. The form target belongs in metadata,
+    // where it already is.
+    const submissionGroupId = createChangeGroupId();
+
+    await setCells(
+      { pageId: page.id },
+      rowUpdates,
+      {
+        userId: formTarget.createdBy,
+        changeGroupId: submissionGroupId,
+      },
+      tx
+    );
+
+    await tx
+      .update(formTargets)
+      .set({
+        nextRow: formTarget.nextRow + 1,
+        submissionCount: formTarget.submissionCount + 1,
+        lastSubmittedAt: new Date(),
+      })
+          .where(eq(formTargets.id, formTarget.id));
+
+    // The submission's provenance still has to be recorded.
+    //
+    // It used to ride along in `applyPageMutation`'s activity log, which also
+    // carried the whole document — the part we removed. The metadata is the
+    // half that matters for an anonymous, publicly-reachable write: which form
+    // took it, and the hashed IP it came from. Logged without any content
+    // payload, and deliberately inside the transaction so a recorded
+    // submission and a written row cannot disagree.
+    // Returned so it can fire AFTER the commit. Dropping it — as this did —
+    // silently stopped workflows wired to the target sheet from running on form
+    // submissions: no error, just nothing happening.
+    deferredTrigger = await logActivityWithTx(
+      {
+        userId: formTarget.createdBy,
+        actorEmail: 'form-submission@system',
+        operation: 'update',
+        resourceType: 'page',
+        resourceId: page.id,
+        resourceTitle: page.title ?? undefined,
+        driveId: page.driveId,
+        pageId: page.id,
+        updatedFields: ['content'],
+        changeGroupId: submissionGroupId,
+        changeGroupType: 'automation',
+        metadata: {
+          source: 'public-form-submission',
+          formTargetId: formTarget.id,
+          submitterIpHash,
+          row: formTarget.nextRow,
+        },
+      },
+      tx
+    );
+  });
+
+  deferredTrigger?.();
 }
