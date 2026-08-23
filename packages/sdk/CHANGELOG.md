@@ -4,7 +4,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.2.0] — 2026-08-23
+
 ### Added
+
+- **`client.sheets` — a spreadsheet is queryable data, not a document you download.** Six operations
+  over `POST /api/mcp/sheets`: `queryRows` (filter with nested `and`/`or`/`not`, project with
+  `select`, sort with `orderBy`, page with `limit`/`offset`), `getRows` (positional paging by row
+  index), `describe` (tabs, row and column counts, frozen rows — without reading a row),
+  `appendRows`, `updateCells` (A1 addresses, and unlike the older `documents.editSheetCells` it can
+  reach a tab other than the first) and `deleteRows`. Asking a 100,000-row sheet for twelve matching
+  rows now transfers twelve rows.
+
+  Filters compare against the **computed** value, so a formula column matches on its result rather
+  than its `=` text. Every cell carries both: `raw` is what was authored, `value` what it evaluates
+  to. `SheetWhereInput` is exported for building filters in typed code.
+
+  `queryRows` returns `total` — the full match count, not the page size — so a caller can report
+  "20 of 4,312" without a second request. `getRows` returns `nextFromRow`, a **position**, not a
+  count: advancing by `rows.length` loops forever on a sparse tab, following `nextFromRow`
+  terminates.
+
+  `describe` deliberately takes no `tabIndex`. The route resolves the tab before dispatch, so
+  passing one 409s before `describe` runs — precisely for the caller who does not yet know which
+  tabs exist. `deleteRows` requires both `fromRow` and `count`; neither is defaulted, because a
+  wrong guess destroys data.
+
+- **`documents.editSheetCells` now reports `recomputed`** in its `stats` — how many dependent cells
+  were recalculated. The server had always returned it; the output schema didn't declare it, so zod
+  stripped it before any consumer saw it.
 
 - **`tokens.describeSelf`** (`GET /api/auth/key`) — describes the credential making the call: its
   drive scopes, the role granted in each, and the effective `{canView, canEdit, canShare,
@@ -19,6 +47,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   server had always returned them; the output schema didn't declare them, so zod stripped the answer
   to "what was this key granted" before any consumer saw it. They default to `null` against a server
   that omits them.
+
+### Removed
+
+- **`'MACHINE'` is no longer an accepted page type.** `pageTypeSchema` — and therefore
+  `pages.create`, `pages.list`, search filters and the `type` on every page response — no longer
+  accepts or emits it. 2.1.0 renamed `'TERMINAL'` to `'MACHINE'`; this removes the type outright,
+  because the feature it named was deleted server-side. A call passing `'MACHINE'` now fails
+  client-side in schema validation rather than server-side as an unknown type. **This is a narrowing
+  of accepted input in a minor release**, which strict semver would call breaking; it is shipped as
+  a minor because the endpoint rejects the value either way and there is no migration to perform.
+
+### Changed
+
+- **Calendar timezone resolution is documented as it actually behaves.** Omitting `timezone` is not
+  the same as sending `"UTC"`: the server resolves an absent field against the caller's profile
+  timezone and only then falls back to UTC, matching `tasks.create`/`tasks.setTrigger`.
+  `calendar.create` stores the resolved zone on the event, so a later `update` that omits `timezone`
+  reinterprets against the event's own zone rather than the editor's. `startDate`/`endDate` on
+  `calendar.list` are absolute instants and are never reinterpreted. No SDK code changed; the
+  previous documentation described behaviour that did not match the server.
 
 ### Fixed
 
