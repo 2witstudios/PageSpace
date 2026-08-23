@@ -129,7 +129,7 @@ export function renderKeyDescription(description: KeyDescription): string {
   return `${lines.join('\n')}\n`;
 }
 
-export const keysDescribe: CommandHandler = async (ctx, intent) => {
+export const keysDescribeHandler: CommandHandler = async (ctx, intent) => {
   const parsed = parseKeysDescribeArgs(intent.args);
   if (!parsed.ok) {
     ctx.stderr.write(`${parsed.message}\n`);
@@ -152,5 +152,3 @@ export const keysDescribe: CommandHandler = async (ctx, intent) => {
   ctx.stdout.write(renderKeyDescription(description));
   return EXIT_SUCCESS;
 };
-
-export const keysDescribeHandler: CommandHandler = keysDescribe;

@@ -340,7 +340,7 @@ export {
 } from './commands/keys/create.js';
 export type { BuildKeyActivateScopeResult, BuildKeyUpdateScopeResult, BuildTokenScopeResult, ResolveNewKeyNameResult, TokensCreateHandlerDeps } from './commands/keys/create.js';
 export { tokensList, tokensListHandler } from './commands/keys/list.js';
-export { keysDescribe, keysDescribeHandler, renderKeyDescription } from './commands/keys/describe.js';
+export { keysDescribeHandler, parseKeysDescribeArgs, renderKeyDescription } from './commands/keys/describe.js';
 export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
 
 // `pagespace keys use` — the per-machine active key (browser-approved
