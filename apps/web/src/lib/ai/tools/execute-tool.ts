@@ -11,7 +11,7 @@ import { formatInvalidParametersError, formatUnknownToolError } from './tool-err
  * given — the exact opposite of what that screen is for.
  */
 export const EXECUTE_TOOL_DESCRIPTION =
-  'Execute any PageSpace tool by name. Use tool_search to discover what exists; you do not need it for parameter schemas, because a call rejected for bad parameters comes back with the schema.';
+  'Execute any PageSpace tool by name. Use tool_search to discover what exists, and to check a schema when a filter or limit has to be right — unrecognised optional keys are dropped, not rejected. A call rejected for bad parameters comes back with the schema, so that mistake needs no lookup.';
 
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {

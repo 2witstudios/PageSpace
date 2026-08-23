@@ -63,6 +63,24 @@ const MAX_SUGGESTIONS = 3;
 const MIN_SUBSTRING_MATCH_CHARS = 3;
 
 /**
+ * How much longer one name may be than the other and still count as a typo of
+ * it.
+ *
+ * Containment on its own says `create_drive` is a near miss for
+ * `create_drive_role`, which is the SAME misdirection the distance rank was
+ * removed for, reached by a different route: an agent permitted `create_drive`
+ * but not `create_drive_role` would be told to create a drive instead of a
+ * role. Swept over the real registry, containment matched ten pairs of
+ * genuinely distinct tools — `create_task`/`create_task_status`,
+ * `delete_task`/`delete_task_trigger`, `gh_pr_review`/`gh_pr_review_comment`,
+ * `list_agents`/`multi_drive_list_agents` — every one of them separated by 4
+ * to 10 characters. The typos worth catching are separated by ONE
+ * (`git_log`/`git_logs`, `read_page`/`read_pages`), so 2 admits them all and
+ * excludes every real-name collision in the registry.
+ */
+const MAX_SUBSTRING_LENGTH_GAP = 2;
+
+/**
  * THE ONE CEILING FOR A TOOL NAME — how long a name may be to be echoed back
  * in an error, and to be worth searching for a near miss.
  *
@@ -139,12 +157,30 @@ type JsonSchemaLike = {
  * A tool's input schema, rendered for a model that just got it wrong, never
  * longer than `MAX_SCHEMA_CHARS`.
  *
- * `unrepresentable: 'any'` rather than the default `'throw'`, and `io: 'input'`
- * rather than the default `'output'`: this is describing what the CALLER must
- * send, and a schema with a transform or a branded type in it must still
- * produce something useful instead of exploding inside an error path. Cycles
- * become `$ref`s for the same reason — throwing here would replace a helpful
- * error with an unhelpful one.
+ * `unrepresentable: 'any'` rather than the default `'throw'`: a schema with a
+ * transform or a branded type in it must still produce something useful rather
+ * than explode inside an error path. Cycles become `$ref`s for the same reason.
+ *
+ * WHICH FIELDS ARE "REQUIRED" IS THE PART THAT CAN CAUSE A WRONG WRITE, and
+ * neither of zod's two rendering modes gets it right on its own. Measured
+ * across the real registry, 12 of 153 tools disagree between them:
+ *
+ *   - the default (`io: 'output'`) marks a `.default()` field REQUIRED, which
+ *     it is not for a caller — `get_activity` comes back demanding seven
+ *     fields that all default;
+ *   - `io: 'input'` marks a `z.preprocess()` field required, which is worse:
+ *     `create_task` comes back demanding an `agentTrigger`, and `update_task`
+ *     demands one while omitting the `taskId` it actually needs. A model
+ *     obeying that schema fabricates an agent trigger with an invented
+ *     `agentPageId` — scheduling an agent the user never asked for, off a
+ *     rejection this PR tells it to trust instead of looking the schema up.
+ *
+ * So the rendering is the default one — the same call `tool-search-tool.ts`
+ * and `realtime/tools.ts` make, which keeps the three surfaces describing a
+ * tool identically — and `required` is narrowed to the fields BOTH modes
+ * agree on. A genuinely required field has neither a default nor a preprocess
+ * and so appears in both; every one of the 12 disagreements resolves to the
+ * correct list this way.
  */
 export function describeToolSchema(toolName: string, schema: unknown): string {
   // EVERY path that does not return a schema must hand back the lookup that
@@ -287,15 +323,16 @@ export function suggestToolNames(
       scored.push({ name, rank: 0, distance: 0 });
       continue;
     }
-    // Substring alone is far too generous for a short name: `'a'` is contained
-    // in `bash`, `read_page` and `list_pages` alike, and answering a one-letter
-    // typo with three unrelated tools is worse than the honest `tool_search`
-    // fallback. Require enough characters to mean something, and require the
-    // overlap to be a real fraction of the longer name rather than an accident.
+    // Substring alone is far too generous. For a short name `'a'` is contained
+    // in `bash`, `read_page` and `list_pages` alike; for a long one it makes
+    // `create_drive` a "near miss" for `create_drive_role`, which is a
+    // different tool doing a different thing. Require enough characters to
+    // mean something, and require the two names to be nearly the same LENGTH —
+    // a typo drops or adds a character, it does not add a whole word.
     if (
       target.length >= MIN_SUBSTRING_MATCH_CHARS &&
       (candidate.includes(target) || target.includes(candidate)) &&
-      Math.min(candidate.length, target.length) * 2 >= Math.max(candidate.length, target.length)
+      Math.abs(candidate.length - target.length) <= MAX_SUBSTRING_LENGTH_GAP
     ) {
       scored.push({ name, rank: 1, distance: Math.abs(candidate.length - target.length) });
     }
@@ -331,13 +368,38 @@ function normalizeToolName(name: string): string {
 function toJsonSchema(schema: unknown): JsonSchemaLike | undefined {
   if (schema == null || typeof schema !== 'object') return undefined;
   try {
-    return z.toJSONSchema(schema as z.ZodType, {
+    const rendered = z.toJSONSchema(schema as z.ZodType, {
+      unrepresentable: 'any',
+      cycles: 'ref',
+    }) as JsonSchemaLike;
+    return { ...rendered, ...narrowedRequired(schema as z.ZodType, rendered) };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `required` reduced to the fields both rendering modes call required — see
+ * `describeToolSchema` for why either alone is wrong. Returns nothing when the
+ * input rendering cannot be produced, leaving the default rendering's own list
+ * rather than guessing.
+ */
+function narrowedRequired(
+  schema: z.ZodType,
+  rendered: JsonSchemaLike
+): { required?: readonly string[] } {
+  const required = rendered.required;
+  if (required === undefined || required.length === 0) return {};
+  try {
+    const asInput = z.toJSONSchema(schema, {
       io: 'input',
       unrepresentable: 'any',
       cycles: 'ref',
     }) as JsonSchemaLike;
+    const inputRequired = new Set(asInput.required ?? []);
+    return { required: required.filter((key) => inputRequired.has(key)) };
   } catch {
-    return undefined;
+    return {};
   }
 }
 

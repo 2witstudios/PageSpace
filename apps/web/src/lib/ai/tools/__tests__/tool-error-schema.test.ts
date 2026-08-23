@@ -38,6 +38,53 @@ describe('describeToolSchema', () => {
     expect(parsed.required.sort()).toEqual(['newString', 'oldString']);
   });
 
+  it('must never report a field as required that the caller does not have to send', () => {
+    // THE PART THAT CAN CAUSE A WRONG WRITE. Neither of zod's rendering modes
+    // is right alone: the default marks `.default()` fields required, and
+    // `io: 'input'` marks `z.preprocess()` fields required. The second is the
+    // dangerous direction — `create_task` came back demanding an `agentTrigger`
+    // and `update_task` demanded one while omitting the `taskId` it actually
+    // needs, so a model obeying the schema would fabricate an agent trigger
+    // with an invented `agentPageId` and schedule an agent nobody asked for.
+    const tools = buildPageSpaceTools({ codeExecutionEnabled: true });
+
+    const required = (name: string): string[] => {
+      const parsed = JSON.parse(describeToolSchema(name, tools[name]?.inputSchema)) as {
+        required?: string[];
+      };
+      return (parsed.required ?? []).slice().sort();
+    };
+
+    expect(required('create_task')).toEqual(['pageId', 'title']);
+    expect(required('update_task')).toEqual([]);
+    // ...and the other direction: fields carrying a `.default()` are not the
+    // caller's problem either.
+    expect(required('get_activity')).toEqual([]);
+    expect(required('glob_search')).toEqual(['pattern']);
+    expect(required('trash_page')).toEqual(['id']);
+
+    // Swept, not sampled: nothing in the registry may claim a field is required
+    // unless the caller genuinely has to supply it.
+    const overclaimed: string[] = [];
+    for (const [name, tool] of Object.entries(tools)) {
+      const rendered = describeToolSchema(name, tool.inputSchema);
+      let parsed: { required?: string[] };
+      try {
+        parsed = JSON.parse(rendered) as { required?: string[] };
+      } catch {
+        continue;
+      }
+      for (const key of parsed.required ?? []) {
+        const probe = (tool.inputSchema as z.ZodType).safeParse({});
+        // A key reported required must actually be one zod complains about.
+        if (!probe.success && !probe.error.message.includes(key)) {
+          overclaimed.push(`${name}.${key}`);
+        }
+      }
+    }
+    expect(overclaimed).toEqual([]);
+  });
+
   it('given a schema with descriptions, should keep them', () => {
     const rendered = describeToolSchema('git_clone',
       z.object({ repo_url: z.string().describe('HTTPS clone URL') })
@@ -326,27 +373,60 @@ describe('suggestToolNames', () => {
     expect(suggestToolNames('git_logs', ['git_log', 'git_status', 'bash'])).toContain('git_log');
   });
 
+  it('must never call one real tool a near miss for another', () => {
+    // Containment made `create_drive` a "near miss" for `create_drive_role` —
+    // the same misdirection the distance rank was removed for, reached by a
+    // different route. Every registered name is checked against every OTHER
+    // registered name: if a name is itself a real tool, nothing else may be
+    // offered in its place.
+    const names = Object.keys(buildPageSpaceTools({ codeExecutionEnabled: true }));
+    expect(names.length).toBeGreaterThan(100);
+
+    const collisions: string[] = [];
+    for (const name of names) {
+      const others = names.filter((other) => other !== name);
+      const suggested = suggestToolNames(name, others);
+      if (suggested.length > 0) collisions.push(`${name} -> ${suggested.join(', ')}`);
+    }
+
+    expect(collisions).toEqual([]);
+  });
+
+  it('should still catch the typos that are one character off', () => {
+    // The gate must not throw away what it exists to serve.
+    expect(suggestToolNames('git_logs', ['git_log', 'bash'])).toEqual(['git_log']);
+    expect(suggestToolNames('read_pages', ['read_page', 'bash'])).toEqual(['read_page']);
+  });
+
   it('must never point one tier of the registry at a different tool in the other', () => {
     // THE REGISTRY IS TWO-TIER and each caller sees only its own tier, so a
     // name from the other tier is not a typo but is still unknown here. Scored
     // by edit distance it matched whatever same-tier name looked closest, and
     // the model that asked to RENAME a page was told to call one that CREATES
-    // one. Built from the real registries, because the shape is the point.
+    // one.
+    //
+    // Exhaustive rather than sampled: every registered tool name is checked
+    // against the tier that cannot run it. A sampled version of this test
+    // passed while the bug was live, because the names it happened to pick had
+    // no near neighbour — so the sweep is the guard, not the examples.
+    const all = buildPageSpaceTools({ codeExecutionEnabled: true });
     const voicePool = Object.keys(buildRealtimeToolExposure(buildPageSpaceTools()).tools);
-    const { nonCoreTools } = splitToolsForExposure(buildPageSpaceTools({ codeExecutionEnabled: true }));
-    const deferredPool = Object.keys(nonCoreTools);
+    const deferredPool = Object.keys(splitToolsForExposure(all).nonCoreTools);
+    expect(Object.keys(all).length).toBeGreaterThan(100);
 
-    // Real deferred tools spoken directly at the voice dispatcher.
-    for (const deferred of ['rename_page', 'create_task', 'list_panes', 'glob_search']) {
-      expect(voicePool).not.toContain(deferred);
-      expect(suggestToolNames(deferred, voicePool)).toEqual([]);
+    const misdirected: string[] = [];
+    for (const name of Object.keys(all)) {
+      if (!voicePool.includes(name)) {
+        const s = suggestToolNames(name, voicePool);
+        if (s.length > 0) misdirected.push(`voice: ${name} -> ${s.join(', ')}`);
+      }
+      if (!deferredPool.includes(name)) {
+        const s = suggestToolNames(name, deferredPool);
+        if (s.length > 0) misdirected.push(`execute_tool: ${name} -> ${s.join(', ')}`);
+      }
     }
 
-    // Real core tools routed through execute_tool, whose pool is the deferred half.
-    for (const core of ['list_pages', 'create_page']) {
-      expect(deferredPool).not.toContain(core);
-      expect(suggestToolNames(core, deferredPool)).toEqual([]);
-    }
+    expect(misdirected).toEqual([]);
   });
 
   it('given a namespaced MCP name, should still be searched rather than skipped', () => {
