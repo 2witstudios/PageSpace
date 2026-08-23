@@ -597,6 +597,10 @@ describe('roleNotFoundMessage', () => {
     expect(message).toMatch(/system role/i);
     expect(message).toMatch(/drive membership/i);
     expect(message).toContain('pagespace keys describe');
+    // Same reason as the MCP write refusal: `keys describe` needs a content
+    // credential named, so pointing at a bare invocation would send the reader
+    // into a second refusal.
+    expect(message).toMatch(/with that credential in hand/i);
     expect(message).not.toBe(`Role "${name}" not found in this drive`);
   });
 });
