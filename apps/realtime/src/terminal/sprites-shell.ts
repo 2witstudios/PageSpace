@@ -6,6 +6,7 @@ import type {
 import { readSessionInfoId, spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { isAgentActive } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { SANDBOX_BASE_ENV } from '@pagespace/lib/services/sandbox/sandbox-env';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   EMPTY_SEEN,
@@ -528,7 +529,24 @@ const MAX_HELD_SIDE_BYTES = 256 * 1024;
 
 const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-const TERMINAL_ENV = { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' };
+/**
+ * The interactive shell's environment.
+ *
+ * The tty settings are this surface's own (a batch `runCommand` has no terminal
+ * to describe), but everything else comes from {@link SANDBOX_BASE_ENV} — the
+ * same base the `bash` tool builds on (`buildSandboxEnv`). The two surfaces used
+ * to disagree: the tool forwarded the host's `NODE_ENV` while the PTY set none,
+ * so the same sandbox answered `env | grep NODE_ENV` differently depending on
+ * which tool asked, and an agent that debugged a failing `npm install` in the
+ * terminal was looking at a different environment from the one that ran it
+ * (#2466). They are now one env by construction.
+ */
+const TERMINAL_ENV = {
+  TERM: 'xterm-256color',
+  COLORTERM: 'truecolor',
+  LANG: 'en_US.UTF-8',
+  ...SANDBOX_BASE_ENV,
+};
 
 export function openPtyShell({
   sprite,

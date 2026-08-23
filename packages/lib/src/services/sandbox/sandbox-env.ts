@@ -21,22 +21,61 @@
 import type { ServerEnv } from '../../config/env-validation';
 
 /**
- * The only keys ever forwarded into a sandbox. Each must be non-secret and
- * safe to expose to untrusted code. Adding a key here is a security decision.
+ * The sandbox's OWN environment — values the sandbox defines for itself, with no
+ * dependence on how the host web server happens to be running.
+ *
+ * `NODE_ENV=development`: a sandbox is a development machine. An agent clones a
+ * repo, installs its toolchain, and runs its tests there; nothing inside a
+ * sandbox is ever a production deployment of anything. This used to be forwarded
+ * from the host instead (the allowlist below carried `NODE_ENV`), which meant a
+ * sandbox opened from our production web server reported `NODE_ENV=production` —
+ * and npm silently drops `devDependencies` under that, so a plain
+ * `npm install` left `tsx`/`vitest`/`tsc` missing and every later command failed
+ * with a module-not-found that named nothing to do with the env (#2466). The
+ * host's own mode is simply not a fact about the sandbox, so it is no longer
+ * forwarded; nothing running INSIDE a sandbox reads `NODE_ENV` for our own
+ * behaviour (every `NODE_ENV` branch in this repo — logging, cookies, checkpoint
+ * policy, rate limits — evaluates on the host, never in a sandbox).
+ *
+ * `PYTHONUNBUFFERED=1`: CPython block-buffers stdout when it is a pipe rather
+ * than a tty, so a long python job behind a filter (`… | grep -v noise`) shows
+ * NOTHING in the terminal pane until it exits (#2468). One env var makes python
+ * — the single most common long-job interpreter here — visible as it goes. It
+ * cannot fix the general case (that is libc buffering inside whatever binary the
+ * agent ran, and the `spawn_shell`/`read_shell` tool docs carry the `stdbuf -oL`
+ * workaround for it), but it costs nothing and removes the commonest instance.
+ *
+ * These are sandbox-owned: a forwarded host key can never override one.
  */
-const SANDBOX_ENV_ALLOWLIST = ['NODE_ENV'] as const;
+export const SANDBOX_BASE_ENV: Readonly<Record<string, string>> = {
+  NODE_ENV: 'development',
+  PYTHONUNBUFFERED: '1',
+};
 
-type AllowlistedKey = (typeof SANDBOX_ENV_ALLOWLIST)[number];
+/**
+ * Host env keys forwarded verbatim into a sandbox. Each must be non-secret and
+ * safe to expose to untrusted code. Adding a key here is a security decision.
+ *
+ * Deliberately EMPTY: no property of the host process is currently a fact the
+ * sandbox needs (`NODE_ENV` was the last one, and it was actively wrong — see
+ * {@link SANDBOX_BASE_ENV}). The forwarding machinery is kept because the
+ * allowlist, not its current contents, is the security invariant: a future
+ * non-secret key is added here explicitly, and everything else stays excluded by
+ * construction.
+ */
+const SANDBOX_ENV_ALLOWLIST: readonly (keyof ServerEnv)[] = [];
 
 export function buildSandboxEnv({
   env,
-}: { env: Partial<ServerEnv> }): Record<AllowlistedKey, string> {
-  const result = {} as Record<AllowlistedKey, string>;
+}: { env: Partial<ServerEnv> }): Record<string, string> {
+  const forwarded: Record<string, string> = {};
   for (const key of SANDBOX_ENV_ALLOWLIST) {
     const value = env[key];
     if (typeof value === 'string') {
-      result[key] = value;
+      forwarded[key] = value;
     }
   }
-  return result;
+  // Sandbox-owned values are applied LAST so a forwarded host key can never
+  // shadow one — the sandbox's own identity is not the host's to overwrite.
+  return { ...forwarded, ...SANDBOX_BASE_ENV };
 }

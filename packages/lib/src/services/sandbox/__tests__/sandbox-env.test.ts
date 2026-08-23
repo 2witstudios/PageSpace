@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildSandboxEnv } from '../sandbox-env';
+import { buildSandboxEnv, SANDBOX_BASE_ENV } from '../sandbox-env';
 
 // A validated-env shape carrying every category of host secret we must never
 // leak into an untrusted sandbox.
@@ -55,10 +55,25 @@ describe('buildSandboxEnv', () => {
     }
   });
 
-  it('should only expose explicitly allowlisted, non-secret keys', () => {
+  it('should only expose sandbox-owned, non-secret keys', () => {
     const env = buildSandboxEnv({ env: hostEnv });
-    expect(Object.keys(env)).toEqual(['NODE_ENV']);
-    expect(env.NODE_ENV).toBe('production');
+    expect(Object.keys(env).sort()).toEqual(['NODE_ENV', 'PYTHONUNBUFFERED']);
+  });
+
+  it('given a host running in production, should still describe the sandbox as a development machine', () => {
+    // #2466: the sandbox used to inherit the host's NODE_ENV, so a sandbox opened
+    // from the production web server reported NODE_ENV=production — under which
+    // npm silently drops devDependencies, leaving tsx/vitest/tsc missing after a
+    // plain `npm install`. The host's mode is not a fact about the sandbox.
+    const env = buildSandboxEnv({ env: hostEnv });
+    expect(hostEnv.NODE_ENV).toBe('production');
+    expect(env.NODE_ENV).toBe('development');
+  });
+
+  it('should unbuffer python stdout so a piped long job is visible before it exits', () => {
+    // #2468: CPython block-buffers stdout when it is a pipe rather than a tty, so
+    // `python … | grep -v noise` shows nothing in the pane until exit.
+    expect(buildSandboxEnv({ env: hostEnv }).PYTHONUNBUFFERED).toBe('1');
   });
 
   it('should ignore arbitrary extra keys present on the input env', () => {
@@ -75,15 +90,19 @@ describe('buildSandboxEnv', () => {
     }
   });
 
-  it('given an empty injected env, should return an empty record without reading any global or throwing (pure)', () => {
-    // The validated env is injected, never read from a global here, so an empty
-    // input yields an empty result deterministically — no NODE_ENV leaks in from
-    // the host process and the call cannot throw on a missing/invalid global.
-    expect(buildSandboxEnv({ env: {} })).toEqual({});
+  it('given an empty injected env, should return exactly the sandbox-owned base without reading any global or throwing (pure)', () => {
+    // The validated env is injected, never read from a global here, so the result
+    // is the sandbox's own base and nothing else — no host value leaks in through
+    // process.env, and the call cannot throw on a missing/invalid global.
+    expect(buildSandboxEnv({ env: {} })).toEqual(SANDBOX_BASE_ENV);
   });
 
-  it('given the allowlisted key absent, should omit it rather than copy an undefined', () => {
-    const env = buildSandboxEnv({ env: { DATABASE_URL: 'x' } as never });
-    expect(env).not.toHaveProperty('NODE_ENV');
+  it('should not let any host key shadow a sandbox-owned value', () => {
+    // Sandbox-owned values are applied last precisely so a future allowlist entry
+    // (or a host env that happens to carry the same key) cannot overwrite one.
+    const env = buildSandboxEnv({
+      env: { NODE_ENV: 'production', PYTHONUNBUFFERED: '0' } as never,
+    });
+    expect(env).toEqual(SANDBOX_BASE_ENV);
   });
 });
