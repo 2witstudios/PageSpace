@@ -72,6 +72,12 @@ import type { ServerEnv } from '../../config/env-validation';
  * that guidance for the stages this variable cannot cover.
  *
  * These are sandbox-owned: a forwarded host key can never override one.
+ *
+ * Do NOT add `TERM`, `COLORTERM` or `LANG` here. Those belong to the interactive
+ * terminal, which layers them AFTER this base (`terminalEnv` in
+ * `apps/realtime/.../sprites-shell.ts`) — so adding one here to make the two
+ * surfaces agree would achieve the opposite: the batch tool would take it and the
+ * terminal would keep overriding it, silently.
  */
 export const SANDBOX_BASE_ENV = {
   NODE_ENV: 'development',
@@ -103,20 +109,26 @@ type ForwardableEnvKey = Extract<keyof ServerEnv, 'NODE_ENV' | 'SENTRY_DSN' | 'W
 const SANDBOX_ENV_ALLOWLIST: readonly ForwardableEnvKey[] = [];
 
 /**
- * @param allowlist Injected ONLY so the forwarding rule stays testable while the
- * production allowlist is empty. With nothing to forward, a test against the
- * real allowlist proves nothing — every "this secret does not reach the sandbox"
- * assertion passes vacuously, and deleting the loop outright would keep the
- * suite green — so the tests hand in a fixture allowlist and check the rule that
- * will matter the day a key is added back: allowlisted keys pass, everything
- * else stays out, and a sandbox-owned value still wins. Production never passes
- * it, and {@link ForwardableEnvKey} means it could not be abused to forward a
- * secret if it did.
+ * The forwarding rule, with the allowlist as a parameter.
+ *
+ * Exported for TESTS ONLY, and named so that a production caller reaching for it
+ * reads as the deviation it would be. It exists because the production allowlist
+ * is empty: a test against that allowlist proves nothing — every "this secret
+ * does not reach the sandbox" assertion passes vacuously, and deleting the loop
+ * outright would keep the suite green — so the tests hand in a fixture allowlist
+ * and check the rule that will matter the day a key is added back.
+ *
+ * {@link buildSandboxEnv} keeps the narrow signature deliberately: the security
+ * boundary every production seam calls cannot be handed an allowlist at all, so
+ * the module docblock's invariant holds structurally — what a sandbox may receive
+ * changes only by editing THIS file, under review.
+ *
+ * @internal
  */
-export function buildSandboxEnv({
-  env,
-  allowlist = SANDBOX_ENV_ALLOWLIST,
-}: { env: Partial<ServerEnv>; allowlist?: readonly ForwardableEnvKey[] }): Record<string, string> {
+export function composeSandboxEnvForTest(
+  env: Partial<ServerEnv>,
+  allowlist: readonly ForwardableEnvKey[],
+): Record<string, string> {
   const forwarded: Record<string, string> = {};
   for (const key of allowlist) {
     const value = env[key];
@@ -128,3 +140,21 @@ export function buildSandboxEnv({
   // shadow one — the sandbox's own identity is not the host's to overwrite.
   return { ...forwarded, ...SANDBOX_BASE_ENV };
 }
+
+export function buildSandboxEnv({ env }: { env: Partial<ServerEnv> }): Record<string, string> {
+  return composeSandboxEnvForTest(env, SANDBOX_ENV_ALLOWLIST);
+}
+
+/**
+ * A tripwire, not a behaviour test: it fails the moment someone forwards a host
+ * key, and its message is the handshake that fact requires.
+ *
+ * Forwarding is a two-service decision. The `bash`/`git` tools build their env
+ * from the WEB service's validated env; the interactive terminal builds it from
+ * the REALTIME service's raw `process.env` (that service cannot validate — see
+ * `sprites-shell.ts`). So a key that only one deployment sets, or that only one
+ * side validates, puts the two surfaces back to answering `env | grep X`
+ * differently — which is exactly the bug (#2466) this file exists to have fixed.
+ * Nothing else in the tree fails when that happens, so this does.
+ */
+export const SANDBOX_ENV_ALLOWLIST_TRIPWIRE = SANDBOX_ENV_ALLOWLIST;

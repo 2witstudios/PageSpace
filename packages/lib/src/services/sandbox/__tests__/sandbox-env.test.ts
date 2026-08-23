@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest';
-import { buildSandboxEnv, SANDBOX_BASE_ENV } from '../sandbox-env';
+import {
+  buildSandboxEnv,
+  composeSandboxEnvForTest,
+  SANDBOX_BASE_ENV,
+  SANDBOX_ENV_ALLOWLIST_TRIPWIRE,
+} from '../sandbox-env';
 
 // A validated-env shape carrying every category of host secret we must never
 // leak into an untrusted sandbox.
@@ -107,7 +112,7 @@ describe('buildSandboxEnv', () => {
   // — is actually exercised.
 
   it('given a non-empty allowlist, should forward exactly those keys and no others', () => {
-    const env = buildSandboxEnv({ env: hostEnv, allowlist: ['SENTRY_DSN'] });
+    const env = composeSandboxEnvForTest(hostEnv, ['SENTRY_DSN']);
     expect(env.SENTRY_DSN).toBe(hostEnv.SENTRY_DSN);
     // Every other host key — every secret in the fixture — is still excluded by
     // construction, which is the assertion that was vacuous while the production
@@ -120,7 +125,7 @@ describe('buildSandboxEnv', () => {
   });
 
   it('given an allowlisted key absent from the host env, should omit it rather than copy an undefined', () => {
-    const env = buildSandboxEnv({ env: { DATABASE_URL: 'x' } as never, allowlist: ['SENTRY_DSN'] });
+    const env = composeSandboxEnvForTest({ DATABASE_URL: 'x' } as never, ['SENTRY_DSN']);
     expect(env).not.toHaveProperty('SENTRY_DSN');
     expect(Object.values(env).every((value) => typeof value === 'string')).toBe(true);
   });
@@ -132,7 +137,7 @@ describe('buildSandboxEnv', () => {
     // not enforce it (the loop forwards whatever it is handed) — `tsc` does, and
     // `@ts-expect-error` IS the check: if the union ever widens far enough to
     // admit a secret, this directive becomes unused and the typecheck FAILS.
-    type Allowlist = NonNullable<Parameters<typeof buildSandboxEnv>[0]['allowlist']>;
+    type Allowlist = Parameters<typeof composeSandboxEnvForTest>[1];
     // @ts-expect-error ENCRYPTION_KEY is not a forwardable key
     const forbidden: Allowlist = ['ENCRYPTION_KEY'];
     const allowed: Allowlist = ['SENTRY_DSN'];
@@ -142,8 +147,19 @@ describe('buildSandboxEnv', () => {
   it('given a sandbox-owned key ON the allowlist, should still refuse the host value', () => {
     // The precedence that makes #2466 unrepeatable: even deliberately
     // forwarding NODE_ENV cannot put the host's mode back into a sandbox.
-    const env = buildSandboxEnv({ env: hostEnv, allowlist: ['NODE_ENV'] });
+    const env = composeSandboxEnvForTest(hostEnv, ['NODE_ENV']);
     expect(env.NODE_ENV).toBe('development');
+  });
+
+  it('given a key is ever forwarded, should fail until both services have been considered', () => {
+    // Not a behaviour test — a tripwire. Forwarding is a two-service decision:
+    // the bash/git tools build from the WEB service's validated env, the
+    // interactive terminal from the REALTIME service's raw process.env. A key
+    // only one deployment sets (or only one side validates) puts the two
+    // surfaces back to answering `env | grep X` differently, which is #2466.
+    // If you are here because this failed: provision the key in BOTH services,
+    // then update this expectation.
+    expect(SANDBOX_ENV_ALLOWLIST_TRIPWIRE).toEqual([]);
   });
 
   it('should not let any host key shadow a sandbox-owned value', () => {

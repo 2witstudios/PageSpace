@@ -359,7 +359,10 @@ describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
       const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
       expect(options.env.NODE_ENV).toBe('development');
     } finally {
-      process.env.NODE_ENV = previous;
+      // Assigning back an `undefined` would set the literal string 'undefined'
+      // and leave every later NODE_ENV read in this file wrong.
+      if (previous === undefined) delete process.env.NODE_ENV;
+      else process.env.NODE_ENV = previous;
     }
   });
 });
