@@ -140,6 +140,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
+  agent sandboxes and environments were all refused, because the gate asked which subscription plan
+  the account was on and a dedicated deployment has no plan to be on: the deployment itself is what
+  was bought. It now asks the question that fits — a dedicated deployment is entitled — while
+  keeping the same safety ceilings everyone else has, on how many things run at once and how many
+  environments a drive can hold, each adjustable by whoever runs the deployment. Nothing changes for
+  accounts on pagespace.ai; self-hosted installs still don't get cloud machines, and will get a
+  local option instead.
 - **Mentions in a document survive being read back in** — a page mention was written as a link the
   editor could not recognise on the way back, so anything that re-read a document's HTML turned its
   mentions into ordinary links and the page quietly dropped out of the mention list on the pages it

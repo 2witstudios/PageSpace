@@ -354,6 +354,21 @@ describe('Tenant docker-compose configuration', () => {
       expect(getEnv('web').NEXT_PUBLIC_DEPLOYMENT_MODE).toBe('tenant');
     });
 
+    it('given the realtime service, should set DEPLOYMENT_MODE to tenant', () => {
+      // Not cosmetic symmetry: realtime runs the terminal, which takes the same
+      // sandbox gates as the web tier, and those gates read DEPLOYMENT_MODE to
+      // resolve the payer's effective tier. A realtime container left at the
+      // default would refuse every shell on a deployment whose web tier allows
+      // them — a split-brain that no unit test of either service can see.
+      expect(getEnv('realtime').DEPLOYMENT_MODE).toBe('tenant');
+    });
+
+    it('given every service that runs app code, should agree on the deployment mode', () => {
+      for (const service of ['web', 'realtime']) {
+        expect(getEnv(service).DEPLOYMENT_MODE).toBe('tenant');
+      }
+    });
+
     it('given the web service, should not include STRIPE vars', () => {
       const env = getEnv('web');
       const stripeKeys = Object.keys(env).filter(k => k.includes('STRIPE'));

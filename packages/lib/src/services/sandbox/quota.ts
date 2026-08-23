@@ -19,7 +19,7 @@
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
-import { isSandboxAvailable } from '../../billing/sandbox-eligibility';
+import { isSandboxAvailable, resolveEffectiveSandboxTier } from '../../billing/sandbox-eligibility';
 import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 
 function envInt(name: string, fallback: number): number {
@@ -35,6 +35,13 @@ function envInt(name: string, fallback: number): number {
 // REAL free-tier block is `isSandboxAvailable` below, checked as a defense-in-
 // depth backstop ahead of both concurrency checks in this file, in addition to
 // (not instead of) `can-run-code.ts`'s own tier-eligibility gate.
+//
+// Indexed by the EFFECTIVE tier, never the raw stored one: every lookup in this
+// file goes through `resolveEffectiveSandboxTier`, so a tenant deployment (whose
+// stored tier is meaningless — see `sandbox-eligibility.ts`) lands on the
+// business row here instead of free's ceiling of 1. That keeps the runaway guard
+// ON for tenant while eligibility is bypassed: the ceiling is a real number an
+// operator can retune via `CODE_EXEC_CONCURRENCY_BUSINESS`, not an exemption.
 const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
   free: envInt('CODE_EXEC_CONCURRENCY_FREE', 1),
   pro: envInt('CODE_EXEC_CONCURRENCY_PRO', 10),
@@ -45,7 +52,7 @@ const CONCURRENCY_LIMITS: Record<SubscriptionTier, number> = {
 const activeByUser = new Map<string, number>();
 
 export function getCodeExecutionConcurrencyLimit(tier: SubscriptionTier): number {
-  return CONCURRENCY_LIMITS[tier];
+  return CONCURRENCY_LIMITS[resolveEffectiveSandboxTier(tier)];
 }
 
 export function canAcquireCodeExecutionSlot({
@@ -56,7 +63,7 @@ export function canAcquireCodeExecutionSlot({
   tier: SubscriptionTier;
 }): boolean {
   if (!isSandboxAvailable(tier)) return false;
-  return (activeByUser.get(userId) ?? 0) < CONCURRENCY_LIMITS[tier];
+  return (activeByUser.get(userId) ?? 0) < getCodeExecutionConcurrencyLimit(tier);
 }
 
 export function acquireCodeExecutionSlot({
@@ -170,7 +177,7 @@ export async function checkAgentSessionConcurrency({
   }
   if (alreadyProvisioned) return { allowed: true };
   const liveCount = await countLiveAgentSessions(ownerId);
-  if (liveCount >= CONCURRENCY_LIMITS[tier]) {
+  if (liveCount >= getCodeExecutionConcurrencyLimit(tier)) {
     return { allowed: false, reason: 'concurrency_limit' };
   }
   return { allowed: true };
@@ -321,6 +328,12 @@ export function sessionActivityMapSize(): number {
  * they will move: an operator can retune a tier without a deploy, and the
  * pricing work can land its real numbers as a one-line change.
  *
+ * As with the concurrency table, the lookup is by EFFECTIVE tier
+ * (`resolveEffectiveSandboxTier`), so a tenant deployment gets the business row —
+ * a generous but real env-count cap, retunable there via `DRIVE_ENV_LIMIT_BUSINESS`
+ * — rather than free's 0. Tenant bypasses tier ELIGIBILITY; it does not bypass
+ * the ceiling.
+ *
  * `payerId` is the DRIVE OWNER — envs are drive-owned and drive-billed, so a
  * free-tier member creating an env in a Pro-owned drive is entitled and metered
  * against the drive's owner, exactly as sandbox eligibility already resolves
@@ -355,7 +368,7 @@ const DRIVE_ENV_LIMITS: Record<SubscriptionTier, number> = {
 };
 
 export function getDriveEnvLimit(tier: SubscriptionTier): number {
-  return DRIVE_ENV_LIMITS[tier];
+  return DRIVE_ENV_LIMITS[resolveEffectiveSandboxTier(tier)];
 }
 
 /**
@@ -384,7 +397,7 @@ export async function checkDriveEnvAllowance({
   tier,
   countEnvsOwnedBy,
 }: CheckDriveEnvAllowanceInput): Promise<DriveEnvAllowanceDecision> {
-  const limit = DRIVE_ENV_LIMITS[tier];
+  const limit = getDriveEnvLimit(tier);
   // Eligibility FIRST, and ahead of any count: a free-tier payer is refused for
   // being on a tier without cloud machines at all, which is a different thing to
   // tell them than "you are at your limit" — and it costs no database round-trip
