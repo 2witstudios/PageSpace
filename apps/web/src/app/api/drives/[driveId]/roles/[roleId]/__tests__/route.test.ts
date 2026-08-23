@@ -197,7 +197,27 @@ describe('GET /api/drives/[driveId]/roles/[roleId]', () => {
       const body = await response.json();
 
       expect(response.status).toBe(404);
-      expect(body.error).toBe('Role not found');
+      expect(body.error).toBe(`Role "${mockRoleId}" not found in this drive`);
+    });
+
+    // Issue #2470: `get_drive_role "member"` / `roles get <driveId> member` can
+    // only ever miss here — system roles are not rows in drive_roles — so the
+    // 404 names where they do live rather than leaving a dead end.
+    it('should point a SYSTEM role name at where system roles actually live', async () => {
+      vi.mocked(checkDriveAccessForRoles).mockResolvedValue(createAccessFixture({
+        isOwner: true,
+        isMember: true,
+        drive: createDriveFixture({ id: mockDriveId, name: 'Test', ownerId: mockUserId }),
+      }));
+      vi.mocked(getRoleById).mockResolvedValue(null);
+
+      const request = new Request(`https://example.com/api/drives/${mockDriveId}/roles/member`);
+      const response = await GET(request, createContext(mockDriveId, 'member'));
+      const body = await response.json();
+
+      expect(response.status).toBe(404);
+      expect(body.error).toMatch(/system role/i);
+      expect(body.error).toMatch(/drive membership/i);
     });
 
     it('should return role when user is owner', async () => {

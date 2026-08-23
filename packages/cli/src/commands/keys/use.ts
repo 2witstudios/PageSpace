@@ -20,6 +20,7 @@ import { listMcpTokens } from '@pagespace/sdk';
 import type { z } from 'zod';
 import { PAGESPACE_CLI_CLIENT_ID } from '../../auth/client.js';
 import { confirmIdentity } from '../../auth/confirm-identity.js';
+import { keysCommandNeedsLoginMessage } from '../../auth/credential-kind.js';
 import { createDiscoverMetadata } from '../../auth/discover.js';
 import { createExchangeCode } from '../../auth/exchange-code.js';
 import { createLoopbackServer } from '../../auth/create-loopback-server.js';
@@ -39,6 +40,7 @@ import type { HandlerContext } from '../../handler-context.js';
 import type { CommandHandler } from '../../router/router.js';
 import { DEFAULT_LOGIN_TIMEOUT_MS, DEFAULT_MAX_PORT_ATTEMPTS } from '../login.js';
 import { buildKeyActivateScope, type TokensCreateHandlerDeps } from './create.js';
+import { describeKeyPermissions } from '../../auth/probe-permissions.js';
 import { parseKeysUseArgs } from './args.js';
 
 type ServerKeySummaries = z.infer<typeof listMcpTokens.outputSchema>;
@@ -194,6 +196,15 @@ export async function runActivateCeremony(
 
 export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
+    // Same wall `keys list` hits, same reason: the activation ceremony's server
+    // lookup rides the ambient `manage_keys` credential, which a scoped access
+    // key is not. Refused here so a live key is never reported as invalidated
+    // (issue #2464).
+    if (ctx.credentialKind === 'key') {
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use')}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
     const parsed = parseKeysUseArgs(intent.args);
     if (!parsed.ok) {
       ctx.stderr.write(`${parsed.message}\n`);
@@ -288,6 +299,7 @@ export const keysUseHandler: CommandHandler = createKeysUseHandler({
   waitMs: unrefWaitMs,
   exchangeCode: createExchangeCode(),
   confirmIdentity,
+  describeKeyPermissions,
   requestDeviceAuthorization: createRequestDeviceAuthorization(),
   pollDeviceToken: createPollDeviceToken(),
   // Passed UNCALLED — see create.ts.

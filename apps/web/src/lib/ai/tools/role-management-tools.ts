@@ -7,6 +7,7 @@ import {
   checkDriveAccessForRoles,
   listDriveRoles,
   getRoleById,
+  roleNotFoundMessage,
   createDriveRole,
   updateDriveRole,
   deleteDriveRole,
@@ -69,7 +70,7 @@ async function logAndBroadcastRoleChange(
 
 export const roleManagementTools = {
   list_drive_roles: tool({
-    description: 'List all custom roles in a drive with their names, colors, and positions. Use this to discover existing roles before creating new ones or assigning roles to members.',
+    description: 'List the CUSTOM roles defined in a drive with their names, colors, and positions. Use this to discover existing roles before creating new ones or assigning roles to members. Does not include the system roles OWNER/ADMIN/MEMBER, which are not rows in this list and have no role id.',
     inputSchema: z.object({
       driveId: driveIdSchema.describe('The ID of the drive to list roles for'),
     }),
@@ -100,18 +101,21 @@ export const roleManagementTools = {
           driveWidePermissions: r.driveWidePermissions,
           position: r.position,
         })),
-        summary: `${roles.length} role${roles.length === 1 ? '' : 's'} in "${access.drive.name}"`,
+        summary: `${roles.length} custom role${roles.length === 1 ? '' : 's'} in "${access.drive.name}"`,
         stats: { total: roles.length, driveName: access.drive.name },
         nextSteps: [
           'Use get_drive_role to inspect a role\'s full permissions',
           'Use create_drive_role to add a new role',
+          // Named here because its absence is what sent a caller to
+          // get_drive_role "member" in the first place (issue #2470).
+          'This lists only CUSTOM roles. The system roles (OWNER/ADMIN/MEMBER) are not rows here — they are held per member on the drive membership.',
         ],
       };
     },
   }),
 
   get_drive_role: tool({
-    description: 'Get a single drive role with its full per-page permissions map and drive-wide permissions. Use after list_drive_roles to inspect what a role can access.',
+    description: 'Get a single CUSTOM drive role by its id, with its full per-page permissions map and drive-wide permissions. Use after list_drive_roles to inspect what a role can access. The system roles (OWNER/ADMIN/MEMBER) are not addressable here — they have no role id.',
     inputSchema: z.object({
       driveId: driveIdSchema.describe('The ID of the drive the role belongs to'),
       roleId: z.string().describe('The ID of the role to fetch'),
@@ -131,7 +135,10 @@ export const roleManagementTools = {
       }
 
       const role = await getRoleById(driveId, roleId);
-      if (!role) return { success: false, error: `Role "${roleId}" not found in this drive` };
+      // Shared with the REST route: a system-role name (member/admin/owner) is
+      // not a row here and never will be, so the refusal names where those
+      // actually live rather than stopping at "not found".
+      if (!role) return { success: false, error: roleNotFoundMessage(roleId) };
 
       return {
         success: true,

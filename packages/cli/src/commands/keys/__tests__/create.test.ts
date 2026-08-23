@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseScopeList, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
 import { parseArgv } from '../../../argv/parse.js';
@@ -8,6 +8,36 @@ import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import type { DriveScopeArg } from '../args.js';
 import { buildKeyActivateScope, buildKeyUpdateScope, buildTokenScope, createTokensCreateHandler, resolveNewKeyName } from '../create.js';
+
+/**
+ * What `GET /api/auth/key` answers for the key the mint just produced. Stubbed
+ * rather than reaching the network: the mint flow's contract is that it PRINTS
+ * this readback, not that it can resolve permissions itself.
+ */
+const FAKE_KEY_DESCRIPTION = {
+  credential: {
+    type: 'mcp' as const,
+    scoped: true,
+    id: 'key_1',
+    name: 'agent',
+    tokenPrefix: 'mcp_abc12345',
+    createdAt: '2026-07-03T00:00:00.000Z',
+    lastUsed: null,
+  },
+  driveScopes: [
+    {
+      id: 'drv1',
+      name: 'Research',
+      role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      roleSource: 'explicit' as const,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    },
+  ],
+  page: null,
+};
+
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
@@ -395,6 +425,7 @@ function baseHandlerDeps(store: CredentialStore) {
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    describeKeyPermissions: async () => FAKE_KEY_DESCRIPTION,
     requestDeviceAuthorization: async () => DEVICE_AUTHORIZATION,
     pollDeviceToken: async () => ({ kind: 'success' as const, tokens: FIXED_MCP_TOKENS }),
     createIsInterrupted: () => () => false,
@@ -588,6 +619,76 @@ describe('createTokensCreateHandler', () => {
     expect(stdoutText).toContain('PAGESPACE_TOKEN=mcp_raw_secret_1');
     expect(stderr.lines.join('')).toMatch(/shown once/i);
     expect(stderr.lines.join('')).not.toContain('mcp_raw_secret_1');
+  });
+
+  // Issue #2470: the mint used to end at "Created key X, scoped to: …" and
+  // never say what that scope actually resolved to. This block is read back
+  // from the server WITH the new key, so it reports the resolution real
+  // requests will get, not a restatement of the --role flag.
+  it('prints the new key\'s effective permissions, resolved server-side with the key itself', async () => {
+    const fake = fakeServer();
+    const describeKeyPermissions = vi.fn(async () => FAKE_KEY_DESCRIPTION);
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+      describeKeyPermissions,
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(describeKeyPermissions).toHaveBeenCalledWith({ host: 'https://pagespace.ai', accessToken: 'mcp_raw_secret_1' });
+    const output = stdout.lines.join('');
+    expect(output).toContain('Research');
+    expect(output).toContain('on the drive: view');
+  });
+
+  it('keeps the readback on stderr under --show-token, so stdout stays the one token line', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--show-token']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('').trim().split('\n')).toEqual(['PAGESPACE_TOKEN=mcp_raw_secret_1']);
+    expect(stderr.lines.join('')).toContain('on the drive: view');
+  });
+
+  it('still reports success when the permission readback fails, and points at "keys describe"', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+      describeKeyPermissions: async () => {
+        throw new Error('server unreachable');
+      },
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    // The key is minted and stored before the readback runs, so a probe failure
+    // must never read as the mint having failed.
+    expect(await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']))).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('The key was created.');
+    expect(output).toContain('pagespace keys describe');
   });
 
   it('without --show-token the raw mcp_* token appears nowhere in the output', async () => {

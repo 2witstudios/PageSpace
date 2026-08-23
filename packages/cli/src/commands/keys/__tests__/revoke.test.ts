@@ -17,6 +17,24 @@ function fakeSdk(invoke: ReturnType<typeof vi.fn>): PageSpaceClient {
 }
 
 describe('tokensRevokeHandler', () => {
+  // Issue #2464: the key-management route refuses mcp_* credentials, and the
+  // SDK reported that refusal as the key having been invalidated.
+  it('refuses under a scoped access key, before the confirmation and without a round trip', async () => {
+    const invoke = vi.fn();
+    const prompt = vi.fn();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk(invoke), isTTY: true, prompt, credentialKind: 'key' });
+
+    const code = await tokensRevokeHandler(ctx, commandIntent(['keys', 'revoke', 'tok_1']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(invoke).not.toHaveBeenCalled();
+    expect(prompt).not.toHaveBeenCalled();
+    const output = stderr.lines.join('');
+    expect(output).toContain('Your key is not invalid');
+    expect(output).not.toMatch(/invalidated/i);
+  });
+
   it('rejects a missing tokenId as a usage error without touching the SDK', async () => {
     const invoke = vi.fn();
     const stderr = createRecordingSink();

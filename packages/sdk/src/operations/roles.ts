@@ -85,7 +85,7 @@ export const listDriveRoles = defineOperation({
   inputSchema: z.strictObject({ driveId: z.string() }),
   outputSchema: z.object({ roles: z.array(driveRoleSchema) }),
   requiredScope: 'drive',
-  description: 'List all custom roles defined in a drive. Requires drive membership (owner or member).',
+  description: 'List the custom roles defined in a drive. Requires drive membership (owner or member). Does not include the system roles OWNER/ADMIN/MEMBER — those are held per member on the drive membership, are not rows here, and have no role id.',
 });
 
 export const getDriveRole = defineOperation({
@@ -95,7 +95,7 @@ export const getDriveRole = defineOperation({
   inputSchema: z.strictObject({ driveId: z.string(), roleId: z.string() }),
   outputSchema: roleEnvelopeSchema,
   requiredScope: 'drive',
-  description: 'Get a single drive role with its full permission configuration. Requires drive membership.',
+  description: 'Get a single CUSTOM drive role by its id, with its full permission configuration. Requires drive membership. The system roles OWNER/ADMIN/MEMBER are not addressable here — they have no role id; use tokens.describeSelf to see what a credential actually resolves to.',
 });
 
 export const createDriveRole = defineOperation({

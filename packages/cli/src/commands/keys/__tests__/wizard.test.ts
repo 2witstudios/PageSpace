@@ -7,6 +7,36 @@ import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../../../exi
 import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 
+/**
+ * What `GET /api/auth/key` answers for the key the mint just produced. Stubbed
+ * rather than reaching the network: the mint flow's contract is that it PRINTS
+ * this readback, not that it can resolve permissions itself.
+ */
+const FAKE_KEY_DESCRIPTION = {
+  credential: {
+    type: 'mcp' as const,
+    scoped: true,
+    id: 'key_1',
+    name: 'agent',
+    tokenPrefix: 'mcp_abc12345',
+    createdAt: '2026-07-03T00:00:00.000Z',
+    lastUsed: null,
+  },
+  driveScopes: [
+    {
+      id: 'drv1',
+      name: 'Research',
+      role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      roleSource: 'explicit' as const,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    },
+  ],
+  page: null,
+};
+
+
 // `vi.mock` factories are hoisted above every top-level `const` in this file,
 // so anything the factory closes over must itself be created via
 // `vi.hoisted` — a plain `const` declared below would still be in its
@@ -113,6 +143,7 @@ function baseMintDeps(store: CredentialStore) {
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    describeKeyPermissions: async () => FAKE_KEY_DESCRIPTION,
     requestDeviceAuthorization: async () => {
       throw new Error('device flow not exercised by this test — loopback transport expected');
     },
@@ -161,6 +192,26 @@ describe('createKeysHandler — non-interactive', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toContain('keys create');
     expect(introMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('createKeysHandler — under a scoped access key', () => {
+  // Issue #2464: every menu item here reaches the key-management surface, so
+  // the wizard used to open and then fail on its first fetch, claiming the key
+  // had been invalidated.
+  it('refuses before showing any UI at all', async () => {
+    const { createKeysHandler } = await import('../wizard.js');
+    const handler = createKeysHandler(baseMintDeps(fakeStore()));
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, isTTY: true, credentialKind: 'key' });
+
+    const code = await handler(ctx, commandIntent(['keys']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    expect(introMock).not.toHaveBeenCalled();
+    const output = stderr.lines.join('');
+    expect(output).toContain('Your key is not invalid');
+    expect(output).not.toMatch(/invalidated/i);
   });
 });
 
@@ -307,6 +358,39 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
     expect(notes.some((note) => note.includes('PAGESPACE_TOKEN=mcp_wizard_tok'))).toBe(true);
     expect(notes.some((note) => note.includes('PAGESPACE_KEY') && note.includes('"pagespace"'))).toBe(true);
+    // Issue #2470: the mint used to end without ever saying what the new key
+    // could actually do. This block is read back from the server WITH the new
+    // key, so it reports the resolution that will gate real requests.
+    expect(notes.some((note) => note.includes('What this key can do') && note.includes('on the drive: view'))).toBe(true);
+  });
+
+  it('still completes the mint when the permission readback fails, and points at "keys describe" instead', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-key');
+    confirmMock.mockReset().mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    noteMock.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { deps, sdk } = mcpCreateHandlerSetup();
+    const handler = createKeysHandler({
+      ...deps,
+      describeKeyPermissions: async () => {
+        throw new Error('server unreachable');
+      },
+    });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    // The key is minted and stored before the readback runs — losing the
+    // summary must never read as losing the key.
+    expect(await handler(ctx, commandIntent(['keys']))).toBe(EXIT_SUCCESS);
+    const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
+    expect(notes.some((note) => note.includes('pagespace keys describe'))).toBe(true);
   });
 
   it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {

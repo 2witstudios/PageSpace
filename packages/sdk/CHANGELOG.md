@@ -2,6 +2,36 @@
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [Unreleased]
+
+### Added
+
+- **`tokens.describeSelf`** (`GET /api/auth/key`) — describes the credential making the call: its
+  drive scopes, the role granted in each, and the effective `{canView, canEdit, canShare,
+  canDelete}` that role resolves to server-side. Unlike `tokens.list`/`tokens.revoke`, it accepts an
+  `mcp_` token, because a credential describing ITSELF is not the same authority as one enumerating
+  every key its owner holds. Pass `pageId` to also resolve a specific page, which can be strictly
+  narrower than its drive (a `MEMBER` grant edits at the drive root and can be view-only on a
+  document inside it); `page.permissions: null` means the page is out of reach entirely, which is
+  deliberately not the same as all-false. It carries no identity fields — a key still cannot learn
+  who owns it.
+- **`tokens.list` now surfaces each drive scope's `role`, `customRoleId` and `customRoleName`.** The
+  server had always returned them; the output schema didn't declare them, so zod stripped the answer
+  to "what was this key granted" before any consumer saw it. They default to `null` against a server
+  that omits them.
+
+### Fixed
+
+- **A 401 that refuses a credential CLASS no longer surfaces as a dead token.** `AuthProvider` gained
+  an optional `canRefresh`, and `PageSpaceClient` now spends its single auth retry only on a provider
+  that can actually produce a different credential. `StaticTokenProvider` declares `canRefresh:
+  false`: retrying re-sent the identical bearer, and the second pass failed inside the provider, so
+  the provider's "no refresh path" error replaced whatever the server had said — turning
+  "MCP tokens are not permitted for this endpoint" into "Static token was invalidated". The server's
+  own refusal now reaches the caller intact, and `StaticTokenProvider`'s own message no longer claims
+  to know that the token is invalid. **Custom `AuthProvider` implementations need no change** —
+  an omitted `canRefresh` keeps the previous retry behaviour.
+
 ## [2.1.0] — 2026-07-10
 
 ### Changed
