@@ -95,9 +95,14 @@ all — it's scoped to *whatever role you personally hold on drive `a` at reques
 changes if your own membership does. Give every drive its own `--role` when you want a fixed
 grant: `--drive a --role admin --drive b --role admin`.
 
-None of these need `--key`/`--token`: a plain `pagespace login` is enough to drive them all
-(`keys create` brings its own browser consent). Everything else — the content commands — needs
-a credential, resolved as described next.
+A plain `pagespace login` is enough to drive these — with one exception. `keys create`, `list`,
+`revoke`, `use` and the wizard all *manage* keys, so they need your login and nothing else
+(`keys create` brings its own browser consent). **`keys describe` is the exception**: it reports on
+a *content* credential rather than managing keys, so it needs one named — `--key=<name>`,
+`--token`, the env vars, or an active key — exactly like the content commands below. A bare
+`pagespace keys describe` with only a login is refused.
+
+Everything else — the content commands — needs a credential, resolved as described next.
 
 ### How commands find a credential
 
