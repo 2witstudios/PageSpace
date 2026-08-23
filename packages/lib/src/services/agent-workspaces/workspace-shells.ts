@@ -171,11 +171,15 @@ export type KillSessionShellResult =
   | { ok: true; killed: boolean }
   | { ok: false; reason: 'error' };
 
-/** What {@link killShellProcess} learned. `ok: false` means we learned NOTHING and the row must stay. */
-export type KillShellProcessResult =
-  /** `nothingToKill` — no PTY was ever launched, or its sandbox is gone. Success, and the row still goes. */
-  | { ok: true; nothingToKill: boolean }
-  | { ok: false; reason: 'error' };
+/**
+ * What {@link killShellProcess} learned. `ok: false` means we learned NOTHING —
+ * the process may or may not be running — and the row must therefore stay.
+ *
+ * Success carries nothing else, deliberately: "killed it", "no PTY was ever
+ * launched" and "its sandbox is gone" are the same fact to every caller, which
+ * is that no process of this shell's is left to worry about.
+ */
+export type KillShellProcessResult = { ok: true } | { ok: false; reason: 'error' };
 
 /**
  * THE PTY HALF, on its own — the only part of a kill that leaves the database.
@@ -202,10 +206,10 @@ export async function killShellProcess({
   deps: Pick<KillSessionShellDeps, 'host' | 'resolveSessionSandboxId'>;
 }): Promise<KillShellProcessResult> {
   // No PTY was ever opened, so there is no process and nothing to reach for.
-  if (row.spriteExecId === null) return { ok: true, nothingToKill: true };
+  if (row.spriteExecId === null) return { ok: true };
 
   const sandboxId = await deps.resolveSessionSandboxId(row.workspaceId);
-  if (sandboxId === null) return { ok: true, nothingToKill: true };
+  if (sandboxId === null) return { ok: true };
 
   let handle;
   try {
@@ -217,7 +221,7 @@ export async function killShellProcess({
     return { ok: false, reason: 'error' };
   }
   // A vanished sandbox has nothing left running; the row is still dropped.
-  if (!handle) return { ok: true, nothingToKill: true };
+  if (!handle) return { ok: true };
 
   try {
     // The kill-by-id endpoint reaches this session whether or not we hold a
@@ -227,7 +231,7 @@ export async function killShellProcess({
   } catch {
     return { ok: false, reason: 'error' };
   }
-  return { ok: true, nothingToKill: false };
+  return { ok: true };
 }
 
 /**
@@ -248,6 +252,13 @@ export async function killShellProcess({
  * the one the row holds NOW catches exactly that, and answers `error` rather
  * than orphaning a process: the caller unwinds, the retry reads the new
  * pointer, and the kill lands on the process that actually exists.
+ *
+ * The comparison cannot fire spuriously, and that rests on an invariant the
+ * bridge states about itself: `updateSpriteExecId` "only ever writes a new id
+ * over an old one" and nothing ever clears the column
+ * (`shell-handler.ts`'s `sessionLiveness`). So the only transitions this can
+ * see are `null → id` and `id → other id`, and both are exactly the case where
+ * dropping the row would strand a process.
  *
  * It does not close the window entirely — a PTY that starts between this read
  * and the commit still loses its pointer update to the delete — and it is not
