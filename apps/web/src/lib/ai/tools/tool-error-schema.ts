@@ -57,6 +57,12 @@ const MAX_VALIDATION_CHARS = 2_000;
 const MAX_SUGGESTIONS = 3;
 
 /**
+ * Shortest name the substring rule will act on. Below this a "match" carries
+ * no information — every tool contains some one- or two-letter run.
+ */
+const MIN_SUBSTRING_MATCH_CHARS = 3;
+
+/**
  * Longest name `suggestToolNames` will run its edit-distance pass over.
  *
  * THE NAME IS MODEL-CONTROLLED AND UNBOUNDED. `execute_tool` declares
@@ -69,11 +75,15 @@ const MAX_SUGGESTIONS = 3;
  * bound: a single 200,000-character name against ~200 candidates took 31
  * seconds.
  *
- * 128 is double the 64-character ceiling `mcp-tool-converter` enforces on any
- * real tool name, so nothing legitimate is turned away; past it there is no
- * near miss to find, only a bill to pay.
+ * The bound has to clear the longest LEGITIMATE name, and that is not 64.
+ * `createSafeToolName` builds `mcp:${server}:${tool}` with each half capped at
+ * 64 independently, so a real registered MCP tool reaches 133 characters — 131
+ * once normalization drops the colons. A bound below that would silently
+ * withhold suggestions from exactly the tools whose names are hardest to type.
+ * 192 clears it with room, and still caps the quadratic step at ~37k cells per
+ * candidate, which is nothing.
  */
-const MAX_SUGGESTION_NAME_CHARS = 128;
+const MAX_SUGGESTION_NAME_CHARS = 192;
 
 /**
  * Longest tool name echoed back inside an error.
@@ -83,10 +93,16 @@ const MAX_SUGGESTION_NAME_CHARS = 128;
  * error as large as the caller chose to make it, which is the same unbounded
  * payload `MAX_SCHEMA_CHARS` exists to prevent, arriving by a different door.
  * (The old messages echoed it unclipped too; the difference is that the bound
- * is now claimed, so it has to be true.) 96 is comfortably above the
- * 64-character ceiling any real tool name obeys.
+ * is now claimed, so it has to be true.)
+ *
+ * 160, not the 64 a single tool name obeys: `createSafeToolName` namespaces an
+ * MCP tool as `mcp:${server}:${tool}` with each half capped at 64 separately,
+ * so a legitimate name runs to 133 characters. Clipping below that would
+ * corrupt the `tool_search("select:…")` pointer into one that selects nothing
+ * — putting the agent back in the blind-retry loop this module exists to end,
+ * for the tools least likely to be guessed right first time.
  */
-const MAX_TOOL_NAME_CHARS = 96;
+const MAX_TOOL_NAME_CHARS = 160;
 
 /**
  * The longest an invalid-parameters error can be — the caps above plus the
@@ -170,8 +186,10 @@ export function describeToolSchema(toolName: string, schema: unknown): string {
  *
  * The validation errors come first because they name the specific keys that
  * were wrong, and the schema follows as the answer to "then what should they
- * have been". No `tool_search` hint: the payload that lookup would have
- * returned is already here.
+ * have been". In the ordinary case there is no `tool_search` hint, because the
+ * payload that lookup would have returned is already here; the hint reappears
+ * only on a rendering `describeToolSchema` had to degrade, where it is the
+ * only recovery left.
  */
 export function formatInvalidParametersError(
   toolName: string,
@@ -238,7 +256,16 @@ export function suggestToolNames(
       scored.push({ name, rank: 0, distance: 0 });
       continue;
     }
-    if (candidate.includes(target) || target.includes(candidate)) {
+    // Substring alone is far too generous for a short name: `'a'` is contained
+    // in `bash`, `read_page` and `list_pages` alike, and answering a one-letter
+    // typo with three unrelated tools is worse than the honest `tool_search`
+    // fallback. Require enough characters to mean something, and require the
+    // overlap to be a real fraction of the longer name rather than an accident.
+    if (
+      target.length >= MIN_SUBSTRING_MATCH_CHARS &&
+      (candidate.includes(target) || target.includes(candidate)) &&
+      Math.min(candidate.length, target.length) * 2 >= Math.max(candidate.length, target.length)
+    ) {
       scored.push({ name, rank: 1, distance: Math.abs(candidate.length - target.length) });
       continue;
     }
@@ -256,6 +283,17 @@ export function suggestToolNames(
     .sort((a, b) => a.rank - b.rank || a.distance - b.distance || a.name.localeCompare(b.name))
     .slice(0, MAX_SUGGESTIONS)
     .map((entry) => entry.name);
+}
+
+/**
+ * A model-supplied tool name, cut to what an error may echo.
+ *
+ * Exported because the voice surface writes its own unknown-tool sentence — it
+ * has to read as speech — and a message that quotes the name without this is a
+ * hole in the bound, not a stylistic choice.
+ */
+export function clipToolName(toolName: string): string {
+  return clip(toolName, MAX_TOOL_NAME_CHARS);
 }
 
 /** Case and separators removed — `read_file`, `readFile` and `ReadFile` all collapse together. */

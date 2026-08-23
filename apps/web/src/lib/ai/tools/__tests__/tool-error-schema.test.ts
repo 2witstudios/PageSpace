@@ -134,7 +134,6 @@ describe('describeToolSchema', () => {
 
     expect(largest).toBeLessThan(MAX_SCHEMA_CHARS);
   });
-});
 
   it('given a degraded rendering, should still hand back a usable lookup', () => {
     // The prompt now tells the model a rejection carries the schema and that it
@@ -161,6 +160,21 @@ describe('describeToolSchema', () => {
     // whole would rebuild the unbounded payload by another door.
     const rendered = describeToolSchema('n'.repeat(50_000), { notASchema: true });
     expect(rendered.length).toBeLessThan(300);
+  });
+});
+
+  it('given a namespaced MCP tool name, should keep the lookup selectable', () => {
+    // `createSafeToolName` builds `mcp:${server}:${tool}` with EACH half capped
+    // at 64, so a legitimate registered name runs to 133 characters. A clip
+    // below that corrupts the pointer into `tool_search("select:mcp:ssss…")`,
+    // which selects nothing — stranding exactly the tools whose names are
+    // hardest to guess right first time.
+    const mcpName = `mcp:${'s'.repeat(64)}:${'t'.repeat(64)}`;
+    expect(mcpName.length).toBe(133);
+
+    const rendered = describeToolSchema(mcpName, { notASchema: true });
+    expect(rendered).toContain(`tool_search("select:${mcpName}")`);
+    expect(rendered).not.toContain('…');
   });
 
 describe('formatInvalidParametersError', () => {
@@ -212,7 +226,6 @@ describe('formatInvalidParametersError', () => {
     // The schema still arrives — the cut falls on the issue list, not on it.
     expect(message).toContain('Input schema for "wide_tool"');
   });
-});
 
   it('given an absurd tool name, should not echo it back unbounded from either formatter', () => {
     // `describeToolSchema` clips its own copy of the name; these two formatters
@@ -226,6 +239,7 @@ describe('formatInvalidParametersError', () => {
     const unknown = formatUnknownToolError(absurd, ['read_page', 'bash']);
     expect(unknown.length).toBeLessThan(500);
   });
+});
 
 describe('suggestToolNames', () => {
   it('given a snake_case guess at a camelCase tool, should suggest the real name', () => {
@@ -245,6 +259,33 @@ describe('suggestToolNames', () => {
 
   it('given a near-miss spelling, should suggest by edit distance', () => {
     expect(suggestToolNames('git_logs', ['git_log', 'git_status', 'bash'])).toContain('git_log');
+  });
+
+  it('given a namespaced MCP name, should still be searched rather than skipped', () => {
+    // The length bound guards against a degenerate name, but a namespaced MCP
+    // name normalizes to 131 characters and is perfectly legitimate — a bound
+    // below that would silently withhold suggestions from real tools.
+    // Both halves at their independent 64-character ceiling: 133 raw, 131 once
+    // normalization drops the colons. Anything shorter would pass under an
+    // undersized bound and prove nothing.
+    const real = `mcp:${'s'.repeat(64)}:${'t'.repeat(64)}`;
+    expect(real.toLowerCase().replace(/[^a-z0-9]/g, '')).toHaveLength(131);
+
+    const typo = real.replace('mcp:', 'MCP_');
+    expect(suggestToolNames(typo, [real, 'bash'])).toEqual([real]);
+  });
+
+  it('given a one- or two-character name, should not call every tool a near miss', () => {
+    // Bare substring matching makes `'a'` a "near miss" for bash, read_page and
+    // list_pages alike. Three unrelated tools presented as candidates is worse
+    // than the honest tool_search fallback.
+    expect(suggestToolNames('a', ['bash', 'read_page', 'list_pages'])).toEqual([]);
+    expect(suggestToolNames('ls', ['bash', 'read_page', 'list_pages'])).toEqual([]);
+  });
+
+  it('should still match a substring that is a real fraction of the name', () => {
+    // The gate must not throw away the case it exists to serve.
+    expect(suggestToolNames('read_pages', ['read_page', 'bash'])).toEqual(['read_page']);
   });
 
   it('given nothing close, should suggest nothing', () => {

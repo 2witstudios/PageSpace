@@ -64,7 +64,11 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
-import { formatInvalidParametersError, suggestToolNames } from '../tools/tool-error-schema';
+import {
+  clipToolName,
+  formatInvalidParametersError,
+  suggestToolNames,
+} from '../tools/tool-error-schema';
 import type {
   VoiceAssistant,
   VoiceLocationContext,
@@ -325,7 +329,12 @@ export const dispatchRealtimeToolCall = async (
 ): Promise<RealtimeToolOutcome> => {
   const failure = (output: string): RealtimeToolOutcome => ({ output, failed: true });
 
-  const tool: Tool | undefined = deps.tools[request.name];
+  // Own-property lookup for the same reason `execute-tool.ts` uses one: the
+  // advertised set is a plain object, so a spoken 'constructor' or 'toString'
+  // resolves up the prototype chain and reads as a tool that exists.
+  const tool: Tool | undefined = Object.hasOwn(deps.tools, request.name)
+    ? deps.tools[request.name]
+    : undefined;
   if (!tool) {
     deps.logger.warn('Realtime voice tool call named an unadvertised tool', {
       callId: request.callId,
@@ -343,8 +352,16 @@ export const dispatchRealtimeToolCall = async (
     // Wording stays a sentence because a voice turn may end up reading it out.
     const suggestions = suggestToolNames(request.name, Object.keys(deps.tools));
     const didYouMean = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : '';
+    // The name is CLIPPED, and this is the one message in the pair that has to
+    // remember to do it by hand. `failure()` output does not pass through
+    // `formatToolResult`, so `MAX_RESULT_CHARS` never applies to it and
+    // `bridge-handler` returns it verbatim — while the bridge contract declares
+    // `name: z.string().min(1)` with no ceiling. Echoing whole would drop a
+    // model-chosen payload straight into a 32k-token session: one call could end
+    // the conversation, using the same degenerate name the suggestion bound
+    // above already refuses to search.
     return failure(
-      `There is no tool called "${request.name}".${didYouMean} Use tool_search to find the right one.`,
+      `There is no tool called "${clipToolName(request.name)}".${didYouMean} Use tool_search to find the right one.`,
     );
   }
   if (!tool.execute) {

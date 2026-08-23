@@ -397,6 +397,36 @@ describe('dispatchRealtimeToolCall', () => {
     expect(output).toContain('tool_search');
   });
 
+  it('given a degenerate spoken tool name, should not echo it into the session', async () => {
+    // `failure()` output does NOT pass through `formatToolResult`, so
+    // MAX_RESULT_CHARS never applies to it and the bridge returns it verbatim.
+    // The bridge contract declares `name: z.string().min(1)` with no ceiling,
+    // so echoing whole would drop a model-chosen payload straight into a
+    // 32k-token realtime session — one call could end the conversation.
+    const { output } = await dispatchRealtimeToolCall(
+      deps({ read_page: spyTool(() => 'ok') }),
+      request({ name: 'x'.repeat(200_000) }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output.length).toBeLessThan(500);
+    expect(output).toContain('no tool called');
+  });
+
+  it('given a prototype key spoken as a tool name, should call it unknown', async () => {
+    // `deps.tools['toString']` is truthy via the prototype chain, so a plain
+    // truthiness check read it as a tool that exists and then reported it as
+    // one that "cannot be run".
+    const { output } = await dispatchRealtimeToolCall(
+      deps({ read_page: spyTool(() => 'ok') }),
+      request({ name: 'toString' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('no tool called "toString"');
+    expect(output).not.toContain('cannot be run');
+  });
+
   it('given a tool with no implementation, should say so rather than hang', async () => {
     const { output } = await dispatchRealtimeToolCall(
       deps({

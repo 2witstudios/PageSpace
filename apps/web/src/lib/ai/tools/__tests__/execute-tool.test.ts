@@ -68,6 +68,19 @@ describe('createExecuteTool', () => {
     });
   });
 
+  it('a prototype key is an unknown tool, not a tool without an implementation', async () => {
+    // `registry['constructor']` resolves up the prototype chain and is truthy,
+    // so a plain `if (!t)` skipped the unknown-tool branch entirely.
+    const t = createExecuteTool(registry);
+    const result = await t.execute!({ tool_name: 'constructor', parameters: {} }, {} as never) as { error: string };
+    assert({
+      given: 'a tool_name that is an Object.prototype member',
+      should: 'be reported as an unknown tool rather than one missing an implementation',
+      actual: result.error.includes('Unknown tool') && !result.error.includes('no execute implementation'),
+      expected: true,
+    });
+  });
+
   it('tool without execute returns an error', async () => {
     const t = createExecuteTool(registry);
     const result = await t.execute!({ tool_name: 'no_execute_tool', parameters: { id: '1' } }, {} as never) as { error: string };

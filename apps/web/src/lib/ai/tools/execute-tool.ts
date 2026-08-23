@@ -6,7 +6,7 @@ import { formatInvalidParametersError, formatUnknownToolError } from './tool-err
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {
     description:
-      'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
+      'Execute any PageSpace tool by name. Use tool_search to discover what exists; you do not need it for parameter schemas, because a call rejected for bad parameters comes back with the schema.',
     inputSchema: z.object({
       tool_name: z.string(),
       parameters: z.record(z.string(), z.unknown()).default({}),
@@ -18,7 +18,14 @@ export function createExecuteTool(allowedTools: ToolSet): Tool {
       const enabledTools = (options as { experimental_context?: ToolExecutionContext })
         ?.experimental_context?.enabledTools;
 
-      const t = allowedTools[tool_name];
+      // `Object.hasOwn`, not a truthiness check on the lookup: the registry is
+      // a plain object, so `allowedTools['constructor']` (or 'toString', or
+      // '__proto__') resolves up the prototype chain and comes back TRUTHY.
+      // Nothing could run — `execute` is undefined on all of them — but the
+      // model was told "has no execute implementation" for a name that simply
+      // is not a tool, instead of being handed the near-miss suggestion this
+      // branch exists to give.
+      const t = Object.hasOwn(allowedTools, tool_name) ? allowedTools[tool_name] : undefined;
       if (!t) {
         // A name that is in no registry at all is a MISTAKE, not a permission
         // outcome, and answering it with "not permitted" (as this did while the
