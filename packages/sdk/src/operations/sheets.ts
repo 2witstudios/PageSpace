@@ -317,5 +317,13 @@ export const deleteRows = defineOperation({
     rowCount: z.number(),
   }),
   requiredScope: 'drive',
+  /**
+   * The only irreversible operation here: the rows are gone and everything
+   * below them shifts up. Drives the MCP `destructiveHint` annotation, which is
+   * how an agent frontend knows to ask before calling it — the CLI's own gate
+   * is separate (`confirmDestructive` in the handler), since nothing reads this
+   * flag outside the MCP layer.
+   */
+  destructive: true,
   description: 'Delete a contiguous range of rows from a SHEET page, shifting the rows below up.',
 });
