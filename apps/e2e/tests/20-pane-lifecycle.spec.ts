@@ -43,12 +43,17 @@ import { sessionDelete, sessionGet, sessionPost } from '../support/http';
  *
  * ## No sandbox
  *
- * Shells are seeded as ROWS (`seedSessionShell`), which is the state a shell is
- * in before its PTY is ever opened: `spriteExecId` null, nothing running. The
- * product's own spawn route provisions a Sprite first and is therefore
- * infrastructure-dependent; none of the three defects above is about compute.
- * The kill path runs end to end regardless — with no sandbox to reach, it drops
- * the row and expels the node, which is exactly the half under test.
+ * Shells are seeded as ROWS (`seedSessionShell`). The product's own spawn route
+ * provisions a Sprite first and is therefore infrastructure-dependent; none of
+ * the three defects above is about compute. The kill path runs end to end
+ * regardless — with no sandbox to reach, it drops the row and expels the node,
+ * which is exactly the half under test.
+ *
+ * The shell the #2462 spec kills carries a `spriteExecId`, the pointer the
+ * realtime bridge writes when a PTY first starts, so the kill runs its process
+ * half and its `expectedSpriteExecId` comparison rather than short-circuiting
+ * on "no PTY was ever launched" — the shape every kill of a shell somebody
+ * actually used takes.
  */
 
 test.use({ storageState: { cookies: [], origins: [] } });
