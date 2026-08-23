@@ -18,13 +18,14 @@
  * grid, which is what the issue asked for; it is not what it is.
  *
  * The server cannot see pixels, so a rectangle here is a FRACTION of the
- * workspace ({@link paneRects}) scaled by a nominal viewport shape
+ * workspace ({@link paneRects}) scaled by a nominal surface shape
  * ({@link NOMINAL_VIEWPORT_ASPECT}). That approximation is stated rather than
- * hidden, and it is sound for the decision being made: the panes it compares
- * are all inside the same viewport, so a workspace that is wider or narrower
- * than the nominal one moves every pane's aspect in the same direction and only
- * ever changes the answer for panes that were already close to square — where
- * both answers are good ones.
+ * hidden, along with which way it is deliberately wrong: a real surface that is
+ * narrower than the nominal one moves every pane's aspect the same way, so the
+ * only decisions it can change are the ones near the boundary, and the constant
+ * is chosen so that those land on `column`. A pane that ends up shorter than it
+ * might have been is usable; another column, thinner than the last, is the
+ * thing this file exists to stop.
  *
  * Pure, and shared by the browser and the server like every other decision in
  * this model: the client applies the identical split optimistically, so a
@@ -42,21 +43,32 @@ import {
 } from './workspace-node';
 
 /**
- * The workspace's assumed width-to-height ratio — the one number this file
+ * The PANE SURFACE's assumed width-to-height ratio — the one number this file
  * cannot derive.
  *
  * A pane's stored geometry is a share of its container, so the tree knows a
- * pane is half as wide as the workspace and knows nothing about whether the
- * workspace is a widescreen monitor or a phone. 16:9 is the shape the grid is
- * overwhelmingly drawn at (the pane surface is the desktop layout's main
- * column) and it is the shape that makes the FIRST split horizontal, which is
- * both what the model this replaces did and what a reader expects.
+ * pane is half as wide as the workspace and knows nothing about how many pixels
+ * that is. {@link splitAxisFor} needs the surface's aspect to turn those shares
+ * back into a shape: a pane is wider than it is tall exactly when
+ * `width × (surfaceWidth / surfaceHeight) ≥ height`.
  *
- * It biases toward columns, deliberately: a workspace narrower than this splits
- * vertically sooner, which is the right failure — a too-narrow pane is unusable
- * in a way a too-short one is not, because terminal output and chat both wrap.
+ * **It is deliberately at the LOW end of what that ratio can be, and the
+ * direction of the error is the point.** The surface is not the screen — it is
+ * the agents layout's main column, with the sidebar and the top chrome already
+ * taken out, so a 16:9 monitor presents something nearer 1.6, a windowed
+ * browser less, a narrow one less again. Guessing HIGH answers `row` too often,
+ * which is the failure this rule exists to remove: another column, thinner than
+ * the last. Guessing LOW answers `column`, and a pane that is shorter than it
+ * might have been still shows a full-width line of terminal output or chat.
+ * 4:3 is below every ordinary desktop surface and above the narrow ones.
+ *
+ * On an untouched grid the choice does not depend on it at all — halves and
+ * quarters answer the same for any ratio between 1 and 2 — so what this value
+ * actually decides is what happens to a layout somebody has DRAGGED: a pane
+ * given 60% of the width and full height is taller than it is wide on any real
+ * surface, and this says so.
  */
-export const NOMINAL_VIEWPORT_ASPECT = 16 / 9;
+export const NOMINAL_VIEWPORT_ASPECT = 4 / 3;
 
 /** A pane's share of the workspace, as fractions of its width and height. */
 export interface PaneRect {

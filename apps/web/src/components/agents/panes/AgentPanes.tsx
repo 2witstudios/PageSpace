@@ -649,8 +649,9 @@ export default function AgentPanes({
    * and every denial land on the SAME status, so a prober cannot tell them
    * apart). A client cannot separate them either — that is the point of the
    * family policy — so this swallows a revoked user's failed close too. It
-   * still LOGS, because "nothing happened at all" is the one thing a support
-   * conversation cannot work with.
+   * still WARNS — not `debug`, which Chrome hides behind a Verbose filter
+   * nobody turns on — because "nothing happened at all" is the one thing a
+   * support conversation cannot work with.
    *
    * That user is not left in silence, though, and the reason is the OTHER
    * writer: the same close queues a node drop, `/nodes` answers it with the
@@ -668,7 +669,11 @@ export default function AgentPanes({
       void del(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
         (error) => {
           if (error instanceof ApiRequestError && error.status === 404) {
-            console.debug('Close shell: nothing to close (already gone, or no longer permitted).', shellId);
+            // WARN rather than debug: this is the record a support conversation
+            // works from, and Chrome hides `console.debug` behind a Verbose
+            // filter nobody turns on — a log the reader cannot see is the
+            // silence this branch was trying not to leave (review).
+            console.warn('Close shell: nothing to close (already gone, or no longer permitted).', shellId);
             return;
           }
           console.error('Failed to close shell:', error);

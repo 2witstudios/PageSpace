@@ -108,9 +108,9 @@ describe('splitAxisFor', () => {
   });
 
   it('should turn back to BESIDE once a pane is short enough', () => {
-    // Half the width and half the height: 0.5 * 16/9 = 0.89 against 0.5, so its
-    // longer edge is horizontal again. That alternation is what produces a grid
-    // instead of a stack.
+    // Half the width and half the height: on any surface wider than it is tall
+    // that rectangle is wider than it is tall too, so its longer edge is
+    // horizontal again. That alternation is what produces a grid, not a stack.
     const nodes = [
       root(),
       pane('a', 'root-1', 0),
@@ -129,10 +129,25 @@ describe('splitAxisFor', () => {
     expect(splitAxisFor(nodes, 'b')).toBe('column');
   });
 
-  it('should read the viewport aspect as the tie-breaker it is', () => {
-    // A square-ish pane goes whichever way the workspace is shaped; the
-    // constant is the only thing that decides, and it is stated, not implied.
+  it('should call a tall pane TALL, however wide its share of the row is', () => {
+    // The direction the nominal aspect is allowed to be wrong in (review). A
+    // pane holding 60% of the width and the full height is drawn taller than it
+    // is wide on every real surface — the agents layout's main column is
+    // narrower than the screen, sidebar and chrome already taken out — so its
+    // longer edge is vertical and the split has to be `column`. An aspect
+    // guessed too HIGH answers `row` here and carves it into two slivers, which
+    // is the failure this file exists to remove.
+    const nodes = [root(), pane('wide', 'root-1', 0, 0.6), pane('narrow', 'root-1', 1, 0.4)];
+    expect(splitAxisFor(nodes, 'wide')).toBe('column');
+  });
+
+  it('should keep the constant between a square and a widescreen surface', () => {
+    // Below 1 it would answer `column` for a pane that is genuinely wider than
+    // it is tall; at or above ~1.8 it is claiming a surface no pane grid is
+    // actually drawn in. The value is stated rather than implied because it is
+    // the one number here that cannot be derived.
     expect(NOMINAL_VIEWPORT_ASPECT).toBeGreaterThan(1);
+    expect(NOMINAL_VIEWPORT_ASPECT).toBeLessThan(1.6);
   });
 
   it('should answer `row` for a pane the tree does not hold, leaving the refusal to the placement', () => {
