@@ -31,11 +31,25 @@ import type { ServerEnv } from '../../config/env-validation';
  * sandbox opened from our production web server reported `NODE_ENV=production` —
  * and npm silently drops `devDependencies` under that, so a plain
  * `npm install` left `tsx`/`vitest`/`tsc` missing and every later command failed
- * with a module-not-found that named nothing to do with the env (#2466). The
+ * with a module-not-found that named nothing to do with the env (#2466).
+ *
+ * `npm` specifically. Bun's installer ignores `NODE_ENV` for this and omits dev
+ * dependencies only when told (`--production` / `--omit=dev`), which is why
+ * nobody working in THIS repo ever tripped over it — the trap was waiting in the
+ * npm-based repos agents clone into a sandbox. The
  * host's own mode is simply not a fact about the sandbox, so it is no longer
  * forwarded; nothing running INSIDE a sandbox reads `NODE_ENV` for our own
  * behaviour (every `NODE_ENV` branch in this repo — logging, cookies, checkpoint
  * policy, rate limits — evaluates on the host, never in a sandbox).
+ *
+ * This is every sandbox the product has, not only the throwaway ones: the same
+ * builder feeds the bash tool, the git/gh tools, and the workspace runtime, so a
+ * persistent DRIVE ENVIRONMENT gets it too — including one a user has named
+ * "prod", since an environment's name is a label and nothing in the product ever
+ * makes one a production deployment (see `drive-envs/env-contract.ts`). Uniform
+ * on purpose: a second rule keyed on which kind of machine you are standing in
+ * would recreate, one level down, exactly the "the same sandbox answers
+ * differently depending on who asked" problem this change removes.
  *
  * It does of course reach OTHER people's code, which is the point and also the
  * cost: a cloned repo whose bundler keys off `NODE_ENV` (`mode: process.env

@@ -547,9 +547,12 @@ const delay = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve,
  * satisfy the web schema — validating here would throw and take every terminal
  * down, the same reason `resolveSpritesToken` reads it raw. So the day a host
  * key joins `SANDBOX_ENV_ALLOWLIST`, it reaches a terminal only if the REALTIME
- * deployment also sets it. Provisioning both services is part of adding that key;
- * the sandbox-owned values (the ones #2466 was actually about) are a constant and
- * are identical either way.
+ * deployment also sets it — and it reaches it UNVALIDATED, where the tool surface
+ * would have forwarded a value the web schema had already checked (`WEB_APP_URL`
+ * is `z.string().url()` there; whatever string this host happens to hold, here).
+ * Provisioning both services, and satisfying the schema in both, is part of
+ * adding such a key; the sandbox-owned values (the ones #2466 was actually about)
+ * are a constant and are identical either way.
  *
  * Called per shell rather than once at import: with an empty allowlist the two
  * are equivalent, but a module-level snapshot would freeze whatever `process.env`

@@ -182,9 +182,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   reported success left the toolchain missing and every later command failed with an error naming
   nothing to do with the cause. A sandbox now describes itself as what it is, and a plain
   `npm install` installs the whole toolchain. The terminal and the agent's own shell also report
-  the same environment as each other now; they used to disagree. One consequence worth knowing: a
-  build run inside a sandbox that keys off the environment now produces a development build, so say
-  `NODE_ENV=production npm run build` when you actually want a production bundle.
+  the same environment as each other now; they used to disagree. This covers every machine an agent
+  works on, named environments included — an environment called “prod” is a name, not a deployment.
+  One consequence worth knowing: a build run on one of these machines now produces a development
+  build, so say `NODE_ENV=production npm run build` when you actually want a production bundle.
 - **A long job in a terminal no longer looks frozen** — a job piped through a filter
   (`… | grep …`, and especially `… | tail -200`, which by design prints nothing until the job ends)
   held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
