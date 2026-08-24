@@ -15,9 +15,20 @@ import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-type
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
-import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { describeContentModeMismatch, serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
-import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import {
+  loadSheetWindow,
+  renderSheetTableWithinBudget,
+  columnsInRows,
+  SheetDocumentUnreadableError,
+  SheetTabNotFoundError,
+  type SheetWindow,
+  SHEET_PREVIEW_ROWS,
+  SHEET_LIST_PREVIEW_ROWS,
+  MAX_SHEET_READ_ROWS,
+  TABLE_CELL_CHAR_LIMIT,
+} from './sheet-view';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
@@ -42,6 +53,94 @@ const MAX_CONTENT_INCLUDE_PAGES = 50;
 // resume with read_page's lineStart/lineEnd.
 const MAX_CONTENT_CHARS_PER_PAGE = 8000;
 
+// Room reserved for the header and pointer sentence wrapped around a sheet
+// preview, so the budget bounds the finished ENTRY rather than just its table.
+const SHEET_PREVIEW_FRAMING_CHARS = 300;
+
+// Characters read_page's own sheet table may spend. Larger than the list_pages
+// preview because this call is about ONE page, but still bounded: the result
+// also carries the structured rows, and an unbounded table made a wide sheet
+// cost more than the raw document it replaced.
+const MAX_SHEET_TABLE_CHARS = 20_000;
+
+/**
+ * The window `read_page` shows for a SHEET, or `null` when the page turns out
+ * not to hold a sheet document at all.
+ *
+ * Split out because the load has to happen BEFORE the branch decides whether
+ * this is a sheet read or a text read, and an unreadable document has to refuse
+ * rather than fall through — a document that cannot be parsed is not the same
+ * as one that was never a sheet, and only the second may be shown as text.
+ */
+async function loadSheetWindowForRead(
+  page: { id: string; content: string | null },
+  lineStart: number | undefined,
+  lineEnd: number | undefined,
+): Promise<SheetWindow> {
+  const requestedStart = Math.max(1, lineStart ?? 1);
+  const windowSize = lineEnd !== undefined
+    ? Math.min(Math.max(0, lineEnd - requestedStart + 1), MAX_SHEET_READ_ROWS)
+    : SHEET_PREVIEW_ROWS;
+
+  // `limit` is at least 1 even for an empty range (lineEnd < lineStart): the
+  // fetch is what carries the sheet's dimensions and tab list, and an empty
+  // range must still report those rather than "0 rows x 0 columns", which reads
+  // as an empty spreadsheet.
+  return loadSheetWindow(page.id, {
+    fromRow: requestedStart - 1,
+    limit: Math.max(1, windowSize),
+    documentContent: page.content,
+  });
+}
+
+/**
+ * One SHEET's entry in a `list_pages include: "content"` batch.
+ *
+ * Bounded by CHARACTERS, not by row count: five rows of a wide sheet is still a
+ * lot of text and this call previews up to 50 pages at once, so the budget that
+ * has to hold is the per-page cap every other page type obeys. Whole rows are
+ * dropped until it fits, so the table is never cut mid-row into something that
+ * reads like a real value, and the cap bounds the finished ENTRY — the header
+ * and pointer are prepended after the table, so bounding the table alone let
+ * the result run past the budget.
+ */
+/** Rows `buildSheetPreviewContent` will actually render, after its budget. */
+function previewRowsShown(sheet: SheetWindow): number {
+  return renderSheetTableWithinBudget(
+    sheet.rows,
+    MAX_CONTENT_CHARS_PER_PAGE - SHEET_PREVIEW_FRAMING_CHARS,
+  ).rowsShown;
+}
+
+function buildSheetPreviewContent(sheet: SheetWindow): string {
+  // Budgeted against the framing too, not just the table: the header and the
+  // pointer sentence are prepended, so bounding the table alone let the
+  // finished entry run past the per-page cap.
+  const rendered = renderSheetTableWithinBudget(sheet.rows, MAX_CONTENT_CHARS_PER_PAGE - SHEET_PREVIEW_FRAMING_CHARS);
+
+  // The same truncation signal read_page and read_sheet surface: values cut at
+  // the cell limit must not be copied back into a write, and an ellipsis alone
+  // does not say how many.
+  const cutNote = rendered.truncatedCells > 0
+    ? ` ${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters — read them with read_sheet, which carries the full text.`
+    : '';
+  const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.${cutNote}`;
+  // The pointer rides in the content rather than in `contentClipped`, which
+  // promises the rest is reachable with read_page's lineStart — the rest of a
+  // sheet is reached with read_sheet. A wrong pointer is worse than none.
+  // "First 0 row(s) below" reads as an empty sheet. It is not: at this budget a
+  // single row of 35+ columns overflows, so the cut leaves the header alone.
+  // Say which it was, or the reader cannot tell a blank sheet from one whose
+  // rows are too wide to preview.
+  if (sheet.rows.length > 0 && rendered.rowsShown === 0) {
+    return `${header} Its rows are too wide to preview here — use read_sheet on this page, with select to name the columns you need.`;
+  }
+
+  const framing = `${header} First ${rendered.rowsShown} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
+
+  return rendered.text ? `${framing}${rendered.text}` : `${header} No data yet.`;
+}
+
 export const pageReadTools = {
   /**
    * Explore the folder structure and find content within a workspace
@@ -53,7 +152,7 @@ export const pageReadTools = {
       driveId: z.string().optional().describe('The unique ID of the drive (used for operations). Omit to list the workspace currently in view (see LOCATION context).'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
-      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content, and SHEET pages get their dimensions plus their first ${SHEET_LIST_PREVIEW_ROWS} rows — use read_sheet for the rest.`),
     }),
     execute: async ({ driveSlug, driveId: driveIdArg, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -162,6 +261,10 @@ export const pageReadTools = {
         // report what was dropped instead of silently truncating.
         let contentTruncated = false;
         let contentClippedCount = 0;
+        // Sheet previews clip too, but they resume with read_sheet, not with
+        // read_page's lineStart. Counted apart so the guidance below can name
+        // the continuation that actually works for each kind.
+        let sheetClippedCount = 0;
         if (include === 'content' && resultPages.length > 0) {
           const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
           contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
@@ -186,15 +289,67 @@ export const pageReadTools = {
               const row = contentMap.get(entry.id);
               if (!row) continue;
 
-              // Sheets come from their rows here too. `isTextSerializablePageType`
-              // accepts SHEET, and this path reads `pages.content` directly —
-              // which is empty for a materialised sheet, so `include: "content"`
-              // returned a blank spreadsheet while `read_page` returned the data.
-              const readableRow = isSheetType(entry.type as PageType)
-                ? { ...row, content: (await readSheetDocument(entry.id)) ?? row.content }
-                : row;
+              // Sheets are rows, not text, and this batching surface is where
+              // reading them as text hurts most: one 500-row sheet in a folder
+              // used to reconstruct the whole SheetDoc document, then hand back
+              // the first 8,000 characters of it — a clipped TOML header that
+              // reaches roughly cell B3 and tells the reader nothing about the
+              // sheet. It gets the same bounded row window read_page returns,
+              // just fewer rows because this call previews many pages at once.
+              if (isSheetType(entry.type as PageType)) {
+                let sheet: SheetWindow;
+                try {
+                  sheet = await loadSheetWindow(entry.id, {
+                    limit: SHEET_LIST_PREVIEW_ROWS,
+                    documentContent: row.content,
+                  });
+                } catch (error) {
+                  // One sheet that cannot be parsed must not blank itself out
+                  // (an agent would read that as "empty" and overwrite it) and
+                  // must not fail the other 49 pages in the batch either. Say
+                  // what happened, in this entry only.
+                  if (error instanceof SheetDocumentUnreadableError || error instanceof SheetTabNotFoundError) {
+                    entry.contentOmitted = `SHEET could not be read: ${error.message} It is NOT empty — do not overwrite it.`;
+                    continue;
+                  }
+                  throw error;
+                }
+                if (!sheet.documentIsNotASheet) {
+                  entry.content = buildSheetPreviewContent(sheet);
+                  // A preview of N rows out of a 500-row sheet is partial
+                  // content by definition, and the `include` description
+                  // promises `contentClipped` for partial content. Leaving it
+                  // unset told an agent branching on the flag — rather than
+                  // reading the prose inside `content` — that it held the whole
+                  // sheet. `contentClippedAfterLine` is deliberately NOT set:
+                  // it means "resume with read_page's lineStart", and the rest
+                  // of a sheet is reached with read_sheet, which the content
+                  // says. A wrong pointer is worse than none.
+                  // From the FETCH, never the declared grid size — the rule
+                  // sheet-view states and I broke here. `create_page` starts a
+                  // sheet at 20x10, so three stored rows under a declared 20
+                  // reported "clipped" for a preview holding the whole sheet,
+                  // and an agent branching on the flag paid a wasted read_sheet
+                  // for every small sheet in a folder. `hasMore` means rows
+                  // remain; `rowsShown` catches rows the budget dropped.
+                  const previewIsPartial =
+                    sheet.hasMore || previewRowsShown(sheet) < sheet.rows.length;
+                  if (previewIsPartial) {
+                    entry.contentClipped = true;
+                    contentClippedCount++;
+                    sheetClippedCount++;
+                  }
+                  continue;
+                }
+                // Otherwise the page holds legacy text rather than a sheet
+                // document, and this deliberately does NOT `continue`: it drops
+                // out of the sheet branch so the shared text handling below
+                // answers. Reporting "no data yet" would lose the content, and
+                // clipping it here would duplicate a cut the shared path does
+                // better (last-newline, so no severed surrogate pair or tag).
+              }
 
-              const fullContent = serializePageContentForAI({ type: entry.type, ...readableRow });
+              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
               if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
                 // Cut at the last newline within the budget rather than an arbitrary
                 // character offset, so we don't split a UTF-16 surrogate pair or sever
@@ -246,8 +401,15 @@ export const pageReadTools = {
             ...(contentTruncated ? [
               `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
             ] : []),
-            ...(contentClippedCount > 0 ? [
-              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true) — each clipped entry's contentClippedAfterLine tells you where it stopped, so call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
+            // Two different continuations hide behind one `contentClipped`
+            // flag, so they get two different sentences. Telling a caller to
+            // resume a sheet at `contentClippedAfterLine + 1` sends it to
+            // read_page with NaN — the field is deliberately unset on sheets.
+            ...(contentClippedCount - sheetClippedCount > 0 ? [
+              `${contentClippedCount - sheetClippedCount} page${contentClippedCount - sheetClippedCount === 1 ? '' : 's'} had text content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true, with contentClippedAfterLine) — call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
+            ] : []),
+            ...(sheetClippedCount > 0 ? [
+              `${sheetClippedCount} sheet${sheetClippedCount === 1 ? '' : 's'} showed only a preview of their rows (contentClipped: true, no contentClippedAfterLine) — call read_sheet with that page ID to read the rest, not read_page.`,
             ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };
@@ -262,12 +424,12 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
-      lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning.'),
-      lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
+      lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning. On a SHEET this is a sheet ROW number.'),
+      lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end. On a SHEET this is a sheet ROW number.'),
     }),
     toModelOutput: ({ output }) => toModelOutputForReadPage(output),
     execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd }, { experimental_context: context }) => {
@@ -835,19 +997,295 @@ export const pageReadTools = {
           };
         }
 
-        // A sheet's content is generated from its rows. `pages.content` is
-        // empty once a sheet has been materialised, so serialising the page as
-        // stored would hand the model a blank spreadsheet.
-        const readable = isSheetType(page.type as PageType)
-          ? { ...page, content: (await readSheetDocument(page.id)) ?? page.content }
-          : page;
+        // A SHEET is rows, and reading it as text was the single worst answer
+        // this tool gave.
+        //
+        // The old path reconstructed the whole spreadsheet as a SheetDoc TOML
+        // document and then numbered every line of it: a 500-row, 16-column
+        // sheet came back as ~23,700 lines of `[sheets.cells.AB417]` tables,
+        // one per cell, with no way to ask for a row range or look a row up by
+        // value. Reading a real dataset was impossible, so agents kept a copy of
+        // the data outside the platform instead — the storage was write-only in
+        // practice (issue #2467).
+        //
+        // What comes back now is what makes a sheet legible and bounded: its
+        // dimensions and tabs, then a window of rows as delimited text whose
+        // line numbers ARE the sheet's row numbers, so reading row 417 tells you
+        // where to write `C417`. lineStart/lineEnd select ROWS here rather than
+        // lines of serialised TOML, which is the only reading of them that
+        // survives the change with a useful meaning. Anything beyond a window —
+        // filtering, sorting, column projection — is `read_sheet`, and this
+        // result says so.
+        // A SHEET page can hold legacy plain text or HTML rather than a sheet
+        // document at all, and `parseSheetContentSafe` reports that as an EMPTY
+        // sheet — correctly, since there is no sheet data to lose. Rendering it
+        // as a grid would answer "20 rows x 10 columns, nothing stored" and hide
+        // the content. Handling it INSIDE the sheet branch was not enough
+        // either: that returned the whole document with no `N→` numbering, no
+        // lineStart/lineEnd slicing and a row-count `totalLines`, so an agent
+        // asking for lines 200-250 got everything and could not page. The whole
+        // branch is skipped instead, and the ordinary text path below answers —
+        // numbering, ranges and counts all correct.
+        let sheetWindow: SheetWindow | null = null;
+        if (isSheetType(page.type as PageType)) {
+          try {
+            sheetWindow = await loadSheetWindowForRead(page, lineStart, lineEnd);
+          } catch (error) {
+            // A sheet whose stored document will not PARSE is reported as
+            // unreadable, never as blank and never as text: the data may be
+            // intact and recoverable, and "empty" invites an overwrite.
+            if (error instanceof SheetDocumentUnreadableError) {
+              return {
+                success: false,
+                pageId: page.id,
+                title: page.title,
+                type: page.type,
+                error: 'Sheet content could not be read',
+                message: error.message,
+                suggestion:
+                  'Do not treat this sheet as empty and do not overwrite it. The stored document needs repair.',
+              };
+            }
+            // The other two callers of this loader answer this one; leaving it
+            // to the outer catch here made read_page the only surface where a
+            // sheet with a non-zero-based tab set produced the generic
+            // "Failed to read document" this change exists to eliminate.
+            if (error instanceof SheetTabNotFoundError) {
+              return {
+                success: false,
+                pageId: page.id,
+                title: page.title,
+                type: page.type,
+                error: 'Sheet tab not found',
+                message: error.message,
+                suggestion: 'Use read_sheet with one of the tab indexes listed in the message.',
+                tabs: error.availableTabs,
+              };
+            }
+            throw error;
+          }
+        }
+
+        if (sheetWindow && !sheetWindow.documentIsNotASheet) {
+          const sheet = sheetWindow;
+          const requestedStart = Math.max(1, lineStart ?? 1);
+          const invertedRange = lineEnd !== undefined && lineEnd < requestedStart;
+
+          // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
+          // window that starts inside the requested range can still run past
+          // its end. Clip to what was actually asked for.
+          const rowsInWindow = sheet.rows.filter(
+            (row) => lineEnd === undefined || row.rowNumber <= lineEnd
+          );
+
+          // Budgeted like the other two sheet surfaces. 25 rows of a 60-column
+          // sheet at 120 chars a cell is far past what an orientation read
+          // should put in context, and row count alone does not bound it.
+          // No explicit column list: the renderer derives the header from the
+          // rows it actually keeps, so the header cannot name a column the
+          // budget dropped. `columns` below is derived the same way, from the
+          // rows returned.
+          const rendered = renderSheetTableWithinBudget(rowsInWindow, MAX_SHEET_TABLE_CHARS);
+          const table = rendered.text;
+          // The budget can drop rows the fetch returned. Every count below is
+          // derived from what is ACTUALLY shown, because reporting `lineCount:
+          // 25` above a table holding 8 is a false statement about the one
+          // surface a reader can see — and the structured `rows` are clipped to
+          // match so the two halves of the response cannot disagree.
+          // At least one row survives whenever the window had one. A single row
+          // too wide to render (165+ columns at the cell cap) left `rowsShown`
+          // at 0, which emptied `rows`, which made the resume point fall back
+          // to that same unrenderable row — the exact non-terminating loop the
+          // empty-fetch and empty-after-clipping guards above exist to prevent,
+          // reachable through the third door. Keeping the row means the DATA is
+          // still returned even when the rendering cannot show it, and the
+          // disagreement is stated rather than silent.
+          const shownCount = rendered.rowsShown > 0 ? rendered.rowsShown : Math.min(1, rowsInWindow.length);
+          const rows = rowsInWindow.slice(0, shownCount);
+          // Computed from the rows actually RETURNED. Taking it from the
+          // pre-budget set could name a column present in neither `rows` nor
+          // the table, and a model mapping table positions by this list would
+          // misalign them.
+          const columns = columnsInRows(rows);
+          const droppedForBudget = rowsInWindow.length - rows.length;
+          const tableOmittedRows = rows.length - rendered.rowsShown;
+          const rowCount = sheet.rowCount;
+          const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
+
+          // Formulas and errors, keyed by A1 address across the window. A sheet
+          // read that shows only computed values cannot tell "5" from "=2+3",
+          // and the spreadsheets skill documents reading a page back to confirm
+          // a formula (and to see the expected cross-page-reference error).
+          // Both stay sparse — only cells that have one appear.
+          const formulas: Record<string, string> = {};
+          const errors: Record<string, string> = {};
+          for (const row of rows) {
+            for (const [column, formula] of Object.entries(row.formulas ?? {})) {
+              formulas[`${column}${row.rowNumber}`] = formula;
+            }
+            for (const [column, message] of Object.entries(row.errors ?? {})) {
+              errors[`${column}${row.rowNumber}`] = message;
+            }
+          }
+
+          const lastRow = rows.length > 0 ? rows[rows.length - 1].rowNumber : requestedStart - 1;
+          // Whether anything FOLLOWS comes from the fetch, never from the tab's
+          // declared rowCount.
+          //
+          // `readRows` selects `rowIndex >= from`, so a window that came back
+          // empty proves nothing follows. Comparing `lastRow` (which collapses
+          // to `requestedStart - 1` on an empty window) against `rowCount`
+          // instead answered "more rows, resume at N" for the very call that
+          // had just returned nothing — an agent looping on those fields would
+          // never terminate. Both halves of that are real shapes: a tab can
+          // declare 500 rows while storing rows only up to 60, and a new sheet
+          // declares 20 while storing none. `loadSheetWindow` already gets this
+          // right and `read_sheet` inherits it; only this path recomputed it.
+          const clippedByLineEnd = sheet.rows.length > rowsInWindow.length;
+          // Where to resume comes from what the FETCH reached, never from the
+          // request. Rows are sparse: a sheet storing rows 1-3 and 500-509
+          // answers `lineStart: 4, lineEnd: 10` by fetching from index 3,
+          // getting rows 500+, and clipping every one of them. `rows` is then
+          // empty while the fetch was not, so falling back to `requestedStart`
+          // pointed at the very call that had just returned nothing. The first
+          // fix here only covered the empty-FETCH case; this is the empty-after
+          // -CLIPPING case, and it loops the same way.
+          // Resume at the first row this window DROPPED, not past the last one
+          // it fetched. Same sparse example: rows 1-3 and 500-509, asked for
+          // `lineStart: 4, lineEnd: 10`. The fetch returns rows 500-506 and
+          // clipping removes all of them; pointing past the last fetched row
+          // would resume at 507 and silently skip 500-506, which the agent had
+          // never been shown. The first dropped row is always past `lineEnd`,
+          // so it cannot reproduce the loop this guards against either.
+          const resumeAt = rows.length > 0
+            ? rows[rows.length - 1].rowNumber + 1
+            : sheet.rows.length > 0 ? sheet.rows[0].rowNumber : null;
+          // `clippedByLineEnd` means the fetch ran PAST lineEnd, which proves the
+          // requested range is complete — it was being used as evidence of the
+          // opposite. A bounded read also has to measure "more" against the
+          // CALLER's range, not the sheet: `lineStart: 1, lineEnd: 10` on a
+          // dense sheet fetches exactly 10 rows, so `sheet.hasMore` is true
+          // (a full page) while the request is entirely satisfied. Both shapes
+          // cost a guaranteed-empty extra call and, worse, contradicted the
+          // `rangeMessage` in the same response.
+          const moreRows =
+            !invertedRange &&
+            sheet.rows.length > 0 &&
+            resumeAt !== null &&
+            // Rows the BUDGET dropped are still unread, so they count as more
+            // even when the requested range was otherwise satisfied.
+            (droppedForBudget > 0 ||
+              (lineEnd === undefined
+                ? sheet.hasMore
+                : !clippedByLineEnd && sheet.hasMore && lastRow < lineEnd));
+          const nextStartRow = moreRows ? resumeAt : null;
+          // An empty window is not the same as an empty sheet, and the two must
+          // not read alike: a request past the last row, or into a gap in a
+          // sparse sheet, still has to report the sheet's real size and say
+          // which it was. The text path draws the same distinction with
+          // `rangeMessage`.
+          const emptyWindowReason = rows.length > 0
+            ? undefined
+            : invertedRange
+              // Blaming sparsity here was simply false: rows 10-5 is an empty
+              // REQUEST, not a gap in the data.
+              ? `Requested range is inverted: lineEnd (${lineEnd}) is before lineStart (${requestedStart}), so it selects no rows.`
+              : requestedStart > rowCount
+                ? `Requested rows start at ${requestedStart}, past the last row of this ${rowCount}-row sheet.`
+                : `No rows are stored in ${lineEnd === undefined ? `rows ${requestedStart} onward` : `rows ${requestedStart}-${lineEnd}`}, though the sheet has ${rowCount} rows — sheet rows can be sparse.`;
+
+          return {
+            success: true,
+            pageId: page.id,
+            title: page.title,
+            type: page.type,
+            contentMode: page.contentMode || 'html',
+            isTaskLinked,
+            // `totalLines` is a sheet's ROW count here, which is what
+            // lineStart/lineEnd address on this page type.
+            totalLines: rowCount,
+            lineCount: rows.length,
+            // No `rawContent` here: on this path it was byte-identical to
+            // `content`, and the whole result — table AND structured rows — is
+            // passed to the model as JSON. Sending the same window twice in a
+            // tool whose purpose is cutting sheet-read context is the one waste
+            // this branch cannot justify. The renderer reads
+            // `rawContent ?? content`, so it is unaffected.
+            content: table,
+            ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
+            dimensions: { rowCount, columnCount: sheet.columnCount },
+            tabs: sheet.tabs,
+            tabIndex: sheet.tabIndex,
+            tabName: sheet.tabName,
+            columns,
+            rows,
+            rowsReturned: rows.length,
+            ...(Object.keys(formulas).length > 0 && { formulas }),
+            ...(Object.keys(errors).length > 0 && { errors }),
+            ...(droppedForBudget > 0 && { rowsDroppedForSize: droppedForBudget }),
+            // The table could not render rows that `rows` still carries.
+            ...(tableOmittedRows > 0 && { tableRowsOmitted: tableOmittedRows }),
+            ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
+            hasMoreRows: moreRows,
+            ...(moreRows && nextStartRow !== null && { nextStartRow }),
+            ...(emptyWindowReason && { rangeMessage: emptyWindowReason }),
+            summary: emptyWindowReason
+              ? `Sheet "${page.title}" has ${rowCount} rows x ${sheet.columnCount} columns. ${emptyWindowReason}`
+              : isRangeRequest
+                ? `Read rows ${requestedStart}-${lastRow} of sheet "${page.title}" (${rows.length} of ${rowCount} rows, ${sheet.columnCount} columns)`
+                : `Sheet "${page.title}": ${rowCount} rows x ${sheet.columnCount} columns — showing the first ${rows.length}`,
+            stats: {
+              documentType: page.type,
+              rowCount,
+              columnCount: sheet.columnCount,
+              rowsReturned: rows.length,
+              characterCount: table.length,
+            },
+            nextSteps: [
+              // Both continuations are named on purpose. `read_sheet` is the
+              // right one, but an agent whose saved `enabledTools` allowlist
+              // predates it cannot call it — and pointing only at a tool the
+              // caller may not have would leave it with 25 rows and no way
+              // forward. `lineStart`/`lineEnd` on THIS tool page the same
+              // sheet and are always available.
+              ...(moreRows && rows.length > 0
+                ? [
+                    `Only rows up to ${lastRow} of ${rowCount} are shown. Continue with read_sheet (startRow: ${lastRow + 1}), or with read_page again (lineStart: ${lastRow + 1}) if read_sheet is not available to you.`,
+                  ]
+                : []),
+              ...(tableOmittedRows > 0
+                ? [`${tableOmittedRows} row(s) were too wide to render in the table above — read them from "rows", which carries them in full.`]
+                : []),
+              ...(rendered.truncatedCells > 0
+                ? [`${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in the content above — read them from "rows", which carries the full text.`]
+                : []),
+              // Hedged like the continuation above it. The allowlist guard in
+              // inline-instructions exists because naming a tool the agent does
+              // not hold produces an unknown-tool call; this line was the one
+              // place left doing exactly that.
+              'To find rows rather than page them — filter by column value, sort, or return only some columns — use read_sheet if it is available to you. Do not read a whole sheet to search it.',
+              'Use edit_sheet_cells with A1 addresses to write; a row\'s number here is its A1 row.',
+            ],
+          };
+        }
 
         // Format content for AI line-based editing, then split into lines.
         // Shared with command injection (page-serializer) so both surfaces
         // serialize page content identically.
-        const formattedContent = serializePageContentForAI(readable);
+        const formattedContent = serializePageContentForAI(page);
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
+
+        // An html-mode page holding JSON or markdown numbers its lines by its
+        // own newlines. The agent needs that BEFORE it writes — the workflow it
+        // is told to follow is read, then edit — so the warning belongs on the
+        // read, not only on the write result (#2463).
+        // `page`, not the `readable` alias master used: that alias existed only
+        // to swap a sheet's empty `pages.content` for its reconstructed
+        // document, and sheets no longer reach this path — they take the branch
+        // above, or fall through as legacy TEXT, for which `page` is the right
+        // subject anyway.
+        const contentModeWarning = describeContentModeMismatch(page);
 
         // Calculate effective range (1-indexed, inclusive)
         const effectiveStart = lineStart ?? 1;
@@ -901,6 +1339,7 @@ export const pageReadTools = {
           totalLines,
           lineCount: selectedLines.length,
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+          ...(contentModeWarning && { contentModeWarning }),
           content: numberedContent,
           rawContent,
           summary: isRangeRequest

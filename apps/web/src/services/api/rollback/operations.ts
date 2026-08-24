@@ -84,5 +84,10 @@ export const AGENT_CONFIG_ROLLBACK_FIELDS = [
   'includePageTree',
   'pageTreeScope',
   'toolExposureMode',
+  // The per-agent sandbox switch became tool-writable in issue #2460's fix. A
+  // config change that grants or revokes an agent's whole sandbox surface is
+  // exactly the kind a person wants to undo, and this list is the only thing
+  // that decides whether they can.
+  'sandboxEnabled',
   'userScopedAccess',
 ] as const;

@@ -39,20 +39,45 @@ const WORKSPACE_RULES = `WORKSPACE RULES:
  * body covers it verbatim-or-better.
  */
 const PAGE_TYPE_BULLETS: ReadonlyArray<{
-  full: string;
+  full?: string;
   slim?: string;
   skill?: string;
+  /**
+   * Builds the bullet from the tools the agent actually holds, instead of
+   * choosing between fixed strings. Used where a bullet names several tools and
+   * any of them may be absent from a saved allowlist.
+   */
+  compose?: (availableTools?: string[]) => string;
+  /** Appended to a composed bullet when its skill pointer is usable. */
+  slimSuffix?: string;
 }> = [
   { full: '• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.' },
   {
-    full: '• DOCUMENT: Rich text stored as HTML. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
-    slim: '• DOCUMENT: Rich text stored as HTML. Load the writing-documents skill before non-trivial writing or line-range editing.',
+    full: '• DOCUMENT: Markdown text, or rich text stored as HTML (contentMode says which; documents you create default to markdown). Write the format the page is in. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
+    slim: '• DOCUMENT: Markdown or rich text stored as HTML (check contentMode). Load the writing-documents skill before non-trivial writing or line-range editing.',
     skill: 'writing-documents',
   },
   { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).' },
   {
-    full: '• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.',
-    slim: '• SHEET: Spreadsheet. Use edit_sheet_cells for cell edits; load the spreadsheets skill before formulas or new sheets.',
+    // Composed rather than picked from fixed variants. A bullet naming a tool
+    // the agent does not hold produces an unknown-tool call before the model
+    // recovers, and this bullet names up to three — read_sheet, read_page and
+    // edit_sheet_cells. Gating only one of them left the other two able to do
+    // exactly what the gate exists to prevent.
+    compose: (availableTools?: string[]) => {
+      const has = (tool: string) => hasAny(availableTools, [tool]);
+      const parts = ['• SHEET: Spreadsheet stored as rows.'];
+      if (has('read_sheet')) {
+        parts.push('Use read_sheet to read a row range, look rows up by column value, or project columns — never page a whole sheet to search it.');
+      } else if (has('read_page')) {
+        parts.push('read_page returns its dimensions and a window of rows, and lineStart/lineEnd page it by ROW number.');
+      }
+      if (has('edit_sheet_cells')) {
+        parts.push('Use edit_sheet_cells for cell-level edits.');
+      }
+      return parts.join(' ');
+    },
+    slimSuffix: 'load the spreadsheets skill before formulas or new sheets.',
     skill: 'spreadsheets',
   },
   {
@@ -78,11 +103,19 @@ function skillPointerUsable(availableTools: string[] | undefined, trigger: strin
 }
 
 function buildPageTypes(availableTools?: string[]): string {
-  const lines = PAGE_TYPE_BULLETS.map((bullet) =>
-    bullet.slim && bullet.skill && skillPointerUsable(availableTools, bullet.skill)
-      ? bullet.slim
-      : bullet.full
-  );
+  const lines = PAGE_TYPE_BULLETS.map((bullet) => {
+    const usesSkillPointer =
+      Boolean(bullet.skill) && skillPointerUsable(availableTools, bullet.skill!);
+
+    if (bullet.compose) {
+      const composed = bullet.compose(availableTools);
+      return usesSkillPointer && bullet.slimSuffix
+        ? `${composed.replace(/\.$/, '')}; ${bullet.slimSuffix}`
+        : composed;
+    }
+    return usesSkillPointer && bullet.slim ? bullet.slim : bullet.full;
+  });
+
   return `PAGE TYPES:\n${lines.join('\n')}`;
 }
 

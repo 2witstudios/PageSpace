@@ -66,6 +66,37 @@ export function extractLineRangeFlags(args: readonly string[]): RangeFlagsResult
   return { ok: true, startLine, endLine, rest };
 }
 
+/**
+ * Pure: no I/O. Consumes `--expect-lines N`, the staleness guard: the total
+ * line count the caller last read. The server refuses (409) rather than
+ * applying an edit addressed against a document that has since changed —
+ * #2463, where a stale range replaced most of a document and left the tail of
+ * the old one behind, leaving invalid JSON.
+ */
+export function extractExpectLinesFlag(
+  args: readonly string[],
+): { readonly ok: true; readonly expectedTotalLines: number | undefined; readonly rest: readonly string[] } | { readonly ok: false; readonly message: string } {
+  const rest: string[] = [];
+  let expectedTotalLines: number | undefined;
+  let i = 0;
+  while (i < args.length) {
+    if (args[i] === '--expect-lines') {
+      const value = args[i + 1];
+      if (value === undefined) return { ok: false, message: 'Flag --expect-lines requires a value.' };
+      const parsed = Number(value);
+      if (!Number.isInteger(parsed) || parsed < 0) {
+        return { ok: false, message: `Invalid --expect-lines "${value}": must be an integer >= 0.` };
+      }
+      expectedTotalLines = parsed;
+      i += 2;
+      continue;
+    }
+    rest.push(args[i] as string);
+    i += 1;
+  }
+  return { ok: true, expectedTotalLines, rest };
+}
+
 /** Pure: no I/O. */
 function extractRawFlag(args: readonly string[]): { readonly raw: boolean; readonly rest: readonly string[] } {
   const rest: string[] = [];
@@ -121,6 +152,14 @@ export const pagesReadHandler: CommandHandler = async (ctx, intent) => {
   );
   if (!result.ok) return EXIT_RUNTIME_ERROR;
 
+  // stderr, always: a page whose contentMode disagrees with its content
+  // numbers its lines differently than the agent expects, and finding that out
+  // by corrupting the document is the failure #2463 reported. --json callers
+  // get the field itself in the payload.
+  if ('contentModeWarning' in result.value && result.value.contentModeWarning) {
+    ctx.stderr.write(`Warning: ${result.value.contentModeWarning}\n`);
+  }
+
   if (intent.flags.json) {
     ctx.stdout.write(`${JSON.stringify(result.value)}\n`);
   } else if ('content' in result.value) {
@@ -141,7 +180,7 @@ export function createPagesReplaceLinesHandler(deps: ContentSourceDeps): Command
   return async (ctx, intent) => {
     const [pageId, ...rest0] = intent.args;
     if (!pageId) {
-      ctx.stderr.write('Usage: pagespace pages replace-lines <pageId> --start N [--end M] [--file <path>]\n');
+      ctx.stderr.write('Usage: pagespace pages replace-lines <pageId> --start N [--end M] [--file <path>] [--expect-lines N]\n');
       return EXIT_USAGE_ERROR;
     }
 
@@ -150,7 +189,12 @@ export function createPagesReplaceLinesHandler(deps: ContentSourceDeps): Command
       ctx.stderr.write(`${fileFlag.message}\n`);
       return EXIT_USAGE_ERROR;
     }
-    const range = extractLineRangeFlags(fileFlag.rest);
+    const expectFlag = extractExpectLinesFlag(fileFlag.rest);
+    if (!expectFlag.ok) {
+      ctx.stderr.write(`${expectFlag.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+    const range = extractLineRangeFlags(expectFlag.rest);
     if (!range.ok) {
       ctx.stderr.write(`${range.message}\n`);
       return EXIT_USAGE_ERROR;
@@ -173,9 +217,20 @@ export function createPagesReplaceLinesHandler(deps: ContentSourceDeps): Command
     }
 
     const result = await callSdk(ctx.stderr, () =>
-      ctx.sdk.pages.replaceLines({ operation: 'replace', pageId, startLine: range.startLine as number, endLine: range.endLine, content }),
+      ctx.sdk.pages.replaceLines({
+        operation: 'replace',
+        pageId,
+        startLine: range.startLine as number,
+        endLine: range.endLine,
+        content,
+        expectedTotalLines: expectFlag.expectedTotalLines,
+      }),
     );
     if (!result.ok) return EXIT_RUNTIME_ERROR;
+
+    if (result.value.contentModeWarning) {
+      ctx.stderr.write(`Warning: ${result.value.contentModeWarning}\n`);
+    }
 
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify(result.value)}\n`);

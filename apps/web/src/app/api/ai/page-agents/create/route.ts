@@ -6,6 +6,11 @@ import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { getAppDriveMembership } from '@pagespace/lib/permissions/app-permissions';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import {
+  describeAgentToolSurface,
+  formatConfigSurfaceNotes,
+  toolSurfaceEcho,
+} from '@/lib/ai/core/agent-tool-surface';
 import { DEFAULT_PROVIDER, DEFAULT_MODEL, ONPREM_ALLOWED_PROVIDERS, isValidModel } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -28,7 +33,7 @@ export async function POST(request: Request) {
     const { userId } = auth;
 
     const body = await request.json();
-    const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage } = body;
+    const { driveId, parentId, title, systemPrompt, enabledTools, aiProvider, aiModel, welcomeMessage, sandboxEnabled } = body;
 
     if (!driveId || !title || !systemPrompt) {
       return NextResponse.json(
@@ -114,6 +119,19 @@ export async function POST(request: Request) {
       }
     }
 
+    // The per-agent sandbox switch, settable AT BIRTH (issue #2460). Without it
+    // an agent created here with `enabledTools: ['bash', …]` was born in the
+    // contradiction this PR exists to end: the names stored, the switch off, and
+    // a response below cheerfully listing tools it would never be granted.
+    // Rejected rather than coerced, like the other doors that write it —
+    // `Boolean("false")` is `true`.
+    if (sandboxEnabled !== undefined && typeof sandboxEnabled !== 'boolean') {
+      return NextResponse.json(
+        { error: 'sandboxEnabled must be a boolean' },
+        { status: 400 }
+      );
+    }
+
     // Resolve the agent's (provider, model) as one atomic pair — never mix a caller
     // provider with the default model. A partial body (only one field) falls back to
     // the product default pair rather than synthesizing an impossible combination.
@@ -159,6 +177,9 @@ export async function POST(request: Request) {
     if (enabledTools !== undefined) {
       agentData.enabledTools = enabledTools;
     }
+    if (sandboxEnabled !== undefined) {
+      agentData.sandboxEnabled = sandboxEnabled;
+    }
 
     // Create the agent and membership atomically so there is never an agent
     // without a drive role (partial failure rolls back both).
@@ -200,22 +221,40 @@ export async function POST(request: Request) {
       driveId,
     } });
 
+    // What the stored config becomes at runtime, computed exactly as the update
+    // doors compute it so a create and an update never describe the same agent
+    // differently.
+    const toolSurface = describeAgentToolSurface({
+      enabledTools: Array.isArray(enabledTools) ? enabledTools : null,
+      sandboxEnabled: Boolean(agentData.sandboxEnabled),
+      // Creation does not set the exposure mode, so it is the column default.
+      toolExposureMode: 'upfront',
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+    });
+    const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
+
     return NextResponse.json({
       success: true,
       id: newAgent.id,
       title: newAgent.title,
       type: 'AI_CHAT',
       parentId: parentId || 'root',
-      message: `Successfully created AI agent "${title}" with custom configuration`,
-      summary: `Created AI agent "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'} with ${enabledTools?.length || 0} tools`,
+      message: toolSurface.blocked.length > 0
+        ? `Created AI agent "${title}", but ${toolSurface.blocked.length} configured tool(s) will NOT be granted at runtime.`
+        : `Successfully created AI agent "${title}" with custom configuration`,
+      summary: `Created AI agent "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'} with ${enabledTools?.length || 0} tools (${toolSurface.granted.length} of them actually granted)`,
       agentConfig: {
         systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),
         enabledToolsCount: enabledTools?.length || 0,
         enabledTools: enabledTools || [],
+        // STORED vs EFFECTIVE, the same block every other config door reports.
+        ...toolSurfaceEcho(toolSurface),
+        sandboxEnabled: Boolean(agentData.sandboxEnabled),
         aiProvider: agentData.aiProvider,
         aiModel: agentData.aiModel,
         hasWelcomeMessage: !!welcomeMessage
       },
+      ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),
       stats: {
         pageType: 'AI_CHAT',
         location: parentId ? `Parent ID: ${parentId}` : 'Drive root',
@@ -224,7 +263,13 @@ export async function POST(request: Request) {
       },
       nextSteps: [
         `AI agent "${title}" is ready to use`,
-        `Agent has access to ${enabledTools?.length || 0} tools: ${(enabledTools || []).join(', ')}`,
+        // What it can ACTUALLY call — the old line listed whatever was stored,
+        // which is the sentence the reporter of #2460 believed for three spawns.
+        // An agent created with no allowlist is unrestricted; naming its ninety
+        // tools here would be noise, so it says so instead.
+        toolSurface.configured === null
+          ? `Agent can call every available tool (${toolSurface.granted.length})`
+          : `Agent can call ${toolSurface.granted.length} tool(s): ${toolSurface.granted.join(', ') || 'none'}`,
         'Start a conversation to test the agent\'s behavior',
         `Agent ID: ${newAgent.id} - use this for further operations`,
         'Use read_page to view the agent\'s full configuration'

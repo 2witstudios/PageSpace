@@ -20,6 +20,23 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
   drive name alone.
 
+- **A spreadsheet is readable by an agent, not just writable** — reading a sheet used to hand an
+  assistant the whole spreadsheet as its raw internal file: a 500-row sheet arrived as roughly
+  24,000 lines of cell-by-cell markup, with no way to ask for a range of rows or find the row you
+  wanted. Assistants ended up keeping a copy of your data somewhere else just to be able to read it.
+  Now an assistant reads rows: a range, or the rows matching a value in a column ("the row where the
+  member ID is 28605"), returning only the columns it asked for, with formulas and cell errors
+  intact. Opening a sheet gives its size and first rows rather than a wall of markup, and so does a
+  folder listing that includes page contents, and so does a command whose instructions live on a
+  sheet — that used to spend the command's whole budget on markup every time it ran. Cell edits also
+  have a stated limit now — 500 cells per call — instead of a size an assistant had to discover by
+  failing. And a sheet whose stored file cannot be read is reported as unreadable rather than as
+  empty, so an assistant is never invited to overwrite data that is still there — as is a page that
+  is a sheet in name but holds ordinary text. Reading a sheet never changes it, including in
+  read-only mode: on an older sheet that has not been converted to the new row storage yet, an
+  assistant can still read rows in order, and is told to do that rather than having the read quietly
+  convert the sheet — or being told to change a cell just to make searching work.
+
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
   sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
@@ -187,6 +204,82 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the only hint was a count inside the expanded row.
 
 ### Fixed
+
+- **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
+  built-in commands and your personal ones; the drive's own commands were missing, and since a
+  command runs from the chip you pick out of that list, they simply could not be used there. That
+  composer never said which drive it was in, so the list was built as though there were none. It now
+  scopes to the agent's drive — the same drive the command actually runs against — in the agent page,
+  in agent panes, and in the assistant. The right-sidebar assistant had a subtler version of the same
+  fault: with an agent selected it offered the commands of whatever page you were looking at, so an
+  agent borrowed from another drive showed commands that failed the moment you sent them. It now
+  offers the agent's.
+
+- **An agent you configure with tools actually gets them, or says why not** — an agent set up
+  entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
+  `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
+  then run without a single one of them. The switch that offers an agent the sandbox at all was
+  only reachable from the settings screen, so a tool-configured agent was silently stuck with it
+  off, and every worker spawned under that agent quietly came up unable to do the work. Three
+  things changed: the sandbox switch can be set from chat like every other setting — and when
+  creating an agent, so a new agent is no longer born unable to use the tools it was given;
+  saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
+  call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
+  contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
+  instead of starting a worker that cannot do the job. A spawn also warns when the workspace the
+  worker lands in will not run code for you at all — the reason the same agent could produce three
+  different tool sets on three tries and look random. The SDK and `pagespace agents config` can set
+  the switch and read the same answers.
+
+- **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
+  access was turned off still received the sandbox tools when someone @-mentioned it in a channel,
+  when consulted through the API, and on a voice call, while the same agent in a page chat
+  correctly had none of them. The ones
+  that run code were still refused when called, by a separate check — but the session tools
+  (spawning and messaging other agents) need no compute and simply worked, so the switch was not
+  the switch on those surfaces. One switch, every surface.
+
+- **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
+  enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no
+  restriction", so an agent someone was trying to lock down came back holding every tool there is.
+  The settings screen always read an empty list as "none"; now both doors agree. To leave the list
+  alone, don't send it at all.
+- **A long agent job no longer wedges itself partway through** — an agent working through a big
+  batch (reading thirty files and writing each one into a spreadsheet, say) would get several
+  chunks in and then fail every remaining step with the same cryptic complaint that its tool call
+  was missing a `tool_name` — which it had in fact sent. Retrying never helped, and only starting a
+  fresh agent got the work moving again. The tool call was not malformed: everything the agent read
+  and everything it wrote stayed in its working memory at full size for the rest of the job, so it
+  eventually had no room left to compose its next call, and the empty call it managed to send was
+  reported as a missing field. Large reads and writes from earlier in a run are now summarised once
+  the agent has moved past them — the most recent stay whole, and a summarised read says how to
+  fetch it again — so a long job no longer crowds itself out, on every surface that runs one: chat,
+  the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive incomplete,
+  the agent is now told what actually happened and given the fix, instead of a complaint about a
+  field it did not omit.
+- **Editing a document by line number no longer lies about what it did** — a line edit reported a
+  line count taken before the document was stored, so replacing 89 lines with 91 answered "9 lines".
+  An agent that trusted that number addressed its next edit against a document shorter than the one
+  on disk: most of the new content landed, the tail of the old content survived, and the page was
+  left holding invalid JSON — reported as success. Both editing surfaces (the in-app AI tools and
+  the `/api/mcp/documents` endpoint the CLI and SDK use) now share one line-accounting rule, and the
+  count a write reports is measured on the content actually saved — it is the count the next read
+  returns. `replace-lines` also takes an optional `--expect-lines N`: pass the total you read, and
+  an edit addressed against a document that has since changed is refused rather than half-applied.
+- **A document laid out with line breaks is no longer reported as one line** — line numbering only
+  understood block elements, so an eighteen-line document written with `<br>` separators (what
+  pasting text into the editor produces) came back as `totalLines: 1` and could not be edited by
+  line at all. `<br>` and `<hr>` now count as the line breaks they are, and a blank line between two
+  paragraphs is no longer silently swallowed.
+- **Documents an agent creates default to markdown** — machine-written documents used to be created
+  in rich-text mode, where line numbers are computed from the underlying markup rather than the text
+  that was written. Documents created through the AI tools or an API key now default to markdown;
+  documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
+  disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
+  read and every edit instead of leaving it to be discovered by corrupting the document — and that
+  content is left exactly as written, including any HTML tags inside it. Previously a page holding
+  JSON with a tag in one of its strings could have a line break inserted inside that string, leaving
+  the page holding invalid JSON.
 
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh

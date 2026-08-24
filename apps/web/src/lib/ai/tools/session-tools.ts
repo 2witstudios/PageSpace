@@ -80,6 +80,7 @@ import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { PaneTargetKind } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { MAX_SIBLINGS } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import type { ToolExecutionContext } from '../core/types';
+import type { AgentToolSurface } from '../core/agent-tool-surface';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
 export const MAX_SESSION_INPUT_BYTES = 4000;
@@ -420,6 +421,16 @@ export type ShellSendOutcome =
   | { ok: true; delivered: true; started?: boolean }
   | { ok: false; error: string };
 
+/**
+ * `AgentToolSurface` plus its human sentences — the formatter lives beside the
+ * gates it describes (`../core/agent-tool-surface.ts`), which imports the tool
+ * registry, so this factory takes the finished report rather than importing its
+ * way to the database.
+ */
+export interface AgentToolSurfaceReport extends AgentToolSurface {
+  notes: string[];
+}
+
 export interface SessionToolsDeps {
   /**
    * The caller's WORKSPACE (agent_workspaces row id) resolved from their
@@ -513,6 +524,46 @@ export interface SessionToolsDeps {
    * view permission any agent consult requires. Never called for null (global).
    */
   canUseAgent: (userId: string, agentPageId: string) => Promise<boolean>;
+  /**
+   * What that agent's stored tool config will ACTUALLY become in the worker's
+   * turn, with a sentence per divergence (`../core/agent-tool-surface.ts`).
+   * Null when the page is gone.
+   *
+   * A spawn is the moment the divergence starts costing somebody real work, so
+   * it is the moment to say it: the worker gets whatever the gates leave, and
+   * until issue #2460 nothing at any layer mentioned the difference — three
+   * spawns of a 24-tool sandbox agent produced three different page-only
+   * surfaces and no error anywhere.
+   */
+  describeAgentToolSurface: (agentPageId: string) => Promise<AgentToolSurfaceReport | null>;
+  /**
+   * The one divergence the stored config CANNOT predict: whether the workspace
+   * the worker actually landed in will grant the COMPUTE tools its agent is
+   * configured for. That answer keys on the workspace's payer tier, so the same
+   * agent legitimately resolves differently in two workspaces — which is why the
+   * reporter of issue #2460 saw three spawns produce three different surfaces
+   * and read it as randomness.
+   *
+   * Returns a sentence when compute the agent is configured for will NOT be
+   * granted there, otherwise null. A WARNING, never a refusal: the caller cannot
+   * fix a payer's tier by spawning differently, and a worker without bash is
+   * still a worker that can read pages and think.
+   *
+   * The runtime owns the whole judgement — which of `granted` are compute tools,
+   * and the capability check — because this factory imports neither the tool
+   * name sets nor the database.
+   */
+  describeWorkerComputeShortfall: (input: {
+    workspaceId: string;
+    userId: string;
+    /**
+     * What the worker's agent grants, or `null` for "unrestricted" — an agent
+     * with no allowlist, or a global worker, which reaches the whole registry.
+     * `null` is not "nothing": it is the widest case, and the one where compute
+     * is most certainly in play.
+     */
+    granted: readonly string[] | null;
+  }) => Promise<string | null>;
   /** Create the labeled worker conversation (squat-guarded) bound into its workspace. */
   createWorkerSession: (input: {
     /** The WORKER's new conversation id (minted by the caller of this dep). */
@@ -1313,6 +1364,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
       description:
         'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
+        'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
       inputSchema: spawnSessionInputSchema,
       execute: async ({ name, prompt, agent, workspace: targetWorkspace, wait }, options) => {
@@ -1357,6 +1409,79 @@ export function createSessionTools(deps: SessionToolsDeps): {
           };
         }
 
+        // WHAT THE WORKER WILL ACTUALLY HAVE (issue #2460).
+        //
+        // `enabledTools` is an allowlist, not a grant: the per-agent sandbox
+        // switch strips the whole sandbox family downstream of it, and the
+        // allowlist cannot re-grant them. An agent configured through
+        // `update_agent_config` — where `sandboxEnabled` was, until this change,
+        // not even settable — could therefore name bash/readFile/spawn_shell,
+        // be echoed those names back on every write, and spawn worker after
+        // worker with page tools only. Nothing failed; the workers just could
+        // not do the job.
+        //
+        // FAIL for a config that CONTRADICTS ITSELF — sandbox tools named while
+        // the switch that gates them is off. It is deterministic, it is nobody's
+        // runtime accident, and one `update_agent_config` call fixes it either
+        // way (grant the switch, or drop the tools). Spawning here can only
+        // produce the crippled worker the issue asks us to refuse.
+        //
+        // WARN, don't fail, for everything else: a name that is not registered
+        // in this deployment is not something the caller can fix by trying
+        // again, and `'search'` exposure defers tools without losing them —
+        // refusing there would break working spawns to report a non-problem.
+        // The warning rides the SUCCESS payload, naming the tools and the gate.
+        let toolSurfaceWarnings: string[] = [];
+        // What the agent's own config grants, carried to the post-creation
+        // compute check below — which needs the workspace the worker landed in.
+        // `null` = unrestricted: no allowlist, or a global worker.
+        let grantedForComputeCheck: readonly string[] | null = null;
+        if (agentPageId) {
+          // DEGRADE, don't refuse, if the check itself cannot run. This is a
+          // diagnostic added to a path that worked without it; letting a
+          // transient read failure turn a good spawn into an error would trade
+          // one silent problem for a louder unrelated one. Saying so is the
+          // point — an unverified surface is reported as unverified, never as
+          // verified-fine.
+          const surface = await deps
+            .describeAgentToolSurface(agentPageId)
+            .catch(() => 'unavailable' as const);
+          if (surface === 'unavailable') {
+            toolSurfaceWarnings = [
+              "Could not read this agent's tool configuration before spawning, so its tool surface was not checked. " +
+                'If the worker reports missing tools, call update_agent_config to see what it is actually granted.',
+            ];
+          } else if (surface) {
+            // Filtered inline rather than through `blockedByGate`, which is the
+            // same three lines: this factory deliberately imports nothing that
+            // reaches the tool registry or the database (see the module header),
+            // and that helper's module does both.
+            const sandboxBlocked = surface.blocked
+              .filter((entry) => entry.gate === 'sandbox_disabled')
+              .map((entry) => entry.tool);
+            if (sandboxBlocked.length > 0) {
+              return {
+                success: false,
+                reason: 'agent_tools_ungrantable',
+                error:
+                  `That agent's configuration cannot be honored: ${sandboxBlocked.join(', ')} ` +
+                  'are in its enabledTools but its sandboxEnabled switch is off, so the worker would run without them. ' +
+                  'Either the agent should have them — call update_agent_config with sandboxEnabled: true — or its ' +
+                  'sandbox access was deliberately revoked and the names were left behind, in which case remove them ' +
+                  'from enabledTools. Both are one call; the config cannot mean both.',
+                blockedTools: surface.blocked,
+                grantedTools: surface.granted,
+                // The FULL picture, not just the refusing gate: a config can be
+                // wrong in more than one way at once, and reporting only the
+                // sandbox half would send the caller round again for the rest.
+                ...(surface.notes.length > 0 ? { toolSurfaceWarnings: surface.notes } : {}),
+              };
+            }
+            toolSurfaceWarnings = surface.notes;
+            grantedForComputeCheck = surface.configured === null ? null : surface.granted;
+          }
+        }
+
         // The worker's new conversation id — returned on the wire as `sessionId`.
         const conversationId = deps.newId();
         const created = await deps.createWorkerSession({
@@ -1375,6 +1500,19 @@ export function createSessionTools(deps: SessionToolsDeps): {
             reason: created.reason,
           };
         }
+
+        // The worker EXISTS now, so its workspace is known — and with it the one
+        // question the agent's stored config could not answer (see the dep's
+        // docs). Best-effort: a diagnostic must never be the reason a spawned
+        // worker's caller sees an error.
+        const shortfall = await deps
+          .describeWorkerComputeShortfall({
+            workspaceId: created.workspaceId,
+            userId: actor.userId,
+            granted: grantedForComputeCheck,
+          })
+          .catch(() => null);
+        if (shortfall) toolSurfaceWarnings = [...toolSurfaceWarnings, shortfall];
 
         // Placement moved inside `createWorkerSession`, which this tool asks
         // for with `placeInGrid` (issue #2373). It used to sit here, gated on
@@ -1414,6 +1552,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
           name: plan.name,
           agent: agentPageId,
           workspaceId: created.workspaceId,
+          // Named `toolSurfaceWarnings`, not folded into `note`: the whole
+          // complaint behind issue #2460 is that a worker's tool surface
+          // diverged from its config with nothing anywhere saying so.
+          ...(toolSurfaceWarnings.length > 0 ? { toolSurfaceWarnings } : {}),
           ...(dispatched.waited
             ? { reply: dispatched.reply }
             : {

@@ -1,0 +1,191 @@
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import type { SessionAuthResult } from '@/lib/auth';
+
+// ============================================================================
+// The per-agent SANDBOX SWITCH on POST /api/ai/page-agents/consult (issue #2460)
+//
+// This route assembles its own tool set and used to ask only "is it in
+// enabledTools?". `pages.sandboxEnabled` is the second question — whether the
+// sandbox families are on the table at all — and without it an agent with the
+// switch OFF was handed the session/shell family here while the same agent in a
+// page chat correctly saw none of it.
+//
+// Asserted on the tools actually handed to `generateText`, which is the set the
+// model can call, rather than on an intermediate.
+// ============================================================================
+
+vi.mock('@/lib/auth', () => ({
+  authenticateRequestWithOptions: vi.fn(),
+  isAuthError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r),
+  isMCPAuthResult: vi.fn((r: { tokenType?: string }) => r?.tokenType === 'mcp'),
+  checkMCPPageScope: vi.fn().mockResolvedValue(null),
+  getAllowedDriveIds: vi.fn((auth: { allowedDriveIds?: string[] }) => auth.allowedDriveIds ?? []),
+  isScopedMCPAuth: vi.fn((auth: { allowedDriveIds?: string[] }) => (auth.allowedDriveIds ?? []).length > 0),
+  canPrincipalViewPage: vi.fn(async (auth: { userId: string }, pageId: string) => {
+    const { canUserViewPage } = await import('@pagespace/lib/permissions/permissions');
+    return canUserViewPage(auth.userId, pageId);
+  }),
+}));
+
+vi.mock('@pagespace/lib/permissions/permissions', () => ({
+  canUserViewPage: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    api: { info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() },
+    ai: { child: vi.fn(() => ({ info: vi.fn(), error: vi.fn(), warn: vi.fn(), debug: vi.fn(), trace: vi.fn() })) },
+  },
+}));
+
+vi.mock('@/lib/ai/core/model-capabilities', () => ({
+  supportsTemperature: vi.fn().mockResolvedValue(true),
+}));
+
+vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
+
+// enabledTools names a sandbox-family tool, which is a perfectly valid thing to
+// store — and grants nothing while the switch is off.
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: ['spawn_session', 'list_pages'], subscriptionTier: 'pro', role: 'user', sandboxEnabled: false };
+
+vi.mock('@pagespace/db/db', () => {
+  type QueryBuilder = {
+    from: () => QueryBuilder;
+    where: () => QueryBuilder;
+    orderBy: () => QueryBuilder;
+    limit: () => QueryBuilder;
+    then: (resolve: (v: unknown[]) => unknown) => unknown;
+  };
+  const builder: QueryBuilder = {
+    from: vi.fn(() => builder),
+    where: vi.fn(() => builder),
+    orderBy: vi.fn(() => builder),
+    limit: vi.fn(() => builder),
+    then: (resolve: (v: unknown[]) => unknown) => resolve([agentPage]),
+  };
+  return { db: { select: vi.fn(() => builder) } };
+});
+vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), desc: vi.fn(), and: vi.fn() }));
+// HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
+// reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
+// PR 12) moved the consult route's two history branches onto
+// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// which read the unified `messages` table.
+vi.mock('@/lib/repositories/message-repository', () => ({
+  messageRepository: {
+    savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    // These suites assert other things, so an empty history is the honest
+    // stand-in for the two readers the cutover introduced.
+    getPageConversationMessages: vi.fn().mockResolvedValue([]),
+    getRecentPageMessagesForUser: vi.fn().mockResolvedValue([]),
+  },
+}));
+vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' } }));
+vi.mock('@pagespace/db/schema/auth', () => ({ users: { id: 'id', subscriptionTier: 'subscriptionTier' } }));
+
+vi.mock('@pagespace/lib/billing/credit-gate', () => ({
+  canConsumeAI: vi.fn().mockResolvedValue({ allowed: true, reason: 'unlimited' }),
+}));
+
+vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
+  AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+}));
+
+vi.mock('@/lib/ai/core/provider-factory', () => ({
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  isProviderError: vi.fn().mockReturnValue(false),
+}));
+// A real sandbox-family name, so `SANDBOX_TOOL_NAMES` recognises it.
+vi.mock('@/lib/ai/core/ai-tools', () => ({
+  pageSpaceTools: {
+    spawn_session: { description: 'spawn_session' },
+    list_pages: { description: 'list_pages' },
+  },
+}));
+vi.mock('@/lib/ai/core/timestamp-utils', () => ({
+  buildTimestampSystemPrompt: vi.fn().mockReturnValue(''),
+}));
+vi.mock('@/lib/ai/core/personalization-utils', () => ({
+  getUserTimezone: vi.fn().mockResolvedValue('UTC'),
+}));
+vi.mock('@/lib/ai/core/ai-providers-config', () => ({
+  DEFAULT_PROVIDER: 'openai',
+  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
+  resolveProviderModel: vi.fn((sp: string, sm: string) => ({
+    provider: sp && sm ? sp : 'openai',
+    model: sm || 'openai/gpt-5.3-chat',
+  })),
+}));
+
+vi.mock('@/lib/ai/core/tool-utils', () => ({ mergeToolSets: vi.fn((a: Record<string, unknown>, b: Record<string, unknown>) => ({ ...a, ...b })) }));
+vi.mock('@/lib/ai/tools/finish-tool', () => ({ finishTool: {}, FINISH_TOOL_NAME: 'finish' }));
+vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
+  resolvePageAgentIntegrationTools: vi.fn().mockResolvedValue({}),
+}));
+
+vi.mock('ai', () => ({
+  generateText: vi.fn().mockResolvedValue({
+    text: 'answer',
+    steps: [{ text: 'answer', content: [] }],
+    totalUsage: { inputTokens: 5, outputTokens: 3, totalTokens: 8 },
+  }),
+  convertToModelMessages: vi.fn().mockReturnValue([]),
+  stepCountIs: vi.fn(),
+  hasToolCall: vi.fn(() => () => false),
+}));
+
+import { generateText } from 'ai';
+import { POST } from '../route';
+import { authenticateRequestWithOptions } from '@/lib/auth';
+
+const mockWebAuth = (): SessionAuthResult => ({
+  userId: 'user-1',
+  tokenVersion: 0,
+  tokenType: 'session',
+  sessionId: 'sess-1',
+  role: 'user',
+  adminRoleVersion: 0,
+});
+
+const makeRequest = () =>
+  new Request('https://example.com/api/ai/page-agents/consult', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ agentId: 'agent-1', question: 'What is up?' }),
+  });
+
+describe('POST /api/ai/page-agents/consult - the per-agent sandbox switch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    agentPage.aiProvider = 'openai';
+    agentPage.aiModel = 'openai/gpt-5.3-chat';
+    agentPage.role = 'user';
+    agentPage.sandboxEnabled = false;
+  });
+
+  const toolNamesHandedToTheModel = (): string[] => {
+    const call = vi.mocked(generateText).mock.calls.at(-1)?.[0] as { tools?: Record<string, unknown> };
+    return Object.keys(call?.tools ?? {});
+  };
+
+  it('given the switch OFF, withholds the sandbox family even though enabledTools names it', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth());
+
+    await POST(makeRequest());
+
+    expect(toolNamesHandedToTheModel()).toContain('list_pages');
+    expect(toolNamesHandedToTheModel()).not.toContain('spawn_session');
+  });
+
+  it('given the switch ON, hands over what the allowlist names', async () => {
+    agentPage.sandboxEnabled = true;
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockWebAuth());
+
+    await POST(makeRequest());
+
+    expect(toolNamesHandedToTheModel()).toEqual(
+      expect.arrayContaining(['list_pages', 'spawn_session']),
+    );
+  });
+});

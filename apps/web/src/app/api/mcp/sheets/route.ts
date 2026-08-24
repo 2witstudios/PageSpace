@@ -16,7 +16,7 @@ import {
   listTabs,
   MAX_ROW_PAGE_SIZE,
 } from '@pagespace/lib/sheets/store';
-import { SheetQueryError } from '@pagespace/lib/sheets/query';
+import { SHEET_FILTER_OPS, SheetQueryError } from '@pagespace/lib/sheets/query';
 import { SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -50,11 +50,8 @@ const columnSchema = z.string().regex(/^[A-Za-z]{1,7}$/, 'Column must be letters
  */
 const conditionSchema = z.object({
   column: columnSchema,
-  op: z.enum([
-    'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
-    'contains', 'startsWith', 'endsWith',
-    'isEmpty', 'isNotEmpty', 'in',
-  ]),
+  // From the store's own list, not a copy of it — see `SHEET_FILTER_OPS`.
+  op: z.enum(SHEET_FILTER_OPS),
   value: z.union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))]).optional(),
 });
 
