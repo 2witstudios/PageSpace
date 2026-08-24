@@ -1244,11 +1244,12 @@ describe('page-read-tools', () => {
       ) as Record<string, unknown>;
 
       expect(result.rowsReturned).toBe(0);
-      // Whatever it says, it must not be "call again with lineStart: 4".
+      // Not "call again with lineStart: 4" — and not past the fetched rows
+      // either: resuming at 501 would silently skip row 500, which the fetch
+      // reached but clipping removed and the agent never saw.
       expect(result.nextStartRow).not.toBe(4);
-      if (result.hasMoreRows) {
-        expect(result.nextStartRow).toBe(501);
-      }
+      expect(result.hasMoreRows).toBe(true);
+      expect(result.nextStartRow).toBe(500);
     });
 
     it('still points past the last returned row when rows really do follow', async () => {

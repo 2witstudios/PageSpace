@@ -498,13 +498,17 @@ export function renderSheetTable(
       // produce a row with more apparent columns than the header, silently
       // shifting every value after it onto the wrong column letter.
       const flat = value.replace(/\r?\n/g, '\\n').replace(/\|/g, '\\|');
-      if (flat.length <= MAX_TABLE_CELL_CHARS) return flat;
+      // Measured AND cut in code points. Mixing the two — a UTF-16 `.length`
+      // guard with a code-point slice — flagged cells that were never
+      // shortened: 100 emoji is 200 UTF-16 units, so it failed the guard, got
+      // an ellipsis and bumped the counter, while the slice returned all 100.
+      // The reader was then warned not to write back a value that was whole.
+      const points = [...flat];
+      if (points.length <= MAX_TABLE_CELL_CHARS) return flat;
       truncatedCells++;
-      // By CODE POINT, not UTF-16 unit: slicing mid-surrogate emits a lone
-      // half that rides into the tool result and renders as U+FFFD. The rest
-      // of this change is careful about that on the line-boundary cuts; the
-      // per-cell cut has the same hazard.
-      return `${[...flat].slice(0, MAX_TABLE_CELL_CHARS).join('')}…`;
+      // By CODE POINT: slicing mid-surrogate emits a lone half that rides into
+      // the tool result and renders as U+FFFD.
+      return `${points.slice(0, MAX_TABLE_CELL_CHARS).join('')}…`;
     });
     lines.push(`${row.rowNumber}→${cells.join(' | ')}`);
   }

@@ -217,7 +217,13 @@ export const sheetReadTools = {
         // filtered path — where it was rejected for combining with `startRow`,
         // or refused as "not migrated to row storage" for a request that only
         // ever needed rows.
-        const isFiltered = where !== undefined || orderBy !== undefined || (offset !== undefined && offset > 0);
+        // An empty `orderBy` is not an ordering, exactly as `offset: 0` is not
+        // an offset — `compileOrderBy([])` returns undefined. Models fill these
+        // in as defaults, and counting them as filters derailed a plain
+        // positional read.
+        const orderByKeys = orderBy && orderBy.length > 0 ? orderBy : undefined;
+        const isFiltered =
+          where !== undefined || orderByKeys !== undefined || (offset !== undefined && offset > 0);
 
         // The two paging models are different coordinate systems, and silently
         // ignoring the one that doesn't apply is exactly the failure this tool
@@ -327,7 +333,7 @@ export const sheetReadTools = {
 
         const result = await queryRows(ref, {
           where: toSheetWhere(where),
-          orderBy,
+          orderBy: orderByKeys,
           select: selectColumns,
           limit: pageSize,
           offset,
@@ -472,7 +478,7 @@ function buildResult(params: BuildResultParams) {
     // guaranteed-empty call, and contradicts `SheetWindow.nextFromRow`'s own
     // contract.
     ...(hasMore && nextStartRow !== undefined && nextStartRow !== null && { nextStartRow }),
-    ...(nextOffset !== undefined && { nextOffset }),
+    ...(nextOffset != null && { nextOffset }),
     table: rendered.text,
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
     summary: `Read ${rows.length} row${rows.length === 1 ? '' : 's'} from sheet "${page.title}" (${scope}, ${columnCount} columns)`,

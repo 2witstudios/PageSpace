@@ -373,6 +373,25 @@ describe('read_sheet — filtered reads', () => {
     expect(String((result.nextSteps as string[])[0])).toContain('offset: 4');
   });
 
+  it('omits nextOffset when no matches follow', async () => {
+    // Emitting `nextOffset: null` beside `hasMore: false` invites an agent that
+    // branches on the field's presence into a guaranteed-empty call — the same
+    // reason nextStartRow is suppressed.
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 0, cells: { A: { raw: 'x', value: 'x' } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+    });
+
+    expect(result.hasMore).toBe(false);
+    expect('nextOffset' in result).toBe(false);
+  });
+
   it('turns a bad column or filter into a correctable answer, not a thrown failure', async () => {
     mockQueryRows.mockRejectedValue(new SheetQueryError('Invalid column: 1'));
 
@@ -414,6 +433,17 @@ describe('read_sheet — what counts as a filtered read', () => {
     // pushed a plain positional read onto the filtered path, where it was
     // rejected for combining with startRow or refused as "not migrated".
     const result = await run({ pageId: 'page-1', startRow: 5, limit: 10, offset: 0 });
+
+    expect(result.success).toBe(true);
+    expect(mockReadRows).toHaveBeenCalledTimes(1);
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+
+  it('treats an empty orderBy as no ordering at all', async () => {
+    // `compileOrderBy([])` returns undefined — no sort was ever requested — so
+    // counting it as a filter derailed a plain positional read, same as
+    // `offset: 0` and `select: []` did.
+    const result = await run({ pageId: 'page-1', startRow: 10, limit: 20, orderBy: [] });
 
     expect(result.success).toBe(true);
     expect(mockReadRows).toHaveBeenCalledTimes(1);

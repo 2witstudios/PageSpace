@@ -1055,9 +1055,16 @@ export const pageReadTools = {
           // pointed at the very call that had just returned nothing. The first
           // fix here only covered the empty-FETCH case; this is the empty-after
           // -CLIPPING case, and it loops the same way.
+          // Resume at the first row this window DROPPED, not past the last one
+          // it fetched. Same sparse example: rows 1-3 and 500-509, asked for
+          // `lineStart: 4, lineEnd: 10`. The fetch returns rows 500-506 and
+          // clipping removes all of them; pointing past the last fetched row
+          // would resume at 507 and silently skip 500-506, which the agent had
+          // never been shown. The first dropped row is always past `lineEnd`,
+          // so it cannot reproduce the loop this guards against either.
           const resumeAt = rows.length > 0
             ? rows[rows.length - 1].rowNumber + 1
-            : sheet.nextFromRow !== null ? sheet.nextFromRow + 1 : null;
+            : sheet.rows.length > 0 ? sheet.rows[0].rowNumber : null;
           const moreRows =
             !invertedRange &&
             sheet.rows.length > 0 && resumeAt !== null && (clippedByLineEnd || sheet.hasMore);

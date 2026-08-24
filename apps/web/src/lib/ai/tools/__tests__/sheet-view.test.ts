@@ -192,12 +192,25 @@ describe('renderSheetTable', () => {
   it('cuts a long cell on a code-point boundary, not a UTF-16 unit', () => {
     // Slicing mid-surrogate emits a lone half that rides into the tool result
     // and renders as U+FFFD.
-    const astral = '\u{1F600}'.repeat(TABLE_CELL_CHAR_LIMIT);
+    // Comfortably past the limit in CODE POINTS: exactly TABLE_CELL_CHAR_LIMIT
+    // emoji is 2x that in UTF-16 units and must NOT be reported as cut.
+    const astral = '\u{1F600}'.repeat(TABLE_CELL_CHAR_LIMIT + 10);
     const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: astral, value: astral } })]);
 
     expect(rendered.truncatedCells).toBe(1);
     expect(rendered.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
     expect(rendered.text).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
+  it('measures the cell in code points, so a whole value is never flagged as cut', () => {
+    // 120 emoji is 240 UTF-16 units. Measuring in units while cutting in code
+    // points flagged it as truncated, appended an ellipsis, and warned the
+    // reader not to write back a value that was complete.
+    const exactly = '\u{1F600}'.repeat(TABLE_CELL_CHAR_LIMIT);
+    const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: exactly, value: exactly } })]);
+
+    expect(rendered.truncatedCells).toBe(0);
+    expect(rendered.text).not.toContain('…');
   });
 
   it('reports nothing cut when nothing was cut', () => {
