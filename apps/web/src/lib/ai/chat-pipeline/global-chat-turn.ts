@@ -97,7 +97,6 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
-import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { resolveGenerationAdmission } from '@/lib/ai/core/generation-admission';
 import { makeOnStepFinishHandler } from '@/lib/ai/core/step-finish-handler';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
@@ -113,7 +112,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '@/lib/ai/core/context-assembly';
 import {
   resolveOrCreateConversation,
   ConversationOwnershipError,
@@ -1385,14 +1384,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               });
               lifecycle!.finish(true);
             },
-            // Re-mark breakpoints per step; stableBoundaryIndex is fixed for this request.
-            // Capping runs FIRST so the breakpoint lands on the bytes actually sent:
-            // compaction and elision are per-turn, so this is the only seam that can
-            // stop one agent loop's own oversized payloads from exhausting the window
-            // (#2461 — see cap-step-tool-payloads.ts).
-            prepareStep: ({ messages: stepMessages }) => ({
-              messages: withCacheBreakpoints(capStepToolPayloads(stepMessages), stableBoundaryIndex),
-            }),
+            // Cap this turn's own oversized tool payloads, then re-mark breakpoints.
+            // stableBoundaryIndex is fixed for this request. See agentLoopPrepareStep.
+            prepareStep: agentLoopPrepareStep(stableBoundaryIndex),
             })
           },
         });

@@ -115,7 +115,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 import { db } from '@pagespace/db/db'
@@ -141,7 +141,6 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
-import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
@@ -1903,17 +1902,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 });
                 lifecycle!.finish(true);
               },
-              // Re-mark breakpoints per step so mid-loop tool results are cached.
-              // stableBoundaryIndex stays fixed (the summary is always at position
-              // 0; its first tail neighbour at position 1 remains stable as new
-              // messages are appended to the END of the accumulating array).
-              // Capping runs FIRST so the breakpoint lands on the bytes actually sent:
-              // compaction and elision are per-turn, so this is the only seam that can
-              // stop one agent loop's own oversized payloads from exhausting the window
-              // (#2461 — see cap-step-tool-payloads.ts).
-              prepareStep: ({ messages: stepMessages }) => ({
-                messages: withCacheBreakpoints(capStepToolPayloads(stepMessages), stableBoundaryIndex),
-              }),
+              // Cap this turn's own oversized tool payloads, then re-mark breakpoints
+              // so mid-loop tool results are cached. stableBoundaryIndex stays fixed
+              // (the summary is always at position 0; its first tail neighbour at
+              // position 1 remains stable as new messages are appended to the END of
+              // the accumulating array). See agentLoopPrepareStep.
+              prepareStep: agentLoopPrepareStep(stableBoundaryIndex),
             })
           },
           });

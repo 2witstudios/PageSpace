@@ -45,8 +45,13 @@ function allSourceFiles(dir: string): string[] {
 /**
  * The argument object of each `streamText({` / `generateText({` call, matched by
  * brace balance so a call spanning two hundred lines is still read whole.
- * String literals and comments are skipped — a `}` inside a prompt string would
- * otherwise end the slice early and hide the rest of the call from the guard.
+ *
+ * Comments are STRIPPED from what is returned, not merely stepped over. A
+ * mutation check caught why that matters: deleting the wiring from a chat turn
+ * left the comment above it ("see agentLoopPrepareStep") in the slice, and the
+ * guard below happily matched the prose and passed. A guard a comment can
+ * satisfy is not a guard. String literals are stepped over too, so a `}` inside
+ * a prompt cannot end the slice early and hide the rest of the call.
  */
 function modelCallSlices(src: string): string[] {
   const slices: string[] = [];
@@ -57,33 +62,45 @@ function modelCallSlices(src: string): string[] {
     const open = src.indexOf('{', match.index);
     let depth = 0;
     let i = open;
+    let code = '';
 
     while (i < src.length) {
       const ch = src[i];
       const next = src[i + 1];
 
       if (ch === '/' && next === '/') {
-        i = src.indexOf('\n', i);
-        if (i === -1) break;
+        const eol = src.indexOf('\n', i);
+        if (eol === -1) break;
+        i = eol;
       } else if (ch === '/' && next === '*') {
         const close = src.indexOf('*/', i + 2);
         if (close === -1) break;
         i = close + 1;
       } else if (ch === "'" || ch === '"' || ch === '`') {
         const quote = ch;
+        code += ch;
         i += 1;
         while (i < src.length && src[i] !== quote) {
-          if (src[i] === '\\') i += 1;
+          code += src[i];
+          if (src[i] === '\\') {
+            i += 1;
+            code += src[i];
+          }
           i += 1;
         }
+        code += quote;
       } else if (ch === '{') {
         depth += 1;
+        code += ch;
       } else if (ch === '}') {
         depth -= 1;
+        code += ch;
         if (depth === 0) {
-          slices.push(src.slice(open, i + 1));
+          slices.push(code);
           break;
         }
+      } else {
+        code += ch;
       }
       i += 1;
     }
@@ -98,6 +115,15 @@ function modelCallSlices(src: string): string[] {
 const isMultiStep = (slice: string) => slice.includes('stopWhen');
 /** Only a loop that can emit tool calls has payloads to cap. */
 const passesTools = (slice: string) => /\btools\s*:/.test(slice);
+
+/**
+ * Either form counts. The two chat turns also re-mark cache breakpoints per
+ * step, so they share `agentLoopPrepareStep`, which composes the cap with
+ * `withCacheBreakpoints` — keeping the wiring out of turn-duplication-ratchet's
+ * way. Loops with no boundary to re-mark call the cap directly.
+ */
+const capsItsPayloads = (slice: string) =>
+  /\b(?:capStepToolPayloads|agentLoopPrepareStep)\s*\(/.test(slice);
 
 const SOURCE_FILES = allSourceFiles(SRC_DIR);
 
@@ -135,7 +161,7 @@ describe('per-step tool-payload cap call-site guard', () => {
     for (const file of SOURCE_FILES) {
       for (const slice of modelCallSlices(readFileSync(file, 'utf8'))) {
         if (!isMultiStep(slice) || !passesTools(slice)) continue;
-        if (!slice.includes('capStepToolPayloads')) offenders.push(srcRelPath(file));
+        if (!capsItsPayloads(slice)) offenders.push(srcRelPath(file));
       }
     }
     expect(offenders).toEqual([]);
