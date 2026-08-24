@@ -66,7 +66,7 @@ async function serializeSheetForInjection(pageId: string, content: string | null
       limit: SHEET_PREVIEW_ROWS,
       documentContent: content,
     });
-    const table = renderSheetTable(sheet.rows);
+    const table = renderSheetTable(sheet.rows).text;
     const header =
       `(SHEET "${sheet.tabName}": ${sheet.rowCount} rows x ${sheet.columnCount} columns` +
       (sheet.tabs.length > 1 ? `, ${sheet.tabs.length} tabs` : '') + '.)';

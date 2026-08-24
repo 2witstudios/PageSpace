@@ -429,21 +429,34 @@ export async function loadSheetWindow(
  *
  * Newlines inside a cell are escaped rather than emitted, or one cell would
  * silently become several rows.
+ *
+ * Returns the count of cells it had to cut as well as the text. The table is a
+ * RENDERING — the structured rows beside it always carry the full value — but a
+ * reader working from the table alone would have no way to know a value was
+ * shortened beyond the ellipsis, and could copy a truncated string back into a
+ * write. Callers surface the count so that is stated rather than inferred.
  */
-export function renderSheetTable(rows: readonly SheetViewRow[], columns?: readonly string[]): string {
+export function renderSheetTable(
+  rows: readonly SheetViewRow[],
+  columns?: readonly string[]
+): { text: string; truncatedCells: number } {
   const labels = columns ? [...columns].sort(compareColumnLabels) : columnsInRows(rows);
-  if (labels.length === 0) return '';
+  if (labels.length === 0) return { text: '', truncatedCells: 0 };
 
+  let truncatedCells = 0;
   const lines = [`columns→${labels.join(' | ')}`];
   for (const row of rows) {
     const cells = labels.map((label) => {
       const value = row.cells[label] ?? '';
       const flat = value.replace(/\r?\n/g, '\\n');
-      return flat.length > MAX_TABLE_CELL_CHARS
-        ? `${flat.slice(0, MAX_TABLE_CELL_CHARS)}…`
-        : flat;
+      if (flat.length <= MAX_TABLE_CELL_CHARS) return flat;
+      truncatedCells++;
+      return `${flat.slice(0, MAX_TABLE_CELL_CHARS)}…`;
     });
     lines.push(`${row.rowNumber}→${cells.join(' | ')}`);
   }
-  return lines.join('\n');
+  return { text: lines.join('\n'), truncatedCells };
 }
+
+/** The character budget one cell gets in a rendered table. */
+export const TABLE_CELL_CHAR_LIMIT = MAX_TABLE_CELL_CHARS;

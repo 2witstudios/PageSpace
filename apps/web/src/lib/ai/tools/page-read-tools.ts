@@ -27,6 +27,7 @@ import {
   SHEET_PREVIEW_ROWS,
   SHEET_LIST_PREVIEW_ROWS,
   MAX_SHEET_READ_ROWS,
+  TABLE_CELL_CHAR_LIMIT,
 } from './sheet-view';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
@@ -221,7 +222,7 @@ export const pageReadTools = {
                   }
                   throw error;
                 }
-                const table = renderSheetTable(sheet.rows);
+                const table = renderSheetTable(sheet.rows).text;
                 const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.`;
                 // The pointer rides in the content rather than in
                 // `contentClipped`, which promises the rest is reachable with
@@ -937,7 +938,8 @@ export const pageReadTools = {
             (row) => lineEnd === undefined || row.rowNumber <= lineEnd
           );
           const columns = columnsInRows(rows);
-          const table = renderSheetTable(rows, columns);
+          const rendered = renderSheetTable(rows, columns);
+          const table = rendered.text;
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
@@ -983,6 +985,7 @@ export const pageReadTools = {
             lineCount: rows.length,
             content: table,
             rawContent: table,
+            ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
             dimensions: { rowCount, columnCount: sheet.columnCount },
             tabs: sheet.tabs,
             tabIndex: sheet.tabIndex,
@@ -1019,6 +1022,9 @@ export const pageReadTools = {
                 ? [
                     `Only rows up to ${lastRow} of ${rowCount} are shown. Continue with read_sheet (startRow: ${lastRow + 1}), or with read_page again (lineStart: ${lastRow + 1}) if read_sheet is not available to you.`,
                   ]
+                : []),
+              ...(rendered.truncatedCells > 0
+                ? [`${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in the content above — read them from "rows", which carries the full text.`]
                 : []),
               'To find rows rather than page them — filter by column value, sort, or return only some columns — use read_sheet. Do not read a whole sheet to search it.',
               'Use edit_sheet_cells with A1 addresses to write; a row\'s number here is its A1 row.',

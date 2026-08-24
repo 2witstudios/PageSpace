@@ -23,6 +23,7 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
 import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
+  TABLE_CELL_CHAR_LIMIT,
   columnsInRows,
   loadSheetWindow,
   renderSheetTable,
@@ -135,14 +136,14 @@ describe('renderSheetTable', () => {
     assert({
       given: 'two rows of a sheet',
       should: 'render a column header plus one numbered line per row',
-      actual: renderSheetTable(rows),
+      actual: renderSheetTable(rows).text,
       expected: 'columns→A | B\n1→memid | name\n2→28605 | Acme',
     });
   });
 
   it('escapes a newline inside a cell so one cell cannot become two rows', () => {
     const multiline = toSheetViewRow(0, { A: { raw: 'one\ntwo', value: 'one\ntwo' } });
-    const table = renderSheetTable([multiline]);
+    const table = renderSheetTable([multiline]).text;
 
     expect(table.split('\n')).toHaveLength(2);
     expect(table).toContain('1→one\\ntwo');
@@ -155,8 +156,27 @@ describe('renderSheetTable', () => {
     const table = renderSheetTable(
       [toSheetViewRow(0, { A: { raw: 'x', value: 'x' } })],
       ['A', 'C']
-    );
+    ).text;
     expect(table.split('\n')[0]).toBe('columns→A | C');
+  });
+
+  it('reports how many cells it had to cut, so truncation is stated not inferred', () => {
+    // The table is a rendering; `rows` beside it always carries the full value.
+    // A reader working from the table alone could otherwise copy a shortened
+    // string back into a write and never know.
+    const long = 'x'.repeat(TABLE_CELL_CHAR_LIMIT + 50);
+    const rendered = renderSheetTable([
+      toSheetViewRow(0, { A: { raw: long, value: long }, B: { raw: 'short', value: 'short' } }),
+    ]);
+
+    expect(rendered.truncatedCells).toBe(1);
+    expect(rendered.text).toContain('…');
+    expect(rendered.text).not.toContain(long);
+  });
+
+  it('reports nothing cut when nothing was cut', () => {
+    const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: 'fits', value: 'fits' } })]);
+    expect(rendered.truncatedCells).toBe(0);
   });
 });
 

@@ -157,7 +157,7 @@ Reading either way:
 - Formula cells report both the computed value (in \`cells\`) and the formula (in \`formulas\`) — you never need to re-derive results, and you never lose the formula.
 - Errored cells show \`#ERROR\` as their value and carry the message in \`errors\`, keyed by A1 address in \`read_page\` and by column letter within the row in \`read_sheet\`.
 - Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write values, types, errors or dependencies yourself; \`edit_sheet_cells\` recomputes them.
-- Cell values are truncated at 120 characters in the rendered \`table\` only; the structured \`rows\` always carry the full text.
+- Cell values are truncated at 120 characters in the rendered \`table\` only, and the response says how many were cut (\`tableTruncatedCells\`); the structured \`rows\` always carry the full text. Never write a value back that you read from the table if that count is non-zero.
 - A sheet whose stored document cannot be parsed is reported as **unreadable**, not as empty. If you see that, do NOT write to the sheet — its data may still be intact, and writing would replace it.
 
 ## Structuring a new sheet

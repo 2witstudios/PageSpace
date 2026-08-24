@@ -51,6 +51,7 @@ import {
   loadSheetWindow,
   renderSheetTable,
   toSheetViewRow,
+  TABLE_CELL_CHAR_LIMIT,
   type SheetTabSummary,
   type SheetViewRow,
 } from './sheet-view';
@@ -389,6 +390,8 @@ function buildResult(params: BuildResultParams) {
     ? `${matchedRows ?? rows.length} matching row${(matchedRows ?? rows.length) === 1 ? '' : 's'}`
     : `${rowCount} row${rowCount === 1 ? '' : 's'}`;
 
+  const rendered = renderSheetTable(rows, columns);
+
   return {
     success: true as const,
     pageId: page.id,
@@ -406,7 +409,8 @@ function buildResult(params: BuildResultParams) {
     hasMore,
     ...(nextStartRow !== undefined && { nextStartRow }),
     ...(nextOffset !== undefined && { nextOffset }),
-    table: renderSheetTable(rows, columns),
+    table: rendered.text,
+    ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
     summary: `Read ${rows.length} row${rows.length === 1 ? '' : 's'} from sheet "${page.title}" (${scope}, ${columnCount} columns)`,
     nextSteps: [
       ...(hasMore
@@ -418,6 +422,11 @@ function buildResult(params: BuildResultParams) {
         : []),
       ...(mode === 'range'
         ? ['Pass where to look rows up by value instead of paging, and select to return only the columns you need.']
+        : []),
+      ...(rendered.truncatedCells > 0
+        ? [
+            `${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in "table" — read them from "rows", which always carries the full text.`,
+          ]
         : []),
       'Each row\'s rowNumber is its A1 row — write to it with edit_sheet_cells using addresses like C<rowNumber>.',
     ],
