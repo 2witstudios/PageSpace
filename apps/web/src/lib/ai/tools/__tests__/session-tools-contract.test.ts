@@ -39,6 +39,9 @@ const SHELL = {
   createdAt: '2026-07-28T00:00:00.000Z',
 };
 
+/** The layout a spawn reports back: the pane it landed in, and how many the workspace holds. */
+const PANES = { paneCount: 2, nodeId: 'pane-shell' };
+
 const OWN_WORKER = {
   conversationId: 'conv-worker',
   ownerId: USER_ID,
@@ -68,9 +71,9 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     readTranscript: vi.fn(async () => []),
     killWorker: vi.fn(async () => ({ ok: true as const, spriteTornDown: false })),
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
-    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL })),
+    spawnShell: vi.fn(async () => ({ ok: true as const, shell: SHELL, panes: PANES })),
     findShell: vi.fn(async () => ({ shellId: SHELL.shellId, workspaceId: WORKSPACE_ID, name: SHELL.name })),
-    killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
+    killShell: vi.fn(async () => ({ ok: true as const, killed: true, panes: { paneCount: 2, nodeId: 'pane-shell' } })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: true, output: 'out' })),
       send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),
@@ -390,7 +393,7 @@ describe('spawn_shell description: "in THIS conversation\'s own sandbox (provisi
       }),
       spawnShell: vi.fn(async () => {
         order.push('spawn');
-        return { ok: true as const, shell: SHELL };
+        return { ok: true as const, shell: SHELL, panes: PANES };
       }),
     });
     const tools = createSessionTools(deps);
@@ -399,7 +402,16 @@ describe('spawn_shell description: "in THIS conversation\'s own sandbox (provisi
     expect(deps.ensureOwnSessionSandbox).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: CALLER_CONVERSATION }),
     );
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, name: SHELL.name });
+    // The address AND the layout: the shellId the other three verbs take, plus
+    // the pane it opened in and the count that gives an agent a reason to tidy
+    // up after itself (issue #2469).
+    expect(result).toEqual({
+      success: true,
+      shellId: SHELL.shellId,
+      name: SHELL.name,
+      paneNodeId: PANES.nodeId,
+      paneCount: PANES.paneCount,
+    });
   });
 });
 
@@ -438,8 +450,8 @@ describe('kill_shell description: "The session\'s sandbox (and every other shell
     const deps = makeDeps();
     const tools = createSessionTools(deps);
     const result = await run(tools.kill_shell, { shellId: SHELL.shellId }, contextOptions());
-    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true });
-    expect(deps.killShell).toHaveBeenCalledWith(SHELL.shellId);
+    expect(result).toEqual({ success: true, shellId: SHELL.shellId, killed: true, paneNodeId: 'pane-shell', paneCount: 2 });
+    expect(deps.killShell).toHaveBeenCalledWith({ shellId: SHELL.shellId, actingUserId: USER_ID });
     expect(deps.killWorker).not.toHaveBeenCalled();
     expect(deps.ensureOwnSessionSandbox).not.toHaveBeenCalled();
   });
@@ -605,6 +617,27 @@ describe('resize_pane description: "Set one node share of its parent container"'
     expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
       expect.objectContaining({ command: { type: 'resize', nodeId: 'pane-1', fraction: 0.9 } }),
     );
+  });
+});
+
+describe('close_pane description: "closing it takes the pane, NOT the shell"', () => {
+  it('closes the pane and leaves the shell RUNNING — the claim, pinned to the gate', async () => {
+    // The asymmetry this PR deliberately did NOT remove, and therefore had to
+    // say. The browser's close of a terminal tab kills the shell with it (a
+    // human has no way to reach a shell with no pane), but an agent does:
+    // `send_shell` and `read_shell` address a shell by id, pane or no pane. So
+    // `close_pane` stays a layout act — and the description now warns that the
+    // process survives it, because `kill_shell`'s own note points agents at
+    // this verb for tidying up.
+    const deps = layoutDeps();
+    const tools = createSessionTools(deps);
+
+    await run(tools.close_pane, { nodeId: 'pane-1' }, layoutOptions());
+
+    expect(deps.applyLayoutCommand).toHaveBeenLastCalledWith(
+      expect.objectContaining({ command: { type: 'close', nodeId: 'pane-1' } }),
+    );
+    expect(deps.killShell).not.toHaveBeenCalled();
   });
 });
 

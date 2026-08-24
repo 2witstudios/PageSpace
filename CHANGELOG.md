@@ -7,6 +7,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
+  the machine is using: which drives it reaches, the role it holds in each, and what that role
+  actually resolves to — can it read, write, share, delete. That answer comes from the same
+  permission code that decides real requests, so it cannot quietly disagree with them. Drive-level
+  and page-level are separate answers and both are shown: any member can create a page at a drive's
+  top level while still being read-only on a document inside it, so `--page <pageId>` asks about the
+  exact place you are about to write. The same
+  summary is printed at the end of `pagespace keys create` and the `pagespace keys` wizard, so a new
+  key never leaves you to find out by attempting a write and reading the refusal. Agents get it as
+  an MCP tool too. A key describes only itself — it still cannot see, list or revoke the other keys
+  you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
+  drive name alone.
+
+- **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
+  and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
+  sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`
+  walks it in order, `append` adds rows, `update-cells` writes by address (and, unlike the older
+  `edit-cells`, can reach a second tab), and `delete-rows` removes a range. Filters match the values
+  you see, so a formula column compares as its result. Agents get the same six as MCP tools, and
+  they are on the SDK as `sheets.*` for anything building on top.
+
 - **Spreadsheets hold real data now** — a sheet used to be stored as one document that was rewritten
   from scratch on every cell edit, so a sheet with tens of thousands of rows took seconds to accept a
   single change and eventually stopped saving at all. Sheets are stored row by row, and editing one
@@ -167,6 +188,58 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
+  `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
+  path", which reads as "your key was revoked" — while the very same key kept reading and writing
+  drive content perfectly. Managing keys was never something a key could do; only your personal
+  login can, and the refusal simply lost the server's own words on the way back. Those commands now
+  say what is actually true: the key is fine, key management needs `pagespace login`, and
+  `pagespace keys describe` is what a key can ask about itself. Nothing gets re-minted for nothing.
+
+- **Asking about a built-in role no longer dead-ends** — looking up `member` or `admin` among a
+  drive's roles answered "not found in this drive", which reads as though the role does not exist.
+  Those are built-in roles held per person on their drive membership, not entries in a drive's own
+  role list, so a lookup there can only ever miss. The answer now says so and points at where they
+  actually live — and at `pagespace keys describe` for what a specific credential resolves to.
+
+- **A sandbox is a development machine again** — a session's sandbox inherited the mode of the
+  server that opened it, so a sandbox opened from pagespace.ai reported itself as a production
+  environment. Under that, `npm install` quietly leaves out everything a project needs to be
+  *worked on* — its TypeScript compiler, its test runner, its dev scripts — so an install that
+  reported success left the toolchain missing and every later command failed with an error naming
+  nothing to do with the cause. A sandbox now describes itself as what it is, and a plain
+  `npm install` installs the whole toolchain. The terminal and the agent's own shell also report
+  the same environment as each other now; they used to disagree. This covers every machine an agent
+  works on, named environments included — an environment called “prod” is a name, not a deployment.
+  One consequence worth knowing: a build run on one of these machines now produces a development
+  build, so say `NODE_ENV=production npm run build` when you actually want a production bundle.
+- **A long job in a terminal no longer looks frozen** — a job piped through a filter
+  (`… | grep …`, and especially `… | tail -200`, which by design prints nothing until the job ends)
+  held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
+  watching the terminal exactly nothing. The holding happens inside the programs themselves, not in
+  PageSpace, so the shell tools now explain it and say what to type instead of guessing that the job
+  died; Python programs, the commonest offender, flush as they go in every shell opened from here on,
+  without anyone having to ask. A shell that was already running when this shipped keeps the
+  environment it started with — close it and open a new one to pick up the change.
+- **Closing a shell closes its pane** — killing a shell in an agent session terminated the process
+  and removed the shell, and left its pane sitting on screen bound to a terminal that no longer
+  existed. The pane now goes with the shell, in the same write, so every browser watching the
+  session loses the tab at once instead of accumulating dead rectangles until somebody closes them
+  by hand.
+- **Panes fill the screen as a grid instead of marching sideways** — every pane an agent opened
+  split the screen beside the last one, so a session that started three shells ended up with three
+  ever-thinner columns. A pane that opens for you now takes the roomiest space on screen and divides
+  it along its longer edge: beside when there is width to spare, below when there is not. Four
+  shells and the conversation that opened them share the screen as a grid, with the smallest pane an
+  eighth of it instead of a sixteenth, and repeated opening no longer makes the layout deeper and
+  harder to drag. Panes you have resized are left alone — an opening pane never redistributes a
+  layout you set by hand — and the split buttons still divide only the pane you pointed at. Agents
+  are told how many panes their session is showing when they open or close a shell, so they can tidy
+  up after themselves.
+- **No more "Shell not found" when closing a shell pane** — closing the tab of a shell that was
+  already gone, or one whose session had expired, raised an error toast for a close that had in fact
+  succeeded. Closing something already closed is success and says nothing; a close that genuinely
+  failed still tells you, because the process may still be running.
 - **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
   agent sandboxes and environments were all refused, because the gate asked which subscription plan
   the account was on and a dedicated deployment has no plan to be on: the deployment itself is what
@@ -444,6 +517,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   conversation uses, or about which sessions appear in your sidebar.
 
 ### Changed
+
+- **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
+  agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,
+  used to be told only that the call was invalid and that it should go look the schema up. That
+  cost a wasted call and a second round trip on every first-use mistake. The rejection now carries
+  the tool's own parameter schema, so the next call is the right one. Naming a tool that does not
+  exist now suggests the closest names that do — but only when the match is a real one, like
+  `read_file` for `readFile`; where nothing genuinely matches it still says so rather than offering
+  a guess. Errors say the same thing whether the agent is typing or talking, and an unusually large
+  schema is summarised to its parameter list rather than dumped whole.
 
 - **Expanding a task now lists its sub-tasks instead of just counting them** — the drop-down under
   a task used to say "3 sub-tasks" as plain text and leave you to go find them: open the task, look

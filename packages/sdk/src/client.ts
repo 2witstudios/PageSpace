@@ -67,6 +67,14 @@ import {
   trashPage,
 } from './operations/pages.js';
 import { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
+import {
+  appendRows as appendSheetRows,
+  deleteRows as deleteSheetRows,
+  describeSheet,
+  getRows as getSheetRows,
+  queryRows as querySheetRows,
+  updateCells as updateSheetCells,
+} from './operations/sheets.js';
 import { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
 import { listDriveMembers } from './operations/members.js';
 import {
@@ -89,7 +97,7 @@ import {
   setTaskTrigger,
   updateTask,
 } from './operations/tasks.js';
-import { listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+import { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import type { Operation } from './registry/define.js';
@@ -125,6 +133,23 @@ const DEFAULT_OPERATIONS_MAP = {
     insertLines: insertLines,
     deleteLines: deleteLines,
     editCells: editSheetCells,
+  },
+  /**
+   * Sheet ROWS — the tabular view. `pages.editCells` remains the A1-addressed
+   * editing verb on the documents endpoint; these treat the same sheet as a
+   * table to filter, sort, page and append to.
+   *
+   * Each method is the camelCase of its wire operation (`query-rows` →
+   * `queryRows`), so the facade name and the `operation` field on the request
+   * never drift apart.
+   */
+  sheets: {
+    queryRows: querySheetRows,
+    getRows: getSheetRows,
+    describe: describeSheet,
+    appendRows: appendSheetRows,
+    updateCells: updateSheetCells,
+    deleteRows: deleteSheetRows,
   },
   roles: {
     list: listDriveRoles,
@@ -164,6 +189,7 @@ const DEFAULT_OPERATIONS_MAP = {
   tokens: {
     list: listMcpTokens,
     revoke: revokeMcpToken,
+    describeSelf: describeSelfKey,
   },
   search: {
     glob: globSearch,
@@ -400,7 +426,15 @@ export class PageSpaceClient {
         return parsed;
       }
 
-      if (isAuthenticationError(parsed) && !usedAuthRetry) {
+      // One auth retry, and only for a provider that can actually produce a
+      // different credential on the second pass (AuthProvider.canRefresh). A
+      // static token has no refresh grant behind it, so retrying re-sends the
+      // identical bearer for an identical 401 — and the provider's own
+      // "nothing left to give you" error replaces whatever the server said,
+      // which is how a route refusing a credential CLASS surfaced as a dead
+      // key (#2464). Undeclared means `true`: providers written before this
+      // flag existed all had a refresh path.
+      if (isAuthenticationError(parsed) && !usedAuthRetry && this.#auth.canRefresh !== false) {
         usedAuthRetry = true;
         this.#auth.invalidate();
         continue;

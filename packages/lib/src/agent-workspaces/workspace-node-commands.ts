@@ -67,6 +67,8 @@ import {
   type SplitNode,
   type WorkspaceNode,
 } from './workspace-node';
+import { readFraction } from './workspace-fractions';
+import { splitAxisFor, splitHostPane } from './workspace-node-packing';
 
 /**
  * Why a command was refused.
@@ -280,11 +282,52 @@ function stageContainer(pane: PaneNode, parentId: string, input: SplitInput): No
  * Binding at the MINT rather than after it is the whole reason `create` carries
  * a target: a create-then-bind pair has a moment where the first landed and the
  * second did not, and that moment is the state production is in today.
+ *
+ * **IT PACKS BEFORE IT NESTS — under two conditions, and both of them are
+ * about not moving something somebody chose.** A pane whose container already
+ * runs along the requested axis gets its sibling IN THAT CONTAINER; a split
+ * that changes direction still mints one. Two containers running the same way
+ * are ONE container as far as the renderer is concerned (`ContainerGroup` lays
+ * out any number of children), so the nested form is a strictly deeper spelling
+ * of the identical picture — deeper against `MAX_DEPTH`, one node heavier
+ * against `MAX_NODES`, and harder to drag, because a handle between two
+ * containers resizes a group rather than the panes either side of it. Four
+ * shells spawned into one session used to become four levels of that
+ * (issue #2469).
+ *
+ * **The conditions, and why packing is not simply better.** Joining a container
+ * means joining its sibling group, and `create` rebalances a group it joins:
+ * the newcomer takes an even share and the survivors keep their proportions
+ * inside what is left. So a packed split does not divide the pane it was
+ * pointed at — it divides the whole container. Where nobody has sized that
+ * container that IS the intent (its members were sharing it evenly anyway, and
+ * an unsized group stays unsized through the rebalance, so no share nobody
+ * chose is written). Where somebody has DRAGGED it, it is a change nobody asked
+ * for: splitting one of two panes would move the other. Hence:
+ *
+ * How often this fires is worth knowing, because the direction is chosen from
+ * the RECTANGLE (`splitAxisFor`) rather than from the container: on a fresh
+ * workspace it is the first split of a lone pane, and after that it is whenever
+ * a pane's longer edge happens to agree with the way its container already runs
+ * — a narrow pane in a column, a short one in a row. Every other placement
+ * nests, which is why the depth that matters is bounded by
+ * {@link splitHostPane} choosing the roomiest pane rather than by this.
+ *
+ *  - **`pack` is asked for by the PLACEMENT path only.** `split` — the toolbar's
+ *    two buttons — keeps nesting, so "split right" still divides the pane the
+ *    user pointed at and leaves its neighbours exactly where they were. The
+ *    accumulation issue #2469 reports is about panes an agent OPENS, which is
+ *    the path that asks.
+ *  - **and only into a container NOBODY HAS SIZED.** A group carrying stored
+ *    shares is one a user dragged; the nesting form gives the newcomer the split
+ *    pane's own slot and share (see {@link stageContainer}) and leaves every
+ *    sibling's share untouched, which is the honest answer there.
  */
 function splitInto(
   nodes: readonly WorkspaceNode[],
   input: SplitInput,
   target: PaneTarget | null,
+  pack = false,
 ): CommandResult {
   const node = findNode(nodes, input.nodeId);
   if (node === undefined) return refuse('unknown_node', `no node "${input.nodeId}" to split`);
@@ -294,6 +337,23 @@ function splitInto(
   if (node.nodeType !== 'pane') {
     return refuse('not_a_pane', `node "${input.nodeId}" is a split; a split divides space rather than occupying it`);
   }
+
+  // PACK: the container is already going this way and nobody has sized it, so
+  // the newcomer is a sibling. `newSplitId` is not consulted at all on this
+  // path — no container is minted, so an id for one is neither used nor
+  // required to be free, and the checks below belong with the mint they defend
+  // rather than with the command.
+  const parent = findNode(nodes, node.parentId);
+  if (pack && parent !== undefined && parent.nodeType !== 'pane' && parent.axis === input.axis) {
+    const group = childrenOf(nodes, parent.id);
+    if (isUnsizedGroup(group)) {
+      const index = group.findIndex((sibling) => sibling.id === node.id) + 1;
+      return compile(nodes, [
+        (current) => create(current, { nodeId: input.newNodeId, target, parentId: parent.id, index }),
+      ]);
+    }
+  }
+
   // `create` catches a `newNodeId` the workspace already holds; the container's
   // id has no operation to catch it, and an id already in the set would be
   // UPSERTED over its sitting node rather than minted beside it.
@@ -315,6 +375,21 @@ function splitInto(
 }
 
 /**
+ * Has nobody sized this container? — the second half of the packing condition.
+ *
+ * "Nobody" is read the way the renderer reads it: `currentShares` falls back to
+ * an even split the moment ANY member is unsized, so a group that is not wholly
+ * sized is one no stored share is currently deciding. Packing into such a group
+ * rebalances numbers nobody chose into other numbers nobody chose, and writes
+ * none of them (an all-unsized group stays all-unsized through
+ * `rebalanceFractions`). Packing into a SIZED one would move a pane the user
+ * dragged, so that one nests instead.
+ */
+function isUnsizedGroup(group: readonly WorkspaceNode[]): boolean {
+  return group.every((member) => member.nodeType === 'root' || readFraction(member.fraction) === null);
+}
+
+/**
  * Split a pane: give it a sibling by putting a container where it was.
  *
  * Replaces `split_right` and `split_down`, which differed by an axis and
@@ -325,11 +400,10 @@ function splitInto(
  * user has not yet said anything about, and minting it bound to something would
  * be the toolbar deciding what the user meant.
  *
- * It always NESTS, even when the pane's parent already runs along the requested
- * axis — where `split_down` appended to the existing column instead. That is a
- * deliberate consequence of compiling one gesture into the data model's own
- * terms, and it is why the depth cap is reachable by repeating one gesture; see
- * the report.
+ * It always NESTS, and that is deliberate rather than left over: this is the
+ * TOOLBAR's gesture, and a user who points at a pane and asks to divide it has
+ * not asked for their other panes to move. The placement path packs instead —
+ * see {@link splitInto} for both halves of that condition.
  */
 export function split(nodes: readonly WorkspaceNode[], input: SplitInput): CommandResult {
   return splitInto(nodes, input, null);
@@ -499,7 +573,15 @@ export interface OpenInput<Kind extends PaneTargetKind> {
   newNodeId: string;
   /** The container minted if the placement has to split. */
   newSplitId: string;
-  /** The split's direction when it comes to that. Defaults to `row` — beside, as `split_right` was. */
+  /**
+   * The split's direction when it comes to that. OMIT IT, and the placement
+   * picks the direction from the layout it is placing into
+   * (`splitAxisFor` — along the host pane's longer edge). It is here for a
+   * caller that genuinely means one direction, which in practice is the human
+   * toolbar's two split buttons; every server-side admission leaves it unset,
+   * and a `row` default is what made every agent-opened pane a new column
+   * (issue #2469).
+   */
   axis?: NodeAxis;
   /**
    * Where the user is looking. A PREFERENCE and never the subject of the
@@ -646,10 +728,26 @@ function open(nodes: readonly WorkspaceNode[], input: OpenInput<PaneTargetKind>)
     ]);
   }
 
-  // Nothing may be given up, so ADD instead: split beside the pane the user is
-  // looking at, and mint the newcomer already showing what was asked for.
-  const from = active ?? panes[0];
-  return splitInto(nodes, { nodeId: from.id, axis: input.axis ?? 'row', newNodeId, newSplitId }, target);
+  // Nothing may be given up, so ADD instead: split the pane with the most room
+  // — the one the user is looking at whenever that is one of them — and mint
+  // the newcomer already showing what was asked for.
+  //
+  // Both halves of that choice live in `workspace-node-packing.ts`, and both
+  // used to be constants here: `active ?? panes[0]` for the host and `'row'`
+  // for the direction. A constant direction is what gave a session that spawned
+  // three shells three columns; a constant host is what made every one of those
+  // splits subdivide the SAME pane. See that module for why the rule is the
+  // rectangle rather than the count.
+  const from = splitHostPane(nodes, panes, input.activeNodeId) ?? panes[0];
+  return splitInto(
+    nodes,
+    { nodeId: from.id, axis: input.axis ?? splitAxisFor(nodes, from.id), newNodeId, newSplitId },
+    target,
+    // PACK. Placing is the path that accumulates — one pane per shell, per
+    // page, per thread an agent opens — and it is the path with no user gesture
+    // behind it whose meaning a rebalance could contradict.
+    true,
+  );
 }
 
 /** Place a conversation. See {@link open} for the policy, which is shared with {@link openPage}. */

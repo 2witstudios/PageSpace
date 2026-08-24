@@ -64,6 +64,11 @@
 import type { Tool, ToolSet } from 'ai';
 import type { z } from 'zod';
 import type { ToolExecutionContext } from '../core/types';
+import {
+  clipToolName,
+  formatInvalidParametersError,
+  suggestToolNames,
+} from '../tools/tool-error-schema';
 import type {
   VoiceAssistant,
   VoiceLocationContext,
@@ -324,15 +329,43 @@ export const dispatchRealtimeToolCall = async (
 ): Promise<RealtimeToolOutcome> => {
   const failure = (output: string): RealtimeToolOutcome => ({ output, failed: true });
 
-  const tool: Tool | undefined = deps.tools[request.name];
+  // Own-property lookup for the same reason `execute-tool.ts` uses one: the
+  // advertised set is a plain object, so a spoken 'constructor' or 'toString'
+  // resolves up the prototype chain and reads as a tool that exists.
+  const tool: Tool | undefined = Object.hasOwn(deps.tools, request.name)
+    ? deps.tools[request.name]
+    : undefined;
   if (!tool) {
     deps.logger.warn('Realtime voice tool call named an unadvertised tool', {
       callId: request.callId,
       userId: request.userId,
-      tool: request.name,
+      // Clipped for the same reason the response below is: the bridge contract
+      // puts no ceiling on this, and an unbounded name written verbatim into
+      // structured logs on every unknown-tool call is the same payload problem
+      // one layer down.
+      tool: clipToolName(request.name),
     });
+    // `deps.tools` IS the set this session advertised, so every suggestion is
+    // a tool the model can actually call next — which on voice means the core
+    // tools, since every non-core one is deferred behind `execute_tool`. A
+    // deferred name spoken directly therefore gets no suggestion here, and
+    // should not: this dispatcher could not run it. `createExecuteTool` holds
+    // the deferred half and makes the same suggestion on that path, which is
+    // the path the discovery prompt sends the model down.
+    //
+    // Wording stays a sentence because a voice turn may end up reading it out.
+    const suggestions = suggestToolNames(request.name, Object.keys(deps.tools));
+    const didYouMean = suggestions.length > 0 ? ` Did you mean: ${suggestions.join(', ')}?` : '';
+    // The name is CLIPPED, and this is the one message in the pair that has to
+    // remember to do it by hand. `failure()` output does not pass through
+    // `formatToolResult`, so `MAX_RESULT_CHARS` never applies to it and
+    // `bridge-handler` returns it verbatim — while the bridge contract declares
+    // `name: z.string().min(1)` with no ceiling. Echoing whole would drop a
+    // model-chosen payload straight into a 32k-token session: one call could end
+    // the conversation, using the same degenerate name the suggestion bound
+    // above already refuses to search.
     return failure(
-      `There is no tool called "${request.name}". Use tool_search to find the right one.`,
+      `There is no tool called "${clipToolName(request.name)}".${didYouMean} Use tool_search to find the right one.`,
     );
   }
   if (!tool.execute) {
@@ -351,8 +384,16 @@ export const dispatchRealtimeToolCall = async (
 
   const validated = (tool.inputSchema as z.ZodType).safeParse(parsed.args);
   if (!validated.success) {
+    // Same bounded rendering the text stack uses, and the bound matters more
+    // here than anywhere: a realtime session has 32k tokens total, this string
+    // stays in it, and `failure()` does NOT pass through `formatToolResult`, so
+    // `MAX_RESULT_CHARS` never applies to it. What holds it is
+    // `MAX_PARAMETER_ERROR_CHARS` (~6.6k characters, ~1.6k tokens) — roughly
+    // half the per-result ceiling above rather than a small fraction of it, so
+    // it is bounded but not negligible: a call that omits many required fields
+    // on a large schema is the expensive case.
     return failure(
-      `Invalid parameters for "${request.name}": ${validated.error.message}. Call tool_search("select:${request.name}") for the correct schema.`,
+      formatInvalidParametersError(request.name, tool.inputSchema, validated.error.message),
     );
   }
 

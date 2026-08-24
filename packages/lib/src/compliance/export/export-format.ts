@@ -13,8 +13,16 @@
 
 import type { AllUserData } from './gdpr-export';
 
-/** Bump when the export bundle's structure/inventory changes. */
-export const EXPORT_SCHEMA_VERSION = '1.0.0';
+/**
+ * Bump when the export bundle's structure/inventory changes.
+ *
+ * 1.1.0 adds `content-tags.json` (and the matching `contentTags` portable
+ * property). Additive: every 1.0.0 file is still present and unchanged, so a
+ * consumer written against 1.0.0 keeps working — but one keyed on the version
+ * can now tell a bundle that carries the subject's tags from one predating the
+ * category, which is the whole point of the field being in the manifest.
+ */
+export const EXPORT_SCHEMA_VERSION = '1.1.0';
 
 export type ExportFormat = 'native' | 'portable';
 
@@ -86,6 +94,10 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // was inferred about you" rather than leaving the subject unable to tell
     // the difference between that and the category not being carried.
     { name: 'personalization-candidates.json', description: 'Inferences the AI drew about you from your conversations, including ones that were rejected or are still pending, with the quotes they were drawn from', recordCount: data.personalizationCandidates.length, data: data.personalizationCandidates },
+    // The subject's own acts of classification. For an anchored tag the row
+    // carries the quoted text they selected, which nothing else in the bundle
+    // holds.
+    { name: 'content-tags.json', description: 'Tags you applied to pages, passages, sheet cells and messages, with the text each one was anchored to', recordCount: data.contentTags.length, data: data.contentTags },
   ];
   if (data.personalization) {
     files.push({ name: 'personalization.json', description: 'Personalization settings', recordCount: 1, data: data.personalization });
@@ -199,6 +211,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'sheets', value: data.sheets },
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
+      { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
     ],
   };
 }

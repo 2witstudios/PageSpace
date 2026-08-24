@@ -21,7 +21,7 @@ It's the same client the [\`pagespace\` CLI](/docs/features/cli) and the \`pages
 npm install @pagespace/sdk
 \`\`\`
 
-ESM only, with a single runtime dependency (\`zod\`). The current version is **2.1.0**.
+ESM only, with a single runtime dependency (\`zod\`). The current version is **2.2.0**.
 
 ## Quickstart
 
@@ -84,6 +84,7 @@ Every operation hangs off a namespace on the client. Inputs and outputs are sche
 | \`drives\` | \`list\`, \`create\`, \`rename\`, \`updateContext\`, \`setHomePage\`, \`trash\`, \`restore\` |
 | \`pages\` | \`list\`, \`listTrash\`, \`create\`, \`details\`, \`rename\`, \`move\`, \`trash\`, \`restore\` — plus content editing: \`read\`, \`replaceLines\`, \`insertLines\`, \`deleteLines\`, \`editCells\` |
 | \`tasks\` | \`create\`, \`update\`, \`delete\`, \`reorder\`, \`getAssigned\`, \`createStatus\`, \`setTrigger\`, \`deleteTrigger\` |
+| \`sheets\` | \`describe\`, \`queryRows\`, \`getRows\`, \`appendRows\`, \`updateCells\`, \`deleteRows\` — a spreadsheet as queryable rows |
 | \`search\` | \`regex\`, \`glob\`, \`multiDrive\` |
 | \`agents\` | \`list\`, \`listMultiDrive\`, \`ask\`, \`updateConfig\`, \`listModels\` |
 | \`conversations\` | \`list\`, \`read\` — full transcripts of an agent's conversations |
@@ -96,7 +97,7 @@ Every operation hangs off a namespace on the client. Inputs and outputs are sche
 | \`workflows\` | \`list\`, \`create\`, \`update\`, \`delete\` |
 | \`activity\` | \`get\` — a drive's activity feed |
 | \`export\` | \`pageMarkdown\`, \`sheetCsv\` |
-| \`tokens\` | \`list\`, \`revoke\` — API keys (OAuth only) |
+| \`tokens\` | \`list\`, \`revoke\` — API keys (OAuth only); \`describeSelf\` — what the calling credential can do |
 
 Reading and writing document content lives on \`pages\`, not a separate namespace:
 
@@ -111,6 +112,26 @@ await client.pages.deleteLines({ pageId, startLine: 10, endLine: 12 });
 // Sheet cells
 await client.pages.editCells({ pageId, cells: [{ address: 'A1', value: 'Hello' }] });
 \`\`\`
+
+### Spreadsheets as data
+
+A sheet with 100,000 rows is not something you want to download to find twelve. \`sheets\` filters, sorts and pages server-side:
+
+\`\`\`typescript
+const { rows, total } = await client.sheets.queryRows({
+  pageId,
+  where: { and: [
+    { column: 'C', op: 'eq', value: 'open' },
+    { column: 'F', op: 'gt', value: 1000 },
+  ]},
+  orderBy: [{ column: 'F', direction: 'desc' }],
+  limit: 20,
+});
+
+console.log(\`showing \${rows.length} of \${total}\`);
+\`\`\`
+
+Filters match the values you **see**: a formula column compares as its result, not its \`=\` text. Every cell carries both — \`raw\` is what was authored, \`value\` what it evaluates to.
 
 Need an endpoint the SDK doesn't wrap? \`defineOperation\` lets you declare one with its own Zod schemas and call it through \`client.invoke\`, keeping the same typing, auth, and retry behaviour.
 

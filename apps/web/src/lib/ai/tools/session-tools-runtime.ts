@@ -1193,7 +1193,7 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       if (!session) return { ok: false, reason: 'no_session' };
       const spawned = await spawnShell({ workspaceId: session.id, ownerId, name });
       if (!spawned.ok) return { ok: false, reason: spawned.reason };
-      return { ok: true, shell: spawned.shell };
+      return { ok: true, shell: spawned.shell, panes: spawned.panes };
     },
 
     findShell: async (shellId) => {
@@ -1216,10 +1216,10 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       };
     },
 
-    killShell: async (shellId) => {
-      const killed = await killShellById(shellId);
+    killShell: async ({ shellId, actingUserId }) => {
+      const killed = await killShellById({ shellId, actingUserId });
       if (!killed.ok) return { ok: false, reason: killed.reason };
-      return { ok: true, killed: killed.killed };
+      return { ok: true, killed: killed.killed, panes: killed.panes };
     },
 
     shellIo: createShellIo(realtimeShellIoTransport),

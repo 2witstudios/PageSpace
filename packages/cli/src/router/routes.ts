@@ -57,7 +57,15 @@ import {
   pagesTrashHandler,
   pagesTreeHandler,
 } from '../commands/pages.js';
-import { sheetsEditCellsHandler } from '../commands/sheets.js';
+import {
+  sheetsAppendHandler,
+  sheetsDeleteRowsHandler,
+  sheetsDescribeHandler,
+  sheetsEditCellsHandler,
+  sheetsQueryHandler,
+  sheetsRowsHandler,
+  sheetsUpdateCellsHandler,
+} from '../commands/sheets.js';
 import {
   tasksAssignedHandler,
   tasksCreateHandler,
@@ -71,6 +79,7 @@ import {
 import { trashListHandler } from '../commands/trash.js';
 import { whoamiHandler } from '../commands/whoami.js';
 import { tokensCreateHandler } from '../commands/keys/create.js';
+import { keysDescribeHandler } from '../commands/keys/describe.js';
 import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
@@ -96,6 +105,11 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys'], handler: keysHandler, summary: 'Guided wizard to create/list/edit/revoke access keys' },
   { path: ['keys', 'create'], handler: tokensCreateHandler, summary: 'Mint a new access key (--device for a headless machine)' },
   { path: ['keys', 'list'], handler: tokensListHandler, summary: 'List access keys' },
+  // The one keys verb a KEY itself can run: it describes the credential this
+  // machine would use, never the other keys its owner holds — so it resolves
+  // like a content command (active key included) rather than riding the
+  // ambient login the management verbs need.
+  { path: ['keys', 'describe'], handler: keysDescribeHandler, summary: "Show this credential's drives, role and effective permissions" },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
@@ -133,6 +147,12 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['pages', 'read'], handler: pagesReadHandler, summary: 'Read page content' },
   { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler, summary: 'Replace a line range in a page' },
   { path: ['pages', 'export'], handler: pagesExportHandler, summary: 'Export a page to a file' },
+  { path: ['sheets', 'describe'], handler: sheetsDescribeHandler, summary: 'Show a sheet\'s tabs and dimensions' },
+  { path: ['sheets', 'query'], handler: sheetsQueryHandler, summary: 'Filter and sort sheet rows' },
+  { path: ['sheets', 'rows'], handler: sheetsRowsHandler, summary: 'Read sheet rows by position' },
+  { path: ['sheets', 'append'], handler: sheetsAppendHandler, summary: 'Append rows to a sheet' },
+  { path: ['sheets', 'update-cells'], handler: sheetsUpdateCellsHandler, summary: 'Write sheet cells by address (supports --tab)' },
+  { path: ['sheets', 'delete-rows'], handler: sheetsDeleteRowsHandler, summary: 'Delete a range of sheet rows' },
   { path: ['sheets', 'edit-cells'], handler: sheetsEditCellsHandler, summary: 'Edit sheet cells' },
   { path: ['trash', 'list'], handler: trashListHandler, summary: 'List trashed pages/drives' },
   { path: ['tasks', 'list'], handler: tasksListHandler, summary: 'List tasks' },

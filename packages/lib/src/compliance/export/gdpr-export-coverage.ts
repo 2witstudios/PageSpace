@@ -113,6 +113,12 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // and "nothing writes it yet" is a state that expires quietly. Read by
   // `collectUserStreamState`, which owns the Art 15(4) boundary for both tables.
   ai_stream_frames: 'streamState',
+  // The subject's own acts of classification: `createdBy` is the person who
+  // applied the tag, and for an anchored tag the row carries the passage they
+  // selected. The VOCABULARY (`tags`) stays organisation-owned below — the word
+  // belongs to the drive, the act of applying it belongs to the person — so the
+  // collector joins the name in rather than exporting an opaque id.
+  content_tags: 'contentTags',
 };
 
 /**
@@ -253,8 +259,11 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     'workflow_runs',
     'workflow_run_steps',
     'task_status_configs',
+    // The drive's shared VOCABULARY. A tag name is minted once and used by
+    // every member; `createdBy` records who happened to type it first and
+    // confers nothing. The subject's own USE of the vocabulary is exported as
+    // `content_tags` above, with the name joined in.
     'tags',
-    'page_tags',
     'commands',
     'email_broadcasts',
     'broadcast_templates',

@@ -2,7 +2,12 @@
  * One shell — kill it.
  *
  * DELETE → 200 { ok: true, killed } — terminate the PTY (if one was ever
- * launched) and drop the row; the session's SANDBOX is untouched. A shell that
+ * launched), then drop the row and REMOVE THE PANE bound to it in one
+ * transaction (the process dies first and outside the workspace lock — see
+ * `killShellById`); the session's SANDBOX is untouched. The pane's removal is what
+ * makes this the inverse of the spawn (issue #2462): it broadcasts, so every
+ * browser watching the workspace loses the tab, rather than each of them
+ * keeping a pane bound to a terminal that no longer exists. A shell that
  * does not exist (or lives under a different session than the URL claims) is a
  * 404, which the client treats as success — killing something already gone IS
  * success (`planKillTarget`), and the 404 leaks nothing because it is the same
@@ -47,7 +52,9 @@ export async function DELETE(request: Request, context: RouteContext) {
     return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, access.reason, ROUTE, 'Shell not found');
   }
 
-  const killed = await killShellById(shellId);
+  // The acting human, carried into the membership write the kill now performs:
+  // the pane bound to this shell goes with the process, in the same transaction.
+  const killed = await killShellById({ shellId, actingUserId: auth.userId });
   if (!killed.ok) {
     loggers.api.error('Shell kill failed', undefined, { workspaceId, shellId });
     return NextResponse.json({ error: 'Could not close this shell', reason: killed.reason }, { status: 502 });

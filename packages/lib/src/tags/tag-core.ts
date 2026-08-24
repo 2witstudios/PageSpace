@@ -21,6 +21,7 @@
 import { isValidCellAddress } from '../sheets/address';
 import type { SheetCellAnchor, TextAnchor } from '../content/anchoring/types';
 import type { PageTypeValue } from '../utils/enums';
+import type { ContentTagTargetKind } from '@pagespace/db/schema/content-tags';
 
 /** Max code points in a tag's display name, after normalization. */
 export const MAX_TAG_NAME_LENGTH = 64;
@@ -350,8 +351,37 @@ export function normalizeTagName(raw: string): TagNameResult {
   return { ok: true, name, key: tagKey(name) };
 }
 
-/** What a tag can be attached to. Mirrors the Phase 2 `targetKind` enum. */
-export type TargetKind = 'page' | 'text' | 'sheet_cell' | 'channel_message' | 'ai_message';
+/**
+ * What a tag can be attached to — DERIVED from the `ContentTagTargetKind`
+ * pgEnum in `packages/db/src/schema/content-tags.ts`, which is the one
+ * canonical declaration of the variant set.
+ *
+ * Derived rather than restated because the dependency runs `lib -> db` and
+ * never the reverse, so `db` is the only side that can be the source. Two
+ * parallel unions kept in step by a drift test is strictly worse than a
+ * structure in which drift cannot exist — and both directions of drift are
+ * compile errors, verified by mutating the pgEnum and watching them:
+ *
+ *   - REMOVING or renaming a value breaks THIS FILE: `TAG_TARGETS` lists the
+ *     kinds as literals under a `satisfies Record<..., readonly TargetKind[]>`,
+ *     and `validateTarget` compares `target.kind` against them.
+ *   - ADDING a value breaks the `sample()` switch in `__tests__`, which must
+ *     return a `TagTarget` for every `TargetKind` — so a new kind cannot land
+ *     without the payload variant that goes with it.
+ *
+ * Note what derivation does NOT do: an added value is not automatically legal
+ * to store. `content_tags_target_chk` enumerates all five kinds exhaustively,
+ * so a sixth needs a REPLACEMENT constraint, not an amendment — which is the
+ * reason all five landed at once.
+ *
+ * The import is `import type`, which is what keeps this module pure: a
+ * type-only import is erased entirely by the compiler, so nothing about
+ * `@pagespace/db` — least of all its `db` singleton — is present at runtime.
+ * The purity test enforces exactly that distinction, following the same rule
+ * `services/__tests__/page-webhook-core.test.ts` already applies to its own
+ * schema imports.
+ */
+export type TargetKind = ContentTagTargetKind;
 
 /**
  * A tag's attachment point, payload included.

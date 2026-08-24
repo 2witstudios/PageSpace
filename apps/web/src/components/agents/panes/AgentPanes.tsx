@@ -51,7 +51,7 @@ import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 import type { Cache } from 'swr';
 import { globalChannelId } from '@pagespace/lib/ai/global-channel-id';
-import { fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
+import { ApiRequestError, fetchWithAuth, post, del } from '@/lib/auth/auth-fetch';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
 import { useWorkspaceLayoutSync } from '@/stores/agent-workspace/useWorkspaceLayoutSync';
@@ -622,13 +622,66 @@ export default function AgentPanes({
   // torn down once — and only once — the DELETE has actually succeeded.
   const [pendingEnd, setPendingEnd] = useState<{ nodeId: string } | null>(null);
 
+  /**
+   * Close a shell: kill the PTY, drop the row, and — since #2462 — take its
+   * pane with it. The route kills the process first and then writes the row and
+   * the node together (see `killShellById` for why those are the two halves).
+   *
+   * **404 IS SUCCESS, because the route says so.** Its own doc states the
+   * contract verbatim: "A shell that does not exist (or lives under a different
+   * session than the URL claims) is a 404, which the client treats as success —
+   * killing something already gone IS success (`planKillTarget`)." This did not
+   * honour it: every non-2xx toasted, so closing the tab of a shell whose row
+   * had already gone — with an ended session, or a close the user clicked twice
+   * — reported "Could not close the shell / Shell not found" for a close that
+   * had in fact happened (#2473).
+   *
+   * That is the same shape as the phantom conversation toast documented on
+   * {@link closeChatPane} below, and it is settled the same way: the LOSER of a
+   * race that reached the state it wanted is not an error. What it is NOT
+   * settled by is making the route answer 200 for a shell it never found —
+   * "already gone" and "killed it" are different facts, and the DELETE is the
+   * only place that can still tell them apart.
+   *
+   * **The 404 is WIDER than "already gone", and that is accepted rather than
+   * unnoticed.** `workspaceNotFoundOrDenied` answers the same 404 for a caller
+   * whose access was revoked while the session was open (its own doc: not-found
+   * and every denial land on the SAME status, so a prober cannot tell them
+   * apart). A client cannot separate them either — that is the point of the
+   * family policy — so this swallows a revoked user's failed close too. It
+   * still WARNS — not `debug`, which Chrome hides behind a Verbose filter
+   * nobody turns on — because "nothing happened at all" is the one thing a
+   * support conversation cannot work with.
+   *
+   * That user is not left in silence, though, and the reason is the OTHER
+   * writer: the same close queues a node drop, `/nodes` answers it with the
+   * same denial, and a non-409 4xx there abandons the queue and raises
+   * `queueErrors: 'refused'` — "That can't be shown in this workspace. The
+   * layout has been put back to what the server has." Which is the accurate
+   * account of what happened, from the write that owns the pane.
+   *
+   * Everything else still toasts. A 502 means the kill genuinely failed and the
+   * process may still be running — see {@link handleClosePane} for what that
+   * leaves on screen, and why the message says where to find it.
+   */
   const closeShell = useCallback(
     (shellId: string) => {
       void del(`/api/agent-workspaces/${encodeURIComponent(sessionId)}/shells/${encodeURIComponent(shellId)}`).catch(
         (error) => {
+          if (error instanceof ApiRequestError && error.status === 404) {
+            // WARN rather than debug: this is the record a support conversation
+            // works from, and Chrome hides `console.debug` behind a Verbose
+            // filter nobody turns on — a log the reader cannot see is the
+            // silence this branch was trying not to leave (review).
+            console.warn('Close shell: nothing to close (already gone, or no longer permitted).', shellId);
+            return;
+          }
           console.error('Failed to close shell:', error);
           toast.error('Could not close the shell', {
-            description: error instanceof Error ? error.message : 'It may still be running.',
+            // The pane is already gone from this window — the close was applied
+            // optimistically and nothing rolls it back — so the useful half of
+            // this message is where the thing they were looking at went.
+            description: 'The process may still be running. Reopen it from this session in the sidebar to check.',
           });
         },
       );
@@ -716,6 +769,27 @@ export default function AgentPanes({
         // binding are gone with the close, so the PTY has no surface left and
         // nothing that could reattach to it — it goes too, rather than being
         // left running for a row that no longer exists.
+        //
+        // BOTH of these now destroy this node — the drop above locally and
+        // optimistically, the DELETE's `expel` server-side (#2462) — and unlike
+        // the chat double-write below that is not a fact with two writers. It is
+        // ONE idempotent removal reached from two directions, which is the rule
+        // the kill path is built on: "killing something already gone IS
+        // success". Whichever takes the workspace lock second finds the node
+        // gone and writes nothing. The optimistic drop is what keeps the pane
+        // from sitting there until the round trip and the broadcast come back.
+        //
+        // **WHERE THAT LEAVES A FAILED KILL, stated because the two directions
+        // do not agree there.** If the DELETE answers 502 the server has
+        // deliberately unwound its own `expel` to keep the pane — but this
+        // window's drop is already queued and will remove it anyway, so the
+        // pane goes and the PTY may not. Deferring the drop until the DELETE
+        // answered would fix that and cost the close its optimism: the kill
+        // retries a sleepy Sprite for up to half a minute, and a Close button
+        // that hangs that long is a worse product than a rare wrong outcome.
+        // What is owed instead is the truth and a way back, which is why
+        // `closeShell`'s toast names the sidebar — the shell ROW survives the
+        // unwind, so reopening it there is a real recovery rather than advice.
         if (node.target?.kind === 'terminal') closeShell(node.target.id);
         return;
       }

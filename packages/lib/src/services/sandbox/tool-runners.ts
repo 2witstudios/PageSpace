@@ -25,9 +25,15 @@
  */
 
 import type { SubscriptionTier } from '../subscription-utils';
-import { SANDBOX_TIMEOUT_MS, SANDBOX_MAX_TIMEOUT_MS, SANDBOX_MAX_OUTPUT_BYTES } from './execution-policy';
+import {
+  SANDBOX_TIMEOUT_MS,
+  SANDBOX_MAX_TIMEOUT_MS,
+  SANDBOX_MAX_OUTPUT_BYTES,
+  DEFAULT_READ_LINES,
+  MAX_LINE_BYTES,
+} from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
-import { truncateToBytes } from './output-limit';
+import { truncateToBytes, selectLineWindow, LINE_ELISION_MARKER } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
@@ -383,7 +389,27 @@ export type WriteFileToolResult =
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type ReadFileToolResult =
-  | { success: true; path: string; content: string; truncated: boolean }
+  | {
+      success: true;
+      path: string;
+      content: string;
+      /**
+       * True when `content` is NOT the whole file — either the line window
+       * ended before the last line, or the byte backstop cut it. Always
+       * accompanied by `notice`, because a boolean in a JSON blob is not a
+       * thing a model reliably acts on.
+       */
+      truncated: boolean;
+      /** 1-based line numbers of the window actually returned. */
+      firstLine: number;
+      lastLine: number;
+      /** Total lines in the file, so the caller can see what it is missing. */
+      totalLines: number;
+      /** Size of the WHOLE file on disk, not of `content`. */
+      originalBytes: number;
+      /** Present iff `truncated`: says what is missing and how to get it. */
+      notice?: string;
+    }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
 export type EditFileToolResult =
@@ -414,8 +440,13 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
-  edit_no_match: 'The oldString was not found in the file. Read the file and copy the exact text to replace.',
-  edit_not_unique: 'The oldString is not unique in the file. Include more surrounding context, or set replaceAll to replace every occurrence.',
+  edit_no_match:
+    'The oldString was not found in the file. Read the file and copy the exact text to replace. '
+    + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
+  edit_not_unique:
+    'The oldString is not unique in the file. Add more surrounding context to pin the one you mean. '
+    + 'The duplicate may be OUTSIDE the lines you read — readFile returns a window, but this match runs over the whole file, '
+    + 'so read the rest before assuming replaceAll is safe: it would rewrite every occurrence, including ones you have not seen.',
   no_session:
     'This conversation has no session (workspace), so there is no sandbox to run in — it predates sessions. Start a new conversation to get one.',
   provision_failed: 'Could not provision a sandbox for this run.',
@@ -960,12 +991,110 @@ export async function writeSandboxFile({
   });
 }
 
+/**
+ * Thousands separators without `toLocaleString()`, which depends on the process
+ * locale — the notice text is asserted in tests and read by a model, so it must
+ * not vary with the environment.
+ */
+function withThousands(n: number): string {
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
+
+/**
+ * The sentence a partial read MUST carry.
+ *
+ * `truncated: true` alone was the whole signal before, and it is not one a model
+ * acts on: it is a boolean in a JSON blob next to the content it contradicts.
+ * The notice rides INSIDE the payload for the same reason `shell-io.ts` frames
+ * its cold/unreachable answers there — so truncation cannot be mistaken for the
+ * file simply ending, and so the caller is told the exact next call.
+ *
+ * The editFile clause is the load-bearing one. `applyEdit` counts occurrences
+ * across the ENTIRE file while this read shows a window, so an anchor that looks
+ * unique here can collide with a line the caller never saw; without this warning
+ * the natural recovery from `edit_not_unique` is `replaceAll: true`, which edits
+ * the invisible region.
+ */
+export function buildReadTruncationNotice({
+  path,
+  window,
+}: {
+  path: string;
+  window: {
+    firstLine: number;
+    lastLine: number;
+    totalLines: number;
+    bytesCapped: boolean;
+    lineElided: boolean;
+  };
+}): string {
+  const { firstLine, lastLine, totalLines, bytesCapped, lineElided } = window;
+  const total = withThousands(totalLines);
+
+  // Appended to EVERY variant: whichever way a read came back partial, the next
+  // thing the caller usually does is an edit.
+  const editWarning =
+    ' Note that editFile matches oldString against the ENTIRE file, including lines not shown here —' +
+    ' if an edit reports "not unique", the duplicate may be outside this window,' +
+    ' so read more rather than reaching for replaceAll.';
+  const elisionNote = lineElided
+    ? ` Lines longer than ${withThousands(MAX_LINE_BYTES)} bytes are shown clipped, marked "${LINE_ELISION_MARKER.trim()}" —` +
+      ' their full text is not here, so do not build an editFile anchor from a clipped line.'
+    : '';
+
+  // Overshot the file entirely — say where it actually ends, and do NOT also
+  // claim "this is not the whole file"; nothing was returned to be partial.
+  if (lastLine < firstLine) {
+    return (
+      `[No lines returned: offset ${firstLine} is past the end of ${path}, which has ${total} line${totalLines === 1 ? '' : 's'}.` +
+      ` Re-read with a smaller offset.${editWarning}]`
+    );
+  }
+
+  const shown = `Showing lines ${firstLine}-${lastLine} of ${total}`;
+  const remaining = totalLines - lastLine;
+
+  if (remaining > 0) {
+    // `lastLine` is where the returned content genuinely ends — the byte budget
+    // is applied per line during selection, never to the joined text after —
+    // so this offset resumes exactly where this window stopped, with no gap.
+    const why = bytesCapped
+      ? ' This window was cut short by the output size limit rather than by the line count, so it is shorter than requested.'
+      : '';
+    return (
+      `[${shown}. This is NOT the whole file — ${withThousands(remaining)} line${remaining === 1 ? '' : 's'} below this window` +
+      ` ${remaining === 1 ? 'is' : 'are'} not shown. Continue with readFile({ path: "${path}", offset: ${lastLine + 1} }).` +
+      `${why}${elisionNote}${editWarning}]`
+    );
+  }
+
+  // Every line present and the window started at the top: the only thing that
+  // made this partial is per-line clipping.
+  if (firstLine === 1) {
+    return `[${shown} — every line of the file is here, but at least one was too long to show in full.${elisionNote}${editWarning}]`;
+  }
+
+  // Reached the last line, but started past line 1: the tail is complete, the
+  // head is missing. Saying "NOT the whole file" here would be misleading about
+  // which end is absent.
+  return (
+    `[${shown} — this window reaches the end of the file, but lines 1-${firstLine - 1} are not shown.` +
+    `${elisionNote}${editWarning}]`
+  );
+}
+
 export async function readSandboxFile({
   path,
+  offset,
+  limit,
   ctx,
   deps,
 }: {
   path: string;
+  /** 1-based first line to return. Omit for the start of the file. */
+  offset?: number;
+  /** How many lines to return. Omit for DEFAULT_READ_LINES. */
+  limit?: number;
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
 }): Promise<ReadFileToolResult> {
@@ -982,7 +1111,7 @@ export async function readSandboxFile({
     return fail('path_escape');
   }
 
-  return withMachineBilling<{ path: string; content: string; truncated: boolean }>(ctx, deps, async () => {
+  return withMachineBilling<Extract<ReadFileToolResult, { success: true }>>(ctx, deps, async () => {
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
@@ -1021,16 +1150,40 @@ export async function readSandboxFile({
     // Injection seam (fail-open): screen untrusted file content before truncation.
     const rawContent = buffer.toString('utf8');
     const screenedContent = deps.screenOutput ? await deps.screenOutput(rawContent) : rawContent;
-    const { text, truncated } = truncateToBytes({
+    const originalBytes = Buffer.byteLength(screenedContent, 'utf8');
+
+    // Both caps are applied INSIDE the windowing, so `window.lastLine` always
+    // describes the line the returned content actually ends on. Capping the
+    // joined text afterwards instead would cut mid-window while lastLine still
+    // named the requested end, and the notice would then send the caller to an
+    // offset well past the content, silently skipping everything in between.
+    const window = selectLineWindow({
       text: screenedContent,
+      offset,
+      limit: limit ?? DEFAULT_READ_LINES,
       maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
+      maxLineBytes: MAX_LINE_BYTES,
     });
+    const text = window.text;
+    const truncated = window.windowed || window.lineElided;
     await safeAudit(deps, ctx, {
       code: `readFile ${path}`,
       exitCode: 0,
       durationMs,
     });
-    return { success: true, path, content: text, truncated };
+    return {
+      success: true,
+      path,
+      content: text,
+      truncated,
+      firstLine: window.firstLine,
+      lastLine: window.lastLine,
+      totalLines: window.totalLines,
+      originalBytes,
+      ...(truncated
+        ? { notice: buildReadTruncationNotice({ path, window }) }
+        : {}),
+    };
   } finally {
     session.release();
   }
@@ -1119,6 +1272,13 @@ export async function editSandboxFile({
  * Default env builder used by the production tool wrappers. This is the effect
  * seam that sources the validated env from the global and hands it to the pure
  * `buildSandboxEnv`, keeping the allowlist construction itself IO-free.
+ *
+ * The validated env is currently READ AND UNUSED — `SANDBOX_ENV_ALLOWLIST` is
+ * empty, so `buildSandboxEnv` looks at none of it. Kept deliberately: this is
+ * where the host env enters the sandbox path, and the day a key is allowlisted
+ * this seam must hand over the VALIDATED value rather than a raw `process.env`
+ * read. The one live effect meanwhile is that a broken env throws here — which,
+ * in the web service, it would already have done long before any tool ran.
  */
 export const defaultBuildEnv = (): Record<string, string> =>
   buildSandboxEnv({ env: getValidatedEnv() });

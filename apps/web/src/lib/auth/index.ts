@@ -942,6 +942,8 @@ export {
   getPrincipalDriveIds,
   getPrincipalAccessiblePagesInDrive,
   getPrincipalBatchPagePermissions,
+  getPrincipalDriveAccessLevel,
+  getPrincipalDriveMembership,
 } from './principal-permissions';
 export { verifyAuth, verifyAdminAuth, isAdminAuthError, withAdminAuth, type VerifiedUser, type AdminRouteContext } from './auth';
 export { validateCSRF } from './csrf-validation';

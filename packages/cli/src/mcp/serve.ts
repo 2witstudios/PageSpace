@@ -10,6 +10,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import {
+  appendRows,
   askAgent,
   createCalendarEvent,
   createCommand,
@@ -25,9 +26,12 @@ import {
   deleteCommand,
   deleteDriveRole,
   deleteLines,
+  deleteRows,
   deleteTask,
   deleteTaskTrigger,
   deleteWorkflow,
+  describeSelfKey,
+  describeSheet,
   editSheetCells,
   exportPageMarkdown,
   exportSheetCsv,
@@ -36,6 +40,7 @@ import {
   getCalendarEvent,
   getDriveRole,
   getPageDetails,
+  getRows,
   globSearch,
   insertLines,
   inviteCalendarAttendees,
@@ -54,6 +59,7 @@ import {
   movePage,
   multiDriveListAgents,
   multiDriveSearch,
+  queryRows,
   readConversation,
   readDocument,
   regexSearch,
@@ -76,6 +82,7 @@ import {
   trashPage,
   updateAgentConfig,
   updateCalendarEvent,
+  updateCells,
   updateCommand,
   updateDriveContext,
   updateDriveRole,
@@ -105,8 +112,16 @@ import { CLI_VERSION } from '../commands/version.js';
  * MCP tool surface is derived from it mechanically (`listOperations` +
  * `operationToMcpTool`), so drift between "operations the SDK has" and
  * "tools MCP serves" is structurally impossible.
+ *
+ * `tokens.list`/`tokens.revoke` are the two deliberate omissions: key
+ * management is not something an agent's own key should be able to do to the
+ * other keys its owner holds, and the routes behind them refuse `mcp_`
+ * credentials anyway. `describeSelfKey` is here for the opposite reason — an
+ * agent asking what its own credential may do is exactly the question this
+ * surface should be able to answer, and it answers only about itself.
  */
 const ALL_OPERATIONS: readonly Operation[] = [
+  appendRows,
   askAgent,
   createCalendarEvent,
   createCommand,
@@ -122,9 +137,12 @@ const ALL_OPERATIONS: readonly Operation[] = [
   deleteCommand,
   deleteDriveRole,
   deleteLines,
+  deleteRows,
   deleteTask,
   deleteTaskTrigger,
   deleteWorkflow,
+  describeSelfKey,
+  describeSheet,
   editSheetCells,
   exportPageMarkdown,
   exportSheetCsv,
@@ -133,6 +151,7 @@ const ALL_OPERATIONS: readonly Operation[] = [
   getCalendarEvent,
   getDriveRole,
   getPageDetails,
+  getRows,
   globSearch,
   insertLines,
   inviteCalendarAttendees,
@@ -151,6 +170,7 @@ const ALL_OPERATIONS: readonly Operation[] = [
   movePage,
   multiDriveListAgents,
   multiDriveSearch,
+  queryRows,
   readConversation,
   readDocument,
   regexSearch,
@@ -173,6 +193,7 @@ const ALL_OPERATIONS: readonly Operation[] = [
   trashPage,
   updateAgentConfig,
   updateCalendarEvent,
+  updateCells,
   updateCommand,
   updateDriveContext,
   updateDriveRole,

@@ -83,6 +83,14 @@ const { mockTable } = vi.hoisted(() => {
     resolved: `${name}.resolved`,
     method: `${name}.method`,
     endpoint: `${name}.endpoint`,
+    tagId: `${name}.tagId`,
+    targetKind: `${name}.targetKind`,
+    anchor: `${name}.anchor`,
+    anchorStatus: `${name}.anchorStatus`,
+    channelMessageId: `${name}.channelMessageId`,
+    aiMessageId: `${name}.aiMessageId`,
+    source: `${name}.source`,
+    confidence: `${name}.confidence`,
   });
   return { mockTable: fn };
 });
@@ -91,6 +99,10 @@ vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),
+  tags: mockTable('tags'),
+}));
+vi.mock('@pagespace/db/schema/content-tags', () => ({
+  contentTags: mockTable('contentTags'),
 }));
 vi.mock('@pagespace/db/schema/monitoring', () => ({
   activityLogs: mockTable('activityLogs'),
@@ -898,6 +910,9 @@ describe('collectAllUserData', () => {
     // reaches nobody's export.
     expect(Array.isArray(result!.agentWorkspaces)).toBe(true);
     expect(Array.isArray(result!.streamState)).toBe(true);
+    // Same rule again for the content-tags category: a collector that
+    // `collectAllUserData` never calls reaches nobody's export.
+    expect(Array.isArray(result!.contentTags)).toBe(true);
     expect(result!.personalization).toBeNull();
   });
 });

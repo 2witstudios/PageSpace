@@ -27,6 +27,7 @@ import { unrefWaitMs } from '../auth/wait.js';
 import { runLoopbackLogin } from '../auth/loopback-flow.js';
 import { resolveEnvKeyName } from '../auth/legacy-token-env.js';
 import { resolveKeyName } from '../auth/resolve.js';
+import { shellQuote } from '../shell-quote.js';
 import type {
   ConfirmIdentity,
   DiscoverMetadata,
@@ -74,7 +75,14 @@ export function createLoginHandler(deps: LoginHandlerDeps): CommandHandler {
     if (existing && !intent.flags.yes) {
       const keyNote = keyName === DEFAULT_PROFILE_NAME ? '' : ` (key "${keyName}")`;
       ctx.stderr.write(
-        `A stored credential for ${host}${keyNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host ${host}" first.\n`,
+        // The suggested logout must name the SAME key this message is about.
+        // Without `--key`, `logout` resolves the name independently and lands
+        // on `default` — and logout is destructive: it revokes the refresh
+        // token server-side before deleting it. So telling someone blocked by
+        // key "ci" to run a bare logout was telling them to revoke their
+        // personal login. Quoted and equals-joined for the same reason
+        // `keys create` is (see `shell-quote.ts`).
+        `A stored credential for ${host}${keyNote} already exists. Re-run with --yes to overwrite it, or "pagespace logout --host=${shellQuote(host)}${keyName === DEFAULT_PROFILE_NAME ? '' : ` --key=${shellQuote(keyName)}`}" first.\n`,
       );
       return EXIT_RUNTIME_ERROR;
     }

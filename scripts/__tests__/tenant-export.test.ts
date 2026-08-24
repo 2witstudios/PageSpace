@@ -180,7 +180,7 @@ describe('exportData', () => {
     expect(result.manifest.tableCounts.pagePermissions).toBe(1);
   });
 
-  it('exports tags and page-tag links', async () => {
+  it('exports tags and content-tag assignments', async () => {
     const outputDir = path.join(tmpDir, 'bundle');
     const result = await exportData(db as unknown as DbClient, {
       userIds: [FIXTURES.users.owner.id, FIXTURES.users.member.id],
@@ -190,8 +190,11 @@ describe('exportData', () => {
       dryRun: false,
     });
 
-    expect(result.manifest.tableCounts.tags).toBe(1);
-    expect(result.manifest.tableCounts.pageTags).toBe(1);
+    // TWO vocabulary rows, ONE assignment. The vocabulary travels by DRIVE, so
+    // the unused entry comes too — deriving the tag list from the surviving
+    // assignments would carry only `important` and lose `unused` in silence.
+    expect(result.manifest.tableCounts.tags).toBe(2);
+    expect(result.manifest.tableCounts.contentTags).toBe(1);
   });
 
   it('exports mentions and user mentions', async () => {

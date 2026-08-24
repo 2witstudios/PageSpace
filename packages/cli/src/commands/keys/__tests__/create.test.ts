@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { parseScopeList, formatScopeSet } from '@pagespace/lib/auth/oauth/scopes';
 import type { CredentialStore, HostCredential, LoopbackCallback, LoopbackServer } from '@pagespace/cli';
 import { parseArgv } from '../../../argv/parse.js';
@@ -8,6 +8,36 @@ import { credentialSecret } from '../../../credentials/serialize.js';
 import { createFakeContext, createRecordingSink } from '../../../__tests__/fake-context.js';
 import type { DriveScopeArg } from '../args.js';
 import { buildKeyActivateScope, buildKeyUpdateScope, buildTokenScope, createTokensCreateHandler, resolveNewKeyName } from '../create.js';
+
+/**
+ * What `GET /api/auth/key` answers for the key the mint just produced. Stubbed
+ * rather than reaching the network: the mint flow's contract is that it PRINTS
+ * this readback, not that it can resolve permissions itself.
+ */
+const FAKE_KEY_DESCRIPTION = {
+  credential: {
+    type: 'mcp' as const,
+    scoped: true,
+    id: 'key_1',
+    name: 'agent',
+    tokenPrefix: 'mcp_abc12345',
+    createdAt: '2026-07-03T00:00:00.000Z',
+    lastUsed: null,
+  },
+  driveScopes: [
+    {
+      id: 'drv1',
+      name: 'Research',
+      role: 'MEMBER' as const,
+      customRoleId: null,
+      customRoleName: null,
+      roleSource: 'explicit' as const,
+      permissions: { canView: true, canEdit: false, canShare: false, canDelete: false },
+    },
+  ],
+  page: null,
+};
+
 
 function commandIntent(argv: string[]): CommandIntent {
   const parsed = parseArgv(argv);
@@ -265,6 +295,69 @@ describe('resolveNewKeyName', () => {
     });
   });
 
+  // `--name ""` arrives as an empty STRING, not as absent — `??` only falls
+  // through on null/undefined — so it used to mint a key the keychain stores
+  // under "", which `--key=`, the key env var and `keys use` all refuse
+  // (blank reads as absent). Nothing could ever name it again.
+  // Asserted as the BLANK message specifically, not "blank or whitespace". An
+  // all-whitespace name satisfies both guards, and when the padding guard won
+  // the race the advice became `Use ""` — the empty name the other guard
+  // rejects. A regex accepting either message hid that entirely.
+  it.each([[''], ['   '], ['\t'], ['\n ']])('rejects a blank-or-whitespace --name (%j) as blank', (name) => {
+    const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('must not be blank');
+    expect(result.ok === false && result.message).not.toMatch(/Use ""/);
+  });
+
+  // The same failure short of its limit: a key is STORED under its name
+  // verbatim but every lookup trims first, so `--name "  x  "` writes the store
+  // under "  x  " while `--key` resolves "x" and misses. Trimming to decide and
+  // storing untrimmed is what created the mismatch.
+  it.each([['  x  '], ['x '], [' x'], ['\tx']])('rejects a whitespace-padded --name (%j)', (name) => {
+    const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toMatch(/whitespace/);
+    // Names the usable form rather than leaving the caller to guess.
+    expect(result.ok === false && result.message).toContain(`"${name.trim()}"`);
+  });
+
+  it('still accepts a name with INTERNAL spaces, which look up fine', () => {
+    expect(resolveNewKeyName({ name: 'lead gen', drives: [{ id: 'drv1', role: null }] })).toEqual({
+      ok: true,
+      name: 'lead gen',
+    });
+  });
+
+  // The padding branch is the only rejection that SUGGESTS a replacement, so
+  // every name whose trimmed form is ALSO invalid has to be caught before it.
+  // Two such names exist — "   " trims to "" (blank) and "  default  " trims to
+  // "default" (reserved) — and both used to be told to use the very thing the
+  // next guard refuses.
+  it('rejects a padded reserved name as reserved, not with advice to use the reserved name', () => {
+    const result = resolveNewKeyName({ name: '  default  ', drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('is reserved');
+    expect(result.ok === false && result.message).not.toMatch(/Use "default"/);
+  });
+
+  // The invariant that makes this class of bug impossible rather than merely
+  // absent: whenever a rejection names a replacement, that replacement must
+  // itself be accepted.
+  it.each([['  x  '], [' lead gen '], ['\tci-bot\t']])(
+    'only ever suggests a name that is itself valid (%j)',
+    (name) => {
+      const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+      expect(result.ok).toBe(false);
+      const suggested = result.ok === false && result.message.match(/Use "(.*)"\.$/)?.[1];
+      expect(suggested).toBeTruthy();
+      expect(resolveNewKeyName({ name: suggested as string, drives: [{ id: 'drv1', role: null }] })).toEqual({
+        ok: true,
+        name: suggested,
+      });
+    },
+  );
+
   it('rejects "default" as an explicit --name — that slot is reserved for "pagespace login", and says so in key vocabulary', () => {
     const result = resolveNewKeyName({ name: 'default', drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);
@@ -395,6 +488,7 @@ function baseHandlerDeps(store: CredentialStore) {
     waitMs: () => new Promise<void>(() => {}),
     exchangeCode: async () => FIXED_TOKENS,
     confirmIdentity: async () => ({ name: 'Ada Lovelace', email: 'ada@example.com' }),
+    describeKeyPermissions: async () => FAKE_KEY_DESCRIPTION,
     requestDeviceAuthorization: async () => DEVICE_AUTHORIZATION,
     pollDeviceToken: async () => ({ kind: 'success' as const, tokens: FIXED_MCP_TOKENS }),
     createIsInterrupted: () => () => false,
@@ -590,6 +684,98 @@ describe('createTokensCreateHandler', () => {
     expect(stderr.lines.join('')).not.toContain('mcp_raw_secret_1');
   });
 
+  // Issue #2470: the mint used to end at "Created key X, scoped to: …" and
+  // never say what that scope actually resolved to. This block is read back
+  // from the server WITH the new key, so it reports the resolution real
+  // requests will get, not a restatement of the --role flag.
+  it('prints the new key\'s effective permissions, resolved server-side with the key itself', async () => {
+    const fake = fakeServer();
+    const describeKeyPermissions = vi.fn(async () => FAKE_KEY_DESCRIPTION);
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+      describeKeyPermissions,
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(describeKeyPermissions).toHaveBeenCalledWith({ host: 'https://pagespace.ai', accessToken: 'mcp_raw_secret_1' });
+    const output = stdout.lines.join('');
+    expect(output).toContain('Research');
+    expect(output).toContain('on the drive: view');
+  });
+
+  it('keeps the readback on stderr under --show-token, so stdout stays the one token line', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+    });
+
+    const stdout = createRecordingSink();
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stdout, stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--show-token']));
+
+    expect(code).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('').trim().split('\n')).toEqual(['PAGESPACE_TOKEN=mcp_raw_secret_1']);
+    expect(stderr.lines.join('')).toContain('on the drive: view');
+  });
+
+  it('still reports success when the permission readback fails, and points at "keys describe"', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+      exchangeCode: async () => ({ kind: 'mcp' as const, token: 'mcp_raw_secret_1', scope: 'drive:drv1:member offline_access' }),
+      describeKeyPermissions: async () => {
+        throw new Error('server unreachable');
+      },
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    // The key is minted and stored before the readback runs, so a probe failure
+    // must never read as the mint having failed.
+    expect(await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']))).toBe(EXIT_SUCCESS);
+    const output = stdout.lines.join('');
+    expect(output).toContain('The key was created.');
+    // The pointer is printed once, by the wiring guidance, and names the key —
+    // a bare `keys describe` would be refused by run.ts's credential gate in
+    // exactly the state a user is in right after a mint.
+    expect(output).toContain('pagespace keys describe --key');
+    expect(output.split('pagespace keys describe').length - 1).toBe(1);
+  });
+
+  // The cause has to be stated here rather than deferred to the --show-token
+  // branch, which does not run on this path: deferring left a bare "could not
+  // be read back" with nothing for the reader to act on.
+  it('names WHY the readback did not happen even without --show-token', async () => {
+    const fake = fakeServer();
+    const handler = createTokensCreateHandler({
+      ...baseHandlerDeps(fakeStore()),
+      startServer: async () => fake.server,
+      openBrowser: autoApprove(fake),
+    });
+
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, env: {} });
+
+    expect(await handler(ctx, commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member']))).toBe(EXIT_SUCCESS);
+    expect(stdout.lines.join('')).toContain('Its permissions could not be read back here — it returned no raw token.');
+  });
+
   it('without --show-token the raw mcp_* token appears nowhere in the output', async () => {
     const store = fakeStore();
     const fake = fakeServer();
@@ -627,6 +813,7 @@ describe('createTokensCreateHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     expect(stderr.lines.join('')).toMatch(/no raw token to show/i);
+    expect(stderr.lines.join('')).toContain('Its permissions could not be read back here — it returned no raw token.');
     const allOutput = [...stdout.lines, ...stderr.lines].join('');
     expect(allOutput).not.toContain(FIXED_TOKENS.refreshToken);
     expect(allOutput).not.toContain(FIXED_TOKENS.accessToken);
@@ -668,6 +855,36 @@ describe('createTokensCreateHandler', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(stderr.lines.join('')).toMatch(/--yes/);
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
+  });
+
+  // The other command this CLI prints with a key name in it. A name like
+  // `-prod` made the suggested logout unpasteable in exactly the way the
+  // post-mint hint was — `--key` takes the next word, or rejects a value
+  // starting with `-` outright.
+  it('suggests a logout command that survives an awkward key name', async () => {
+    const store = fakeStore();
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'static', token: 'mcp_existing', scopes: ['drive:drv1:member'], createdAt: '2026-01-01T00:00:00.000Z' },
+      '-prod key',
+    );
+    const handler = createTokensCreateHandler(baseHandlerDeps(store));
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(
+      ctx,
+      commandIntent(['keys', 'create', '--drive', 'drv1', '--role', 'member', '--name', '-prod key']),
+    );
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    const output = stderr.lines.join('');
+    expect(output).toContain(`--key='-prod key'`);
+    expect(output).not.toContain('--key -prod key');
+    // Both halves of the suggested command, not just the one that motivated it.
+    expect(output).toContain('--host=https://pagespace.ai');
+    expect(output).not.toContain('--host https://pagespace.ai');
   });
 
   it('overwrites an existing stored key when --yes is passed', async () => {

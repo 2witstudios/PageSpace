@@ -106,6 +106,17 @@ export { listConversations, readConversation } from './operations/conversations.
 // Documents / content (Phase 3 task 2) — full pagespace-mcp document.js parity.
 export { deleteLines, editSheetCells, insertLines, readDocument, replaceLines } from './operations/documents.js';
 
+// Sheet rows — the tabular view of a SHEET page (POST /api/mcp/sheets).
+export {
+  appendRows,
+  deleteRows,
+  describeSheet,
+  getRows,
+  queryRows,
+  updateCells,
+} from './operations/sheets.js';
+export type { SheetWhereInput } from './operations/sheets.js';
+
 // Export (Phase 3 task 10) — page -> Markdown, sheet -> CSV text exports.
 export { exportPageMarkdown, exportSheetCsv } from './operations/export.js';
 
@@ -128,7 +139,7 @@ export { listDriveMembers } from './operations/members.js';
 // MCP tokens (Phase 4 task 6) — CLI `pagespace keys list/revoke`. These require
 // a `ps_at_` OAuth access token (or web session); there is no `tokens.create` —
 // key minting is session-only server-side (OAuth consent flow or web UI).
-export { listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
+export { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 
 // Pages (Phase 3 task 2) — full pagespace-mcp page.js parity.
 export {
