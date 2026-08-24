@@ -17,7 +17,14 @@ import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
-import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import {
+  loadSheetWindow,
+  renderSheetTable,
+  columnsInRows,
+  SHEET_PREVIEW_ROWS,
+  SHEET_LIST_PREVIEW_ROWS,
+  MAX_SHEET_READ_ROWS,
+} from './sheet-view';
 import { fetchCachedImagePreset } from '../core/image-preset-fetch';
 import { toModelOutputForReadPage, buildVisualContentMetadata } from './read-page-vision-output';
 import { ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
@@ -53,7 +60,7 @@ export const pageReadTools = {
       driveId: z.string().optional().describe('The unique ID of the drive (used for operations). Omit to list the workspace currently in view (see LOCATION context).'),
       parentId: z.string().optional().describe('Page ID to list children of. Omit for drive root.'),
       recursive: z.boolean().optional().describe('Set true to return the full subtree instead of direct children only. Default: false.'),
-      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content.`),
+      include: z.enum(['content']).optional().describe(`Set to "content" to batch each page's content into the response instead of calling read_page per page. Content over ${MAX_CONTENT_CHARS_PER_PAGE} characters is clipped (contentClipped: true) — resume with read_page's lineStart at contentClippedAfterLine + 1. CHANNEL/TASK_LIST/FILE pages get a short summary instead of content, and SHEET pages get their dimensions plus their first ${SHEET_LIST_PREVIEW_ROWS} rows — use read_sheet for the rest.`),
     }),
     execute: async ({ driveSlug, driveId: driveIdArg, parentId, recursive = false, include }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -186,15 +193,31 @@ export const pageReadTools = {
               const row = contentMap.get(entry.id);
               if (!row) continue;
 
-              // Sheets come from their rows here too. `isTextSerializablePageType`
-              // accepts SHEET, and this path reads `pages.content` directly —
-              // which is empty for a materialised sheet, so `include: "content"`
-              // returned a blank spreadsheet while `read_page` returned the data.
-              const readableRow = isSheetType(entry.type as PageType)
-                ? { ...row, content: (await readSheetDocument(entry.id)) ?? row.content }
-                : row;
+              // Sheets are rows, not text, and this batching surface is where
+              // reading them as text hurts most: one 500-row sheet in a folder
+              // used to reconstruct the whole SheetDoc document, then hand back
+              // the first 8,000 characters of it — a clipped TOML header that
+              // reaches roughly cell B3 and tells the reader nothing about the
+              // sheet. It gets the same bounded row window read_page returns,
+              // just fewer rows because this call previews many pages at once.
+              if (isSheetType(entry.type as PageType)) {
+                const sheet = await loadSheetWindow(entry.id, {
+                  limit: SHEET_LIST_PREVIEW_ROWS,
+                  documentContent: row.content,
+                });
+                const table = renderSheetTable(sheet.rows);
+                const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.`;
+                // The pointer rides in the content rather than in
+                // `contentClipped`, which promises the rest is reachable with
+                // read_page's lineStart — the rest of a sheet is reached with
+                // read_sheet. A wrong pointer is worse than none.
+                entry.content = table
+                  ? `${header} First ${sheet.rows.length} rows below; use read_sheet on this page for the rest, or to filter and project.\n${table}`
+                  : `${header} No data yet.`;
+                continue;
+              }
 
-              const fullContent = serializePageContentForAI({ type: entry.type, ...readableRow });
+              const fullContent = serializePageContentForAI({ type: entry.type, ...row });
               if (fullContent.length > MAX_CONTENT_CHARS_PER_PAGE) {
                 // Cut at the last newline within the budget rather than an arbitrary
                 // character offset, so we don't split a UTF-16 surrogate pair or sever
@@ -262,12 +285,12 @@ export const pageReadTools = {
    * Read existing documents to understand context and content
    */
   read_page: tool({
-    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
+    description: 'Read the content of any page (document, AI chat, channel, etc.) using its ID. Returns content with line numbers. For CHANNEL pages, returns a message transcript. For SHEET pages, returns the sheet\'s dimensions and its first ' + SHEET_PREVIEW_ROWS + ' rows as a table (lineStart/lineEnd select ROW numbers there) — use read_sheet to read a row range, filter rows by column value, or project columns. Use lineStart/lineEnd to read specific line ranges. Omit pageId to read the page currently in view.',
     inputSchema: z.object({
       title: z.string().describe('The document title for display context'),
       pageId: z.string().optional().describe('The unique ID of the page to read. Defaults to the page currently in view if omitted.'),
-      lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning.'),
-      lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end.'),
+      lineStart: z.number().int().optional().describe('Start line number (1-indexed, inclusive). Omit to start from beginning. On a SHEET this is a sheet ROW number.'),
+      lineEnd: z.number().int().optional().describe('End line number (1-indexed, inclusive). Omit to read to end. On a SHEET this is a sheet ROW number.'),
     }),
     toModelOutput: ({ output }) => toModelOutputForReadPage(output),
     execute: async ({ title, pageId: pageIdArg, lineStart, lineEnd }, { experimental_context: context }) => {
@@ -835,17 +858,120 @@ export const pageReadTools = {
           };
         }
 
-        // A sheet's content is generated from its rows. `pages.content` is
-        // empty once a sheet has been materialised, so serialising the page as
-        // stored would hand the model a blank spreadsheet.
-        const readable = isSheetType(page.type as PageType)
-          ? { ...page, content: (await readSheetDocument(page.id)) ?? page.content }
-          : page;
+        // A SHEET is rows, and reading it as text was the single worst answer
+        // this tool gave.
+        //
+        // The old path reconstructed the whole spreadsheet as a SheetDoc TOML
+        // document and then numbered every line of it: a 500-row, 16-column
+        // sheet came back as ~23,700 lines of `[sheets.cells.AB417]` tables,
+        // one per cell, with no way to ask for a row range or look a row up by
+        // value. Reading a real dataset was impossible, so agents kept a copy of
+        // the data outside the platform instead — the storage was write-only in
+        // practice (issue #2467).
+        //
+        // What comes back now is what makes a sheet legible and bounded: its
+        // dimensions and tabs, then a window of rows as delimited text whose
+        // line numbers ARE the sheet's row numbers, so reading row 417 tells you
+        // where to write `C417`. lineStart/lineEnd select ROWS here rather than
+        // lines of serialised TOML, which is the only reading of them that
+        // survives the change with a useful meaning. Anything beyond a window —
+        // filtering, sorting, column projection — is `read_sheet`, and this
+        // result says so.
+        if (isSheetType(page.type as PageType)) {
+          const requestedStart = Math.max(1, lineStart ?? 1);
+          const windowSize = lineEnd !== undefined
+            ? Math.min(Math.max(0, lineEnd - requestedStart + 1), MAX_SHEET_READ_ROWS)
+            : SHEET_PREVIEW_ROWS;
+
+          // `limit` is at least 1 even for an empty range (lineEnd < lineStart):
+          // the fetch is what carries the sheet's dimensions and tab list, and
+          // an empty range must still report those rather than "0 rows x 0
+          // columns", which reads as an empty spreadsheet.
+          const sheet = await loadSheetWindow(page.id, {
+            fromRow: requestedStart - 1,
+            limit: Math.max(1, windowSize),
+            documentContent: page.content,
+          });
+
+          // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
+          // window that starts inside the requested range can still run past
+          // its end. Clip to what was actually asked for.
+          const rows = sheet.rows.filter(
+            (row) => lineEnd === undefined || row.rowNumber <= lineEnd
+          );
+          const columns = columnsInRows(rows);
+          const table = renderSheetTable(rows, columns);
+          const rowCount = sheet.rowCount;
+          const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
+
+          // Formulas and errors, keyed by A1 address across the window. A sheet
+          // read that shows only computed values cannot tell "5" from "=2+3",
+          // and the spreadsheets skill documents reading a page back to confirm
+          // a formula (and to see the expected cross-page-reference error).
+          // Both stay sparse — only cells that have one appear.
+          const formulas: Record<string, string> = {};
+          const errors: Record<string, string> = {};
+          for (const row of rows) {
+            for (const [column, formula] of Object.entries(row.formulas ?? {})) {
+              formulas[`${column}${row.rowNumber}`] = formula;
+            }
+            for (const [column, message] of Object.entries(row.errors ?? {})) {
+              errors[`${column}${row.rowNumber}`] = message;
+            }
+          }
+
+          const lastRow = rows.length > 0 ? rows[rows.length - 1].rowNumber : requestedStart - 1;
+          const moreRows = lastRow < rowCount;
+
+          return {
+            success: true,
+            pageId: page.id,
+            title: page.title,
+            type: page.type,
+            contentMode: page.contentMode || 'html',
+            isTaskLinked,
+            // `totalLines` is a sheet's ROW count here, which is what
+            // lineStart/lineEnd address on this page type.
+            totalLines: rowCount,
+            lineCount: rows.length,
+            content: table,
+            rawContent: table,
+            dimensions: { rowCount, columnCount: sheet.columnCount },
+            tabs: sheet.tabs,
+            tabIndex: sheet.tabIndex,
+            tabName: sheet.tabName,
+            columns,
+            rows,
+            rowsReturned: rows.length,
+            ...(Object.keys(formulas).length > 0 && { formulas }),
+            ...(Object.keys(errors).length > 0 && { errors }),
+            ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
+            hasMoreRows: moreRows,
+            ...(moreRows && { nextStartRow: lastRow + 1 }),
+            summary: isRangeRequest
+              ? `Read rows ${requestedStart}-${lastRow} of sheet "${page.title}" (${rows.length} of ${rowCount} rows, ${sheet.columnCount} columns)`
+              : `Sheet "${page.title}": ${rowCount} rows x ${sheet.columnCount} columns — showing the first ${rows.length}`,
+            stats: {
+              documentType: page.type,
+              rowCount,
+              columnCount: sheet.columnCount,
+              rowsReturned: rows.length,
+              characterCount: table.length,
+            },
+            nextSteps: [
+              ...(moreRows
+                ? [`Only rows up to ${lastRow} of ${rowCount} are shown — use read_sheet (startRow: ${lastRow + 1}) rather than paging this tool.`]
+                : []),
+              'Use read_sheet to filter rows by column value, sort them, or return only some columns — do not read the whole sheet to search it.',
+              'Use edit_sheet_cells with A1 addresses to write; a row\'s number here is its A1 row.',
+            ],
+          };
+        }
 
         // Format content for AI line-based editing, then split into lines.
         // Shared with command injection (page-serializer) so both surfaces
         // serialize page content identically.
-        const formattedContent = serializePageContentForAI(readable);
+        const formattedContent = serializePageContentForAI(page);
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 

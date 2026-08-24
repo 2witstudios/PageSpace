@@ -5,6 +5,7 @@ import { roleManagementTools } from '../tools/role-management-tools';
 import { driveTools } from '../tools/drive-tools';
 import { pageReadTools } from '../tools/page-read-tools';
 import { pageWriteTools } from '../tools/page-write-tools';
+import { sheetReadTools } from '../tools/sheet-read-tools';
 import { searchTools } from '../tools/search-tools';
 import { taskManagementTools } from '../tools/task-management-tools';
 import { agentTools } from '../tools/agent-tools';
@@ -47,6 +48,7 @@ const TOOL_MODULES = {
   drives: driveTools,
   pagesRead: pageReadTools,
   pagesWrite: pageWriteTools,
+  sheetsRead: sheetReadTools,
   search: searchTools,
   tasks: taskManagementTools,
   agents: agentTools,

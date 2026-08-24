@@ -52,6 +52,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'restore_page': 'Restore',
   'restore_drive': 'Restore Drive',
   'move_page': 'Move Page',
+  'read_sheet': 'Read Sheet',
   'edit_sheet_cells': 'Edit Sheet',
   // Search tools
   'regex_search': 'Search',

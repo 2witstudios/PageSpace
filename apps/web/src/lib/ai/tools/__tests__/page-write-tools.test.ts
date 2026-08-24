@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 /**
  * Page Write Tools Tests
@@ -190,7 +191,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess' },
 }));
 
-import { pageWriteTools } from '../page-write-tools';
+import { pageWriteTools, MAX_SHEET_CELLS_PER_EDIT } from '../page-write-tools';
 import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel, hasAgentDriveMembership, hasAgentDriveAdminRole } from '@pagespace/lib/permissions/agent-permissions';
@@ -2137,6 +2138,33 @@ describe('page-write-tools', () => {
       const [ref, cells] = mockSetCells.mock.calls[0] as [unknown, unknown];
       expect(ref).toEqual({ pageId: 'page-1' });
       expect(cells).toEqual([{ address: 'A1', value: 'test' }]);
+    });
+
+    it('caps the batch at MAX_SHEET_CELLS_PER_EDIT and says so in the schema', () => {
+      // The cap has to be REACHABLE by the model, not just enforced: it is the
+      // schema, and the description, that stop an agent from inferring a batch
+      // size by trial and error the way issue #2467 reports having to. An
+      // enforcement with no advertisement would just move the folklore.
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      const cell = (index: number) => ({ address: `A${index + 1}`, value: 'x' });
+
+      const atCap = schema.safeParse({
+        pageId: 'page-1',
+        cells: Array.from({ length: MAX_SHEET_CELLS_PER_EDIT }, (_, i) => cell(i)),
+      });
+      const overCap = schema.safeParse({
+        pageId: 'page-1',
+        cells: Array.from({ length: MAX_SHEET_CELLS_PER_EDIT + 1 }, (_, i) => cell(i)),
+      });
+
+      expect(atCap.success).toBe(true);
+      expect(overCap.success).toBe(false);
+      expect(pageWriteTools.edit_sheet_cells.description).toContain(String(MAX_SHEET_CELLS_PER_EDIT));
+    });
+
+    it('still rejects an empty batch', () => {
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      expect(schema.safeParse({ pageId: 'page-1', cells: [] }).success).toBe(false);
     });
 
     it('returns error for non-sheet pages', async () => {

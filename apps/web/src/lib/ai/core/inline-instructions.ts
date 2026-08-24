@@ -51,8 +51,8 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
   },
   { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).' },
   {
-    full: '• SHEET: Spreadsheet stored as TOML. Use edit_sheet_cells for cell-level edits.',
-    slim: '• SHEET: Spreadsheet. Use edit_sheet_cells for cell edits; load the spreadsheets skill before formulas or new sheets.',
+    full: '• SHEET: Spreadsheet stored as rows. Use read_sheet to read a row range, look rows up by column value, or project columns — never page a whole sheet to search it. Use edit_sheet_cells for cell-level edits.',
+    slim: '• SHEET: Spreadsheet. Use read_sheet to read rows and edit_sheet_cells for cell edits; load the spreadsheets skill before formulas or new sheets.',
     skill: 'spreadsheets',
   },
   {

@@ -126,6 +126,15 @@ vi.mock('@/lib/logging/mask', () => ({
 vi.mock('@pagespace/lib/services/drive-member-service', () => ({
   checkDriveAccess: vi.fn(),
 }));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  getTab: (...args: unknown[]) => mockGetTab(...args as []),
+  listTabs: (...args: unknown[]) => mockListTabs(...args as []),
+  readRows: (...args: unknown[]) => mockReadRows(...args as []),
+}));
+const mockGetTab = vi.hoisted(() => vi.fn());
+const mockListTabs = vi.hoisted(() => vi.fn());
+const mockReadRows = vi.hoisted(() => vi.fn());
+
 vi.mock('../../core/image-preset-fetch', () => ({
   fetchCachedImagePreset: vi.fn(),
 }));
@@ -152,6 +161,8 @@ const createMockPage = (content: string, type = 'DOCUMENT') => ({
   isTrashed: false,
   driveId: 'drive-1',
 });
+
+const sheetTab = { id: 'tab-1', tabIndex: 0, name: 'Sheet1', rowCount: 500, columnCount: 16 };
 
 const createAuthContext = (userId = 'user-123') => ({
   toolCallId: '1',
@@ -960,6 +971,118 @@ describe('page-read-tools', () => {
           context
         )
       ).rejects.toThrow('Page with ID "non-existent" not found');
+    });
+
+    it('returns a SHEET as bounded rows, not as thousands of lines of TOML', async () => {
+      // The defect in issue #2467: a 500-row sheet came back as ~23,700
+      // numbered lines of SheetDoc TOML, one table per cell, with no way to ask
+      // for a row range. What comes back now is the sheet's shape plus a window.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `row-${index}`, value: `row-${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      assert({
+        given: 'a 500-row sheet read with no range',
+        should: 'report its true dimensions and return only the preview window',
+        actual: { dimensions: result.dimensions, rowsReturned: result.rowsReturned },
+        expected: { dimensions: { rowCount: 500, columnCount: 16 }, rowsReturned: 25 },
+      });
+      // 25 rows + one column header line, not 23,715 lines of TOML.
+      expect(String(result.content).split('\n')).toHaveLength(26);
+      expect(String(result.content)).not.toContain('PAGESPACE_SHEETDOC');
+      expect(result.hasMoreRows).toBe(true);
+      expect(String((result.nextSteps as string[]).join(' '))).toContain('read_sheet');
+    });
+
+    it('reads lineStart/lineEnd on a SHEET as row numbers', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 4, cells: { A: { raw: 'five', value: 'five' } } },
+        { rowIndex: 5, cells: { A: { raw: 'six', value: 'six' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 5, lineEnd: 6 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const [, options] = mockReadRows.mock.calls[0] as [string, { fromRow: number; limit: number }];
+      assert({
+        given: 'lineStart 5 and lineEnd 6 on a sheet',
+        should: 'fetch rows 5 and 6, translating to the store\'s 0-based index',
+        actual: options,
+        expected: { fromRow: 4, limit: 2 },
+      });
+      expect(result.content).toBe('columns→A\n5→five\n6→six');
+    });
+
+    it('clips a sparse sheet window to the requested last row', async () => {
+      // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
+      // window that starts inside the range can still run past its end.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: { A: { raw: 'one', value: 'one' } } },
+        { rowIndex: 400, cells: { A: { raw: 'far', value: 'far' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 1, lineEnd: 2 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect((result.rows as { rowNumber: number }[]).map(row => row.rowNumber)).toEqual([1]);
+    });
+
+    it('keeps formulas and errors reachable on a SHEET read', async () => {
+      // The spreadsheets skill documents reading a sheet back to confirm a
+      // formula was stored and to see the expected cross-page-reference error.
+      // A read that showed only computed values would break that workflow and
+      // could not tell "5" from "=2+3".
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        {
+          rowIndex: 3,
+          cells: {
+            B: { raw: '=SUM(B2:B3)', value: 2200 },
+            C: { raw: '=OTHER!A1', error: { type: 'error', message: 'Cross-page references are not supported in this context' } },
+          },
+        },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Budget', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.formulas).toEqual({ B4: '=SUM(B2:B3)', C4: '=OTHER!A1' });
+      expect(result.errors).toEqual({
+        C4: 'Cross-page references are not supported in this context',
+      });
     });
 
     it('returns channel messages when reading a CHANNEL page', async () => {

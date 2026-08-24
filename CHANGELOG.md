@@ -20,6 +20,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   you hold. `pagespace keys list` now also shows the role granted on each drive rather than the
   drive name alone.
 
+- **A spreadsheet is readable by an agent, not just writable** — reading a sheet used to hand an
+  assistant the whole spreadsheet as its raw internal file: a 500-row sheet arrived as roughly
+  24,000 lines of cell-by-cell markup, with no way to ask for a range of rows or find the row you
+  wanted. Assistants ended up keeping a copy of your data somewhere else just to be able to read it.
+  Now an assistant reads rows: a range, or the rows matching a value in a column ("the row where the
+  member ID is 28605"), returning only the columns it asked for, with formulas and cell errors
+  intact. Opening a sheet gives its size and first rows rather than a wall of markup, and so does a
+  folder listing that includes page contents. Cell edits also have a stated limit now — 500 cells
+  per call — instead of a size an assistant had to discover by failing.
+
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
   sheet for the twelve rows you want no longer means pulling the whole thing down first. `rows`

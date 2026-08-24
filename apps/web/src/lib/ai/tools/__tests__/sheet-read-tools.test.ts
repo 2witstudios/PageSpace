@@ -1,0 +1,398 @@
+/**
+ * `read_sheet` (issue #2467).
+ *
+ * The tool is a facade, so most of these cases are about the facade's own
+ * failure modes rather than about querying: that it hands the store the
+ * arguments it was given instead of reimplementing them, that the two paging
+ * coordinate systems cannot be silently mixed, and that a read never quietly
+ * answers a different question than the one asked — a crippled agent that gets
+ * no error is the worst outcome here.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { assert } from './riteway';
+
+const mockGetTab = vi.fn();
+const mockListTabs = vi.fn();
+const mockReadRows = vi.fn();
+const mockQueryRows = vi.fn();
+const mockEnsureTab = vi.fn();
+
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  getTab: (...args: unknown[]) => mockGetTab(...args as []),
+  listTabs: (...args: unknown[]) => mockListTabs(...args as []),
+  readRows: (...args: unknown[]) => mockReadRows(...args as []),
+  queryRows: (...args: unknown[]) => mockQueryRows(...args as []),
+  ensureTab: (...args: unknown[]) => mockEnsureTab(...args as []),
+}));
+
+vi.mock('@pagespace/lib/repositories/page-repository', () => ({
+  pageRepository: { findById: vi.fn() },
+}));
+
+vi.mock('../actor-permissions', () => ({
+  canActorViewPage: vi.fn(),
+  canActorEditPage: vi.fn(),
+}));
+
+vi.mock('@pagespace/lib/logging/logger-config', () => ({
+  loggers: {
+    ai: { child: vi.fn(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() })) },
+  },
+}));
+
+vi.mock('@/lib/logging/mask', () => ({
+  maskIdentifier: (id: string) => `***${id?.slice(-4) ?? ''}`,
+}));
+
+import { sheetReadTools } from '../sheet-read-tools';
+import { pageRepository } from '@pagespace/lib/repositories/page-repository';
+import { canActorViewPage, canActorEditPage } from '../actor-permissions';
+import { SheetQueryError } from '@pagespace/lib/sheets/query';
+import type { ToolExecutionContext } from '../../core/types';
+
+const mockFindById = vi.mocked(pageRepository.findById);
+const mockCanView = vi.mocked(canActorViewPage);
+const mockCanEdit = vi.mocked(canActorEditPage);
+
+const sheetPage = {
+  id: 'page-1',
+  title: 'Members',
+  type: 'SHEET' as const,
+  content: '',
+  contentMode: 'html' as const,
+  driveId: 'drive-1',
+  parentId: null,
+  position: 1,
+  isTrashed: false,
+  trashedAt: null,
+  revision: 1,
+  stateHash: null,
+};
+
+const tab = { id: 'tab-1', tabIndex: 0, name: 'Sheet1', rowCount: 500, columnCount: 16 };
+
+const context = {
+  toolCallId: '1',
+  messages: [],
+  experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+};
+
+// The tool's return type is a union of a success envelope and several
+// self-correcting error envelopes; tests read fields off whichever came back.
+type Result = Record<string, unknown>;
+
+const run = (input: Record<string, unknown>) =>
+  sheetReadTools.read_sheet.execute!(input as never, context) as Promise<Result>;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockFindById.mockResolvedValue({ ...sheetPage });
+  mockCanView.mockResolvedValue(true);
+  mockCanEdit.mockResolvedValue(true);
+  mockListTabs.mockResolvedValue([tab]);
+  mockGetTab.mockResolvedValue(tab);
+  mockReadRows.mockResolvedValue([]);
+  mockQueryRows.mockResolvedValue({ rows: [], total: 0, hasMore: false });
+});
+
+describe('read_sheet — authentication and page type', () => {
+  it('requires an authenticated user', async () => {
+    await expect(
+      sheetReadTools.read_sheet.execute!(
+        { pageId: 'page-1' } as never,
+        { toolCallId: '1', messages: [], experimental_context: {} } as never
+      )
+    ).rejects.toThrow('User authentication required');
+  });
+
+  it('refuses a page that is not a sheet, and names the tool that reads it', async () => {
+    mockFindById.mockResolvedValue({ ...sheetPage, type: 'DOCUMENT' as const });
+    const result = await run({ pageId: 'page-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Page is not a sheet');
+    expect(String(result.suggestion)).toContain('read_page');
+  });
+
+  it('refuses a reader without view permission', async () => {
+    mockCanView.mockResolvedValue(false);
+    await expect(run({ pageId: 'page-1' })).rejects.toThrow('Insufficient permissions');
+  });
+});
+
+describe('read_sheet — range reads', () => {
+  it('translates the 1-based startRow an agent reads into the 0-based index the store wants', async () => {
+    // The off-by-one this guards is the whole reason the parameter is named
+    // differently from the MCP route's `fromRow`: the number in front of a row
+    // is its A1 row, and asking for row 417 must not return row 418.
+    mockReadRows.mockResolvedValue([{ rowIndex: 416, cells: { A: { raw: 'x', value: 'x' } } }]);
+
+    const result = await run({ pageId: 'page-1', startRow: 417, limit: 1 });
+
+    const [, options] = mockReadRows.mock.calls[0] as [string, { fromRow: number }];
+    expect(options.fromRow).toBe(416);
+    expect((result.rows as { rowNumber: number }[])[0].rowNumber).toBe(417);
+  });
+
+  it('reports the sheet dimensions even when the window is empty', async () => {
+    // An agent that reads past the end must learn the sheet has 500 rows, not
+    // conclude it is empty.
+    const result = await run({ pageId: 'page-1', startRow: 900 });
+
+    assert({
+      given: 'a range read past the last row',
+      should: 'still report the sheet dimensions',
+      actual: result.dimensions,
+      expected: { rowCount: 500, columnCount: 16 },
+    });
+  });
+
+  it('points at the next row position when more rows remain', async () => {
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },
+      { rowIndex: 1, cells: { A: { raw: 'b', value: 'b' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1', limit: 2 });
+
+    expect(result.hasMore).toBe(true);
+    expect(result.nextStartRow).toBe(3);
+    expect(String((result.nextSteps as string[])[0])).toContain('startRow: 3');
+  });
+
+  it('renders the rows as a table whose line numbers are the sheet rows', async () => {
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'memid', value: 'memid' }, B: { raw: 'name', value: 'name' } } },
+      { rowIndex: 1, cells: { A: { raw: '28605', value: 28605 }, B: { raw: 'Acme', value: 'Acme' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1' });
+    expect(result.table).toBe('columns→A | B\n1→memid | name\n2→28605 | Acme');
+  });
+});
+
+describe('read_sheet — filtered reads', () => {
+  it('compiles a single condition to the store filter, without a wrapper', async () => {
+    await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'C', op: 'eq', value: '28605' }] },
+    });
+
+    const [ref, options] = mockQueryRows.mock.calls[0] as [
+      unknown,
+      { where: unknown; limit: number },
+    ];
+    assert({
+      given: 'a lookup by key column',
+      should: 'pass the condition straight to the row store',
+      actual: { ref, where: options.where },
+      expected: {
+        ref: { pageId: 'page-1', tabIndex: 0 },
+        where: { column: 'C', op: 'eq', value: '28605' },
+      },
+    });
+  });
+
+  it('combines several conditions with AND by default and OR on request', async () => {
+    const conditions = [
+      { column: 'A', op: 'eq' as const, value: 'x' },
+      { column: 'B', op: 'contains' as const, value: 'y' },
+    ];
+
+    await run({ pageId: 'page-1', where: { conditions } });
+    await run({ pageId: 'page-1', where: { match: 'any', conditions } });
+
+    const first = (mockQueryRows.mock.calls[0] as [unknown, { where: unknown }])[1].where;
+    const second = (mockQueryRows.mock.calls[1] as [unknown, { where: unknown }])[1].where;
+    expect(first).toEqual({ and: conditions });
+    expect(second).toEqual({ or: conditions });
+  });
+
+  it('hands projection and sorting to the store rather than doing them here', async () => {
+    await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+      select: ['A', 'C'],
+      orderBy: [{ column: 'C', direction: 'desc', numeric: true }],
+      offset: 40,
+      limit: 20,
+    });
+
+    const [, options] = mockQueryRows.mock.calls[0] as [unknown, Record<string, unknown>];
+    expect(options.select).toEqual(['A', 'C']);
+    expect(options.orderBy).toEqual([{ column: 'C', direction: 'desc', numeric: true }]);
+    expect(options.offset).toBe(40);
+    expect(options.limit).toBe(20);
+  });
+
+  it('reports projected columns even when every matching row leaves one empty', async () => {
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 0, cells: { A: { raw: 'x', value: 'x' } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+      select: ['A', 'C'],
+    });
+
+    expect(result.columns).toEqual(['A', 'C']);
+  });
+
+  it('reports the total match count and where to continue paging', async () => {
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 5, cells: { A: { raw: 'x', value: 'x' } } }],
+      total: 12,
+      hasMore: true,
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+      offset: 3,
+      limit: 1,
+    });
+
+    expect(result.matchedRows).toBe(12);
+    expect(result.nextOffset).toBe(4);
+    expect(String((result.nextSteps as string[])[0])).toContain('offset: 4');
+  });
+
+  it('turns a bad column or filter into a correctable answer, not a thrown failure', async () => {
+    mockQueryRows.mockRejectedValue(new SheetQueryError('Invalid column: 1'));
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'AA', op: 'eq', value: 'x' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Invalid filter or sort');
+    expect(result.message).toBe('Invalid column: 1');
+  });
+});
+
+describe('read_sheet — the two paging models cannot be mixed', () => {
+  it('rejects startRow combined with a filter instead of ignoring one of them', async () => {
+    // Silently dropping startRow would hand back matches from the top of the
+    // sheet while the agent believed it had paged past them — the class of
+    // quiet wrong answer this tool exists to remove.
+    const result = await run({
+      pageId: 'page-1',
+      startRow: 100,
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(String(result.error)).toContain('startRow cannot be combined');
+    expect(mockQueryRows).not.toHaveBeenCalled();
+    expect(mockReadRows).not.toHaveBeenCalled();
+  });
+
+  it('rejects startRow combined with offset', async () => {
+    const result = await run({ pageId: 'page-1', startRow: 10, offset: 5 });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('read_sheet — sheet not yet migrated to row storage', () => {
+  beforeEach(() => {
+    mockListTabs.mockResolvedValue([]);
+    mockGetTab.mockResolvedValue(null);
+  });
+
+  it('reads a range from the stored document without writing anything', async () => {
+    mockFindById.mockResolvedValue({
+      ...sheetPage,
+      content: [
+        '#%PAGESPACE_SHEETDOC v1',
+        'page_id = "page-1"',
+        '',
+        '[[sheets]]',
+        'name = "Legacy"',
+        'order = 0',
+        '',
+        '[sheets.meta]',
+        'row_count = 2',
+        'column_count = 1',
+        '',
+        '[sheets.cells.A1]',
+        'value = "Item"',
+        'type = "string"',
+      ].join('\n'),
+    });
+
+    const result = await run({ pageId: 'page-1' });
+
+    expect(result.materialized).toBe(false);
+    expect((result.rows as { cells: Record<string, string> }[])[0].cells).toEqual({ A: 'Item' });
+    expect(mockEnsureTab).not.toHaveBeenCalled();
+  });
+
+  it('migrates on a filtered read when the actor may write', async () => {
+    // Filtering compiles to SQL over the row store, so there is nothing to
+    // filter until the sheet is materialised.
+    mockEnsureTab.mockImplementation(async () => {
+      mockGetTab.mockResolvedValue(tab);
+      mockListTabs.mockResolvedValue([tab]);
+      return tab;
+    });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    expect(mockEnsureTab).toHaveBeenCalledWith({ pageId: 'page-1', tabIndex: 0 });
+    expect(result.success).toBe(true);
+  });
+
+  it('refuses a filtered read for a view-only actor rather than answering it unfiltered', async () => {
+    // Materialising is a WRITE. Falling back to an unfiltered document read
+    // would answer a different question than the one asked — worse than saying
+    // the filter is unavailable.
+    mockCanEdit.mockResolvedValue(false);
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Sheet not migrated to row storage');
+    expect(mockEnsureTab).not.toHaveBeenCalled();
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+});
+
+describe('read_sheet — schema', () => {
+  const schema = () => sheetReadTools.read_sheet.inputSchema as {
+    safeParse: (input: unknown) => { success: boolean };
+  };
+
+  it('caps a single call at 500 rows so one read cannot flood the context', () => {
+    expect(schema().safeParse({ pageId: 'p', limit: 500 }).success).toBe(true);
+    expect(schema().safeParse({ pageId: 'p', limit: 501 }).success).toBe(false);
+  });
+
+  it('treats startRow as 1-based by rejecting row 0', () => {
+    expect(schema().safeParse({ pageId: 'p', startRow: 0 }).success).toBe(false);
+    expect(schema().safeParse({ pageId: 'p', startRow: 1 }).success).toBe(true);
+  });
+
+  it('accepts columns past ZZZ, which the sheet itself allows', () => {
+    expect(schema().safeParse({ pageId: 'p', select: ['ABCDEFG'] }).success).toBe(true);
+    expect(schema().safeParse({ pageId: 'p', select: ['ABCDEFGH'] }).success).toBe(false);
+  });
+
+  it('advertises the lookup and range capabilities in its description', () => {
+    // A capability an agent cannot discover is a capability it does not have —
+    // the whole complaint in issue #2467.
+    const description = sheetReadTools.read_sheet.description ?? '';
+    expect(description).toContain('range');
+    expect(description).toContain('where');
+    expect(description).toContain('select');
+  });
+});

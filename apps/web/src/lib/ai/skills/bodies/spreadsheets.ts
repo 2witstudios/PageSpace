@@ -14,7 +14,7 @@ Sheets store structured cell data, not editable text. \`replace_lines\` (and oth
 Tool contract:
 
 - \`pageId\` (optional) — the sheet page to edit; defaults to the page currently in view.
-- \`cells\` — an array of \`{ address, value }\` updates. Batch as many cells as you can into one call instead of calling once per cell.
+- \`cells\` — an array of \`{ address, value }\` updates. Batch cells into one call instead of calling once per cell, up to the hard limit of **500 cells per call**; split anything larger across calls. The whole array is generated as one tool call, so a batch of long values can exhaust your own output budget well before 500 — if a large call fails to be produced at all, halve the batch.
 - \`address\` — A1-style, e.g. \`"A1"\`, \`"B2"\`, \`"AA100"\`. Case-insensitive; normalized to uppercase.
 - \`value\` — always a string:
   - Starts with \`=\` → stored as a formula.
@@ -22,7 +22,7 @@ Tool contract:
   - Looks like a number (\`"42"\`, \`"-3.14"\`, \`".5"\`) → treated as a number.
   - Anything else → plain text.
 
-Writing to an address beyond the current grid (e.g. \`Z50\` on a 20x10 sheet) expands the sheet to include it. The result reports how many values, formulas, and clears were applied; verify with \`read_page\` afterwards.
+Writing to an address beyond the current grid (e.g. \`Z50\` on a 20x10 sheet) expands the sheet to include it. The result reports how many values, formulas, and clears were applied; verify with \`read_sheet\` afterwards (\`read_page\` shows only the first rows).
 
 To create a new spreadsheet: \`create_page\` with \`type: "SHEET"\` (it initializes an empty 20x10 grid), then populate it with one batched \`edit_sheet_cells\` call.
 
@@ -136,45 +136,27 @@ Important: cross-page references only resolve in the live sheet view. The evalua
 
 ## Reading a sheet
 
-\`read_page\` on a SHEET returns its stored serialization with line numbers: a \`#%PAGESPACE_SHEETDOC v1\` header followed by TOML. Example:
+Sheets are stored as rows in the database, not as text, and they are read as rows. Two tools:
 
-\`\`\`
-#%PAGESPACE_SHEETDOC v1
-page_id = "abc123"
+**\`read_sheet\`** — the tool to reach for on any sheet with real data in it. One call does a row range, a lookup by column value, or a column projection:
 
-[[sheets]]
-name = "Sheet1"
-order = 0
+- \`pageId\` (optional) — defaults to the sheet currently in view. \`tabIndex\` (optional) picks a tab; the response lists them all.
+- **Range:** \`startRow\` (1-based, the number shown in front of each row and the row in its A1 addresses) + \`limit\`. Page on with the \`nextStartRow\` the response returns.
+- **Lookup:** \`where: { match: "all" | "any", conditions: [{ column, op, value }] }\`. Ops: \`eq neq gt gte lt lte contains startsWith endsWith isEmpty isNotEmpty in\`. So "the row where column C is 28605" is \`where: { conditions: [{ column: "C", op: "eq", value: "28605" }] }\` — never read the sheet and filter it yourself.
+- **Projection:** \`select: ["A", "C", "D"]\` returns only those columns. \`orderBy: [{ column, direction, numeric }]\` sorts (set \`numeric\` or "10" sorts before "9"). \`offset\` pages through matches.
+- Filters and sorts run in the database against each cell's **computed** value, so a formula column matches on its result.
+- \`startRow\` and \`where\`/\`orderBy\`/\`offset\` are different coordinate systems and cannot be combined — the call is rejected rather than quietly ignoring one.
+- Returns at most 500 rows per call, with \`dimensions\`, \`hasMore\`, and each row as \`{ rowNumber, cells, formulas?, errors? }\` plus a rendered \`table\`. \`cells\` holds computed values keyed by column letter; \`formulas\` holds the authored formula for the cells that have one.
 
-[sheets.meta]
-row_count = 20
-column_count = 10
+**\`read_page\`** on a SHEET gives the sheet's dimensions, its tabs, and its first 25 rows as a table — an orientation read, not a data read. \`lineStart\`/\`lineEnd\` select **row numbers** there rather than lines of text. It is enough to confirm a small write or see a sheet's shape; for anything larger, or any question about specific rows, use \`read_sheet\`.
 
-[sheets.cells.A1]
-value = "Item"
-type = "string"
+Reading either way:
 
-[sheets.cells.B2]
-value = 1200
-type = "number"
-
-[sheets.cells.B4]
-formula = "=SUM(B2:B3)"
-value = 2200
-type = "number"
-
-[sheets.dependencies.B4]
-depends_on = ["B2", "B3"]
-dependents = []
-\`\`\`
-
-How to read it:
-
-- Only non-empty cells appear, sorted by address (note: lexicographic, so A10 sorts before A2).
-- Formula cells show both the \`formula\` and its computed \`value\` — you never need to re-derive results.
-- Errored cells carry an \`error\` inline table with type and message.
-- \`[sheets.dependencies.*]\` maps each cell's precedents/dependents — useful for tracing what breaks if you change a cell.
-- Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write \`value\`, \`type\`, \`error\`, or \`dependencies\` yourself; \`edit_sheet_cells\` recomputes them.
+- Only non-empty cells appear. A row's \`rowNumber\` is its A1 row, so a row read at 417 is written with \`C417\`.
+- Formula cells report both the computed value (in \`cells\`) and the formula (in \`formulas\`) — you never need to re-derive results, and you never lose the formula.
+- Errored cells show \`#ERROR\` as their value and carry the message in \`errors\`, keyed by A1 address in \`read_page\` and by column letter within the row in \`read_sheet\`.
+- Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write values, types, errors or dependencies yourself; \`edit_sheet_cells\` recomputes them.
+- Cell values are truncated at 120 characters in the rendered \`table\` only; the structured \`rows\` always carry the full text.
 
 ## Structuring a new sheet
 
@@ -196,5 +178,6 @@ How to read it:
 6. **FIND/SEARCH on a miss is an error**, not -1 or blank. Wrap in \`IFERROR\` if absence is expected.
 7. **Formatted numbers.** \`"$1,200"\` or \`"85%"\` are text. Enter \`1200\` and \`0.85\`.
 8. **Cross-sheet error right after writing** ("Cross-page references are not supported in this context") is expected on save — see Cross-sheet references above.
-9. **Editing the sheet as text.** Never write SheetDoc TOML via any text tool, even if you've read it — hand-built TOML that parses incorrectly resets the sheet to empty. All writes go through \`edit_sheet_cells\`.
+9. **Editing the sheet as text.** Never write SheetDoc TOML via any text tool — hand-built TOML that parses incorrectly resets the sheet to empty. All writes go through \`edit_sheet_cells\`.
+10. **Reading a sheet to search it.** Paging a whole sheet through \`read_page\` to find one row wastes the context the sheet was supposed to save you. Ask \`read_sheet\` with a \`where\` instead.
 `;

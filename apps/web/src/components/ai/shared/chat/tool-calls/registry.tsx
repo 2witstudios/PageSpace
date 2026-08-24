@@ -335,6 +335,22 @@ export const toolRenderers: Record<string, ToolRenderer> = {
     );
   },
 
+  // A sheet read renders as the table it already carries — the same
+  // RichContentRenderer read_page uses, so a sheet looks the same whichever
+  // tool fetched it.
+  read_sheet: ({ parsedOutput }) => {
+    const table = parsedOutput.table;
+    if (typeof table !== 'string' || table.length === 0) return null;
+    return (
+      <RichContentRenderer
+        title={(parsedOutput.title as string | undefined) || 'Sheet'}
+        content={table}
+        pageId={parsedOutput.pageId as string | undefined}
+        pageType="SHEET"
+      />
+    );
+  },
+
   list_conversations: ({ parsedOutput }) => {
     if (!parsedOutput.conversations) return null;
     const conversations = parsedOutput.conversations as Array<{ conversationId: string; title?: string; firstMessagePreview?: string; messageCount?: number }>;
