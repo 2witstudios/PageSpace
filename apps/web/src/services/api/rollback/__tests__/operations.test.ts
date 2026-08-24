@@ -141,6 +141,7 @@ describe('operations — AGENT_CONFIG_ROLLBACK_FIELDS', () => {
         'includePageTree',
         'pageTreeScope',
         'toolExposureMode',
+        'sandboxEnabled',
         'userScopedAccess',
       ],
     });
