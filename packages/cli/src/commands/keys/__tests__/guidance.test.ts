@@ -77,7 +77,8 @@ describe('keysDescribeHint', () => {
   });
 
   // Key names are close to free-form (`resolveNewKeyName` refuses only the
-  // reserved "default"), so an unquoted name with a space printed a command the
+  // reserved "default" and names no lookup could produce — blank or padded), so
+  // an unquoted name with a space printed a command the
   // shell would mis-split: `--key` took `lead`, and `gen` became a stray
   // positional the parser rejects. A hint that cannot be pasted is worse than
   // no hint, because the reader cannot tell it from one that can.

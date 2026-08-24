@@ -20,6 +20,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   returns a refresh credential instead of a static token there is no bearer to ask with; 1.8.0 said
   the readback had failed but not that. (The `pagespace keys` wizard already gave the reason — the
   two surfaces now match.)
+- **`pagespace login --key <name>` no longer suggests a command that would revoke your personal
+  login.** When a NAMED key was the credential already stored, the message named that key but
+  suggested a bare `pagespace logout --host <host>` — and `logout` resolves its own key name, so it
+  landed on `default`, revoking that refresh token server-side and deleting it. The suggestion now
+  names the same key the message is about. `login --device` printed the same line.
 - **The `logout` command suggested when a key name is already taken is pasteable too.** It printed
   `--key <name>` space-separated with the name interpolated, so a key called `-prod` produced a
   command the parser rejects and `lead gen` one that logs out of the wrong key. Same fix as the

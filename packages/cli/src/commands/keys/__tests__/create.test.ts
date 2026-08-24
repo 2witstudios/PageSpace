@@ -882,6 +882,9 @@ describe('createTokensCreateHandler', () => {
     const output = stderr.lines.join('');
     expect(output).toContain(`--key='-prod key'`);
     expect(output).not.toContain('--key -prod key');
+    // Both halves of the suggested command, not just the one that motivated it.
+    expect(output).toContain('--host=https://pagespace.ai');
+    expect(output).not.toContain('--host https://pagespace.ai');
   });
 
   it('overwrites an existing stored key when --yes is passed', async () => {

@@ -6,6 +6,7 @@
  */
 import { KEY_ENV_VAR_NAME, TOKEN_ENV_VAR_NAME } from '../../auth/resolve.js';
 import { DEFAULT_HOST } from '../../config/resolve.js';
+import { shellQuote } from '../../shell-quote.js';
 
 export const WIZARD_INTRO_HINT =
   'Keys are scoped credentials your agents use to access specific drives. Each key is saved locally as a named credential in your OS keychain.';
@@ -39,37 +40,6 @@ export function keysDescribeHint(keyName: string, host: string): string {
   return `Run "pagespace keys describe --key=${shellQuote(keyName)}${hostFlag}" at any time to see this key's drives, role and effective permissions.`;
 }
 
-/**
- * Makes `value` safe to paste into a shell as one word.
- *
- * Key names are close to free-form — `resolveNewKeyName` refuses only the
- * reserved `"default"` and names that cannot be looked up (blank, or padded
- * with whitespace) — so `--name "lead gen"` is legal and printing it bare
- * gave `--key lead gen`, where the shell hands `--key` the word `lead` and
- * drops `gen` into the command as a stray positional. A hint that cannot be
- * pasted is worse than no hint, since the reader has no way to tell it apart
- * from one that can.
- *
- * Single quotes rather than double: they suppress every expansion, so a name
- * containing `$`, backticks or `!` is inert. The `'\''` dance is the standard
- * way to carry a literal single quote through a single-quoted word.
- *
- * Quoting alone is NOT enough, which is why the caller emits the equals-joined
- * `--key=<quoted>` form. A name beginning with `-` (`--name -prod` is legal and
- * mints fine) survives quote-stripping as the argv word `-prod`, and
- * `argv/parse.ts` rejects a space-separated flag value that starts with `-`
- * — so `--key '-prod'` is a usage error no amount of quoting can rescue.
- * `--key=-prod` is exactly the ambiguity the equals form exists to resolve
- * (see `parse.ts`, which documents it for `--host=-looks-like-a-flag`).
- *
- * Exported because the hint is not the only command this CLI prints with a key
- * name in it — `keys create`'s "already exists" message suggests a `logout`
- * command the same way, and had the same hole.
- */
-export function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9._@%+=:,/-]+$/.test(value)) return value;
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
 
 export interface AgentWiringGuidanceParams {
   readonly keyName: string;

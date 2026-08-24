@@ -51,7 +51,8 @@ import type {
   WaitMs,
 } from '../../auth/loopback-flow.js';
 import { parseTokensCreateArgs, type CreateTokenArgs, type DriveScopeArg } from './args.js';
-import { renderAgentWiringGuidance, shellQuote } from './guidance.js';
+import { renderAgentWiringGuidance } from './guidance.js';
+import { shellQuote } from '../../shell-quote.js';
 import { renderKeyDescription } from './describe.js';
 import { describeKeyPermissions, type DescribeKeyPermissions } from '../../auth/probe-permissions.js';
 
