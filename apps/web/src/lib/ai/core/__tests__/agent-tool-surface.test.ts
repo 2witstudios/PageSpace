@@ -12,6 +12,7 @@ import {
   describeAgentToolSurface,
   blockedByGate,
   formatAgentToolSurfaceNotes,
+  describeSandboxTierCaveat,
   RUNTIME_TOGGLE_TOOL_NAMES,
 } from '../agent-tool-surface';
 import { ALWAYS_UPFRONT_TOOLS } from '../../tools/tool-exposure';
@@ -127,7 +128,7 @@ describe('formatAgentToolSurfaceNotes', () => {
     expect(notes[0]).toContain('update_agent_config');
   });
 
-  it('given granted COMPUTE tools, should caveat the per-conversation tier gate this module cannot answer', () => {
+  it('given a config that grants compute cleanly, should stay silent — the tier caveat is not a divergence', () => {
     const surface = describeAgentToolSurface({
       enabledTools: ['bash'],
       sandboxEnabled: true,
@@ -135,10 +136,25 @@ describe('formatAgentToolSurfaceNotes', () => {
       registeredToolNames: REGISTERED,
     });
 
-    expect(formatAgentToolSurfaceNotes(surface).join(' ')).toContain('payer tier');
+    // It is a real caveat, but it belongs to the config audience, not to every
+    // spawn that consumes these notes.
+    expect(formatAgentToolSurfaceNotes(surface)).toEqual([]);
+  });
+});
+
+describe('describeSandboxTierCaveat', () => {
+  it('given granted COMPUTE tools, should name the per-conversation gate this module cannot answer', () => {
+    const surface = describeAgentToolSurface({
+      enabledTools: ['bash'],
+      sandboxEnabled: true,
+      toolExposureMode: 'upfront',
+      registeredToolNames: REGISTERED,
+    });
+
+    expect(describeSandboxTierCaveat(surface)).toContain('payer tier');
   });
 
-  it('given only the chat-side session family granted, should NOT invent a tier caveat — sessions are free on every plan', () => {
+  it('given only the chat-side session family granted, should say nothing — sessions are free on every plan', () => {
     const surface = describeAgentToolSurface({
       enabledTools: ['spawn_session'],
       sandboxEnabled: true,
@@ -146,7 +162,7 @@ describe('formatAgentToolSurfaceNotes', () => {
       registeredToolNames: REGISTERED,
     });
 
-    expect(formatAgentToolSurfaceNotes(surface).join(' ')).not.toContain('payer tier');
+    expect(describeSandboxTierCaveat(surface)).toBeNull();
   });
 });
 

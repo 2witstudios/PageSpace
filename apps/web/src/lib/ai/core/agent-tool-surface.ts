@@ -186,14 +186,26 @@ export function formatAgentToolSurfaceNotes(surface: AgentToolSurface): string[]
     );
   }
 
-  // Only the COMPUTE subset is tier-gated — the chat-side session family is
-  // free on every plan (`filterToolsForSandboxTier`), so naming it here would
-  // invent a caveat that does not exist.
-  if (surface.granted.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name))) {
-    notes.push(
-      'Sandbox compute tools (bash/files, git+gh, shells) additionally require an eligible payer tier and a session to run in; that is resolved per conversation, not from this config.'
-    );
-  }
-
   return notes;
+}
+
+/**
+ * The one caveat that is NOT a divergence: compute tools this config genuinely
+ * grants still answer to a gate no config can settle — the payer's tier and the
+ * session the conversation lands in (`filterToolsForSandboxTier`,
+ * `resolveSandboxToolEligibilityForConversation`).
+ *
+ * Kept OUT of {@link formatAgentToolSurfaceNotes} because the two have
+ * different audiences. Someone CONFIGURING an agent needs to hear it — the
+ * answer is not knowable from what they just saved. Attaching it to every spawn
+ * would fire on every sandbox worker forever, saying nothing about that spawn,
+ * and warning noise is how real warnings stop being read.
+ *
+ * Only the COMPUTE subset is tier-gated: the chat-side session family is free on
+ * every plan (review #2326), so naming it would invent a caveat that does not
+ * exist.
+ */
+export function describeSandboxTierCaveat(surface: AgentToolSurface): string | null {
+  if (!surface.granted.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name))) return null;
+  return 'Sandbox compute tools (bash/files, git+gh, shells) additionally require an eligible payer tier and a session to run in; that is resolved per conversation, not from this config.';
 }

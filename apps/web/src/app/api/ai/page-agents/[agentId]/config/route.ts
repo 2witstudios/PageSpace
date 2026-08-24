@@ -5,7 +5,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
-import { describeAgentToolSurface, formatAgentToolSurfaceNotes } from '@/lib/ai/core/agent-tool-surface';
+import { describeAgentToolSurface, describeSandboxTierCaveat, formatAgentToolSurfaceNotes } from '@/lib/ai/core/agent-tool-surface';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
@@ -247,7 +247,11 @@ export async function PUT(
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
       registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
     });
-    const toolSurfaceNotes = formatAgentToolSurfaceNotes(toolSurface);
+    const tierCaveat = describeSandboxTierCaveat(toolSurface);
+    const toolSurfaceNotes = [
+      ...formatAgentToolSurfaceNotes(toolSurface),
+      ...(tierCaveat ? [tierCaveat] : []),
+    ];
 
     // Broadcast agent update event
     await broadcastPageEvent(

@@ -12,6 +12,7 @@ import { pageSpaceTools } from '../core/ai-tools';
 import { filterToolsForMcpScope } from '../core/tool-filtering';
 import {
   describeAgentToolSurface,
+  describeSandboxTierCaveat,
   formatAgentToolSurfaceNotes,
 } from '../core/agent-tool-surface';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
@@ -214,7 +215,13 @@ export const agentTools = {
             filterToolsForMcpScope(pageSpaceTools, isMcpScoped(context as ToolExecutionContext)),
           ),
         });
-        const surfaceNotes = formatAgentToolSurfaceNotes(surface);
+        // The tier caveat belongs to a CONFIG audience specifically — see
+        // `describeSandboxTierCaveat`.
+        const tierCaveat = describeSandboxTierCaveat(surface);
+        const surfaceNotes = [
+          ...formatAgentToolSurfaceNotes(surface),
+          ...(tierCaveat ? [tierCaveat] : []),
+        ];
 
         // Broadcast update event
         await broadcastPageEvent(
