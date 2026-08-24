@@ -1303,6 +1303,62 @@ describe('page-read-tools', () => {
       expect(result.totalLines).not.toBe(20);
     });
 
+    it('pages a sparse sheet to exhaustion: terminates, no repeats, no skips, no wasted calls', async () => {
+      // Three separate defects have been found in this paging logic — pointing
+      // at the same call, pointing past the last fetched row, and trusting the
+      // declared rowCount. Individual cases kept missing the next one, so this
+      // drives the loop an agent actually writes and asserts the properties
+      // together. It needs MORE rows than one page holds, or nothing pages; and
+      // it counts calls, because the rowCount defect shows up only as a
+      // guaranteed-empty extra round trip, not as a wrong row set.
+      // The layout matters. The last stored row must sit well BELOW the tab's
+      // declared rowCount (500), or `nextFromRow` lands exactly on it and the
+      // declared-count defect gives the same answer as the fix. And the final
+      // page must be partial, or the loop legitimately costs one extra call.
+      const indexes = [
+        ...Array.from({ length: 30 }, (_, i) => i),        // dense block
+        ...Array.from({ length: 25 }, (_, i) => 200 + i),  // gap, then more
+      ];
+      const stored = indexes.map((rowIndex) => ({
+        rowIndex,
+        cells: { A: { raw: `r${rowIndex}`, value: `r${rowIndex}` } },
+      }));
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // Serve like the real store: rowIndex >= fromRow, ascending, capped.
+      mockReadRows.mockImplementation(async (_id: string, o: { fromRow?: number; limit?: number }) =>
+        stored.filter(r => r.rowIndex >= (o.fromRow ?? 0)).slice(0, o.limit ?? 200));
+
+      const seen: number[] = [];
+      let lineStart: number | undefined;
+      let calls = 0;
+      for (;;) {
+        if (++calls > 20) throw new Error('paging did not terminate');
+        const result = await pageReadTools.read_page.execute!(
+          { title: 'Members', pageId: 'page-1', ...(lineStart !== undefined && { lineStart }) },
+          createAuthContext()
+        ) as Record<string, unknown>;
+        const batch = (result.rows as { rowNumber: number }[]).map(r => r.rowNumber);
+        // No call may come back empty: that is the wasted round trip the
+        // declared-rowCount defect produced.
+        expect(batch.length).toBeGreaterThan(0);
+        seen.push(...batch);
+        if (!result.hasMoreRows) break;
+        const next = result.nextStartRow as number;
+        expect(next).not.toBe(lineStart ?? 1);   // never resume where we started
+        lineStart = next;
+      }
+
+      const expected = indexes.map(i => i + 1);
+      expect(seen).toEqual(expected);                 // every row, in order, no skips
+      expect(new Set(seen).size).toBe(seen.length);   // and none twice
+      // 55 rows at 25 per page: 25 + 25 + 5. A fourth call means a wasted one.
+      expect(calls).toBe(3);
+    });
+
     it('distinguishes an empty window from an empty sheet', async () => {
       // Reading past the end, or into a gap in a sparse sheet, must still
       // report the sheet's real size and say which case it was. "0 rows" with
