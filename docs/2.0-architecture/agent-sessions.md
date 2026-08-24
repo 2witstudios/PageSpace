@@ -637,14 +637,19 @@ Four rules now hold, and `agent-tool-surface.ts` is the single place that comput
    refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
    would break working spawns over a non-problem.
 
-ONE SWITCH, EVERY SURFACE. Two surfaces built their own tool set — allowlist applied, switch
-never asked — so an agent with sandbox access OFF was handed the sandbox families anyway:
+ONE SWITCH, EVERY SURFACE. Every surface that assembles its own tool set has to ask BOTH
+questions — is it in `enabledTools`, and is `sandboxEnabled` on. Three asked only the first, so
+an agent with sandbox access OFF was handed the sandbox families anyway:
 
 - the `@`-mention / consult engine (`agent-communication-tools.ts`), which registers the
   session family and therefore the shells, the moment someone mentioned the agent;
-- the VOICE call path (`realtime/system-context.ts`), which exposes the whole registry
-  through the same search-mode discovery pair, so the stripped tools were reachable through
-  `tool_search`/`execute_tool` as well as directly.
+- `POST /api/ai/page-agents/consult`, the HTTP/SDK door onto the same capability, which
+  builds its own set from the allowlist alone;
+- the VOICE path, in BOTH of its independently-built sets — what the call advertises
+  (`realtime/system-context.ts`) and what the bridge can execute
+  (`voice-runtime-deps.ts`). Fixing only the first would have been half a gate: `tool_search`
+  searches the executable set and `execute_tool` dispatches from it, so the tools would have
+  stayed discoverable and runnable while merely going unadvertised.
 
 How much this actually granted is worth stating precisely rather than reassuringly.
 `canRunCode` still refused every COMPUTE call (bash/files, git+gh, shells), so neither surface

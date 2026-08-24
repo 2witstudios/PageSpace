@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -458,14 +458,24 @@ export async function POST(request: Request) {
       false,
     );
 
-    // Filter tools based on agent's enabled tools
-    const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
+    // Filter tools based on agent's enabled tools, then apply the per-agent
+    // SANDBOX SWITCH (issue #2460). The allowlist is the agent owner's list of
+    // what their agent may do; `pages.sandboxEnabled` is whether the sandbox
+    // families are on the table at all, and it strips them whatever the
+    // allowlist says. This route assembled its own set and asked only the first
+    // question, so an agent with the switch off was handed the session/shell
+    // family here while the same agent in a page chat correctly saw none of it.
+    const allowedTools = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
           Object.entries(scopedPageSpaceTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
         )
       : {};
+    const availableTools = filterToolsForSandboxEnablement(
+      allowedTools,
+      Boolean(agent.sandboxEnabled),
+    );
 
     // INTEGRATION TOOLS: resolve and merge integration tools for this agent
     let toolsForRun: Record<string, unknown> = availableTools;
