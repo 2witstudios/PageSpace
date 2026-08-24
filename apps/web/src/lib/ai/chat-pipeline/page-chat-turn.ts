@@ -141,7 +141,7 @@ import {
   removeStream,
 } from '@/lib/ai/core/stream-abort-registry';
 import { runAgentWithRetry, AGENT_MAX_STEPS, isRunAborted, type RunAgentWithRetryResult } from '@/lib/ai/core/run-agent-with-retry';
-import { capStepToolInputs } from '@/lib/ai/core/cap-step-tool-inputs';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 import { resolveRequestContext } from '@/lib/ai/core/resolve-request-context';
 import { locationContextToPageContext, pageContextToLocationContext } from '@/lib/ai/shared/buildPageContext';
 import type { LocationContext } from '@/lib/ai/shared/chat-types';
@@ -1910,9 +1910,9 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
               // Capping runs FIRST so the breakpoint lands on the bytes actually sent:
               // compaction and elision are per-turn, so this is the only seam that can
               // stop one agent loop's own oversized payloads from exhausting the window
-              // (#2461 — see cap-step-tool-inputs.ts).
+              // (#2461 — see cap-step-tool-payloads.ts).
               prepareStep: ({ messages: stepMessages }) => ({
-                messages: withCacheBreakpoints(capStepToolInputs(stepMessages), stableBoundaryIndex),
+                messages: withCacheBreakpoints(capStepToolPayloads(stepMessages), stableBoundaryIndex),
               }),
             })
           },

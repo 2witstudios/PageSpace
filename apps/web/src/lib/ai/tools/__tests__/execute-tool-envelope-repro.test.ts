@@ -15,10 +15,11 @@
 import { describe, it } from 'vitest';
 import { z } from 'zod';
 import { streamText, stepCountIs, asSchema, type Tool, type ToolSet } from 'ai';
+import type { ModelMessage } from 'ai';
 import { MockLanguageModelV3 } from 'ai/test';
 import { assert } from './riteway';
 import { createExecuteTool } from '../execute-tool';
-import { capStepToolInputs } from '@/lib/ai/core/cap-step-tool-inputs';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 // Derived from the mock's own signature rather than imported from
 // @ai-sdk/provider, which apps/web does not depend on directly — it is only
@@ -34,7 +35,14 @@ const editSheetCells: Tool = {
   execute: async () => ({ ok: true }),
 };
 
-const registry: ToolSet = { edit_sheet_cells: editSheetCells };
+/** Stand-in for the reporter's other half: tiny arguments, a very large result. */
+const readFileTool: Tool = {
+  description: 'Read a file',
+  inputSchema: z.object({ path: z.string() }),
+  execute: async () => ({ content: 'z'.repeat(100_000) }),
+};
+
+const registry: ToolSet = { edit_sheet_cells: editSheetCells, readFile: readFileTool };
 
 /**
  * A single provider turn that emits one `execute_tool` call whose raw argument
@@ -267,6 +275,62 @@ describe('issue #2461 — the fixes', () => {
     });
   });
 
+  it('the per-step cap bounds a READ-heavy loop too, not just a write-heavy one', async () => {
+    // The reporter's agent did both: readFile a JSON chunk (a ~100 KB RESULT),
+    // then edit_sheet_cells it (a ~100 KB ARGUMENT). Capping only arguments left
+    // results accumulating at the same dead-linear +100 KB per step, so #2461
+    // stayed reproducible for anything read-heavy. Both directions are capped.
+    //
+    // Run the identical loop twice — once capped, once not — so the assertion is
+    // a measured difference between them rather than a threshold picked to pass.
+    const STEPS = 8;
+
+    async function lastStepGrowth(capped: boolean): Promise<number> {
+      let step = 0;
+      const model = new MockLanguageModelV3({
+        doStream: providerEmitting(() => {
+          step += 1;
+          return JSON.stringify({
+            tool_name: 'readFile',
+            parameters: { path: `chunk-${step}.json` },
+          });
+        }),
+      });
+      const result = streamText({
+        model,
+        messages: [{ role: 'user', content: 'read every chunk' }],
+        tools: { execute_tool: createExecuteTool(registry) },
+        stopWhen: [stepCountIs(STEPS)],
+        ...(capped
+          ? {
+              prepareStep: ({ messages: m }: { messages: ModelMessage[] }) => ({
+                messages: capStepToolPayloads(m),
+              }),
+            }
+          : {}),
+      });
+      for await (const _part of result.fullStream) {
+        void _part;
+      }
+      await result.content;
+      const bytes = model.doStreamCalls.map((call) => JSON.stringify(call.prompt).length);
+      return bytes[STEPS - 1] - bytes[STEPS - 2];
+    }
+
+    const uncappedGrowth = await lastStepGrowth(false);
+    const cappedGrowth = await lastStepGrowth(true);
+
+    assert({
+      given: `${STEPS} sequential 100 KB reads in one agent loop`,
+      should: 'still grow by a whole result uncapped, and by almost nothing capped',
+      actual: {
+        uncappedGrowsByAWholeResult: uncappedGrowth > 90_000,
+        cappedGrowthIsTiny: cappedGrowth < uncappedGrowth / 50,
+      },
+      expected: { uncappedGrowsByAWholeResult: true, cappedGrowthIsTiny: true },
+    });
+  });
+
   it('capping what is SENT never changes what is recorded', async () => {
     // The cap rewrites the messages handed to the provider for one step. If that
     // also reached the run's recorded steps, the fix would be quietly destroying
@@ -284,7 +348,7 @@ describe('issue #2461 — the fixes', () => {
       messages: [{ role: 'user', content: 'apply every chunk' }],
       tools: { execute_tool: createExecuteTool(registry) },
       stopWhen: [stepCountIs(4)],
-      prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolInputs(stepMessages) }),
+      prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
     });
     for await (const _part of result.fullStream) {
       void _part;
@@ -301,14 +365,14 @@ describe('issue #2461 — the fixes', () => {
       actual: {
         callsRecorded: recorded.length,
         allFullSize: recorded.every((input) => input.includes(big)),
-        anyStubbed: recorded.some((input) => input.includes('__arguments_elided')),
+        anyStubbed: recorded.some((input) => input.includes('__payload_elided')),
       },
       expected: { callsRecorded: 4, allFullSize: true, anyStubbed: false },
     });
   });
 
   it('the per-step cap bounds what one agent loop replays to the provider', async () => {
-    // The measured cause. Without capStepToolInputs the prompt handed to the
+    // The measured cause. Without capStepToolPayloads the prompt handed to the
     // provider grows by the full payload on every step — 71 bytes at step 1, then
     // dead linear at +103 KB — until the window is gone and the provider starts
     // emitting the argument-less tool calls the tests above reproduce.
@@ -337,7 +401,7 @@ describe('issue #2461 — the fixes', () => {
       stopWhen: [stepCountIs(STEPS)],
       // Exactly how global-chat-turn and page-chat-turn wire the seam.
       prepareStep: ({ messages: stepMessages }) => ({
-        messages: capStepToolInputs(stepMessages),
+        messages: capStepToolPayloads(stepMessages),
       }),
     });
     for await (const _part of result.fullStream) {

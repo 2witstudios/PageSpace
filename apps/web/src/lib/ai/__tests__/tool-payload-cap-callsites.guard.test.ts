@@ -1,15 +1,15 @@
 /**
  * Merge guard over every multi-step model loop. This is a source-scan invariant:
  * it reads the call sites and fails the build if a new agent loop forgets the
- * per-step tool-input cap.
+ * per-step tool-payload cap.
  *
  * #2461 was not one broken loop, it was a missing seam. History is prepared once
  * per turn, so any loop that takes many model calls accumulates its own oversized
- * tool arguments for the whole run and eventually exhausts the context window.
- * Six call sites need `capStepToolInputs`, they live in four directories, and a
+ * tool payloads for the whole run and eventually exhausts the context window.
+ * Six call sites need `capStepToolPayloads`, they live in four directories, and a
  * seventh added later would reintroduce the bug silently — the review that caught
  * two of the six is exactly the kind of thing that should not have to be noticed
- * twice. See cap-step-tool-inputs.ts.
+ * twice. See cap-step-tool-payloads.ts.
  *
  * A loop is only in scope when it passes `tools`: without them the model cannot
  * emit tool calls, so there is nothing to accumulate and nothing to cap.
@@ -92,12 +92,12 @@ function modelCallSlices(src: string): string[] {
 
 /** A loop takes many model calls when it declares a step budget. */
 const isMultiStep = (slice: string) => slice.includes('stopWhen');
-/** Only a loop that can emit tool calls has tool inputs to cap. */
+/** Only a loop that can emit tool calls has payloads to cap. */
 const passesTools = (slice: string) => /\btools\s*:/.test(slice);
 
 const SOURCE_FILES = allSourceFiles(SRC_DIR);
 
-describe('per-step tool-input cap call-site guard', () => {
+describe('per-step tool-payload cap call-site guard', () => {
   it('found the source files (the guard is actually scanning something)', () => {
     expect(SOURCE_FILES.length).toBeGreaterThan(0);
     expect(
@@ -126,12 +126,12 @@ describe('per-step tool-input cap call-site guard', () => {
     ]);
   });
 
-  it('every multi-step tool loop caps its per-step tool inputs', () => {
+  it('every multi-step tool loop caps its per-step tool payloads', () => {
     const offenders: string[] = [];
     for (const file of SOURCE_FILES) {
       for (const slice of modelCallSlices(readFileSync(file, 'utf8'))) {
         if (!isMultiStep(slice) || !passesTools(slice)) continue;
-        if (!slice.includes('capStepToolInputs')) offenders.push(srcRelPath(file));
+        if (!slice.includes('capStepToolPayloads')) offenders.push(srcRelPath(file));
       }
     }
     expect(offenders).toEqual([]);

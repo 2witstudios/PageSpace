@@ -32,7 +32,7 @@ import { applyImplicitStepArgs } from './core/implicit-step-args';
 import { frameWebhookPayloadPrompt } from '@/lib/webhooks/webhook-payload-framing';
 import { DETERMINISTIC_TOOL_ALLOWLIST, getDeterministicTools } from '@/lib/ai/core/deterministic-tools';
 import type { z } from 'zod';
-import { capStepToolInputs } from '@/lib/ai/core/cap-step-tool-inputs';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 export type WorkflowRunSource =
   | { table: 'cron'; id: null; triggerAt: Date | null }
@@ -735,8 +735,8 @@ async function runExecution(
           stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(100)],
           // Per-step cap: history is prepared once, but this loop runs many model
           // calls, so one run's oversized tool payloads would otherwise accumulate
-          // for its whole duration (#2461 — see cap-step-tool-inputs.ts).
-          prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolInputs(stepMessages) }),
+          // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+          prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
         })
       : await generateText({
           model: providerResult.model,
