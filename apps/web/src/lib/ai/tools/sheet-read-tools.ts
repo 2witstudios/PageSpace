@@ -51,6 +51,7 @@ import {
   loadSheetWindow,
   renderSheetTable,
   toSheetViewRow,
+  toTabSummaries,
   TABLE_CELL_CHAR_LIMIT,
   type SheetTabSummary,
   type SheetViewRow,
@@ -272,14 +273,13 @@ export const sheetReadTools = {
         }
 
         const ref = { pageId: page.id, tabIndex: tabIndex ?? 0 };
+        const tabs = toTabSummaries(await listTabs(page.id));
         const tab = await getTab(ref);
         if (!tab) {
-          return {
-            success: false,
-            error: `Sheet tab ${ref.tabIndex} not found`,
-            message: `"${page.title}" has no tab at index ${ref.tabIndex}.`,
-            suggestion: 'Call read_sheet without tabIndex to see the tabs this sheet has.',
-          };
+          // Thrown, not returned, so a bad tab index answers identically
+          // whichever path found it — the catch below builds the one envelope,
+          // with the tabs that DO exist attached.
+          throw new SheetTabNotFoundError(ref.tabIndex, tabs);
         }
 
         const result = await queryRows(ref, {
@@ -291,12 +291,6 @@ export const sheetReadTools = {
         });
 
         const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells));
-        const tabs = (await listTabs(page.id)).map((entry) => ({
-          tabIndex: entry.tabIndex,
-          name: entry.name,
-          rowCount: entry.rowCount,
-          columnCount: entry.columnCount,
-        }));
 
         return buildResult({
           page,

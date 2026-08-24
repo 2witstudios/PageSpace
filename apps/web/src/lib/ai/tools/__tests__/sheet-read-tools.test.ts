@@ -216,6 +216,25 @@ describe('read_sheet — projection and refusals', () => {
     ]);
   });
 
+  it('gives a filtered read the same tab refusal as a range read', async () => {
+    // Two paths can discover a bad tab index; they must not describe it two
+    // different ways, and neither may answer with another tab's rows.
+    mockGetTab.mockResolvedValue(null);
+
+    const result = await run({
+      pageId: 'page-1',
+      tabIndex: 4,
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Sheet tab not found');
+    expect(result.tabs).toEqual([
+      { tabIndex: 0, name: 'Sheet1', rowCount: 500, columnCount: 16 },
+    ]);
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+
   it('reports an unparseable sheet as unreadable, never as empty', async () => {
     // The one answer that invites an agent to overwrite content that is still
     // intact is "this spreadsheet is blank".

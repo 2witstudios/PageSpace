@@ -224,6 +224,23 @@ export function toSheetViewRow(
 }
 
 /**
+ * Stored tab rows narrowed to what a caller is told about a tab.
+ *
+ * Shared so the window and `read_sheet`'s filtered path cannot describe the
+ * same tabs differently.
+ */
+export function toTabSummaries(
+  tabs: readonly { tabIndex: number; name: string; rowCount: number; columnCount: number }[]
+): SheetTabSummary[] {
+  return tabs.map((tab) => ({
+    tabIndex: tab.tabIndex,
+    name: tab.name,
+    rowCount: tab.rowCount,
+    columnCount: tab.columnCount,
+  }));
+}
+
+/**
  * Every tab a stored document describes.
  *
  * `parseSheetContentSafe` returns the FIRST tab as the `SheetData` and the rest
@@ -386,12 +403,7 @@ export async function loadSheetWindow(
     return windowFromDocument(options.documentContent, pageId, tabIndex, fromRow, limit, only);
   }
 
-  const tabs: SheetTabSummary[] = storedTabs.map((tab) => ({
-    tabIndex: tab.tabIndex,
-    name: tab.name,
-    rowCount: tab.rowCount,
-    columnCount: tab.columnCount,
-  }));
+  const tabs = toTabSummaries(storedTabs);
 
   const tab = await getTab({ pageId, tabIndex });
   if (!tab) {
