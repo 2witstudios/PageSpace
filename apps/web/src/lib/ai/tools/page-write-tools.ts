@@ -32,7 +32,7 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
-import { LineRangeError, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
+import { LineRangeError, projectLines, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
 import { describeContentModeMismatch, isRawTextPage } from '../core/page-serializer';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
@@ -669,7 +669,7 @@ export const pageWriteTools = {
       startLine: z.number().describe('Starting line number (1-based)'),
       endLine: z.number().optional().describe('Ending line number (1-based, optional, defaults to startLine)'),
       content: z.string().describe('New content to replace the lines with'),
-      expectedTotalLines: z.number().optional().describe('Optional safety check: the total line count you saw when you read the page. If the document is no longer that length the edit is refused instead of being applied to lines you have not seen.'),
+      expectedTotalLines: z.number().int().min(0).optional().describe('Optional safety check: the total line count you saw when you read the page. If the document is no longer that length the edit is refused instead of being applied to lines you have not seen.'),
     }),
     execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content, expectedTotalLines }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
@@ -746,12 +746,15 @@ export const pageWriteTools = {
         } catch (error) {
           // A bad range is the agent's mistake, not a fault: answer it with the
           // real line count so the next attempt is addressed correctly, rather
-          // than throwing a bare message it has to parse.
+          // than a bare message it has to parse. `totalLines` is a field, not
+          // prose inside `message`, and it is the same field the MCP route
+          // returns for the same two refusals.
           if (error instanceof LineRangeError) {
             return {
               success: false,
               error: error.kind === 'stale' ? 'Document changed since it was read' : 'Line number out of range',
               message: error.message,
+              totalLines: projectLines(page.content, isRawText).length,
               suggestion: 'Read the page again and re-address the edit against the line numbers it returns.',
               pageInfo: { pageId: page.id, title: page.title, type: page.type },
             };

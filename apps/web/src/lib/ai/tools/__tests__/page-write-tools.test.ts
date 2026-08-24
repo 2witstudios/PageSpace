@@ -483,10 +483,12 @@ describe('page-write-tools', () => {
         { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
       );
 
-      const failure = result as { success: boolean; error: string; message: string };
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
       expect(failure.success).toBe(false);
       expect(failure.error).toBe('Document changed since it was read');
       expect(failure.message).toMatch(/89 lines/);
+      // The count is a field, not prose the agent has to parse out of `message`.
+      expect(failure.totalLines).toBe(89);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
     });
 
@@ -512,11 +514,24 @@ describe('page-write-tools', () => {
         { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
       );
 
-      const failure = result as { success: boolean; error: string; message: string };
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
       expect(failure.success).toBe(false);
       expect(failure.error).toBe('Line number out of range');
       expect(failure.message).toMatch(/Document has 3 lines/);
+      expect(failure.totalLines).toBe(3);
       expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    // The guard is only meaningful as a line count. 3.5 or -1 can never equal
+    // one, so without these constraints they parse and then refuse every edit.
+    it('accepts only a non-negative integer as expectedTotalLines', () => {
+      const schema = pageWriteTools.replace_lines.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      const base = { title: 'Doc', pageId: 'page-1', startLine: 1, content: 'x' };
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3 }).success).toBe(true);
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3.5 }).success).toBe(false);
+      expect(schema.safeParse({ ...base, expectedTotalLines: -1 }).success).toBe(false);
     });
 
     it('warns when an html-mode page holds non-HTML content', async () => {
