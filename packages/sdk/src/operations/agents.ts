@@ -172,7 +172,8 @@ const agentConfigSchema = z.object({
   effectiveToolsCount: z.number().optional(),
   blockedTools: z.array(blockedToolSchema).optional(),
   toolsNeedingComposerToggle: z.array(z.string()).optional(),
-  toolsReachedBySearch: z.array(z.string()).optional(),
+  /** `null` = not listed because the agent is unrestricted, not "none deferred". */
+  toolsReachedBySearch: z.array(z.string()).nullable().optional(),
   sandboxEnabled: z.boolean().optional(),
   aiProvider: z.string(),
   aiModel: z.string(),

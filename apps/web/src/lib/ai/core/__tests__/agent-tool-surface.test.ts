@@ -279,6 +279,8 @@ describe('toolSurfaceEcho', () => {
     expect(echo.effectiveTools).toBeNull();
     expect(echo.effectiveToolsCount).toBe(REGISTERED.length);
     expect(echo.blockedTools).toEqual([]);
-    expect(echo.toolsReachedBySearch).toEqual([]);
+    // NOT `[]` — in search mode this agent really does reach its non-core tools
+    // through tool_search, and an empty array would claim otherwise.
+    expect(echo.toolsReachedBySearch).toBeNull();
   });
 });

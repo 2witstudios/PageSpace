@@ -233,7 +233,7 @@ export function toolSurfaceEcho(surface: AgentToolSurface): {
   effectiveToolsCount: number;
   blockedTools: BlockedTool[];
   toolsNeedingComposerToggle: string[];
-  toolsReachedBySearch: string[];
+  toolsReachedBySearch: string[] | null;
 } {
   // `null` for an UNRESTRICTED agent, not the ninety-odd names it can call.
   // The count still tells the truth, and a caller that wants the list can read
@@ -247,6 +247,10 @@ export function toolSurfaceEcho(surface: AgentToolSurface): {
     effectiveToolsCount: surface.granted.length,
     blockedTools: surface.blocked,
     toolsNeedingComposerToggle: surface.conditional,
-    toolsReachedBySearch: unrestricted ? [] : surface.deferred,
+    // `null`, not `[]`: in search mode an unrestricted agent DOES reach its
+    // non-core tools through tool_search, and an empty array here would say the
+    // opposite. Unknown-because-not-listed and empty are different answers, and
+    // conflating them is the habit this whole module exists to break.
+    toolsReachedBySearch: unrestricted ? null : surface.deferred,
   };
 }
