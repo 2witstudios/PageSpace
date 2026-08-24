@@ -188,11 +188,22 @@ export async function PUT(
       updatedFields.push('toolExposureMode');
     }
     if (sandboxEnabled !== undefined) {
+      // REJECTED, not coerced (CodeRabbit): `Boolean("false")` is `true`, and
+      // this is the switch that decides whether a stored sandbox allowlist is
+      // granted at all — a JSON string turning the sandbox family ON is not a
+      // silent conversion anyone wants. The neighbouring booleans still coerce;
+      // they decide sidebar visibility and prompt assembly, not tool grants.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
       // The same field the settings tab and `update_agent_config` write, gated
       // by the same edit permission. Before issue #2460 this door could store
       // `enabledTools: ['bash', …]` and had no way to turn on the switch that
       // grants them — a config that reads as configured and means nothing.
-      updateData.sandboxEnabled = Boolean(sandboxEnabled);
+      updateData.sandboxEnabled = sandboxEnabled;
       updatedFields.push('sandboxEnabled');
     }
 

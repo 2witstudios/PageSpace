@@ -458,6 +458,16 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       expect(String(body.warnings.join(' '))).toContain('sandboxEnabled');
     });
 
+    it('should return 400 for a non-boolean sandboxEnabled — "false" must not enable the sandbox', async () => {
+      const request = createRequest(mockAgentId, { sandboxEnabled: 'false' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
     it('should return 400 for an invalid toolExposureMode value', async () => {
       const request = createRequest(mockAgentId, {
         toolExposureMode: 'invalid',
