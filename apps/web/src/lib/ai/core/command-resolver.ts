@@ -37,8 +37,58 @@ import {
 } from './command-processor';
 import { serializePageContentForAI, isTextSerializablePageType } from './page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
-import { readSheetDocument } from '@pagespace/lib/sheets/store';
+import {
+  SheetDocumentUnreadableError,
+  SheetTabNotFoundError,
+  SHEET_PREVIEW_ROWS,
+  loadSheetWindow,
+  renderSheetTable,
+} from '../tools/sheet-view';
 import { PageType } from '@pagespace/lib/utils/enums';
+
+/**
+ * A SHEET entry page, rendered for injection.
+ *
+ * Bounded on purpose: this text is prompt, not a tool result, so its cost is
+ * paid on every turn the command is active. It carries what a reader needs to
+ * decide what to ASK for — the sheet's size, its tabs, and its first rows —
+ * and names the tool that answers.
+ *
+ * Never throws. A command whose entry page cannot be parsed must still resolve;
+ * refusing the whole command because one referenced sheet is damaged would take
+ * away the tools needed to investigate it. The note says the sheet is unreadable
+ * rather than empty, for the same reason every other caller does: an agent told
+ * a sheet is blank may overwrite data that is still intact.
+ */
+async function serializeSheetForInjection(pageId: string, content: string | null): Promise<string> {
+  try {
+    const sheet = await loadSheetWindow(pageId, {
+      limit: SHEET_PREVIEW_ROWS,
+      documentContent: content,
+    });
+    const table = renderSheetTable(sheet.rows);
+    const header =
+      `(SHEET "${sheet.tabName}": ${sheet.rowCount} rows x ${sheet.columnCount} columns` +
+      (sheet.tabs.length > 1 ? `, ${sheet.tabs.length} tabs` : '') + '.)';
+
+    if (!table) {
+      return `${header} No rows yet. Use read_sheet with pageId "${pageId}" once it has data.`;
+    }
+    return (
+      `${header} First ${sheet.rows.length} row(s) below. ` +
+      `Use read_sheet with pageId "${pageId}" to read a row range, filter rows by column value, ` +
+      `or return only some columns — do not assume these rows are all of it.\n${table}`
+    );
+  } catch (error) {
+    if (error instanceof SheetDocumentUnreadableError || error instanceof SheetTabNotFoundError) {
+      return (
+        `(SHEET could not be read: ${error.message} It is NOT empty — do not overwrite it. ` +
+        `Use read_sheet with pageId "${pageId}" for the full error.)`
+      );
+    }
+    throw error;
+  }
+}
 
 /** DB command ids are cuid2-style lowercase alphanumerics. */
 const COMMAND_ID_PATTERN = /^[a-z0-9]{10,40}$/;
@@ -206,17 +256,21 @@ export async function resolveCommandInjectionById(
   const canView = await canUserViewPage(senderId, entryPage.id);
   if (!canView) return skip(commandId, label, 'no_access');
 
-  // A sheet serialises from its rows. `pages.content` is empty for a
-  // materialised one, so injecting the column handed the model a blank grid —
-  // the same defect fixed in `page-read-tools` and `mcp/documents`, and this
-  // was the third caller.
-  const readableEntry = isSheetType(entryPage.type as PageType)
-    ? { ...entryPage, content: (await readSheetDocument(entryPage.id)) ?? entryPage.content }
-    : entryPage;
-
-  const serializedContent = isTextSerializablePageType(entryPage.type)
-    ? serializePageContentForAI(readableEntry)
-    : `(This entry page is a ${entryPage.type} page. Use read_page with pageId "${entryPage.id}" to read it.)`;
+  // A SHEET entry page is injected as rows, not as its stored document.
+  //
+  // Serialising the whole SheetDoc here was the same defect as `read_page`'s
+  // (issue #2467) with a worse blast radius: an injection is not an on-demand
+  // read, it rides the prompt on EVERY use of the command. A 500-row sheet
+  // serialises to ~460KB, so what actually reached the model was
+  // `COMMAND_CONTENT_CHAR_LIMIT` worth of TOML — a truncated header a few dozen
+  // cells in, spending the command's whole content budget on markup. A sheet
+  // used as a command resource is a reference table; its shape plus its first
+  // rows plus a pointer to `read_sheet` is the useful form.
+  const serializedContent = isSheetType(entryPage.type as PageType)
+    ? await serializeSheetForInjection(entryPage.id, entryPage.content)
+    : isTextSerializablePageType(entryPage.type)
+      ? serializePageContentForAI(entryPage)
+      : `(This entry page is a ${entryPage.type} page. Use read_page with pageId "${entryPage.id}" to read it.)`;
 
   const children = await loadViewableChildren(entryPage.id, senderId);
 

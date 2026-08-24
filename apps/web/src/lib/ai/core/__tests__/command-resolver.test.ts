@@ -24,6 +24,15 @@ vi.mock('@pagespace/lib/permissions/permissions', () => ({
   isUserDriveMember: vi.fn(),
   getBatchPagePermissions: vi.fn(),
 }));
+vi.mock('@pagespace/lib/sheets/store', () => ({
+  getTab: (...args: unknown[]) => mockGetTab(...args as []),
+  listTabs: (...args: unknown[]) => mockListTabs(...args as []),
+  readRows: (...args: unknown[]) => mockReadRows(...args as []),
+}));
+const mockGetTab = vi.hoisted(() => vi.fn());
+const mockListTabs = vi.hoisted(() => vi.fn());
+const mockReadRows = vi.hoisted(() => vi.fn());
+
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: {
     ai: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -204,6 +213,61 @@ describe('planCommandExecutions', () => {
     if (plan?.kind === 'inject') {
       expect(plan.injection.entryPage?.serializedContent).toContain('read_page');
     }
+  });
+
+  it('injects a SHEET entry page as bounded rows, not as its stored document', async () => {
+    // An injection rides the prompt on EVERY use of the command, so a sheet
+    // serialised as its SheetDoc spent the whole content budget on markup —
+    // the same defect as read_page's with a worse blast radius (issue #2467).
+    mockListTabs.mockResolvedValue([
+      { id: 'tab-1', tabIndex: 0, name: 'Members', rowCount: 500, columnCount: 16 },
+    ]);
+    mockGetTab.mockResolvedValue({ id: 'tab-1', tabIndex: 0, name: 'Members', rowCount: 500, columnCount: 16 });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'memid', value: 'memid' } } },
+      { rowIndex: 1, cells: { A: { raw: '28605', value: 28605 } } },
+    ]);
+    mockCommandsFindFirst.mockResolvedValue(
+      personalCommandRow({
+        entryPage: { ...personalCommandRow().entryPage, type: 'SHEET', content: '' },
+      })
+    );
+
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
+    expect(plan?.kind).toBe('inject');
+    if (plan?.kind !== 'inject') return;
+    const content = plan.injection.entryPage?.serializedContent ?? '';
+
+    expect(content).toContain('500 rows x 16 columns');
+    expect(content).toContain('read_sheet');
+    expect(content).toContain('1→memid');
+    expect(content).not.toContain('PAGESPACE_SHEETDOC');
+    // Bounded: a preview, never the whole sheet.
+    expect(content.length).toBeLessThan(2000);
+  });
+
+  it('reports an unreadable SHEET entry page without failing the command', async () => {
+    // A command whose entry page is damaged must still resolve — refusing it
+    // would take away the tools needed to investigate. And it must not say
+    // "empty", which invites an overwrite of data that may be intact.
+    mockListTabs.mockResolvedValue([]);
+    mockCommandsFindFirst.mockResolvedValue(
+      personalCommandRow({
+        entryPage: {
+          ...personalCommandRow().entryPage,
+          type: 'SHEET',
+          content: '#%PAGESPACE_SHEETDOC v1\n[[sheets]]\nname = "Broken"\nthis is not toml = = =',
+        },
+      })
+    );
+
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
+    expect(plan?.kind).toBe('inject');
+    if (plan?.kind !== 'inject') return;
+    const content = plan.injection.entryPage?.serializedContent ?? '';
+
+    expect(content).toContain('could not be read');
+    expect(content).toContain('NOT empty');
   });
 
   it('injects a built-in command from the registry without a command-row lookup', async () => {
