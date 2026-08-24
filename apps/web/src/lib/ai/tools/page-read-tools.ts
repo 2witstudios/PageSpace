@@ -222,14 +222,32 @@ export const pageReadTools = {
                   }
                   throw error;
                 }
-                const table = renderSheetTable(sheet.rows).text;
+                // Row COUNT alone does not bound this. A five-row preview of a
+                // wide sheet is five rows of up to 64+ columns, and this call
+                // previews up to 50 pages at once — so the budget that has to
+                // hold is the per-page CHARACTER cap every other type obeys
+                // here, not the row cap. Drop whole rows until it fits, so the
+                // table is never cut mid-row into something that reads like a
+                // real value.
+                let previewRows = sheet.rows;
+                let table = renderSheetTable(previewRows).text;
+                while (table.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
+                  previewRows = previewRows.slice(0, -1);
+                  table = renderSheetTable(previewRows).text;
+                }
+                // A single row wider than the whole budget still has to be cut;
+                // the ellipsis says so.
+                if (table.length > MAX_CONTENT_CHARS_PER_PAGE) {
+                  table = `${table.slice(0, MAX_CONTENT_CHARS_PER_PAGE)}…`;
+                }
+
                 const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.`;
                 // The pointer rides in the content rather than in
                 // `contentClipped`, which promises the rest is reachable with
                 // read_page's lineStart — the rest of a sheet is reached with
                 // read_sheet. A wrong pointer is worse than none.
                 entry.content = table
-                  ? `${header} First ${sheet.rows.length} rows below; use read_sheet on this page for the rest, or to filter and project.\n${table}`
+                  ? `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n${table}`
                   : `${header} No data yet.`;
                 continue;
               }

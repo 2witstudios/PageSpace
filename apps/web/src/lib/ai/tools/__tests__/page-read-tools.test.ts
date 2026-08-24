@@ -582,6 +582,45 @@ describe('page-read-tools', () => {
         });
       });
 
+      it('previews a SHEET as bounded rows, within the same per-page char budget', async () => {
+        // Row count alone does not bound this: a five-row preview of a WIDE
+        // sheet is five rows of many columns, across up to 50 pages in one
+        // call. The budget that has to hold is the per-page character cap
+        // every other type obeys here.
+        const sheetPage = {
+          id: 'sheet-1', title: 'Members', type: 'SHEET', parentId: null, position: 6, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const wideCells = Object.fromEntries(
+          Array.from({ length: 60 }, (_, i) => [
+            String.fromCharCode(65 + (i % 26)) + (i < 26 ? '' : 'A'),
+            { raw: 'y'.repeat(110), value: 'y'.repeat(110) },
+          ]),
+        );
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 5 }, (_, index) => ({ rowIndex: index, cells: wideCells })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-1', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-1');
+        expect(sheet?.content).toContain('500 rows x 16 columns');
+        expect(sheet?.content).toContain('read_sheet');
+        expect(sheet?.content).not.toContain('PAGESPACE_SHEETDOC');
+        // The whole entry, header included, stays inside the batch's budget.
+        expect((sheet?.content ?? '').length).toBeLessThanOrEqual(8000 + 200);
+      });
+
       it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
         setupDriveAccessWithContent(
           [taskListPage, channelPage, filePage],
