@@ -128,7 +128,11 @@ export const pageAgentRepository = {
       aiProvider: agent.aiProvider,
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
-      sandboxEnabled: agent.sandboxEnabled,
+      // Coerced rather than passed through: the column is NOT NULL with a
+      // default, but this shape is what decides whether the sandbox family is
+      // offered, and `undefined` reaching a Boolean gate is the kind of
+      // "falsy so it looked fine" that made issue #2460 invisible for a week.
+      sandboxEnabled: Boolean(agent.sandboxEnabled),
       isTrashed: agent.isTrashed,
     };
   },
