@@ -140,19 +140,19 @@ describe('splitAxisFor', () => {
     expect(splitAxisFor(wider, 'wide')).toBe('row');
   });
 
-  it('should split a THIRD of the width DOWN, and call the half-height one a tie', () => {
-    // THREE panes in a row is the shape the packing path produces on its own —
-    // no drag involved — and it is the common shape where the surface aspect
-    // actually decides. At 1045x702 (a 1280x800 window) a third of the width is
-    // 348 wide against 702 tall: taller, so `column`. The 16:9 this file started
-    // with called the same pane WIDE and cut it into two 174px slivers.
+  it('should split a THIRD of the width DOWN whether or not it has the full height', () => {
+    // A third of the width at FULL height is `column` for any ratio under 3 —
+    // this case pins the shape, not the constant.
     const thirds = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('c', 'root-1', 2)];
     expect(splitAxisFor(thirds, 'a')).toBe('column');
 
-    // Halve its height and it lands EXACTLY on the boundary: a third of the
-    // width against half the height is square at 3:2, and the measured range
-    // (1.49–1.60) straddles it — genuinely either answer on a real screen. The
-    // tie rule decides, and the tie goes beside.
+    // Halve its height and it lands EXACTLY on the boundary — a third of the
+    // width against half the height is square at 3:2 — which is where the tie
+    // rule earns its keep. Answering `row` here grows a row of three into a row
+    // of FOUR, thinner again, which is the accumulation this file exists to
+    // stop; the narrowest measured surface (1.49) says the pane really is
+    // taller than it is wide. THE constant-sensitive case in the whole file:
+    // 16/9 answers `row`, and so does 3:2 with a `>=` comparison.
     const halved = [
       root(),
       container('col', 'root-1', 0, 'column'),
@@ -161,17 +161,24 @@ describe('splitAxisFor', () => {
       pane('b', 'root-1', 1),
       pane('c', 'root-1', 2),
     ];
-    expect(splitAxisFor(halved, 'tall')).toBe('row');
+    expect(splitAxisFor(halved, 'tall')).toBe('column');
+  });
+
+  it('should still take the FIRST split of a fresh workspace beside, tie rule or not', () => {
+    // The tie goes down, and a lone pane never reaches the tie: it is wider
+    // than it is tall by the whole of the aspect.
+    const nodes = [root(), pane('only', 'root-1', 0)];
+    expect(splitAxisFor(nodes, 'only')).toBe('row');
   });
 
   it('should keep the constant inside the range the surface was MEASURED at', () => {
-    // 1.49 to 1.60 across viewports from a small laptop to a 27-inch monitor
+    // 1.49 to 1.60 across viewports from a 1280x800 laptop to a 27-inch monitor
     // (the table on the constant's own doc). A value outside that is not an
     // approximation of this app's layout any more, whatever else it might be —
     // and the two values this file has already had, 16/9 and 4/3, both fall
     // outside it.
-    expect(NOMINAL_VIEWPORT_ASPECT).toBeGreaterThanOrEqual(1.45);
-    expect(NOMINAL_VIEWPORT_ASPECT).toBeLessThanOrEqual(1.65);
+    expect(NOMINAL_VIEWPORT_ASPECT).toBeGreaterThanOrEqual(1.49);
+    expect(NOMINAL_VIEWPORT_ASPECT).toBeLessThanOrEqual(1.6);
   });
 
   it('should answer `row` for a pane the tree does not hold, leaving the refusal to the placement', () => {

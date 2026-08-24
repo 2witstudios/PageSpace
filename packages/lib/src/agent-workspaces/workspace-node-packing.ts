@@ -23,7 +23,9 @@
  * hidden, and it is the only place a real screen enters this file at all. It
  * decides nothing on a grid of halves, quarters and eighths — those answer the
  * same for any ratio between 1 and 2 — and everything for a container of
- * THREE, which is a shape the packing path produces on its own.
+ * THREE, which the packing path reaches once a CLOSE is in the mix (three
+ * opens, a close, three more opens is the shortest way there; opens alone keep
+ * every container at two children and every share a power of two).
  *
  * Pure, and shared by the browser and the server like every other decision in
  * this model: the client applies the identical split optimistically, so a
@@ -65,11 +67,17 @@ import {
  * 27-inch monitor. Collapsing the sidebar widens it, which is a state the user
  * chose and which moves the answer only for panes already on the boundary.
  *
- * **16:9 was the screen's shape, and it was wrong by 12–19%** — not a rounding
- * error but the difference between "this pane is wider than it is tall" and "it
- * is not" for a pane a third of the width, which is the commonest shape a
- * packed container produces. An earlier cut over-corrected to 4:3, wrong by
- * about as much the other way. Both were guesses; this is the measurement.
+ * **16:9 was the screen's shape and overstated the surface by 11–19%; a later
+ * cut over-corrected to 4:3 and understated it by about as much.** Neither
+ * error shows up often — a search over drag-free open/close sequences finds
+ * exactly ONE shape any of the three answer differently (a pane a third of the
+ * width at half the height), and 16:9 and 3:2 agree even on that one. What the
+ * measurement buys is not a behaviour change; it is that the number is now a
+ * fact about this app rather than a preference, so the next person to doubt it
+ * measures again instead of arguing. The behaviour it does change is the
+ * DRAGGED case, where the aspect is the whole of the answer: a pane given 60%
+ * of the width and the full height is 627x702 on a 1045x702 surface, and 16:9
+ * called it wide.
  */
 export const NOMINAL_VIEWPORT_ASPECT = 3 / 2;
 
@@ -129,9 +137,18 @@ function areaOf(rect: PaneRect): number {
 /**
  * WHICH WAY to split this pane: along its longer edge as drawn.
  *
- * `row` on a tie, which is what makes the first split of a fresh workspace
- * horizontal — the direction `split_right` gave the grid this model replaces,
- * and the direction the old constant default hard-coded for every split.
+ * **STRICTLY wider, or it goes down.** A pane the rule cannot separate is
+ * square, and a square pane is the one case where the preference underneath
+ * this whole file has to break the tie: a too-narrow pane stops showing a line
+ * of terminal output or chat, a too-short one still shows one. That is not
+ * theoretical — a row of three panes inside a column is exactly square at 3:2,
+ * and answering `row` there grows it to a row of FOUR, thinner again, which is
+ * the accumulation this file exists to stop. On the narrowest surface measured
+ * (1.49) the real pixels agree: that pane is taller than it is wide.
+ *
+ * The first split of a fresh workspace is still `row` — a pane holding the
+ * whole surface is genuinely wider than it is tall, by the whole of the aspect,
+ * so it never reaches the tie.
  *
  * A pane the tree does not hold answers `row` rather than throwing: this is a
  * preference feeding a placement that will refuse the unknown node itself, with
@@ -140,7 +157,7 @@ function areaOf(rect: PaneRect): number {
 export function splitAxisFor(nodes: readonly WorkspaceNode[], paneId: string): NodeAxis {
   const rect = paneRects(nodes).get(paneId);
   if (rect === undefined) return 'row';
-  return rect.width * NOMINAL_VIEWPORT_ASPECT >= rect.height ? 'row' : 'column';
+  return rect.width * NOMINAL_VIEWPORT_ASPECT > rect.height ? 'row' : 'column';
 }
 
 /**
