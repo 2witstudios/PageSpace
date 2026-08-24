@@ -112,8 +112,18 @@ const cappedInput = (chars: number): Record<string, string> => ({
  * rewriting it to `text` would silently turn a failure into a success. So only
  * the value is replaced, in whichever shape that type declares.
  *
- * `execution-denied` carries no value, and `content` is a multimodal array whose
- * bulk is images rather than text; both are left alone.
+ * Two output types are deliberately left alone:
+ *
+ * - `execution-denied` carries no value at all, so there is nothing to cap.
+ * - `content` is the multimodal array read_page returns to a vision-capable
+ *   model, and its bulk is base64 image bytes. Those DO accumulate in-turn like
+ *   anything else, but a stub is not a substitute for an image the way it is for
+ *   text the model can simply read again, and image delivery already has its own
+ *   deliberate design in read-page-vision-output.ts (see
+ *   guardReadPageToolForVision, which degrades stale image results only when the
+ *   active model lacks vision). Capping images is a product decision about what
+ *   a mid-comparison agent is allowed to lose, not a mechanical extension of
+ *   this one — so it is named here rather than made silently.
  */
 function cappedOutput(output: ToolResultOutput, maxChars: number): ToolResultOutput | null {
   switch (output.type) {
