@@ -304,6 +304,19 @@ export const pageReadTools = {
                 }
                 if (!sheet.documentIsNotASheet) {
                   entry.content = buildSheetPreviewContent(sheet);
+                  // A preview of N rows out of a 500-row sheet is partial
+                  // content by definition, and the `include` description
+                  // promises `contentClipped` for partial content. Leaving it
+                  // unset told an agent branching on the flag — rather than
+                  // reading the prose inside `content` — that it held the whole
+                  // sheet. `contentClippedAfterLine` is deliberately NOT set:
+                  // it means "resume with read_page's lineStart", and the rest
+                  // of a sheet is reached with read_sheet, which the content
+                  // says. A wrong pointer is worse than none.
+                  if (sheet.rowCount > sheet.rows.length) {
+                    entry.contentClipped = true;
+                    contentClippedCount++;
+                  }
                   continue;
                 }
                 // Otherwise the page holds legacy text rather than a sheet
@@ -1208,7 +1221,11 @@ export const pageReadTools = {
               ...(rendered.truncatedCells > 0
                 ? [`${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in the content above — read them from "rows", which carries the full text.`]
                 : []),
-              'To find rows rather than page them — filter by column value, sort, or return only some columns — use read_sheet. Do not read a whole sheet to search it.',
+              // Hedged like the continuation above it. The allowlist guard in
+              // inline-instructions exists because naming a tool the agent does
+              // not hold produces an unknown-tool call; this line was the one
+              // place left doing exactly that.
+              'To find rows rather than page them — filter by column value, sort, or return only some columns — use read_sheet if it is available to you. Do not read a whole sheet to search it.',
               'Use edit_sheet_cells with A1 addresses to write; a row\'s number here is its A1 row.',
             ],
           };

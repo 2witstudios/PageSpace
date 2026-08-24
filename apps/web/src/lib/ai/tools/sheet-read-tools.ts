@@ -347,8 +347,11 @@ export const sheetReadTools = {
 
         const ref = { pageId: page.id, tabIndex: tabIndex ?? 0 };
         // Reuses the rows fetched for the `materialized` check above rather
-        // than asking again — this path was making the same listTabs call
-        // twice per filtered read.
+        // than asking again. Note this path still costs `listTabs` + `getTab`
+        // + `queryRows`'s own tab lookup: `getTab` re-selects a row `listTabs`
+        // already returned, and `queryRows` looks it up a third time. Left as
+        // is deliberately — collapsing it means changing a store signature this
+        // change does not otherwise touch — but it is three queries, not one.
         const tabs = toTabSummaries(storedTabs);
         const tab = await getTab(ref);
         if (!tab) {

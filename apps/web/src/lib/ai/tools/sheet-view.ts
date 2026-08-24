@@ -610,21 +610,25 @@ export function renderSheetTable(
       // escaped delimiter from a real backslash followed by one — and would
       // read the row's columns back wrong. Escaping backslashes first makes
       // every sequence decode to exactly one original.
-      const flat = value
+      // TRUNCATE FIRST, then escape. Cutting the escaped string could land
+      // between the two halves of an escaped backslash, emitting an odd number
+      // of them before the ellipsis — the reader then cannot decode that cell,
+      // which is precisely the ambiguity the escaping above exists to remove.
+      // Measuring on the escaped form was also a lie in the other direction: a
+      // cell full of backslashes or pipes was cut well before 120 original
+      // characters while the response said it had been "cut at 120".
+      const points = [...value];
+      const cut = points.length > MAX_TABLE_CELL_CHARS;
+      const original = cut ? points.slice(0, MAX_TABLE_CELL_CHARS).join('') : value;
+      const flat = original
         .replace(/\\/g, '\\\\')
         .replace(/\r?\n/g, '\\n')
         .replace(/\|/g, '\\|');
-      // Measured AND cut in code points. Mixing the two — a UTF-16 `.length`
-      // guard with a code-point slice — flagged cells that were never
-      // shortened: 100 emoji is 200 UTF-16 units, so it failed the guard, got
-      // an ellipsis and bumped the counter, while the slice returned all 100.
-      // The reader was then warned not to write back a value that was whole.
-      const points = [...flat];
-      if (points.length <= MAX_TABLE_CELL_CHARS) return flat;
+      // Counted in CODE POINTS on the ORIGINAL, so the count means what the
+      // response says it means, and a cut never splits a surrogate pair.
+      if (!cut) return flat;
       truncatedCells++;
-      // By CODE POINT: slicing mid-surrogate emits a lone half that rides into
-      // the tool result and renders as U+FFFD.
-      return `${points.slice(0, MAX_TABLE_CELL_CHARS).join('')}…`;
+      return `${flat}…`;
     });
     lines.push(`${row.rowNumber}→${cells.join(' | ')}`);
   }

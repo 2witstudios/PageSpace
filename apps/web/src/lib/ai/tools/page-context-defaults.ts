@@ -19,8 +19,8 @@ export function resolveDefaultPageId(context: ToolExecutionContext | undefined):
 /**
  * Resolve an omitted `pageId` tool argument the same way across every page
  * tool that supports the default, or throw the identical, tool-agnostic
- * error message. Centralizing this keeps the 6 call sites (read_page,
- * replace_lines, rename_page, move_page, insert_content, edit_sheet_cells)
+ * error message. Centralizing this keeps the 7 call sites (read_page,
+ * replace_lines, rename_page, move_page, insert_content, edit_sheet_cells, read_sheet)
  * from silently drifting if the fallback or its wording ever needs to change.
  */
 export function resolveOrThrowPageId(

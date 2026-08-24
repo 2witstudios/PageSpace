@@ -677,6 +677,38 @@ describe('page-read-tools', () => {
         expect(sheet?.content).not.toContain('No data yet');
       });
 
+      it('marks a partial sheet preview as clipped, as the description promises', async () => {
+        // A 5-row preview of a 500-row sheet is partial content. Leaving
+        // contentClipped unset told an agent branching on the flag, rather than
+        // reading the prose inside content, that it held the whole sheet.
+        const sheetPage = {
+          id: 'sheet-4', title: 'Big', type: 'SHEET', parentId: null, position: 9, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 5 }, (_, i) => ({ rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } } })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-4', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean; contentClippedAfterLine?: number }>; contentClippedCount?: number };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-4');
+        expect(sheet?.contentClipped).toBe(true);
+        expect(result.contentClippedCount).toBeGreaterThan(0);
+        // Deliberately absent: it promises read_page's lineStart continues the
+        // read, and the rest of a sheet is reached with read_sheet.
+        expect(sheet?.contentClippedAfterLine).toBeUndefined();
+      });
+
       it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
         setupDriveAccessWithContent(
           [taskListPage, channelPage, filePage],

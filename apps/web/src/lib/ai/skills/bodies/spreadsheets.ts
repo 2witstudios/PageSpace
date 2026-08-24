@@ -132,7 +132,7 @@ Reference cells in *another SHEET page* with an \`@[...]\` mention inside a form
 
 Resolution: the identifier is tried first (must be a SHEET page); otherwise the label is matched case-insensitively against sheet page titles in the drive tree. Duplicate titles are ranked (siblings of the current sheet first, then most shared ancestry, then shallowest, then position) — so **include the page ID whenever you know it**. The label must be non-empty and the target must be a SHEET page.
 
-Important: cross-page references only resolve in the live sheet view. The evaluation that runs when \`edit_sheet_cells\` saves has no page resolver, so immediately after writing a cross-sheet formula, \`read_page\` will show the cell with \`error = { message = "Cross-page references are not supported in this context" }\`. The formula itself is stored correctly and evaluates for users viewing the sheet — do not "fix" this error by removing the reference.
+Important: cross-page references only resolve in the live sheet view. The evaluation that runs when \`edit_sheet_cells\` saves has no page resolver, so immediately after writing a cross-sheet formula a read shows that cell as \`#ERROR\`, with "Cross-page references are not supported in this context" under the cell's A1 address in \`errors\` (\`read_page\`) or in that row's \`errors\` (\`read_sheet\`). The formula itself is stored correctly and evaluates for users viewing the sheet — do not "fix" this error by removing the reference.
 
 ## Reading a sheet
 

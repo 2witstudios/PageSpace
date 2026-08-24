@@ -377,6 +377,32 @@ describe('renderSheetTable', () => {
     expect(a).not.toBe(b);
   });
 
+  it('never cuts an escape sequence in half', () => {
+    // Cutting the ESCAPED string could land between the two halves of an
+    // escaped backslash, leaving an odd number of them before the ellipsis —
+    // the reader then cannot decode that cell, which is the exact ambiguity
+    // the escaping exists to remove.
+    const backslashes = '\\'.repeat(TABLE_CELL_CHAR_LIMIT + 20);
+    const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: backslashes, value: backslashes } })]);
+    const line = rendered.text.split('\n')[1];
+    const body = line.slice('1→'.length).replace(/…$/, '');
+
+    // Every backslash is escaped as a pair, so the rendered run must be even.
+    expect(body.length % 2).toBe(0);
+    expect(rendered.truncatedCells).toBe(1);
+  });
+
+  it('counts the cut against the ORIGINAL text, as the message claims', () => {
+    // Measuring the escaped form cut a pipe-heavy cell at ~60 real characters
+    // while telling the model it had been cut at 120.
+    const pipes = '|'.repeat(TABLE_CELL_CHAR_LIMIT);
+    const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: pipes, value: pipes } })]);
+
+    // Exactly at the limit in original characters — nothing should be cut.
+    expect(rendered.truncatedCells).toBe(0);
+    expect(rendered.text).not.toContain('…');
+  });
+
   it('reports how many cells it had to cut, so truncation is stated not inferred', () => {
     // The table is a rendering; `rows` beside it always carries the full value.
     // A reader working from the table alone could otherwise copy a shortened
