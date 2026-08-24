@@ -41,6 +41,9 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { factories } from '@pagespace/db/test/factories';
 import { requireDb } from '@pagespace/db/test/require-db';
+import { createId } from '@paralleldrive/cuid2';
+import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
+import { ensureGlobalSandboxSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 
 let dbAvailable = false;
@@ -216,6 +219,78 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
       });
 
       expect(Object.keys(deps.tools)).not.toContain('spawn_shell');
+    });
+  });
+
+  /**
+   * The divergence no stored config can predict: whether the WORKSPACE the
+   * worker landed in will grant compute at all. This is the runtime half — the
+   * factory's fail/warn policy is unit-tested with fakes, but the question it
+   * asks (which granted names are compute, and `canRunCode` against that
+   * workspace's drive and owner) only exists here.
+   */
+  describe('describeWorkerComputeShortfall', () => {
+    const workspaceFor = async (userId: string): Promise<string> => {
+      const conversationId = createId();
+      await resolveOrCreateConversation(userId, conversationId);
+      const ensured = await ensureGlobalSandboxSession(conversationId, userId);
+      if (!ensured.ok) throw new Error(`could not mint a workspace: ${ensured.reason}`);
+      return ensured.session.id;
+    };
+
+    it('given an agent granted NO compute tools, should not even ask the workspace', async () => {
+      if (!dbAvailable) return;
+
+      const owner = await factories.createUser();
+      const workspaceId = await workspaceFor(owner.id);
+
+      const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
+        workspaceId,
+        userId: owner.id,
+        granted: ['read_page', 'spawn_session'],
+      });
+
+      // `spawn_session` is sandbox-family but NOT compute — sessions are free on
+      // every plan, so a workspace that cannot run code still runs workers.
+      expect(shortfall).toBeNull();
+    });
+
+    it('given compute tools and a free-tier workspace owner, should name the shortfall', async () => {
+      if (!dbAvailable) return;
+
+      // `factories.createUser` mints a free-tier payer, which is exactly the
+      // case the reporter kept landing in without being told.
+      const owner = await factories.createUser();
+      const workspaceId = await workspaceFor(owner.id);
+
+      const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
+        workspaceId,
+        userId: owner.id,
+        granted: ['read_page', 'bash'],
+      });
+
+      expect(shortfall).not.toBeNull();
+      expect(String(shortfall)).toContain('bash');
+      // The OUTCOME, not a guessed cause: canRunCode folds three questions.
+      expect(String(shortfall)).toContain('will NOT grant');
+    });
+
+    it('given `granted: null` (unrestricted or a global worker), should treat compute as in play', async () => {
+      if (!dbAvailable) return;
+
+      const owner = await factories.createUser();
+      const workspaceId = await workspaceFor(owner.id);
+
+      const shortfall = await buildSessionToolsDeps().describeWorkerComputeShortfall({
+        workspaceId,
+        userId: owner.id,
+        granted: null,
+      });
+
+      // null is the WIDEST case, not "nothing" — the whole registry, compute
+      // included. Reading it as an empty list would silently skip this check for
+      // every unrestricted agent.
+      expect(shortfall).not.toBeNull();
     });
   });
 });
