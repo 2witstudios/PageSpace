@@ -23,6 +23,7 @@ import {
   columnsInRows,
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
+  type SheetWindow,
   SHEET_PREVIEW_ROWS,
   SHEET_LIST_PREVIEW_ROWS,
   MAX_SHEET_READ_ROWS,
@@ -203,7 +204,7 @@ export const pageReadTools = {
               // sheet. It gets the same bounded row window read_page returns,
               // just fewer rows because this call previews many pages at once.
               if (isSheetType(entry.type as PageType)) {
-                let sheet;
+                let sheet: SheetWindow;
                 try {
                   sheet = await loadSheetWindow(entry.id, {
                     limit: SHEET_LIST_PREVIEW_ROWS,
@@ -902,7 +903,7 @@ export const pageReadTools = {
           // the fetch is what carries the sheet's dimensions and tab list, and
           // an empty range must still report those rather than "0 rows x 0
           // columns", which reads as an empty spreadsheet.
-          let sheet;
+          let sheet: SheetWindow;
           try {
             sheet = await loadSheetWindow(page.id, {
               fromRow: requestedStart - 1,
@@ -958,6 +959,16 @@ export const pageReadTools = {
 
           const lastRow = rows.length > 0 ? rows[rows.length - 1].rowNumber : requestedStart - 1;
           const moreRows = lastRow < rowCount;
+          // An empty window is not the same as an empty sheet, and the two must
+          // not read alike: a request past the last row, or into a gap in a
+          // sparse sheet, still has to report the sheet's real size and say
+          // which it was. The text path draws the same distinction with
+          // `rangeMessage`.
+          const emptyWindowReason = rows.length > 0
+            ? undefined
+            : requestedStart > rowCount
+              ? `Requested rows start at ${requestedStart}, past the last row of this ${rowCount}-row sheet.`
+              : `No rows are stored in ${lineEnd === undefined ? `rows ${requestedStart} onward` : `rows ${requestedStart}-${lineEnd}`}, though the sheet has ${rowCount} rows — sheet rows can be sparse.`;
 
           return {
             success: true,
@@ -984,9 +995,12 @@ export const pageReadTools = {
             ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
             hasMoreRows: moreRows,
             ...(moreRows && { nextStartRow: lastRow + 1 }),
-            summary: isRangeRequest
-              ? `Read rows ${requestedStart}-${lastRow} of sheet "${page.title}" (${rows.length} of ${rowCount} rows, ${sheet.columnCount} columns)`
-              : `Sheet "${page.title}": ${rowCount} rows x ${sheet.columnCount} columns — showing the first ${rows.length}`,
+            ...(emptyWindowReason && { rangeMessage: emptyWindowReason }),
+            summary: emptyWindowReason
+              ? `Sheet "${page.title}" has ${rowCount} rows x ${sheet.columnCount} columns. ${emptyWindowReason}`
+              : isRangeRequest
+                ? `Read rows ${requestedStart}-${lastRow} of sheet "${page.title}" (${rows.length} of ${rowCount} rows, ${sheet.columnCount} columns)`
+                : `Sheet "${page.title}": ${rowCount} rows x ${sheet.columnCount} columns — showing the first ${rows.length}`,
             stats: {
               documentType: page.type,
               rowCount,
@@ -995,7 +1009,7 @@ export const pageReadTools = {
               characterCount: table.length,
             },
             nextSteps: [
-              ...(moreRows
+              ...(moreRows && rows.length > 0
                 ? [`Only rows up to ${lastRow} of ${rowCount} are shown — use read_sheet (startRow: ${lastRow + 1}) rather than paging this tool.`]
                 : []),
               'Use read_sheet to filter rows by column value, sort them, or return only some columns — do not read the whole sheet to search it.',

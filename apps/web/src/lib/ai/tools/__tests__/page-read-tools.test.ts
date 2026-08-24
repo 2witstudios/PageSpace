@@ -1054,6 +1054,29 @@ describe('page-read-tools', () => {
       expect((result.rows as { rowNumber: number }[]).map(row => row.rowNumber)).toEqual([1]);
     });
 
+    it('distinguishes an empty window from an empty sheet', async () => {
+      // Reading past the end, or into a gap in a sparse sheet, must still
+      // report the sheet's real size and say which case it was. "0 rows" with
+      // no explanation reads as an empty spreadsheet.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([]);
+
+      const past = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 900 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(past.dimensions).toEqual({ rowCount: 500, columnCount: 16 });
+      expect(String(past.rangeMessage)).toContain('past the last row');
+      expect(String(past.summary)).toContain('500 rows');
+      // Nothing should tell the agent to keep paging an empty window.
+      expect((past.nextSteps as string[]).join(' ')).not.toContain('startRow: 1');
+    });
+
     it('keeps formulas and errors reachable on a SHEET read', async () => {
       // The spreadsheets skill documents reading a sheet back to confirm a
       // formula was stored and to see the expected cross-page-reference error.
