@@ -267,6 +267,46 @@ describe('issue #2461 — the fixes', () => {
     });
   });
 
+  it('capping what is SENT never changes what is recorded', async () => {
+    // The cap rewrites the messages handed to the provider for one step. If that
+    // also reached the run's recorded steps, the fix would be quietly destroying
+    // the agent's own history — the arguments it actually sent — which is what
+    // persistence and the activity log are built from. Prove it does not.
+    const big = 'y'.repeat(50_000);
+    const model = new MockLanguageModelV3({
+      doStream: providerEmitting(() =>
+        JSON.stringify({ tool_name: 'edit_sheet_cells', parameters: { pageId: 'p1', cells: [big] } })
+      ),
+    });
+
+    const result = streamText({
+      model,
+      messages: [{ role: 'user', content: 'apply every chunk' }],
+      tools: { execute_tool: createExecuteTool(registry) },
+      stopWhen: [stepCountIs(4)],
+      prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolInputs(stepMessages) }),
+    });
+    for await (const _part of result.fullStream) {
+      void _part;
+    }
+    const steps = await result.steps;
+    const recorded = steps
+      .flatMap((step) => step.content)
+      .filter((part) => part.type === 'tool-call')
+      .map((part) => JSON.stringify((part as { input: unknown }).input));
+
+    assert({
+      given: 'a capped run of four oversized calls',
+      should: 'record every call at full size, with no stub anywhere in the history',
+      actual: {
+        callsRecorded: recorded.length,
+        allFullSize: recorded.every((input) => input.includes(big)),
+        anyStubbed: recorded.some((input) => input.includes('__arguments_elided')),
+      },
+      expected: { callsRecorded: 4, allFullSize: true, anyStubbed: false },
+    });
+  });
+
   it('the per-step cap bounds what one agent loop replays to the provider', async () => {
     // The measured cause. Without capStepToolInputs the prompt handed to the
     // provider grows by the full payload on every step — 71 bytes at step 1, then
