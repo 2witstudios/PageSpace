@@ -646,9 +646,13 @@ never asked — so an agent with sandbox access OFF was handed the sandbox famil
   through the same search-mode discovery pair, so the stripped tools were reachable through
   `tool_search`/`execute_tool` as well as directly.
 
-`canRunCode` still refused the execution in both cases, so these were contradictions in
-configuration rather than ways into the sandbox. They are closed anyway, because a gate that
-answers differently depending on which surface asks is not a gate. Voice applies it only to a
+How much this actually granted is worth stating precisely rather than reassuringly.
+`canRunCode` still refused every COMPUTE call (bash/files, git+gh, shells), so neither surface
+was a way into the sandbox. The chat-side session family is deliberately NOT compute-gated
+(sessions and workers are free on every plan — review #2326), so `spawn_session` and its
+siblings were genuinely usable from an agent whose switch was off. That is the switch failing
+to be the switch, on two surfaces, for the tools it names first. Closed on both, because a gate
+that answers differently depending on which surface asks is not a gate. Voice applies it only to a
 BOUND agent: an unbound (Global Assistant) call has no agent whose switch it would be, exactly
 as the global text path has none.
 
