@@ -260,7 +260,12 @@ export const agentTools = {
               ? ['Resolve the warnings above — the stored config and the runtime tool surface do not agree.']
               : []),
             'Test the agent to ensure the new configuration works as expected',
-            'The changes will take effect immediately in new conversations'
+            // The page row is re-read per request (`page-chat-turn.ts`), so the
+            // next turn of an EXISTING conversation already runs the new config.
+            // Saying "new conversations" implied the old one was pinned to the
+            // old config, which would have anyone debugging this start a fresh
+            // thread looking for a change that was already in front of them.
+            'The changes take effect on this agent\'s next turn, in existing conversations as well as new ones'
           ]
         };
       } catch (error) {
