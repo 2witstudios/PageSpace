@@ -579,6 +579,49 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
 
 });
 
+describe('read_sheet — every refusal is actionable', () => {
+  // The issue this PR closes is not "sheets error badly", it is that an agent
+  // could not tell what to do next. A refusal without a way forward is the same
+  // dead end in a different costume, so this drives EVERY failure envelope the
+  // tool can produce and asserts each names one.
+  const refusals: Array<[string, () => Promise<Result>]> = [
+    ['wrong page type', async () => {
+      mockFindById.mockResolvedValue({ ...sheetPage, type: 'DOCUMENT' as const });
+      return run({ pageId: 'page-1' });
+    }],
+    ['startRow with a filter', async () =>
+      run({ pageId: 'page-1', startRow: 4, where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] } })],
+    ['tab not found', async () => {
+      mockGetTab.mockResolvedValue(null);
+      return run({ pageId: 'page-1', tabIndex: 9 });
+    }],
+    ['not a spreadsheet', async () => {
+      mockListTabs.mockResolvedValue([]);
+      mockFindById.mockResolvedValue({ ...sheetPage, content: '<p>text</p>' });
+      return run({ pageId: 'page-1' });
+    }],
+    ['unmigrated + filtered', async () => {
+      mockListTabs.mockResolvedValue([]);
+      return run({ pageId: 'page-1', where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] } });
+    }],
+    ['invalid filter', async () => {
+      mockQueryRows.mockRejectedValue(new SheetQueryError('Invalid column: 1'));
+      return run({ pageId: 'page-1', where: { conditions: [{ column: 'AA', op: 'eq', value: 'x' }] } });
+    }],
+  ];
+
+  it.each(refusals)('%s says what to do next', async (_label, produce) => {
+    const result = await produce();
+
+    expect(result.success).toBe(false);
+    expect(typeof result.error).toBe('string');
+    expect(typeof result.message).toBe('string');
+    // The load-bearing one: a next step, not just a diagnosis.
+    expect(typeof result.suggestion, 'refusal carries no suggestion').toBe('string');
+    expect(String(result.suggestion).length).toBeGreaterThan(20);
+  });
+});
+
 describe('read_sheet — schema', () => {
   const schema = () => sheetReadTools.read_sheet.inputSchema as {
     safeParse: (input: unknown) => { success: boolean };
