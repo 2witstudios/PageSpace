@@ -13,6 +13,10 @@
  *
  * A loop is only in scope when it passes `tools`: without them the model cannot
  * emit tool calls, so there is nothing to accumulate and nothing to cap.
+ *
+ * Scoped to src/. The one loop outside it (scripts/redteam-sandbox-injection.ts)
+ * is a hand-run security probe with stubbed, non-executing tools and a two-step
+ * budget — nothing accumulates across two steps.
  */
 import { describe, it, expect } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
