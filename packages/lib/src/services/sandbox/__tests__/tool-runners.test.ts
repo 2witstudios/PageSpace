@@ -1135,21 +1135,64 @@ describe('readSandboxFile', () => {
     expect(result.notice).toBeUndefined();
   });
 
-  it('given one pathological long line, should still cap on bytes and say the shown lines are incomplete', async () => {
+  it('given one enormous line, should clip it and still return the lines after it', async () => {
+    // Previously the byte cap ate the whole window on line 1, and because paging
+    // is by line there was no offset that could reach line 2.
     const { deps } = makeDeps({
-      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('y'.repeat(300 * 1024)) }),
+      reconnect: async () =>
+        makeSandbox({ readFileToBuffer: async () => Buffer.from('A'.repeat(300 * 1024) + '\nline2\nline3\n') }),
     });
     const result = await readSandboxFile({ path: 'bundle.min.js', ctx: makeCtx(), deps });
     expect(result.success).toBe(true);
     if (!result.success) return;
 
-    expect(result.truncated).toBe(true);
     expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
-    expect(result.notice).toContain('byte cap');
-    // A whole-file-by-line read that only the byte cap cut must not claim lines
-    // are missing — an earlier draft rendered this as 'lines 1-0 are not shown'.
-    expect(result.notice).not.toContain('1-0');
-    expect(result.notice).not.toContain('are not shown');
+    expect(result.content).toContain('line2');
+    expect(result.content).toContain('line3');
+    expect(result.lastLine).toBe(3);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('too long to show in full');
+  });
+
+  it('given a window cut short by the byte budget, should point the next read at the line content actually ended on', async () => {
+    // The bug this pins: the budget used to be applied to the joined window
+    // AFTER selection, so content stopped near line 1,300 while lastLine still
+    // said 2,000 and the notice sent the caller to offset 2,001 — silently
+    // losing ~700 lines.
+    const wide = Array.from({ length: 5000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+    const result = await readSandboxFile({ path: 'wide.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const returnedLines = result.content.replace(/\n$/, '').split('\n').length;
+    expect(result.lastLine).toBe(returnedLines);
+    expect(result.lastLine).toBeLessThan(DEFAULT_READ_LINES);
+    expect(result.notice).toContain(`offset: ${result.lastLine + 1}`);
+    expect(result.notice).toContain('output size limit');
+  });
+
+  it('given repeated reads following the notice, should recover every line of a large file', async () => {
+    const total = 5000;
+    const wide = Array.from({ length: total }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+
+    const seen: string[] = [];
+    let offset = 1;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page = await readSandboxFile({ path: 'wide.ts', offset, ctx: makeCtx(), deps });
+      if (!page.success || page.lastLine < page.firstLine) break;
+      seen.push(...page.content.replace(/\n$/, '').split('\n'));
+      if (page.lastLine >= page.totalLines) break;
+      offset = page.lastLine + 1;
+    }
+
+    expect(seen.length).toBe(total);
+    expect(seen[total - 1]).toBe(`line ${total} ` + 'x'.repeat(190));
   });
 
   it('given a truncated read, should report the WHOLE file size — originalBytes used to be computed and thrown away', async () => {

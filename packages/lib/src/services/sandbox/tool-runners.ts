@@ -30,9 +30,10 @@ import {
   SANDBOX_MAX_TIMEOUT_MS,
   SANDBOX_MAX_OUTPUT_BYTES,
   DEFAULT_READ_LINES,
+  MAX_LINE_BYTES,
 } from './execution-policy';
 import { evaluateCommandPolicy } from './command-policy';
-import { truncateToBytes, selectLineWindow } from './output-limit';
+import { truncateToBytes, selectLineWindow, LINE_ELISION_MARKER } from './output-limit';
 import { resolveSandboxPath, SANDBOX_ROOT } from './sandbox-paths';
 import { applyEdit } from './edit-file';
 import { buildSandboxEnv } from './sandbox-env';
@@ -1017,23 +1018,28 @@ function withThousands(n: number): string {
 export function buildReadTruncationNotice({
   path,
   window,
-  bytesCut,
 }: {
   path: string;
-  window: { firstLine: number; lastLine: number; totalLines: number };
-  bytesCut: boolean;
+  window: {
+    firstLine: number;
+    lastLine: number;
+    totalLines: number;
+    bytesCapped: boolean;
+    lineElided: boolean;
+  };
 }): string {
-  const { firstLine, lastLine, totalLines } = window;
+  const { firstLine, lastLine, totalLines, bytesCapped, lineElided } = window;
   const total = withThousands(totalLines);
 
-  // The editFile clause is appended to EVERY variant: whichever way a read came
-  // back partial, the next thing the caller does is usually an edit.
+  // Appended to EVERY variant: whichever way a read came back partial, the next
+  // thing the caller usually does is an edit.
   const editWarning =
     ' Note that editFile matches oldString against the ENTIRE file, including lines not shown here —' +
     ' if an edit reports "not unique", the duplicate may be outside this window,' +
     ' so read more rather than reaching for replaceAll.';
-  const byteNote = bytesCut
-    ? ' The text was ALSO cut mid-line by the output byte cap (a very long single line), so even what is shown may be incomplete.'
+  const elisionNote = lineElided
+    ? ` Lines longer than ${withThousands(MAX_LINE_BYTES)} bytes are shown clipped, marked "${LINE_ELISION_MARKER.trim()}" —` +
+      ' their full text is not here, so do not build an editFile anchor from a clipped line.'
     : '';
 
   // Overshot the file entirely — say where it actually ends, and do NOT also
@@ -1049,18 +1055,23 @@ export function buildReadTruncationNotice({
   const remaining = totalLines - lastLine;
 
   if (remaining > 0) {
+    // `lastLine` is where the returned content genuinely ends — the byte budget
+    // is applied per line during selection, never to the joined text after —
+    // so this offset resumes exactly where this window stopped, with no gap.
+    const why = bytesCapped
+      ? ' This window was cut short by the output size limit rather than by the line count, so it is shorter than requested.'
+      : '';
     return (
       `[${shown}. This is NOT the whole file — ${withThousands(remaining)} line${remaining === 1 ? '' : 's'} below this window` +
       ` ${remaining === 1 ? 'is' : 'are'} not shown. Continue with readFile({ path: "${path}", offset: ${lastLine + 1} }).` +
-      `${byteNote}${editWarning}]`
+      `${why}${elisionNote}${editWarning}]`
     );
   }
 
-  // Every line is present and the window started at the top — the only reason
-  // this read is flagged truncated is the byte cap (one pathological long line).
-  // Do not talk about missing lines here; there are none.
+  // Every line present and the window started at the top: the only thing that
+  // made this partial is per-line clipping.
   if (firstLine === 1) {
-    return `[${shown}, but the text was cut mid-line by the output byte cap (a very long single line), so what is shown is incomplete.${editWarning}]`;
+    return `[${shown} — every line of the file is here, but at least one was too long to show in full.${elisionNote}${editWarning}]`;
   }
 
   // Reached the last line, but started past line 1: the tail is complete, the
@@ -1068,7 +1079,7 @@ export function buildReadTruncationNotice({
   // which end is absent.
   return (
     `[${shown} — this window reaches the end of the file, but lines 1-${firstLine - 1} are not shown.` +
-    `${byteNote}${editWarning}]`
+    `${elisionNote}${editWarning}]`
   );
 }
 
@@ -1141,19 +1152,20 @@ export async function readSandboxFile({
     const screenedContent = deps.screenOutput ? await deps.screenOutput(rawContent) : rawContent;
     const originalBytes = Buffer.byteLength(screenedContent, 'utf8');
 
-    // Line window FIRST, byte cap second. The window is the addressable unit the
-    // caller can page through; the byte cap is only a backstop for input a line
-    // count cannot bound (one 300 KiB minified line is legitimately one line).
+    // Both caps are applied INSIDE the windowing, so `window.lastLine` always
+    // describes the line the returned content actually ends on. Capping the
+    // joined text afterwards instead would cut mid-window while lastLine still
+    // named the requested end, and the notice would then send the caller to an
+    // offset well past the content, silently skipping everything in between.
     const window = selectLineWindow({
       text: screenedContent,
       offset,
       limit: limit ?? DEFAULT_READ_LINES,
-    });
-    const { text, truncated: bytesCut } = truncateToBytes({
-      text: window.text,
       maxBytes: SANDBOX_MAX_OUTPUT_BYTES,
+      maxLineBytes: MAX_LINE_BYTES,
     });
-    const truncated = window.windowed || bytesCut;
+    const text = window.text;
+    const truncated = window.windowed || window.lineElided;
     await safeAudit(deps, ctx, {
       code: `readFile ${path}`,
       exitCode: 0,
@@ -1169,7 +1181,7 @@ export async function readSandboxFile({
       totalLines: window.totalLines,
       originalBytes,
       ...(truncated
-        ? { notice: buildReadTruncationNotice({ path, window, bytesCut }) }
+        ? { notice: buildReadTruncationNotice({ path, window }) }
         : {}),
     };
   } finally {

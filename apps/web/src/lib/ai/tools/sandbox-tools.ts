@@ -184,6 +184,7 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
       description:
         `Read a file from this conversation's sandbox. A relative path resolves from the sandbox root and cannot escape it. ` +
         `Returns at most ${DEFAULT_READ_LINES} lines per call (override with limit); when a file is longer the result reports totalLines and a notice naming the offset that returns the next page, so page through rather than assuming the file ended. ` +
+        `Very long individual lines are shown clipped and marked, so do not build an editFile anchor from a clipped line. ` +
         `Note editFile matches against the whole file, including lines outside the window you read.`,
       inputSchema: readFileInputSchema,
       execute: async ({ path, offset, limit }, options) => {

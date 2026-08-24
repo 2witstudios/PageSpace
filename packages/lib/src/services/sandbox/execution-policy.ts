@@ -37,6 +37,19 @@ export const SANDBOX_MAX_OUTPUT_BYTES = 256 * 1024;
  */
 export const DEFAULT_READ_LINES = 2000;
 
+/**
+ * Per-LINE byte cap for `readFile`.
+ *
+ * Without it, one pathological line (a minified bundle, an embedded data URI)
+ * either eats the whole window budget or, on its own, exceeds it — and since the
+ * window is addressed by line, there is then no offset that reaches past it: the
+ * rest of the file becomes unreachable through this tool. Capping each line
+ * keeps line numbering meaningful and every line addressable; the elided tail of
+ * an over-long line is recoverable with `bash` (cut/sed) when it is actually
+ * wanted, which is rare and explicit.
+ */
+export const MAX_LINE_BYTES = 2000;
+
 // Resource caps set explicitly per sandbox at creation, rather than relying on
 // the platform's quota defaults. Modest by design: enough for git clones + a
 // package install + a build, sized so a single runaway session can't consume an

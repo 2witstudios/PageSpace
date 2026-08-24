@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { truncateToBytes, selectLineWindow } from '../output-limit';
+import { truncateToBytes, selectLineWindow, LINE_ELISION_MARKER } from '../output-limit';
 
 describe('truncateToBytes', () => {
   it('given output within the cap, should return it unchanged and untruncated', () => {
@@ -58,6 +58,8 @@ describe('selectLineWindow', () => {
       lastLine: 5,
       totalLines: 5,
       windowed: false,
+      bytesCapped: false,
+      lineElided: false,
     });
   });
 
@@ -101,5 +103,69 @@ describe('selectLineWindow', () => {
     const result = selectLineWindow({ text: '', limit: 10 });
     expect(result.text).toBe('');
     expect(result.windowed).toBe(false);
+  });
+});
+
+describe('selectLineWindow — byte budget', () => {
+  // The budget MUST be spent during selection. Applying it to the joined text
+  // afterwards cut mid-window while lastLine still named the requested end, so
+  // the caller resumed past the content and silently lost everything between.
+  const wide = (count: number) =>
+    Array.from({ length: count }, (_, i) => `line ${i + 1} ` + 'x'.repeat(90)).join('\n') + '\n';
+
+  it('given a window that exceeds the byte budget, should report the line it ACTUALLY ended on', () => {
+    const result = selectLineWindow({ text: wide(500), limit: 500, maxBytes: 1000 });
+    const returnedLines = result.text.split('\n').length;
+    expect(result.lastLine).toBe(returnedLines);
+    expect(result.lastLine).toBeLessThan(500);
+    expect(result.bytesCapped).toBe(true);
+  });
+
+  it('given a byte-capped window, should keep the text within the budget', () => {
+    const result = selectLineWindow({ text: wide(500), limit: 500, maxBytes: 1000 });
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(1000);
+  });
+
+  it('given repeated paging at lastLine + 1, should reconstruct the file with no gaps', () => {
+    const total = 400;
+    const text = wide(total);
+    const seen: string[] = [];
+    let offset = 1;
+    for (;;) {
+      const w = selectLineWindow({ text, offset, limit: 500, maxBytes: 1000 });
+      if (w.lastLine < w.firstLine) break;
+      seen.push(...w.text.replace(/\n$/, '').split('\n'));
+      if (w.lastLine >= w.totalLines) break;
+      offset = w.lastLine + 1;
+    }
+    expect(seen.length).toBe(total);
+    expect(seen[0]).toBe('line 1 ' + 'x'.repeat(90));
+    expect(seen[total - 1]).toBe(`line ${total} ` + 'x'.repeat(90));
+  });
+
+  it('given one line larger than the whole budget, should still return it rather than stalling', () => {
+    // Returning nothing would leave the caller with no way to make progress.
+    const result = selectLineWindow({ text: 'x'.repeat(500) + '\nb\n', limit: 10, maxBytes: 100 });
+    expect(result.lastLine).toBeGreaterThanOrEqual(1);
+  });
+
+  it('given a line over maxLineBytes, should clip it and mark it', () => {
+    const result = selectLineWindow({ text: 'x'.repeat(500) + '\nb\n', limit: 10, maxLineBytes: 100 });
+    expect(result.lineElided).toBe(true);
+    expect(result.text).toContain(LINE_ELISION_MARKER);
+  });
+
+  it('given one enormous line, should keep the lines after it reachable', () => {
+    // Without a per-line cap this line consumes the budget, and because paging
+    // is by line there is then no offset that reaches line 2 at all.
+    const result = selectLineWindow({
+      text: 'A'.repeat(300 * 1024) + '\nline2\nline3\n',
+      limit: 2000,
+      maxBytes: 256 * 1024,
+      maxLineBytes: 2000,
+    });
+    expect(result.lastLine).toBe(3);
+    expect(result.text).toContain('line2');
+    expect(result.text).toContain('line3');
   });
 });
