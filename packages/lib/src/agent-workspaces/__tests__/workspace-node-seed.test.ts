@@ -152,8 +152,12 @@ describe('openShell', () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     const applied = applyNodeWrite(nodes, result.write);
-    expect(applied.find((node) => node.id === 'other-shell')?.parentId).toBe('s1');
-    expect(applied.find((node) => node.id === 'n1')?.parentId).toBe('s1');
+    // Beside it, IN THE ROOT — the running shell keeps its pane, and no
+    // container is minted because the root already runs the way this split
+    // goes. See the packing rule in `workspace-node-packing.ts`.
+    expect(applied.find((node) => node.id === 'other-shell')?.parentId).toBe(WS);
+    expect(applied.find((node) => node.id === 'n1')?.parentId).toBe(WS);
+    expect(applied.find((node) => node.id === 's1')).toBeUndefined();
   });
 
   it('should leave a shell already on the grid exactly where it is, writing nothing', () => {

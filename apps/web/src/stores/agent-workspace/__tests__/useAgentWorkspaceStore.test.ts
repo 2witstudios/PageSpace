@@ -216,6 +216,44 @@ describe('local writes survive new server truth', () => {
     expect(panes.some((n) => n.id === 'remote')).toBe(true);
   });
 
+  it('should DROP a pending PACKED open whose slot the server filled, and say so', () => {
+    // THE COST OF PACKING (#2469), stated rather than discovered. A PLACEMENT
+    // into a container already running that way no longer mints a container in
+    // the splitter's own slot: it puts one pane into the container, at the slot
+    // after it. A remote insert into that same container takes the same slot,
+    // and two members of one group cannot share a position — so the replay
+    // produces a tree the validator refuses and the write is dropped WHOLE
+    // rather than partly applied.
+    //
+    // That is the model's existing rule for a write that no longer applies, and
+    // it is loud: `queueErrors` becomes `superseded`, which `AgentPanes` toasts
+    // as "That pane changed somewhere else while you were editing it". The
+    // toolbar's split above survives the same race, because it nests and its
+    // container lands in a slot the remote pane did not take. A rarer, announced
+    // loss on a concurrent open is the trade for a grid that packs.
+    // A TERMINAL pane to open beside: a shell is never evicted, so the
+    // placement has to split rather than fill, which is the case that packs.
+    const shellPane: WorkspaceNode = {
+      nodeType: 'pane',
+      id: 'p1',
+      parentId: WS,
+      position: 0,
+      target: { kind: 'terminal', id: 'shell-sitting' },
+    };
+    store().hydrateFromServer(WS, snapshot(1, [root, shellPane]));
+    store().openShell(WS, 'shell-packed');
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
+
+    store().applyRemoteUpdate({
+      workspaceId: WS,
+      rev: 2,
+      nodes: [root, shellPane, pane('remote', WS, 1, 'c2')],
+    });
+
+    expect(tree().nodes.filter((n) => n.nodeType === 'pane')).toHaveLength(2);
+    expect(useAgentWorkspaceStore.getState().queueErrors[WS]?.reason).toBe('superseded');
+  });
+
   /**
    * THE RESURRECTION CASE. A pending edit to a node the server destroyed must be
    * DROPPED, not upserted back — and the user has to be told, because their edit

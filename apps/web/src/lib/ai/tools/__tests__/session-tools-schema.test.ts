@@ -177,7 +177,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       spawn_shell: {
         description:
-'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it on first touch), starting in /workspace. Opening it runs nothing — type commands with send_shell, read them with read_shell, close with kill_shell. Omit name for an auto label; bash is for one-shot commands, a shell for long-running ones. LAUNCHING A LONG JOB so read_shell can see it: never end a live pipeline in `| tail -N`, which prints nothing until its input ENDS, and unbuffer every stage but the last — only the last writes to this terminal, the rest write to a PIPE and block-buffer — `stdbuf -oL cmd 2>&1 | grep -v noise` (`stdbuf` retunes C/stdio programs and carries into their children, so it works through `npm run` too; python ignores it — `python3 -u`; node needs nothing). End with `; echo DONE_$?`: a PTY has no exit code. Or type `stdbuf -oL cmd > /workspace/job.log 2>&1 &` here (a file is no more a terminal than a pipe) and poll it from bash with `tail -n 50 /workspace/job.log` — a file has an end, a live pipeline does not.',
+          'Open a named PTY shell in THIS conversation\'s own sandbox (provisioning it on first touch), starting in /workspace. Opening it runs nothing; drive it with send_shell/read_shell, close with kill_shell. Returns the shellId, the pane it opened in and this workspace\'s pane count — a shell you open is on a human\'s screen until you close it. Omit name for an auto label; bash is for one-shot commands, a shell for long-running ones. LAUNCHING A LONG JOB so read_shell can see it: never end a live pipeline in `| tail -N`, which prints nothing until its input ENDS, and unbuffer every stage but the last — only the last writes to this terminal, the rest write to a PIPE and block-buffer — `stdbuf -oL cmd 2>&1 | grep -v noise` (`stdbuf` carries into child processes, so it works through `npm run`; python ignores it — `python3 -u`; node needs nothing). End with `; echo DONE_$?`: a PTY has no exit code. Or type `stdbuf -oL cmd > /workspace/job.log 2>&1 &` here and poll it from bash with `tail -n 50 /workspace/job.log`.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -217,7 +217,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       kill_shell: {
         description:
-          'Close one of this session\'s shells (by shellId): its process is terminated and its record removed. The session\'s sandbox (and every other shell) is untouched. Closing an already-gone shell succeeds.',
+          'Close one of this session\'s shells (by shellId): its process is terminated, its record removed, AND ITS PANE CLOSED — every browser watching this workspace loses the tab. The session\'s sandbox (and every other shell) is untouched. Returns paneNodeId (the pane that closed) and paneCount (the panes this workspace is still showing) whenever there was a shell to kill; a shell that was already gone reports killed: false and no pane numbers, because there was no workspace to count. Closing an already-gone shell succeeds.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',
@@ -295,7 +295,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
       },
       close_pane: {
         description:
-          'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
+          'Close a pane: the pane GOES, and so does its place in this workspace. Pass the nodeId from list_panes. What it was showing is not deleted — a conversation keeps its history and a page keeps its content — but the workspace stops holding it, so a thread closed this way is no longer one of this session\'s conversations. A TERMINAL pane is the one to think twice about: closing it takes the pane, NOT the shell. The process keeps running, you can still reach it with send_shell/read_shell, and a human can put it back on screen from the session\'s shell list in the sidebar — but nothing on the grid shows it until someone does. Use kill_shell when you mean to be done with it, which closes its pane for you. Closing the LAST pane leaves the session standing with an empty layout; it does not end the session. A container left holding one child collapses into it. Refuses a container and refuses the root.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',
           type: 'object',

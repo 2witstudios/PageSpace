@@ -58,7 +58,10 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
     const response = await del();
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, killed: true });
-    expect(mockKillShellById).toHaveBeenCalledWith(SHELL_ID);
+    // Addressed by shell AND by the acting human: the kill takes the shell's
+    // pane with it through the membership funnel, which never takes a caller's
+    // word for who is acting (#2462).
+    expect(mockKillShellById).toHaveBeenCalledWith({ shellId: SHELL_ID, actingUserId: 'user-1' });
   });
 
   it('given a shell that is already gone, should 404 — which the client treats as success', async () => {

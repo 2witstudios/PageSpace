@@ -34,6 +34,7 @@ import {
   type MembershipResult,
 } from '../workspace-membership';
 import { seedRoot } from '../workspace-node-commands';
+import { paneRects } from '../workspace-node-packing';
 import { applyNodeWrite } from '../workspace-node-algebra';
 import { validateTree } from '../workspace-node-validate';
 import {
@@ -87,6 +88,16 @@ function atCapacity(count = MAX_SESSION_CONVERSATIONS): WorkspaceNode[] {
 }
 
 const ids = { newNodeId: 'node-new', newSplitId: 'split-new' };
+
+/** How many containers stand between the root and the furthest pane. */
+function deepestPane(nodes: readonly WorkspaceNode[]): number {
+  const depthOf = (id: string): number => {
+    const node = nodes.find((candidate) => candidate.id === id);
+    if (node === undefined || node.parentId === null) return 0;
+    return 1 + depthOf(node.parentId);
+  };
+  return Math.max(...nodes.filter((node) => node.nodeType === 'pane').map((node) => depthOf(node.id)));
+}
 
 // ---------------------------------------------------------------------------
 // admit
@@ -202,6 +213,45 @@ describe('admit — the membership chokepoint', () => {
     const next = applied(before, admit(before, { ...ids, target: { kind: 'terminal', id: 'shell-1' } }));
 
     expect(memberNode(next, { kind: 'terminal', id: 'shell-1' })?.id).toBe('p1');
+  });
+
+  it('PACKS a session\u2019s shells into a grid instead of a row of ever-thinner columns', () => {
+    // Issue #2469, end to end on the path production takes: `spawnShell` calls
+    // `admit` with a target and a pair of ids and nothing else \u2014 no axis, no
+    // active pane \u2014 five times, which is what one working session did.
+    //
+    // What that used to build: five nested `row` containers, each halving the
+    // pane the invoking conversation sat in, four levels deep and unusable by
+    // the third. What it builds now is asserted below.
+    let nodes: WorkspaceNode[] = [root(), chatPane('p1', 'root-1', 0, 'conv-invoker')];
+    for (let index = 0; index < 5; index += 1) {
+      nodes = applied(
+        nodes,
+        admit(nodes, {
+          newNodeId: `pane-${index}`,
+          newSplitId: `split-${index}`,
+          target: { kind: 'terminal', id: `shell-${index}` },
+          excludeTargetId: 'conv-invoker',
+        }),
+      );
+    }
+
+    // Every shell is on screen, and so is the conversation that spawned them.
+    for (let index = 0; index < 5; index += 1) {
+      expect(memberNode(nodes, { kind: 'terminal', id: `shell-${index}` })).toBeDefined();
+    }
+    expect(memberNode(nodes, { kind: 'chat', id: 'conv-invoker' })).toBeDefined();
+
+    // No pane is a sliver: six panes in a balanced grid, so the smallest is a
+    // sixth of the workspace rather than the 1/32 five halvings of one pane
+    // would leave.
+    const rects = paneRects(nodes);
+    const smallest = Math.min(...[...rects.values()].map((rect) => rect.width * rect.height));
+    expect(smallest).toBeGreaterThan(1 / 12);
+
+    // And the tree stayed shallow: depth grows with the LOGARITHM of the pane
+    // count under this rule, nowhere near `MAX_DEPTH`.
+    expect(deepestPane(nodes)).toBeLessThanOrEqual(3);
   });
 
   it('places a PAGE by the same policy too', () => {

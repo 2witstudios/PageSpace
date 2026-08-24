@@ -96,6 +96,25 @@ beforeEach(() => {
   logged.errors = [];
 });
 
+/**
+ * The pane the user was looking at came through the write UNTOUCHED — not
+ * dropped, and still showing what it showed.
+ *
+ * "Absent from `put` entirely" is the ordinary answer since the placement
+ * started PACKING (#2469): when the newcomer joins the container the pane is
+ * already in, nothing about the sitting pane changes, so the write does not
+ * name it at all. It used to be reparented under a freshly minted container,
+ * which is why these assertions could once read it straight out of `put`. A
+ * write is `put` ∪ `drop`; a node in neither is a node nothing happened to.
+ */
+function paneUntouched(write: { put: WorkspaceNode[]; drop: string[] } | undefined, nodeId: string, target: { kind: string; id: string }): void {
+  expect(write).toBeDefined();
+  if (!write) return;
+  expect(write.drop).not.toContain(nodeId);
+  const rewritten = write.put.find((node) => node.id === nodeId);
+  if (rewritten !== undefined) expect(rewritten).toMatchObject({ target });
+}
+
 /** Every pane the last applied write left bound, by target. */
 function boundTargets(): string[] {
   const write = runtime.applied.at(-1);
@@ -121,11 +140,12 @@ describe('open_page_pane: an agent ADDS a surface and never navigates the user p
     const write = runtime.applied.at(-1);
     expect(write).toBeDefined();
     if (!write) return;
-    // A new container took the pane's place and the newcomer arrived beside it;
-    // the pane the user was looking at still shows what it showed.
-    expect(write.put.some((node) => node.nodeType === 'split')).toBe(true);
+    // The newcomer arrived BESIDE it — packed into the root, which already runs
+    // that way, so no container was minted (#2469) — and the pane the user was
+    // looking at still shows what it showed.
     expect(boundTargets()).toContain('page:page-1');
-    expect(write.put.find((node) => node.id === 'pane-a')).toMatchObject({ target: { id: 'conv-other' } });
+    expect(write.drop).toEqual([]);
+    paneUntouched(write, 'pane-a', { kind: 'chat', id: 'conv-other' });
   });
 
   it('never evicts the INVOKING conversation', async () => {
@@ -136,18 +156,15 @@ describe('open_page_pane: an agent ADDS a surface and never navigates the user p
     // said no.
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'chat', id: CALLER_CONVERSATION })];
     await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
-    const write = runtime.applied.at(-1);
-    expect(write?.put.find((node) => node.id === 'pane-a')).toMatchObject({
-      target: { kind: 'chat', id: CALLER_CONVERSATION },
-    });
-    expect(write?.drop).toEqual([]);
+    paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'chat', id: CALLER_CONVERSATION });
+    expect(boundTargets()).toContain('page:page-1');
   });
 
   it('never gives up a running shell — the PTY loses its only surface and there is no reattach', async () => {
     runtime.nodes = [root, pane('pane-a', 'root', 0, { kind: 'terminal', id: 'shell-1' })];
     await placePagePaneForConversation({ conversationId: CALLER_CONVERSATION, pageId: 'page-1', viewerId: ACTOR });
-    const write = runtime.applied.at(-1);
-    expect(write?.put.find((node) => node.id === 'pane-a')).toMatchObject({ target: { kind: 'terminal' } });
+    paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'terminal', id: 'shell-1' });
+    expect(boundTargets()).toContain('page:page-1');
   });
 
   it('leaves a page already on screen exactly where it is — idempotent by POLICY, not by an opId', async () => {
@@ -211,10 +228,8 @@ describe('spawn_session: the worker gets a pane in the workspace it was placed i
       actingUserId: ACTOR,
       excludeTargetId: CALLER_CONVERSATION,
     });
-    const write = runtime.applied.at(-1);
-    expect(write?.put.find((node) => node.id === 'pane-a')).toMatchObject({
-      target: { kind: 'chat', id: CALLER_CONVERSATION },
-    });
+    paneUntouched(runtime.applied.at(-1), 'pane-a', { kind: 'chat', id: CALLER_CONVERSATION });
+    expect(boundTargets()).toContain('chat:conv-worker');
   });
 });
 

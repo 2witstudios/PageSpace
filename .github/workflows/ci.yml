@@ -256,7 +256,7 @@ jobs:
       # NEXT_PUBLIC_REALTIME_URL is deliberately UNSET. See the proxy step.
       E2E_WEB_TARGET: http://127.0.0.1:3100
       E2E_REALTIME_TARGET: http://127.0.0.1:3001
-      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts
+      E2E_SPECS: tests/15-chat-fixture-smoke.spec.ts tests/16-dispatch-multiplayer.spec.ts tests/17-agent-workspace-grid.spec.ts tests/18-sidebar-directory-live.spec.ts tests/19-channels-badge-live.spec.ts tests/20-pane-lifecycle.spec.ts
 
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0

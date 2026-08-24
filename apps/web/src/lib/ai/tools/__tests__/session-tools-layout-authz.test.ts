@@ -59,7 +59,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     ensureOwnSessionSandbox: vi.fn(async () => ({ ok: true as const })),
     spawnShell: vi.fn(async () => ({ ok: false as const, reason: 'sandbox_unavailable' as const })),
     findShell: vi.fn(async () => null),
-    killShell: vi.fn(async () => ({ ok: true as const, killed: true })),
+    killShell: vi.fn(async () => ({ ok: true as const, killed: true, panes: { paneCount: 2, nodeId: 'pane-shell' } })),
     shellIo: {
       read: vi.fn(async () => ({ ok: true as const, live: true, hasOutput: false, output: '' })),
       send: vi.fn(async () => ({ ok: true as const, delivered: true as const })),

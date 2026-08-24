@@ -861,8 +861,18 @@ export async function applyWorkspaceMembershipWrite(input: {
   actingUserId: string;
   run: (nodes: readonly WorkspaceNode[]) => MembershipResult;
   within?: WithinNodeWrite;
+  /**
+   * See {@link commitUnderLock}'s own `seed`. An ADMISSION needs the default —
+   * there has to be a root to place into. A REMOVAL passes false: a workspace
+   * with no tree holds no node to expel, so seeding one would mint a root in
+   * order to write nothing into it. That is not hypothetical here — ending a
+   * session destroys its tree and THEN the browser kills the shell whose pane
+   * raised the confirm, so a seeding removal would put a root row back on a
+   * session that had just ended.
+   */
+  seed?: boolean;
 }): Promise<ApplyWorkspaceNodeWriteResult> {
-  const { workspaceId, actingUserId, run, within } = input;
+  const { workspaceId, actingUserId, run, within, seed } = input;
   return commitUnderLock({
     workspaceId,
     actingUserId,
@@ -870,6 +880,7 @@ export async function applyWorkspaceMembershipWrite(input: {
     // discard the rest, so resolving a title for them would be authority
     // spent on nothing.
     viewerId: null,
+    ...(seed === undefined ? {} : { seed }),
     produce: (nodes, rev) => {
       const result = run(nodes);
       if (!result.ok) return { status: 'refused', code: result.code, detail: result.detail };
