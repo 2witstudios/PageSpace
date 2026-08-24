@@ -1003,6 +1003,7 @@ export const pageReadTools = {
         if (sheetWindow && !sheetWindow.documentIsNotASheet) {
           const sheet = sheetWindow;
           const requestedStart = Math.max(1, lineStart ?? 1);
+          const invertedRange = lineEnd !== undefined && lineEnd < requestedStart;
 
           // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
           // window that starts inside the requested range can still run past
@@ -1058,6 +1059,7 @@ export const pageReadTools = {
             ? rows[rows.length - 1].rowNumber + 1
             : sheet.nextFromRow !== null ? sheet.nextFromRow + 1 : null;
           const moreRows =
+            !invertedRange &&
             sheet.rows.length > 0 && resumeAt !== null && (clippedByLineEnd || sheet.hasMore);
           const nextStartRow = moreRows ? resumeAt : null;
           // An empty window is not the same as an empty sheet, and the two must
@@ -1067,9 +1069,13 @@ export const pageReadTools = {
           // `rangeMessage`.
           const emptyWindowReason = rows.length > 0
             ? undefined
-            : requestedStart > rowCount
-              ? `Requested rows start at ${requestedStart}, past the last row of this ${rowCount}-row sheet.`
-              : `No rows are stored in ${lineEnd === undefined ? `rows ${requestedStart} onward` : `rows ${requestedStart}-${lineEnd}`}, though the sheet has ${rowCount} rows — sheet rows can be sparse.`;
+            : invertedRange
+              // Blaming sparsity here was simply false: rows 10-5 is an empty
+              // REQUEST, not a gap in the data.
+              ? `Requested range is inverted: lineEnd (${lineEnd}) is before lineStart (${requestedStart}), so it selects no rows.`
+              : requestedStart > rowCount
+                ? `Requested rows start at ${requestedStart}, past the last row of this ${rowCount}-row sheet.`
+                : `No rows are stored in ${lineEnd === undefined ? `rows ${requestedStart} onward` : `rows ${requestedStart}-${lineEnd}`}, though the sheet has ${rowCount} rows — sheet rows can be sparse.`;
 
           return {
             success: true,

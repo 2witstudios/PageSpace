@@ -308,10 +308,18 @@ function windowFromDocument(
     );
   }
 
+  // "Never was a sheet" is narrower than "parsed to no cells". A pre-SheetDoc
+  // sheet stored as JSON — `{"cells":{},"rowCount":20,...}` — parses to a
+  // perfectly valid EMPTY sheet, and calling that text told the agent not to
+  // write to a sheet that is genuinely empty and safe to write. Only content
+  // that is neither a SheetDoc nor JSON took `parseSheetContentSafe`'s
+  // arbitrary-text fallback, and only that is really text.
+  const trimmed = typeof content === 'string' ? content.trim() : '';
+  const looksLikeJson = trimmed.startsWith('{') || trimmed.startsWith('[');
   const isText =
-    typeof content === 'string' &&
-    content.trim().length > 0 &&
-    !isSheetDocString(content.trim()) &&
+    trimmed.length > 0 &&
+    !isSheetDocString(trimmed) &&
+    !looksLikeJson &&
     Object.keys(parsed.sheet.cells).length === 0;
 
   const tabs = documentTabs(parsed.sheet);
@@ -492,7 +500,11 @@ export function renderSheetTable(
       const flat = value.replace(/\r?\n/g, '\\n').replace(/\|/g, '\\|');
       if (flat.length <= MAX_TABLE_CELL_CHARS) return flat;
       truncatedCells++;
-      return `${flat.slice(0, MAX_TABLE_CELL_CHARS)}…`;
+      // By CODE POINT, not UTF-16 unit: slicing mid-surrogate emits a lone
+      // half that rides into the tool result and renders as U+FFFD. The rest
+      // of this change is careful about that on the line-boundary cuts; the
+      // per-cell cut has the same hazard.
+      return `${[...flat].slice(0, MAX_TABLE_CELL_CHARS).join('')}…`;
     });
     lines.push(`${row.rowNumber}→${cells.join(' | ')}`);
   }

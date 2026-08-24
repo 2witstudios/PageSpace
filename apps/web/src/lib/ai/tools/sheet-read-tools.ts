@@ -34,13 +34,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
-import { ensureTab, queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
+import { queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
 import { SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
-import { canActorViewPage, canActorEditPage } from './actor-permissions';
+import { canActorViewPage } from './actor-permissions';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import {
   DEFAULT_SHEET_READ_ROWS,
@@ -204,7 +204,20 @@ export const sheetReadTools = {
           };
         }
 
-        const isFiltered = where !== undefined || orderBy !== undefined || offset !== undefined;
+        // An empty `select` must mean the same thing on both paths. The range
+        // path reads `[]` as "no projection" and returns every column, while
+        // `queryRows` treats the empty array as truthy and projects to nothing,
+        // so `select: []` with a filter answered "12 matching rows" and twelve
+        // rows of `cells: {}`. Normalised once, here, so neither path can read
+        // it differently.
+        const selectColumns = select && select.length > 0 ? select : undefined;
+
+        // `offset: 0` is not a filter. Models fill it in as a harmless default,
+        // and treating it as one pushed a plain positional read onto the
+        // filtered path — where it was rejected for combining with `startRow`,
+        // or refused as "not migrated to row storage" for a request that only
+        // ever needed rows.
+        const isFiltered = where !== undefined || orderBy !== undefined || (offset !== undefined && offset > 0);
 
         // The two paging models are different coordinate systems, and silently
         // ignoring the one that doesn't apply is exactly the failure this tool
@@ -237,7 +250,7 @@ export const sheetReadTools = {
             // the rendered table would have returned every column in `rows`
             // while reporting the narrow column list — a larger payload
             // presented as a smaller one.
-            select,
+            select: selectColumns,
             documentContent: page.content,
           });
 
@@ -257,44 +270,49 @@ export const sheetReadTools = {
             rows: window.rows,
             hasMore: window.hasMore,
             nextStartRow: window.nextFromRow !== null ? window.nextFromRow + 1 : null,
-            select,
+            select: selectColumns,
           });
         }
 
-        // Filtered reads compile to SQL over the row store, so they need the
-        // sheet materialised. Materialising is a WRITE (it inserts tabs, rows
-        // and dependency edges), so a view-only actor must not trigger it —
-        // mirroring `/api/mcp/sheets`, which draws the same line. Falling back
-        // to an unfiltered document read would answer a different question
-        // than the one asked, which is worse than saying so.
+        // A filtered read NEVER writes.
+        //
+        // Filtering compiles to SQL, so it needs rows in the store, and the
+        // obvious move was to materialise the sheet first — which is what
+        // `/api/mcp/sheets` does. But read-only mode is enforced by stripping
+        // `WRITE_TOOLS`, and a tool named `read_sheet` cannot be in that set
+        // without taking away every sheet READ. `ToolExecutionContext` carries
+        // no read-only signal, so the tool cannot tell the difference, and the
+        // product tells users read-only means "read and search — no writes".
+        // Materialising here broke that promise silently, on a read.
+        //
+        // It also made a read destructive in one case: legacy text on a SHEET
+        // page materialises to an EMPTY tab without throwing, after which the
+        // page's text is unreachable from every read path, permanently.
+        //
+        // So this refuses instead, for everyone. The sheet is still readable
+        // positionally — that path needs no rows — and one edit in the app
+        // migrates it for good.
         const materialized = (await listTabs(page.id)).length > 0;
         if (!materialized) {
-          // Check what the document IS before materialising it. Legacy text on
-          // a SHEET page parses to an empty 20x10 sheet without throwing, so
-          // `ensureTab` would happily insert a tab with zero rows — and from
-          // then on every read takes the store path, `documentIsNotASheet` can
-          // never be true again, and the page's text is hidden from read_page,
-          // list_pages and command injection permanently. A filtered READ must
-          // not be able to do that.
+          // Probe the document so a page that never held a sheet gets the
+          // specific answer rather than the generic "not migrated" one. Cheap,
+          // and purely a read now that nothing materialises.
           const probe = await loadSheetWindow(page.id, { limit: 1, documentContent: page.content });
           if (probe.documentIsNotASheet) {
             return notASheetResult(page);
           }
-
-          if (!(await canActorEditPage(toolContext, page.id))) {
-            return {
-              success: false,
-              error: 'Sheet not migrated to row storage',
-              message:
-                'Filtering and sorting run in the database, and this sheet\'s rows have not been migrated there yet. ' +
-                'Read-only access cannot trigger the migration.',
-              suggestion:
-                'Read it positionally instead (drop where/orderBy/offset and use startRow/limit), or ask someone with ' +
-                'edit access to open or edit the sheet once.',
-              pageInfo: { pageId: page.id, title: page.title, type: page.type },
-            };
-          }
-          await materialiseOrRefuse(page.id);
+          return {
+            success: false,
+            error: 'Sheet not migrated to row storage',
+            message:
+              'Filtering and sorting run in the database, and this sheet\'s rows have not been migrated ' +
+              'there yet. Reading is never allowed to write, so read_sheet will not migrate it.',
+            suggestion:
+              'Read it positionally instead — drop where/orderBy/offset and use startRow/limit, which ' +
+              'works on an unmigrated sheet. Editing any cell in the app migrates it permanently, after ' +
+              'which filtering works.',
+            pageInfo: { pageId: page.id, title: page.title, type: page.type },
+          };
         }
 
         const ref = { pageId: page.id, tabIndex: tabIndex ?? 0 };
@@ -310,7 +328,7 @@ export const sheetReadTools = {
         const result = await queryRows(ref, {
           where: toSheetWhere(where),
           orderBy,
-          select,
+          select: selectColumns,
           limit: pageSize,
           offset,
         });
@@ -330,7 +348,7 @@ export const sheetReadTools = {
           hasMore: result.hasMore,
           matchedRows: result.total,
           nextOffset: result.hasMore ? (offset ?? 0) + rows.length : null,
-          select,
+          select: selectColumns,
         });
       } catch (error) {
         // A bad column letter or an `in` with no values is the caller's
@@ -398,49 +416,6 @@ function notASheetResult(page: { id: string; title: string }) {
   };
 }
 
-/**
- * Materialise a sheet's rows, turning an unreadable stored document into the
- * SAME typed refusal a read produces.
- *
- * Filtering compiles to SQL, so a filtered read of an unmigrated sheet has to
- * materialise first — and `materializeFromDocument` refuses (correctly) when it
- * cannot parse the document. That refusal arrived here as a bare `Error`, so it
- * missed the `SheetDocumentUnreadableError` branch and surfaced as a thrown
- * "Failed to read sheet", losing the one instruction that matters on this path:
- * do not treat the sheet as empty and do not overwrite it. A positional read of
- * the same sheet answered properly. Two paths, one condition, different answers
- * — with the safety instruction dropped on the more dangerous one.
- *
- * The store signals this by message, and both `/api/mcp/documents` and
- * `/api/mcp/sheets` already recognise it the same way; this is the third. That
- * shared string is fragile and the store should raise a typed error all three
- * consume instead — a `packages/lib` change, noted rather than smuggled in here.
- *
- * Note that this makes a FILTERED `read_sheet` capable of a database write, on
- * a tool whose name promises a read. It is deliberate and it matches
- * `/api/mcp/sheets`: filtering compiles to SQL, so the rows have to exist, and
- * materialisation is a storage migration that preserves the sheet exactly.
- * `read_sheet` is therefore NOT in `WRITE_TOOLS` — listing it there would strip
- * the tool entirely in read-only mode, taking away every positional and
- * filtered READ of a sheet to prevent a content-preserving migration, which is
- * a far worse trade. The actor-level guard above is the real boundary: a
- * principal without edit rights is refused before this runs.
- */
-async function materialiseOrRefuse(pageId: string): Promise<void> {
-  try {
-    await ensureTab({ pageId, tabIndex: 0 });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes('could not be read')) {
-      throw new SheetDocumentUnreadableError(
-        'shape',
-        `${message} The stored document needs repair before this sheet can be filtered.`,
-      );
-    }
-    throw error;
-  }
-}
-
 interface BuildResultParams {
   page: { id: string; title: string };
   mode: 'range' | 'filter';
@@ -492,7 +467,11 @@ function buildResult(params: BuildResultParams) {
     rowsReturned: rows.length,
     ...(matchedRows !== undefined && { matchedRows }),
     hasMore,
-    ...(nextStartRow !== undefined && { nextStartRow }),
+    // Only when something actually follows: emitting it beside `hasMore:
+    // false` invites an agent that branches on the field's presence to make a
+    // guaranteed-empty call, and contradicts `SheetWindow.nextFromRow`'s own
+    // contract.
+    ...(hasMore && nextStartRow !== undefined && nextStartRow !== null && { nextStartRow }),
     ...(nextOffset !== undefined && { nextOffset }),
     table: rendered.text,
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),

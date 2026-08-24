@@ -317,6 +317,27 @@ describe('read_sheet — filtered reads', () => {
     expect(options.limit).toBe(20);
   });
 
+  it('reads an empty select as no projection, on both paths', async () => {
+    // The range path read `[]` as "no projection"; `queryRows` treats the empty
+    // array as truthy and projects to nothing. So `select: []` with a filter
+    // answered "12 matching rows" and twelve rows of `cells: {}` — a wrong
+    // answer that looks like a right one.
+    mockQueryRows.mockResolvedValue({
+      rows: [{ rowIndex: 0, cells: { A: { raw: 'kept', value: 'kept' } } }],
+      total: 1,
+      hasMore: false,
+    });
+
+    await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'isNotEmpty' }] },
+      select: [],
+    });
+
+    const [, options] = mockQueryRows.mock.calls[0] as [unknown, { select?: string[] }];
+    expect(options.select).toBeUndefined();
+  });
+
   it('reports projected columns even when every matching row leaves one empty', async () => {
     mockQueryRows.mockResolvedValue({
       rows: [{ rowIndex: 0, cells: { A: { raw: 'x', value: 'x' } } }],
@@ -388,6 +409,17 @@ describe('read_sheet — what counts as a filtered read', () => {
     expect(mockReadRows).not.toHaveBeenCalled();
   });
 
+  it('treats offset: 0 as no offset at all', async () => {
+    // Models fill `offset: 0` in as a harmless default. Counting it as a filter
+    // pushed a plain positional read onto the filtered path, where it was
+    // rejected for combining with startRow or refused as "not migrated".
+    const result = await run({ pageId: 'page-1', startRow: 5, limit: 10, offset: 0 });
+
+    expect(result.success).toBe(true);
+    expect(mockReadRows).toHaveBeenCalledTimes(1);
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+
   it('sends a plain read to the positional path', async () => {
     await run({ pageId: 'page-1', limit: 5 });
 
@@ -453,57 +485,21 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
     expect(mockEnsureTab).not.toHaveBeenCalled();
   });
 
-  it('migrates on a filtered read when the actor may write', async () => {
-    // Filtering compiles to SQL over the row store, so there is nothing to
-    // filter until the sheet is materialised.
-    mockEnsureTab.mockImplementation(async () => {
-      mockGetTab.mockResolvedValue(tab);
-      mockListTabs.mockResolvedValue([tab]);
-      return tab;
-    });
-
-    const result = await run({
-      pageId: 'page-1',
-      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
-    });
-
-    expect(mockEnsureTab).toHaveBeenCalledWith({ pageId: 'page-1', tabIndex: 0 });
-    expect(result.success).toBe(true);
-  });
-
-  it('refuses a filtered read whose sheet cannot be materialised, as a read would', async () => {
-    // An editor CAN trigger materialisation, so a filtered read of an
-    // unmigrated sheet reaches `ensureTab` — which refuses when it cannot parse
-    // the stored document. That refusal used to arrive as a bare Error and
-    // surface as a thrown "Failed to read sheet", losing the one instruction
-    // that matters here: do not treat the sheet as empty, do not overwrite it.
-    // A POSITIONAL read of the same sheet answered properly, so one condition
-    // had two answers and the more dangerous path lost the warning.
-    mockListTabs.mockResolvedValue([]);
-    mockEnsureTab.mockRejectedValue(
-      new Error('Sheet content could not be read (toml); refusing to materialise it as empty.'),
-    );
-
+  it('refuses a filtered read of an unmigrated sheet rather than writing to migrate it', async () => {
+    // read-only mode is enforced by stripping WRITE_TOOLS, and read_sheet
+    // cannot be in that set without taking away every sheet READ. The tool
+    // cannot see the toggle, so the only way to keep the product's documented
+    // "no writes" promise is for a read never to write — for anyone.
     const result = await run({
       pageId: 'page-1',
       where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
     });
 
     expect(result.success).toBe(false);
-    expect(result.error).toBe('Sheet content could not be read');
-    expect(String(result.suggestion)).toContain('do not overwrite');
+    expect(result.error).toBe('Sheet not migrated to row storage');
+    expect(String(result.suggestion)).toContain('startRow/limit');
     expect(mockQueryRows).not.toHaveBeenCalled();
-  });
-
-  it('does not disguise an unrelated materialisation failure as an unreadable sheet', async () => {
-    // Only the parse refusal is translated; anything else must keep propagating
-    // rather than being reported as "your spreadsheet is corrupt".
-    mockListTabs.mockResolvedValue([]);
-    mockEnsureTab.mockRejectedValue(new Error('deadlock detected'));
-
-    await expect(
-      run({ pageId: 'page-1', where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] } })
-    ).rejects.toThrow('deadlock detected');
+    expect(mockEnsureTab).not.toHaveBeenCalled();
   });
 
   it('refuses a legacy-text SHEET page instead of calling it a blank spreadsheet', async () => {
@@ -538,22 +534,6 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
     expect(mockQueryRows).not.toHaveBeenCalled();
   });
 
-  it('refuses a filtered read for a view-only actor rather than answering it unfiltered', async () => {
-    // Materialising is a WRITE. Falling back to an unfiltered document read
-    // would answer a different question than the one asked — worse than saying
-    // the filter is unavailable.
-    mockCanEdit.mockResolvedValue(false);
-
-    const result = await run({
-      pageId: 'page-1',
-      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
-    });
-
-    expect(result.success).toBe(false);
-    expect(result.error).toBe('Sheet not migrated to row storage');
-    expect(mockEnsureTab).not.toHaveBeenCalled();
-    expect(mockQueryRows).not.toHaveBeenCalled();
-  });
 });
 
 describe('read_sheet — schema', () => {

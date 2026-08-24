@@ -189,6 +189,17 @@ describe('renderSheetTable', () => {
     expect(rendered.text).not.toContain(long);
   });
 
+  it('cuts a long cell on a code-point boundary, not a UTF-16 unit', () => {
+    // Slicing mid-surrogate emits a lone half that rides into the tool result
+    // and renders as U+FFFD.
+    const astral = '\u{1F600}'.repeat(TABLE_CELL_CHAR_LIMIT);
+    const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: astral, value: astral } })]);
+
+    expect(rendered.truncatedCells).toBe(1);
+    expect(rendered.text).not.toMatch(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])/);
+    expect(rendered.text).not.toMatch(/(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/);
+  });
+
   it('reports nothing cut when nothing was cut', () => {
     const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: 'fits', value: 'fits' } })]);
     expect(rendered.truncatedCells).toBe(0);
@@ -428,6 +439,30 @@ describe('loadSheetWindow — projection', () => {
       should: 'match the upper-case column labels rows are keyed by',
       actual: window.rows[0].cells,
       expected: { A: 'a' },
+    });
+  });
+});
+
+describe('loadSheetWindow — what counts as "not a sheet"', () => {
+  beforeEach(() => { mockListTabs.mockResolvedValue([]); });
+
+  it('treats an empty legacy-JSON sheet as a real, writable sheet', () => {
+    // It parses to a perfectly valid EMPTY sheet. Calling it text told the
+    // agent not to write to a sheet that is genuinely empty and safe to write.
+    return loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: '{"cells":{},"rowCount":20,"columnCount":10}',
+    }).then((window) => {
+      expect(window.documentIsNotASheet).toBe(false);
+    });
+  });
+
+  it('treats arbitrary text on a SHEET page as not a sheet', () => {
+    return loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: '<p>Never a grid</p>',
+    }).then((window) => {
+      expect(window.documentIsNotASheet).toBe(true);
     });
   });
 });
