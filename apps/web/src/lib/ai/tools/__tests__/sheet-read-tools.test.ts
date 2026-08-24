@@ -461,6 +461,41 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
     expect(result.success).toBe(true);
   });
 
+  it('refuses a filtered read whose sheet cannot be materialised, as a read would', async () => {
+    // An editor CAN trigger materialisation, so a filtered read of an
+    // unmigrated sheet reaches `ensureTab` — which refuses when it cannot parse
+    // the stored document. That refusal used to arrive as a bare Error and
+    // surface as a thrown "Failed to read sheet", losing the one instruction
+    // that matters here: do not treat the sheet as empty, do not overwrite it.
+    // A POSITIONAL read of the same sheet answered properly, so one condition
+    // had two answers and the more dangerous path lost the warning.
+    mockListTabs.mockResolvedValue([]);
+    mockEnsureTab.mockRejectedValue(
+      new Error('Sheet content could not be read (toml); refusing to materialise it as empty.'),
+    );
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Sheet content could not be read');
+    expect(String(result.suggestion)).toContain('do not overwrite');
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+
+  it('does not disguise an unrelated materialisation failure as an unreadable sheet', async () => {
+    // Only the parse refusal is translated; anything else must keep propagating
+    // rather than being reported as "your spreadsheet is corrupt".
+    mockListTabs.mockResolvedValue([]);
+    mockEnsureTab.mockRejectedValue(new Error('deadlock detected'));
+
+    await expect(
+      run({ pageId: 'page-1', where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] } })
+    ).rejects.toThrow('deadlock detected');
+  });
+
   it('refuses a filtered read for a view-only actor rather than answering it unfiltered', async () => {
     // Materialising is a WRITE. Falling back to an unfiltered document read
     // would answer a different question than the one asked — worse than saying

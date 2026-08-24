@@ -269,7 +269,7 @@ export const sheetReadTools = {
               pageInfo: { pageId: page.id, title: page.title, type: page.type },
             };
           }
-          await ensureTab({ pageId: page.id, tabIndex: 0 });
+          await materialiseOrRefuse(page.id);
         }
 
         const ref = { pageId: page.id, tabIndex: tabIndex ?? 0 };
@@ -349,6 +349,39 @@ export const sheetReadTools = {
     },
   }),
 };
+
+/**
+ * Materialise a sheet's rows, turning an unreadable stored document into the
+ * SAME typed refusal a read produces.
+ *
+ * Filtering compiles to SQL, so a filtered read of an unmigrated sheet has to
+ * materialise first — and `materializeFromDocument` refuses (correctly) when it
+ * cannot parse the document. That refusal arrived here as a bare `Error`, so it
+ * missed the `SheetDocumentUnreadableError` branch and surfaced as a thrown
+ * "Failed to read sheet", losing the one instruction that matters on this path:
+ * do not treat the sheet as empty and do not overwrite it. A positional read of
+ * the same sheet answered properly. Two paths, one condition, different answers
+ * — with the safety instruction dropped on the more dangerous one.
+ *
+ * The store signals this by message, and both `/api/mcp/documents` and
+ * `/api/mcp/sheets` already recognise it the same way; this is the third. That
+ * shared string is fragile and the store should raise a typed error all three
+ * consume instead — a `packages/lib` change, noted rather than smuggled in here.
+ */
+async function materialiseOrRefuse(pageId: string): Promise<void> {
+  try {
+    await ensureTab({ pageId, tabIndex: 0 });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (message.includes('could not be read')) {
+      throw new SheetDocumentUnreadableError(
+        'shape',
+        `${message} The stored document needs repair before this sheet can be filtered.`,
+      );
+    }
+    throw error;
+  }
+}
 
 interface BuildResultParams {
   page: { id: string; title: string };
