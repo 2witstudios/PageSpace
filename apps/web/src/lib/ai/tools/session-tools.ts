@@ -1420,6 +1420,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
                   'Call update_agent_config with sandboxEnabled: true (or remove those tools) and spawn again.',
                 blockedTools: surface.blocked,
                 grantedTools: surface.granted,
+                // The FULL picture, not just the refusing gate: a config can be
+                // wrong in more than one way at once, and reporting only the
+                // sandbox half would send the caller round again for the rest.
+                ...(surface.notes.length > 0 ? { toolSurfaceWarnings: surface.notes } : {}),
               };
             }
             toolSurfaceWarnings = surface.notes;

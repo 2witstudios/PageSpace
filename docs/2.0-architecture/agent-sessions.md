@@ -612,16 +612,25 @@ spawned worker after worker with page tools only. No spawn failed. The workers s
 could not do the job, and each landed on a different surface (workspace placement decides
 tier eligibility), so the divergence read as randomness.
 
-Three rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
+Four rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
 
-1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access
-   `PATCH /api/pages/[pageId]/agent-config` uses — one field, two doors, one policy. The
-   gate itself is untouched: it is settable and visible now, not weaker.
-2. `update_agent_config` echoes the EFFECTIVE surface beside the stored one
-   (`effectiveTools`, `blockedTools` with the gate that dropped each,
-   `toolsReachedBySearch`), plus a warning sentence per divergence. Confirming a stored
-   list that grants nothing is the lie §5 is about.
-3. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
+1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access the
+   settings UI's `PATCH /api/pages/[pageId]/agent-config` uses. Three doors write this field
+   now — that tool, that PATCH, and `PUT /api/ai/page-agents/[agentId]/config` (the SDK's) —
+   and they share ONE policy. Non-booleans are refused rather than coerced on both HTTP
+   doors: `Boolean("false")` is `true`, and this is the field that decides whether a stored
+   sandbox allowlist is granted. The gate itself is untouched: settable and visible now, not
+   weaker.
+2. Both config doors echo the EFFECTIVE surface beside the stored one (`effectiveTools`,
+   `blockedTools` with the gate that dropped each, `toolsNeedingComposerToggle`,
+   `toolsReachedBySearch`), plus a warning sentence per divergence. Confirming a stored list
+   that grants nothing is the lie §5 is about.
+3. An EMPTY `enabledTools` array means "no PageSpace tools", never "no change" and never
+   "unrestricted". `filterToolsForAgentAllowlist` reads `[]` as none and `null` as
+   everything; `update_agent_config` used to fold `[]` into `null`, so locking an agent down
+   through the tool handed it the entire registry. Omitting the parameter is how a caller
+   keeps the current list.
+4. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
    config contradicts itself — sandbox tools named while its `sandboxEnabled` switch is
    off. That is deterministic and one call fixes it either way. Drops the caller cannot
    fix (a name this deployment does not register) and `'search'`-mode deferral do NOT

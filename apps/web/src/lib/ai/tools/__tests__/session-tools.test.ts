@@ -1143,6 +1143,7 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
             { tool: 'bash', gate: 'sandbox_disabled' as const },
             { tool: 'spawn_shell', gate: 'sandbox_disabled' as const },
           ],
+          notes: ['also: read_file is not a tool here'],
         }),
       ),
     });
@@ -1158,6 +1159,10 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     );
     expect(String(result.error)).toContain('bash, spawn_shell');
     expect(String(result.error)).toContain('sandboxEnabled');
+    // Everything wrong with the config, not only the half that refused — a
+    // caller fixing one problem should not have to spawn again to discover the
+    // next one.
+    expect(result.toolSurfaceWarnings).toEqual(['also: read_file is not a tool here']);
     // A crippled worker is worse than no worker: nothing was created, nothing
     // was dispatched, and the caller has an actionable fix instead of a
     // silently useless session id.
