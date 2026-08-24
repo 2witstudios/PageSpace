@@ -104,6 +104,14 @@ async function loadSheetWindowForRead(
  * and pointer are prepended after the table, so bounding the table alone let
  * the result run past the budget.
  */
+/** Rows `buildSheetPreviewContent` will actually render, after its budget. */
+function previewRowsShown(sheet: SheetWindow): number {
+  return renderSheetTableWithinBudget(
+    sheet.rows,
+    MAX_CONTENT_CHARS_PER_PAGE - SHEET_PREVIEW_FRAMING_CHARS,
+  ).rowsShown;
+}
+
 function buildSheetPreviewContent(sheet: SheetWindow): string {
   // Budgeted against the framing too, not just the table: the header and the
   // pointer sentence are prepended, so bounding the table alone let the
@@ -313,7 +321,16 @@ export const pageReadTools = {
                   // it means "resume with read_page's lineStart", and the rest
                   // of a sheet is reached with read_sheet, which the content
                   // says. A wrong pointer is worse than none.
-                  if (sheet.rowCount > sheet.rows.length) {
+                  // From the FETCH, never the declared grid size — the rule
+                  // sheet-view states and I broke here. `create_page` starts a
+                  // sheet at 20x10, so three stored rows under a declared 20
+                  // reported "clipped" for a preview holding the whole sheet,
+                  // and an agent branching on the flag paid a wasted read_sheet
+                  // for every small sheet in a folder. `hasMore` means rows
+                  // remain; `rowsShown` catches rows the budget dropped.
+                  const previewIsPartial =
+                    sheet.hasMore || previewRowsShown(sheet) < sheet.rows.length;
+                  if (previewIsPartial) {
                     entry.contentClipped = true;
                     contentClippedCount++;
                   }
@@ -1048,11 +1065,15 @@ export const pageReadTools = {
           const rowsInWindow = sheet.rows.filter(
             (row) => lineEnd === undefined || row.rowNumber <= lineEnd
           );
-          const columns = columnsInRows(rowsInWindow);
+
           // Budgeted like the other two sheet surfaces. 25 rows of a 60-column
           // sheet at 120 chars a cell is far past what an orientation read
           // should put in context, and row count alone does not bound it.
-          const rendered = renderSheetTableWithinBudget(rowsInWindow, MAX_SHEET_TABLE_CHARS, columns);
+          // No explicit column list: the renderer derives the header from the
+          // rows it actually keeps, so the header cannot name a column the
+          // budget dropped. `columns` below is derived the same way, from the
+          // rows returned.
+          const rendered = renderSheetTableWithinBudget(rowsInWindow, MAX_SHEET_TABLE_CHARS);
           const table = rendered.text;
           // The budget can drop rows the fetch returned. Every count below is
           // derived from what is ACTUALLY shown, because reporting `lineCount:
@@ -1069,6 +1090,11 @@ export const pageReadTools = {
           // disagreement is stated rather than silent.
           const shownCount = rendered.rowsShown > 0 ? rendered.rowsShown : Math.min(1, rowsInWindow.length);
           const rows = rowsInWindow.slice(0, shownCount);
+          // Computed from the rows actually RETURNED. Taking it from the
+          // pre-budget set could name a column present in neither `rows` nor
+          // the table, and a model mapping table positions by this list would
+          // misalign them.
+          const columns = columnsInRows(rows);
           const droppedForBudget = rowsInWindow.length - rows.length;
           const tableOmittedRows = rows.length - rendered.rowsShown;
           const rowCount = sheet.rowCount;

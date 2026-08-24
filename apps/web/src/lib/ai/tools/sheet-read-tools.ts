@@ -287,9 +287,22 @@ export const sheetReadTools = {
             return notASheetResult(page);
           }
 
+          // An empty window is not an empty sheet — the distinction read_page
+          // draws with `rangeMessage`, and this path was conflating "past the
+          // end", "a gap in a sparse sheet" and "the sheet has no rows" into
+          // one indistinguishable envelope.
+          const emptyReason = window.rows.length > 0
+            ? undefined
+            : startRow !== undefined && startRow > window.rowCount
+              ? `Requested rows start at ${startRow}, past the last row of this ${window.rowCount}-row sheet.`
+              : window.rowCount === 0
+                ? 'This sheet has no rows yet.'
+                : `No rows are stored from row ${startRow ?? 1} onward, though the sheet has ${window.rowCount} rows — sheet rows can be sparse.`;
+
           return buildResult({
             page,
             mode: 'range' as const,
+            emptyReason,
             tabIndex: window.tabIndex,
             tabName: window.tabName,
             rowCount: window.rowCount,
@@ -471,12 +484,14 @@ interface BuildResultParams {
   nextStartRow?: number | null;
   nextOffset?: number | null;
   select?: string[];
+  /** Why a range read came back with nothing, when it did. */
+  emptyReason?: string;
 }
 
 function buildResult(params: BuildResultParams) {
   const {
     page, mode, tabIndex, tabName, rowCount, columnCount, tabs,
-    materialized, rows, hasMore, matchedRows, nextStartRow, nextOffset, select,
+    materialized, rows, hasMore, matchedRows, nextStartRow, nextOffset, select, emptyReason,
   } = params;
 
   // With `select`, the projected columns are the answer even when every
@@ -525,7 +540,10 @@ function buildResult(params: BuildResultParams) {
     // Saying so is the difference between a bounded rendering and a silent one.
     ...(rendered.rowsShown < rows.length && { tableRowsShown: rendered.rowsShown }),
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
-    summary: `Read ${rows.length} row${rows.length === 1 ? '' : 's'} from sheet "${page.title}" (${scope}, ${columnCount} columns)`,
+    ...(emptyReason && { emptyReason }),
+    summary: emptyReason
+      ? `Sheet "${page.title}" has ${rowCount} rows x ${columnCount} columns. ${emptyReason}`
+      : `Read ${rows.length} row${rows.length === 1 ? '' : 's'} from sheet "${page.title}" (${scope}, ${columnCount} columns)`,
     nextSteps: [
       ...(hasMore
         ? [

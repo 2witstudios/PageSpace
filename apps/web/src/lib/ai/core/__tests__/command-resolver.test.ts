@@ -270,6 +270,26 @@ describe('planCommandExecutions', () => {
     expect(content).not.toContain('No rows yet');
   });
 
+  it('still resolves the command when the sheet fails in an unexpected way', async () => {
+    // The docstring promises "never throws" because this runs on the
+    // prompt-building path: an unexpected failure took down command resolution
+    // and with it the turn, every turn, for as long as the command was active.
+    mockListTabs.mockRejectedValue(new Error('connection terminated unexpectedly'));
+    mockCommandsFindFirst.mockResolvedValue(
+      personalCommandRow({
+        entryPage: { ...personalCommandRow().entryPage, type: 'SHEET', content: '' },
+      })
+    );
+
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
+    expect(plan?.kind).toBe('inject');
+    if (plan?.kind !== 'inject') return;
+    const content = plan.injection.entryPage?.serializedContent ?? '';
+
+    expect(content).toContain('could not be rendered');
+    expect(content).toContain('NOT empty');
+  });
+
   it('reports an unreadable SHEET entry page without failing the command', async () => {
     // A command whose entry page is damaged must still resolve — refusing it
     // would take away the tools needed to investigate. And it must not say

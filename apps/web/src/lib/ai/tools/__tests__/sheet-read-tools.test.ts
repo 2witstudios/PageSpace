@@ -161,6 +161,17 @@ describe('read_sheet — range reads', () => {
     });
   });
 
+  it('says WHY an empty window is empty, as read_page does', async () => {
+    // "past the end", "a gap in a sparse sheet" and "the sheet has no rows"
+    // were one indistinguishable envelope: success, rows: [], no explanation.
+    const past = await run({ pageId: 'page-1', startRow: 900 });
+    expect(String(past.emptyReason)).toContain('past the last row');
+
+    const gap = await run({ pageId: 'page-1', startRow: 100 });
+    expect(String(gap.emptyReason)).toContain('sparse');
+    expect(String(gap.emptyReason)).not.toContain('past the last row');
+  });
+
   it('points at the next row position when more rows remain', async () => {
     mockReadRows.mockResolvedValue([
       { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },

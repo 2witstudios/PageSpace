@@ -121,7 +121,21 @@ async function serializeSheetForInjection(
         `Use read_sheet with pageId "${pageId}" for the full error.)`
       );
     }
-    throw error;
+    // Anything else too, because the contract above says "never throws" and
+    // rethrowing broke it: this runs on the prompt-building path, so an
+    // unexpected failure here — a DB error, a parser edge in
+    // `evaluateSheetSparse` — took down the whole command resolution and with
+    // it the turn, every turn, for as long as the command stayed active. The
+    // command must still resolve so its other tools remain available to
+    // investigate. Logged rather than swallowed silently.
+    loggers.ai.warn('Sheet entry page could not be rendered for injection', {
+      pageId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return (
+      `(SHEET could not be rendered here. It is NOT empty — do not overwrite it. ` +
+      `Use read_sheet with pageId "${pageId}" to read it and see the error.)`
+    );
   }
 }
 

@@ -709,6 +709,39 @@ describe('page-read-tools', () => {
         expect(sheet?.contentClippedAfterLine).toBeUndefined();
       });
 
+      it('does not call a small sheet clipped just because its GRID is bigger', async () => {
+        // create_page starts a sheet at 20x10. Three stored rows under a
+        // declared 20 is the whole sheet — deriving the flag from the declared
+        // count reported "clipped" for a complete preview, and an agent
+        // branching on it paid a wasted read_sheet for every small sheet in a
+        // folder. The rule is the fetch, not the grid.
+        const smallTab = { id: 'tab-s', tabIndex: 0, name: 'Small', rowCount: 20, columnCount: 10 };
+        const sheetPage = {
+          id: 'sheet-5', title: 'Small', type: 'SHEET', parentId: null, position: 10, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([smallTab]);
+        mockGetTab.mockResolvedValue(smallTab);
+        // Three rows, fewer than the 5-row preview limit → nothing follows.
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: 3 }, (_, i) => ({ rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } } })),
+        );
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-5', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean }>; contentClippedCount?: number };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-5');
+        expect(sheet?.contentClipped).toBeUndefined();
+        expect(result.contentClippedCount).toBe(0);
+      });
+
       it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
         setupDriveAccessWithContent(
           [taskListPage, channelPage, filePage],
