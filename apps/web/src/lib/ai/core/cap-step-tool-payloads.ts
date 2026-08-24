@@ -4,8 +4,9 @@
  * Everything else that reclaims context — sliding-window compaction and stale
  * tool-output elision — runs once per TURN, inside prepareHistoryForModel. A
  * single turn, though, is up to AGENT_MAX_STEPS (100) model calls, and between
- * those steps nothing reclaims anything: `prepareStep` only re-marked cache
- * breakpoints. So the transcript the provider is handed grows monotonically for
+ * those steps nothing reclaimed anything: four of the six loops had no
+ * `prepareStep` at all, and the two that did only re-marked cache breakpoints
+ * with it. So the transcript the provider is handed grows monotonically for
  * the whole turn, and an agent moving large payloads pays for every earlier one
  * on every later step.
  *
@@ -23,9 +24,11 @@
  *
  * What is capped, and what is deliberately kept:
  *
- * - Tool ARGUMENTS: everything but the newest call. Arguments are content the
- *   model itself just wrote, and the result of the call is still in front of it,
- *   so an older payload is the cheapest thing in the transcript to give up.
+ * - Tool ARGUMENTS: everything but the newest STEP's calls. Arguments are content
+ *   the model itself just wrote, and the result of the call is still in front of
+ *   it, so an older payload is the cheapest thing in the transcript to give up.
+ *   A step that issued three calls in parallel is one step: keeping one of the
+ *   three and capping its siblings would be an arbitrary place to draw the line.
  * - Tool RESULTS: everything but the newest few. A result is information the
  *   model READ and may still be consuming — a gather-then-act agent reads two or
  *   three files before it writes anything, and capping those would break it
@@ -175,13 +178,19 @@ export function capStepToolPayloads(
   messages: ModelMessage[],
   maxChars: number = TOOL_PAYLOAD_MAX_CHARS,
 ): ModelMessage[] {
-  // Exempt the newest call and the newest few results. Positions, not identity:
-  // the same part object can legitimately appear more than once in a history
-  // assembled from shared parts.
+  // Exempt the newest step's calls and the newest few results. Positions, not
+  // identity: the same part object can legitimately appear more than once in a
+  // history assembled from shared parts.
+  //
+  // Calls are exempted by MESSAGE, not by count: one step can issue several tool
+  // calls in parallel, and they all land in a single assistant message. Taking
+  // the last position would keep one of them and cap its siblings, which is an
+  // arbitrary line to draw through a single step.
   const callPositions = positionsOf(messages, isToolCallPart);
+  const newestCallMessage = callPositions.at(-1)?.split(':')[0];
   const resultPositions = positionsOf(messages, isToolResultPart);
   const exempt = new Set([
-    ...callPositions.slice(-1),
+    ...callPositions.filter((position) => position.split(':')[0] === newestCallMessage),
     ...resultPositions.slice(-KEEP_RECENT_TOOL_RESULTS),
   ]);
 

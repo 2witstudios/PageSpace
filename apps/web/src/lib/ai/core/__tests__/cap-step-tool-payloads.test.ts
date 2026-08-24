@@ -201,6 +201,28 @@ describe('capStepToolPayloads', () => {
   });
 });
 
+describe('capStepToolPayloads — parallel calls in one step', () => {
+  it('keeps every call of the newest step, not just one of them', () => {
+    // A step can issue several tool calls at once; they all land in a single
+    // assistant message. Exempting by position would keep the last and cap its
+    // siblings — an arbitrary line through what is really one step.
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [toolCall('old-a', OVERSIZED), toolCall('old-b', OVERSIZED)] },
+      { role: 'tool', content: [toolResult('old-a'), toolResult('old-b')] },
+      { role: 'assistant', content: [toolCall('new-a', OVERSIZED), toolCall('new-b', OVERSIZED), toolCall('new-c', OVERSIZED)] },
+      { role: 'tool', content: [toolResult('new-a'), toolResult('new-b'), toolResult('new-c')] },
+    ];
+
+    assert({
+      given: 'an older parallel step and a newest parallel step of three calls',
+      should: 'cap the older step entirely and keep all three newest calls',
+      actual: inputsOf(capStepToolPayloads(messages)).map(isCapped),
+      expected: [true, true, false, false, false],
+    });
+  });
+});
+
 describe('capStepToolPayloads — tool results', () => {
   it('caps oversized results from steps outside the retention window', () => {
     const capped = capStepToolPayloads(readTranscript(6, OVERSIZED));
