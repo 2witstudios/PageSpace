@@ -22,7 +22,10 @@
  *  - the PAYER-tier gate (`filterToolsForSandboxTier`) and the bound-session
  *    requirement behind it, which depend on the session a conversation lands in
  *    (`resolveSandboxToolEligibilityForConversation`) — the same agent
- *    legitimately resolves differently in two workspaces;
+ *    legitimately resolves differently in two workspaces. A SPAWN answers it
+ *    separately, once the worker's workspace is known, through
+ *    `describeWorkerComputeShortfall` in `session-tools-runtime.ts`; it is
+ *    absent HERE because nothing in a stored config can predict it;
  *  - `filterToolsForReadOnly` / `filterToolsForMcpScope`, which are properties
  *    of the REQUEST, not the agent.
  *
@@ -33,6 +36,7 @@
 
 import { SANDBOX_TOOL_NAMES, SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
+
 /**
  * The two tools the allowlist does not decide: `web_search` and
  * `generate_image` are lifted OUT of the tool set before the allowlist is
