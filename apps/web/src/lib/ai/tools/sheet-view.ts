@@ -401,7 +401,13 @@ function windowFromDocument(
 
   const indexes = [...byRow.keys()].filter((index) => index >= fromRow).sort((a, b) => a - b);
   const windowed = indexes.slice(0, limit);
-  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only, sheet.columnFormats));
+  // No column formats here, deliberately. `evaluated.display` has ALREADY been
+  // formatted by the evaluator with the resolved cell-over-column format, and
+  // the cell's own format is not attached to this synthetic `StoredCell` — so
+  // re-applying the column format would let it beat a per-cell override. A
+  // `plain` cell inside a currency column rendered `$1,200.00` here while the
+  // UI and the row store both showed `1200`.
+  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only));
   const nextFromRow = windowed.length > 0 ? windowed[windowed.length - 1] + 1 : null;
 
   return {
@@ -518,8 +524,20 @@ export function renderSheetTableWithinBudget(
   budget: number,
   columns?: readonly string[],
 ): { text: string; rowsShown: number; truncatedCells: number } {
+  // Dropping one row per re-render is O(rows^2) on exactly the input this
+  // exists for: a 500-row read of a wide sheet sheds hundreds of rows, each
+  // shedding costing a full re-render of everything still standing. Estimate
+  // from the measured overshoot instead, then settle one row at a time — the
+  // estimate is a ratio so it can undershoot, and the loop is the guarantee.
   let shown = rows;
   let rendered = renderSheetTable(shown, columns);
+  if (rendered.text.length > budget && shown.length > 1) {
+    const keep = Math.max(1, Math.floor(shown.length * (budget / rendered.text.length)));
+    if (keep < shown.length) {
+      shown = shown.slice(0, keep);
+      rendered = renderSheetTable(shown, columns);
+    }
+  }
   while (rendered.text.length > budget && shown.length > 1) {
     shown = shown.slice(0, -1);
     rendered = renderSheetTable(shown, columns);

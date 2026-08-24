@@ -434,6 +434,21 @@ describe('renderSheetTableWithinBudget', () => {
     expect(bounded.rowsShown).toBe(0);
   });
 
+  it('keeps as many rows as the budget allows, not merely one', () => {
+    // The proportional estimate must not overshoot downward: shedding to a
+    // single row whenever the budget bites would make every wide-sheet preview
+    // useless while still passing a "fits the budget" assertion.
+    const rows = Array.from({ length: 100 }, (_, i) =>
+      toSheetViewRow(i, { A: { raw: `row-${i}`, value: `row-${i}` } }));
+
+    const bounded = renderSheetTableWithinBudget(rows, 400);
+
+    expect(bounded.text.length).toBeLessThanOrEqual(400);
+    expect(bounded.rowsShown).toBeGreaterThan(20);
+    // And it reports exactly what it kept.
+    expect(bounded.text.split('\n')).toHaveLength(bounded.rowsShown + 1);
+  });
+
   it('reports the rows it actually kept', () => {
     const rows = Array.from({ length: 5 }, (_, i) =>
       toSheetViewRow(i, { A: { raw: `r${i}`, value: `r${i}` } }));

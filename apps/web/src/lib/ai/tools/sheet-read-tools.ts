@@ -50,7 +50,7 @@ import {
   columnsInRows,
   compareColumnLabels,
   loadSheetWindow,
-  renderSheetTable,
+  renderSheetTableWithinBudget,
   toSheetViewRow,
   toTabSummaries,
   TABLE_CELL_CHAR_LIMIT,
@@ -59,6 +59,17 @@ import {
 } from './sheet-view';
 
 const sheetReadLogger = loggers.ai.child({ module: 'sheet-read-tools' });
+
+/**
+ * Characters `read_sheet`'s rendered table may spend.
+ *
+ * The structured `rows` carry the data; the table is the legible rendering of
+ * it. Row count alone does not bound a table — `limit: 500` on a 64-column
+ * sheet is megabytes — and this tool returns both, so an unbounded table was
+ * the context blow-up read_sheet exists to prevent. Larger than read_page's
+ * preview budget because this is the tool asked for bulk.
+ */
+const MAX_SHEET_TABLE_CHARS = 40_000;
 
 /**
  * Seven letters, matching `assertColumn` in the store and the MCP route's
@@ -345,7 +356,11 @@ export const sheetReadTools = {
           offset,
         });
 
-        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells));
+        // `tab.columnFormats` here for the same reason `loadSheetWindow` passes
+        // it: column formats are never denormalised onto a cell, so omitting
+        // them made ONE cell render two ways depending on which branch reached
+        // it — `$1,200.00` from a range read, `1200` from a filtered one.
+        const rows = result.rows.map((row) => toSheetViewRow(row.rowIndex, row.cells, undefined, tab.columnFormats));
 
         return buildResult({
           page,
@@ -465,7 +480,11 @@ function buildResult(params: BuildResultParams) {
     ? `${matchedRows ?? rows.length} matching row${(matchedRows ?? rows.length) === 1 ? '' : 's'}`
     : `${rowCount} row${rowCount === 1 ? '' : 's'}`;
 
-  const rendered = renderSheetTable(rows, columns);
+  // Bounded like every other sheet surface. Row count alone does not bound a
+  // table — `limit: 500` on a 64-column sheet is megabytes — and this tool
+  // returns the structured `rows` alongside it, so an unbounded table was the
+  // context blow-up read_sheet exists to prevent.
+  const rendered = renderSheetTableWithinBudget(rows, MAX_SHEET_TABLE_CHARS, columns);
 
   return {
     success: true as const,
@@ -489,6 +508,9 @@ function buildResult(params: BuildResultParams) {
     ...(hasMore && nextStartRow !== undefined && nextStartRow !== null && { nextStartRow }),
     ...(nextOffset != null && { nextOffset }),
     table: rendered.text,
+    // The table can hold fewer rows than `rows` does once the budget bites.
+    // Saying so is the difference between a bounded rendering and a silent one.
+    ...(rendered.rowsShown < rows.length && { tableRowsShown: rendered.rowsShown }),
     ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
     summary: `Read ${rows.length} row${rows.length === 1 ? '' : 's'} from sheet "${page.title}" (${scope}, ${columnCount} columns)`,
     nextSteps: [
@@ -508,6 +530,9 @@ function buildResult(params: BuildResultParams) {
           ]
         : []),
       'Values shown here carry the sheet\'s display formatting; where and orderBy compare the UNFORMATTED value underneath, so filter on 1200 rather than "$1,200.00".',
+      ...(rendered.rowsShown < rows.length
+        ? [`"table" shows only ${rendered.rowsShown} of the ${rows.length} rows returned — the full set is in "rows".`]
+        : []),
       'Each row\'s rowNumber is its A1 row — write to it with edit_sheet_cells using addresses like C<rowNumber>.',
     ],
   };

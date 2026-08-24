@@ -579,6 +579,38 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
 
 });
 
+describe('read_sheet — both branches render one cell one way', () => {
+  // The formatting property has now been broken four times, most recently on
+  // THIS branch: `loadSheetWindow` resolved the tab's column formats for a
+  // range read while the filtered read did not, so one cell rendered
+  // `$1,200.00` or `1200` depending on which branch reached it. The property
+  // test in sheet-view covers document-vs-store; this covers range-vs-filter.
+  const columnFormats = { B: { number: { kind: 'currency' as const, currency: 'USD', decimals: 2 } } };
+  const cells = { A: { raw: 'x', value: 'x' }, B: { raw: '1200', value: 1200 } };
+
+  it('agrees between a range read and a filtered read', async () => {
+    mockGetTab.mockResolvedValue({ ...tab, columnFormats });
+    mockReadRows.mockResolvedValue([{ rowIndex: 6, cells }]);
+    const range = await run({ pageId: 'page-1', startRow: 7, limit: 1 });
+
+    mockQueryRows.mockResolvedValue({ rows: [{ rowIndex: 6, cells }], total: 1, hasMore: false });
+    const filtered = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    // Guard the fixture: if the format stops applying, this proves nothing.
+    expect((range.rows as { cells: Record<string, string> }[])[0].cells.B).toContain('1,200');
+
+    assert({
+      given: 'the same row reached by a range read and by a filter',
+      should: 'render identically',
+      actual: (filtered.rows as { cells: unknown }[])[0].cells,
+      expected: (range.rows as { cells: unknown }[])[0].cells,
+    });
+  });
+});
+
 describe('read_sheet — every refusal is actionable', () => {
   // The issue this PR closes is not "sheets error badly", it is that an agent
   // could not tell what to do next. A refusal without a way forward is the same

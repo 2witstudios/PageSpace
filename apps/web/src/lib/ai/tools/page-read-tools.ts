@@ -1024,15 +1024,22 @@ export const pageReadTools = {
           // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
           // window that starts inside the requested range can still run past
           // its end. Clip to what was actually asked for.
-          const rows = sheet.rows.filter(
+          const rowsInWindow = sheet.rows.filter(
             (row) => lineEnd === undefined || row.rowNumber <= lineEnd
           );
-          const columns = columnsInRows(rows);
+          const columns = columnsInRows(rowsInWindow);
           // Budgeted like the other two sheet surfaces. 25 rows of a 60-column
           // sheet at 120 chars a cell is far past what an orientation read
           // should put in context, and row count alone does not bound it.
-          const rendered = renderSheetTableWithinBudget(rows, MAX_SHEET_TABLE_CHARS, columns);
+          const rendered = renderSheetTableWithinBudget(rowsInWindow, MAX_SHEET_TABLE_CHARS, columns);
           const table = rendered.text;
+          // The budget can drop rows the fetch returned. Every count below is
+          // derived from what is ACTUALLY shown, because reporting `lineCount:
+          // 25` above a table holding 8 is a false statement about the one
+          // surface a reader can see — and the structured `rows` are clipped to
+          // match so the two halves of the response cannot disagree.
+          const rows = rowsInWindow.slice(0, rendered.rowsShown);
+          const droppedForBudget = rowsInWindow.length - rows.length;
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
@@ -1065,7 +1072,7 @@ export const pageReadTools = {
           // declare 500 rows while storing rows only up to 60, and a new sheet
           // declares 20 while storing none. `loadSheetWindow` already gets this
           // right and `read_sheet` inherits it; only this path recomputed it.
-          const clippedByLineEnd = sheet.rows.length > rows.length;
+          const clippedByLineEnd = sheet.rows.length > rowsInWindow.length;
           // Where to resume comes from what the FETCH reached, never from the
           // request. Rows are sparse: a sheet storing rows 1-3 and 500-509
           // answers `lineStart: 4, lineEnd: 10` by fetching from index 3,
@@ -1096,9 +1103,12 @@ export const pageReadTools = {
             !invertedRange &&
             sheet.rows.length > 0 &&
             resumeAt !== null &&
-            (lineEnd === undefined
-              ? sheet.hasMore
-              : !clippedByLineEnd && sheet.hasMore && lastRow < lineEnd);
+            // Rows the BUDGET dropped are still unread, so they count as more
+            // even when the requested range was otherwise satisfied.
+            (droppedForBudget > 0 ||
+              (lineEnd === undefined
+                ? sheet.hasMore
+                : !clippedByLineEnd && sheet.hasMore && lastRow < lineEnd));
           const nextStartRow = moreRows ? resumeAt : null;
           // An empty window is not the same as an empty sheet, and the two must
           // not read alike: a request past the last row, or into a gap in a
@@ -1143,6 +1153,7 @@ export const pageReadTools = {
             rowsReturned: rows.length,
             ...(Object.keys(formulas).length > 0 && { formulas }),
             ...(Object.keys(errors).length > 0 && { errors }),
+            ...(droppedForBudget > 0 && { rowsDroppedForSize: droppedForBudget }),
             ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
             hasMoreRows: moreRows,
             ...(moreRows && nextStartRow !== null && { nextStartRow }),
