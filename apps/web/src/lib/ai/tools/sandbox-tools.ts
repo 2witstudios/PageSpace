@@ -34,6 +34,7 @@ import {
   type SandboxRunDeps,
 } from '@pagespace/lib/services/sandbox/tool-runners';
 import { MAX_COMMAND_BYTES } from '@pagespace/lib/services/sandbox/command-policy';
+import { DEFAULT_READ_LINES } from '@pagespace/lib/services/sandbox/execution-policy';
 import type { SandboxToolGateResult } from '@pagespace/lib/services/sandbox/tool-gate';
 import type { ToolExecutionContext } from '../core/types';
 
@@ -62,6 +63,21 @@ export const writeFileInputSchema = z
 export const readFileInputSchema = z
   .object({
     path: z.string().min(1, 'path is required').max(MAX_PATH_LENGTH),
+    // Line-addressed paging. A file longer than the default window is not an
+    // error and not a dead end: the result says how many lines exist and which
+    // offset returns the next page.
+    offset: z
+      .number()
+      .int()
+      .min(1)
+      .optional()
+      .describe('1-based first line to return. Omit to start at the beginning.'),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(`How many lines to return. Omit for the default ${DEFAULT_READ_LINES}.`),
   })
   .strict();
 
@@ -166,12 +182,14 @@ export function createSandboxTools({ runDeps, resolveContext, gate }: SandboxToo
 
     readFile: tool({
       description:
-        'Read a file from this conversation\'s sandbox. A relative path resolves from the sandbox root and cannot escape it.',
+        `Read a file from this conversation's sandbox. A relative path resolves from the sandbox root and cannot escape it. ` +
+        `Returns at most ${DEFAULT_READ_LINES} lines per call (override with limit); when a file is longer the result reports totalLines and a notice naming the offset that returns the next page, so page through rather than assuming the file ended. ` +
+        `Note editFile matches against the whole file, including lines outside the window you read.`,
       inputSchema: readFileInputSchema,
-      execute: async ({ path }, options) => {
+      execute: async ({ path, offset, limit }, options) => {
         const opened = await open(options);
         if (!opened.ok) return opened.error;
-        return readSandboxFile({ path, ctx: opened.ctx, deps: runDeps });
+        return readSandboxFile({ path, offset, limit, ctx: opened.ctx, deps: runDeps });
       },
     }),
 

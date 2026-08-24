@@ -24,6 +24,19 @@ export const SANDBOX_TIMEOUT_MS = 120_000;
 export const SANDBOX_MAX_TIMEOUT_MS = 200_000;
 export const SANDBOX_MAX_OUTPUT_BYTES = 256 * 1024;
 
+/**
+ * How many LINES `readFile` returns when the caller names no `limit`.
+ *
+ * `readFile` is line-addressed (offset/limit) rather than byte-addressed, so an
+ * agent that hits the end of a window can ask for the next one. The byte cap
+ * above stays as a BACKSTOP for pathological input a line count cannot bound —
+ * a minified bundle is legitimately one line of several hundred KiB.
+ *
+ * This is a window, not a limit on what is knowable: every truncated read says
+ * how many lines exist and which `offset` returns the rest.
+ */
+export const DEFAULT_READ_LINES = 2000;
+
 // Resource caps set explicitly per sandbox at creation, rather than relying on
 // the platform's quota defaults. Modest by design: enough for git clones + a
 // package install + a build, sized so a single runaway session can't consume an

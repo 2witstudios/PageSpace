@@ -47,3 +47,64 @@ export function truncateToBytes({
   }
   return { text: decoded, truncated: true, originalBytes };
 }
+
+export interface LineWindow {
+  /** The selected lines, rejoined with '\n'. */
+  text: string;
+  /** 1-based bounds of what was selected. `firstLine > lastLine` iff empty. */
+  firstLine: number;
+  lastLine: number;
+  totalLines: number;
+  /** True when the window does not cover the whole file. */
+  windowed: boolean;
+}
+
+/**
+ * Select a 1-based line window from text, for `readFile`'s offset/limit paging.
+ *
+ * LINE-addressed rather than byte-addressed on purpose: a byte offset cuts
+ * mid-line, and the anchors `editFile` matches on are lines. Paging by line is
+ * what makes a partial read RESUMABLE — the previous byte-cap behaviour gave a
+ * caller no way to name the next chunk.
+ *
+ * Trailing-newline note: a file ending in '\n' splits to a final '' element,
+ * which would report a phantom extra line. It is dropped from the count and
+ * restored on output only when the window reaches the end, so round-tripping a
+ * full read preserves the terminator.
+ *
+ * An `offset` past the end is NOT an error: it returns an empty window with the
+ * real `totalLines`, so a caller that overshoots learns where the file ended
+ * instead of getting a failure it has to interpret.
+ */
+export function selectLineWindow({
+  text,
+  offset = 1,
+  limit,
+}: {
+  text: string;
+  offset?: number;
+  limit: number;
+}): LineWindow {
+  const endsWithNewline = text.endsWith('\n');
+  const all = text.split('\n');
+  if (endsWithNewline) all.pop();
+
+  const totalLines = all.length;
+  // Clamp rather than reject: a 0 or negative offset means "from the start".
+  const start = Math.max(1, Math.floor(offset));
+  const end = Math.min(totalLines, start + Math.max(0, Math.floor(limit)) - 1);
+
+  if (start > totalLines) {
+    return { text: '', firstLine: start, lastLine: start - 1, totalLines, windowed: true };
+  }
+
+  const selected = all.slice(start - 1, end);
+  const reachesEnd = end >= totalLines;
+  return {
+    text: selected.join('\n') + (reachesEnd && endsWithNewline ? '\n' : ''),
+    firstLine: start,
+    lastLine: end,
+    totalLines,
+    windowed: start > 1 || !reachesEnd,
+  };
+}

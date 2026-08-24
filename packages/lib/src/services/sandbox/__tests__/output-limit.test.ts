@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { truncateToBytes } from '../output-limit';
+import { truncateToBytes, selectLineWindow } from '../output-limit';
 
 describe('truncateToBytes', () => {
   it('given output within the cap, should return it unchanged and untruncated', () => {
@@ -44,5 +44,62 @@ describe('truncateToBytes', () => {
       truncated: false,
       originalBytes: 0,
     });
+  });
+});
+
+describe('selectLineWindow', () => {
+  const five = 'a\nb\nc\nd\ne\n';
+
+  it('given a window covering the whole file, should not report itself as windowed', () => {
+    const result = selectLineWindow({ text: five, limit: 100 });
+    expect(result).toEqual({
+      text: five,
+      firstLine: 1,
+      lastLine: 5,
+      totalLines: 5,
+      windowed: false,
+    });
+  });
+
+  it('given a trailing newline, should not count a phantom final empty line', () => {
+    // 'a\nb\n'.split('\n') is ['a','b',''] — counting that as 3 lines would
+    // make every newline-terminated file report one line more than it has.
+    expect(selectLineWindow({ text: five, limit: 100 }).totalLines).toBe(5);
+    expect(selectLineWindow({ text: 'a\nb', limit: 100 }).totalLines).toBe(2);
+  });
+
+  it('given a full read, should round-trip the file byte-for-byte', () => {
+    expect(selectLineWindow({ text: five, limit: 100 }).text).toBe(five);
+    expect(selectLineWindow({ text: 'a\nb', limit: 100 }).text).toBe('a\nb');
+  });
+
+  it('given a window that stops short, should not invent a trailing newline', () => {
+    expect(selectLineWindow({ text: five, limit: 2 }).text).toBe('a\nb');
+  });
+
+  it('given an offset, should return a 1-based window', () => {
+    const result = selectLineWindow({ text: five, offset: 2, limit: 2 });
+    expect(result.text).toBe('b\nc');
+    expect(result.firstLine).toBe(2);
+    expect(result.lastLine).toBe(3);
+    expect(result.windowed).toBe(true);
+  });
+
+  it('given an offset past the end, should return empty with the real total, not throw', () => {
+    const result = selectLineWindow({ text: five, offset: 99, limit: 10 });
+    expect(result.text).toBe('');
+    expect(result.totalLines).toBe(5);
+    expect(result.lastLine).toBeLessThan(result.firstLine);
+  });
+
+  it('given a zero or negative offset, should clamp to the start rather than wrap', () => {
+    expect(selectLineWindow({ text: five, offset: 0, limit: 1 }).text).toBe('a');
+    expect(selectLineWindow({ text: five, offset: -5, limit: 1 }).firstLine).toBe(1);
+  });
+
+  it('given empty text, should report one empty line and not be windowed', () => {
+    const result = selectLineWindow({ text: '', limit: 10 });
+    expect(result.text).toBe('');
+    expect(result.windowed).toBe(false);
   });
 });
