@@ -207,7 +207,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   that was written. Documents created through the AI tools or an API key now default to markdown;
   documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
   disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
-  read and every edit instead of leaving it to be discovered by corrupting the document.
+  read and every edit instead of leaving it to be discovered by corrupting the document — and that
+  content is left exactly as written, including any HTML tags inside it. Previously a page holding
+  JSON with a tag in one of its strings could have a line break inserted inside that string, leaving
+  the page holding invalid JSON.
 
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
