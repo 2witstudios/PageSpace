@@ -556,6 +556,24 @@ export function renderSheetTableWithinBudget(
   let text = rendered.text;
   let rowsShown = shown.length;
   if (text.length > budget) {
+    // This cut is on the ESCAPED text, which one level down (`renderSheetTable`)
+    // is exactly what the cell truncation refuses to do — cutting escaped output
+    // can land between the halves of an escaped backslash, or inside a surrogate
+    // pair, and emit something the reader cannot decode. It is safe HERE only
+    // because of what can reach it: a prefix holding no newline is necessarily a
+    // prefix of the HEADER, and the header is `columns→` plus column labels.
+    // Labels are letters — `columnsInRows` reads keys that `encodeColumnLabel`
+    // or the store's `assertColumn` produced, and the one caller passing
+    // `columns` explicitly validates each against `/^[A-Za-z]{1,7}$/`. So the
+    // raw branch below only ever cuts ASCII.
+    //
+    // Swept to confirm rather than argued: every budget from 0 to 400, over
+    // single rows of emoji and of backslashes, and over a 60-column header
+    // wider than the budget, takes the raw branch 318 times between them and
+    // produces no lone surrogate and no odd trailing backslash — because every
+    // one of those cuts landed inside `columns→...`. If a label ever becomes
+    // free text, this cut needs a safe boundary computed before it, and this
+    // comment is the reason why.
     const hardCut = text.slice(0, Math.max(0, budget));
     const lastNewline = hardCut.lastIndexOf('\n');
     text = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
