@@ -99,6 +99,24 @@ describe('toSheetViewRow', () => {
     });
   });
 
+  it('renders a number the same way whether the sheet is migrated or not', () => {
+    // The document path stores the evaluator's formatted display; the row store
+    // keeps the raw primitive. Rendering the raw one directly showed a float as
+    // 0.30000000000000004 after migration and 0.3 before — and 0.3 is what the
+    // editor shows.
+    const row = toSheetViewRow(0, {
+      A: { raw: '=A1+B1', value: 0.30000000000000004 },
+      B: { raw: '=X', value: 12345678901234 },
+    });
+
+    assert({
+      given: 'materialised numbers straight from the row store',
+      should: 'format them through the same function the evaluator uses',
+      actual: row.cells,
+      expected: { A: '0.3', B: '1.23456789012e+13' },
+    });
+  });
+
   it('reports an errored cell as an error rather than as its own source text', () => {
     const row = toSheetViewRow(0, {
       C: { raw: '=OTHER!A1', error: { type: 'error', message: 'Cross-page references are not supported in this context' } },

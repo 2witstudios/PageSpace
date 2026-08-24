@@ -1244,12 +1244,13 @@ describe('page-read-tools', () => {
       ) as Record<string, unknown>;
 
       expect(result.rowsReturned).toBe(0);
-      // Not "call again with lineStart: 4" — and not past the fetched rows
-      // either: resuming at 501 would silently skip row 500, which the fetch
-      // reached but clipping removed and the agent never saw.
-      expect(result.nextStartRow).not.toBe(4);
-      expect(result.hasMoreRows).toBe(true);
-      expect(result.nextStartRow).toBe(500);
+      // The fetch ran past lineEnd, which PROVES rows 4-10 hold nothing — so
+      // the bounded request is answered, not continued. Claiming more rows here
+      // both cost an empty call and contradicted this response's own
+      // rangeMessage ("No rows are stored in rows 4-10").
+      expect(result.hasMoreRows).toBe(false);
+      expect('nextStartRow' in result).toBe(false);
+      expect(String(result.rangeMessage)).toContain('No rows are stored');
     });
 
     it('still points past the last returned row when rows really do follow', async () => {
@@ -1357,6 +1358,33 @@ describe('page-read-tools', () => {
       expect(new Set(seen).size).toBe(seen.length);   // and none twice
       // 55 rows at 25 per page: 25 + 25 + 5. A fourth call means a wasted one.
       expect(calls).toBe(3);
+    });
+
+    it('does not claim more rows when a bounded range is fully satisfied', async () => {
+      // A dense sheet read with lineStart: 1, lineEnd: 10 fetches exactly 10
+      // rows, so the window is "full" and sheet.hasMore is true — but the
+      // CALLER's range is complete. Measuring against the sheet rather than the
+      // request pointed at row 11, past the lineEnd they asked for.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 10 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 1, lineEnd: 10 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.rowsReturned).toBe(10);
+      expect(result.hasMoreRows).toBe(false);
+      expect('nextStartRow' in result).toBe(false);
     });
 
     it('distinguishes an empty window from an empty sheet', async () => {

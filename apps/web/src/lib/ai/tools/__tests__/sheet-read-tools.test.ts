@@ -338,6 +338,19 @@ describe('read_sheet — filtered reads', () => {
     expect(options.select).toBeUndefined();
   });
 
+  it('reports columns in the order the table header uses', async () => {
+    // A model mapping table positions by `columns` would swap them if the two
+    // disagreed.
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' }, C: { raw: 'c', value: 'c' } } },
+    ]);
+
+    const result = await run({ pageId: 'page-1', select: ['C', 'A'] });
+
+    expect(result.columns).toEqual(['A', 'C']);
+    expect(String(result.table).split('\n')[0]).toBe('columns→A | C');
+  });
+
   it('reports projected columns even when every matching row leaves one empty', async () => {
     mockQueryRows.mockResolvedValue({
       rows: [{ rowIndex: 0, cells: { A: { raw: 'x', value: 'x' } } }],

@@ -24,6 +24,7 @@ import type { StoredCell } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,
+  formatDisplayValue,
   isSheetDocString,
   decodeCellAddress,
   encodeColumnLabel,
@@ -168,7 +169,7 @@ export interface SheetWindow {
  * before "AA". Plain string comparison gets this wrong, which would silently
  * reorder the columns of any sheet wider than 26.
  */
-function compareColumnLabels(a: string, b: string): number {
+export function compareColumnLabels(a: string, b: string): number {
   if (a.length !== b.length) return a.length - b.length;
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -182,10 +183,20 @@ export function columnsInRows(rows: readonly SheetViewRow[]): string[] {
   return [...seen].sort(compareColumnLabels);
 }
 
-/** A stored cell's display text: the computed value, falling back to what was authored. */
+/**
+ * A stored cell's display text: the computed value, falling back to what was
+ * authored.
+ *
+ * Formatted through `formatDisplayValue`, the same function the evaluator uses,
+ * because the two paths must not render one number two ways. The document path
+ * stores `evaluated.display` (already formatted) while the row store keeps the
+ * raw materialised primitive, so a plain `String(...)` showed `=A1+B1` as
+ * `0.3` before migration and `0.30000000000000004` after — and the second is
+ * not what the editor shows the user either.
+ */
 function cellText(cell: StoredCell): string {
   if (cell.error) return '#ERROR';
-  if (cell.value !== undefined && cell.value !== '') return String(cell.value);
+  if (cell.value !== undefined && cell.value !== '') return formatDisplayValue(cell.value);
   // A formula whose value never materialised would otherwise render as its own
   // source text, which reads like data. Show it as a formula instead.
   return cell.raw ?? '';

@@ -1065,9 +1065,21 @@ export const pageReadTools = {
           const resumeAt = rows.length > 0
             ? rows[rows.length - 1].rowNumber + 1
             : sheet.rows.length > 0 ? sheet.rows[0].rowNumber : null;
+          // `clippedByLineEnd` means the fetch ran PAST lineEnd, which proves the
+          // requested range is complete — it was being used as evidence of the
+          // opposite. A bounded read also has to measure "more" against the
+          // CALLER's range, not the sheet: `lineStart: 1, lineEnd: 10` on a
+          // dense sheet fetches exactly 10 rows, so `sheet.hasMore` is true
+          // (a full page) while the request is entirely satisfied. Both shapes
+          // cost a guaranteed-empty extra call and, worse, contradicted the
+          // `rangeMessage` in the same response.
           const moreRows =
             !invertedRange &&
-            sheet.rows.length > 0 && resumeAt !== null && (clippedByLineEnd || sheet.hasMore);
+            sheet.rows.length > 0 &&
+            resumeAt !== null &&
+            (lineEnd === undefined
+              ? sheet.hasMore
+              : !clippedByLineEnd && sheet.hasMore && lastRow < lineEnd);
           const nextStartRow = moreRows ? resumeAt : null;
           // An empty window is not the same as an empty sheet, and the two must
           // not read alike: a request past the last row, or into a gap in a
@@ -1095,8 +1107,13 @@ export const pageReadTools = {
             // lineStart/lineEnd address on this page type.
             totalLines: rowCount,
             lineCount: rows.length,
+            // No `rawContent` here: on this path it was byte-identical to
+            // `content`, and the whole result — table AND structured rows — is
+            // passed to the model as JSON. Sending the same window twice in a
+            // tool whose purpose is cutting sheet-read context is the one waste
+            // this branch cannot justify. The renderer reads
+            // `rawContent ?? content`, so it is unaffected.
             content: table,
-            rawContent: table,
             ...(rendered.truncatedCells > 0 && { tableTruncatedCells: rendered.truncatedCells }),
             dimensions: { rowCount, columnCount: sheet.columnCount },
             tabs: sheet.tabs,

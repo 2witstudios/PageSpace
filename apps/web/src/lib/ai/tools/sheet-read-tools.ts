@@ -48,6 +48,7 @@ import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
   columnsInRows,
+  compareColumnLabels,
   loadSheetWindow,
   renderSheetTable,
   toSheetViewRow,
@@ -298,7 +299,8 @@ export const sheetReadTools = {
         // So this refuses instead, for everyone. The sheet is still readable
         // positionally — that path needs no rows — and one edit in the app
         // migrates it for good.
-        const materialized = (await listTabs(page.id)).length > 0;
+        const storedTabs = await listTabs(page.id);
+        const materialized = storedTabs.length > 0;
         if (!materialized) {
           // Probe the document so a page that never held a sheet gets the
           // specific answer rather than the generic "not migrated" one. Cheap,
@@ -322,7 +324,10 @@ export const sheetReadTools = {
         }
 
         const ref = { pageId: page.id, tabIndex: tabIndex ?? 0 };
-        const tabs = toTabSummaries(await listTabs(page.id));
+        // Reuses the rows fetched for the `materialized` check above rather
+        // than asking again — this path was making the same listTabs call
+        // twice per filtered read.
+        const tabs = toTabSummaries(storedTabs);
         const tab = await getTab(ref);
         if (!tab) {
           // Thrown, not returned, so a bad tab index answers identically
@@ -448,8 +453,11 @@ function buildResult(params: BuildResultParams) {
   // With `select`, the projected columns are the answer even when every
   // matching row happens to leave one of them empty — reporting only the
   // columns that came back would make an all-empty column look absent.
+  // Sorted the way the table header is sorted. Reporting `["C","A"]` beside a
+  // header reading `columns→A | C` invites a model mapping table positions by
+  // this list to swap them.
   const columns = select && select.length > 0
-    ? [...select].map((column) => column.toUpperCase())
+    ? [...select].map((column) => column.toUpperCase()).sort(compareColumnLabels)
     : columnsInRows(rows);
 
   const scope = mode === 'filter'
