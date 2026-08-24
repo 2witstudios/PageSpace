@@ -261,6 +261,10 @@ export const pageReadTools = {
         // report what was dropped instead of silently truncating.
         let contentTruncated = false;
         let contentClippedCount = 0;
+        // Sheet previews clip too, but they resume with read_sheet, not with
+        // read_page's lineStart. Counted apart so the guidance below can name
+        // the continuation that actually works for each kind.
+        let sheetClippedCount = 0;
         if (include === 'content' && resultPages.length > 0) {
           const pagesForContent = resultPages.slice(0, MAX_CONTENT_INCLUDE_PAGES);
           contentTruncated = resultPages.length > MAX_CONTENT_INCLUDE_PAGES;
@@ -333,6 +337,7 @@ export const pageReadTools = {
                   if (previewIsPartial) {
                     entry.contentClipped = true;
                     contentClippedCount++;
+                    sheetClippedCount++;
                   }
                   continue;
                 }
@@ -396,8 +401,15 @@ export const pageReadTools = {
             ...(contentTruncated ? [
               `Content was only included for the first ${MAX_CONTENT_INCLUDE_PAGES} of ${resultPages.length} pages — the rest have no "content" field. Narrow with parentId or call read_page directly for the remaining pages.`,
             ] : []),
-            ...(contentClippedCount > 0 ? [
-              `${contentClippedCount} page${contentClippedCount === 1 ? '' : 's'} had content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true) — each clipped entry's contentClippedAfterLine tells you where it stopped, so call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
+            // Two different continuations hide behind one `contentClipped`
+            // flag, so they get two different sentences. Telling a caller to
+            // resume a sheet at `contentClippedAfterLine + 1` sends it to
+            // read_page with NaN — the field is deliberately unset on sheets.
+            ...(contentClippedCount - sheetClippedCount > 0 ? [
+              `${contentClippedCount - sheetClippedCount} page${contentClippedCount - sheetClippedCount === 1 ? '' : 's'} had text content clipped near the ${MAX_CONTENT_CHARS_PER_PAGE}-character mark (contentClipped: true, with contentClippedAfterLine) — call read_page with lineStart: contentClippedAfterLine + 1 on that page to continue.`,
+            ] : []),
+            ...(sheetClippedCount > 0 ? [
+              `${sheetClippedCount} sheet${sheetClippedCount === 1 ? '' : 's'} showed only a preview of their rows (contentClipped: true, no contentClippedAfterLine) — call read_sheet with that page ID to read the rest, not read_page.`,
             ] : []),
           ] : [`"${locationLabel}" is empty — use create_page to add content`],
         };

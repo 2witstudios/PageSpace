@@ -140,6 +140,7 @@ vi.mock('../../core/image-preset-fetch', () => ({
 }));
 
 import { pageReadTools } from '../page-read-tools';
+import { SHEET_LIST_PREVIEW_ROWS } from '../sheet-view';
 import { db } from '@pagespace/db/db';
 import { getUserAccessLevel, getUserAccessiblePagesInDriveWithDetails, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { checkDriveAccess } from '@pagespace/lib/services/drive-member-service';
@@ -707,6 +708,62 @@ describe('page-read-tools', () => {
         // Deliberately absent: it promises read_page's lineStart continues the
         // read, and the rest of a sheet is reached with read_sheet.
         expect(sheet?.contentClippedAfterLine).toBeUndefined();
+      });
+
+      it('sends a clipped sheet to read_sheet and a clipped doc to read_page', async () => {
+        // One `contentClipped` flag, two different ways to continue. The batch
+        // guidance used to name only read_page's lineStart, which on a sheet
+        // resolves to `undefined + 1` — an agent following it calls read_page
+        // with NaN. Each kind has to name the continuation that works for it.
+        const docPage = {
+          id: 'doc-9', title: 'Long doc', type: 'DOCUMENT', parentId: null, position: 1, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const sheetPage = {
+          id: 'sheet-9', title: 'Wide', type: 'SHEET', parentId: null, position: 2, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const bigTab = { id: 'tab-9', tabIndex: 0, name: 'S', rowCount: 500, columnCount: 4 };
+        mockListTabs.mockResolvedValue([bigTab]);
+        mockGetTab.mockResolvedValue(bigTab);
+        mockReadRows.mockResolvedValue(
+          Array.from({ length: SHEET_LIST_PREVIEW_ROWS }, (_, i) => ({
+            rowIndex: i, cells: { A: { raw: `r${i}`, value: `r${i}` } },
+          })),
+        );
+        setupDriveAccessWithContent(
+          [docPage, sheetPage],
+          [
+            { id: 'doc-9', content: 'x'.repeat(60_000), contentMode: 'html', type: 'DOCUMENT' },
+            { id: 'sheet-9', content: '', contentMode: 'html', type: 'SHEET' },
+          ],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; contentClipped?: boolean; contentClippedAfterLine?: number }>; nextSteps: string[] };
+
+        const doc = result.pages.find(p => p.id === 'doc-9');
+        const sheet = result.pages.find(p => p.id === 'sheet-9');
+        expect(doc?.contentClipped).toBe(true);
+        expect(doc?.contentClippedAfterLine).toBeGreaterThan(0);
+        expect(sheet?.contentClipped).toBe(true);
+        expect(sheet?.contentClippedAfterLine).toBeUndefined();
+
+        const steps = result.nextSteps.join('\n');
+        // The doc sentence counts ONLY the doc, and the sheet sentence sends
+        // the sheet somewhere that can actually read it.
+        const docStep = result.nextSteps.find(s => s.includes('contentClippedAfterLine + 1'));
+        expect(docStep).toBeDefined();
+        expect(docStep).toContain('1 page had text content clipped');
+        const sheetStep = result.nextSteps.find(s => s.includes('read_sheet with that page ID'));
+        expect(sheetStep).toBeDefined();
+        expect(sheetStep).toContain('1 sheet');
+        // No sentence may offer a lineStart resume for the sheet count.
+        expect(steps).not.toMatch(/1 sheet[^\n]*lineStart/);
       });
 
       it('does not call a small sheet clipped just because its GRID is bigger', async () => {
