@@ -8,13 +8,12 @@ import { fetchEnrichedTasks, serializeTaskItem } from '@/lib/ai/tools/task-helpe
 import { backfillMissingTaskItems, ensureTaskListForPage, seedInheritedTaskStatusConfigs } from '@/services/api/task-sync-service';
 import { computeHasContent } from '@/app/api/pages/[pageId]/tasks/task-utils';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isCodePage } from '@pagespace/lib/content/page-types.config';
 import { isSheetType, isValidCellAddress } from '@pagespace/lib/sheets/sheet';
 import { setCells, readSheetDocument, SheetAddressError } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
 import { z } from 'zod/v4';
-import { addLineBreaksForAI } from '@/lib/editor/line-breaks';
-import { serializePageContentForAI } from '@/lib/ai/core/page-serializer';
+import { deleteLines, insertLines, LineRangeError, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
+import { describeContentModeMismatch, isRawTextPage, serializePageContentForAI } from '@/lib/ai/core/page-serializer';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -40,6 +39,34 @@ async function getDriveIdFromPage(pageId: string): Promise<string | null> {
   }
 }
 
+
+type LineEditOutcome =
+  | { ok: true; edit: LineEditResult }
+  | { ok: false; response: NextResponse };
+
+/**
+ * Run a line edit, turning its failures into the right HTTP answer. A crippled
+ * edit that reports success is the worst outcome here (#2463): an out-of-range
+ * address is a 400, and an edit addressed against a document length the caller
+ * no longer has is a 409 naming both counts. Anything else is a real fault and
+ * rethrows to the 500 handler.
+ */
+function runLineEdit(compute: () => LineEditResult, totalLines: number): LineEditOutcome {
+  try {
+    return { ok: true, edit: compute() };
+  } catch (error) {
+    if (!(error instanceof LineRangeError)) throw error;
+    return {
+      ok: false,
+      response: NextResponse.json({
+        error: error.kind === 'stale' ? 'Document changed since it was read' : 'Line number out of range',
+        message: error.message,
+        totalLines,
+        suggestion: 'Re-read the page with operation: "read" and re-address the edit.',
+      }, { status: error.kind === 'stale' ? 409 : 400 }),
+    };
+  }
+}
 
 // Split content into lines and add line numbers
 function getNumberedLines(content: string): string[] {
@@ -115,6 +142,10 @@ const lineOperationSchema = z.object({
   endLine: z.number().min(1).optional(),
   content: z.string().optional(),
   cells: z.array(cellUpdateSchema).optional(),
+  // Optional staleness guard for write operations: the totalLines the caller
+  // read before addressing this edit. Supplying it turns "the document grew
+  // since I looked" from a silent partial overwrite into a 409.
+  expectedTotalLines: z.number().int().min(0).optional(),
 });
 
 export async function POST(req: NextRequest) {
@@ -132,7 +163,7 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = await req.json();
-    const { operation, pageId, startLine, endLine, content, cells } = lineOperationSchema.parse(body);
+    const { operation, pageId, startLine, endLine, content, cells, expectedTotalLines } = lineOperationSchema.parse(body);
 
     // Check drive scope restrictions before permission check
     if (allowedDriveIds.length > 0) {
@@ -228,7 +259,7 @@ export async function POST(req: NextRequest) {
     // documents are normalized. Shared with the internal read_page/
     // replace_lines tools via serializePageContentForAI so both surfaces
     // agree on line numbers.
-    const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
+    const isRawText = isRawTextPage(page);
 
     // Sheets serialise from their rows — `pages.content` is empty for a
     // materialised sheet, so reading the column would return a blank grid.
@@ -245,6 +276,10 @@ export async function POST(req: NextRequest) {
         : page;
     const serializedContent = serializePageContentForAI(readablePage);
     const lines = serializedContent.split('\n');
+    // Surfaced on every read and every write: an html-mode page that holds raw
+    // JSON or markdown numbers its lines by its own newlines, and the agent
+    // editing it deserves to know that before it writes HTML into it (#2463).
+    const contentModeWarning = describeContentModeMismatch(readablePage);
 
     switch (operation) {
       case 'read': {
@@ -615,6 +650,7 @@ export async function POST(req: NextRequest) {
           content: rangeContent,
           ...(fileMetadata && { fileMetadata }),
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -625,19 +661,23 @@ export async function POST(req: NextRequest) {
 
         const actualEndLine = endLine || startLine;
 
-        if (startLine > lines.length || actualEndLine > lines.length) {
-          return NextResponse.json({ error: 'Line number out of range' }, { status: 400 });
-        }
-
-        // Replace lines (convert to 0-based index)
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...content.split('\n'),
-          ...lines.slice(actualEndLine),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        // One shared line-accounting rule with the in-app replace_lines tool
+        // (`@/lib/editor/line-edit`). The input is the SAME projection `read`
+        // numbered lines against, so the edit addresses exactly the lines the
+        // caller was shown; the output is already canonical, so this route no
+        // longer re-normalizes what it stores and no longer reports a count
+        // taken before that pass.
+        const outcome = runLineEdit(() => replaceLines({
+          content: serializedContent,
+          startLine,
+          endLine: actualEndLine,
+          replacement: content,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -675,10 +715,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'replace',
           affectedLines: `${startLine}-${actualEndLine}`,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -687,16 +729,16 @@ export async function POST(req: NextRequest) {
           return NextResponse.json({ error: 'startLine and content are required for insert' }, { status: 400 });
         }
 
-        // Insert at line (convert to 0-based index)
-        const insertIndex = Math.min(startLine - 1, lines.length);
-        const newLines = [
-          ...lines.slice(0, insertIndex),
-          ...content.split('\n'),
-          ...lines.slice(insertIndex),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        const outcome = runLineEdit(() => insertLines({
+          content: serializedContent,
+          startLine,
+          insertion: content,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -735,10 +777,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'insert',
           insertedAt: startLine,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
@@ -749,18 +793,16 @@ export async function POST(req: NextRequest) {
 
         const actualEndLine = endLine || startLine;
 
-        if (startLine > lines.length || actualEndLine > lines.length) {
-          return NextResponse.json({ error: 'Line number out of range' }, { status: 400 });
-        }
-
-        // Delete lines (convert to 0-based index)
-        const newLines = [
-          ...lines.slice(0, startLine - 1),
-          ...lines.slice(actualEndLine),
-        ];
-
-        const joined = newLines.join('\n');
-        const newContent = isRawText ? joined : addLineBreaksForAI(joined);
+        const outcome = runLineEdit(() => deleteLines({
+          content: serializedContent,
+          startLine,
+          endLine: actualEndLine,
+          isRawText,
+          expectedTotalLines,
+        }), lines.length);
+        if (!outcome.ok) return outcome.response;
+        const { edit } = outcome;
+        const newContent = edit.newContent;
 
         const actorInfo = await getActorInfo(userId);
         await applyPageMutation({
@@ -798,10 +840,12 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           pageId,
           pageTitle: page.title,
-          totalLines: newLines.length,
+          totalLines: edit.newLineCount,
+          previousTotalLines: edit.previousLineCount,
           numberedLines,
           operation: 'delete',
           deletedLines: `${startLine}-${actualEndLine}`,
+          ...(contentModeWarning && { contentModeWarning }),
         });
       }
 
