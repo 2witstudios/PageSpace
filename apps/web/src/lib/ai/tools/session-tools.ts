@@ -1405,8 +1405,21 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // The warning rides the SUCCESS payload, naming the tools and the gate.
         let toolSurfaceWarnings: string[] = [];
         if (agentPageId) {
-          const surface = await deps.describeAgentToolSurface(agentPageId);
-          if (surface) {
+          // DEGRADE, don't refuse, if the check itself cannot run. This is a
+          // diagnostic added to a path that worked without it; letting a
+          // transient read failure turn a good spawn into an error would trade
+          // one silent problem for a louder unrelated one. Saying so is the
+          // point — an unverified surface is reported as unverified, never as
+          // verified-fine.
+          const surface = await deps
+            .describeAgentToolSurface(agentPageId)
+            .catch(() => 'unavailable' as const);
+          if (surface === 'unavailable') {
+            toolSurfaceWarnings = [
+              "Could not read this agent's tool configuration before spawning, so its tool surface was not checked. " +
+                'If the worker reports missing tools, call update_agent_config to see what it is actually granted.',
+            ];
+          } else if (surface) {
             const sandboxBlocked = surface.blocked
               .filter((entry) => entry.gate === 'sandbox_disabled')
               .map((entry) => entry.tool);

@@ -1198,6 +1198,27 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     expect(deps.dispatch).toHaveBeenCalled();
   });
 
+  it('given the check itself failing, should still spawn — and say the surface was NOT checked', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // A diagnostic added to a path that worked without it must not become a new
+    // way for that path to fail…
+    expect(result).toEqual(expect.objectContaining({ success: true, sessionId: 'new-session-id' }));
+    expect(deps.dispatch).toHaveBeenCalled();
+    // …and an unchecked surface is reported as unchecked, never as fine.
+    expect(String((result.toolSurfaceWarnings as string[])[0])).toContain('not checked');
+  });
+
   it('given a config the gates honour verbatim, should say nothing about tools at all', async () => {
     const deps = makeDeps();
     const tools = createSessionTools(deps);
