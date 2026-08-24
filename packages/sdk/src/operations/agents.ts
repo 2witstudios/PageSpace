@@ -146,10 +146,33 @@ export const multiDriveListAgents = defineOperation({
 
 const toolExposureModeSchema = z.enum(['upfront', 'search']);
 
+/**
+ * STORED vs EFFECTIVE. `enabledTools` is what the agent has saved;
+ * `effectiveTools` is what it will actually be able to call once the gates
+ * downstream of the allowlist have had their say — chiefly `sandboxEnabled`,
+ * which strips the whole sandbox family whatever the allowlist names. Reporting
+ * only the stored list is what let a 24-tool sandbox config be confirmed on
+ * every write while every worker ran with page tools only (issue #2460).
+ *
+ * The effective fields are OPTIONAL so this client still parses a response from
+ * a server that predates them, rather than failing a call over a field it did
+ * not need.
+ */
+const blockedToolSchema = z.object({
+  tool: z.string(),
+  gate: z.enum(['sandbox_disabled', 'not_registered']),
+});
+
 const agentConfigSchema = z.object({
   systemPrompt: z.string().optional(),
   enabledToolsCount: z.number(),
   enabledTools: z.array(z.string()),
+  effectiveTools: z.array(z.string()).optional(),
+  effectiveToolsCount: z.number().optional(),
+  blockedTools: z.array(blockedToolSchema).optional(),
+  toolsNeedingComposerToggle: z.array(z.string()).optional(),
+  toolsReachedBySearch: z.array(z.string()).optional(),
+  sandboxEnabled: z.boolean().optional(),
   aiProvider: z.string(),
   aiModel: z.string(),
   hasSystemPrompt: z.boolean(),
@@ -165,6 +188,8 @@ const updateAgentConfigOutputSchema = z.object({
   summary: z.string(),
   updatedFields: z.array(z.string()),
   agentConfig: agentConfigSchema,
+  /** One sentence per divergence between the stored config and what it grants. */
+  warnings: z.array(z.string()).optional(),
   stats: z.object({
     pageType: z.literal('AI_CHAT'),
     updatedFields: z.number(),
@@ -187,12 +212,19 @@ export const updateAgentConfig = defineOperation({
     agentDefinition: z.string().nullable().optional(),
     visibleToGlobalAssistant: z.boolean().optional(),
     toolExposureMode: toolExposureModeSchema.optional(),
+    /**
+     * Whether the agent is offered the sandbox tool families at all. Naming
+     * those tools in `enabledTools` grants nothing while this is false — the
+     * trap issue #2460 documents — so a client that can set the allowlist has
+     * to be able to set this.
+     */
+    sandboxEnabled: z.boolean().optional(),
     expectedRevision: z.number().optional(),
   }),
   outputSchema: updateAgentConfigOutputSchema,
   requiredScope: 'drive',
   description:
-    'Update an AI agent\'s configuration (systemPrompt, enabledTools, aiProvider/aiModel, agentDefinition, visibleToGlobalAssistant, toolExposureMode). Route rejects a call with no updatable field (400) and an `expectedRevision` mismatch (409/428) — both surface as a classified HttpError, not a schema mismatch.',
+    'Update an AI agent\'s configuration (systemPrompt, enabledTools, aiProvider/aiModel, agentDefinition, visibleToGlobalAssistant, toolExposureMode, sandboxEnabled). The response reports the EFFECTIVE tool surface beside the stored one (`effectiveTools`, `blockedTools`, `warnings`): naming sandbox tools in `enabledTools` grants nothing while `sandboxEnabled` is false. Route rejects a call with no updatable field (400), a non-boolean `sandboxEnabled` (400), and an `expectedRevision` mismatch (409/428) — all surface as a classified HttpError, not a schema mismatch.',
 });
 
 // ---------------------------------------------------------------------------
