@@ -596,6 +596,107 @@ and the call degrades to audio without tools or transcripts rather than dropping
 is unaffected either way; it runs inside `apps/realtime` against `@pagespace/lib` and
 crosses no process boundary.
 
+### 3e. A spawn never starts a crippled worker
+
+`pages.enabledTools` is an ALLOWLIST, not a grant. Downstream of it the page pipeline
+applies gates the allowlist cannot re-open — chiefly the per-agent sandbox switch
+(`pages.sandboxEnabled`, `filterToolsForSandboxEnablement`), which strips the whole
+sandbox family (bash/files, git+gh, sessions/shells) whatever the allowlist says, and then
+the payer-tier gate and the exposure mode.
+
+Issue #2460 is what that costs when nothing says so. An agent configured entirely through
+`update_agent_config` — where `sandboxEnabled` was not even a parameter, the one agent
+field the settings UI could write and tools could not — stored 24 tool names including
+`bash`, `readFile` and `spawn_shell`, had them echoed back intact on every write, and
+spawned worker after worker with page tools only. No spawn failed. The workers simply
+could not do the job, and each landed on a different surface (workspace placement decides
+tier eligibility), so the divergence read as randomness.
+
+Four rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
+
+1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access the
+   settings UI's `PATCH /api/pages/[pageId]/agent-config` uses. Four doors write this field
+   now — that tool, that PATCH, `PUT /api/ai/page-agents/[agentId]/config` (the SDK's), and
+   `POST /api/ai/page-agents/create`, so an agent is not BORN in the contradiction — and they
+   share ONE policy. Non-booleans are refused rather than coerced on both HTTP
+   doors: `Boolean("false")` is `true`, and this is the field that decides whether a stored
+   sandbox allowlist is granted. The gate itself is untouched: settable and visible now, not
+   weaker.
+2. Both config doors echo the EFFECTIVE surface beside the stored one (`effectiveTools`,
+   `blockedTools` with the gate that dropped each, `toolsNeedingComposerToggle`,
+   `toolsReachedBySearch`), plus a warning sentence per divergence. Confirming a stored list
+   that grants nothing is the lie §5 is about.
+3. An EMPTY `enabledTools` array means "no PageSpace tools", never "no change" and never
+   "unrestricted". `filterToolsForAgentAllowlist` reads `[]` as none and `null` as
+   everything; `update_agent_config` used to fold `[]` into `null`, so locking an agent down
+   through the tool handed it the entire registry. Omitting the parameter is how a caller
+   keeps the current list.
+4. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
+   config contradicts itself — sandbox tools named while its `sandboxEnabled` switch is
+   off. That is deterministic and one call fixes it either way.
+
+   TWO SITUATIONS PRODUCE THAT STATE and the config cannot tell them apart, so the refusal
+   names both. One is the issue's: tools configured for an agent that was never granted the
+   sandbox. The other is a deliberate revoke — someone turns the switch off in the settings
+   tab, which hides those tools from the picker but does NOT prune them from the stored
+   list (only `enabledTools` the user actually edits is sent), so the names stay behind. The
+   fix differs by intent (grant the switch, or drop the names) and the refusal says so
+   rather than assuming. Pruning on revoke was considered and rejected: it destroys a
+   selection the owner may want back when they re-enable, to save them one call. Drops the caller cannot
+   fix (a name this deployment does not register) and `'search'`-mode deferral do NOT
+   refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
+   would break working spawns over a non-problem.
+
+ONE SWITCH, EVERY SURFACE. Every surface that assembles its own tool set has to ask BOTH
+questions — is it in `enabledTools`, and is `sandboxEnabled` on. Three asked only the first, so
+an agent with sandbox access OFF was handed the sandbox families anyway:
+
+- the `@`-mention / consult engine (`agent-communication-tools.ts`), which registers the
+  session family and therefore the shells, the moment someone mentioned the agent;
+- `POST /api/ai/page-agents/consult`, the HTTP/SDK door onto the same capability, which
+  builds its own set from the allowlist alone;
+- the VOICE path, in BOTH of its independently-built sets — what the call advertises
+  (`realtime/system-context.ts`) and what the bridge can execute
+  (`voice-runtime-deps.ts`). Fixing only the first would have been half a gate: `tool_search`
+  searches the executable set and `execute_tool` dispatches from it, so the tools would have
+  stayed discoverable and runnable while merely going unadvertised.
+
+How much this actually granted is worth stating precisely rather than reassuringly.
+`canRunCode` still refused every COMPUTE call (bash/files, git+gh, shells), so neither surface
+was a way into the sandbox. The chat-side session family is deliberately NOT compute-gated
+(sessions and workers are free on every plan — review #2326), so `spawn_session` and its
+siblings were genuinely usable from an agent whose switch was off. That is the switch failing
+to be the switch, on two surfaces, for the tools it names first. Closed on both, because a gate
+that answers differently depending on which surface asks is not a gate. Voice applies it only to a
+BOUND agent: an unbound (Global Assistant) call has no agent whose switch it would be, exactly
+as the global text path has none.
+
+Two names are in neither camp. `web_search` and `generate_image` never pass through the
+allowlist at all — `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back
+only for a request whose composer toggle is on (steps 4/4b; image generation also requires
+an app admin). A DISPATCHED turn carries no toggles, so a spawned worker never receives
+them however its agent is configured. They are reported as runtime-conditional
+(`toolsNeedingComposerToggle`), never as effective and never as a refusal: calling them
+granted would be this bug in a new place, and refusing a spawn over them would refuse
+agents that work perfectly in a browser chat.
+
+THE ONE DIVERGENCE A CONFIG CANNOT PREDICT is compute eligibility, and it is the one that made
+the issue read as randomness: `filterToolsForSandboxTier` keys on the PAYER of the workspace the
+worker landed in, so the same agent legitimately resolves differently in two workspaces. A spawn
+now asks that question of the workspace the worker actually landed in — the same question its own
+turn will ask, with the same inputs — and WARNS when compute the agent is configured for will not
+be granted there. The warning states the OUTCOME and lists the possible causes rather than naming
+one: `canRunCode` folds together the deployment kill switch, the payer's tier and the requester's
+own drive role, and a guess dressed as a reason is the failure mode this section exists to end. A warning, never a refusal: no caller can fix a payer's tier by spawning
+differently, and a worker without `bash` is still a worker that can read pages and think. The
+check is best-effort; a diagnostic must never be the reason a spawned worker's caller sees an
+error.
+
+`'search'` exposure defers non-core tools behind `tool_search`/`execute_tool` without
+losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
+tools only — which is how #2460 was first misread — and because a deferral reported as a
+block would send the next reader after the wrong fix.
+
 ## 4. Vocabulary
 
 "sessionId" carried five meanings. **The epic's final phase (Phase 5) landed the renames,

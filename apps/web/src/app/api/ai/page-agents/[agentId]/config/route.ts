@@ -5,6 +5,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { describeAgentToolSurface, formatConfigSurfaceNotes, toolSurfaceEcho } from '@/lib/ai/core/agent-tool-surface';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
@@ -77,6 +78,7 @@ export async function PUT(
       agentDefinition,
       visibleToGlobalAssistant,
       toolExposureMode,
+      sandboxEnabled,
       expectedRevision,
     } = body;
 
@@ -185,6 +187,25 @@ export async function PUT(
       updateData.toolExposureMode = toolExposureMode;
       updatedFields.push('toolExposureMode');
     }
+    if (sandboxEnabled !== undefined) {
+      // REJECTED, not coerced (CodeRabbit): `Boolean("false")` is `true`, and
+      // this is the switch that decides whether a stored sandbox allowlist is
+      // granted at all — a JSON string turning the sandbox family ON is not a
+      // silent conversion anyone wants. The neighbouring booleans still coerce;
+      // they decide sidebar visibility and prompt assembly, not tool grants.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
+      // The same field the settings tab and `update_agent_config` write, gated
+      // by the same edit permission. Before issue #2460 this door could store
+      // `enabledTools: ['bash', …]` and had no way to turn on the switch that
+      // grants them — a config that reads as configured and means nothing.
+      updateData.sandboxEnabled = sandboxEnabled;
+      updatedFields.push('sandboxEnabled');
+    }
 
     if (updatedFields.length === 0) {
       return NextResponse.json(
@@ -228,6 +249,17 @@ export async function PUT(
       ? updatedAgent.enabledTools
       : [];
 
+    // STORED vs EFFECTIVE, both reported (issue #2460): the allowlist above is
+    // what was saved, and this is what the gates downstream of it will leave
+    // the agent actually able to call.
+    const toolSurface = describeAgentToolSurface({
+      enabledTools: Array.isArray(updatedAgent.enabledTools) ? updatedAgent.enabledTools : null,
+      sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+      toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
+      registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
+    });
+    const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
+
     // Broadcast agent update event
     await broadcastPageEvent(
       createPageEventPayload(updatedAgent.driveId, updatedAgent.id, 'updated', {
@@ -264,8 +296,11 @@ export async function PUT(
         aiProvider: aiProvider || agent.aiProvider || 'default',
         aiModel: aiModel || agent.aiModel || 'default',
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
-        toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront'
+        toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront',
+        sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+        ...toolSurfaceEcho(toolSurface),
       },
+      ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),
       stats: {
         pageType: 'AI_CHAT',
         updatedFields: updatedFields.length,

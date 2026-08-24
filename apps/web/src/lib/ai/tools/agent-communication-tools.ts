@@ -13,7 +13,7 @@ import { runCompaction } from '@/lib/ai/core/compaction/compaction-service';
 import { canActorViewPage, canActorAccessDrive, filterDriveIdsByAppTokenScope, filterDriveIdsByMcpScope, isMcpScoped, resolveActingAgentId } from './actor-permissions';
 import { listAgentDrives, getAgentContextDrives } from '@pagespace/lib/services/drive-agent-service';
 import { listAccessibleDrives } from '@pagespace/lib/services/drive-service';
-import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMcpScope, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { sanitizeMessagesForModel, convertDbMessageToUIMessage } from '@/lib/ai/core/message-utils';
 import { messageRepository } from '@/lib/repositories/message-repository';
@@ -706,9 +706,24 @@ export async function executeAskAgent(
         // drive scope via nestedContext below, so a scoped token must not be able to
         // reach create_drive (or other account-level-only tools) through a consulted
         // agent's enabledTools either — same listing gate as the top-level routes.
-        const agentTools = filterToolsForMcpScope(
-          filterToolsForAgent(targetAgent.enabledTools as string[] | null),
-          isMcpScoped(executionContext),
+        //
+        // The per-agent SANDBOX SWITCH applies here too (issue #2460). This path
+        // built its own tool set — allowlist + MCP scope — and never asked
+        // `pages.sandboxEnabled`, so an agent with the switch OFF was handed the
+        // shell family (`spawn_shell` and friends ride the session family this
+        // engine registers) the moment someone @-mentioned it, while the same
+        // agent in a page chat correctly saw none of them. `canRunCode` still
+        // refused the actual execution, so this was a contradiction in
+        // configuration rather than a way into the sandbox — but
+        // `tool-filtering.ts` says it plainly: the switch gates BOTH at listing
+        // time and at request time, and hiding a tool from a picker is not a
+        // gate. One surface may not answer differently from the others.
+        const agentTools = filterToolsForSandboxEnablement(
+          filterToolsForMcpScope(
+            filterToolsForAgent(targetAgent.enabledTools as string[] | null),
+            isMcpScoped(executionContext),
+          ),
+          Boolean(targetAgent.sandboxEnabled),
         );
 
         // try/catch: resolver failures degrade to built-in tools only rather than hard-failing the call

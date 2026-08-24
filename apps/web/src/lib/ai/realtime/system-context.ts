@@ -37,6 +37,7 @@ import type { RealtimeTool } from './session';
 import { buildVoiceInstructions } from './instructions';
 import type { PersonalizationInfo } from '../core/system-prompt';
 import { buildBuiltinSkillCatalog } from '../core/skill-catalog';
+import { filterToolsForSandboxEnablement } from '../core/tool-filtering';
 import {
   buildRealtimeToolExposure,
   toRealtimeTools,
@@ -66,6 +67,8 @@ export type BoundAgent = {
   readonly title: string;
   readonly systemPrompt: string | null;
   readonly enabledTools: string[] | null;
+  /** The per-agent sandbox switch — see `AgentPage` in `binding-loader.ts`. */
+  readonly sandboxEnabled: boolean;
 };
 
 /** The conversation's own coordinates, which the Global Assistant reports back to the model. */
@@ -173,14 +176,25 @@ const withVoiceOverride = (
  * Read-only mode is `false`: it is a property of a typed session's toggles, and
  * a call has none. An agent whose owner restricted its tools is still restricted
  * — that rides `enabledTools` through the exposure, which is a different
- * mechanism and is applied.
+ * mechanism and is applied. So is the per-agent SANDBOX SWITCH, below: a call
+ * used to apply the allowlist and ignore the switch, so an agent with sandbox
+ * access turned off was offered the sandbox families the moment it was spoken to
+ * (issue #2460). An UNBOUND call — the Global Assistant — is deliberately not
+ * gated on it, exactly as the global text path is not: there is no agent whose
+ * switch it would be.
  */
 export const buildVoiceCallContext = async (
   deps: VoiceSystemContextDeps,
   request: VoiceSystemContextRequest,
 ): Promise<VoiceCallContext> => {
   const allowlist: ToolAllowlist = request.agent?.enabledTools ?? null;
-  const exposure = buildRealtimeToolExposure(deps.buildTools(), allowlist);
+  // BEFORE the exposure, for the same reason the allowlist is applied before it:
+  // filtering afterwards would leave the stripped tools discoverable through
+  // `tool_search` and callable through `execute_tool`.
+  const registry = request.agent
+    ? (filterToolsForSandboxEnablement(deps.buildTools(), request.agent.sandboxEnabled) as ToolSet)
+    : deps.buildTools();
+  const exposure = buildRealtimeToolExposure(registry, allowlist);
   // The PRE-split names, not `Object.keys(exposure.tools)`. After the split that
   // object holds the core tools and the two scaffolding tools, so gating on its
   // keys would drop the task-management, delegation and automation guidance for

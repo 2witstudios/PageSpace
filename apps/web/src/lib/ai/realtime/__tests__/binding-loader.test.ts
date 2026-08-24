@@ -33,6 +33,7 @@ const agentPage = (over: Partial<AgentPage> = {}): AgentPage => ({
   title: 'Release Notes Bot',
   systemPrompt: null,
   enabledTools: null,
+  sandboxEnabled: false,
   ...over,
 });
 
@@ -269,6 +270,9 @@ describe('loadVoiceBinding — the instructions', () => {
         title: 'Release Notes Bot',
         systemPrompt,
         enabledTools: ['read_page'],
+        // The agent's whole tool configuration travels together — the switch is
+        // part of it, not a separate concern the call can skip (issue #2460).
+        sandboxEnabled: false,
       },
     });
   });
