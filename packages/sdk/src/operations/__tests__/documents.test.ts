@@ -214,6 +214,21 @@ describe('pages.replaceLines — request shape', () => {
     const result = replaceLines.inputSchema.safeParse({ pageId: 'p1abc', startLine: 5, endLine: 2, content: 'x' });
     expect(result.success).toBe(false);
   });
+
+  // #2463: the staleness guard. `strictObject` would have REJECTED the field
+  // outright, so a caller could not have passed it at all.
+  it('forwards expectedTotalLines to the route', () => {
+    const parsed = replaceLines.inputSchema.parse({ pageId: 'p1abc', startLine: 2, content: 'x', expectedTotalLines: 81 });
+    const request = buildRequest(replaceLines, parsed, config);
+    expect(JSON.parse(request.body!)).toEqual({
+      operation: 'replace', pageId: 'p1abc', startLine: 2, content: 'x', expectedTotalLines: 81,
+    });
+  });
+
+  it('accepts the guard on insert and delete too', () => {
+    expect(insertLines.inputSchema.safeParse({ pageId: 'p1abc', startLine: 1, content: 'x', expectedTotalLines: 3 }).success).toBe(true);
+    expect(deleteLines.inputSchema.safeParse({ pageId: 'p1abc', startLine: 1, expectedTotalLines: 3 }).success).toBe(true);
+  });
 });
 
 describe('pages.replaceLines — response contract', () => {
@@ -233,6 +248,37 @@ describe('pages.replaceLines — response contract', () => {
   it('classifies an out-of-range 400 as ValidationError', () => {
     const result = parseResponse(replaceLines, 400, new Headers(), JSON.stringify({ error: 'Line number out of range' }));
     expect(result).toBeInstanceOf(ValidationError);
+  });
+
+  // A bare z.object STRIPS unknown keys, so an unmodelled warning would have
+  // reached the client and been silently dropped — the exact silent
+  // degradation #2463's warning exists to end.
+  it('keeps previousTotalLines and contentModeWarning instead of stripping them', () => {
+    const fixture = {
+      pageId: 'p1abc',
+      pageTitle: 'registry',
+      totalLines: 91,
+      previousTotalLines: 89,
+      numberedLines: ['   1 | {'],
+      operation: 'replace',
+      affectedLines: '1-89',
+      contentModeWarning: 'This page is in html contentMode but holds content with no HTML block structure',
+    };
+    const result = parseResponse(replaceLines, 200, new Headers(), JSON.stringify(fixture));
+    expect(result).toEqual(fixture);
+  });
+
+  it('keeps contentModeWarning on a read result', () => {
+    const fixture = {
+      pageId: 'p1abc',
+      pageTitle: 'registry',
+      totalLines: 3,
+      numberedLines: ['   1 | {', '   2 | "a": 1', '   3 | }'],
+      content: '{\n"a": 1\n}',
+      contentModeWarning: 'This page is in html contentMode but holds content with no HTML block structure',
+    };
+    const result = parseResponse(readDocument, 200, new Headers(), JSON.stringify(fixture));
+    expect(result).toEqual(fixture);
   });
 
   it('classifies a revision-conflict 409 as HttpError (not a schema mismatch)', () => {

@@ -152,6 +152,13 @@ export const listTrash = defineOperation({
  * D9 resolution: the type enum is the full creatable set (route accepts
  * FILE and CODE beyond the old tool's narrower list;
  * `packages/lib/src/content/page-types.config.ts`).
+ *
+ * `contentMode` is optional and applies to DOCUMENT pages. Omitting it from a
+ * machine caller (this SDK is one) creates a MARKDOWN document, not an html
+ * one (#2463): html mode stores Tiptap markup whose line numbers are a
+ * normalized projection of it, which is not what a caller writing markdown or
+ * JSON by line number wants. Pass `'html'` explicitly for a document a person
+ * will edit in the rich editor.
  */
 export const createPage = defineOperation({
   name: 'pages.create',

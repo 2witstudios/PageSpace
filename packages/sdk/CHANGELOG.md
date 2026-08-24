@@ -4,6 +4,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`pages.replaceLines`/`insertLines`/`deleteLines` accept `expectedTotalLines`** — the optional
+  staleness guard: the document length the caller believes it is editing. A mismatch is refused
+  (409) instead of applying the edit to lines the caller has not seen. Their results now also model
+  `previousTotalLines` and `contentModeWarning`, and `pages.read` models `contentModeWarning` — a
+  bare `z.object` had been stripping them, so the warning never reached the caller.
+
 ## [2.2.0] — 2026-08-23
 
 ### Added
