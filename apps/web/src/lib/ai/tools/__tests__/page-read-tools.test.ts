@@ -1093,6 +1093,53 @@ describe('page-read-tools', () => {
       expect((result.rows as { rowNumber: number }[]).map(row => row.rowNumber)).toEqual([1]);
     });
 
+    it('reads a sheet whose rows were never migrated, from its stored document', async () => {
+      // The legacy path, end to end through read_page rather than through
+      // loadSheetWindow directly: `documentContent: page.content` is the only
+      // wiring that makes an unmigrated sheet read as its data instead of as an
+      // empty spreadsheet, and nothing else covers that argument being passed.
+      const document = [
+        '#%PAGESPACE_SHEETDOC v1',
+        'page_id = "page-1"',
+        '',
+        '[[sheets]]',
+        'name = "Legacy"',
+        'order = 0',
+        '',
+        '[sheets.meta]',
+        'row_count = 2',
+        'column_count = 2',
+        '',
+        '[sheets.cells.A1]',
+        'value = "Item"',
+        'type = "string"',
+        '',
+        '[sheets.cells.B2]',
+        'formula = "=1+1"',
+        'value = 2',
+        'type = "number"',
+      ].join('\n');
+
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage(document, 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      // No tabs in the row store — the sheet predates it.
+      mockListTabs.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Legacy', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.dimensions).toEqual({ rowCount: 2, columnCount: 2 });
+      expect(String(result.content)).toContain('1→Item');
+      // A formula still reads as its computed value, with the formula kept.
+      expect(result.formulas).toEqual({ B2: '=1+1' });
+      expect(String(result.content)).not.toContain('PAGESPACE_SHEETDOC');
+      // Reading must never have materialised anything.
+      expect(mockReadRows).not.toHaveBeenCalled();
+    });
+
     it('offers a continuation that does not require a tool the caller may not have', async () => {
       // An agent whose saved enabledTools allowlist predates read_sheet cannot
       // call it. Pointing only there would leave it with 25 rows of a 500-row

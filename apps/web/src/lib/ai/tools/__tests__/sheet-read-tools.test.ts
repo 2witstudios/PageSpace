@@ -356,6 +356,36 @@ describe('read_sheet — filtered reads', () => {
   });
 });
 
+describe('read_sheet — what counts as a filtered read', () => {
+  // `isFiltered` decides which engine answers. If it ever narrowed to check
+  // only `where`, an orderBy-only call would take the POSITIONAL path and come
+  // back in row order while the caller believed it was sorted — plausible,
+  // ordered, and wrong, which is the failure mode this tool exists to remove.
+  it('sends an orderBy-only read to the store, not to the positional path', async () => {
+    await run({ pageId: 'page-1', orderBy: [{ column: 'C', direction: 'desc' }] });
+
+    expect(mockQueryRows).toHaveBeenCalledTimes(1);
+    expect(mockReadRows).not.toHaveBeenCalled();
+    const [, options] = mockQueryRows.mock.calls[0] as [unknown, { orderBy: unknown }];
+    expect(options.orderBy).toEqual([{ column: 'C', direction: 'desc' }]);
+  });
+
+  it('sends an offset-only read to the store too', async () => {
+    // offset pages MATCHES; answering it positionally would page something else.
+    await run({ pageId: 'page-1', offset: 10 });
+
+    expect(mockQueryRows).toHaveBeenCalledTimes(1);
+    expect(mockReadRows).not.toHaveBeenCalled();
+  });
+
+  it('sends a plain read to the positional path', async () => {
+    await run({ pageId: 'page-1', limit: 5 });
+
+    expect(mockReadRows).toHaveBeenCalledTimes(1);
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+});
+
 describe('read_sheet — the two paging models cannot be mixed', () => {
   it('rejects startRow combined with a filter instead of ignoring one of them', async () => {
     // Silently dropping startRow would hand back matches from the top of the

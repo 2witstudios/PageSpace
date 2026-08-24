@@ -27,8 +27,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   Now an assistant reads rows: a range, or the rows matching a value in a column ("the row where the
   member ID is 28605"), returning only the columns it asked for, with formulas and cell errors
   intact. Opening a sheet gives its size and first rows rather than a wall of markup, and so does a
-  folder listing that includes page contents. Cell edits also have a stated limit now — 500 cells
-  per call — instead of a size an assistant had to discover by failing.
+  folder listing that includes page contents, and so does a command whose instructions live on a
+  sheet — that used to spend the command's whole budget on markup every time it ran. Cell edits also
+  have a stated limit now — 500 cells per call — instead of a size an assistant had to discover by
+  failing. And a sheet whose stored file cannot be read is reported as unreadable rather than as
+  empty, so an assistant is never invited to overwrite data that is still there.
 
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row

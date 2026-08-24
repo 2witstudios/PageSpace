@@ -20,7 +20,7 @@
  * SQL against the materialised cell value; `read_sheet` passes its arguments
  * through and formats what comes back.
  */
-import type { StoredCell } from '@pagespace/db/schema';
+import type { StoredCell } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,

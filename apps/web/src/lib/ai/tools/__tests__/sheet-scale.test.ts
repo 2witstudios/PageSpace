@@ -48,7 +48,7 @@ import { sheetReadTools } from '../sheet-read-tools';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { serializeSheetContent } from '@pagespace/lib/sheets/io';
 import { encodeCellAddress } from '@pagespace/lib/sheets/sheet';
-import type { StoredCell } from '@pagespace/db/schema';
+import type { StoredCell } from '@pagespace/db/schema/sheets-types';
 import type { ToolExecutionContext } from '../../core/types';
 
 const ROWS = 500;
