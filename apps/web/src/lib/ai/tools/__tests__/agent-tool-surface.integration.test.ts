@@ -162,4 +162,60 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
 
     expect(await buildSessionToolsDeps().describeAgentToolSurface(document.id)).toBeNull();
   });
+
+  /**
+   * The EXECUTE side of a voice call, which is a different set from the one the
+   * session advertises: `execute_tool` dispatches from it and `tool_search`
+   * searches it. Filtering only the advertised set would leave a switched-off
+   * agent's sandbox tools discoverable and runnable — half a gate.
+   */
+  describe('the voice bridge tool set', () => {
+    // Imported INSIDE the test, not at the top of the file: this module pulls in
+    // the tool registry, whose compute families are decided once at import time
+    // from the kill switch `beforeAll` stubs. A static import here evaluated the
+    // registry before the stub and turned the fixture guard red — the same trap
+    // the header describes, arriving by a different door.
+    const dispatchDeps = async (assistant: { agentPageId: string; enabledTools: string[] }) => {
+      const { voiceToolDispatchDeps } = await import('@/lib/ai/realtime/voice-runtime-deps');
+      return voiceToolDispatchDeps(assistant);
+    };
+
+    it('given the switch OFF, withholds the sandbox family from the executable set', async () => {
+      if (!dbAvailable) return;
+
+      const { agent } = await createAgent(['read_page', 'spawn_shell'], false);
+
+      const deps = await dispatchDeps({
+        agentPageId: agent.id,
+        enabledTools: ['read_page', 'spawn_shell'],
+      });
+
+      expect(Object.keys(deps.tools)).toContain('read_page');
+      expect(Object.keys(deps.tools)).not.toContain('spawn_shell');
+    });
+
+    it('given the switch ON, keeps it', async () => {
+      if (!dbAvailable) return;
+
+      const { agent } = await createAgent(['read_page', 'spawn_shell'], true);
+
+      const deps = await dispatchDeps({
+        agentPageId: agent.id,
+        enabledTools: ['read_page', 'spawn_shell'],
+      });
+
+      expect(Object.keys(deps.tools)).toContain('spawn_shell');
+    });
+
+    it('given an agent page that cannot be read, fails CLOSED', async () => {
+      if (!dbAvailable) return;
+
+      const deps = await dispatchDeps({
+        agentPageId: 'no-such-page-id',
+        enabledTools: ['read_page', 'spawn_shell'],
+      });
+
+      expect(Object.keys(deps.tools)).not.toContain('spawn_shell');
+    });
+  });
 });
