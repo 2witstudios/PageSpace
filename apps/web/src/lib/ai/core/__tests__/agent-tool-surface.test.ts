@@ -13,6 +13,7 @@ import {
   blockedByGate,
   formatAgentToolSurfaceNotes,
   formatConfigSurfaceNotes,
+  toolSurfaceEcho,
   RUNTIME_TOGGLE_TOOL_NAMES,
 } from '../agent-tool-surface';
 import { ALWAYS_UPFRONT_TOOLS } from '../../tools/tool-exposure';
@@ -243,5 +244,41 @@ describe('the composer-toggle pair is neither granted nor blocked', () => {
     // a reason that may have nothing to do with a composer toggle. This pin
     // forces that decision to be made deliberately in both places.
     expect([...RUNTIME_TOGGLE_TOOL_NAMES].sort()).toEqual([...ALWAYS_UPFRONT_TOOLS].sort());
+  });
+});
+
+describe('toolSurfaceEcho', () => {
+  it('given a configured agent, reports the effective list', () => {
+    const surface = describeAgentToolSurface({
+      enabledTools: ['read_page', 'bash'],
+      sandboxEnabled: false,
+      toolExposureMode: 'upfront',
+      registeredToolNames: REGISTERED,
+    });
+
+    expect(toolSurfaceEcho(surface)).toMatchObject({
+      effectiveTools: ['read_page'],
+      effectiveToolsCount: 1,
+      blockedTools: [{ tool: 'bash', gate: 'sandbox_disabled' }],
+    });
+  });
+
+  it('given an UNRESTRICTED agent, reports null and a count — not a wall of ninety names', () => {
+    // The block exists to show the DIVERGENCE from a stored list. An agent that
+    // stored no list has none (`blockedTools` is empty by construction), so
+    // listing everything it can call would be noise a model reads past on every
+    // config write.
+    const surface = describeAgentToolSurface({
+      enabledTools: null,
+      sandboxEnabled: true,
+      toolExposureMode: 'search',
+      registeredToolNames: REGISTERED,
+    });
+
+    const echo = toolSurfaceEcho(surface);
+    expect(echo.effectiveTools).toBeNull();
+    expect(echo.effectiveToolsCount).toBe(REGISTERED.length);
+    expect(echo.blockedTools).toEqual([]);
+    expect(echo.toolsReachedBySearch).toEqual([]);
   });
 });

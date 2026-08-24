@@ -265,7 +265,11 @@ export async function POST(request: Request) {
         `AI agent "${title}" is ready to use`,
         // What it can ACTUALLY call — the old line listed whatever was stored,
         // which is the sentence the reporter of #2460 believed for three spawns.
-        `Agent can call ${toolSurface.granted.length} tool(s): ${toolSurface.granted.join(', ') || 'none'}`,
+        // An agent created with no allowlist is unrestricted; naming its ninety
+        // tools here would be noise, so it says so instead.
+        toolSurface.configured === null
+          ? `Agent can call every available tool (${toolSurface.granted.length})`
+          : `Agent can call ${toolSurface.granted.length} tool(s): ${toolSurface.granted.join(', ') || 'none'}`,
         'Start a conversation to test the agent\'s behavior',
         `Agent ID: ${newAgent.id} - use this for further operations`,
         'Use read_page to view the agent\'s full configuration'

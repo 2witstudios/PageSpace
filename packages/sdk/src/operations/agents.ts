@@ -167,7 +167,8 @@ const agentConfigSchema = z.object({
   systemPrompt: z.string().optional(),
   enabledToolsCount: z.number(),
   enabledTools: z.array(z.string()),
-  effectiveTools: z.array(z.string()).optional(),
+  /** `null` = unrestricted (the agent stored no allowlist), not "none". */
+  effectiveTools: z.array(z.string()).nullable().optional(),
   effectiveToolsCount: z.number().optional(),
   blockedTools: z.array(blockedToolSchema).optional(),
   toolsNeedingComposerToggle: z.array(z.string()).optional(),

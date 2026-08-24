@@ -229,17 +229,24 @@ export function formatConfigSurfaceNotes(surface: AgentToolSurface): string[] {
  * shape of the bug this whole module exists to prevent.
  */
 export function toolSurfaceEcho(surface: AgentToolSurface): {
-  effectiveTools: string[];
+  effectiveTools: string[] | null;
   effectiveToolsCount: number;
   blockedTools: BlockedTool[];
   toolsNeedingComposerToggle: string[];
   toolsReachedBySearch: string[];
 } {
+  // `null` for an UNRESTRICTED agent, not the ninety-odd names it can call.
+  // The count still tells the truth, and a caller that wants the list can read
+  // it from the tool catalog — where it is not a per-response wall of text a
+  // model has to read past on every config write. The point of this block is
+  // the DIVERGENCE from the stored list, and an agent that stored no list has
+  // none: `blockedTools` is empty by construction there.
+  const unrestricted = surface.configured === null;
   return {
-    effectiveTools: surface.granted,
+    effectiveTools: unrestricted ? null : surface.granted,
     effectiveToolsCount: surface.granted.length,
     blockedTools: surface.blocked,
     toolsNeedingComposerToggle: surface.conditional,
-    toolsReachedBySearch: surface.deferred,
+    toolsReachedBySearch: unrestricted ? [] : surface.deferred,
   };
 }
