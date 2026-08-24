@@ -382,50 +382,58 @@ describe('issue #2461 — the fixes', () => {
       value: 'x'.repeat(400),
     }));
 
-    let step = 0;
-    const model = new MockLanguageModelV3({
-      doStream: providerEmitting(() => {
-        step += 1;
-        return JSON.stringify({
-          tool_name: 'edit_sheet_cells',
-          parameters: { pageId: `chunk-${step}`, cells },
-        });
-      }),
-    });
-
     const STEPS = 10;
-    const result = streamText({
-      model,
-      messages: [{ role: 'user', content: 'apply every chunk' }],
-      tools: { execute_tool: createExecuteTool(registry) },
-      stopWhen: [stepCountIs(STEPS)],
-      // Exactly how global-chat-turn and page-chat-turn wire the seam.
-      prepareStep: ({ messages: stepMessages }) => ({
-        messages: capStepToolPayloads(stepMessages),
-      }),
-    });
-    for await (const _part of result.fullStream) {
-      void _part;
-    }
-    await result.content;
 
-    const promptBytes = model.doStreamCalls.map((call) => JSON.stringify(call.prompt).length);
+    // Run the identical loop twice — once capped, once not — so the assertion is
+    // a measured difference between them, never a threshold arranged to pass.
+    async function finalPromptBytes(capped: boolean): Promise<number> {
+      let step = 0;
+      const model = new MockLanguageModelV3({
+        doStream: providerEmitting(() => {
+          step += 1;
+          return JSON.stringify({
+            tool_name: 'edit_sheet_cells',
+            parameters: { pageId: `chunk-${step}`, cells },
+          });
+        }),
+      });
+      const result = streamText({
+        model,
+        messages: [{ role: 'user', content: 'apply every chunk' }],
+        tools: { execute_tool: createExecuteTool(registry) },
+        stopWhen: [stepCountIs(STEPS)],
+        // Exactly how global-chat-turn and page-chat-turn wire the seam.
+        ...(capped
+          ? {
+              prepareStep: ({ messages: m }: { messages: ModelMessage[] }) => ({
+                messages: capStepToolPayloads(m),
+              }),
+            }
+          : {}),
+      });
+      for await (const _part of result.fullStream) {
+        void _part;
+      }
+      await result.content;
+      const bytes = model.doStreamCalls.map((call) => JSON.stringify(call.prompt).length);
+      return bytes[bytes.length - 1];
+    }
+
     const perCallPayload = JSON.stringify({
       tool_name: 'edit_sheet_cells',
       parameters: { pageId: 'chunk-1', cells },
     }).length;
+    const uncappedFinal = await finalPromptBytes(false);
+    const cappedFinal = await finalPromptBytes(true);
 
-    // Uncapped, the last step would replay every earlier payload: ~9 × ~103 KB.
-    // Capped, only the newest survives at full size, so the final prompt stays
-    // within a small multiple of ONE payload no matter how many steps ran.
     assert({
       given: `${STEPS} sequential execute_tool calls of ~${Math.round(perCallPayload / 1024)} KB each in one agent loop`,
-      should: 'keep the final replayed prompt near a single payload, not the sum of all of them',
+      should: 'replay every earlier payload uncapped, and stay near a single payload capped',
       actual: {
-        wouldHaveBeenUnbounded: (STEPS - 1) * perCallPayload > 2 * perCallPayload,
-        stayedBounded: promptBytes[promptBytes.length - 1] < 2 * perCallPayload,
+        uncappedReplaysThemAll: uncappedFinal > (STEPS - 2) * perCallPayload,
+        cappedStaysNearOnePayload: cappedFinal < 2 * perCallPayload,
       },
-      expected: { wouldHaveBeenUnbounded: true, stayedBounded: true },
+      expected: { uncappedReplaysThemAll: true, cappedStaysNearOnePayload: true },
     });
   });
 });
