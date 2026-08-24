@@ -662,9 +662,11 @@ export async function POST(req: NextRequest) {
         const actualEndLine = endLine || startLine;
 
         // One shared line-accounting rule with the in-app replace_lines tool
-        // (`@/lib/editor/line-edit`): the content it returns is already the
-        // canonical projection, so this route no longer re-normalizes what it
-        // stores and no longer reports a count taken before that pass.
+        // (`@/lib/editor/line-edit`). The input is the SAME projection `read`
+        // numbered lines against, so the edit addresses exactly the lines the
+        // caller was shown; the output is already canonical, so this route no
+        // longer re-normalizes what it stores and no longer reports a count
+        // taken before that pass.
         const outcome = runLineEdit(() => replaceLines({
           content: serializedContent,
           startLine,

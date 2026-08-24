@@ -758,12 +758,12 @@ export const pageWriteTools = {
           }
           throw error;
         }
-        const { oldContent, newContent, newLineCount, previousLineCount, changeType } = edit;
+        const { oldContent, newContent, newLineCount, previousLineCount, linesReplaced, changeType } = edit;
         const isDeletion = changeType === 'deletion';
 
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
           metadata: {
-            linesChanged: endLine - startLine + 1,
+            linesChanged: linesReplaced,
             changeType,
           },
         });
@@ -792,7 +792,7 @@ export const pageWriteTools = {
           contentMode: page.contentMode || 'html',
           oldContent,
           newContent,
-          linesReplaced: endLine - startLine + 1,
+          linesReplaced,
           newLineCount,
           previousLineCount,
           ...(contentModeWarning && { contentModeWarning }),
@@ -800,10 +800,10 @@ export const pageWriteTools = {
             ? `Successfully removed lines ${startLine}-${endLine}`
             : `Successfully replaced lines ${startLine}-${endLine}`,
           summary: isDeletion
-            ? `Removed ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'} from "${page.title}"`
-            : `Updated "${page.title}" by replacing ${endLine - startLine + 1} line${endLine - startLine + 1 === 1 ? '' : 's'}`,
+            ? `Removed ${linesReplaced} line${linesReplaced === 1 ? '' : 's'} from "${page.title}"`
+            : `Updated "${page.title}" by replacing ${linesReplaced} line${linesReplaced === 1 ? '' : 's'}`,
           stats: {
-            linesChanged: endLine - startLine + 1,
+            linesChanged: linesReplaced,
             totalLines: newLineCount,
             changeType
           },
