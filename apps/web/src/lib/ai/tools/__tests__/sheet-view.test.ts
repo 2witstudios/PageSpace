@@ -226,6 +226,31 @@ describe('loadSheetWindow — materialised sheet', () => {
     expect(window.hasMore).toBe(false);
   });
 
+  it('reads the requested tab of a materialised sheet, and reports all of them', async () => {
+    // The multi-tab success path on the row store, alongside the refusal case
+    // below: asking for tab 1 must read tab 1's rows and identify them as
+    // such, not quietly serve tab 0's.
+    const second = { id: 'tab-2', tabIndex: 1, name: 'Archive', rowCount: 12, columnCount: 3 };
+    mockListTabs.mockResolvedValue([tab, second]);
+    mockGetTab.mockImplementation(async (ref: { tabIndex?: number }) =>
+      (ref.tabIndex ?? 0) === 1 ? second : tab
+    );
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'archived', value: 'archived' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { tabIndex: 1, limit: 10 });
+
+    expect(mockReadRows).toHaveBeenCalledWith('tab-2', { fromRow: 0, limit: 10 });
+    assert({
+      given: 'tabIndex 1 on a materialised two-tab sheet',
+      should: 'read that tab and report its own name and dimensions',
+      actual: { tabIndex: window.tabIndex, tabName: window.tabName, rowCount: window.rowCount },
+      expected: { tabIndex: 1, tabName: 'Archive', rowCount: 12 },
+    });
+    expect(window.tabs).toHaveLength(2);
+  });
+
   it('never fetches more than the agent-facing row cap, whatever it is asked for', async () => {
     await loadSheetWindow('page-1', { limit: 100_000 });
     const [, options] = mockReadRows.mock.calls[0] as [string, { limit: number }];
