@@ -1430,7 +1430,9 @@ export function createSessionTools(deps: SessionToolsDeps): {
                 error:
                   `That agent's configuration cannot be honored: ${sandboxBlocked.join(', ')} ` +
                   'are in its enabledTools but its sandboxEnabled switch is off, so the worker would run without them. ' +
-                  'Call update_agent_config with sandboxEnabled: true (or remove those tools) and spawn again.',
+                  'Either the agent should have them — call update_agent_config with sandboxEnabled: true — or its ' +
+                  'sandbox access was deliberately revoked and the names were left behind, in which case remove them ' +
+                  'from enabledTools. Both are one call; the config cannot mean both.',
                 blockedTools: surface.blocked,
                 grantedTools: surface.granted,
                 // The FULL picture, not just the refusing gate: a config can be

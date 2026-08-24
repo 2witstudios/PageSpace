@@ -633,7 +633,16 @@ Four rules now hold, and `agent-tool-surface.ts` is the single place that comput
    keeps the current list.
 4. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
    config contradicts itself — sandbox tools named while its `sandboxEnabled` switch is
-   off. That is deterministic and one call fixes it either way. Drops the caller cannot
+   off. That is deterministic and one call fixes it either way.
+
+   TWO SITUATIONS PRODUCE THAT STATE and the config cannot tell them apart, so the refusal
+   names both. One is the issue's: tools configured for an agent that was never granted the
+   sandbox. The other is a deliberate revoke — someone turns the switch off in the settings
+   tab, which hides those tools from the picker but does NOT prune them from the stored
+   list (only `enabledTools` the user actually edits is sent), so the names stay behind. The
+   fix differs by intent (grant the switch, or drop the names) and the refusal says so
+   rather than assuming. Pruning on revoke was considered and rejected: it destroys a
+   selection the owner may want back when they re-enable, to save them one call. Drops the caller cannot
    fix (a name this deployment does not register) and `'search'`-mode deferral do NOT
    refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
    would break working spawns over a non-problem.

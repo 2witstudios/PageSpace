@@ -161,7 +161,8 @@ export function formatAgentToolSurfaceNotes(surface: AgentToolSurface): string[]
   if (sandboxBlocked.length > 0) {
     notes.push(
       `These configured tools are NOT granted because this agent's sandboxEnabled switch is off: ${sandboxBlocked.join(', ')}. ` +
-        'Call update_agent_config with sandboxEnabled: true to grant them, or remove them from enabledTools.'
+        'Call update_agent_config with sandboxEnabled: true to grant them — or, if the agent\'s sandbox access was ' +
+        'deliberately turned off and these names were simply left behind, remove them from enabledTools.'
     );
   }
 
