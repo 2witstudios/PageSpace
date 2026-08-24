@@ -199,7 +199,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
   call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
   contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
-  instead of starting a worker that cannot do the job.
+  instead of starting a worker that cannot do the job. A spawn also warns when the workspace the
+  worker lands in will not run code for you at all — the reason the same agent could produce three
+  different tool sets on three tries and look random. The SDK and `pagespace agents config` can set
+  the switch and read the same answers.
 
 - **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
   access was turned off still received the sandbox tools when someone @-mentioned it in a channel,
