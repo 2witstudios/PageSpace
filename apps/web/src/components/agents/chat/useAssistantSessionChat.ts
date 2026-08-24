@@ -61,6 +61,25 @@ import { useConversationSubscription } from '@/hooks/useConversationSubscription
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import type { UseAgentSessionChatReturn } from './useAgentSessionChat';
 
+/**
+ * The context ref an assistant session sends — and therefore the drive the
+ * SERVER scopes that turn to (`global-chat-turn` reads
+ * `locationContext?.currentDrive?.id`). Exported so the composer can scope its
+ * `/` command picker to the exact same drive: the picker and the execution it
+ * feeds must never disagree about which drive's commands exist.
+ *
+ * The session's own drive wins over the pathname because the Agents console
+ * never navigates as panes are clicked, so pathname parsing cannot see it.
+ */
+export function useAssistantContextRef(driveId: string | null): ContextRef {
+  const pathname = usePathname();
+  const drives = useDriveStore((state) => state.drives);
+  return useMemo(
+    () => (driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives)),
+    [driveId, pathname, drives],
+  );
+}
+
 export function useAssistantSessionChat({
   conversationId,
   driveId,
@@ -78,9 +97,8 @@ export function useAssistantSessionChat({
    */
   driveId: string | null;
 }): UseAgentSessionChatReturn {
-  const pathname = usePathname();
   const { user } = useAuth();
-  const drives = useDriveStore((state) => state.drives);
+  const contextRef = useAssistantContextRef(driveId);
 
   // The user's one global channel — every assistant stream, whichever surface
   // started it, broadcasts here. Null until auth resolves; every consumer
@@ -172,7 +190,6 @@ export function useAssistantSessionChat({
   // Shared by handleSend and the ask_user answer path (submitting an answer
   // re-invokes the chat with the same per-request body a fresh send would use).
   const buildBody = useCallback(() => {
-    const contextRef: ContextRef = driveId ? { routeType: 'drive', driveId } : buildContextRef(pathname, drives);
     return buildGlobalChatRequestBody({
       conversationId,
       isReadOnly: !writeMode,
@@ -185,9 +202,7 @@ export function useAssistantSessionChat({
     });
   }, [
     conversationId,
-    driveId,
-    pathname,
-    drives,
+    contextRef,
     writeMode,
     webSearchEnabled,
     imageGenEnabled,

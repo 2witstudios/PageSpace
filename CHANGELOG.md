@@ -188,6 +188,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
+  built-in commands and your personal ones; the drive's own commands were missing, and since a
+  command runs from the chip you pick out of that list, they simply could not be used there. That
+  composer never said which drive it was in, so the list was built as though there were none. It now
+  scopes to the agent's drive — the same drive the command actually runs against — in the agent page,
+  in agent panes, and in the assistant. The right-sidebar assistant had a subtler version of the same
+  fault: with an agent selected it offered the commands of whatever page you were looking at, so an
+  agent borrowed from another drive showed commands that failed the moment you sent them. It now
+  offers the agent's.
+
 - **An agent you configure with tools actually gets them, or says why not** — an agent set up
   entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
   `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
