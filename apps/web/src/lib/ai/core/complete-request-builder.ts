@@ -22,6 +22,7 @@ import { buildTimestampSystemPrompt } from './timestamp-utils';
 import { buildMentionSystemPrompt } from './mention-processor';
 import { buildAgentSystemPrompt, buildVolatileTurnContext } from './prompt-assembly';
 import { buildLocationTurnPrompt } from './location-prompt';
+import { EXECUTE_TOOL_DESCRIPTION } from '@/lib/ai/tools/execute-tool';
 
 export interface LocationContext {
   currentPage?: {
@@ -225,8 +226,7 @@ export function buildCompleteRequest(
     },
     {
       name: 'execute_tool',
-      description:
-        'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
+      description: EXECUTE_TOOL_DESCRIPTION,
       parameters: executeToolJsonSchema,
       tokenEstimate: estimateSystemPromptTokens(
         JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })

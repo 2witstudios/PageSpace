@@ -1119,6 +1119,13 @@ export async function editSandboxFile({
  * Default env builder used by the production tool wrappers. This is the effect
  * seam that sources the validated env from the global and hands it to the pure
  * `buildSandboxEnv`, keeping the allowlist construction itself IO-free.
+ *
+ * The validated env is currently READ AND UNUSED — `SANDBOX_ENV_ALLOWLIST` is
+ * empty, so `buildSandboxEnv` looks at none of it. Kept deliberately: this is
+ * where the host env enters the sandbox path, and the day a key is allowlisted
+ * this seam must hand over the VALIDATED value rather than a raw `process.env`
+ * read. The one live effect meanwhile is that a broken env throws here — which,
+ * in the web service, it would already have done long before any tool ran.
  */
 export const defaultBuildEnv = (): Record<string, string> =>
   buildSandboxEnv({ env: getValidatedEnv() });
