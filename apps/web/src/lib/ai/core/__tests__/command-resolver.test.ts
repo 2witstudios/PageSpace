@@ -246,6 +246,30 @@ describe('planCommandExecutions', () => {
     expect(content.length).toBeLessThan(2000);
   });
 
+  it('injects the text of a SHEET entry page that never held a spreadsheet', async () => {
+    // parseSheetContentSafe calls arbitrary text on a SHEET page an EMPTY sheet
+    // — correctly, there is no sheet data to lose. Injecting "no rows yet"
+    // would drop the instructions entirely, on every turn the command runs.
+    mockListTabs.mockResolvedValue([]);
+    mockCommandsFindFirst.mockResolvedValue(
+      personalCommandRow({
+        entryPage: {
+          ...personalCommandRow().entryPage,
+          type: 'SHEET',
+          content: '<p>Follow these release steps</p>',
+        },
+      })
+    );
+
+    const [plan] = await planCommandExecutions(tokenContent(), SENDER);
+    expect(plan?.kind).toBe('inject');
+    if (plan?.kind !== 'inject') return;
+    const content = plan.injection.entryPage?.serializedContent ?? '';
+
+    expect(content).toContain('Follow these release steps');
+    expect(content).not.toContain('No rows yet');
+  });
+
   it('reports an unreadable SHEET entry page without failing the command', async () => {
     // A command whose entry page is damaged must still resolve — refusing it
     // would take away the tools needed to investigate. And it must not say

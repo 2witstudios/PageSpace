@@ -1151,9 +1151,14 @@ describe('page-read-tools', () => {
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       mockListTabs.mockResolvedValue([sheetTab]);
       mockGetTab.mockResolvedValue(sheetTab);
-      mockReadRows.mockResolvedValue([
-        { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },
-      ]);
+      // A FULL page is what signals "there may be more" — a short page proves
+      // there is not, whatever the tab's declared rowCount says.
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
 
       const result = await pageReadTools.read_page.execute!(
         { title: 'Members', pageId: 'page-1' },
@@ -1161,8 +1166,8 @@ describe('page-read-tools', () => {
       ) as Record<string, unknown>;
 
       const steps = (result.nextSteps as string[]).join(' ');
-      expect(steps).toContain('read_sheet (startRow: 2)');
-      expect(steps).toContain('read_page again (lineStart: 2)');
+      expect(steps).toContain('read_sheet (startRow: 26)');
+      expect(steps).toContain('read_page again (lineStart: 26)');
     });
 
     it('never tells the agent to resume at the row it just asked for', async () => {
@@ -1200,10 +1205,13 @@ describe('page-read-tools', () => {
       mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
       mockListTabs.mockResolvedValue([sheetTab]);
       mockGetTab.mockResolvedValue(sheetTab);
-      mockReadRows.mockResolvedValue([
-        { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },
-        { rowIndex: 1, cells: { A: { raw: 'b', value: 'b' } } },
-      ]);
+      // Full page → there may be more. A short page would prove otherwise.
+      mockReadRows.mockResolvedValue(
+        Array.from({ length: 25 }, (_, index) => ({
+          rowIndex: index,
+          cells: { A: { raw: `r${index}`, value: `r${index}` } },
+        })),
+      );
 
       const result = await pageReadTools.read_page.execute!(
         { title: 'Members', pageId: 'page-1' },
@@ -1211,7 +1219,7 @@ describe('page-read-tools', () => {
       ) as Record<string, unknown>;
 
       expect(result.hasMoreRows).toBe(true);
-      expect(result.nextStartRow).toBe(3);
+      expect(result.nextStartRow).toBe(26);
     });
 
     it('shows a SHEET page holding legacy text rather than calling it an empty grid', async () => {
@@ -1231,9 +1239,15 @@ describe('page-read-tools', () => {
         createAuthContext()
       ) as Record<string, unknown>;
 
-      expect(result.contentIsNotASheet).toBe(true);
+      // The ordinary text path answers, so the content is line-NUMBERED and
+      // `totalLines` counts real lines — not the fake 20-row grid the sheet
+      // parser reports for text it does not recognise.
       expect(String(result.content)).toContain('never a spreadsheet');
-      expect(String(result.summary)).toContain('not a spreadsheet document');
+      expect(String(result.content)).toMatch(/^1→/);
+      // `totalLines` counts the real text, not the 20-row grid the sheet parser
+      // reports for content it does not recognise as a sheet.
+      expect(result.totalLines).toBe(String(result.content).split('\n').length);
+      expect(result.totalLines).not.toBe(20);
     });
 
     it('distinguishes an empty window from an empty sheet', async () => {

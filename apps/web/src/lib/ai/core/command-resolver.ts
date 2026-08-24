@@ -66,6 +66,14 @@ async function serializeSheetForInjection(pageId: string, content: string | null
       limit: SHEET_PREVIEW_ROWS,
       documentContent: content,
     });
+    // Not a sheet document at all — legacy text on a SHEET page. Inject the
+    // text, as this path did before, rather than "no rows yet": a command whose
+    // instructions live on such a page would otherwise inject nothing useful on
+    // every single turn.
+    if (sheet.documentIsNotASheet) {
+      return serializePageContentForAI({ type: 'SHEET', contentMode: null, content });
+    }
+
     const table = renderSheetTable(sheet.rows).text;
     const header =
       `(SHEET "${sheet.tabName}": ${sheet.rowCount} rows x ${sheet.columnCount} columns` +

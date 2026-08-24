@@ -266,6 +266,41 @@ describe('loadSheetWindow — materialised sheet', () => {
     expect(window.tabs).toHaveLength(2);
   });
 
+  it('takes a short page as proof that nothing follows, whatever the tab declares', async () => {
+    // A tab's rowCount is the GRID height, not how many rows hold data: 500
+    // declared, data only to row 60 is an ordinary shape. Deriving hasMore from
+    // the declared count claimed more rows after the window that already held
+    // the last one, costing a guaranteed empty round trip every time.
+    mockReadRows.mockResolvedValue(
+      Array.from({ length: 21 }, (_, index) => ({
+        rowIndex: 40 + index,
+        cells: { A: { raw: `r${index}`, value: `r${index}` } },
+      })),
+    );
+
+    const window = await loadSheetWindow('page-1', { fromRow: 40, limit: 25 });
+
+    assert({
+      given: 'a short page from a tab that declares 500 rows',
+      should: 'report no further rows, because a short page proves there are none',
+      actual: { rows: window.rows.length, hasMore: window.hasMore },
+      expected: { rows: 21, hasMore: false },
+    });
+  });
+
+  it('takes a full page as a reason there may be more', async () => {
+    mockReadRows.mockResolvedValue(
+      Array.from({ length: 25 }, (_, index) => ({
+        rowIndex: index,
+        cells: { A: { raw: `r${index}`, value: `r${index}` } },
+      })),
+    );
+
+    const window = await loadSheetWindow('page-1', { limit: 25 });
+    expect(window.hasMore).toBe(true);
+    expect(window.nextFromRow).toBe(25);
+  });
+
   it('never fetches more than the agent-facing row cap, whatever it is asked for', async () => {
     await loadSheetWindow('page-1', { limit: 100_000 });
     const [, options] = mockReadRows.mock.calls[0] as [string, { limit: number }];

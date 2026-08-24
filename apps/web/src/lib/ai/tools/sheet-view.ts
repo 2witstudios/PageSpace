@@ -24,6 +24,7 @@ import type { StoredCell } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,
+  isSheetDocString,
   decodeCellAddress,
   encodeColumnLabel,
   evaluateSheetSparse,
@@ -150,6 +151,16 @@ export interface SheetWindow {
    */
   nextFromRow: number | null;
   hasMore: boolean;
+  /**
+   * True when the page's stored content is not a sheet document at all —
+   * legacy plain text or HTML on a SHEET page.
+   *
+   * `parseSheetContentSafe` reports that as an EMPTY sheet, correctly: it is
+   * not a parse failure, because there is no sheet data to lose. Taken at face
+   * value it reads as "this spreadsheet is blank", which hides content every
+   * surface used to display. Callers use this to fall back to the text instead.
+   */
+  documentIsNotASheet: boolean;
 }
 
 /**
@@ -297,6 +308,12 @@ function windowFromDocument(
     );
   }
 
+  const isText =
+    typeof content === 'string' &&
+    content.trim().length > 0 &&
+    !isSheetDocString(content.trim()) &&
+    Object.keys(parsed.sheet.cells).length === 0;
+
   const tabs = documentTabs(parsed.sheet);
   const summary = tabs[tabIndex];
   if (!summary) {
@@ -353,6 +370,7 @@ function windowFromDocument(
     rows,
     nextFromRow,
     hasMore: nextFromRow !== null && indexes.length > windowed.length,
+    documentIsNotASheet: isText,
   };
 }
 
@@ -426,7 +444,14 @@ export async function loadSheetWindow(
     tabs,
     rows,
     nextFromRow,
-    hasMore: nextFromRow !== null && nextFromRow < tab.rowCount,
+    // From what the fetch RETURNED, never from the tab's declared `rowCount`.
+    // A tab can declare 500 rows while storing data only to row 60, so
+    // comparing against the declared count claimed more rows after the window
+    // that already held the last one — costing a guaranteed empty round trip.
+    // A short page proves there is nothing further; a full one means there may
+    // be. Same reasoning the document path above already used.
+    hasMore: stored.length === limit,
+    documentIsNotASheet: false,
   };
 }
 

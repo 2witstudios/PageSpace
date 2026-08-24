@@ -181,6 +181,19 @@ export const sheetReadTools = {
           throw new Error(`Page with ID "${pageId}" not found`);
         }
 
+        // Permission BEFORE the type guard, not after.
+        //
+        // The wrong-type refusal quotes the page's real title and type, so
+        // running the guard first answered "that page is a DOCUMENT called
+        // 'Q3 Layoffs'" for any page id the caller cannot see — a probe that
+        // reads out titles across the whole instance. `read_page` checks
+        // permission immediately after the lookup for this reason; this now
+        // matches it, and an unviewable page is indistinguishable from one
+        // that does not exist.
+        if (!(await canActorViewPage(toolContext, page.id))) {
+          throw new Error('Insufficient permissions to read this sheet');
+        }
+
         if (!isSheetType(page.type as PageType)) {
           return {
             success: false,
@@ -189,10 +202,6 @@ export const sheetReadTools = {
             suggestion: 'Use read_page for documents, notes and code.',
             pageInfo: { pageId: page.id, title: page.title, type: page.type },
           };
-        }
-
-        if (!(await canActorViewPage(toolContext, page.id))) {
-          throw new Error('Insufficient permissions to read this sheet');
         }
 
         const isFiltered = where !== undefined || orderBy !== undefined || offset !== undefined;

@@ -118,6 +118,16 @@ describe('read_sheet — authentication and page type', () => {
     expect(String(result.suggestion)).toContain('read_page');
   });
 
+  it('does not disclose a page the caller cannot view, even to say it is the wrong type', async () => {
+    // The wrong-type refusal quotes the page's real title and type. Running it
+    // before the permission check turned read_sheet into a probe that reads
+    // titles out of any drive, one page id at a time.
+    mockFindById.mockResolvedValue({ ...sheetPage, type: 'DOCUMENT' as const, title: 'Q3 Layoffs' });
+    mockCanView.mockResolvedValue(false);
+
+    await expect(run({ pageId: 'page-1' })).rejects.toThrow('Insufficient permissions');
+  });
+
   it('refuses a reader without view permission', async () => {
     mockCanView.mockResolvedValue(false);
     await expect(run({ pageId: 'page-1' })).rejects.toThrow('Insufficient permissions');
