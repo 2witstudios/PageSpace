@@ -202,6 +202,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   role list, so a lookup there can only ever miss. The answer now says so and points at where they
   actually live — and at `pagespace keys describe` for what a specific credential resolves to.
 
+- **A sandbox is a development machine again** — a session's sandbox inherited the mode of the
+  server that opened it, so a sandbox opened from pagespace.ai reported itself as a production
+  environment. Under that, `npm install` quietly leaves out everything a project needs to be
+  *worked on* — its TypeScript compiler, its test runner, its dev scripts — so an install that
+  reported success left the toolchain missing and every later command failed with an error naming
+  nothing to do with the cause. A sandbox now describes itself as what it is, and a plain
+  `npm install` installs the whole toolchain. The terminal and the agent's own shell also report
+  the same environment as each other now; they used to disagree. This covers every machine an agent
+  works on, named environments included — an environment called “prod” is a name, not a deployment.
+  One consequence worth knowing: a build run on one of these machines now produces a development
+  build, so say `NODE_ENV=production npm run build` when you actually want a production bundle.
+- **A long job in a terminal no longer looks frozen** — a job piped through a filter
+  (`… | grep …`, and especially `… | tail -200`, which by design prints nothing until the job ends)
+  held its output back until it exited, so a healthy multi-minute build or scrape showed an agent
+  watching the terminal exactly nothing. The holding happens inside the programs themselves, not in
+  PageSpace, so the shell tools now explain it and say what to type instead of guessing that the job
+  died; Python programs, the commonest offender, flush as they go in every shell opened from here on,
+  without anyone having to ask. A shell that was already running when this shipped keeps the
+  environment it started with — close it and open a new one to pick up the change.
 - **Dedicated deployments can run code again** — on a dedicated (tenant) deployment, code execution,
   agent sandboxes and environments were all refused, because the gate asked which subscription plan
   the account was on and a dedicated deployment has no plan to be on: the deployment itself is what

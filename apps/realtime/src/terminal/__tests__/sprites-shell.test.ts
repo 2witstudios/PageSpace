@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { openPtyShell, planReconnect, planWatchdogResponse, planTeardown, sessionIds } from '../sprites-shell';
 import { appendScrollback } from '../terminal-session-map';
 import { spawnWithSelfHealingCwd } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
+import { buildSandboxEnv } from '@pagespace/lib/services/sandbox/sandbox-env';
 import { TASK_HOLD_AGENT_IDLE_MS } from '@pagespace/lib/services/sandbox/sandbox-client/sprite-tasks';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -303,6 +304,59 @@ describe('sessionIds (pure)', () => {
     should: 'return an empty set',
     actual: sessionIds([]),
     expected: [],
+  });
+});
+
+describe('openPtyShell environment (#2466: one sandbox, one env)', () => {
+  // `vi.stubEnv` + `unstubAllEnvs` rather than save/assign/restore by hand: the
+  // hand-rolled version needs an `undefined` branch (assigning it back writes the
+  // literal string 'undefined'), and this file's coverage counts every branch.
+  afterEach(() => { vi.unstubAllEnvs(); });
+
+  it('given a fresh shell, spawns it with the sandbox-owned values plus this surface\'s tty settings — and nothing else', () => {
+    // The two surfaces used to disagree — the bash tool forwarded the host's
+    // NODE_ENV while the PTY set none — so the same sandbox answered
+    // `env | grep NODE_ENV` differently depending on which tool asked.
+    //
+    // What an in-process test can and cannot do here: it CANNOT prove the
+    // terminal calls the shared builder rather than repeating its values, because
+    // any expectation it computes runs in this same process and a hardcoded
+    // literal satisfies it identically. What it CAN pin is the content that
+    // reaches a sandbox — the sandbox-owned values, the tty settings, and
+    // crucially nothing else, which is what fails the day someone reaches for
+    // `{ ...process.env }` to make a variable available.
+    vi.stubEnv('PAGESPACE_TEST_HOST_SECRET', 'must-never-reach-a-sandbox');
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+
+    expect(sprite.createSession).toHaveBeenCalledTimes(1);
+    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
+    expect(options.env).toEqual({
+      NODE_ENV: 'development',
+      PYTHONUNBUFFERED: '1',
+      TERM: 'xterm-256color',
+      COLORTERM: 'truecolor',
+      LANG: 'en_US.UTF-8',
+    });
+    // Said separately because it is the assertion with teeth: the host process
+    // this terminal runs in holds secrets, and none of them are a sandbox's
+    // business.
+    expect(JSON.stringify(options.env)).not.toContain('must-never-reach-a-sandbox');
+  });
+
+  it('given a host running in production, still starts the shell in a development sandbox', () => {
+    // The realtime service's own env is the source here, so this is the shape
+    // #2466 actually had: a production host, and a terminal that must not repeat it.
+    vi.stubEnv('NODE_ENV', 'production');
+    const cmd = buildFakeCommand();
+    const sprite = buildFakeSprite(cmd);
+
+    openPtyShell({ sprite, cols: 80, rows: 24, onOutput: vi.fn(), onExit: vi.fn() });
+
+    const options = sprite.createSession.mock.calls[0].at(-1) as { env: Record<string, string> };
+    expect(options.env.NODE_ENV).toBe('development');
   });
 });
 
@@ -1093,7 +1147,7 @@ describe('openPtyShell', () => {
       tty: true,
       cols: 80,
       rows: 24,
-      env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+      env: { ...buildSandboxEnv({ env: process.env as never }), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
     });
   });
 
@@ -1109,7 +1163,7 @@ describe('openPtyShell', () => {
         tty: true,
         cols: 80,
         rows: 24,
-        env: { TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
+        env: { ...buildSandboxEnv({ env: process.env as never }), TERM: 'xterm-256color', COLORTERM: 'truecolor', LANG: 'en_US.UTF-8' },
       },
     );
   });
