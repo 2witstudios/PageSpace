@@ -3,7 +3,7 @@ import type { ModelMessage } from 'ai';
 import { assert } from '@/lib/ai/tools/__tests__/riteway';
 import {
   capStepToolPayloads,
-  KEEP_RECENT_TOOL_RESULTS,
+  KEEP_RECENT_RESULT_STEPS,
   TOOL_PAYLOAD_MAX_CHARS,
 } from '../cap-step-tool-payloads';
 
@@ -221,19 +221,64 @@ describe('capStepToolPayloads — parallel calls in one step', () => {
   });
 });
 
+describe('capStepToolPayloads — parallel results in one step', () => {
+  it('keeps every result of the newest step, however many it produced', () => {
+    // One step can read four files at once and land four result parts in a
+    // single tool message. Retaining the last N result PARTS would keep three of
+    // those four and stub the rest — breaking exactly the gather-then-act agent
+    // the retention window exists to protect. Retention is by step.
+    const parallel = KEEP_RECENT_RESULT_STEPS + 1;
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'read them all' },
+      {
+        role: 'assistant',
+        content: Array.from({ length: parallel }, (_, i) => toolCall(`p-${i}`, 10)),
+      },
+      {
+        role: 'tool',
+        content: Array.from({ length: parallel }, (_, i) => toolResult(`p-${i}`, OVERSIZED)),
+      },
+    ];
+
+    assert({
+      given: `a single newest step that produced ${parallel} oversized results in parallel`,
+      should: 'keep all of them, not just the last few parts',
+      actual: outputsOf(capStepToolPayloads(messages)).map(isCappedOutput),
+      expected: Array(parallel).fill(false),
+    });
+  });
+
+  it('still caps steps that have fallen out of the window', () => {
+    // The window is steps, so it must still expire whole steps behind it.
+    const steps = KEEP_RECENT_RESULT_STEPS + 2;
+    const messages: ModelMessage[] = [{ role: 'user', content: 'read every chunk' }];
+    for (let i = 0; i < steps; i++) {
+      messages.push({ role: 'assistant', content: [toolCall(`s-${i}`, 10)] });
+      messages.push({ role: 'tool', content: [toolResult(`s-${i}`, OVERSIZED)] });
+    }
+
+    assert({
+      given: `${steps} sequential oversized reads with a ${KEEP_RECENT_RESULT_STEPS}-step window`,
+      should: 'cap the two oldest steps and keep the rest',
+      actual: outputsOf(capStepToolPayloads(messages)).map(isCappedOutput),
+      expected: [true, true, ...Array(KEEP_RECENT_RESULT_STEPS).fill(false)],
+    });
+  });
+});
+
 describe('capStepToolPayloads — tool results', () => {
   it('caps oversized results from steps outside the retention window', () => {
     const capped = capStepToolPayloads(readTranscript(6, OVERSIZED));
     const flags = outputsOf(capped).map(isCappedOutput);
 
-    // Six results, the newest KEEP_RECENT_TOOL_RESULTS kept whole.
+    // Six results, the newest KEEP_RECENT_RESULT_STEPS kept whole.
     assert({
       given: 'six executed reads whose results each exceed the ceiling',
       should: 'cap all but the most recent few',
       actual: flags,
       expected: [
-        ...Array(6 - KEEP_RECENT_TOOL_RESULTS).fill(true),
-        ...Array(KEEP_RECENT_TOOL_RESULTS).fill(false),
+        ...Array(6 - KEEP_RECENT_RESULT_STEPS).fill(true),
+        ...Array(KEEP_RECENT_RESULT_STEPS).fill(false),
       ],
     });
   });
@@ -242,13 +287,13 @@ describe('capStepToolPayloads — tool results', () => {
     // Reading three files before writing anything is normal. If the first read
     // were capped by the time the write happens, the agent loses what it was
     // about to act on — the whole reason results get a window and arguments do not.
-    const capped = capStepToolPayloads(readTranscript(KEEP_RECENT_TOOL_RESULTS, OVERSIZED));
+    const capped = capStepToolPayloads(readTranscript(KEEP_RECENT_RESULT_STEPS, OVERSIZED));
 
     assert({
       given: 'exactly as many reads as the retention window holds',
       should: 'leave every one of them intact',
       actual: outputsOf(capped).map(isCappedOutput),
-      expected: Array(KEEP_RECENT_TOOL_RESULTS).fill(false),
+      expected: Array(KEEP_RECENT_RESULT_STEPS).fill(false),
     });
   });
 
@@ -268,7 +313,7 @@ describe('capStepToolPayloads — tool results', () => {
           },
         ],
       },
-      ...readTranscript(KEEP_RECENT_TOOL_RESULTS, 10).slice(1),
+      ...readTranscript(KEEP_RECENT_RESULT_STEPS, 10).slice(1),
     ];
     const capped = capStepToolPayloads(messages);
     const errPart = (capped[1].content as { output: { type: string; value: unknown } }[])[0];

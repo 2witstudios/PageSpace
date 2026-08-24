@@ -29,11 +29,13 @@
  *   it, so an older payload is the cheapest thing in the transcript to give up.
  *   A step that issued three calls in parallel is one step: keeping one of the
  *   three and capping its siblings would be an arbitrary place to draw the line.
- * - Tool RESULTS: everything but the newest few. A result is information the
- *   model READ and may still be consuming — a gather-then-act agent reads two or
- *   three files before it writes anything, and capping those would break it
- *   mid-thought. The number kept is a heuristic; what matters is that retention
- *   is constant in the number of steps rather than growing with it.
+ * - Tool RESULTS: everything but the newest few STEPS. A result is information
+ *   the model READ and may still be consuming — a gather-then-act agent reads two
+ *   or three files before it writes anything, and capping those would break it
+ *   mid-thought. Retention is by step, not by result part, because one step can
+ *   read four files in parallel and land four results in a single tool message.
+ *   The number of steps kept is a heuristic; what matters is that retention is
+ *   constant in the number of steps rather than growing with it.
  *
  * Capping only ever rewrites the messages SENT for one step. The run's recorded
  * steps keep every payload at full size, so persistence and the activity log see
@@ -58,14 +60,20 @@ type ToolResultOutput = ToolResultPart['output'];
 export const TOOL_PAYLOAD_MAX_CHARS = 24_000;
 
 /**
- * How many of the most recent tool results survive at full size.
+ * How many of the most recent tool-result STEPS survive at full size.
  *
- * One would be enough for the read-then-write agent in #2461, where each result
- * is consumed by the very next step. A small window also covers the agent that
- * gathers a few things before acting on them. Beyond that the model is working
- * from what it has already concluded, not from the raw bytes.
+ * Steps, not individual results: one step can read four files in parallel and
+ * deliver four result parts in a single tool message. Counting parts would keep
+ * three of those four and stub the rest, breaking the gather-then-act agent this
+ * window exists to protect — the same mistake, in the other direction, that
+ * exempting calls by position rather than by message would make.
+ *
+ * One step would be enough for the read-then-write agent in #2461, where each
+ * result is consumed by the very next step. A small window also covers the agent
+ * that gathers a few things before acting on them. Beyond that the model is
+ * working from what it has already concluded, not from the raw bytes.
  */
-export const KEEP_RECENT_TOOL_RESULTS = 3;
+export const KEEP_RECENT_RESULT_STEPS = 3;
 
 /** Marker key for a capped payload. Kept greppable in provider logs. */
 const ELIDED_KEY = '__payload_elided';
@@ -186,12 +194,22 @@ export function capStepToolPayloads(
   // calls in parallel, and they all land in a single assistant message. Taking
   // the last position would keep one of them and cap its siblings, which is an
   // arbitrary line to draw through a single step.
+  const messageOf = (position: string) => position.split(':')[0];
+
   const callPositions = positionsOf(messages, isToolCallPart);
   const newestCallMessage = callPositions.at(-1)?.split(':')[0];
+
+  // Results are exempted by MESSAGE too, for the same reason as calls: a step
+  // that read four files in parallel delivers four result parts in one tool
+  // message, and keeping the last three PARTS would stub one of them — breaking
+  // exactly the gather-then-act agent the window exists to protect.
   const resultPositions = positionsOf(messages, isToolResultPart);
+  const resultMessages = [...new Set(resultPositions.map(messageOf))];
+  const keptResultMessages = new Set(resultMessages.slice(-KEEP_RECENT_RESULT_STEPS));
+
   const exempt = new Set([
-    ...callPositions.filter((position) => position.split(':')[0] === newestCallMessage),
-    ...resultPositions.slice(-KEEP_RECENT_TOOL_RESULTS),
+    ...callPositions.filter((position) => messageOf(position) === newestCallMessage),
+    ...resultPositions.filter((position) => keptResultMessages.has(messageOf(position))),
   ]);
 
   let didCap = false;
