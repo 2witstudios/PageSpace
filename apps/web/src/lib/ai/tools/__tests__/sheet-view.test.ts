@@ -189,6 +189,41 @@ describe('toSheetViewRow', () => {
   });
 });
 
+describe('column-level formats', () => {
+  it('applies a tab column format, which is never denormalised onto the cell', async () => {
+    // `sheetDataToRows` copies only `sheet.formats[address]` onto a cell;
+    // column formats live on `sheet_tabs.columnFormats`. Resolving just the
+    // cell format left the common case — a column formatted as currency —
+    // reading $1,200.00 from the document path and the UI, and 1200 from the
+    // row store.
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      columnFormats: { B: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { B: { raw: '1200', value: 1200 } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+    expect(window.rows[0].cells.B).toContain('1,200');
+  });
+
+  it('lets a cell own format win over the column default', async () => {
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      columnFormats: { B: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+    });
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { B: { raw: '0.85', value: 0.85, format: { number: { kind: 'percent', decimals: 0 } } } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10 });
+    expect(window.rows[0].cells.B).toContain('%');
+  });
+});
+
 describe('renderSheetTable', () => {
   const rows = [
     toSheetViewRow(0, { A: { raw: 'memid', value: 'memid' }, B: { raw: 'name', value: 'name' } }),

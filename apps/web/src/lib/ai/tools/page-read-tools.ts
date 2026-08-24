@@ -19,7 +19,6 @@ import { serializePageContentForAI, isTextSerializablePageType } from '../core/p
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import {
   loadSheetWindow,
-  renderSheetTable,
   renderSheetTableWithinBudget,
   columnsInRows,
   SheetDocumentUnreadableError,
@@ -57,6 +56,12 @@ const MAX_CONTENT_CHARS_PER_PAGE = 8000;
 // Room reserved for the header and pointer sentence wrapped around a sheet
 // preview, so the budget bounds the finished ENTRY rather than just its table.
 const SHEET_PREVIEW_FRAMING_CHARS = 300;
+
+// Characters read_page's own sheet table may spend. Larger than the list_pages
+// preview because this call is about ONE page, but still bounded: the result
+// also carries the structured rows, and an unbounded table made a wide sheet
+// cost more than the raw document it replaced.
+const MAX_SHEET_TABLE_CHARS = 20_000;
 
 /**
  * The window `read_page` shows for a SHEET, or `null` when the page turns out
@@ -1023,7 +1028,10 @@ export const pageReadTools = {
             (row) => lineEnd === undefined || row.rowNumber <= lineEnd
           );
           const columns = columnsInRows(rows);
-          const rendered = renderSheetTable(rows, columns);
+          // Budgeted like the other two sheet surfaces. 25 rows of a 60-column
+          // sheet at 120 chars a cell is far past what an orientation read
+          // should put in context, and row count alone does not bound it.
+          const rendered = renderSheetTableWithinBudget(rows, MAX_SHEET_TABLE_CHARS, columns);
           const table = rendered.text;
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;

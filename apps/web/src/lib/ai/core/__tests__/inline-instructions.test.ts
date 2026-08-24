@@ -229,3 +229,20 @@ describe('buildInlineInstructions — skill-aware slimming', () => {
     expect(buildGlobalAssistantInstructions()).toContain('provision_form_target');
   });
 });
+
+describe('SHEET bullet vs the agent allowlist', () => {
+  it('names read_sheet when the agent holds it', () => {
+    const text = buildInlineInstructions(['read_page', 'read_sheet', 'edit_sheet_cells']);
+    expect(text).toContain('read_sheet');
+  });
+
+  it('points at read_page instead when the agent does not', () => {
+    // An allowlist saved before read_sheet existed cannot contain it, and
+    // naming it produces an unknown-tool call before the model recovers.
+    const text = buildInlineInstructions(['read_page', 'edit_sheet_cells']);
+    const sheetLine = text.split('\n').find(l => l.startsWith('• SHEET')) ?? '';
+    expect(sheetLine).not.toContain('read_sheet');
+    expect(sheetLine).toContain('read_page');
+    expect(sheetLine).toContain('lineStart');
+  });
+});

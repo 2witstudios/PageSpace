@@ -20,12 +20,13 @@
  * SQL against the materialised cell value; `read_sheet` passes its arguments
  * through and formats what comes back.
  */
-import type { StoredCell } from '@pagespace/db/schema/sheets-types';
+import type { CellFormat, StoredCell } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,
   applyNumberFormat,
   formatDisplayValue,
+  resolveCellFormat,
   isSheetDocString,
   decodeCellAddress,
   encodeColumnLabel,
@@ -198,7 +199,7 @@ export function columnsInRows(rows: readonly SheetViewRow[]): string[] {
  * user sees on screen — or filtering on a value it read pre-migration — gets no
  * matches from that.
  */
-function cellText(cell: StoredCell): string {
+function cellText(cell: StoredCell, columnFormat?: CellFormat): string {
   if (cell.error) return '#ERROR';
   // `undefined` means never materialised; `''` means it materialised AS blank.
   // Conflating them rendered `=IF(A2>0,"ok","")` as its own source text where
@@ -209,7 +210,14 @@ function cellText(cell: StoredCell): string {
     // An empty value needs no special case: every numeric format rejects a
     // blank string (`applyNumberFormat` requires `value.trim() !== ''`) and
     // `formatDisplayValue('')` is `''`, so a formatted blank stays blank.
-    const formatted = applyNumberFormat(cell.value, cell.format?.number);
+    // Column formats are NOT denormalised onto the cell: `sheetDataToRows`
+    // copies only `sheet.formats[address]`, while column formats live on
+    // `sheet_tabs.columnFormats`. Resolving just the cell format therefore
+    // still diverged for the common case — a column formatted as currency read
+    // `$1,200.00` from the document path and the UI, and `1200` from the row
+    // store. Same precedence the evaluator uses: cell overrides column.
+    const format = resolveCellFormat(cell.format, columnFormat);
+    const formatted = applyNumberFormat(cell.value, format?.number);
     return formatted !== null ? formatted : formatDisplayValue(cell.value);
   }
   // Only a cell with no materialised value at all falls back to what was
@@ -236,6 +244,8 @@ export function toSheetViewRow(
    * a bigger response that merely looks smaller.
    */
   only?: ReadonlySet<string>,
+  /** Per-column defaults from the tab, applied under each cell's own format. */
+  columnFormats?: Record<string, CellFormat> | null,
 ): SheetViewRow {
   const values: Record<string, string> = {};
   const formulas: Record<string, string> = {};
@@ -245,7 +255,7 @@ export function toSheetViewRow(
     if (only && !only.has(label)) continue;
     const cell = cells[label];
     if (!cell) continue;
-    const text = cellText(cell);
+    const text = cellText(cell, columnFormats?.[label]);
     // An empty cell is absent, not blank: a 500x16 sheet is mostly empty, and
     // emitting every empty cell would put the payload straight back where it was.
     if (text === '' && !cell.error && !(cell.raw ?? '').startsWith('=')) continue;
@@ -391,7 +401,7 @@ function windowFromDocument(
 
   const indexes = [...byRow.keys()].filter((index) => index >= fromRow).sort((a, b) => a - b);
   const windowed = indexes.slice(0, limit);
-  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only));
+  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only, sheet.columnFormats));
   const nextFromRow = windowed.length > 0 ? windowed[windowed.length - 1] + 1 : null;
 
   return {
@@ -466,7 +476,7 @@ export async function loadSheetWindow(
   }
 
   const stored = await readRows(tab.id, { fromRow, limit });
-  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only));
+  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only, tab.columnFormats));
   const nextFromRow = stored.length > 0 ? stored[stored.length - 1].rowIndex + 1 : null;
 
   return {
@@ -506,12 +516,13 @@ export async function loadSheetWindow(
 export function renderSheetTableWithinBudget(
   rows: readonly SheetViewRow[],
   budget: number,
+  columns?: readonly string[],
 ): { text: string; rowsShown: number; truncatedCells: number } {
   let shown = rows;
-  let rendered = renderSheetTable(shown);
+  let rendered = renderSheetTable(shown, columns);
   while (rendered.text.length > budget && shown.length > 1) {
     shown = shown.slice(0, -1);
-    rendered = renderSheetTable(shown);
+    rendered = renderSheetTable(shown, columns);
   }
 
   let text = rendered.text;
