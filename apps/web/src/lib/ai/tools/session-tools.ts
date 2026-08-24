@@ -1403,7 +1403,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // again, and `'search'` exposure defers tools without losing them —
         // refusing there would break working spawns to report a non-problem.
         // The warning rides the SUCCESS payload, naming the tools and the gate.
-        let toolSurfaceWarning: string[] = [];
+        let toolSurfaceWarnings: string[] = [];
         if (agentPageId) {
           const surface = await deps.describeAgentToolSurface(agentPageId);
           if (surface) {
@@ -1422,7 +1422,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
                 grantedTools: surface.granted,
               };
             }
-            toolSurfaceWarning = surface.notes;
+            toolSurfaceWarnings = surface.notes;
           }
         }
 
@@ -1486,7 +1486,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
           // Named `toolSurfaceWarnings`, not folded into `note`: the whole
           // complaint behind issue #2460 is that a worker's tool surface
           // diverged from its config with nothing anywhere saying so.
-          ...(toolSurfaceWarning.length > 0 ? { toolSurfaceWarnings: toolSurfaceWarning } : {}),
+          ...(toolSurfaceWarnings.length > 0 ? { toolSurfaceWarnings } : {}),
           ...(dispatched.waited
             ? { reply: dispatched.reply }
             : {
