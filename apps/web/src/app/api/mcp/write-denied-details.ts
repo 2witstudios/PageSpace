@@ -12,6 +12,12 @@
  * VIEW gate immediately before reaching the write gate, so it can read this
  * page and cannot write it.
  *
+ * "with this same credential" is load-bearing, not filler. `keys describe`
+ * reports on a CONTENT credential, so unlike its `keys` siblings it is subject
+ * to the CLI's explicit-credential gate: run bare, under nothing but a personal
+ * login, it is refused. Naming a command the reader cannot run is the failure
+ * this message exists to prevent, one level up.
+ *
  * Only the `details` field. `error` stays the stable `'Write permission
  * required'` string the security suites pin and clients may branch on.
  *
@@ -25,8 +31,8 @@
 export function writeDeniedDetails(operation: string, subject: 'document' | 'sheet'): string {
   return (
     `The '${operation}' operation requires edit access to this ${subject}. This credential can view ` +
-    'this page but not edit it. Call tokens.describeSelf with this pageId (CLI: "pagespace keys ' +
-    'describe --page <pageId>") for what it can actually do, instead of discovering it one failed ' +
-    'write at a time.'
+    'this page but not edit it. Call tokens.describeSelf with this pageId — or, with this same ' +
+    'credential, "pagespace keys describe --page <pageId>" — for what it can actually do, instead ' +
+    'of discovering it one failed write at a time.'
   );
 }

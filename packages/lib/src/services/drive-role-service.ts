@@ -196,7 +196,8 @@ export function roleNotFoundMessage(roleId: string): string {
     `"${roleId}" is a system role, not a custom role defined in this drive, so it has no role id and cannot be ` +
     'fetched here. System roles (OWNER/ADMIN/MEMBER) are held per member on the drive membership itself — list ' +
     'them with the drive members surface. To see what a specific credential resolves to, describe that credential ' +
-    '("pagespace keys describe"), which reports the role and the effective view/edit/share/delete it grants. ' +
+    '(with that credential in hand: "pagespace keys describe"), which reports the role and the effective ' +
+    'view/edit/share/delete it grants. ' +
     'This endpoint lists only the custom roles defined in this drive.'
   );
 }

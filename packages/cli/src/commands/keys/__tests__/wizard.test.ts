@@ -364,6 +364,32 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     expect(notes.some((note) => note.includes('What this key can do') && note.includes('on the drive: view'))).toBe(true);
   });
 
+  // The no-raw-token branch had no test at all, so its copy could drift from
+  // create.ts's (and did — one surface kept the reason, the other dropped it).
+  it('says the key was created and why its permissions are missing when no raw token comes back', async () => {
+    selectMock
+      .mockReset()
+      .mockResolvedValueOnce('create')
+      .mockResolvedValueOnce('specific')
+      .mockResolvedValueOnce({ kind: 'member' })
+      .mockResolvedValueOnce('exit');
+    multiselectMock.mockReset().mockResolvedValueOnce(['drv1']);
+    textMock.mockReset().mockResolvedValueOnce('my-key');
+    confirmMock.mockReset().mockResolvedValueOnce(true);
+    noteMock.mockReset();
+
+    const { createKeysHandler } = await import('../wizard.js');
+    const { deps, sdk } = mcpCreateHandlerSetup();
+    // An oauth-kind exchange yields no static token, so onMintedStaticToken
+    // never fires — the same anomaly `--show-token` reports in create.ts.
+    const handler = createKeysHandler({ ...deps, exchangeCode: async () => FIXED_TOKENS });
+    const ctx = createFakeContext({ sdk, isTTY: true, env: {} });
+
+    expect(await handler(ctx, commandIntent(['keys']))).toBe(EXIT_SUCCESS);
+    const notes = noteMock.mock.calls.map((call) => `${String(call[0])}\n${String(call[1] ?? '')}`);
+    expect(notes.some((note) => note.includes('The key was created. Its permissions could not be read back here — it returned no raw token.'))).toBe(true);
+  });
+
   it('still completes the mint when the permission readback fails, and points at "keys describe" instead', async () => {
     selectMock
       .mockReset()
@@ -394,7 +420,7 @@ describe('createKeysHandler — Create flow, mcp-kind mint (the production shape
     // appears once, in the wiring note, naming the key.
     expect(notes.some((note) => note.includes('could not be read back just now'))).toBe(true);
     expect(notes.filter((note) => note.includes('pagespace keys describe'))).toHaveLength(1);
-    expect(notes.some((note) => note.includes('pagespace keys describe --key my-key'))).toBe(true);
+    expect(notes.some((note) => note.includes('pagespace keys describe --key=my-key'))).toBe(true);
   });
 
   it('never surfaces the raw token anywhere when the show-once confirm is declined, but still prints guidance', async () => {

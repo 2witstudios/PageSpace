@@ -91,7 +91,9 @@ function formatGrant(scope: DescribedScope, scoped: boolean): string {
   return `role ${(scope.role ?? 'unknown').toLowerCase()}`;
 }
 
-export const KEYS_DESCRIBE_USAGE = 'Usage: pagespace keys describe [--page <pageId>]';
+export const KEYS_DESCRIBE_USAGE =
+  'Usage: pagespace keys describe [--page <pageId>]\n' +
+  '  Needs a content credential named: --key=<name>, --token, the env vars, or an active key.';
 
 export type ParseKeysDescribeArgsResult =
   | { readonly ok: true; readonly pageId?: string }

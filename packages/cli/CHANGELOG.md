@@ -4,6 +4,35 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+
+- **The `keys describe` command printed after a mint now works when you paste it.** 1.8.0 printed
+  `--key <name>` space-separated, which the argument parser rejects when the name begins with `-`
+  (`--name -prod` mints fine, so this is reachable), and omitted `--host`, so a key minted against a
+  non-default host resolved against the default one and was not found. It now prints
+  `--key=<name>`, shell-quoted, with `--host` when there is one.
+- **`keys create` refuses a blank or whitespace-padded `--name` instead of minting an unfindable
+  key.** A key is stored under its name verbatim, but every lookup trims first — so `--name "  x  "`
+  wrote the store under `"  x  "` while `--key` resolved `"x"` and missed, and `--name ""` wrote a
+  key no lookup could ever produce. A padded name is now refused with the trimmed spelling
+  suggested; a blank or all-whitespace one is refused as blank.
+- **`keys create` now says WHY it could not read a new key's permissions back.** When the server
+  returns a refresh credential instead of a static token there is no bearer to ask with; 1.8.0 said
+  the readback had failed but not that. (The `pagespace keys` wizard already gave the reason — the
+  two surfaces now match.)
+- **`pagespace login --key <name>` no longer suggests a command that would revoke your personal
+  login.** When a NAMED key was the credential already stored, the message named that key but
+  suggested a bare `pagespace logout --host <host>` — and `logout` resolves its own key name, so it
+  landed on `default`, revoking that refresh token server-side and deleting it. The suggestion now
+  names the same key the message is about. `login --device` printed the same line.
+- **The `logout` command suggested when a key name is already taken is pasteable too.** It printed
+  `--key <name>` space-separated with the name interpolated, so a key called `-prod` produced a
+  command the parser rejects and `lead gen` one that logs out of the wrong key. Same fix as the
+  post-mint hint, which is where the hole was first found.
+- **`keys describe`'s usage line and the README** now say it needs a content credential named — it
+  is the one `keys` verb that reports on one rather than managing keys, and the README's summary
+  paragraph previously said the opposite.
+
 ## [1.8.0] — 2026-08-23
 
 ### Added

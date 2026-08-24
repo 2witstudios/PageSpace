@@ -51,6 +51,7 @@ import {
   getPrincipalDriveMembership,
   isDriveScopedPrincipal,
 } from '@/lib/auth/principal-permissions';
+import { mapWithConcurrency } from '@/lib/map-with-concurrency';
 import { sessionRepository } from '@/lib/repositories/session-repository';
 import { getRoleById } from '@pagespace/lib/services/drive-role-service';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
@@ -69,45 +70,6 @@ const AUTH_OPTIONS_READ = { allow: ['mcp', 'oauth', 'session'] as const, require
  * it fast.
  */
 const DRIVE_RESOLUTION_CONCURRENCY = 8;
-
-/**
- * `Promise.all` over `items`, at most `limit` in flight, preserving input
- * order. Order matters: this is a report a human diffs between runs, and a
- * settle-as-they-finish result would reshuffle it for no reason.
- *
- * `Math.max(1, …)` is a guard against a returned array of HOLES rather than a
- * style flourish: a non-positive limit would start zero workers, and this
- * function would then resolve `new Array(n)` — typed `TResult[]`, actually
- * empty — with no work done and no error, which the route would serialize as a
- * list of nulls. A status readout quietly reporting every drive as garbage is
- * the worst failure this endpoint could have.
- *
- * The first rejection stops the queue as well as propagating. `Promise.all`
- * rejects immediately but does not cancel its siblings, so without the flag the
- * remaining workers would keep draining — spending the full fan-out this bound
- * exists to contain on a response that has already failed.
- */
-async function mapWithConcurrency<TItem, TResult>(
-  items: readonly TItem[],
-  limit: number,
-  resolve: (item: TItem) => Promise<TResult>,
-): Promise<TResult[]> {
-  const results: TResult[] = new Array(items.length);
-  let next = 0;
-  let failed = false;
-  const workers = Array.from({ length: Math.min(Math.max(1, limit), items.length) }, async () => {
-    for (let index = next++; index < items.length && !failed; index = next++) {
-      try {
-        results[index] = await resolve(items[index]);
-      } catch (error) {
-        failed = true;
-        throw error;
-      }
-    }
-  });
-  await Promise.all(workers);
-  return results;
-}
 
 /**
  * How the principal holds this drive, spelled out so a reader never has to
@@ -209,30 +171,30 @@ export async function GET(req: NextRequest) {
     // The bound is on DRIVES: each one fans out to two concurrent resolvers, so
     // the real ceiling is roughly double this number of queries in flight.
     const driveScopes = await mapWithConcurrency(driveIds, DRIVE_RESOLUTION_CONCURRENCY, async (driveId) => {
-        const [permissions, membership] = await Promise.all([
-          getPrincipalDriveAccessLevel(auth, driveId),
-          getPrincipalDriveMembership(auth, driveId),
-        ]);
-        const role = membership?.role ?? null;
-        const customRoleId = membership?.customRoleId ?? null;
-        const customRole = customRoleId ? await getRoleById(driveId, customRoleId) : null;
+      const [permissions, membership] = await Promise.all([
+        getPrincipalDriveAccessLevel(auth, driveId),
+        getPrincipalDriveMembership(auth, driveId),
+      ]);
+      const role = membership?.role ?? null;
+      const customRoleId = membership?.customRoleId ?? null;
+      const customRole = customRoleId ? await getRoleById(driveId, customRoleId) : null;
 
-        return {
-          id: driveId,
-          name: driveNames.get(driveId) ?? driveId,
-          role,
-          customRoleId,
-          customRoleName: customRole?.name ?? null,
-          roleSource: describeRoleSource(membership, customRoleId),
-          // A scope whose drive resolves to no access at all — a dangling
-          // inherit row whose owner lost the drive, a custom role deleted out
-          // from under the key — is reported as an all-false entry rather than
-          // dropped. "You hold a grant here that currently gets you nothing" is
-          // the honest answer; omitting the row would read as never having had
-          // access.
-          permissions: permissions ?? { canView: false, canEdit: false, canShare: false, canDelete: false },
-        };
-      });
+      return {
+        id: driveId,
+        name: driveNames.get(driveId) ?? driveId,
+        role,
+        customRoleId,
+        customRoleName: customRole?.name ?? null,
+        roleSource: describeRoleSource(membership, customRoleId),
+        // A scope whose drive resolves to no access at all — a dangling
+        // inherit row whose owner lost the drive, a custom role deleted out
+        // from under the key — is reported as an all-false entry rather than
+        // dropped. "You hold a grant here that currently gets you nothing" is
+        // the honest answer; omitting the row would read as never having had
+        // access.
+        permissions: permissions ?? { canView: false, canEdit: false, canShare: false, canDelete: false },
+      };
+    });
 
     // Only when asked. `permissions: null` (out of reach) is preserved rather
     // than flattened to all-false: "this page is not yours to see" and "you may
