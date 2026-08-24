@@ -12,6 +12,7 @@ import {
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
+import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES } from '../execution-policy';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -1060,6 +1061,167 @@ describe('readSandboxFile', () => {
     const result = await readSandboxFile({ path: '/etc/passwd', ctx: makeCtx(), deps });
     expect(result).toMatchObject({ success: false, reason: 'path_escape' });
     expect(acquired).toBe(false);
+  });
+
+  // --- line paging (offset/limit) -------------------------------------------
+  // Before this, readFile cut at 256 KiB with no offset parameter, so a caller
+  // could not reach past the cut AT ALL, and learned only `truncated: true`.
+
+  /** A sandbox whose file is `lines` numbered lines, newline-terminated. */
+  const linesSandbox = (count: number) =>
+    makeSandbox({
+      readFileToBuffer: async () =>
+        Buffer.from(Array.from({ length: count }, (_, i) => `line ${i + 1}`).join('\n') + '\n'),
+    });
+
+  it('given a file longer than the default window, should return the first page and say how to get the rest', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.firstLine).toBe(1);
+    expect(result.lastLine).toBe(DEFAULT_READ_LINES);
+    expect(result.totalLines).toBe(5000);
+    expect(result.truncated).toBe(true);
+    expect(result.content.split('\n')[0]).toBe('line 1');
+    // The caller must be told the exact next call, not just that there is more.
+    expect(result.notice).toContain(`offset: ${DEFAULT_READ_LINES + 1}`);
+    expect(result.notice).toContain('5,000');
+  });
+
+  it('given an explicit offset and limit, should return exactly that window', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', offset: 2001, limit: 3, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('line 2001\nline 2002\nline 2003');
+    expect(result.firstLine).toBe(2001);
+    expect(result.lastLine).toBe(2003);
+  });
+
+  it('given a window that reaches the last line, should report it is the end rather than offering a next page', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', offset: 9, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('line 9\nline 10\n');
+    expect(result.truncated).toBe(true); // windowed: line 1-8 not shown
+    expect(result.notice).not.toContain('Continue with');
+    expect(result.notice).toContain('end of the file');
+  });
+
+  it('given an offset past the end, should return an empty window naming the real length, not an error', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', offset: 999, ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.content).toBe('');
+    expect(result.totalLines).toBe(10);
+    expect(result.notice).toContain('past the end');
+  });
+
+  it('given a file shorter than the window, should not be truncated and should carry no notice', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(10) });
+    const result = await readSandboxFile({ path: 'small.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.truncated).toBe(false);
+    expect(result.totalLines).toBe(10);
+    expect(result.notice).toBeUndefined();
+  });
+
+  it('given one enormous line, should clip it and still return the lines after it', async () => {
+    // Previously the byte cap ate the whole window on line 1, and because paging
+    // is by line there was no offset that could reach line 2.
+    const { deps } = makeDeps({
+      reconnect: async () =>
+        makeSandbox({ readFileToBuffer: async () => Buffer.from('A'.repeat(300 * 1024) + '\nline2\nline3\n') }),
+    });
+    const result = await readSandboxFile({ path: 'bundle.min.js', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
+    expect(result.content).toContain('line2');
+    expect(result.content).toContain('line3');
+    expect(result.lastLine).toBe(3);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('too long to show in full');
+  });
+
+  it('given a window cut short by the byte budget, should point the next read at the line content actually ended on', async () => {
+    // The bug this pins: the budget used to be applied to the joined window
+    // AFTER selection, so content stopped near line 1,300 while lastLine still
+    // said 2,000 and the notice sent the caller to offset 2,001 — silently
+    // losing ~700 lines.
+    const wide = Array.from({ length: 5000 }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+    const result = await readSandboxFile({ path: 'wide.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    const returnedLines = result.content.replace(/\n$/, '').split('\n').length;
+    expect(result.lastLine).toBe(returnedLines);
+    expect(result.lastLine).toBeLessThan(DEFAULT_READ_LINES);
+    expect(result.notice).toContain(`offset: ${result.lastLine + 1}`);
+    expect(result.notice).toContain('output size limit');
+  });
+
+  it('given repeated reads following the notice, should recover every line of a large file', async () => {
+    const total = 5000;
+    const wide = Array.from({ length: total }, (_, i) => `line ${i + 1} ` + 'x'.repeat(190)).join('\n') + '\n';
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(wide) }),
+    });
+
+    const seen: string[] = [];
+    let offset = 1;
+    for (let guard = 0; guard < 50; guard += 1) {
+      const page = await readSandboxFile({ path: 'wide.ts', offset, ctx: makeCtx(), deps });
+      if (!page.success || page.lastLine < page.firstLine) break;
+      seen.push(...page.content.replace(/\n$/, '').split('\n'));
+      if (page.lastLine >= page.totalLines) break;
+      offset = page.lastLine + 1;
+    }
+
+    expect(seen.length).toBe(total);
+    expect(seen[total - 1]).toBe(`line ${total} ` + 'x'.repeat(190));
+  });
+
+  it('given a truncated read, should report the WHOLE file size — originalBytes used to be computed and thrown away', async () => {
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.originalBytes).toBeGreaterThan(Buffer.byteLength(result.content, 'utf8'));
+  });
+
+  it('given a truncated read, should warn that editFile matches outside the window', async () => {
+    // The harm chain this closes: editFile counts occurrences across the ENTIRE
+    // file, so an anchor unique in the visible window can still report
+    // edit_not_unique, and replaceAll would then edit an unseen region.
+    const { deps } = makeDeps({ reconnect: async () => linesSandbox(5000) });
+    const result = await readSandboxFile({ path: 'big.ts', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.notice).toContain('editFile');
+    expect(result.notice).toContain('replaceAll');
+  });
+
+  it('given a multi-byte character at the window edge, should not corrupt it', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('a\n😀\nc\n') }),
+    });
+    const result = await readSandboxFile({ path: 'emoji.txt', offset: 2, limit: 1, ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.content).toBe('😀');
   });
 });
 
