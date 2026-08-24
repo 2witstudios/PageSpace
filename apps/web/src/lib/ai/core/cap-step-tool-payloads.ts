@@ -197,7 +197,7 @@ export function capStepToolPayloads(
   const messageOf = (position: string) => position.split(':')[0];
 
   const callPositions = positionsOf(messages, isToolCallPart);
-  const newestCallMessage = callPositions.at(-1)?.split(':')[0];
+  const newestCallMessage = callPositions.at(-1) && messageOf(callPositions.at(-1)!);
 
   // Results are exempted by MESSAGE too, for the same reason as calls: a step
   // that read four files in parallel delivers four result parts in one tool

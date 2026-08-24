@@ -331,6 +331,83 @@ describe('issue #2461 — the fixes', () => {
     });
   });
 
+  it("reproduces the reporter's own workflow, and bounds it", async () => {
+    // The closest thing to "does this fix #2461?". The reporter's agent
+    // ALTERNATED: readFile a JSON chunk (a several-hundred-KB result), then
+    // edit_sheet_cells it (a several-hundred-KB argument), ~30 times. The tests
+    // above drive each direction on its own; this drives the real mixture.
+    //
+    // Uncapped, the transcript crosses ~1.1 MB by step 5 — past a 200k-token
+    // window — which is exactly where the reporter stopped: "first ~4 files
+    // applied fine, after that EVERY subsequent call failed."
+    const chunk = 'z'.repeat(300_000);
+    const cells = Array.from({ length: 240 }, (_, i) => ({ row: i, col: 1, value: 'x'.repeat(1200) }));
+    const mixedRegistry: ToolSet = {
+      readFile: {
+        description: 'Read a chunk file',
+        inputSchema: z.object({ path: z.string() }),
+        execute: async () => ({ content: chunk }),
+      },
+      edit_sheet_cells: editSheetCells,
+    };
+
+    const STEPS = 30;
+
+    async function promptBytes(capped: boolean): Promise<number[]> {
+      let step = 0;
+      const model = new MockLanguageModelV3({
+        doStream: providerEmitting(() => {
+          step += 1;
+          return step % 2 === 1
+            ? JSON.stringify({ tool_name: 'readFile', parameters: { path: `chunk-${step}.json` } })
+            : JSON.stringify({
+                tool_name: 'edit_sheet_cells',
+                parameters: { pageId: `p-${step}`, cells },
+              });
+        }),
+      });
+      const result = streamText({
+        model,
+        messages: [{ role: 'user', content: 'apply all thirty chunks' }],
+        tools: { execute_tool: createExecuteTool(mixedRegistry) },
+        stopWhen: [stepCountIs(STEPS)],
+        ...(capped
+          ? {
+              prepareStep: ({ messages: m }: { messages: ModelMessage[] }) => ({
+                messages: capStepToolPayloads(m),
+              }),
+            }
+          : {}),
+      });
+      for await (const _part of result.fullStream) {
+        void _part;
+      }
+      await result.content;
+      return model.doStreamCalls.map((call) => JSON.stringify(call.prompt).length);
+    }
+
+    const uncapped = await promptBytes(false);
+    const capped = await promptBytes(true);
+    const A_200K_TOKEN_WINDOW = 800_000; // ~4 chars per token
+
+    assert({
+      given: "the reporter's alternating read-then-write workload, thirty steps",
+      should: 'blow a 200k-token window within a handful of steps uncapped, and stay flat capped',
+      actual: {
+        uncappedBlowsTheWindowByStepFive: uncapped[4] > A_200K_TOKEN_WINDOW,
+        uncappedKeepsGrowing: uncapped[STEPS - 1] > uncapped[4] * 5,
+        cappedStaysInsideTheWindow: Math.max(...capped) < A_200K_TOKEN_WINDOW,
+        cappedStopsGrowing: capped[STEPS - 1] < capped[9] * 1.5,
+      },
+      expected: {
+        uncappedBlowsTheWindowByStepFive: true,
+        uncappedKeepsGrowing: true,
+        cappedStaysInsideTheWindow: true,
+        cappedStopsGrowing: true,
+      },
+    });
+  }, 300_000);
+
   it('capping what is SENT never changes what is recorded', async () => {
     // The cap rewrites the messages handed to the provider for one step. If that
     // also reached the run's recorded steps, the fix would be quietly destroying
