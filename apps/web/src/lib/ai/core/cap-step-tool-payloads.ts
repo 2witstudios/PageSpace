@@ -127,14 +127,23 @@ const cappedInput = (chars: number): Record<string, string> => ({
  *
  * - `execution-denied` carries no value at all, so there is nothing to cap.
  * - `content` is the multimodal array read_page returns to a vision-capable
- *   model, and its bulk is base64 image bytes. Those DO accumulate in-turn like
- *   anything else, but a stub is not a substitute for an image the way it is for
- *   text the model can simply read again, and image delivery already has its own
- *   deliberate design in read-page-vision-output.ts (see
- *   guardReadPageToolForVision, which degrades stale image results only when the
- *   active model lacks vision). Capping images is a product decision about what
- *   a mid-comparison agent is allowed to lose, not a mechanical extension of
- *   this one — so it is named here rather than made silently.
+ *   model, and its bulk is base64 image bytes.
+ *
+ *   Measured, so the gap is stated exactly rather than vaguely: this only
+ *   escapes the cap when read_page is dispatched as a TOP-LEVEL tool, because
+ *   `type: 'content'` comes from read_page's own toModelOutput. Through
+ *   `execute_tool` — search-exposure mode, where a high-volume agent lives — the
+ *   image arrives as an ordinary JSON output and IS capped: a loop of ~0.5 MB
+ *   screenshots flattens at the retention window (1.53 MB over 8 steps) instead
+ *   of growing 0.51 MB per step to 3.56 MB.
+ *
+ *   The remaining top-level path is left alone deliberately. A stub is not a
+ *   substitute for an image the way it is for text the model can simply read
+ *   again, and image delivery already has its own design in
+ *   read-page-vision-output.ts (see guardReadPageToolForVision, which degrades
+ *   stale image results only when the active model lacks vision). What a
+ *   mid-comparison vision agent may lose is a product decision, not a mechanical
+ *   extension of this one — so it is named here rather than made silently.
  */
 function cappedOutput(output: ToolResultOutput, maxChars: number): ToolResultOutput | null {
   switch (output.type) {
