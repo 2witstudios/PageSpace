@@ -628,6 +628,14 @@ Three rules now hold, and `agent-tool-surface.ts` is the single place that compu
    refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
    would break working spawns over a non-problem.
 
+ONE SWITCH, EVERY SURFACE. The `@`-mention / consult engine
+(`agent-communication-tools.ts`) built its own tool set — allowlist + MCP scope — and never
+asked `pages.sandboxEnabled`, so an agent with the switch OFF was handed the shell family
+the moment someone mentioned it, while the same agent in a page chat correctly saw none of
+it. `canRunCode` still refused the execution, so it was a contradiction in configuration
+rather than a way into the sandbox; it is closed anyway, because a gate that answers
+differently per surface is not a gate.
+
 Two names are in neither camp. `web_search` and `generate_image` never pass through the
 allowlist at all — `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back
 only for a request whose composer toggle is on (steps 4/4b; image generation also requires
