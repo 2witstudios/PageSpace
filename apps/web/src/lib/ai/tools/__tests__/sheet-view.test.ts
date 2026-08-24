@@ -9,15 +9,27 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { assert } from './riteway';
+import type * as SheetStore from '@pagespace/lib/sheets/store';
 
 const mockGetTab = vi.fn();
 const mockListTabs = vi.fn();
 const mockReadRows = vi.fn();
 
+/**
+ * Argument tuples come from the real exports rather than `unknown[]`, so a
+ * function REMOVED or RENAMED in the store fails compilation here instead of
+ * leaving a stub that still satisfies every assertion against a name nothing
+ * calls any more. Be clear about the limit: `vi.fn()` accepts anything, so a
+ * change to a parameter's TYPE still flows through silently — this guards the
+ * export surface, not the signatures.
+ *
+ * The import is type-only and erased, so nothing loads the real store — which
+ * would open a database connection — at runtime.
+ */
 vi.mock('@pagespace/lib/sheets/store', () => ({
-  getTab: (...args: unknown[]) => mockGetTab(...args as []),
-  listTabs: (...args: unknown[]) => mockListTabs(...args as []),
-  readRows: (...args: unknown[]) => mockReadRows(...args as []),
+  getTab: (...args: Parameters<typeof SheetStore.getTab>) => mockGetTab(...args),
+  listTabs: (...args: Parameters<typeof SheetStore.listTabs>) => mockListTabs(...args),
+  readRows: (...args: Parameters<typeof SheetStore.readRows>) => mockReadRows(...args),
 }));
 
 import { serializeSheetContent } from '@pagespace/lib/sheets/io';

@@ -35,7 +35,7 @@ import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { queryRows, listTabs, getTab } from '@pagespace/lib/sheets/store';
-import { SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
+import { SHEET_FILTER_OPS, SheetQueryError, type SheetWhere } from '@pagespace/lib/sheets/query';
 import { pageRepository } from '@pagespace/lib/repositories/page-repository';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { maskIdentifier } from '@/lib/logging/mask';
@@ -91,12 +91,10 @@ const columnSchema = z
 
 const conditionSchema = z.object({
   column: columnSchema,
+  // From the store's own list, not a copy of it: an operator added to
+  // `compileWhere` and missed here would be a 400 on input the store handles.
   op: z
-    .enum([
-      'eq', 'neq', 'gt', 'gte', 'lt', 'lte',
-      'contains', 'startsWith', 'endsWith',
-      'isEmpty', 'isNotEmpty', 'in',
-    ])
+    .enum(SHEET_FILTER_OPS)
     .describe('Comparison to apply. "in" takes an array value; "isEmpty"/"isNotEmpty" take none.'),
   value: z
     .union([z.string(), z.number(), z.boolean(), z.array(z.union([z.string(), z.number(), z.boolean()]))])
