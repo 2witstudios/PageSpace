@@ -33,6 +33,13 @@ export interface ChatInputProps {
   placeholder?: string;
   /** Drive ID for mention suggestions */
   driveId?: string;
+  /**
+   * Drive scope for the `/` command picker — defaults to `driveId`. Set it
+   * when the two differ (an agent conversation scopes commands to the AGENT's
+   * drive while mentions stay on the route's), and see `ChatTextareaProps`
+   * for the invariant it must satisfy.
+   */
+  commandDriveId?: string;
   /** Enable cross-drive mention search */
   crossDrive?: boolean;
   /** Hide the model/provider selector in footer (for compact layouts) */
@@ -109,6 +116,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
       disabled = false,
       placeholder = 'Type your message...',
       driveId,
+      commandDriveId,
       crossDrive = false,
       hideModelSelector = false,
       variant = 'main',
@@ -261,6 +269,7 @@ export const ChatInput = forwardRef<ChatInputRef, ChatInputProps>(
             onSend={handleSend}
             placeholder={placeholder}
             driveId={driveId}
+            commandDriveId={commandDriveId}
             crossDrive={crossDrive}
             disabled={effectiveDisabled}
             variant={variant}

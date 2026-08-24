@@ -54,6 +54,7 @@ import { useEditingStore } from '@/stores/useEditingStore';
 import { ChatErrorBanner } from '@/components/ai/shared/chat/ChatErrorBanner';
 import { selectMessagesAreaMode } from '@/lib/ai/streams/selectMessagesAreaMode';
 import { canResumeRecovery } from '@/lib/ai/streams/canResumeRecovery';
+import { commandDriveIdFor } from '@/lib/commands/command-scope';
 
 // Threshold for enabling virtualization in sidebar (lower than main chat due to compact items)
 const SIDEBAR_VIRTUALIZATION_THRESHOLD = 30;
@@ -989,6 +990,13 @@ const SidebarChatTab: React.FC = () => {
           isStopping={isStopping}
           placeholder={`Ask about ${contextLabel ?? 'your workspace'}...`}
           driveId={locationContext?.currentDrive?.id}
+          // Commands scope to the SELECTED AGENT's drive, not the route's:
+          // an agent reached from another drive still has its chips resolved
+          // against its own `page.driveId` server-side, so scoping the picker
+          // to wherever the user happens to be standing offers commands that
+          // come back `not_found`. Mirrors GlobalAssistantView. Mention search
+          // (`driveId`/`crossDrive` above) is deliberately left as it was.
+          commandDriveId={commandDriveIdFor(selectedAgent, locationContext?.currentDrive?.id)}
           crossDrive={true}
           hideModelSelector={true}
           variant="sidebar"

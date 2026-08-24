@@ -14,7 +14,7 @@
  */
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
 import { SessionChatView } from './SessionChat';
-import { useAssistantSessionChat } from './useAssistantSessionChat';
+import { useAssistantContextRef, useAssistantSessionChat } from './useAssistantSessionChat';
 
 export default function AssistantSessionChat({
   sessionId,
@@ -33,6 +33,10 @@ export default function AssistantSessionChat({
 }) {
   const chat = useAssistantSessionChat({ conversationId, driveId });
   const currentModel = useAssistantSettingsStore((state) => state.currentModel);
+  // Same ref the turn itself ships, so the `/` picker scopes to exactly the
+  // drive `global-chat-turn` will resolve — including the case this session
+  // has no drive of its own but the pathname stands in one.
+  const contextRef = useAssistantContextRef(driveId);
 
   return (
     <SessionChatView
@@ -41,6 +45,7 @@ export default function AssistantSessionChat({
       chat={chat}
       name="Global Assistant"
       visionModel={currentModel || ''}
+      commandDriveId={contextRef.driveId ?? null}
       context={context}
       isReadOnly={isReadOnly}
     />

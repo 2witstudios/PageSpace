@@ -60,6 +60,11 @@ export default function SessionChat({
       sessionId={sessionId}
       conversationId={conversationId}
       chat={chat}
+      // The AGENT's own drive — deliberately not the pane-hosting session's,
+      // which can legitimately be a different one. The server resolves this
+      // turn's command chips against the agent page's `page.driveId`, so any
+      // other scope would offer commands that fail as `not_found` on send.
+      commandDriveId={agent.driveId}
       name={agent.title}
       visionModel={agent.aiModel || ''}
       context={context}
@@ -85,6 +90,15 @@ export interface SessionChatViewProps {
   name: string;
   /** The model whose vision capability gates image attachment — '' = none. */
   visionModel: string;
+  /**
+   * Drive scope for the `/` command picker — the drive whose commands the
+   * SERVER will resolve this conversation's chips against. `null` when the
+   * turn resolves no drive at all (a driveless global-assistant session on a
+   * non-drive route), which is correct: picker and execution then agree that
+   * there are none. Required, not optional, so a future caller of this shared
+   * view cannot silently reintroduce the unscoped-picker bug.
+   */
+  commandDriveId: string | null;
   context: 'page' | 'console';
   isReadOnly?: boolean;
 }
@@ -95,6 +109,7 @@ export function SessionChatView({
   chat,
   name,
   visionModel,
+  commandDriveId,
   context,
   isReadOnly = false,
 }: SessionChatViewProps) {
@@ -216,6 +231,7 @@ export function SessionChatView({
           hideModelSelector
           variant={context === 'console' ? 'sidebar' : 'main'}
           hasVision={hasVisionCapability(visionModel)}
+          commandDriveId={commandDriveId ?? undefined}
           remoteStreamingUser={remoteStreamingUser}
         />
       </div>

@@ -33,8 +33,22 @@ vi.mock('@/hooks/useMobileKeyboard', () => ({
 }));
 
 vi.mock('../ChatTextarea', () => ({
-  ChatTextarea: ({ disabled, value }: { disabled?: boolean; value: string }) => (
-    <textarea data-testid="chat-textarea" disabled={disabled} value={value} readOnly />
+  ChatTextarea: ({
+    disabled,
+    value,
+    commandDriveId,
+  }: {
+    disabled?: boolean;
+    value: string;
+    commandDriveId?: string;
+  }) => (
+    <textarea
+      data-testid="chat-textarea"
+      disabled={disabled}
+      value={value}
+      data-command-drive-id={commandDriveId ?? 'none'}
+      readOnly
+    />
   ),
 }));
 
@@ -123,6 +137,23 @@ describe('ChatInput — remoteStreamingUser lock', () => {
     const actions = screen.getByTestId('input-actions');
     expect(actions.getAttribute('data-streaming')).toBe('false');
     expect(actions.getAttribute('data-disabled')).toBe('true');
+  });
+
+  // The command picker's drive scope is decided in ChatTextarea, so ChatInput's
+  // only job is to hand the prop over intact — an easy hop to drop, and one no
+  // surface-level suite can catch (they all mock ChatInput away).
+  it('forwards commandDriveId to the textarea, and omits it cleanly when unset', () => {
+    const { rerender } = render(<ChatInput {...baseProps} commandDriveId="agent-drive" />);
+    expect(screen.getByTestId('chat-textarea')).toHaveAttribute(
+      'data-command-drive-id',
+      'agent-drive'
+    );
+
+    rerender(<ChatInput {...baseProps} />);
+    expect(screen.getByTestId('chat-textarea')).toHaveAttribute(
+      'data-command-drive-id',
+      'none'
+    );
   });
 
   it('given remoteStreamingUser is null, behaves identically to the prop being omitted', () => {
