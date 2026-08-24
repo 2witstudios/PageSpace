@@ -36,7 +36,10 @@
  * steps keep every payload at full size, so persistence and the activity log see
  * exactly what the agent really sent and received (asserted in the tests).
  */
-import type { ModelMessage } from 'ai';
+import type { ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
+
+/** Not exported by `ai`, but reachable from the part that carries it. */
+type ToolResultOutput = ToolResultPart['output'];
 
 /**
  * Ceiling on a single serialized tool payload, in characters.
@@ -74,17 +77,16 @@ const argumentsStub = (chars: number) =>
 const resultStub = (chars: number) =>
   elided('Result', chars, 'call it again with the same arguments if you still need it.');
 
-interface PartLike {
-  type: string;
-}
+// Narrow to the SDK's own part types, not to a structural stand-in. A predicate
+// like `part is { type: string; output?: unknown }` looks equivalent but is not:
+// every member of the content union satisfies `{ type: string }`, so TypeScript
+// keeps them all and `part.output` fails on TextPart.
+const hasType = (part: unknown, type: string): boolean =>
+  typeof part === 'object' && part !== null && (part as { type?: unknown }).type === type;
 
-function isToolCallPart(part: unknown): part is PartLike & { input?: unknown } {
-  return typeof part === 'object' && part !== null && (part as PartLike).type === 'tool-call';
-}
+const isToolCallPart = (part: unknown): part is ToolCallPart => hasType(part, 'tool-call');
 
-function isToolResultPart(part: unknown): part is PartLike & { output?: { type: string; value?: unknown } } {
-  return typeof part === 'object' && part !== null && (part as PartLike).type === 'tool-result';
-}
+const isToolResultPart = (part: unknown): part is ToolResultPart => hasType(part, 'tool-result');
 
 /** Serialized size of a value, or null when it has none to measure. */
 function sizeOf(value: unknown): number | null {
@@ -113,18 +115,20 @@ const cappedInput = (chars: number): Record<string, string> => ({
  * `execution-denied` carries no value, and `content` is a multimodal array whose
  * bulk is images rather than text; both are left alone.
  */
-function cappedOutput<T extends { type: string; value?: unknown }>(
-  output: T,
-  chars: number
-): T | null {
-  const stub = resultStub(chars);
+function cappedOutput(output: ToolResultOutput, maxChars: number): ToolResultOutput | null {
   switch (output.type) {
     case 'text':
-    case 'error-text':
-      return { ...output, value: stub };
+    case 'error-text': {
+      const chars = sizeOf(output.value);
+      if (chars === null || chars <= maxChars) return null;
+      return { ...output, value: resultStub(chars) };
+    }
     case 'json':
-    case 'error-json':
-      return { ...output, value: { [ELIDED_KEY]: stub } };
+    case 'error-json': {
+      const chars = sizeOf(output.value);
+      if (chars === null || chars <= maxChars) return null;
+      return { ...output, value: { [ELIDED_KEY]: resultStub(chars) } };
+    }
     default:
       return null;
   }
@@ -190,11 +194,9 @@ export function capStepToolPayloads(
       }
 
       if (isToolResultPart(part)) {
-        const output = part.output;
-        if (output === undefined) return part;
-        const chars = sizeOf(output.value);
-        if (chars === null || chars <= maxChars) return part;
-        const capped = cappedOutput(output, chars);
+        // The size check lives inside cappedOutput, with the switch that knows
+        // which shape this output's `value` actually has.
+        const capped = cappedOutput(part.output, maxChars);
         if (capped === null) return part;
         messageChanged = true;
         didCap = true;
