@@ -20,6 +20,7 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
   readRows: (...args: unknown[]) => mockReadRows(...args as []),
 }));
 
+import { serializeSheetContent } from '@pagespace/lib/sheets/io';
 import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
@@ -221,6 +222,82 @@ describe('column-level formats', () => {
 
     const window = await loadSheetWindow('page-1', { limit: 10 });
     expect(window.rows[0].cells.B).toContain('%');
+  });
+});
+
+describe('the two paths render one cell one way', () => {
+  // THE property, asserted directly. Three consecutive review passes found a
+  // different way this had been broken — raw numbers, then cell formats, then
+  // column formats — because each fix targeted the instance it was handed. A
+  // test per instance cannot catch the next one; this drives the SAME cell data
+  // through both paths and compares.
+  //
+  // The fixture must make formatting MATTER, or the comparison is vacuous: an
+  // earlier version of this test used unformatted numbers, passed happily, and
+  // caught none of the three regressions when I mutated them back in.
+  const sheet = {
+    version: 1,
+    rowCount: 3,
+    columnCount: 3,
+    sheetName: 'Money',
+    cells: {
+      A1: 'label',
+      B1: '1200',
+      C1: '=B1/4',
+      // Deliberately in an UNFORMATTED column: a number format would
+      // short-circuit `formatDisplayValue` and mask a regression there.
+      C2: '0.30000000000000004',
+    },
+    // Column-level, which is the case that is never denormalised onto a cell.
+    columnFormats: { B: { number: { kind: 'currency' as const, currency: 'USD', decimals: 2 } } },
+  };
+
+  it('agrees on values and formulas for the same rows, formats included', async () => {
+    mockListTabs.mockResolvedValue([]);
+    const fromDocument = await loadSheetWindow('page-1', {
+      limit: 10,
+      documentContent: serializeSheetContent(sheet, { pageId: 'page-1' }),
+    });
+
+    // The same cells as the row store holds them: raw + materialised value,
+    // with the column format on the TAB rather than on any cell.
+    mockListTabs.mockResolvedValue([tab]);
+    mockGetTab.mockResolvedValue({
+      ...tab,
+      rowCount: 3,
+      columnCount: 3,
+      columnFormats: sheet.columnFormats,
+    });
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 0,
+        cells: {
+          A: { raw: 'label', value: 'label' },
+          B: { raw: '1200', value: 1200 },
+          C: { raw: '=B1/4', value: 300 },
+        },
+      },
+      { rowIndex: 1, cells: { C: { raw: '0.30000000000000004', value: 0.30000000000000004 } } },
+    ]);
+    const fromStore = await loadSheetWindow('page-1', { limit: 10 });
+
+    // Guard the guard: if the fixture stops exercising formatting, this test
+    // silently stops proving anything.
+    expect(fromDocument.rows[0].cells.B).toContain('1,200');          // a format is applied
+    expect(fromDocument.rows[1].cells.C).toBe('0.3');                  // and an unformatted number is still normalised
+
+    assert({
+      given: 'the same cells before and after migration, with a column format',
+      should: 'render identical values',
+      actual: fromStore.rows.map(r => r.cells),
+      expected: fromDocument.rows.map(r => r.cells),
+    });
+    assert({
+      given: 'a formula cell before and after migration',
+      should: 'preserve the formula identically',
+      actual: fromStore.rows[0].formulas,
+      expected: fromDocument.rows[0].formulas,
+    });
   });
 });
 
