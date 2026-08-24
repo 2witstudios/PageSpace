@@ -12,18 +12,18 @@ How to write and edit DOCUMENT and CODE pages well, using \`read_page\`, \`repla
 
 Every text page is one of:
 
-- **DOCUMENT, html mode (the default)** — rich text stored as Tiptap HTML. The stored HTML has no newlines; line structure is synthesized for you (see below).
-- **DOCUMENT, markdown mode** (\`contentMode: 'markdown'\`) — raw markdown text, stored and edited exactly as written, with natural line structure.
+- **DOCUMENT, html mode** — rich text stored as Tiptap HTML. The stored HTML has no newlines; line structure is synthesized for you (see below). This is what the rich editor produces, so most pages a person created are in this mode.
+- **DOCUMENT, markdown mode** (\`contentMode: 'markdown'\`) — raw markdown text, stored and edited exactly as written, with natural line structure. **This is the default for documents YOU create.**
 - **CODE** — raw plain-text source with syntax highlighting. Treated exactly like markdown mode for editing: no HTML processing, natural lines.
 
 \`read_page\` and \`replace_lines\` results report the page's \`type\` and \`contentMode\` (\`insert_content\` results do not — check *before* inserting, not after). Match the page's format: writing markdown syntax into an html-mode DOCUMENT (or HTML tags into a markdown/CODE page) produces literal garbage, not formatting.
 
 ### Choosing contentMode at create_page
 
-\`create_page\` takes an optional \`contentMode: 'html' | 'markdown'\` for DOCUMENT pages; it defaults to \`html\`. This is a creation-time choice — pick deliberately:
+\`create_page\` takes an optional \`contentMode: 'html' | 'markdown'\` for DOCUMENT pages; **for a document you create it defaults to \`markdown\`** (a document created in the browser still defaults to html — that is the editor's own format). So if you write HTML into a page you created without naming a mode, it is stored as markdown and your tags are literal text. Pick deliberately:
 
-- **html** (default): documents humans will edit in the rich editor; anything needing tables, mentions, syntax-highlighted code blocks, or inline font styling.
-- **markdown**: markdown-native content — docs mirrored from repositories, agent-maintained notes, content where you want clean line-based markdown editing. The editor renders it as rich text but stores markdown.
+- **markdown** (default when you create the page): markdown-native content — docs mirrored from repositories, agent-maintained notes, structured data, anything you want clean line-based editing of. Its line numbers are the text's own newlines. The editor renders it as rich text but stores markdown.
+- **html** (must be asked for explicitly): documents humans will edit in the rich editor; anything needing tables, mentions, syntax-highlighted code blocks, or inline font styling. Write HTML into these, never markdown syntax.
 
 Never try to "convert" a page by writing the other syntax into it; create a new page with the right mode instead.
 
@@ -31,7 +31,7 @@ Never try to "convert" a page by writing the other syntax into it; create a new 
 
 \`read_page\` returns content with each line prefixed \`N→\` (1-based), plus \`totalLines\`, and supports \`lineStart\`/\`lineEnd\` ranges. Like the edit tools, it also **requires a \`title\` field** (the page's title, display-only context) alongside the optional \`pageId\`.
 
-For html-mode DOCUMENTs, the stored HTML is first normalized by an **additive** line-breaker: a newline is added after each opening block tag, before each closing block tag, and between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar). Text content is never removed or changed — the one exception is whitespace *between* adjacent block tags, which is collapsed to the newline. So a paragraph reads as three lines:
+For html-mode DOCUMENTs **whose content is actually an HTML document** (it opens with a block element, as anything the editor wrote does), the stored HTML is first normalized by an **additive** line-breaker: a newline is added after each opening block tag, before each closing block tag, between adjacent block tags (\`p\`, \`h1\`–\`h6\`, \`ul\`/\`ol\`/\`li\`, \`table\`/\`tr\`/\`td\`/\`th\`/\`thead\`/\`tbody\`, \`blockquote\`, \`pre\`, \`div\`, and similar), and after each \`<br>\`/\`<hr>\` — a \`<br>\` ends a line, so a document laid out with \`<br>\` separators numbers one line per break. Nothing is ever removed or changed: text, spacing and blank lines all survive. Content that is *not* an HTML document — raw JSON or markdown sitting in an html-mode page — is left completely alone and numbered by its own newlines, tags inside its strings included. So a paragraph reads as three lines:
 
 \`\`\`
 12→<p>
@@ -47,7 +47,7 @@ CHANNEL and TASK_LIST pages return structured data (transcripts, tasks) rather t
 
 1. **Always read before writing.** Never edit from memory of an earlier read.
 2. Make your edit with \`replace_lines\` or \`insert_content\`.
-3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. The edit result's \`newContent\` (and, from \`replace_lines\`, \`newLineCount\`) can also tell you the new layout, but when in doubt, re-read.
+3. **Line numbers shift after every edit.** An insert or a replacement with a different line count renumbers everything below it. Re-read the page (a \`lineStart\`/\`lineEnd\` range around the edit area is enough) before any further line-based edit. \`replace_lines\` reports \`newLineCount\` measured on the content it actually stored, so it is exactly what your next read will return — but it tells you the count, not the new layout; when in doubt, re-read.
 4. Verify the result: edit tools return \`oldContent\`/\`newContent\` so you can confirm the change landed where intended.
 
 ### replace_lines — precise range edits
@@ -56,7 +56,9 @@ CHANNEL and TASK_LIST pages return structured data (transcripts, tasks) rather t
 
 - \`content\` may contain newlines — a multi-line string becomes multiple lines.
 - **Empty-string \`content\` deletes the range entirely** (reported as \`changeType: 'deletion'\`); it does not leave a blank line.
-- The range is validated against the normalized line count: out-of-bounds or inverted ranges fail with \`Invalid line range: X-Y. Document has N lines.\` — a common symptom of stale line numbers.
+- The range is validated against the normalized line count: out-of-bounds or inverted ranges come back with \`success: false\` and \`Invalid line range: X-Y. Document has N lines.\` — a common symptom of stale line numbers. Nothing is written when that happens.
+- **\`expectedTotalLines\` guards against exactly that.** Pass the \`totalLines\` your last read reported; if the document is no longer that length the edit is refused instead of being applied to lines you have not seen. Without it, a range that no longer covers what you think it covers replaces part of the document and silently leaves the rest of the old content behind. Use it on any full-document rewrite.
+- A \`contentModeWarning\` in the result means the page is in html mode but holds content that is not HTML (raw JSON, markdown — usually a page created before content modes existed). Its line numbers are the text's own newlines; keep writing the shape already in the page, and do not introduce HTML into it.
 - It refuses FILE pages (uploads are read-only) and SHEET pages (use \`edit_sheet_cells\` with A1-style addresses instead).
 
 Use it for: rewriting a section, fixing specific lines, deleting content, any edit where you know the exact range from a fresh read.

@@ -33,6 +33,7 @@ import { taskManagementTools } from './task-management-tools';
 import { agentTools } from './agent-tools';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 // Nesting cap. Intent is 3+ for richer agent-to-agent composition, but held at 2
 // until inner stepCountIs budget is reworked — see PR #713. Raising this without
@@ -822,6 +823,10 @@ export async function executeAskAgent(
               tools: { ...allAgentTools, ...finishTool } as Parameters<typeof generateText>[0]['tools'],
               experimental_context: nestedContext,
               stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+              // Per-step cap: history is prepared once, but this loop runs many model
+              // calls, so one run's oversized tool payloads would otherwise accumulate
+              // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+              prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
               maxRetries: 3,
               onStepFinish: ({ toolCalls }) => {
                 if (toolCalls?.length > 0) {

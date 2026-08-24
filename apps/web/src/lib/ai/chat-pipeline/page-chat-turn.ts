@@ -115,7 +115,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '@/lib/ai/core/context-assembly';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 
 import { db } from '@pagespace/db/db'
@@ -1902,13 +1902,12 @@ export async function runPageChatTurn(ctx: PageChatTurnContext): Promise<Respons
                 });
                 lifecycle!.finish(true);
               },
-              // Re-mark breakpoints per step so mid-loop tool results are cached.
-              // stableBoundaryIndex stays fixed (the summary is always at position
-              // 0; its first tail neighbour at position 1 remains stable as new
-              // messages are appended to the END of the accumulating array).
-              prepareStep: ({ messages: stepMessages }) => ({
-                messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
-              }),
+              // Cap this turn's own oversized tool payloads, then re-mark breakpoints
+              // so mid-loop tool results are cached. stableBoundaryIndex stays fixed
+              // (the summary is always at position 0; its first tail neighbour at
+              // position 1 remains stable as new messages are appended to the END of
+              // the accumulating array). See agentLoopPrepareStep.
+              prepareStep: agentLoopPrepareStep(stableBoundaryIndex),
             })
           },
           });

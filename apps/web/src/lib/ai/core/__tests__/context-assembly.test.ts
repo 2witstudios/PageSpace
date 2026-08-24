@@ -26,7 +26,7 @@ vi.mock('ai', async (importOriginal) => {
 });
 
 import { prepareConversationContext } from '@/lib/ai/core/compaction/prepare-context';
-import { prepareHistoryForModel, finishModelRequest } from '../context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '../context-assembly';
 
 const mockPrepare = vi.mocked(prepareConversationContext);
 
@@ -319,5 +319,79 @@ describe('finishModelRequest', () => {
     await finishModelRequest({ prepared, tools: {} as never });
 
     expect(mockConvert).toHaveBeenCalledWith(expect.anything(), { tools: {} });
+  });
+});
+
+describe('agentLoopPrepareStep', () => {
+  const oversized = 'x'.repeat(60_000);
+
+  /** Two executed steps, the older one carrying an oversized argument payload. */
+  const twoSteps = () =>
+    [
+      { role: 'user', content: 'go' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'old', toolName: 'execute_tool', input: { blob: oversized } },
+        ],
+      },
+      {
+        role: 'tool',
+        content: [
+          {
+            type: 'tool-result',
+            toolCallId: 'old',
+            toolName: 'execute_tool',
+            output: { type: 'json', value: { ok: true } },
+          },
+        ],
+      },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'tool-call', toolCallId: 'new', toolName: 'execute_tool', input: { blob: oversized } },
+        ],
+      },
+    ] as Parameters<ReturnType<typeof agentLoopPrepareStep>>[0]['messages'];
+
+  it('caps the turn\'s own oversized payloads', () => {
+    const { messages } = agentLoopPrepareStep(0)({ messages: twoSteps() });
+    const inputs = messages
+      .filter((m) => m.role === 'assistant')
+      .flatMap((m) => m.content as { type: string; input?: unknown }[])
+      .filter((p) => p.type === 'tool-call')
+      .map((p) => JSON.stringify(p.input));
+
+    expect(
+      [inputs[0].includes('__payload_elided'), inputs[1].includes(oversized)],
+      'the executed step is stubbed and the newest call is kept whole',
+    ).toEqual([true, true]);
+  });
+
+  it('marks a cache breakpoint on the last message', () => {
+    const { messages } = agentLoopPrepareStep(0)({ messages: twoSteps() });
+    const last = messages[messages.length - 1] as { providerOptions?: Record<string, unknown> };
+
+    expect(last.providerOptions?.openrouter, 'breakpoint A lands on the final message').toBeDefined();
+  });
+
+  it('caps BEFORE marking, so the breakpoint covers the bytes actually sent', () => {
+    // The ordering is the whole reason this composition is shared rather than
+    // written out per call site. Marking first would put the breakpoint on bytes
+    // the cap then rewrites, so the cached prefix would never match what is sent.
+    // Assert it structurally: the marked message is the capped array's own object.
+    const prepared = agentLoopPrepareStep(0)({ messages: twoSteps() });
+    const marked = prepared.messages[prepared.messages.length - 1] as {
+      providerOptions?: unknown;
+      content: { input?: unknown }[];
+    };
+
+    expect(
+      {
+        marked: marked.providerOptions !== undefined,
+        newestStillWhole: JSON.stringify(marked.content[0].input).includes(oversized),
+      },
+      'the same message carries both the breakpoint and the post-cap payload',
+    ).toEqual({ marked: true, newestStillWhole: true });
   });
 });

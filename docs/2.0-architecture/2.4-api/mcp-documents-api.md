@@ -82,9 +82,9 @@ touched.
 | Operation | Purpose | Requires |
 |---|---|---|
 | `read` | Return page content with numbered lines. Supports `startLine`/`endLine` for a ranged read (1-indexed, inclusive). `TASK_LIST` pages return tasks, `availableStatuses`, progress rollups, `parentTaskList`, and per-task `subTaskCount`/`subTaskCompletedCount` instead of line content. `CHANNEL` pages return a numbered message transcript (`startLine`/`endLine` address message index, not line number). `FILE` pages surface `processingStatus` (`pending`/`processing`/`failed`/`visual` short-circuit with a status body; `completed` returns content plus `fileMetadata`). | view |
-| `replace` | Replace lines `startLine`–`endLine` with `content`. Rejected on `FILE`/`SHEET` pages (400 — see guardrails below). | edit |
-| `insert` | Insert `content` before `startLine`. Rejected on `FILE`/`SHEET` pages. | edit |
-| `delete` | Delete lines `startLine`–`endLine`. Rejected on `FILE`/`SHEET` pages. | edit |
+| `replace` | Replace lines `startLine`–`endLine` with `content`. Optional `expectedTotalLines` staleness guard. Rejected on `FILE`/`SHEET` pages (400 — see guardrails below). | edit |
+| `insert` | Insert `content` before `startLine`. Optional `expectedTotalLines`. Rejected on `FILE`/`SHEET` pages. | edit |
+| `delete` | Delete lines `startLine`–`endLine`. Optional `expectedTotalLines`. Rejected on `FILE`/`SHEET` pages. | edit |
 | `edit-cells` | Set/clear cells on a `SHEET` page. See below. | edit |
 
 `replace`/`insert`/`delete` all persist through `applyPageMutation` with the
@@ -102,15 +102,46 @@ content serialized through `serializePageContentForAI`
 in-process `read_page`/`replace_lines` AI tools use. CODE pages and
 `contentMode: 'markdown'` documents pass through raw (their content already
 has natural line structure, and normalizing raw code/markdown would mangle
-it). Everything else (plain HTML documents) is expanded via
-`addLineBreaksForAI` so line numbers correspond to block-level elements
-instead of collapsing the whole stored document into one line. A line number
-seen from a `read` always addresses the same content on a subsequent
-`replace`/`insert`/`delete` against the same page.
+it). Everything else is expanded via `addLineBreaksForAI` so line numbers
+correspond to block-level elements (and to `<br>`/`<hr>`, which end a line)
+instead of collapsing the whole stored document into one line — but only when
+the content actually IS an HTML document, which it tests by looking at the
+START of the string (`looksLikeHtmlDocument`), since anything the editor wrote
+opens with a block element. Content that fails that test — raw JSON or
+markdown in an html-mode page — passes through untouched and is numbered by
+its own newlines. A "contains a tag anywhere" test would say yes to
+`{"note":"call<br>then email"}` and the normalizer would then inject a newline
+inside a JSON string value, which the write path stores: invalid JSON, written
+by the code that promised not to corrupt anything. A line number seen from a `read` always addresses the
+same content on a subsequent `replace`/`insert`/`delete` against the same page.
 
-Writes mirror that same `isRawText` check: CODE/markdown content is written
-back exactly as spliced, with no re-normalization; HTML documents are
-re-normalized with `addLineBreaksForAI` after the splice.
+Writes go through the same line-accounting core as the in-process AI tools,
+`apps/web/src/lib/editor/line-edit.ts` (`replaceLines`/`insertLines`/
+`deleteLines`). Two properties follow from that, and #2463 is what happens
+without them:
+
+- **The stored content IS the projection.** The spliced document is
+  canonicalized ONCE — CODE/markdown written back exactly as spliced, HTML
+  line-broken — and that string is what is saved. A subsequent `read` cannot
+  reshape it, because `addLineBreaksForAI` is idempotent and additive.
+- **`totalLines` is measured on the saved content**, after that pass, so the
+  count a write reports is the count the next `read` returns. The route used
+  to normalize a second time and report a count taken *before* it, which is
+  how an agent came to address an edit against a document eight lines shorter
+  than the one on disk — replacing most of it and leaving the tail behind.
+
+`replace`/`insert`/`delete` also take an optional **`expectedTotalLines`**:
+the length the caller believes it is editing. A mismatch is refused with
+`409` naming both counts rather than applying the edit to unseen lines. An
+out-of-range address is a `400` carrying the real `totalLines`; neither
+refusal writes anything. Responses carry `previousTotalLines` alongside
+`totalLines`.
+
+`read` and all three write operations return **`contentModeWarning`** when
+the page is an html-mode DOCUMENT whose content has no HTML block structure —
+raw JSON or markdown in a page created before content modes existed. Such a
+page's lines are its own newlines; introducing HTML into it renumbers the
+whole document.
 
 ## `edit-cells` — sheet editing
 

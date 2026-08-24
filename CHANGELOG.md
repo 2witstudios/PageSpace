@@ -217,6 +217,42 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   restriction", so an agent someone was trying to lock down came back holding every tool there is.
   The settings screen always read an empty list as "none"; now both doors agree. To leave the list
   alone, don't send it at all.
+- **A long agent job no longer wedges itself partway through** — an agent working through a big
+  batch (reading thirty files and writing each one into a spreadsheet, say) would get several
+  chunks in and then fail every remaining step with the same cryptic complaint that its tool call
+  was missing a `tool_name` — which it had in fact sent. Retrying never helped, and only starting a
+  fresh agent got the work moving again. The tool call was not malformed: everything the agent read
+  and everything it wrote stayed in its working memory at full size for the rest of the job, so it
+  eventually had no room left to compose its next call, and the empty call it managed to send was
+  reported as a missing field. Large reads and writes from earlier in a run are now summarised once
+  the agent has moved past them — the most recent stay whole, and a summarised read says how to
+  fetch it again — so a long job no longer crowds itself out, on every surface that runs one: chat,
+  the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive incomplete,
+  the agent is now told what actually happened and given the fix, instead of a complaint about a
+  field it did not omit.
+- **Editing a document by line number no longer lies about what it did** — a line edit reported a
+  line count taken before the document was stored, so replacing 89 lines with 91 answered "9 lines".
+  An agent that trusted that number addressed its next edit against a document shorter than the one
+  on disk: most of the new content landed, the tail of the old content survived, and the page was
+  left holding invalid JSON — reported as success. Both editing surfaces (the in-app AI tools and
+  the `/api/mcp/documents` endpoint the CLI and SDK use) now share one line-accounting rule, and the
+  count a write reports is measured on the content actually saved — it is the count the next read
+  returns. `replace-lines` also takes an optional `--expect-lines N`: pass the total you read, and
+  an edit addressed against a document that has since changed is refused rather than half-applied.
+- **A document laid out with line breaks is no longer reported as one line** — line numbering only
+  understood block elements, so an eighteen-line document written with `<br>` separators (what
+  pasting text into the editor produces) came back as `totalLines: 1` and could not be edited by
+  line at all. `<br>` and `<hr>` now count as the line breaks they are, and a blank line between two
+  paragraphs is no longer silently swallowed.
+- **Documents an agent creates default to markdown** — machine-written documents used to be created
+  in rich-text mode, where line numbers are computed from the underlying markup rather than the text
+  that was written. Documents created through the AI tools or an API key now default to markdown;
+  documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
+  disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
+  read and every edit instead of leaving it to be discovered by corrupting the document — and that
+  content is left exactly as written, including any HTML tags inside it. Previously a page holding
+  JSON with a tag in one of its strings could have a line break inserted inside that string, leaving
+  the page holding invalid JSON.
 
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh

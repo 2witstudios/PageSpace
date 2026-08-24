@@ -420,6 +420,148 @@ describe('page-write-tools', () => {
       );
     });
 
+    // #2463: the replacement was pushed into the line array as ONE element, so
+    // a 91-line payload reported `newLineCount: 9` — 8 surrounding lines + 1.
+    // The document on disk was right; every number the agent was told was not.
+    it('counts every line of a multi-line replacement', async () => {
+      const document = Array.from({ length: 89 }, (_, i) => `old ${i + 1}`).join('\n');
+      const payload = Array.from({ length: 91 }, (_, i) => `new ${i + 1}`).join('\n');
+
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: document,
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 89, content: payload },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const success = result as { success: boolean; newLineCount: number; previousLineCount: number; stats: { totalLines: number } };
+      expect(success.success).toBe(true);
+      expect(success.newLineCount).toBe(91);
+      expect(success.previousLineCount).toBe(89);
+      expect(success.stats.totalLines).toBe(91);
+
+      // And the stored document is exactly the payload — no stale tail.
+      const stored = mockApplyPageMutation.mock.calls.at(-1)![0].updates.content as string;
+      expect(stored).toBe(payload);
+      expect(stored.split('\n')).toHaveLength(91);
+    });
+
+    it('refuses an edit addressed against a stale line count instead of applying it', async () => {
+      const document = Array.from({ length: 89 }, (_, i) => `old ${i + 1}`).join('\n');
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: document,
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 1, endLine: 81, content: 'new', expectedTotalLines: 81 },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
+      expect(failure.success).toBe(false);
+      expect(failure.error).toBe('Document changed since it was read');
+      expect(failure.message).toMatch(/89 lines/);
+      // The count is a field, not prose the agent has to parse out of `message`.
+      expect(failure.totalLines).toBe(89);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('answers an out-of-range edit with the real line count rather than throwing', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'Test Doc',
+        type: 'DOCUMENT',
+        content: 'a\nb\nc',
+        contentMode: 'markdown' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'Test Doc', pageId: 'page-1', startLine: 1, endLine: 9, content: 'x' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const failure = result as { success: boolean; error: string; message: string; totalLines: number };
+      expect(failure.success).toBe(false);
+      expect(failure.error).toBe('Line number out of range');
+      expect(failure.message).toMatch(/Document has 3 lines/);
+      expect(failure.totalLines).toBe(3);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    // The guard is only meaningful as a line count. 3.5 or -1 can never equal
+    // one, so without these constraints they parse and then refuse every edit.
+    it('accepts only a non-negative integer as expectedTotalLines', () => {
+      const schema = pageWriteTools.replace_lines.inputSchema as unknown as {
+        safeParse: (v: unknown) => { success: boolean };
+      };
+      const base = { title: 'Doc', pageId: 'page-1', startLine: 1, content: 'x' };
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3 }).success).toBe(true);
+      expect(schema.safeParse({ ...base, expectedTotalLines: 3.5 }).success).toBe(false);
+      expect(schema.safeParse({ ...base, expectedTotalLines: -1 }).success).toBe(false);
+    });
+
+    it('warns when an html-mode page holds non-HTML content', async () => {
+      mockPageRepo.findById.mockResolvedValue({
+        id: 'page-1',
+        title: 'registry',
+        type: 'DOCUMENT',
+        content: '{\n  "leads": []\n}',
+        contentMode: 'html' as const,
+        driveId: 'drive-1',
+        parentId: null,
+        position: 1,
+        isTrashed: false,
+        trashedAt: null,
+        revision: 1,
+        stateHash: null,
+      });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await pageWriteTools.replace_lines.execute!(
+        { title: 'registry', pageId: 'page-1', startLine: 2, content: '  "leads": [1],' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext }
+      );
+
+      const success = result as { success: boolean; contentModeWarning?: string; newLineCount: number };
+      expect(success.success).toBe(true);
+      expect(success.contentModeWarning).toMatch(/html contentMode/);
+      expect(success.newLineCount).toBe(3);
+    });
+
     it('replaces lines in CODE page without HTML mangling', async () => {
       // CODE pages may contain raw HTML/XML source. addLineBreaksForAI must NOT
       // run on them, so the saved content should preserve angle brackets verbatim.
@@ -466,6 +608,68 @@ describe('page-write-tools', () => {
     it('has correct tool definition', () => {
       expect(pageWriteTools.create_page).toBeDefined();
       expect(pageWriteTools.create_page.description).toContain('Create');
+    });
+
+    // #2463: create_page hard-forced 'html' at both the repository call and the
+    // response echo, so an agent that did not know to ask for markdown always
+    // landed on the mode whose line numbers are a normalized projection of
+    // TipTap markup rather than the text it wrote.
+    describe('contentMode default', () => {
+      const setupCreate = () => {
+        mockDriveRepo.findByIdBasic.mockResolvedValue({ id: 'drive-1', ownerId: 'owner-999' });
+        mockCanUserEditPage.mockResolvedValue(true);
+        mockPageRepo.getNextPosition.mockResolvedValue(1);
+        mockPageRepo.create.mockResolvedValue({ id: 'new-page-1', title: 'New Page', type: 'DOCUMENT' } as never);
+      };
+      const context = {
+        toolCallId: '1', messages: [],
+        experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+      };
+
+      it('creates a DOCUMENT in markdown mode when none is asked for', async () => {
+        setupCreate();
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'markdown' })
+        );
+        // The echoed mode must be the mode that was stored — the two sites used
+        // to be able to disagree.
+        expect((result as { contentMode: string }).contentMode).toBe('markdown');
+      });
+
+      it('honours an explicit html contentMode', async () => {
+        setupCreate();
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'New Page', type: 'DOCUMENT', contentMode: 'html' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'html' })
+        );
+        expect((result as { contentMode: string }).contentMode).toBe('html');
+      });
+
+      it('leaves non-document types on html — the column is meaningless for them', async () => {
+        setupCreate();
+        mockPageRepo.create.mockResolvedValue({ id: 'new-page-2', title: 'Notes', type: 'FOLDER' } as never);
+
+        const result = await pageWriteTools.create_page.execute!(
+          { driveId: 'drive-1', title: 'Notes', type: 'FOLDER' },
+          context
+        );
+
+        expect(mockPageRepo.create).toHaveBeenCalledWith(
+          expect.objectContaining({ contentMode: 'html' })
+        );
+        expect((result as { contentMode: string }).contentMode).toBe('html');
+      });
     });
 
     // Regression test for #2150: the description used to hardcode 8 page
