@@ -196,6 +196,34 @@ describe('createLoginHandler', () => {
     expect(stderr.lines.join('')).not.toContain('ps_rt_existing');
   });
 
+
+  // `logout` REVOKES the refresh token server-side before deleting it, and it
+  // resolves its own key name — so a bare `logout --host X` suggested while a
+  // NAMED key is the blocker would revoke the personal login instead. The
+  // suggestion has to name the same key the sentence is about.
+  it('suggests a logout that names the blocking key, not one that revokes the default credential', async () => {
+    const store = fakeStore();
+    // Stored under the NAMED key, which is what makes it the blocker here.
+    await store.set(
+      'https://pagespace.ai',
+      { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' },
+      'ci bot',
+    );
+    const handler = createLoginHandler(baseHandlerDeps(store));
+
+    const stderr = createRecordingSink();
+    const ctx = createFakeContext({ stderr, env: {} });
+
+    const code = await handler(ctx, commandIntent(['login', '--key', 'ci bot']));
+
+    expect(code).toBe(EXIT_RUNTIME_ERROR);
+    const output = stderr.lines.join('');
+    expect(output).toContain(`(key "ci bot")`);
+    // Names the key, and is quoted so it survives being pasted.
+    expect(output).toContain(`--key='ci bot'`);
+    expect(output).not.toMatch(/logout --host=\S+" first/);
+  });
+
   it('overwrites an existing stored credential when --yes is passed', async () => {
     const store = fakeStore(
       new Map([['https://pagespace.ai', { kind: 'oauth', refreshToken: 'ps_rt_existing', clientId: 'pagespace-cli', scopes: ['account'], createdAt: '2026-01-01T00:00:00.000Z' }]]),

@@ -73,27 +73,47 @@ describe('wizard copy constants', () => {
  */
 describe('keysDescribeHint', () => {
   it('names the key that was just minted, so the printed command is runnable', () => {
-    expect(keysDescribeHint('lead-gen')).toContain('pagespace keys describe --key lead-gen');
+    expect(keysDescribeHint('lead-gen', DEFAULT_HOST)).toContain('pagespace keys describe --key=lead-gen');
   });
 
   // Key names are close to free-form (`resolveNewKeyName` refuses only the
-  // reserved "default"), so an unquoted name with a space printed a command the
+  // reserved "default" and names no lookup could produce — blank or padded), so
+  // an unquoted name with a space printed a command the
   // shell would mis-split: `--key` took `lead`, and `gen` became a stray
   // positional the parser rejects. A hint that cannot be pasted is worse than
   // no hint, because the reader cannot tell it from one that can.
+  // Quoting alone is not enough: a name starting with `-` survives
+  // quote-stripping as the argv word `-prod`, and `parseArgv` rejects a
+  // space-separated flag value beginning with `-`. The equals-joined form is
+  // what `parse.ts` documents for exactly that ambiguity, so the hint uses it
+  // unconditionally — a plain name is unquoted, but still `--key=`.
   it.each([
-    ['lead gen', "--key 'lead gen'"],
-    ["o'brien", "--key 'o'\\''brien'"],
-    ['a$HOME', "--key 'a$HOME'"],
-    ['plain-name_1', '--key plain-name_1'],
-  ])('quotes %j so the printed command survives a shell', (keyName, expected) => {
-    expect(keysDescribeHint(keyName)).toContain(expected);
+    ['lead gen', "--key='lead gen'"],
+    ["o'brien", "--key='o'\\''brien'"],
+    ['a$HOME', "--key='a$HOME'"],
+    ['~x', "--key='~x'"],
+    ['plain-name_1', '--key=plain-name_1'],
+    ['-prod', '--key=-prod'],
+    ['--json', '--key=--json'],
+  ])('prints %j as a word a shell hands back intact', (keyName, expected) => {
+    expect(keysDescribeHint(keyName, DEFAULT_HOST)).toContain(expected);
+  });
+
+  // The key is stored under the host it was minted against, and the credential
+  // store is keyed by host — so a hint that omits --host resolves against the
+  // default and misses a key minted anywhere else. Same reason the MCP config
+  // block carries PAGESPACE_API_URL.
+  it('carries --host for a non-default host, and omits it for the default', () => {
+    expect(keysDescribeHint('k', 'https://tenant.example.com')).toContain(
+      '--key=k --host=https://tenant.example.com',
+    );
+    expect(keysDescribeHint('k', DEFAULT_HOST)).not.toContain('--host');
   });
 
   it('is printed exactly once per mint, by the wiring guidance', () => {
     const output = renderAgentWiringGuidance({ keyName: 'lead-gen', host: DEFAULT_HOST }).join('\n');
     const occurrences = output.split('pagespace keys describe').length - 1;
     expect(occurrences).toBe(1);
-    expect(output).toContain('--key lead-gen');
+    expect(output).toContain('--key=lead-gen');
   });
 });

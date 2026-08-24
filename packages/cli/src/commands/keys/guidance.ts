@@ -6,6 +6,7 @@
  */
 import { KEY_ENV_VAR_NAME, TOKEN_ENV_VAR_NAME } from '../../auth/resolve.js';
 import { DEFAULT_HOST } from '../../config/resolve.js';
+import { shellQuote } from '../../shell-quote.js';
 
 export const WIZARD_INTRO_HINT =
   'Keys are scoped credentials your agents use to access specific drives. Each key is saved locally as a named credential in your OS keychain.';
@@ -21,7 +22,7 @@ export const SHOW_TOKEN_PROMPT = "Show the token now for .env/CI use? It won't b
  * `keys describe` asks the server, which resolves it the same way every content
  * request will (issue #2470).
  *
- * `--key <name>` is load-bearing, not decoration. `keys describe` reports the
+ * `--key=<name>` is load-bearing, not decoration. `keys describe` reports the
  * credential a CONTENT command would use, so unlike its `keys` siblings it is
  * not auth-exempt and is subject to `run.ts`'s explicit-credential gate: with
  * a personal login and no active key — the state a user is in immediately
@@ -29,28 +30,16 @@ export const SHOW_TOKEN_PROMPT = "Show the token now for .env/CI use? It won't b
  * Naming the key that was just minted is what makes the printed command one
  * the reader can actually run.
  */
-export function keysDescribeHint(keyName: string): string {
-  return `Run "pagespace keys describe --key ${shellQuote(keyName)}" at any time to see this key's drives, role and effective permissions.`;
+export function keysDescribeHint(keyName: string, host: string): string {
+  // `--host` for the same reason the MCP config block below carries
+  // PAGESPACE_API_URL: the key was stored under THIS host, and the credential
+  // store is keyed by host, so a command that omits it resolves against the
+  // default and misses a key minted anywhere else. Omitted for the default
+  // host, where it would be noise.
+  const hostFlag = host === DEFAULT_HOST ? '' : ` --host=${shellQuote(host)}`;
+  return `Run "pagespace keys describe --key=${shellQuote(keyName)}${hostFlag}" at any time to see this key's drives, role and effective permissions.`;
 }
 
-/**
- * Makes `value` safe to paste into a shell as one word.
- *
- * Key names are close to free-form — `resolveNewKeyName` refuses only the
- * reserved `"default"` — so `--name "lead gen"` is legal and used to print
- * `--key lead gen`, where the shell hands `--key` the word `lead` and drops
- * `gen` into the command as a stray positional. A hint that cannot be pasted is
- * worse than no hint, since the reader has no way to tell it apart from one
- * that can.
- *
- * Single quotes rather than double: they suppress every expansion, so a name
- * containing `$`, backticks or `!` is inert. The `'\''` dance is the standard
- * way to carry a literal single quote through a single-quoted word.
- */
-function shellQuote(value: string): string {
-  if (/^[A-Za-z0-9._@%+=:,/-]+$/.test(value)) return value;
-  return `'${value.replaceAll("'", `'\\''`)}'`;
-}
 
 export interface AgentWiringGuidanceParams {
   readonly keyName: string;
@@ -105,6 +94,6 @@ export function renderAgentWiringGuidance(params: AgentWiringGuidanceParams): re
     // The ONE place this sentence is printed. The mint's permission summary
     // above it already shows the answer inline; repeating the pointer there
     // (and again here) put the same line on screen twice.
-    keysDescribeHint(params.keyName),
+    keysDescribeHint(params.keyName, params.host),
   ];
 }

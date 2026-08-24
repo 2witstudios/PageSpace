@@ -31,6 +31,14 @@ describe('writeDeniedDetails', () => {
     expect(details).toContain('pagespace keys describe --page');
   });
 
+  // `keys describe` reports on a CONTENT credential, so unlike its `keys`
+  // siblings it faces the CLI's explicit-credential gate — run bare under a
+  // personal login it is refused. Naming a command the reader cannot run is
+  // the failure this whole message exists to prevent.
+  it('says the CLI form needs this same credential, not a bare invocation', () => {
+    expect(writeDeniedDetails('replace', 'document')).toMatch(/same credential/i);
+  });
+
   // The module is imported by two routes whose suites partially mock
   // `@/lib/auth`; a barrel import here would make a missing mock surface as an
   // opaque 500 instead of the 403 under test.

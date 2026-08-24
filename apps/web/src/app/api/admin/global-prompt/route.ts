@@ -28,6 +28,7 @@ import { eq, and, asc } from '@pagespace/db/operators'
 import { drives, pages } from '@pagespace/db/schema/core'
 import { driveMembers } from '@pagespace/db/schema/members';
 import { estimateSystemPromptTokens } from '@pagespace/lib/monitoring/ai-context-calculator';
+import { EXECUTE_TOOL_DESCRIPTION } from '@/lib/ai/tools/execute-tool';
 
 interface PromptSection {
   name: string;
@@ -414,8 +415,7 @@ async function handleGlobalPrompt(
       },
       {
         name: 'execute_tool',
-        description:
-          'Execute any PageSpace tool by name. Call tool_search first to discover available tools and get their parameter schemas.',
+        description: EXECUTE_TOOL_DESCRIPTION,
         parameters: executeToolJsonSchema,
         tokenEstimate: estimateSystemPromptTokens(
           JSON.stringify({ name: 'execute_tool', parameters: executeToolJsonSchema })

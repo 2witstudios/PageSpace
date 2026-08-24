@@ -472,7 +472,8 @@ export async function exportData(
   ));
   nullifyOrphanedUserRefs(pagePermissionsData, allExportedUserIdSet, 'grantedBy');
 
-  // Tag ASSIGNMENTS on exported pages, and the vocabulary rows they reference.
+  // Tag ASSIGNMENTS on exported pages. (The vocabulary follows below, selected
+  // by DRIVE rather than by what these rows happen to reference.)
   // The selection rule lives in `contentTagSelectionWhere` so the validator asks
   // exactly the question this answers; its docblock has the reasoning.
   const contentTagsData = await queryRows(db, sql.raw(

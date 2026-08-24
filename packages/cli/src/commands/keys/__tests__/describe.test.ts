@@ -208,6 +208,15 @@ describe('parseKeysDescribeArgs', () => {
       expect(result.ok === false && result.message).toContain('--page <pageId>');
     },
   );
+
+  // The usage line is the one place a reader learns that this verb, alone among
+  // its `keys` siblings, needs a content credential named — pinned so it cannot
+  // drift back to a bare synopsis.
+  it('tells the reader it needs a credential named, which its siblings do not', () => {
+    const result = parseKeysDescribeArgs(['--page']);
+    expect(result.ok === false && result.message).toContain('--key=<name>');
+    expect(result.ok === false && result.message).toMatch(/content credential/i);
+  });
 });
 
 describe('keysDescribeHandler', () => {
