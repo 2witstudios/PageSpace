@@ -15,7 +15,7 @@ import { getPageTypeEmoji, isFolderPage } from '@pagespace/lib/content/page-type
 import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
-import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
+import { describeContentModeMismatch, serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import {
   loadSheetWindow,
@@ -1238,6 +1238,12 @@ export const pageReadTools = {
         const allLines = formattedContent.split('\n');
         const totalLines = allLines.length;
 
+        // An html-mode page holding JSON or markdown numbers its lines by its
+        // own newlines. The agent needs that BEFORE it writes — the workflow it
+        // is told to follow is read, then edit — so the warning belongs on the
+        // read, not only on the write result (#2463).
+        const contentModeWarning = describeContentModeMismatch(readable);
+
         // Calculate effective range (1-indexed, inclusive)
         const effectiveStart = lineStart ?? 1;
         const effectiveEnd = lineEnd !== undefined ? Math.min(lineEnd, totalLines) : totalLines;
@@ -1290,6 +1296,7 @@ export const pageReadTools = {
           totalLines,
           lineCount: selectedLines.length,
           ...(isRangeRequest && { rangeStart: effectiveStart, rangeEnd: effectiveEnd }),
+          ...(contentModeWarning && { contentModeWarning }),
           content: numberedContent,
           rawContent,
           summary: isRangeRequest

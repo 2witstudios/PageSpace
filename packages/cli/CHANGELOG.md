@@ -6,6 +6,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
+- **`pages replace-lines` can refuse a stale edit instead of half-applying it.** The new
+  `--expect-lines N` flag sends the total line count you last read; if the document is no longer
+  that length the server refuses (409) rather than replacing the range you named and leaving the
+  rest of the old content behind. `pages read` and `pages replace-lines` also print a warning to
+  stderr when the target page's content mode disagrees with its content (raw JSON or markdown in a
+  rich-text page), which is where line numbers are least likely to mean what you expect.
+
 - **The `keys describe` command printed after a mint now works when you paste it.** 1.8.0 printed
   `--key <name>` space-separated, which the argument parser rejects when the name begins with `-`
   (`--name -prod` mints fine, so this is reachable), and omitted `--host`, so a key minted against a
