@@ -192,14 +192,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   batch (reading thirty files and writing each one into a spreadsheet, say) would get several
   chunks in and then fail every remaining step with the same cryptic complaint that its tool call
   was missing a `tool_name` — which it had in fact sent. Retrying never helped, and only starting a
-  fresh agent got the work moving again. The tool call was not malformed: each large write stayed
-  in the agent's working memory at full size for the rest of the job, so the job eventually had no
-  room left to compose its next call, and the empty call it managed to send was reported as a
-  missing field. Earlier writes in a run are now summarised once they are done — the newest one is
-  always kept whole — so a long job no longer crowds itself out, on every surface that runs one:
-  chat, the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive
-  incomplete, the agent is now told what actually happened and given the fix, instead of a
-  complaint about a field it did not omit.
+  fresh agent got the work moving again. The tool call was not malformed: everything the agent read
+  and everything it wrote stayed in its working memory at full size for the rest of the job, so it
+  eventually had no room left to compose its next call, and the empty call it managed to send was
+  reported as a missing field. Large reads and writes from earlier in a run are now summarised once
+  the agent has moved past them — the most recent stay whole, and a summarised read says how to
+  fetch it again — so a long job no longer crowds itself out, on every surface that runs one: chat,
+  the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive incomplete,
+  the agent is now told what actually happened and given the fix, instead of a complaint about a
+  field it did not omit.
 
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh

@@ -64,9 +64,15 @@ export const KEEP_RECENT_TOOL_RESULTS = 3;
 /** Marker key for a capped payload. Kept greppable in provider logs. */
 const ELIDED_KEY = '__payload_elided';
 
-const stubText = (kind: 'Arguments' | 'Result', originalChars: number) =>
-  `${kind} (${originalChars} characters) elided to keep this turn inside the context window. ` +
-  `This call already ran; its ${kind === 'Arguments' ? 'result appears' : 'call appears'} in the transcript.`;
+const elided = (what: string, originalChars: number, stillAvailable: string) =>
+  `${what} (${originalChars} characters) elided to keep this turn inside the context window. ` +
+  `This call already ran; ${stillAvailable}`;
+
+const argumentsStub = (chars: number) =>
+  elided('Arguments', chars, 'its result appears in the transcript.');
+
+const resultStub = (chars: number) =>
+  elided('Result', chars, 'call it again with the same arguments if you still need it.');
 
 interface PartLike {
   type: string;
@@ -94,7 +100,7 @@ function sizeOf(value: unknown): number | null {
  * call/result pairing does not survive everywhere.
  */
 const cappedInput = (chars: number): Record<string, string> => ({
-  [ELIDED_KEY]: stubText('Arguments', chars),
+  [ELIDED_KEY]: argumentsStub(chars),
 });
 
 /**
@@ -107,11 +113,11 @@ const cappedInput = (chars: number): Record<string, string> => ({
  * `execution-denied` carries no value, and `content` is a multimodal array whose
  * bulk is images rather than text; both are left alone.
  */
-function cappedOutput(
-  output: { type: string; value?: unknown },
+function cappedOutput<T extends { type: string; value?: unknown }>(
+  output: T,
   chars: number
-): { type: string; value?: unknown } | null {
-  const stub = stubText('Result', chars);
+): T | null {
+  const stub = resultStub(chars);
   switch (output.type) {
     case 'text':
     case 'error-text':
