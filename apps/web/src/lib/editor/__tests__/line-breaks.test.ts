@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addLineBreaksForAI } from '../line-breaks';
+import { addLineBreaksForAI, hasLineStructuringHtml } from '../line-breaks';
 
 describe('addLineBreaksForAI', () => {
   describe('trailing space preservation', () => {
@@ -180,5 +180,90 @@ describe('addLineBreaksForAI', () => {
       const output = addLineBreaksForAI(input);
       expect(output).toContain('I was thinking about ');
     });
+  });
+
+  describe('line-breaking void elements (#2463)', () => {
+    // The reported symptom: an eighteen-line document reported totalLines: 1.
+    // A document laid out with <br> separators contains no BLOCK_TAGS at all,
+    // so every regex pass missed it and it came back with zero newlines.
+    it('breaks a <br>-separated document into one line per <br>', () => {
+      const input = 'line one<br>line two<br>line three';
+      const output = addLineBreaksForAI(input);
+      expect(output.split('\n')).toEqual(['line one<br>', 'line two<br>', 'line three']);
+    });
+
+    it('breaks <br> inside a block element', () => {
+      expect(addLineBreaksForAI('<p>a<br>b</p>')).toBe('<p>\na<br>\nb\n</p>');
+    });
+
+    it('handles self-closing and spaced <br> forms', () => {
+      expect(addLineBreaksForAI('a<br/>b').split('\n').length).toBe(2);
+      expect(addLineBreaksForAI('a<br />b').split('\n').length).toBe(2);
+    });
+
+    it('does not add a second newline after a <br> that already ends a line', () => {
+      expect(addLineBreaksForAI('<p>a<br></p>')).toBe('<p>\na<br>\n</p>');
+    });
+
+    it('gives <hr> a line of its own', () => {
+      expect(addLineBreaksForAI('<p>a</p><hr><p>b</p>')).toBe('<p>\na\n</p>\n<hr>\n<p>\nb\n</p>');
+    });
+
+    it('stays idempotent with the new passes', () => {
+      for (const input of ['a<br>b', '<p>a<br>b</p>', '<p>a</p><hr><p>b</p>', 'a<br/>b']) {
+        const once = addLineBreaksForAI(input);
+        expect(addLineBreaksForAI(once)).toBe(once);
+      }
+    });
+  });
+
+  describe('only-adds contract', () => {
+    // `\s*` in the adjacent-tag pass used to swallow a real newline between two
+    // blocks, silently shortening the document by a line: a removal, in a
+    // function whose whole contract is that it only adds.
+    it('preserves a blank line between two block elements', () => {
+      const input = '<p>one</p>\n\n<p>two</p>';
+      const output = addLineBreaksForAI(input);
+      expect(output).toBe('<p>\none\n</p>\n\n<p>\ntwo\n</p>');
+    });
+
+    it('never removes characters', () => {
+      const inputs = [
+        '<p>First</p><p>Second</p>',
+        '<p>a<br>b</p>',
+        '<ul><li>x</li></ul>',
+        '<p>one</p>\n\n<p>two</p>',
+      ];
+      for (const input of inputs) {
+        expect(addLineBreaksForAI(input).replace(/\n/g, '')).toBe(input.replace(/\n/g, ''));
+      }
+    });
+  });
+});
+
+describe('hasLineStructuringHtml', () => {
+  it('is true for block markup', () => {
+    expect(hasLineStructuringHtml('<p>x</p>')).toBe(true);
+    expect(hasLineStructuringHtml('<ul><li>x</li></ul>')).toBe(true);
+  });
+
+  it('is true for <br>/<hr>-only markup', () => {
+    expect(hasLineStructuringHtml('a<br>b')).toBe(true);
+    expect(hasLineStructuringHtml('a<hr/>b')).toBe(true);
+  });
+
+  it('is false for raw JSON — including JSON that merely contains angle brackets', () => {
+    expect(hasLineStructuringHtml('{\n  "a": 1\n}')).toBe(false);
+    expect(hasLineStructuringHtml('{"note": "use <a> tags"}')).toBe(false);
+  });
+
+  it('is false for markdown and for empty content', () => {
+    expect(hasLineStructuringHtml('# Title\n\n- one\n- two')).toBe(false);
+    expect(hasLineStructuringHtml('')).toBe(false);
+    expect(hasLineStructuringHtml(null)).toBe(false);
+  });
+
+  it('is false for inline-only markup, which has no lines to number', () => {
+    expect(hasLineStructuringHtml('some <strong>bold</strong> text')).toBe(false);
   });
 });

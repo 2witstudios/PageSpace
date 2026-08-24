@@ -70,6 +70,7 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
 }));
 vi.mock('@pagespace/lib/content/page-types.config', () => ({
     getCreatablePageTypes: vi.fn(() => ['FOLDER', 'DOCUMENT', 'CHANNEL', 'AI_CHAT', 'CANVAS', 'SHEET', 'TASK_LIST', 'CODE']),
+    isDocumentPage: vi.fn((type: string) => type === 'DOCUMENT'),
 }));
 
 vi.mock('@pagespace/lib/monitoring/activity-tracker', () => ({
@@ -81,6 +82,7 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPC
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
+import { isDocumentPage } from '@pagespace/lib/content/page-types.config';
 
 // Test helpers
 const mockUserId = 'user_123';
@@ -382,6 +384,68 @@ describe('POST /api/pages', () => {
         }),
         expect.objectContaining({ authorizeEdit: expect.any(Function) }),
       );
+    });
+
+    // #2463: a machine-written DOCUMENT defaults to markdown, whose line numbers
+    // are the document's own newlines. html mode stores TipTap markup and numbers
+    // lines against a normalized projection of it — the mode an agent writing raw
+    // JSON or markdown should never land in by accident.
+    describe('contentMode default', () => {
+      // The suite's beforeEach resets every mock implementation, including the
+      // module factory's, so restore this one per test.
+      beforeEach(() => {
+        vi.mocked(isDocumentPage).mockImplementation((type: unknown) => type === 'DOCUMENT');
+      });
+
+      it('defaults an MCP-created DOCUMENT to markdown', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
+      it('leaves a browser-session DOCUMENT on the editor default', async () => {
+        // The rich-text editor IS html; flipping the UI's default would change
+        // what every human-created document stores.
+        await POST(createRequest({ title: 'Human Doc', type: 'DOCUMENT', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      it('honours an explicit contentMode from either caller', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc', type: 'DOCUMENT', driveId: mockDriveId, contentMode: 'html',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: 'html' }),
+          expect.anything(),
+        );
+      });
+
+      it('does not touch non-document types', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({ title: 'Agent Folder', type: 'FOLDER', driveId: mockDriveId }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
     });
 
     it('passes MCP context when authenticated via MCP', async () => {

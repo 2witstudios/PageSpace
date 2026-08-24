@@ -15,6 +15,14 @@
  * normalized. Line numbers the SDK reports must agree with this corrected
  * line model, which is exactly what the route itself computes.
  *
+ * #2463 fix: the route's line accounting now lives in one shared core
+ * (`apps/web/src/lib/editor/line-edit.ts`) used by both this endpoint and the
+ * in-app AI tools, and `totalLines` is measured on the content actually
+ * stored — so the count a write reports is the count the next `read` returns.
+ * `expectedTotalLines` is the opt-in staleness guard: pass the `totalLines`
+ * you read, and an edit addressed against a document that has since changed
+ * is refused with 409 instead of silently overwriting part of it.
+ *
  * All five operations are POST — already excluded from the client's
  * idempotent-retry path by `isIdempotentMethod` (method-based), so there is
  * no separate "non-idempotent" flag to thread through the registry.
@@ -84,6 +92,15 @@ const genericReadResultSchema = z.object({
   rangeStart: z.number().optional(),
   rangeEnd: z.number().optional(),
   rangeMessage: z.string().optional(),
+  /**
+   * Present when the page is in html contentMode but holds content with no
+   * HTML block structure — raw JSON or markdown in a page created before
+   * content modes existed (#2463). Optional because an older server does not
+   * send it, and because a consistent page has nothing to warn about; a bare
+   * `z.object` would have STRIPPED it, which is the silent degradation this
+   * warning exists to end.
+   */
+  contentModeWarning: z.string().optional(),
 });
 
 /** CHANNEL pages (`route.ts:399-474`) — transcript lines address message index, not text lines. */
@@ -206,6 +223,7 @@ export const replaceLines = defineOperation({
     startLine: z.number().int().min(1),
     endLine: z.number().int().min(1).optional(),
     content: z.string(),
+    expectedTotalLines: z.number().int().min(0).optional(),
   })
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
@@ -215,9 +233,11 @@ export const replaceLines = defineOperation({
     pageId: z.string(),
     pageTitle: z.string().nullable(),
     totalLines: z.number(),
+    previousTotalLines: z.number().optional(),
     numberedLines: z.array(z.string()),
     operation: z.literal('replace'),
     affectedLines: z.string(),
+    contentModeWarning: z.string().optional(),
   }),
   requiredScope: 'drive',
   description: 'Replace line(s) startLine..endLine with new content.',
@@ -237,14 +257,17 @@ export const insertLines = defineOperation({
     pageId: z.string(),
     startLine: z.number().int().min(1),
     content: z.string(),
+    expectedTotalLines: z.number().int().min(0).optional(),
   }),
   outputSchema: z.object({
     pageId: z.string(),
     pageTitle: z.string().nullable(),
     totalLines: z.number(),
+    previousTotalLines: z.number().optional(),
     numberedLines: z.array(z.string()),
     operation: z.literal('insert'),
     insertedAt: z.number(),
+    contentModeWarning: z.string().optional(),
   }),
   requiredScope: 'drive',
   description: 'Insert content before startLine, shifting existing lines down.',
@@ -263,6 +286,7 @@ export const deleteLines = defineOperation({
     pageId: z.string(),
     startLine: z.number().int().min(1),
     endLine: z.number().int().min(1).optional(),
+    expectedTotalLines: z.number().int().min(0).optional(),
   })
     .refine((v) => v.endLine === undefined || v.endLine >= v.startLine, {
       message: 'endLine must be >= startLine',
@@ -272,9 +296,11 @@ export const deleteLines = defineOperation({
     pageId: z.string(),
     pageTitle: z.string().nullable(),
     totalLines: z.number(),
+    previousTotalLines: z.number().optional(),
     numberedLines: z.array(z.string()),
     operation: z.literal('delete'),
     deletedLines: z.string(),
+    contentModeWarning: z.string().optional(),
   }),
   requiredScope: 'drive',
   description: 'Delete line(s) startLine..endLine.',

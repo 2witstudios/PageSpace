@@ -188,6 +188,27 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Editing a document by line number no longer lies about what it did** — a line edit reported a
+  line count taken before the document was stored, so replacing 89 lines with 91 answered "9 lines".
+  An agent that trusted that number addressed its next edit against a document shorter than the one
+  on disk: most of the new content landed, the tail of the old content survived, and the page was
+  left holding invalid JSON — reported as success. Both editing surfaces (the in-app AI tools and
+  the `/api/mcp/documents` endpoint the CLI and SDK use) now share one line-accounting rule, and the
+  count a write reports is measured on the content actually saved — it is the count the next read
+  returns. `replace-lines` also takes an optional `--expect-lines N`: pass the total you read, and
+  an edit addressed against a document that has since changed is refused rather than half-applied.
+- **A document laid out with line breaks is no longer reported as one line** — line numbering only
+  understood block elements, so an eighteen-line document written with `<br>` separators (what
+  pasting text into the editor produces) came back as `totalLines: 1` and could not be edited by
+  line at all. `<br>` and `<hr>` now count as the line breaks they are, and a blank line between two
+  paragraphs is no longer silently swallowed.
+- **Documents an agent creates default to markdown** — machine-written documents used to be created
+  in rich-text mode, where line numbers are computed from the underlying markup rather than the text
+  that was written. Documents created through the AI tools or an API key now default to markdown;
+  documents created in the app are unchanged, and an explicit choice always wins. A page whose mode
+  disagrees with its content (raw JSON or markdown stored in a rich-text page) now says so on every
+  read and every edit instead of leaving it to be discovered by corrupting the document.
+
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
   path", which reads as "your key was revoked" — while the very same key kept reading and writing

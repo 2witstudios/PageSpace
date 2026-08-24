@@ -2,7 +2,8 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod/v4';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { loggers } from '@pagespace/lib/logging/logger-config'
-import { getCreatablePageTypes } from '@pagespace/lib/content/page-types.config'
+import { getCreatablePageTypes, isDocumentPage } from '@pagespace/lib/content/page-types.config'
+import { PageType } from '@pagespace/lib/utils/enums'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { trackPageOperation } from '@pagespace/lib/monitoring/activity-tracker';
 import { authenticateRequestWithOptions, isAuthError, checkMCPCreateScope, isMCPAuthResult, isScopedMCPAuth, canPrincipalEditPage } from '@/lib/auth';
@@ -79,13 +80,22 @@ export async function POST(request: Request) {
       authorizeEdit: (targetId: string) => canPrincipalEditPage(auth, targetId),
     };
 
+    // Machine-written documents default to markdown (#2463). html mode stores
+    // TipTap markup, whose line numbers only exist as a normalized projection —
+    // an agent writing raw JSON or markdown into one is editing a document
+    // whose lines are not the lines it wrote. A browser session still defaults
+    // to html: that IS the editor's format. An explicit contentMode always wins,
+    // and existing pages keep whatever mode they were created with.
+    const contentMode = validatedData.contentMode
+      ?? (isMCP && isDocumentPage(validatedData.type as PageType) ? 'markdown' : undefined);
+
     const result = await pageService.createPage(userId, {
       title: validatedData.title,
       type: validatedData.type as CreatePageParams['type'],
       driveId: validatedData.driveId,
       parentId: validatedData.parentId,
       content: validatedData.content,
-      contentMode: validatedData.contentMode,
+      contentMode,
       systemPrompt: validatedData.systemPrompt,
       enabledTools: validatedData.enabledTools,
       aiProvider: validatedData.aiProvider,

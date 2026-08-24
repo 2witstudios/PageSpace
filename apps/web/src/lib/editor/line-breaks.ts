@@ -6,8 +6,13 @@
  *
  * IMPORTANT: This function ONLY adds newlines. It does NOT:
  * - Remove trailing spaces (preserves user's mid-thought content)
+ * - Remove existing newlines (a blank line between two blocks survives)
  * - Reformat or restructure content
  * - Change any existing characters
+ *
+ * That "only adds" property is what makes the function idempotent, and
+ * idempotence is what lets the write paths STORE this normalized form: the
+ * count a write reports is then exactly the count the next read returns.
  *
  * This replaces Prettier for AI tool usage, avoiding the data loss
  * issues caused by Prettier's whitespace normalization.
@@ -32,6 +37,7 @@ const BLOCK_TAGS = [
   'th',
   'thead',
   'tbody',
+  'caption',
   'blockquote',
   'pre',
   'section',
@@ -43,7 +49,63 @@ const BLOCK_TAGS = [
   'main',
   'figure',
   'figcaption',
+  'dl',
+  'dt',
+  'dd',
+  'address',
+  'details',
+  'summary',
+  'hgroup',
 ];
+
+/**
+ * Void elements that terminate a line of rendered text. `<br>` is the reason
+ * this list exists: a document laid out entirely with `<br>` separators (what
+ * pasting markdown into the editor produces) contains no block tag at all, so
+ * before #2463 it normalized to zero newlines and reported `totalLines: 1` for
+ * an eighteen-line document. Line numbers an agent cannot trust are worse than
+ * no line numbers, because it edits against them anyway.
+ */
+const LINE_BREAK_TAGS = ['br'];
+
+/** Void elements that are blocks in their own right — a newline on both sides. */
+const BLOCK_VOID_TAGS = ['hr'];
+
+/**
+ * Attribute run for a tag: bare, or whitespace followed by attributes whose
+ * quoted values may themselves contain `>`.
+ */
+const TAG_ATTRIBUTES = `(?:\\s+(?:[^"'<>]|"[^"]*"|'[^']*')*)?\\s*`;
+
+const blockTagPattern = BLOCK_TAGS.join('|');
+const blockOpeningTagPattern = `<(?:${blockTagPattern})${TAG_ATTRIBUTES}>`;
+
+/** Matches `<br>`, `<br/>`, `<br />` and the attributed forms of each. */
+function voidTagPattern(tags: string[]): string {
+  return `<(?:${tags.join('|')})${TAG_ATTRIBUTES}/?\\s*>`;
+}
+
+const lineBreakTagPattern = voidTagPattern([...LINE_BREAK_TAGS, ...BLOCK_VOID_TAGS]);
+const blockVoidTagPattern = voidTagPattern(BLOCK_VOID_TAGS);
+
+/**
+ * True when `html` contains markup that {@link addLineBreaksForAI} gives line
+ * structure to — a block element or a `<br>`/`<hr>`.
+ *
+ * This is the honest test for "is this an HTML document?", as opposed to the
+ * `<[a-z]...>` sniff below which a raw JSON blob containing `"<a>"` passes.
+ * Content that fails it has no HTML line structure, so its lines are simply
+ * its own newlines: that is what an html-mode page holding JSON or markdown
+ * (#2463) actually is, and callers use this to say so out loud.
+ */
+export function hasLineStructuringHtml(html: string | null | undefined): boolean {
+  if (!html) return false;
+  const structural = new RegExp(
+    `(?:${blockOpeningTagPattern})|(?:</(?:${blockTagPattern})>)|(?:${lineBreakTagPattern})`,
+    'i'
+  );
+  return structural.test(html);
+}
 
 /**
  * Adds line breaks between block-level HTML tags for AI line-based editing.
@@ -72,10 +134,6 @@ export function addLineBreaksForAI(html: string): string {
 
   let result = html;
 
-  // Create regex pattern for block tags
-  const blockTagPattern = BLOCK_TAGS.join('|');
-  const blockOpeningTagPattern = `<(?:${blockTagPattern})(?:\\s+(?:[^"'<>]|"[^"]*"|'[^']*')*)?\\s*>`;
-
   // Add newline after opening block tags (if not already present)
   // Match: <tag> or <tag attr="value"> but not if followed by newline
   const openingTagRegex = new RegExp(
@@ -93,12 +151,26 @@ export function addLineBreaksForAI(html: string): string {
   result = result.replace(closingTagRegex, '\n$1');
 
   // Add newline between adjacent closing and opening block tags
-  // Match: </tag><tag> or </tag> <tag> (with optional whitespace)
+  // Match: </tag><tag> or </tag> <tag> (with optional horizontal whitespace).
+  // Horizontal whitespace only: `\s*` here would have SWALLOWED a newline,
+  // collapsing a deliberate blank line between two blocks and breaking the
+  // "only adds" contract this file's header promises (and with it the
+  // idempotence the write paths rely on).
   const adjacentTagRegex = new RegExp(
-    `(</(?:${blockTagPattern})>)\\s*(${blockOpeningTagPattern})`,
+    `(</(?:${blockTagPattern})>)[^\\S\\n]*(${blockOpeningTagPattern})`,
     'gi'
   );
   result = result.replace(adjacentTagRegex, '$1\n$2');
+
+  // Add newline before <hr> — it is a block, so it owns its own line.
+  const blockVoidRegex = new RegExp(`(?<!\\n)(${blockVoidTagPattern})`, 'gi');
+  result = result.replace(blockVoidRegex, '\n$1');
+
+  // Add newline after <br>/<hr>. Runs LAST so that a `<br>` already followed
+  // by a newline inserted by the closing-tag pass (`a<br></p>`) is left alone
+  // rather than gaining a second, empty line.
+  const lineBreakRegex = new RegExp(`(${lineBreakTagPattern})(?!\\n)`, 'gi');
+  result = result.replace(lineBreakRegex, '$1\n');
 
   return result;
 }

@@ -32,7 +32,8 @@ import { getDriveRecipientUserIds } from '@pagespace/lib/services/drive-member-s
 import type { ToolExecutionContext } from '../core/types';
 import { maskIdentifier } from '@/lib/logging/mask';
 import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
-import { replaceLines } from '@/lib/editor/line-edit';
+import { LineRangeError, replaceLines, type LineEditResult } from '@/lib/editor/line-edit';
+import { describeContentModeMismatch, isRawTextPage } from '../core/page-serializer';
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveOrThrowDriveId } from './drive-context-defaults';
@@ -668,8 +669,9 @@ export const pageWriteTools = {
       startLine: z.number().describe('Starting line number (1-based)'),
       endLine: z.number().optional().describe('Ending line number (1-based, optional, defaults to startLine)'),
       content: z.string().describe('New content to replace the lines with'),
+      expectedTotalLines: z.number().optional().describe('Optional safety check: the total line count you saw when you read the page. If the document is no longer that length the edit is refused instead of being applied to lines you have not seen.'),
     }),
-    execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content }, { experimental_context: context }) => {
+    execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content, expectedTotalLines }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -726,15 +728,37 @@ export const pageWriteTools = {
         // structure (and CODE may contain raw HTML/XML that addLineBreaksForAI
         // would mangle); HTML documents are normalized for line-based editing.
         // oldContent is normalized identically to newContent so a small edit
-        // diffs as a small change rather than a full-document replacement.
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const { oldContent, newContent, newLineCount, changeType } = replaceLines({
-          content: page.content,
-          startLine,
-          endLine,
-          replacement: content,
-          isRawText,
-        });
+        // diffs as a small change rather than a full-document replacement, and
+        // newContent is the canonical projection — the same text a read of this
+        // page returns, so newLineCount below is what the agent will see next.
+        const isRawText = isRawTextPage(page);
+        const contentModeWarning = describeContentModeMismatch(page);
+        let edit: LineEditResult;
+        try {
+          edit = replaceLines({
+            content: page.content,
+            startLine,
+            endLine,
+            replacement: content,
+            isRawText,
+            expectedTotalLines,
+          });
+        } catch (error) {
+          // A bad range is the agent's mistake, not a fault: answer it with the
+          // real line count so the next attempt is addressed correctly, rather
+          // than throwing a bare message it has to parse.
+          if (error instanceof LineRangeError) {
+            return {
+              success: false,
+              error: error.kind === 'stale' ? 'Document changed since it was read' : 'Line number out of range',
+              message: error.message,
+              suggestion: 'Read the page again and re-address the edit against the line numbers it returns.',
+              pageInfo: { pageId: page.id, title: page.title, type: page.type },
+            };
+          }
+          throw error;
+        }
+        const { oldContent, newContent, newLineCount, previousLineCount, changeType } = edit;
         const isDeletion = changeType === 'deletion';
 
         const mutationContext = await buildAiMutationContext(context as ToolExecutionContext, {
@@ -770,6 +794,8 @@ export const pageWriteTools = {
           newContent,
           linesReplaced: endLine - startLine + 1,
           newLineCount,
+          previousLineCount,
+          ...(contentModeWarning && { contentModeWarning }),
           message: isDeletion
             ? `Successfully removed lines ${startLine}-${endLine}`
             : `Successfully replaced lines ${startLine}-${endLine}`,
@@ -812,7 +838,7 @@ export const pageWriteTools = {
       parentId: z.string().optional().describe('The unique ID of the parent page from list_pages - REQUIRED when creating inside any page (folder, document, channel, etc). Only omit for root-level pages in the drive.'),
       title: z.string().describe('The title of the new page'),
       type: z.enum(getCreatablePageTypes() as [string, ...string[]]).describe('The type of page to create'),
-      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to html. Use markdown for markdown-native documents.'),
+      contentMode: z.enum(['html', 'markdown']).optional().describe('Content mode for DOCUMENT pages. Defaults to markdown, whose line numbers are the document\'s own newlines. Pass html only for a document that will be edited in the rich-text editor.'),
     }),
     execute: async ({ driveId: driveIdArg, parentId, title, type, contentMode }, { experimental_context: context }) => {
       const rawContext = context as ToolExecutionContext | undefined;
@@ -867,6 +893,17 @@ export const pageWriteTools = {
         // Get next position via repository seam
         const nextPosition = await pageRepository.getNextPosition(drive.id, parentId || null);
 
+        // Machine-written documents default to markdown (#2463). In html mode the
+        // stored content is TipTap markup and line numbers exist only as a
+        // normalized projection of it, so an agent that writes raw JSON or
+        // markdown into one is addressing lines it did not write. Markdown's
+        // lines are its own newlines. Non-document types keep 'html': the column
+        // is meaningless for them and changing it would reinterpret their
+        // stored JSON. An explicit contentMode always wins.
+        const resolvedContentMode = isDocumentPage(type as PageType)
+          ? (contentMode ?? 'markdown')
+          : 'html';
+
         const initialContent = getDefaultContent(type as PageType);
         const contentFormat = detectPageContentFormat(initialContent);
         const contentRef = hashWithPrefix(contentFormat, initialContent);
@@ -886,7 +923,7 @@ export const pageWriteTools = {
           title,
           type: type as PageType,
           content: initialContent,
-          contentMode: type === 'DOCUMENT' && contentMode ? contentMode : 'html',
+          contentMode: resolvedContentMode,
           position: nextPosition,
           driveId: drive.id,
           parentId: parentId || null,
@@ -996,7 +1033,7 @@ export const pageWriteTools = {
           title: newPage.title,
           type: newPage.type,
           driveId: drive.id,
-          contentMode: isDocumentPage(type as PageType) && contentMode ? contentMode : 'html',
+          contentMode: resolvedContentMode,
           parentId: parentId || 'root',
           message: `Successfully created ${type.toLowerCase()} page "${title}"`,
           summary: `Created new ${type.toLowerCase()} "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'}`,
@@ -1403,8 +1440,9 @@ export const pageWriteTools = {
           throw new Error('Insufficient permissions to edit this document');
         }
 
-        const isRawText = page.contentMode === 'markdown' || isCodePage(page.type as PageType);
-        const { oldContent, newContent, inserted, anchorLine } = insertAtAnchor({
+        const isRawText = isRawTextPage(page);
+        const contentModeWarning = describeContentModeMismatch(page);
+        const { oldContent, newContent, newLineCount, inserted, anchorLine } = insertAtAnchor({
           content: page.content,
           anchor,
           insertion: content,
@@ -1448,6 +1486,8 @@ export const pageWriteTools = {
           anchorLine,
           oldContent,
           newContent,
+          newLineCount,
+          ...(contentModeWarning && { contentModeWarning }),
           message: `Inserted content ${position} line ${anchorLine} in "${page.title}"`,
         };
       } catch (error) {

@@ -5,11 +5,13 @@
  * a given anchor string — natural for agents that think in terms of headings
  * and landmarks rather than line offsets.
  *
- * Normalizes HTML content via addLineBreaksForAI before operating, matching
- * the same invariant as replaceLines so the oldContent/newContent pair diffs cleanly.
+ * Normalizes HTML content via canonicalizeForLineEditing before operating and
+ * again after, matching the same invariant as replaceLines: the oldContent/
+ * newContent pair diffs cleanly, and the stored content is the same projection
+ * a read returns, so `newLineCount` is the count the next read reports.
  */
 
-import { addLineBreaksForAI } from './line-breaks';
+import { canonicalizeForLineEditing } from './line-edit';
 
 // ─── insertAtAnchor ──────────────────────────────────────────────────────────
 
@@ -26,8 +28,10 @@ export interface InsertAtAnchorParams {
 export interface InsertAtAnchorResult {
   /** Diff baseline, normalized identically to newContent. */
   oldContent: string;
-  /** Content with the insertion applied. */
+  /** Content with the insertion applied, canonicalized for line numbering. */
   newContent: string;
+  /** Line count of `newContent` — what a subsequent read of the page returns. */
+  newLineCount: number;
   /** Whether the anchor was found and the insertion was made. */
   inserted: boolean;
   /** 1-based line number of the anchor (null when not found). */
@@ -41,13 +45,19 @@ export function insertAtAnchor(params: InsertAtAnchorParams): InsertAtAnchorResu
     throw new Error('Anchor string cannot be empty');
   }
 
-  const oldContent = isRawText ? (content ?? '') : addLineBreaksForAI(content ?? '');
+  const oldContent = canonicalizeForLineEditing(content, isRawText);
   const lines = oldContent.split('\n');
 
   const anchorIndex = lines.findIndex(line => line.includes(anchor));
 
   if (anchorIndex === -1) {
-    return { oldContent, newContent: oldContent, inserted: false, anchorLine: null };
+    return {
+      oldContent,
+      newContent: oldContent,
+      newLineCount: lines.length,
+      inserted: false,
+      anchorLine: null,
+    };
   }
 
   let insertAt = position === 'before' ? anchorIndex : anchorIndex + 1;
@@ -68,11 +78,13 @@ export function insertAtAnchor(params: InsertAtAnchorParams): InsertAtAnchorResu
     }
   }
 
-  const newLines = [...lines.slice(0, insertAt), insertion, ...lines.slice(insertAt)];
+  const newLines = [...lines.slice(0, insertAt), ...insertion.split('\n'), ...lines.slice(insertAt)];
+  const newContent = canonicalizeForLineEditing(newLines.join('\n'), isRawText);
 
   return {
     oldContent,
-    newContent: newLines.join('\n'),
+    newContent,
+    newLineCount: newContent.split('\n').length,
     inserted: true,
     anchorLine: anchorIndex + 1,
   };
