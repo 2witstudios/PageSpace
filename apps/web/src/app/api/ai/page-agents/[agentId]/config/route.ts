@@ -290,6 +290,7 @@ export async function PUT(
         effectiveTools: toolSurface.granted,
         effectiveToolsCount: toolSurface.granted.length,
         blockedTools: toolSurface.blocked,
+        toolsNeedingComposerToggle: toolSurface.conditional,
         toolsReachedBySearch: toolSurface.deferred,
       },
       ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),

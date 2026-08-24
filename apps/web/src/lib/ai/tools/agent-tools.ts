@@ -243,6 +243,7 @@ export const agentTools = {
             effectiveTools: surface.granted,
             effectiveToolsCount: surface.granted.length,
             blockedTools: surface.blocked,
+            toolsNeedingComposerToggle: surface.conditional,
             toolsReachedBySearch: surface.deferred,
             sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
             toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',

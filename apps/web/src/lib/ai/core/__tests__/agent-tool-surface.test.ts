@@ -12,7 +12,9 @@ import {
   describeAgentToolSurface,
   blockedByGate,
   formatAgentToolSurfaceNotes,
+  RUNTIME_TOGGLE_TOOL_NAMES,
 } from '../agent-tool-surface';
+import { ALWAYS_UPFRONT_TOOLS } from '../../tools/tool-exposure';
 
 const REGISTERED = [
   'read_page',
@@ -145,5 +147,64 @@ describe('formatAgentToolSurfaceNotes', () => {
     });
 
     expect(formatAgentToolSurfaceNotes(surface).join(' ')).not.toContain('payer tier');
+  });
+});
+
+/**
+ * `web_search` and `generate_image` never pass through the allowlist at all:
+ * `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back only
+ * for a request whose composer toggle is on (steps 4/4b). A dispatched worker
+ * turn carries no toggles, so a worker never gets them however its agent is
+ * configured — reporting them as granted would be the same lie in a new place
+ * (codex review, PR #2484).
+ */
+describe('the composer-toggle pair is neither granted nor blocked', () => {
+  const WITH_TOGGLES = [...REGISTERED, 'web_search', 'generate_image'];
+
+  it('given them in enabledTools, should report them as runtime-conditional, not effective', () => {
+    const surface = describeAgentToolSurface({
+      enabledTools: ['read_page', 'web_search', 'generate_image'],
+      sandboxEnabled: false,
+      toolExposureMode: 'upfront',
+      registeredToolNames: WITH_TOGGLES,
+    });
+
+    expect(surface.granted).toEqual(['read_page']);
+    expect(surface.conditional).toEqual(['web_search', 'generate_image']);
+    // Not a blocked config: the same agent works fine in a browser chat with
+    // the toggle on, so a spawn must not refuse over them.
+    expect(surface.blocked).toEqual([]);
+  });
+
+  it('given an UNCONFIGURED agent, should keep them out of the effective set too', () => {
+    const surface = describeAgentToolSurface({
+      enabledTools: null,
+      sandboxEnabled: true,
+      toolExposureMode: 'upfront',
+      registeredToolNames: WITH_TOGGLES,
+    });
+
+    expect(surface.granted).not.toContain('web_search');
+    expect(surface.conditional).toEqual(['web_search', 'generate_image']);
+  });
+
+  it('should say out loud that a dispatched worker never receives them', () => {
+    const surface = describeAgentToolSurface({
+      enabledTools: ['web_search'],
+      sandboxEnabled: false,
+      toolExposureMode: 'upfront',
+      registeredToolNames: WITH_TOGGLES,
+    });
+
+    const note = formatAgentToolSurfaceNotes(surface).join(' ');
+    expect(note).toContain('composer toggle');
+    expect(note).toContain('worker');
+  });
+
+  it('is exactly the set tool-exposure keeps upfront — drift in either must fail here, not silently', () => {
+    // If a third tool is ever added to ALWAYS_UPFRONT_TOOLS, it is upfront for
+    // a reason that may have nothing to do with a composer toggle. This pin
+    // forces that decision to be made deliberately in both places.
+    expect([...RUNTIME_TOGGLE_TOOL_NAMES].sort()).toEqual([...ALWAYS_UPFRONT_TOOLS].sort());
   });
 });

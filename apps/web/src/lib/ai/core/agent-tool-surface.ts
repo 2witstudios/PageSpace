@@ -33,7 +33,23 @@
 
 import { SANDBOX_TOOL_NAMES, SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
-import { ALWAYS_UPFRONT_TOOLS } from '../tools/tool-exposure';
+/**
+ * The two tools the allowlist does not decide: `web_search` and
+ * `generate_image` are lifted OUT of the tool set before the allowlist is
+ * applied (`page-chat-turn.ts` step 2) and put back only when the composer's
+ * per-request toggle is on (steps 4/4b — image generation additionally requires
+ * an app admin). Storing them in `enabledTools` therefore grants nothing by
+ * itself, and a DISPATCHED turn — a spawned worker's — carries no toggles at
+ * all, so a worker never receives them however the agent is configured.
+ *
+ * They are neither granted nor blocked: reporting them as granted is the lie
+ * this module exists to stop, and refusing a spawn over them would refuse
+ * agents that work perfectly in the browser.
+ */
+export const RUNTIME_TOGGLE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  'web_search',
+  'generate_image',
+]);
 
 /** Why a configured tool never reaches the model. */
 export type BlockedToolGate =
@@ -55,6 +71,12 @@ export interface AgentToolSurface {
   /** Configured tools no gate will grant, each with the gate that dropped it. */
   blocked: BlockedTool[];
   /**
+   * Configured and registered, but decided per REQUEST by a composer toggle
+   * rather than by this config ({@link RUNTIME_TOGGLE_TOOL_NAMES}) — and never
+   * present at all in a dispatched worker turn, which carries no toggles.
+   */
+  conditional: string[];
+  /**
    * Granted, but not sent upfront: in `'search'` exposure mode the model sees
    * only the core tools plus `tool_search`/`execute_tool` and must discover
    * these. NOT a loss of capability — and precisely why a search-mode agent
@@ -75,20 +97,31 @@ export function describeAgentToolSurface(input: {
   const registered = new Set(registeredToolNames);
 
   const blocked: BlockedTool[] = [];
-  let granted: string[];
+  const conditional: string[] = [];
+  const granted: string[] = [];
 
   if (enabledTools === null) {
     // Unconfigured: nothing was ASKED for, so nothing can be denied — the
     // sandbox switch narrows the surface here without contradicting anything.
-    granted = registeredToolNames.filter((name) => sandboxEnabled || !SANDBOX_TOOL_NAMES.has(name));
+    for (const name of registeredToolNames) {
+      if (RUNTIME_TOGGLE_TOOL_NAMES.has(name)) {
+        conditional.push(name);
+        continue;
+      }
+      if (!sandboxEnabled && SANDBOX_TOOL_NAMES.has(name)) continue;
+      granted.push(name);
+    }
   } else {
-    granted = [];
     for (const name of enabledTools) {
       // Registration is checked FIRST: when a name is not registered at all,
       // flipping `sandboxEnabled` would not bring it back, so naming the
       // sandbox switch there would send the reader after the wrong fix.
       if (!registered.has(name)) {
         blocked.push({ tool: name, gate: 'not_registered' });
+        continue;
+      }
+      if (RUNTIME_TOGGLE_TOOL_NAMES.has(name)) {
+        conditional.push(name);
         continue;
       }
       if (!sandboxEnabled && SANDBOX_TOOL_NAMES.has(name)) {
@@ -99,12 +132,16 @@ export function describeAgentToolSurface(input: {
     }
   }
 
+  // The runtime-toggle pair is already out of `granted`, so no second
+  // `ALWAYS_UPFRONT_TOOLS` filter is needed here — those two names ARE that
+  // set (`tool-exposure.ts`), pinned equal by a test so a third always-upfront
+  // tool cannot quietly acquire toggle semantics it does not have.
   const deferred =
     toolExposureMode === 'search'
-      ? granted.filter((name) => !CORE_TOOL_NAMES.has(name) && !ALWAYS_UPFRONT_TOOLS.has(name))
+      ? granted.filter((name) => !CORE_TOOL_NAMES.has(name))
       : [];
 
-  return { configured: enabledTools, granted, blocked, deferred };
+  return { configured: enabledTools, granted, blocked, conditional, deferred };
 }
 
 /** The tools this surface blocks for one specific gate, in config order. */
@@ -133,6 +170,13 @@ export function formatAgentToolSurfaceNotes(surface: AgentToolSurface): string[]
     notes.push(
       `These configured tools are NOT granted because no tool by that name is available here: ${unregistered.join(', ')}. ` +
         'They may have been renamed, or the deployment does not offer them.'
+    );
+  }
+
+  if (surface.conditional.length > 0) {
+    notes.push(
+      `These configured tools are not granted by this config at all — they are turned on per request by the composer toggle (and generate_image also requires an app admin): ${surface.conditional.join(', ')}. ` +
+        'A dispatched worker turn carries no toggles, so a spawned worker never receives them.'
     );
   }
 

@@ -628,6 +628,15 @@ Three rules now hold, and `agent-tool-surface.ts` is the single place that compu
    refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
    would break working spawns over a non-problem.
 
+Two names are in neither camp. `web_search` and `generate_image` never pass through the
+allowlist at all — `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back
+only for a request whose composer toggle is on (steps 4/4b; image generation also requires
+an app admin). A DISPATCHED turn carries no toggles, so a spawned worker never receives
+them however its agent is configured. They are reported as runtime-conditional
+(`toolsNeedingComposerToggle`), never as effective and never as a refusal: calling them
+granted would be this bug in a new place, and refusing a spawn over them would refuse
+agents that work perfectly in a browser chat.
+
 `'search'` exposure defers non-core tools behind `tool_search`/`execute_tool` without
 losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
 tools only — which is how #2460 was first misread — and because a deferral reported as a
