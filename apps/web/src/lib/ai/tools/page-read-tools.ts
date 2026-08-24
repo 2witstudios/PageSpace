@@ -16,7 +16,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
-import { isSheetType, isSheetDocString } from '@pagespace/lib/sheets/sheet';
+import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import {
   loadSheetWindow,
   renderSheetTable,
