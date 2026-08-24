@@ -21,6 +21,8 @@ import {
   loadSheetWindow,
   renderSheetTable,
   columnsInRows,
+  SheetDocumentUnreadableError,
+  SheetTabNotFoundError,
   SHEET_PREVIEW_ROWS,
   SHEET_LIST_PREVIEW_ROWS,
   MAX_SHEET_READ_ROWS,
@@ -201,10 +203,23 @@ export const pageReadTools = {
               // sheet. It gets the same bounded row window read_page returns,
               // just fewer rows because this call previews many pages at once.
               if (isSheetType(entry.type as PageType)) {
-                const sheet = await loadSheetWindow(entry.id, {
-                  limit: SHEET_LIST_PREVIEW_ROWS,
-                  documentContent: row.content,
-                });
+                let sheet;
+                try {
+                  sheet = await loadSheetWindow(entry.id, {
+                    limit: SHEET_LIST_PREVIEW_ROWS,
+                    documentContent: row.content,
+                  });
+                } catch (error) {
+                  // One sheet that cannot be parsed must not blank itself out
+                  // (an agent would read that as "empty" and overwrite it) and
+                  // must not fail the other 49 pages in the batch either. Say
+                  // what happened, in this entry only.
+                  if (error instanceof SheetDocumentUnreadableError || error instanceof SheetTabNotFoundError) {
+                    entry.contentOmitted = `SHEET could not be read: ${error.message} It is NOT empty — do not overwrite it.`;
+                    continue;
+                  }
+                  throw error;
+                }
                 const table = renderSheetTable(sheet.rows);
                 const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.`;
                 // The pointer rides in the content rather than in
@@ -887,11 +902,32 @@ export const pageReadTools = {
           // the fetch is what carries the sheet's dimensions and tab list, and
           // an empty range must still report those rather than "0 rows x 0
           // columns", which reads as an empty spreadsheet.
-          const sheet = await loadSheetWindow(page.id, {
-            fromRow: requestedStart - 1,
-            limit: Math.max(1, windowSize),
-            documentContent: page.content,
-          });
+          let sheet;
+          try {
+            sheet = await loadSheetWindow(page.id, {
+              fromRow: requestedStart - 1,
+              limit: Math.max(1, windowSize),
+              documentContent: page.content,
+            });
+          } catch (error) {
+            // A sheet whose stored document will not parse is reported as
+            // unreadable, never as blank. The old path handed back an empty
+            // spreadsheet here, which is the one answer that invites an agent
+            // to overwrite content that is still intact.
+            if (error instanceof SheetDocumentUnreadableError) {
+              return {
+                success: false,
+                pageId: page.id,
+                title: page.title,
+                type: page.type,
+                error: 'Sheet content could not be read',
+                message: error.message,
+                suggestion:
+                  'Do not treat this sheet as empty and do not overwrite it. The stored document needs repair.',
+              };
+            }
+            throw error;
+          }
 
           // Rows are sparse — rows 1-10 then 500-509 is a normal shape — so a
           // window that starts inside the requested range can still run past

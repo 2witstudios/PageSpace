@@ -171,6 +171,65 @@ describe('read_sheet — range reads', () => {
   });
 });
 
+describe('read_sheet — projection and refusals', () => {
+  it('projects a range read too, not only a filtered one', async () => {
+    // `select` without `where` took the range branch, where projection was
+    // applied to the rendered table and the reported column list but NOT to the
+    // structured rows — so an agent asking for two of sixteen columns still got
+    // all sixteen, in a response that claimed to have two.
+    mockReadRows.mockResolvedValue([
+      {
+        rowIndex: 0,
+        cells: {
+          A: { raw: 'keep', value: 'keep' },
+          B: { raw: 'drop', value: 'drop' },
+          C: { raw: 'keep2', value: 'keep2' },
+        },
+      },
+    ]);
+
+    const result = await run({ pageId: 'page-1', select: ['A', 'C'] });
+
+    assert({
+      given: 'a range read with select',
+      should: 'return only the projected columns in the structured rows',
+      actual: (result.rows as { cells: Record<string, string> }[])[0].cells,
+      expected: { A: 'keep', C: 'keep2' },
+    });
+    expect(result.columns).toEqual(['A', 'C']);
+  });
+
+  it('refuses a tab index the sheet does not have, listing the ones it does', async () => {
+    mockGetTab.mockResolvedValue(null);
+
+    const result = await run({ pageId: 'page-1', tabIndex: 4 });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Sheet tab not found');
+    expect(String(result.message)).toContain('0 ("Sheet1")');
+    expect(result.tabs).toEqual([
+      { tabIndex: 0, name: 'Sheet1', rowCount: 500, columnCount: 16 },
+    ]);
+  });
+
+  it('reports an unparseable sheet as unreadable, never as empty', async () => {
+    // The one answer that invites an agent to overwrite content that is still
+    // intact is "this spreadsheet is blank".
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({
+      ...sheetPage,
+      content: '#%PAGESPACE_SHEETDOC v1\n[[sheets]]\nname = "Broken"\nthis is not toml = = =',
+    });
+
+    const result = await run({ pageId: 'page-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Sheet content could not be read');
+    expect(String(result.suggestion)).toContain('do not overwrite');
+    expect(result.rows).toBeUndefined();
+  });
+});
+
 describe('read_sheet — filtered reads', () => {
   it('compiles a single condition to the store filter, without a wrapper', async () => {
     await run({

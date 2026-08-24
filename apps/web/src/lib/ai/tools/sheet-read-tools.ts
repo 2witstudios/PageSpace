@@ -45,6 +45,8 @@ import { resolveOrThrowPageId } from './page-context-defaults';
 import {
   DEFAULT_SHEET_READ_ROWS,
   MAX_SHEET_READ_ROWS,
+  SheetDocumentUnreadableError,
+  SheetTabNotFoundError,
   columnsInRows,
   loadSheetWindow,
   renderSheetTable,
@@ -119,8 +121,9 @@ export const sheetReadTools = {
     description:
       'Read rows from a SHEET page as structured data — the way to read a spreadsheet. ' +
       'Three ways to use it: (1) omit everything for the first ' + DEFAULT_SHEET_READ_ROWS + ' rows plus the sheet\'s dimensions; ' +
-      '(2) pass startRow/limit to read a row RANGE; (3) pass where/orderBy/select to look rows up by ' +
-      'value (e.g. the row where column C equals "28605") and project only the columns you need. ' +
+      '(2) pass startRow/limit to read a row RANGE; (3) pass where/orderBy to look rows up by ' +
+      'value (e.g. the row where column C equals "28605"). ' +
+      'select narrows the columns returned and works with either — use it whenever you need a few columns of a wide sheet. ' +
       'Filters run in the database against each cell\'s COMPUTED value, so formula columns match on their results. ' +
       'Returns at most ' + MAX_SHEET_READ_ROWS + ' rows per call — page with startRow (range) or offset (filtered). ' +
       'Prefer this over read_page for any sheet with real data in it. Omit pageId to read the sheet currently in view.',
@@ -155,7 +158,7 @@ export const sheetReadTools = {
         .array(columnSchema)
         .max(64)
         .optional()
-        .describe('Only return these columns. Omit for every column each row has.'),
+        .describe('Only return these columns. Works on both range and filtered reads. Omit for every column each row has.'),
     }),
     execute: async (
       { pageId: pageIdArg, tabIndex, startRow, limit, offset, where, orderBy, select },
@@ -217,6 +220,12 @@ export const sheetReadTools = {
             tabIndex,
             fromRow: startRow !== undefined ? startRow - 1 : 0,
             limit: pageSize,
+            // Projection belongs on this path too. `queryRows` applies `select`
+            // in the store for a filtered read; a range read that narrowed only
+            // the rendered table would have returned every column in `rows`
+            // while reporting the narrow column list — a larger payload
+            // presented as a smaller one.
+            select,
             documentContent: page.content,
           });
 
@@ -306,6 +315,27 @@ export const sheetReadTools = {
         // A bad column letter or an `in` with no values is the caller's
         // mistake, and it can fix it — say what was wrong instead of throwing a
         // generic failure it can only retry verbatim.
+        if (error instanceof SheetTabNotFoundError) {
+          return {
+            success: false,
+            error: 'Sheet tab not found',
+            message: error.message,
+            suggestion: 'Call read_sheet without tabIndex to read the first tab, or use one of the indexes listed above.',
+            tabs: error.availableTabs,
+          };
+        }
+        if (error instanceof SheetDocumentUnreadableError) {
+          // Never reported as an empty sheet: the data may be intact and
+          // recoverable, and an agent told "blank" would write over it.
+          return {
+            success: false,
+            error: 'Sheet content could not be read',
+            message: error.message,
+            suggestion:
+              'Do not treat this sheet as empty and do not overwrite it. Ask someone to repair the stored ' +
+              'document, or open the sheet in the app to see what state it is in.',
+          };
+        }
         if (error instanceof SheetQueryError) {
           return {
             success: false,

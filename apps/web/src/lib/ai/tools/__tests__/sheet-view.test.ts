@@ -21,6 +21,8 @@ vi.mock('@pagespace/lib/sheets/store', () => ({
 }));
 
 import {
+  SheetDocumentUnreadableError,
+  SheetTabNotFoundError,
   columnsInRows,
   compareColumnLabels,
   loadSheetWindow,
@@ -270,5 +272,148 @@ describe('loadSheetWindow — sheet not migrated to row storage', () => {
     expect(window.rows.map((row) => row.rowNumber)).toEqual([2]);
     expect(window.hasMore).toBe(true);
     expect(window.nextFromRow).toBe(2);
+  });
+});
+
+describe('loadSheetWindow — projection', () => {
+  it('projects the structured rows, not just the rendered table', () => {
+    // Narrowing only the table would return every column in `rows` while
+    // reporting the narrow column list: a bigger payload that looks smaller,
+    // which is the opposite of what `select` was asked to do.
+    const row = toSheetViewRow(
+      0,
+      {
+        A: { raw: 'keep', value: 'keep' },
+        B: { raw: 'drop', value: 'drop' },
+        C: { raw: '=A1&"x"', value: 'keepx' },
+      },
+      new Set(['A', 'C']),
+    );
+
+    assert({
+      given: 'a projection of columns A and C',
+      should: 'drop column B from the structured cells',
+      actual: row.cells,
+      expected: { A: 'keep', C: 'keepx' },
+    });
+  });
+
+  it('projects formulas and errors alongside the values', () => {
+    const row = toSheetViewRow(
+      0,
+      {
+        A: { raw: '=1+1', value: 2 },
+        B: { raw: '=BAD()', error: { type: 'error', message: 'nope' } },
+      },
+      new Set(['A']),
+    );
+
+    expect(row.formulas).toEqual({ A: '=1+1' });
+    expect(row.errors).toBeUndefined();
+  });
+
+  it('applies select on the row-store path', async () => {
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' }, B: { raw: 'b', value: 'b' } } },
+    ]);
+
+    const window = await loadSheetWindow('page-1', { limit: 10, select: ['a'] });
+    assert({
+      given: 'select given in lower case',
+      should: 'match the upper-case column labels rows are keyed by',
+      actual: window.rows[0].cells,
+      expected: { A: 'a' },
+    });
+  });
+});
+
+describe('loadSheetWindow — refusals', () => {
+  const multiTabDocument = [
+    '#%PAGESPACE_SHEETDOC v1',
+    'page_id = "page-1"',
+    '',
+    '[[sheets]]',
+    'name = "First"',
+    'order = 0',
+    '',
+    '[sheets.meta]',
+    'row_count = 2',
+    'column_count = 1',
+    '',
+    '[sheets.cells.A1]',
+    'value = "from-first"',
+    'type = "string"',
+    '',
+    '[[sheets]]',
+    'name = "Second"',
+    'order = 1',
+    '',
+    '[sheets.meta]',
+    'row_count = 3',
+    'column_count = 2',
+    '',
+    '[sheets.cells.A1]',
+    'value = "from-second"',
+    'type = "string"',
+  ].join('\n');
+
+  it('reads the requested tab of a document-backed sheet, not always tab 0', async () => {
+    // Answering a request for tab 1 with tab 0's rows is a wrong answer an
+    // agent cannot detect — the rows look perfectly valid.
+    mockListTabs.mockResolvedValue([]);
+
+    const first = await loadSheetWindow('page-1', { limit: 10, documentContent: multiTabDocument });
+    const second = await loadSheetWindow('page-1', { tabIndex: 1, limit: 10, documentContent: multiTabDocument });
+
+    expect(first.rows[0].cells).toEqual({ A: 'from-first' });
+    assert({
+      given: 'tabIndex 1 on an unmigrated multi-tab sheet',
+      should: 'return the second tab\'s data and identify it as such',
+      actual: { cells: second.rows[0].cells, tabIndex: second.tabIndex, tabName: second.tabName },
+      expected: { cells: { A: 'from-second' }, tabIndex: 1, tabName: 'Second' },
+    });
+  });
+
+  it('lists every tab of a document-backed sheet, not only the one it read', async () => {
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', { limit: 10, documentContent: multiTabDocument });
+
+    expect(window.tabs).toEqual([
+      { tabIndex: 0, name: 'First', rowCount: 2, columnCount: 1 },
+      { tabIndex: 1, name: 'Second', rowCount: 3, columnCount: 2 },
+    ]);
+  });
+
+  it('refuses a tab index the document does not have', async () => {
+    mockListTabs.mockResolvedValue([]);
+    await expect(
+      loadSheetWindow('page-1', { tabIndex: 5, limit: 10, documentContent: multiTabDocument })
+    ).rejects.toThrow(SheetTabNotFoundError);
+  });
+
+  it('refuses a tab index the row store does not have', async () => {
+    mockGetTab.mockResolvedValue(null);
+    await expect(loadSheetWindow('page-1', { tabIndex: 3, limit: 10 })).rejects.toThrow(SheetTabNotFoundError);
+  });
+
+  it('refuses an unparseable document instead of calling it empty', async () => {
+    // `parseSheetContentSafe` distinguishes "genuinely empty" from "failed to
+    // read" precisely so this case is not conflated. Reporting blank is the one
+    // answer that invites an agent to overwrite content that is still intact.
+    mockListTabs.mockResolvedValue([]);
+    const broken = '#%PAGESPACE_SHEETDOC v1\n[[sheets]]\nname = "Broken"\nthis is not toml = = =';
+
+    await expect(
+      loadSheetWindow('page-1', { limit: 10, documentContent: broken })
+    ).rejects.toThrow(SheetDocumentUnreadableError);
+  });
+
+  it('still reads a genuinely empty sheet as empty', async () => {
+    // The refusal above must not swallow the legitimate empty case.
+    mockListTabs.mockResolvedValue([]);
+    const window = await loadSheetWindow('page-1', { limit: 10, documentContent: '' });
+
+    expect(window.rows).toEqual([]);
+    expect(window.materialized).toBe(false);
   });
 });

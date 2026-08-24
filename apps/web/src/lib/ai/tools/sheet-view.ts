@@ -23,10 +23,12 @@
 import type { StoredCell } from '@pagespace/db/schema';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
+  SHEETDOC_VERSION,
   decodeCellAddress,
   encodeColumnLabel,
   evaluateSheetSparse,
   parseSheetContentSafe,
+  sheetDataFromSheetDoc,
   type SheetData,
 } from '@pagespace/lib/sheets/sheet';
 
@@ -65,6 +67,43 @@ export const DEFAULT_SHEET_READ_ROWS = 50;
  * is a human/model-legible rendering, not the data.
  */
 const MAX_TABLE_CELL_CHARS = 120;
+
+/**
+ * A stored sheet document that could not be parsed.
+ *
+ * Thrown rather than degraded into an empty sheet. `parseSheetContentSafe`
+ * distinguishes "genuinely empty" from "failed to read" precisely so callers
+ * stop conflating them, and the materialisation path in the store already fails
+ * loudly here for the same reason: telling an agent that a spreadsheet it
+ * cannot parse is BLANK invites it to write over content that is still intact.
+ * A crippled read that reports success is worse than a read that refuses.
+ */
+export class SheetDocumentUnreadableError extends Error {
+  constructor(readonly reason: string, message: string) {
+    super(message);
+    this.name = 'SheetDocumentUnreadableError';
+  }
+}
+
+/**
+ * A tab index that does not exist on this sheet.
+ *
+ * Also loud, and for the same reason: answering a request for tab 2 with tab
+ * 0's rows is a wrong answer an agent has no way to detect. Carries the tabs
+ * that DO exist so the next call can be right.
+ */
+export class SheetTabNotFoundError extends Error {
+  constructor(
+    readonly tabIndex: number,
+    readonly availableTabs: readonly SheetTabSummary[],
+  ) {
+    super(
+      `Sheet tab ${tabIndex} does not exist. This sheet has ${availableTabs.length} tab(s): ` +
+      availableTabs.map((tab) => `${tab.tabIndex} ("${tab.name}")`).join(', ') + '.'
+    );
+    this.name = 'SheetTabNotFoundError';
+  }
+}
 
 export interface SheetTabSummary {
   tabIndex: number;
@@ -149,12 +188,24 @@ function cellText(cell: StoredCell): string {
  * renderings of the same row would be a bug an agent could only discover by
  * comparing two calls.
  */
-export function toSheetViewRow(rowIndex: number, cells: Record<string, StoredCell>): SheetViewRow {
+export function toSheetViewRow(
+  rowIndex: number,
+  cells: Record<string, StoredCell>,
+  /**
+   * Column letters to keep. Omitted means every column the row has. Applied
+   * here rather than at a call site so a projected row is projected in ALL of
+   * `cells`, `formulas` and `errors` — dropping a column from the rendered
+   * table while leaving it in the structured payload is not a projection, it is
+   * a bigger response that merely looks smaller.
+   */
+  only?: ReadonlySet<string>,
+): SheetViewRow {
   const values: Record<string, string> = {};
   const formulas: Record<string, string> = {};
   const errors: Record<string, string> = {};
 
   for (const label of Object.keys(cells).sort(compareColumnLabels)) {
+    if (only && !only.has(label)) continue;
     const cell = cells[label];
     if (!cell) continue;
     const text = cellText(cell);
@@ -173,6 +224,32 @@ export function toSheetViewRow(rowIndex: number, cells: Record<string, StoredCel
 }
 
 /**
+ * Every tab a stored document describes.
+ *
+ * `parseSheetContentSafe` returns the FIRST tab as the `SheetData` and the rest
+ * in `extraSheets`, already sorted by their `order` field (`sortSheetDoc` runs
+ * on the way in). Position in this list is therefore the tab index, which is
+ * the same correspondence `readSheetDocument` relies on in the other
+ * direction when it writes `order: tab.tabIndex`.
+ */
+function documentTabs(sheet: SheetData): SheetTabSummary[] {
+  return [
+    {
+      tabIndex: 0,
+      name: sheet.sheetName ?? 'Sheet1',
+      rowCount: sheet.rowCount,
+      columnCount: sheet.columnCount,
+    },
+    ...(sheet.extraSheets ?? []).map((extra, index) => ({
+      tabIndex: index + 1,
+      name: extra.name,
+      rowCount: Math.max(1, Math.floor(extra.meta.rowCount)),
+      columnCount: Math.max(1, Math.floor(extra.meta.columnCount)),
+    })),
+  ];
+}
+
+/**
  * A window of a sheet whose rows have not been materialised.
  *
  * Legacy path: parse the stored document and evaluate it sparsely, which is
@@ -180,15 +257,43 @@ export function toSheetViewRow(rowIndex: number, cells: Record<string, StoredCel
  * more expensive than the behaviour it replaces, and it stays a pure READ.
  * Materialising here instead would be a write, triggered by a reader who may
  * only have view access.
+ *
+ * Throws rather than degrading on either thing it cannot honour: a document it
+ * cannot parse, and a tab that does not exist. Both would otherwise be answered
+ * with rows — an empty sheet, or another tab's data — that an agent has no way
+ * to tell apart from the truth.
  */
 function windowFromDocument(
   content: unknown,
   pageId: string,
+  tabIndex: number,
   fromRow: number,
-  limit: number
+  limit: number,
+  only?: ReadonlySet<string>,
 ): SheetWindow {
   const parsed = parseSheetContentSafe(content);
-  const sheet: SheetData = parsed.ok ? parsed.sheet : { version: 1, rowCount: 0, columnCount: 0, cells: {} };
+  if (!parsed.ok) {
+    throw new SheetDocumentUnreadableError(
+      parsed.reason,
+      `This sheet's stored document could not be parsed (${parsed.reason}): ${parsed.message}. ` +
+      'The document needs repair before the sheet can be read; it is not empty.'
+    );
+  }
+
+  const tabs = documentTabs(parsed.sheet);
+  const summary = tabs[tabIndex];
+  if (!summary) {
+    throw new SheetTabNotFoundError(tabIndex, tabs);
+  }
+
+  // Tab 0 IS the parsed `SheetData`. A later tab is one `SheetDocSheet`, turned
+  // into `SheetData` by the same conversion that produced tab 0 — reusing it
+  // rather than reimplementing the cell/format/range unpacking here.
+  const extra = tabIndex === 0 ? undefined : (parsed.sheet.extraSheets ?? [])[tabIndex - 1];
+  const sheet: SheetData = extra
+    ? sheetDataFromSheetDoc({ version: SHEETDOC_VERSION, pageId, sheets: [extra] })
+    : parsed.sheet;
+
   const evaluation = evaluateSheetSparse(sheet, { pageId });
 
   const byRow = new Map<number, Record<string, StoredCell>>();
@@ -218,23 +323,16 @@ function windowFromDocument(
 
   const indexes = [...byRow.keys()].filter((index) => index >= fromRow).sort((a, b) => a - b);
   const windowed = indexes.slice(0, limit);
-  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}));
+  const rows = windowed.map((index) => toSheetViewRow(index, byRow.get(index) ?? {}, only));
   const nextFromRow = windowed.length > 0 ? windowed[windowed.length - 1] + 1 : null;
 
   return {
     materialized: false,
-    tabIndex: 0,
-    tabName: sheet.sheetName ?? 'Sheet1',
-    rowCount: sheet.rowCount,
-    columnCount: sheet.columnCount,
-    tabs: [
-      {
-        tabIndex: 0,
-        name: sheet.sheetName ?? 'Sheet1',
-        rowCount: sheet.rowCount,
-        columnCount: sheet.columnCount,
-      },
-    ],
+    tabIndex,
+    tabName: summary.name,
+    rowCount: summary.rowCount,
+    columnCount: summary.columnCount,
+    tabs,
     rows,
     nextFromRow,
     hasMore: nextFromRow !== null && indexes.length > windowed.length,
@@ -247,6 +345,15 @@ export interface LoadSheetWindowOptions {
   fromRow?: number;
   limit: number;
   /**
+   * Column letters to return. Omitted means every column each row has.
+   *
+   * Applied here, not at a call site, so a positional read projects exactly
+   * like a filtered one — `queryRows` does its own projection in the store, and
+   * a range read that only narrowed the rendered table would have returned the
+   * full payload while reporting the narrow column list.
+   */
+  select?: readonly string[];
+  /**
    * The page's stored `content`, used only when the sheet has no rows in the
    * store yet. Pass it so an unmigrated sheet reads as its data rather than as
    * an empty spreadsheet.
@@ -257,6 +364,11 @@ export interface LoadSheetWindowOptions {
 /**
  * A positional window of rows, from the row store when the sheet has been
  * materialised and from the stored document when it has not.
+ *
+ * Throws `SheetDocumentUnreadableError` or `SheetTabNotFoundError` rather than
+ * answering with rows it was not asked for. Callers translate those into an
+ * actionable tool result; none of them may treat either as "the sheet is
+ * empty".
  */
 export async function loadSheetWindow(
   pageId: string,
@@ -265,10 +377,13 @@ export async function loadSheetWindow(
   const tabIndex = options.tabIndex ?? 0;
   const fromRow = Math.max(0, options.fromRow ?? 0);
   const limit = Math.max(1, Math.min(options.limit, MAX_SHEET_READ_ROWS));
+  const only = options.select && options.select.length > 0
+    ? new Set(options.select.map((column) => column.toUpperCase()))
+    : undefined;
 
   const storedTabs = await listTabs(pageId);
   if (storedTabs.length === 0) {
-    return windowFromDocument(options.documentContent, pageId, fromRow, limit);
+    return windowFromDocument(options.documentContent, pageId, tabIndex, fromRow, limit, only);
   }
 
   const tabs: SheetTabSummary[] = storedTabs.map((tab) => ({
@@ -280,21 +395,14 @@ export async function loadSheetWindow(
 
   const tab = await getTab({ pageId, tabIndex });
   if (!tab) {
-    return {
-      materialized: true,
-      tabIndex,
-      tabName: '',
-      rowCount: 0,
-      columnCount: 0,
-      tabs,
-      rows: [],
-      nextFromRow: null,
-      hasMore: false,
-    };
+    // Same refusal as the document path. Reporting "0 rows x 0 columns" for a
+    // tab index that simply does not exist reads as an empty spreadsheet, and
+    // an agent would believe it.
+    throw new SheetTabNotFoundError(tabIndex, tabs);
   }
 
   const stored = await readRows(tab.id, { fromRow, limit });
-  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells));
+  const rows = stored.map((row) => toSheetViewRow(row.rowIndex, row.cells, only));
   const nextFromRow = stored.length > 0 ? stored[stored.length - 1].rowIndex + 1 : null;
 
   return {
