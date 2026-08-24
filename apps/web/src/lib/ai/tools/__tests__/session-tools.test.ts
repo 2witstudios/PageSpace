@@ -1239,6 +1239,33 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     );
   });
 
+  it('should ACCUMULATE the config warnings and the workspace one, not replace either', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'read_file'],
+          granted: ['read_page'],
+          blocked: [{ tool: 'read_file', gate: 'not_registered' as const }],
+          notes: ['no tool named read_file'],
+        }),
+      ),
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // Two independent divergences, two sentences: a caller told only the second
+    // would fix the workspace and still find the tool missing.
+    expect(result.toolSurfaceWarnings).toEqual([
+      'no tool named read_file',
+      'no compute in that workspace',
+    ]);
+  });
+
   it('given the compute check itself failing, should still spawn and stay quiet about it', async () => {
     const deps = makeDeps({
       describeWorkerComputeShortfall: vi.fn(async () => {
