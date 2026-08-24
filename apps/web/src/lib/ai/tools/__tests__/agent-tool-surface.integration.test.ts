@@ -184,7 +184,30 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
       return voiceToolDispatchDeps(assistant);
     };
 
-    it('given the switch OFF, withholds the sandbox family from the executable set', async () => {
+    /**
+     * PROBED THROUGH `tool_search`, not by reading top-level keys.
+     *
+     * A voice set is built in `'search'` exposure, so a non-core tool is never a
+     * top-level key whatever the switch says — asserting on `Object.keys` made
+     * the switch-OFF case pass for the wrong reason and the switch-ON case fail
+     * for a reason that had nothing to do with this PR. CI caught the second and
+     * therefore the first. What actually matters is REACHABILITY: `tool_search`
+     * searches the executable corpus and `execute_tool` dispatches from it, so
+     * the corpus is the thing the switch has to empty.
+     */
+    const searchable = async (
+      tools: Record<string, unknown>,
+      query: string,
+    ): Promise<string[]> => {
+      const search = tools.tool_search as
+        | { execute: (input: { query: string }) => Promise<{ tools: { name: string }[] }> }
+        | undefined;
+      if (!search) return [];
+      const found = await search.execute({ query });
+      return found.tools.map((entry) => entry.name);
+    };
+
+    it('given the switch OFF, the executable corpus does not contain the sandbox family', async () => {
       if (!dbAvailable) return;
 
       const { agent } = await createAgent(['read_page', 'spawn_shell'], false);
@@ -194,11 +217,12 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
         enabledTools: ['read_page', 'spawn_shell'],
       });
 
+      // Not discoverable, therefore not runnable through execute_tool.
+      expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual([]);
       expect(Object.keys(deps.tools)).toContain('read_page');
-      expect(Object.keys(deps.tools)).not.toContain('spawn_shell');
     });
 
-    it('given the switch ON, keeps it', async () => {
+    it('given the switch ON, the corpus keeps it', async () => {
       if (!dbAvailable) return;
 
       const { agent } = await createAgent(['read_page', 'spawn_shell'], true);
@@ -208,7 +232,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
         enabledTools: ['read_page', 'spawn_shell'],
       });
 
-      expect(Object.keys(deps.tools)).toContain('spawn_shell');
+      expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual(['spawn_shell']);
     });
 
     it('given an agent page that cannot be read, fails CLOSED', async () => {
@@ -219,7 +243,7 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
         enabledTools: ['read_page', 'spawn_shell'],
       });
 
-      expect(Object.keys(deps.tools)).not.toContain('spawn_shell');
+      expect(await searchable(deps.tools, 'select:spawn_shell')).toEqual([]);
     });
   });
 
