@@ -18,6 +18,7 @@ import type {
 import { parseCellFormat } from './format';
 import { SHEETDOC_MAGIC, SHEETDOC_VERSION, SHEET_VERSION, SHEET_DEFAULT_ROWS, SHEET_DEFAULT_COLUMNS } from './constants';
 import { evaluateSheetSparse } from './evaluation';
+import { parseConditionalRules } from './conditional';
 import { sanitizeSheetData } from './update';
 import { cellRegex } from './address';
 
@@ -284,12 +285,14 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
 
   const columnFormats = readColumnFormats(target.ranges.__columnFormats);
   const rowHeights = readRowHeights(target.ranges.__rowHeights);
+  const conditionalFormats = parseConditionalRules(target.ranges.__conditionalFormats);
 
-  // Strip the two internal bags back out so they do not resurface as if they
-  // were user-defined named ranges.
+  // Strip the internal bags back out so they do not resurface as if they were
+  // user-defined named ranges.
   const userRanges = { ...target.ranges };
   delete userRanges.__columnFormats;
   delete userRanges.__rowHeights;
+  delete userRanges.__conditionalFormats;
 
   const extraSheets = normalized.sheets.slice(1);
 
@@ -302,6 +305,7 @@ export function sheetDataFromSheetDoc(doc: SheetDoc): SheetData {
     ...(columnFormats ? { columnFormats } : {}),
     ...(Object.keys(columnWidths).length > 0 ? { columnWidths } : {}),
     ...(rowHeights ? { rowHeights } : {}),
+    ...(conditionalFormats ? { conditionalFormats } : {}),
     ...(Object.keys(userRanges).length > 0 ? { ranges: userRanges } : {}),
     ...(typeof target.meta.frozenRows === 'number' && target.meta.frozenRows > 0
       ? { frozenRows: target.meta.frozenRows }
@@ -739,6 +743,7 @@ function sheetDataToSheetDoc(
   const ranges: Record<string, Record<string, unknown>> = { ...(sheet.ranges ?? {}) };
   delete ranges.__columnFormats;
   delete ranges.__rowHeights;
+  delete ranges.__conditionalFormats;
 
   // Column defaults and row heights have no first-class SheetDoc home yet, so
   // they ride in the same bag under reserved `__`-prefixed keys.
@@ -747,6 +752,14 @@ function sheetDataToSheetDoc(
   }
   if (sheet.rowHeights && Object.keys(sheet.rowHeights).length > 0) {
     ranges.__rowHeights = { ...sheet.rowHeights };
+  }
+  // Rules are an array, and the bag holds objects — so they ride as a keyed
+  // map under the same reserved-prefix convention, ordered by index. Order is
+  // load-bearing: later rules layer over earlier ones.
+  if (sheet.conditionalFormats && sheet.conditionalFormats.length > 0) {
+    ranges.__conditionalFormats = Object.fromEntries(
+      sheet.conditionalFormats.map((rule, index) => [String(index), rule as unknown as Record<string, unknown>])
+    );
   }
 
   // Tabs beyond the first are carried through verbatim. Dropping them here is

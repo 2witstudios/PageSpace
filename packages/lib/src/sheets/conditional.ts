@@ -16,6 +16,7 @@
  */
 
 import type { CellFormat, SheetPrimitive } from './types';
+import { parseCellFormat } from './format';
 import { adjustFormulaReferences, decodeCellAddress, encodeCellAddress } from './address';
 
 /** Comparisons a single-colour rule can make against a cell's value. */
@@ -451,4 +452,143 @@ export function evaluateConditionalFormats(
   }
 
   return { formats, bars };
+}
+
+
+// ---- Parsing stored rules ------------------------------------------------
+
+const OPERATORS = new Set<ConditionalOperator>([
+  'greaterThan', 'greaterThanOrEqual', 'lessThan', 'lessThanOrEqual',
+  'equal', 'notEqual', 'between', 'notBetween',
+  'contains', 'notContains', 'startsWith', 'endsWith',
+  'isEmpty', 'isNotEmpty', 'isError',
+]);
+
+const ANCHOR_TYPES = new Set(['min', 'max', 'number', 'percent', 'percentile']);
+
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  typeof value === 'object' && value !== null && !Array.isArray(value);
+
+const readRanges = (value: unknown): string[] | null => {
+  if (!Array.isArray(value)) return null;
+  const ranges = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+  return ranges.length > 0 ? ranges : null;
+};
+
+const readAnchor = (value: unknown): ScaleAnchor | null => {
+  if (!isObject(value)) return null;
+  const type = value.type;
+  if (typeof type !== 'string' || !ANCHOR_TYPES.has(type)) return null;
+
+  const anchor: ScaleAnchor = { type: type as ScaleAnchor['type'] };
+  if (typeof value.value === 'number' && Number.isFinite(value.value)) anchor.value = value.value;
+  if (typeof value.color === 'string' && /^#[0-9a-fA-F]{6}$/.test(value.color)) {
+    anchor.color = value.color.toLowerCase();
+  }
+  // A scale anchor without a colour cannot be interpolated against.
+  return anchor;
+};
+
+/**
+ * Validate one stored rule.
+ *
+ * Anything whose core shape is unusable is dropped rather than rendered: a rule
+ * is presentation derived from user data, and a malformed one would either
+ * paint nothing or paint nonsense across a range. Unknown *fields* within an
+ * otherwise valid rule are left alone, so a rule written by a newer build
+ * survives a load/save cycle here.
+ */
+export function parseConditionalRule(value: unknown): ConditionalRule | null {
+  if (!isObject(value)) return null;
+
+  const id = typeof value.id === 'string' && value.id !== '' ? value.id : null;
+  const ranges = readRanges(value.ranges);
+  if (!id || !ranges) return null;
+
+  switch (value.kind) {
+    case 'cell': {
+      if (!isObject(value.condition)) return null;
+      const operator = value.condition.operator;
+      if (typeof operator !== 'string' || !OPERATORS.has(operator as ConditionalOperator)) return null;
+
+      const condition: ConditionalCondition = { operator: operator as ConditionalOperator };
+      if (typeof value.condition.value === 'string') condition.value = value.condition.value;
+      if (typeof value.condition.value2 === 'string') condition.value2 = value.condition.value2;
+
+      const format = parseCellFormat(value.format);
+      if (!format) return null;
+      return { ...value, id, kind: 'cell', ranges, condition, format };
+    }
+
+    case 'formula': {
+      if (typeof value.formula !== 'string' || value.formula.trim() === '') return null;
+      const format = parseCellFormat(value.format);
+      if (!format) return null;
+      return { ...value, id, kind: 'formula', ranges, formula: value.formula, format };
+    }
+
+    case 'colorScale': {
+      const min = readAnchor(value.min);
+      const max = readAnchor(value.max);
+      // Without both end colours there is no gradient to place a value on.
+      if (!min?.color || !max?.color) return null;
+      const mid = readAnchor(value.mid);
+      return {
+        ...value,
+        id,
+        kind: 'colorScale',
+        ranges,
+        min,
+        max,
+        ...(mid?.color ? { mid } : {}),
+      };
+    }
+
+    case 'dataBar': {
+      if (typeof value.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(value.color)) return null;
+      const min = readAnchor(value.min);
+      const max = readAnchor(value.max);
+      return {
+        ...value,
+        id,
+        kind: 'dataBar',
+        ranges,
+        color: value.color.toLowerCase(),
+        ...(min ? { min } : {}),
+        ...(max ? { max } : {}),
+      };
+    }
+
+    default:
+      return null;
+  }
+}
+
+/**
+ * Read a stored rule collection back into an ordered list.
+ *
+ * Accepts either an array or the numerically-keyed map the TOML bag stores,
+ * because the bag holds objects and rule order is load-bearing — later rules
+ * layer over earlier ones.
+ */
+export function parseConditionalRules(value: unknown): ConditionalRule[] | undefined {
+  let entries: unknown[];
+
+  if (Array.isArray(value)) {
+    entries = value;
+  } else if (isObject(value)) {
+    entries = Object.keys(value)
+      .map((key) => ({ key, index: Number(key) }))
+      .filter(({ index }) => Number.isFinite(index))
+      .sort((a, b) => a.index - b.index)
+      .map(({ key }) => (value as Record<string, unknown>)[key]);
+  } else {
+    return undefined;
+  }
+
+  const rules = entries
+    .map((entry) => parseConditionalRule(entry))
+    .filter((rule): rule is ConditionalRule => rule !== null);
+
+  return rules.length > 0 ? rules : undefined;
 }

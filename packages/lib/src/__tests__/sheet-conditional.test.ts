@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   addressesOfRange,
+  parseConditionalRule,
+  parseConditionalRules,
   evaluateConditionalFormats,
   matchesCondition,
   mixColors,
@@ -8,7 +10,13 @@ import {
   type ConditionalContext,
   type ConditionalRule,
 } from '../sheets/conditional';
-import type { SheetPrimitive } from '../sheets/sheet';
+import {
+  createEmptySheet,
+  parseSheetContent,
+  serializeSheetContent,
+  type SheetData,
+  type SheetPrimitive,
+} from '../sheets/sheet';
 
 /** A context backed by a plain map, so rules are testable without an engine. */
 const contextOf = (
@@ -330,5 +338,165 @@ describe('mixColors', () => {
   it('returns null for a colour it cannot parse, rather than a broken hex', () => {
     expect(mixColors('red', '#ffffff', 0.5)).toBeNull();
     expect(mixColors('#fff', '#ffffff', 0.5)).toBeNull();
+  });
+});
+
+// --- storage -------------------------------------------------------------
+
+describe('parseConditionalRule', () => {
+  const cellRule = {
+    id: 'r1',
+    kind: 'cell',
+    ranges: ['A1:A9'],
+    condition: { operator: 'greaterThan', value: '10' },
+    format: { background: '#fee2e2' },
+  };
+
+  it('accepts a well-formed rule', () => {
+    expect(parseConditionalRule(cellRule)).toMatchObject({ id: 'r1', kind: 'cell' });
+  });
+
+  it.each([
+    ['no id', { ...cellRule, id: '' }],
+    ['no ranges', { ...cellRule, ranges: [] }],
+    ['ranges not an array', { ...cellRule, ranges: 'A1:A9' }],
+    ['unknown kind', { ...cellRule, kind: 'telepathy' }],
+    ['unknown operator', { ...cellRule, condition: { operator: 'vibes' } }],
+    ['missing condition', { ...cellRule, condition: undefined }],
+    ['not an object', 'nope'],
+    ['null', null],
+  ])('drops a rule with %s', (_label, value) => {
+    expect(parseConditionalRule(value)).toBeNull();
+  });
+
+  it('drops a colour scale missing an end colour, which has no gradient', () => {
+    expect(
+      parseConditionalRule({
+        id: 's', kind: 'colorScale', ranges: ['A1:A9'],
+        min: { type: 'min' }, max: { type: 'max', color: '#000000' },
+      })
+    ).toBeNull();
+  });
+
+  it('drops a data bar whose colour is not a hex value', () => {
+    expect(
+      parseConditionalRule({ id: 'b', kind: 'dataBar', ranges: ['A1'], color: 'red' })
+    ).toBeNull();
+  });
+
+  it('strips a format field the schema rejects but keeps the rest of the rule', () => {
+    const parsed = parseConditionalRule({
+      ...cellRule,
+      format: { background: '#fee2e2', color: 'javascript:alert(1)' },
+    });
+    expect(parsed?.kind).toBe('cell');
+    expect((parsed as { format: Record<string, unknown> }).format).toEqual({ background: '#fee2e2' });
+  });
+
+  it('carries an unknown field on an otherwise valid rule, for forward compatibility', () => {
+    const parsed = parseConditionalRule({ ...cellRule, stopIfTrue: true });
+    expect((parsed as unknown as Record<string, unknown>).stopIfTrue).toBe(true);
+  });
+
+  it('lower-cases stored colours so comparisons are stable', () => {
+    const parsed = parseConditionalRule({ id: 'b', kind: 'dataBar', ranges: ['A1'], color: '#3B82F6' });
+    expect((parsed as { color: string }).color).toBe('#3b82f6');
+  });
+});
+
+describe('parseConditionalRules', () => {
+  const rule = (id: string) => ({
+    id, kind: 'cell', ranges: ['A1'],
+    condition: { operator: 'isNotEmpty' }, format: { bold: true },
+  });
+
+  it('reads an array', () => {
+    expect(parseConditionalRules([rule('a'), rule('b')])?.map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('restores order from the numerically-keyed map the TOML bag stores', () => {
+    const stored = { '10': rule('k'), '2': rule('b'), '1': rule('a') };
+    expect(parseConditionalRules(stored)?.map((r) => r.id)).toEqual(['a', 'b', 'k']);
+  });
+
+  it('orders by numeric value, not by key-insertion order', () => {
+    // JS already enumerates canonical integer keys ascending, so the case above
+    // would pass without any sorting at all. A non-canonical key like "01" is
+    // enumerated in insertion order instead, which is what actually exercises
+    // it — and is what a hand-written or newer-writer document can contain.
+    // Order is load-bearing here: later rules layer over earlier ones.
+    const stored = { '2': rule('second'), '01': rule('first') };
+    expect(Object.keys(stored)).toEqual(['2', '01']);
+    expect(parseConditionalRules(stored)?.map((r) => r.id)).toEqual(['first', 'second']);
+  });
+
+  it('drops the invalid entries and keeps the rest', () => {
+    expect(parseConditionalRules([rule('a'), { junk: true }, rule('b')])?.map((r) => r.id)).toEqual(['a', 'b']);
+  });
+
+  it('is undefined rather than empty when nothing survives', () => {
+    expect(parseConditionalRules([{ junk: true }])).toBeUndefined();
+    expect(parseConditionalRules(undefined)).toBeUndefined();
+    expect(parseConditionalRules('nope')).toBeUndefined();
+  });
+});
+
+describe('round trip through the document', () => {
+  const withRules = (): SheetData => {
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '5';
+    sheet.conditionalFormats = [
+      {
+        id: 'r1', kind: 'cell', ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '3' },
+        format: { background: '#fee2e2', bold: true },
+      },
+      {
+        id: 's1', kind: 'colorScale', ranges: ['B1:B9'],
+        min: { type: 'min', color: '#ffffff' },
+        mid: { type: 'percentile', value: 50, color: '#fef3c7' },
+        max: { type: 'max', color: '#22c55e' },
+      },
+      { id: 'b1', kind: 'dataBar', ranges: ['C1:C9'], color: '#3b82f6' },
+    ];
+    return sheet;
+  };
+
+  it('survives serialize and parse intact', () => {
+    const restored = parseSheetContent(serializeSheetContent(withRules()));
+    expect(restored.conditionalFormats).toEqual(withRules().conditionalFormats);
+  });
+
+  it('keeps rule order across the round trip', () => {
+    const restored = parseSheetContent(serializeSheetContent(withRules()));
+    expect(restored.conditionalFormats?.map((r) => r.id)).toEqual(['r1', 's1', 'b1']);
+  });
+
+  it('does not leak the internal key into user-visible named ranges', () => {
+    // `__columnFormats` and `__rowHeights` already ride in this bag under the
+    // same convention; a third must not start showing up as a named range.
+    const restored = parseSheetContent(serializeSheetContent(withRules()));
+    expect(restored.ranges).toBeUndefined();
+  });
+
+  it('leaves a genuine named range alongside the rules alone', () => {
+    const sheet = withRules();
+    sheet.ranges = { myRange: { ref: 'A1:B2' } };
+    const restored = parseSheetContent(serializeSheetContent(sheet));
+    expect(restored.ranges).toEqual({ myRange: { ref: 'A1:B2' } });
+    expect(restored.conditionalFormats).toHaveLength(3);
+  });
+
+  it('omits the field entirely when a sheet has no rules', () => {
+    const restored = parseSheetContent(serializeSheetContent(createEmptySheet()));
+    expect(restored.conditionalFormats).toBeUndefined();
+  });
+
+  it('survives repeated save cycles without drift', () => {
+    let content = serializeSheetContent(withRules());
+    for (let cycle = 0; cycle < 3; cycle++) {
+      content = serializeSheetContent(parseSheetContent(content));
+    }
+    expect(parseSheetContent(content).conditionalFormats).toEqual(withRules().conditionalFormats);
   });
 });

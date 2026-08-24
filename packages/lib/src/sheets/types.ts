@@ -101,6 +101,11 @@ export interface SheetData {
    */
   ranges?: Record<string, Record<string, unknown>>;
   /**
+   * Conditional formatting rules, applied in order. Evaluated by
+   * `sheets/conditional` and merged beneath each cell's explicit format.
+   */
+  conditionalFormats?: import('./conditional').ConditionalRule[];
+  /**
    * Tabs after the first, carried verbatim so a multi-tab document survives a
    * load/save cycle. The editor renders only the first sheet today; without
    * this, saving would silently delete every other tab.
