@@ -145,7 +145,7 @@ const lineOperationSchema = z.object({
   // Optional staleness guard for write operations: the totalLines the caller
   // read before addressing this edit. Supplying it turns "the document grew
   // since I looked" from a silent partial overwrite into a 409.
-  expectedTotalLines: z.number().min(0).optional(),
+  expectedTotalLines: z.number().int().min(0).optional(),
 });
 
 export async function POST(req: NextRequest) {

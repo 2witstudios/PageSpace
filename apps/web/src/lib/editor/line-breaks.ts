@@ -88,6 +88,11 @@ function voidTagPattern(tags: string[]): string {
 const lineBreakTagPattern = voidTagPattern([...LINE_BREAK_TAGS, ...BLOCK_VOID_TAGS]);
 const blockVoidTagPattern = voidTagPattern(BLOCK_VOID_TAGS);
 
+const STRUCTURAL_MARKUP_REGEX = new RegExp(
+  `(?:${blockOpeningTagPattern})|(?:</(?:${blockTagPattern})>)|(?:${lineBreakTagPattern})`,
+  'i'
+);
+
 /**
  * True when `html` contains markup that {@link addLineBreaksForAI} gives line
  * structure to — a block element or a `<br>`/`<hr>`.
@@ -100,11 +105,7 @@ const blockVoidTagPattern = voidTagPattern(BLOCK_VOID_TAGS);
  */
 export function hasLineStructuringHtml(html: string | null | undefined): boolean {
   if (!html) return false;
-  const structural = new RegExp(
-    `(?:${blockOpeningTagPattern})|(?:</(?:${blockTagPattern})>)|(?:${lineBreakTagPattern})`,
-    'i'
-  );
-  return structural.test(html);
+  return STRUCTURAL_MARKUP_REGEX.test(html);
 }
 
 /**
@@ -152,15 +153,16 @@ export function addLineBreaksForAI(html: string): string {
 
   // Add newline between adjacent closing and opening block tags
   // Match: </tag><tag> or </tag> <tag> (with optional horizontal whitespace).
-  // Horizontal whitespace only: `\s*` here would have SWALLOWED a newline,
-  // collapsing a deliberate blank line between two blocks and breaking the
-  // "only adds" contract this file's header promises (and with it the
-  // idempotence the write paths rely on).
+  // Two details, both in service of the "only adds" contract this file's
+  // header promises — and with it the idempotence the write paths rely on:
+  // `\s*` here would have SWALLOWED a newline, collapsing a deliberate blank
+  // line between two blocks, and the separating spaces were dropped rather
+  // than carried through to the replacement.
   const adjacentTagRegex = new RegExp(
-    `(</(?:${blockTagPattern})>)[^\\S\\n]*(${blockOpeningTagPattern})`,
+    `(</(?:${blockTagPattern})>)([^\\S\\n]*)(${blockOpeningTagPattern})`,
     'gi'
   );
-  result = result.replace(adjacentTagRegex, '$1\n$2');
+  result = result.replace(adjacentTagRegex, '$1$2\n$3');
 
   // Add newline before <hr> — it is a block, so it owns its own line.
   const blockVoidRegex = new RegExp(`(?<!\\n)(${blockVoidTagPattern})`, 'gi');

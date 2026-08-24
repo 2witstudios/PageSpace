@@ -233,6 +233,10 @@ describe('addLineBreaksForAI', () => {
         '<p>a<br>b</p>',
         '<ul><li>x</li></ul>',
         '<p>one</p>\n\n<p>two</p>',
+        // Whitespace BETWEEN two blocks counts: the adjacent-tag pass used to
+        // drop it on the floor while claiming to only add.
+        '<p>one</p>  <p>two</p>',
+        '<p>one</p>\t<p>two</p>',
       ];
       for (const input of inputs) {
         expect(addLineBreaksForAI(input).replace(/\n/g, '')).toBe(input.replace(/\n/g, ''));
