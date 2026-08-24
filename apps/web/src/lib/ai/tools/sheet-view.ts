@@ -574,7 +574,18 @@ export function renderSheetTable(
       // containing " | " (free text, a piped path, a formula) would otherwise
       // produce a row with more apparent columns than the header, silently
       // shifting every value after it onto the wrong column letter.
-      const flat = value.replace(/\r?\n/g, '\\n').replace(/\|/g, '\\|');
+      //
+      // The BACKSLASH goes first, and that order is the whole correctness of
+      // it. Escaping only the newline and the pipe left the escape character
+      // itself ambiguous: a cell holding the literal text `a\|b` came out
+      // identical to a cell holding `a|b`, so a reader could not tell an
+      // escaped delimiter from a real backslash followed by one — and would
+      // read the row's columns back wrong. Escaping backslashes first makes
+      // every sequence decode to exactly one original.
+      const flat = value
+        .replace(/\\/g, '\\\\')
+        .replace(/\r?\n/g, '\\n')
+        .replace(/\|/g, '\\|');
       // Measured AND cut in code points. Mixing the two — a UTF-16 `.length`
       // guard with a code-point slice — flagged cells that were never
       // shortened: 100 emoji is 200 UTF-16 units, so it failed the guard, got

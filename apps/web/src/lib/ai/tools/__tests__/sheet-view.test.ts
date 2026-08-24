@@ -350,6 +350,33 @@ describe('renderSheetTable', () => {
     expect(line.split(' | ')).toHaveLength(2);
   });
 
+  it('escapes the escape character, so every sequence decodes to one original', () => {
+    // Flagged by CodeQL as incomplete escaping, and it is a real ambiguity:
+    // escaping only the newline and the pipe left a cell holding the literal
+    // text `a\|b` indistinguishable from one holding `a|b`, so a reader could
+    // not tell an escaped delimiter from a backslash followed by a real one.
+    const literalEscape = String.raw`a\|b`;   // backslash, pipe, b
+    const realPipe = 'a|b';
+
+    const a = renderSheetTable([toSheetViewRow(0, { A: { raw: literalEscape, value: literalEscape } })]).text;
+    const b = renderSheetTable([toSheetViewRow(0, { A: { raw: realPipe, value: realPipe } })]).text;
+
+    // The two must not collide — that collision was the bug.
+    expect(a).not.toBe(b);
+    expect(a.split('\n')[1]).toBe(String.raw`1→a\\\|b`);
+    expect(b.split('\n')[1]).toBe(String.raw`1→a\|b`);
+  });
+
+  it('escapes a literal backslash-n distinctly from a real newline', () => {
+    const literal = String.raw`one\ntwo`;   // backslash, n
+    const actual = 'one\ntwo';              // a real newline
+
+    const a = renderSheetTable([toSheetViewRow(0, { A: { raw: literal, value: literal } })]).text;
+    const b = renderSheetTable([toSheetViewRow(0, { A: { raw: actual, value: actual } })]).text;
+
+    expect(a).not.toBe(b);
+  });
+
   it('reports how many cells it had to cut, so truncation is stated not inferred', () => {
     // The table is a rendering; `rows` beside it always carries the full value.
     // A reader working from the table alone could otherwise copy a shortened
