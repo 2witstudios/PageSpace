@@ -200,12 +200,20 @@ export function columnsInRows(rows: readonly SheetViewRow[]): string[] {
  */
 function cellText(cell: StoredCell): string {
   if (cell.error) return '#ERROR';
-  if (cell.value !== undefined && cell.value !== '') {
+  // `undefined` means never materialised; `''` means it materialised AS blank.
+  // Conflating them rendered `=IF(A2>0,"ok","")` as its own source text where
+  // the spreadsheet shows an empty cell — and `where: isEmpty` matched that
+  // same row, because the filter compares the stored `''`. Two reads of one
+  // cell disagreeing is the shape this whole change exists to remove.
+  if (cell.value !== undefined) {
+    // An empty value needs no special case: every numeric format rejects a
+    // blank string (`applyNumberFormat` requires `value.trim() !== ''`) and
+    // `formatDisplayValue('')` is `''`, so a formatted blank stays blank.
     const formatted = applyNumberFormat(cell.value, cell.format?.number);
     return formatted !== null ? formatted : formatDisplayValue(cell.value);
   }
-  // A formula whose value never materialised would otherwise render as its own
-  // source text, which reads like data. Show it as a formula instead.
+  // Only a cell with no materialised value at all falls back to what was
+  // authored, so a formula is never silently reported as data.
   return cell.raw ?? '';
 }
 
@@ -507,12 +515,18 @@ export function renderSheetTableWithinBudget(
   }
 
   let text = rendered.text;
+  let rowsShown = shown.length;
   if (text.length > budget) {
     const hardCut = text.slice(0, Math.max(0, budget));
     const lastNewline = hardCut.lastIndexOf('\n');
     text = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
+    // The loop stops at one row, so a single row wider than the whole budget
+    // gets cut back to the `columns→…` header and NO data row survives.
+    // Reporting `shown.length` then made both callers announce "First 1 row(s)
+    // below" above nothing at all. Count what is actually there.
+    rowsShown = Math.max(0, text.split('\n').length - 1);
   }
-  return { text, rowsShown: shown.length, truncatedCells: rendered.truncatedCells };
+  return { text, rowsShown, truncatedCells: rendered.truncatedCells };
 }
 
 /**

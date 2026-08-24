@@ -27,6 +27,7 @@ import {
   columnsInRows,
   loadSheetWindow,
   renderSheetTable,
+  renderSheetTableWithinBudget,
   toSheetViewRow,
 } from '../sheet-view';
 
@@ -144,6 +145,34 @@ describe('toSheetViewRow', () => {
     });
   });
 
+  it('renders a formula that evaluates to blank as blank, not as its own source', () => {
+    // `=IF(A2>0,"ok","")` with A2 = 0 materialises as ''. Treating that as "no
+    // value" showed the formula text where the spreadsheet shows an empty cell
+    // — while `where: isEmpty` matched the same row, because the filter reads
+    // the stored ''. Two reads of one cell disagreeing.
+    const row = toSheetViewRow(0, {
+      B: { raw: '=IF(A2>0,"ok","")', value: '' },
+    });
+
+    expect(row.cells.B).toBe('');
+    // The formula itself is still recoverable.
+    expect(row.formulas).toEqual({ B: '=IF(A2>0,"ok","")' });
+  });
+
+  it('keeps a formatted blank blank, rather than formatting the empty value', () => {
+    // A blank cell in a currency or text column must stay blank. `text` and
+    // `currency` formats both happily render an empty value into something
+    // ("" -> "" for text, but a number format can produce a zero), so the
+    // emptiness is checked before any formatting is applied.
+    const row = toSheetViewRow(0, {
+      A: { raw: '', value: '', format: { number: { kind: 'text' } } },
+      B: { raw: '=IF(1>2,1,"")', value: '', format: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+    });
+
+    expect(row.cells.A).toBeUndefined();  // an empty literal is omitted entirely
+    expect(row.cells.B).toBe('');         // an empty formula result is blank, not $0.00
+  });
+
   it('omits empty cells instead of emitting a blank for every column', () => {
     // A 500x16 sheet is mostly empty. Emitting every empty cell would put the
     // payload straight back where the raw TOML dump left it.
@@ -250,6 +279,29 @@ describe('renderSheetTable', () => {
   it('reports nothing cut when nothing was cut', () => {
     const rendered = renderSheetTable([toSheetViewRow(0, { A: { raw: 'fits', value: 'fits' } })]);
     expect(rendered.truncatedCells).toBe(0);
+  });
+});
+
+describe('renderSheetTableWithinBudget', () => {
+  it('does not claim a row when the cut left none', () => {
+    // The drop loop stops at one row, so a single row wider than the budget is
+    // cut back to the header and no data row survives. Reporting one made both
+    // callers announce "First 1 row(s) below" above nothing.
+    const wide = toSheetViewRow(0, {
+      A: { raw: 'x'.repeat(400), value: 'x'.repeat(400) },
+    });
+
+    const bounded = renderSheetTableWithinBudget([wide], 60);
+    expect(bounded.rowsShown).toBe(0);
+  });
+
+  it('reports the rows it actually kept', () => {
+    const rows = Array.from({ length: 5 }, (_, i) =>
+      toSheetViewRow(i, { A: { raw: `r${i}`, value: `r${i}` } }));
+
+    const bounded = renderSheetTableWithinBudget(rows, 10_000);
+    expect(bounded.rowsShown).toBe(5);
+    expect(bounded.text.split('\n')).toHaveLength(6); // header + 5
   });
 });
 

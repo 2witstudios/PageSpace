@@ -128,7 +128,8 @@ export const sheetReadTools = {
       '(2) pass startRow/limit to read a row RANGE; (3) pass where/orderBy to look rows up by ' +
       'value (e.g. the row where column C equals "28605"). ' +
       'select narrows the columns returned and works with either — use it whenever you need a few columns of a wide sheet. ' +
-      'Filters run in the database against each cell\'s COMPUTED value, so formula columns match on their results. ' +
+      'Filters run in the database against each cell\'s COMPUTED, UNFORMATTED value, so formula columns match on their results — ' +
+      'a currency cell displayed as "$1,200.00" is filtered as 1200, and a percent shown as "85%" as 0.85. ' +
       'Returns at most ' + MAX_SHEET_READ_ROWS + ' rows per call — page with startRow (range) or offset (filtered). ' +
       'Prefer this over read_page for any sheet with real data in it. Omit pageId to read the sheet currently in view.',
     inputSchema: z.object({
@@ -506,6 +507,7 @@ function buildResult(params: BuildResultParams) {
             `${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in "table" — read them from "rows", which always carries the full text.`,
           ]
         : []),
+      'Values shown here carry the sheet\'s display formatting; where and orderBy compare the UNFORMATTED value underneath, so filter on 1200 rather than "$1,200.00".',
       'Each row\'s rowNumber is its A1 row — write to it with edit_sheet_cells using addresses like C<rowNumber>.',
     ],
   };
