@@ -194,11 +194,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   then run without a single one of them. The switch that offers an agent the sandbox at all was
   only reachable from the settings screen, so a tool-configured agent was silently stuck with it
   off, and every worker spawned under that agent quietly came up unable to do the work. Three
-  things changed: the sandbox switch can be set from chat like every other setting; saving a
-  configuration now reports which tools the agent will ACTUALLY be able to call, which ones are
-  blocked and by what; and spawning a worker under an agent whose tool list contradicts its own
-  sandbox switch fails immediately, naming the tools and the one-line fix, instead of starting a
-  worker that cannot do the job.
+  things changed: the sandbox switch can be set from chat like every other setting — and when
+  creating an agent, so a new agent is no longer born unable to use the tools it was given;
+  saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
+  call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
+  contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
+  instead of starting a worker that cannot do the job.
 
 - **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
   access was turned off still received the sandbox tools when someone @-mentioned it in a channel,

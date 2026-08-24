@@ -615,9 +615,10 @@ tier eligibility), so the divergence read as randomness.
 Four rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
 
 1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access the
-   settings UI's `PATCH /api/pages/[pageId]/agent-config` uses. Three doors write this field
-   now — that tool, that PATCH, and `PUT /api/ai/page-agents/[agentId]/config` (the SDK's) —
-   and they share ONE policy. Non-booleans are refused rather than coerced on both HTTP
+   settings UI's `PATCH /api/pages/[pageId]/agent-config` uses. Four doors write this field
+   now — that tool, that PATCH, `PUT /api/ai/page-agents/[agentId]/config` (the SDK's), and
+   `POST /api/ai/page-agents/create`, so an agent is not BORN in the contradiction — and they
+   share ONE policy. Non-booleans are refused rather than coerced on both HTTP
    doors: `Boolean("false")` is `true`, and this is the field that decides whether a stored
    sandbox allowlist is granted. The gate itself is untouched: settable and visible now, not
    weaker.

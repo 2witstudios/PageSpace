@@ -36,6 +36,12 @@ export interface AgentData {
   isTrashed: boolean;
   systemPrompt?: string | null;
   enabledTools?: string[] | null;
+  /**
+   * The per-agent sandbox switch, settable at BIRTH. An agent created with
+   * sandbox tools in `enabledTools` and no way to say the switch is on was born
+   * in the contradiction issue #2460 is about.
+   */
+  sandboxEnabled?: boolean;
   aiProvider?: string | null;
   aiModel?: string | null;
   createdBy?: string | null;
