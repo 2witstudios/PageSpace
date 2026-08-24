@@ -359,6 +359,82 @@ describe('dispatchRealtimeToolCall', () => {
     expect(output).toContain('tool_search');
   });
 
+  it('given a near-miss tool name, should name one the session ACTUALLY advertised', async () => {
+    // Built from the real exposure, not a hand-made map. A voice session
+    // advertises only the core tools plus tool_search/execute_tool — every
+    // sandbox tool is deferred behind execute_tool — so a test that injects
+    // `readFile` here proves nothing about production: the dispatcher could
+    // never be handed that name in the first place. The near miss that IS
+    // reachable is one against a core tool.
+    const advertised = buildRealtimeToolExposure(buildPageSpaceTools()).tools;
+    expect(Object.keys(advertised)).toContain('read_page');
+    expect(Object.keys(advertised)).not.toContain('readFile');
+
+    const { output } = await dispatchRealtimeToolCall(
+      deps(advertised),
+      request({ name: 'read_pages' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('Did you mean: read_page');
+  });
+
+  it('given a deferred tool name spoken directly, should not invent a suggestion it cannot run', async () => {
+    // `readFile` is real, but it lives behind execute_tool — suggesting it here
+    // would send the model to a name this dispatcher cannot execute. The
+    // discovery prompt already routes non-core tools through execute_tool, and
+    // that path (createExecuteTool) is where the readFile suggestion belongs.
+    const advertised = buildRealtimeToolExposure(buildPageSpaceTools()).tools;
+
+    const { output } = await dispatchRealtimeToolCall(
+      deps(advertised),
+      request({ name: 'readFile' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('no tool called "readFile"');
+    expect(output).not.toContain('Did you mean');
+    expect(output).toContain('tool_search');
+  });
+
+  it('given a degenerate spoken tool name, should not echo it into the session', async () => {
+    // `failure()` output does NOT pass through `formatToolResult`, so
+    // MAX_RESULT_CHARS never applies to it and the bridge returns it verbatim.
+    // The bridge contract declares `name: z.string().min(1)` with no ceiling,
+    // so echoing whole would drop a model-chosen payload straight into a
+    // 32k-token realtime session — one call could end the conversation.
+    const d = deps({ read_page: spyTool(() => 'ok') });
+    const { output } = await dispatchRealtimeToolCall(
+      d,
+      request({ name: 'x'.repeat(200_000) }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output.length).toBeLessThan(500);
+    expect(output).toContain('no tool called');
+
+    // The LOG is the other echo, and it is written on every unknown-tool call.
+    // Bounding the response while writing the same payload verbatim into
+    // structured logs just moves the problem one layer down.
+    const logged = (d.logger.warn as unknown as { mock: { calls: unknown[][] } }).mock.calls[0];
+    const meta = logged[1] as { tool: string };
+    expect(meta.tool.length).toBeLessThan(500);
+  });
+
+  it('given a prototype key spoken as a tool name, should call it unknown', async () => {
+    // `deps.tools['toString']` is truthy via the prototype chain, so a plain
+    // truthiness check read it as a tool that exists and then reported it as
+    // one that "cannot be run".
+    const { output } = await dispatchRealtimeToolCall(
+      deps({ read_page: spyTool(() => 'ok') }),
+      request({ name: 'toString' }),
+      'gpt-realtime-2.1',
+    );
+
+    expect(output).toContain('no tool called "toString"');
+    expect(output).not.toContain('cannot be run');
+  });
+
   it('given a tool with no implementation, should say so rather than hang', async () => {
     const { output } = await dispatchRealtimeToolCall(
       deps({
@@ -393,7 +469,39 @@ describe('dispatchRealtimeToolCall', () => {
 
     expect(execute).not.toHaveBeenCalled();
     expect(output).toContain('Invalid parameters');
-    expect(output).toContain('select:read_page');
+    // The schema itself, not a pointer to `tool_search` — a voice session has
+    // 32k tokens for the whole call, so a wasted discovery round trip is
+    // expensive here in a way it is not on the text stack.
+    // Read off the SCHEMA section, not the whole string: the zod message names
+    // the offending key as well, so searching the whole output would pass even
+    // with the schema gone.
+    const marker = 'Input schema for "read_page": ';
+    const schemaSection = output.slice(output.indexOf(marker) + marker.length);
+    expect(JSON.parse(schemaSection)).toMatchObject({
+      properties: { pageId: { type: 'string' } },
+      required: ['pageId'],
+    });
+    expect(output).not.toContain('select:read_page');
+  });
+
+  it('given a rejected call on a real tool, should stay far inside the result ceiling', async () => {
+    const { output } = await dispatchRealtimeToolCall(
+      deps(buildPageSpaceTools()),
+      request({ name: 'create_calendar_event', argumentsJson: '{}' }),
+      'gpt-realtime-2.1',
+    );
+
+    // Measured against the largest schema in the product, not a synthetic one.
+    const marker = 'Input schema for "create_calendar_event": ';
+    expect(output).toContain(marker);
+    expect(
+      Object.keys(
+        (JSON.parse(output.slice(output.indexOf(marker) + marker.length)) as {
+          properties: Record<string, unknown>;
+        }).properties,
+      ).length,
+    ).toBeGreaterThan(3);
+    expect(output.length).toBeLessThan(MAX_RESULT_CHARS);
   });
 
   it('given the tool validates the arguments, should pass the PARSED value through', async () => {
