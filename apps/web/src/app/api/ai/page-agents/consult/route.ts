@@ -32,6 +32,7 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 /**
  * Format tool execution results into human-readable text
@@ -531,6 +532,10 @@ export async function POST(request: Request) {
             // same ask_agent tool and must not allow a far larger budget for an
             // externally/MCP-triggered call than an internally-triggered one.
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+            // Per-step cap: history is prepared once, but this loop runs many model
+            // calls, so one run's oversized tool payloads would otherwise accumulate
+            // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+            prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
             onStepFinish: ({ toolCalls, toolResults, text }) => {
               loggers.api.debug('Agent tool execution step completed', {
                 agentId,
