@@ -81,8 +81,12 @@ const context = {
 // self-correcting error envelopes; tests read fields off whichever came back.
 type Result = Record<string, unknown>;
 
+// `execute`'s declared return is a union of every result envelope, which does
+// not overlap `Promise<Result>` structurally — the widening goes through
+// `unknown` deliberately rather than being asserted between two shapes TS can
+// see are different.
 const run = (input: Record<string, unknown>) =>
-  sheetReadTools.read_sheet.execute!(input as never, context) as Promise<Result>;
+  sheetReadTools.read_sheet.execute!(input as never, context) as unknown as Promise<Result>;
 
 beforeEach(() => {
   vi.clearAllMocks();
