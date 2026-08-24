@@ -24,6 +24,7 @@ import type { StoredCell } from '@pagespace/db/schema/sheets-types';
 import { getTab, listTabs, readRows } from '@pagespace/lib/sheets/store';
 import {
   SHEETDOC_VERSION,
+  applyNumberFormat,
   formatDisplayValue,
   isSheetDocString,
   decodeCellAddress,
@@ -187,16 +188,22 @@ export function columnsInRows(rows: readonly SheetViewRow[]): string[] {
  * A stored cell's display text: the computed value, falling back to what was
  * authored.
  *
- * Formatted through `formatDisplayValue`, the same function the evaluator uses,
- * because the two paths must not render one number two ways. The document path
- * stores `evaluated.display` (already formatted) while the row store keeps the
- * raw materialised primitive, so a plain `String(...)` showed `=A1+B1` as
- * `0.3` before migration and `0.30000000000000004` after — and the second is
- * not what the editor shows the user either.
+ * Formatted the way the evaluator formats, because the two paths must not
+ * render one cell two ways. The document path stores `evaluated.display`, which
+ * has had BOTH `formatDisplayValue` and the cell's number format applied; the
+ * row store keeps the raw materialised primitive with the format alongside it.
+ * Doing neither showed `=A1+B1` as `0.3` before migration and
+ * `0.30000000000000004` after; doing only the first showed a currency column as
+ * `$1,200.00` before and `1200` after. An agent reconciling against what the
+ * user sees on screen — or filtering on a value it read pre-migration — gets no
+ * matches from that.
  */
 function cellText(cell: StoredCell): string {
   if (cell.error) return '#ERROR';
-  if (cell.value !== undefined && cell.value !== '') return formatDisplayValue(cell.value);
+  if (cell.value !== undefined && cell.value !== '') {
+    const formatted = applyNumberFormat(cell.value, cell.format?.number);
+    return formatted !== null ? formatted : formatDisplayValue(cell.value);
+  }
   // A formula whose value never materialised would otherwise render as its own
   // source text, which reads like data. Show it as a formula instead.
   return cell.raw ?? '';
@@ -472,6 +479,40 @@ export async function loadSheetWindow(
     hasMore: stored.length === limit,
     documentIsNotASheet: false,
   };
+}
+
+/**
+ * A row window rendered as text and bounded by CHARACTERS, for the surfaces
+ * where a sheet is a preview inside a larger payload.
+ *
+ * Row count alone does not bound anything: 25 rows of a 60-column sheet is tens
+ * of thousands of characters. Whole rows are dropped until the text fits, so it
+ * is never cut mid-row into something that reads like a real value; a single
+ * row wider than the whole budget is still cut, on a line boundary, with the
+ * ellipsis saying so.
+ *
+ * Shared because both callers reached for it independently and only one of them
+ * had it: `list_pages` bounded by characters while command injection — whose
+ * cost is paid on EVERY turn, not once per read — bounded only by rows.
+ */
+export function renderSheetTableWithinBudget(
+  rows: readonly SheetViewRow[],
+  budget: number,
+): { text: string; rowsShown: number; truncatedCells: number } {
+  let shown = rows;
+  let rendered = renderSheetTable(shown);
+  while (rendered.text.length > budget && shown.length > 1) {
+    shown = shown.slice(0, -1);
+    rendered = renderSheetTable(shown);
+  }
+
+  let text = rendered.text;
+  if (text.length > budget) {
+    const hardCut = text.slice(0, Math.max(0, budget));
+    const lastNewline = hardCut.lastIndexOf('\n');
+    text = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
+  }
+  return { text, rowsShown: shown.length, truncatedCells: rendered.truncatedCells };
 }
 
 /**

@@ -1387,6 +1387,26 @@ describe('page-read-tools', () => {
       expect('nextStartRow' in result).toBe(false);
     });
 
+    it('answers a missing tab rather than throwing a generic read failure', async () => {
+      // list_pages and read_sheet both handle this; read_page was the one call
+      // site that let it reach the outer catch as "Failed to read document".
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      // Tabs exist, but none at index 0 — what a backfill could leave behind.
+      mockListTabs.mockResolvedValue([{ ...sheetTab, tabIndex: 1 }]);
+      mockGetTab.mockResolvedValue(null);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBe('Sheet tab not found');
+      expect(result.tabs).toBeDefined();
+    });
+
     it('distinguishes an empty window from an empty sheet', async () => {
       // Reading past the end, or into a gap in a sparse sheet, must still
       // report the sheet's real size and say which case it was. "0 rows" with

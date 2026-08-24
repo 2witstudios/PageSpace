@@ -117,6 +117,22 @@ describe('toSheetViewRow', () => {
     });
   });
 
+  it('applies the cell number format, as the evaluator does', () => {
+    // The document path stores `evaluated.display`, which has had the cell's
+    // number format applied. Formatting only the raw value showed a currency
+    // column as $1,200.00 before migration and 1200 after — so an agent
+    // filtering on a value it read earlier, or reconciling against what the
+    // user sees on screen, matched nothing.
+    const row = toSheetViewRow(0, {
+      B: { raw: '1200', value: 1200, format: { number: { kind: 'currency', currency: 'USD', decimals: 2 } } },
+      C: { raw: '0.85', value: 0.85, format: { number: { kind: 'percent', decimals: 0 } } },
+    });
+
+    expect(row.cells.B).toContain('1,200');
+    expect(row.cells.C).toContain('85');
+    expect(row.cells.C).toContain('%');
+  });
+
   it('reports an errored cell as an error rather than as its own source text', () => {
     const row = toSheetViewRow(0, {
       C: { raw: '=OTHER!A1', error: { type: 'error', message: 'Cross-page references are not supported in this context' } },

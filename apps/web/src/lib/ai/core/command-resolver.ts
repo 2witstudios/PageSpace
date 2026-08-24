@@ -42,9 +42,18 @@ import {
   SheetTabNotFoundError,
   SHEET_PREVIEW_ROWS,
   loadSheetWindow,
-  renderSheetTable,
+  renderSheetTableWithinBudget,
 } from '../tools/sheet-view';
 import { PageType } from '@pagespace/lib/utils/enums';
+
+/**
+ * Characters a SHEET entry page may spend inside a command injection.
+ *
+ * Well under `COMMAND_CONTENT_CHAR_LIMIT` on purpose: the injection also
+ * carries the command's own framing, and this text is paid for on every turn
+ * the command is active rather than once per read.
+ */
+const SHEET_INJECTION_CHAR_BUDGET = 4_000;
 
 /**
  * A SHEET entry page, rendered for injection.
@@ -78,7 +87,13 @@ async function serializeSheetForInjection(
       return serializePageContentForAI({ type: 'SHEET', contentMode, content });
     }
 
-    const table = renderSheetTable(sheet.rows).text;
+    // Bounded by CHARACTERS, not rows. 25 rows of a wide sheet is tens of
+    // thousands of characters, and this text rides the prompt on every turn —
+    // `buildCommandSystemPrompt` would then hard-slice it mid-row, leaving a
+    // truncated value that reads like data and a pointer that cannot deliver
+    // the rest. Same budget shape `list_pages` uses, now shared.
+    const bounded = renderSheetTableWithinBudget(sheet.rows, SHEET_INJECTION_CHAR_BUDGET);
+    const table = bounded.text;
     const header =
       `(SHEET "${sheet.tabName}": ${sheet.rowCount} rows x ${sheet.columnCount} columns` +
       (sheet.tabs.length > 1 ? `, ${sheet.tabs.length} tabs` : '') + '.)';
@@ -87,7 +102,7 @@ async function serializeSheetForInjection(
       return `${header} No rows yet. Use read_sheet with pageId "${pageId}" once it has data.`;
     }
     return (
-      `${header} First ${sheet.rows.length} row(s) below. ` +
+      `${header} First ${bounded.rowsShown} row(s) below. ` +
       `Use read_sheet with pageId "${pageId}" to read a row range, filter rows by column value, ` +
       `or return only some columns — do not assume these rows are all of it.\n${table}`
     );

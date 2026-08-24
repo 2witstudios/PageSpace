@@ -20,6 +20,7 @@ import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import {
   loadSheetWindow,
   renderSheetTable,
+  renderSheetTableWithinBudget,
   columnsInRows,
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
@@ -52,6 +53,10 @@ const MAX_CONTENT_INCLUDE_PAGES = 50;
 // huge page can't blow up the whole batch; callers needing the rest can
 // resume with read_page's lineStart/lineEnd.
 const MAX_CONTENT_CHARS_PER_PAGE = 8000;
+
+// Room reserved for the header and pointer sentence wrapped around a sheet
+// preview, so the budget bounds the finished ENTRY rather than just its table.
+const SHEET_PREVIEW_FRAMING_CHARS = 300;
 
 /**
  * The window `read_page` shows for a SHEET, or `null` when the page turns out
@@ -95,12 +100,10 @@ async function loadSheetWindowForRead(
  * the result run past the budget.
  */
 function buildSheetPreviewContent(sheet: SheetWindow): string {
-  let previewRows = sheet.rows;
-  let rendered = renderSheetTable(previewRows);
-  while (rendered.text.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
-    previewRows = previewRows.slice(0, -1);
-    rendered = renderSheetTable(previewRows);
-  }
+  // Budgeted against the framing too, not just the table: the header and the
+  // pointer sentence are prepended, so bounding the table alone let the
+  // finished entry run past the per-page cap.
+  const rendered = renderSheetTableWithinBudget(sheet.rows, MAX_CONTENT_CHARS_PER_PAGE - SHEET_PREVIEW_FRAMING_CHARS);
 
   // The same truncation signal read_page and read_sheet surface: values cut at
   // the cell limit must not be copied back into a write, and an ellipsis alone
@@ -112,17 +115,9 @@ function buildSheetPreviewContent(sheet: SheetWindow): string {
   // The pointer rides in the content rather than in `contentClipped`, which
   // promises the rest is reachable with read_page's lineStart — the rest of a
   // sheet is reached with read_sheet. A wrong pointer is worse than none.
-  const framing = `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
+  const framing = `${header} First ${rendered.rowsShown} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
 
-  let table = rendered.text;
-  if (framing.length + table.length > MAX_CONTENT_CHARS_PER_PAGE) {
-    const room = Math.max(0, MAX_CONTENT_CHARS_PER_PAGE - framing.length);
-    const hardCut = table.slice(0, room);
-    const lastNewline = hardCut.lastIndexOf('\n');
-    table = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
-  }
-
-  return table ? `${framing}${table}` : `${header} No data yet.`;
+  return rendered.text ? `${framing}${rendered.text}` : `${header} No data yet.`;
 }
 
 export const pageReadTools = {
@@ -994,6 +989,22 @@ export const pageReadTools = {
                 message: error.message,
                 suggestion:
                   'Do not treat this sheet as empty and do not overwrite it. The stored document needs repair.',
+              };
+            }
+            // The other two callers of this loader answer this one; leaving it
+            // to the outer catch here made read_page the only surface where a
+            // sheet with a non-zero-based tab set produced the generic
+            // "Failed to read document" this change exists to eliminate.
+            if (error instanceof SheetTabNotFoundError) {
+              return {
+                success: false,
+                pageId: page.id,
+                title: page.title,
+                type: page.type,
+                error: 'Sheet tab not found',
+                message: error.message,
+                suggestion: 'Use read_sheet with one of the tab indexes listed in the message.',
+                tabs: error.availableTabs,
               };
             }
             throw error;
