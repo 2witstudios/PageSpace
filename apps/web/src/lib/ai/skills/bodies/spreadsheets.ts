@@ -159,6 +159,9 @@ Reading either way:
 - Everything except the raw inputs (formula text and literal values) is **derived and regenerated on every save**. Never try to write values, types, errors or dependencies yourself; \`edit_sheet_cells\` recomputes them.
 - Cell values are truncated at 120 characters in the rendered \`table\` only, and the response says how many were cut (\`tableTruncatedCells\`); the structured \`rows\` always carry the full text. Never write a value back that you read from the table if that count is non-zero.
 - A sheet whose stored document cannot be parsed is reported as **unreadable**, not as empty. If you see that, do NOT write to the sheet — its data may still be intact, and writing would replace it.
+- Two refusals you may hit on older sheets, both meaning "do not write here":
+  - *"Page holds text, not a spreadsheet"* — the page is a SHEET but its content is plain text or HTML. Read it with \`read_page\`. Writing cells would replace that text.
+  - *"Sheet not migrated to row storage"* — only from a FILTERED \`read_sheet\`. Filtering runs in the database and this sheet's rows are not there yet; reading is never allowed to write, so the tool will not migrate it for you. Read it positionally instead (\`startRow\`/\`limit\`, which works regardless), or edit any cell once and filtering works from then on.
 
 ## Structuring a new sheet
 

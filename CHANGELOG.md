@@ -31,7 +31,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   sheet — that used to spend the command's whole budget on markup every time it ran. Cell edits also
   have a stated limit now — 500 cells per call — instead of a size an assistant had to discover by
   failing. And a sheet whose stored file cannot be read is reported as unreadable rather than as
-  empty, so an assistant is never invited to overwrite data that is still there.
+  empty, so an assistant is never invited to overwrite data that is still there — as is a page that
+  is a sheet in name but holds ordinary text. Reading a sheet never changes it, including in
+  read-only mode: on an older sheet that has not been converted to the new row storage yet, an
+  assistant can still read rows in order, and is told to open the sheet once rather than having the
+  read quietly convert it.
 
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
