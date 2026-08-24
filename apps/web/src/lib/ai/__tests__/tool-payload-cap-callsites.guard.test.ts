@@ -129,9 +129,10 @@ const SOURCE_FILES = allSourceFiles(SRC_DIR);
 
 describe('per-step tool-payload cap call-site guard', () => {
   it('found the source files (the guard is actually scanning something)', () => {
-    expect(SOURCE_FILES.length).toBeGreaterThan(0);
+    expect(SOURCE_FILES.length, 'the scan found no source files — SRC_DIR is wrong').toBeGreaterThan(0);
     expect(
-      SOURCE_FILES.some((f) => srcRelPath(f) === 'lib/ai/chat-pipeline/global-chat-turn.ts')
+      SOURCE_FILES.some((f) => srcRelPath(f) === 'lib/ai/chat-pipeline/global-chat-turn.ts'),
+      'global-chat-turn.ts is not in the scanned set, so this guard is checking nothing',
     ).toBe(true);
   });
 
@@ -143,10 +144,20 @@ describe('per-step tool-payload cap call-site guard', () => {
       }
     }
 
-    // Pinned so the guard cannot quietly stop matching. If this fails because a
-    // NEW loop was added, add the file here and cap it; if it fails because the
-    // slicer broke, fix the slicer — do not just update the list.
-    expect(found.sort()).toEqual([
+    // Pinned so the guard cannot quietly stop matching. The guidance lives in the
+    // assertion message, not just here, because a comment is not what a failing
+    // developer sees.
+    expect(
+      found.sort(),
+      'The set of multi-step tool loops changed. If a NEW loop was added: wire ' +
+        '`capStepToolPayloads` into its `prepareStep` (or `agentLoopPrepareStep` if it also ' +
+        'marks cache breakpoints) and add the file to this list — an uncapped loop ' +
+        'reintroduces #2461, where one turn\'s own tool payloads exhaust the context window ' +
+        'and the provider starts emitting argument-less tool calls. If a loop was REMOVED, ' +
+        'drop it from the list. If the list is unchanged but this still fails, the brace ' +
+        'slicer stopped matching — fix the slicer rather than the list, or the guard goes ' +
+        'quietly blind.',
+    ).toEqual([
       'app/api/ai/page-agents/consult/route.ts',
       'app/api/v1/chat/completions/route.ts',
       'lib/ai/chat-pipeline/global-chat-turn.ts',
@@ -164,6 +175,14 @@ describe('per-step tool-payload cap call-site guard', () => {
         if (!capsItsPayloads(slice)) offenders.push(srcRelPath(file));
       }
     }
-    expect(offenders).toEqual([]);
+    expect(
+      offenders,
+      'These multi-step tool loops do not cap their per-step tool payloads. History is ' +
+        'prepared once per TURN, but a turn is up to AGENT_MAX_STEPS model calls, so an ' +
+        'uncapped loop accumulates its own oversized arguments AND results for its whole ' +
+        'run until the context window is gone (#2461). Add `prepareStep: ({ messages }) => ' +
+        '({ messages: capStepToolPayloads(messages) })`, or `agentLoopPrepareStep(' +
+        'stableBoundaryIndex)` if the loop also marks cache breakpoints.',
+    ).toEqual([]);
   });
 });
