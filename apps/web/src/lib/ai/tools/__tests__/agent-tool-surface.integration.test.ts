@@ -44,6 +44,7 @@ import { requireDb } from '@pagespace/db/test/require-db';
 import { createId } from '@paralleldrive/cuid2';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
 import { ensureGlobalSandboxSession } from '@/lib/agent-workspaces/agent-workspaces-runtime';
+import { isSandboxAvailable } from '@pagespace/lib/billing/sandbox-eligibility';
 import { buildSessionToolsDeps } from '@/lib/ai/tools/session-tools-runtime';
 
 let dbAvailable = false;
@@ -257,6 +258,13 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
 
     it('given compute tools and a free-tier workspace owner, should name the shortfall', async () => {
       if (!dbAvailable) return;
+
+      // THE ASSUMPTION, ASSERTED. This case only means anything where a free
+      // payer is ineligible — true in `cloud` (the default) but not in `tenant`,
+      // where every payer resolves to an eligible effective tier. Without this
+      // line, a deployment-mode change would make the test fail as though the
+      // shortfall logic broke, instead of saying the environment moved.
+      expect(isSandboxAvailable('free')).toBe(false);
 
       // `factories.createUser` mints a free-tier payer, which is exactly the
       // case the reporter kept landing in without being told.
