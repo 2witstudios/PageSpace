@@ -68,7 +68,8 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
   pageType,
   isMarkdown = false,
   maxHeight = 300,
-  className
+  className,
+  preserveLineNumbers = false
 }) {
   const { navigateToPage } = usePageNavigation();
 
@@ -94,7 +95,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
     const sanitized = hasHtml ? sanitizeHtmlAllowlist(html) : html;
 
     return { processedHtml: sanitized, hasHtmlContent: hasHtml };
-  }, [content, isMarkdown]);
+  }, [content, isMarkdown, preserveLineNumbers]);
 
   const handleNavigate = () => {
     if (pageId) {
