@@ -202,9 +202,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
   access was turned off still received the shell tools when someone @-mentioned it in a channel,
-  while the same agent in a page chat correctly had none of them. Nothing could actually run —
-  the execution check refused it — but the tools were offered, which is its own kind of broken.
-  One switch, every surface.
+  and on a voice call, while the same agent in a page chat correctly had none of them. Nothing
+  could actually run — the execution check refused it — but the tools were offered, which is its
+  own kind of broken. One switch, every surface.
 
 - **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
   enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no

@@ -628,13 +628,20 @@ Three rules now hold, and `agent-tool-surface.ts` is the single place that compu
    refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
    would break working spawns over a non-problem.
 
-ONE SWITCH, EVERY SURFACE. The `@`-mention / consult engine
-(`agent-communication-tools.ts`) built its own tool set — allowlist + MCP scope — and never
-asked `pages.sandboxEnabled`, so an agent with the switch OFF was handed the shell family
-the moment someone mentioned it, while the same agent in a page chat correctly saw none of
-it. `canRunCode` still refused the execution, so it was a contradiction in configuration
-rather than a way into the sandbox; it is closed anyway, because a gate that answers
-differently per surface is not a gate.
+ONE SWITCH, EVERY SURFACE. Two surfaces built their own tool set — allowlist applied, switch
+never asked — so an agent with sandbox access OFF was handed the sandbox families anyway:
+
+- the `@`-mention / consult engine (`agent-communication-tools.ts`), which registers the
+  session family and therefore the shells, the moment someone mentioned the agent;
+- the VOICE call path (`realtime/system-context.ts`), which exposes the whole registry
+  through the same search-mode discovery pair, so the stripped tools were reachable through
+  `tool_search`/`execute_tool` as well as directly.
+
+`canRunCode` still refused the execution in both cases, so these were contradictions in
+configuration rather than ways into the sandbox. They are closed anyway, because a gate that
+answers differently depending on which surface asks is not a gate. Voice applies it only to a
+BOUND agent: an unbound (Global Assistant) call has no agent whose switch it would be, exactly
+as the global text path has none.
 
 Two names are in neither camp. `web_search` and `generate_image` never pass through the
 allowlist at all — `page-chat-turn.ts` lifts them out BEFORE it (step 2) and puts them back
