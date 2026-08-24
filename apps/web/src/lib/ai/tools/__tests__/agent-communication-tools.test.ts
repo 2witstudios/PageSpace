@@ -473,6 +473,60 @@ describe('agent-communication-tools', () => {
       ).rejects.toThrow('Maximum agent consultation depth');
     });
 
+    /**
+     * Issue #2460: this engine built its own tool set (allowlist + MCP scope)
+     * and never asked `pages.sandboxEnabled`, so an @-mentioned agent with the
+     * switch OFF was handed the shell family while the same agent in a page
+     * chat correctly saw none of it. One switch, every surface.
+     */
+    describe('the per-agent sandbox switch', () => {
+      const sandboxAgent = (sandboxEnabled: boolean) => ({
+        id: 'agent-1',
+        title: 'Test Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: 'I am a helpful agent',
+        enabledTools: ['read_page', 'spawn_shell', 'spawn_session'],
+        aiProvider: null,
+        aiModel: null,
+        sandboxEnabled,
+        isTrashed: false,
+      });
+
+      const consult = async () => {
+        await executeAskAgent(
+          { agentPath: '/test/agent', agentId: 'agent-1', question: 'Test question' },
+          {
+            toolCallId: '1',
+            messages: [],
+            experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+          }
+        );
+        const call = vi.mocked(generateText).mock.calls.at(-1)?.[0] as { tools?: Record<string, unknown> };
+        return Object.keys(call?.tools ?? {});
+      };
+
+      it('given the switch OFF, withholds the sandbox family even though enabledTools names it', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(sandboxAgent(false));
+
+        const toolNames = await consult();
+
+        expect(toolNames).toContain('read_page');
+        expect(toolNames).not.toContain('spawn_shell');
+        // The whole family, not just the shells — spawn_session is gated by the
+        // same switch (`SANDBOX_TOOL_NAMES`).
+        expect(toolNames).not.toContain('spawn_session');
+      });
+
+      it('given the switch ON, hands over exactly what the allowlist names', async () => {
+        mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(sandboxAgent(true));
+
+        const toolNames = await consult();
+
+        expect(toolNames).toEqual(expect.arrayContaining(['read_page', 'spawn_shell', 'spawn_session']));
+      });
+    });
+
     describe('chain context tracking', () => {
       const mockAgent = {
         id: 'agent-1',

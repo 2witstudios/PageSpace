@@ -832,6 +832,34 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
     });
   });
 
+  describe('sandboxEnabled', () => {
+    it('rejects a non-boolean rather than coercing it — "false" must not enable the sandbox family', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: 'false' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('stores a real boolean', async () => {
+      setupPatchSelectChain([mockPage], [{ ...mockPage, sandboxEnabled: true }]);
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: true }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ sandboxEnabled: true }) })
+      );
+    });
+  });
+
   describe('refetch after update', () => {
     it('uses updated page data in response', async () => {
       setupPatchSelectChain(

@@ -188,6 +188,35 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **An agent you configure with tools actually gets them, or says why not** — an agent set up
+  entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
+  `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
+  then run without a single one of them. The switch that offers an agent the sandbox at all was
+  only reachable from the settings screen, so a tool-configured agent was silently stuck with it
+  off, and every worker spawned under that agent quietly came up unable to do the work. Three
+  things changed: the sandbox switch can be set from chat like every other setting — and when
+  creating an agent, so a new agent is no longer born unable to use the tools it was given;
+  saving or creating a configuration now reports which tools the agent will ACTUALLY be able to
+  call, which ones are blocked and by what; and spawning a worker under an agent whose tool list
+  contradicts its own sandbox switch fails immediately, naming the tools and the one-line fix,
+  instead of starting a worker that cannot do the job. A spawn also warns when the workspace the
+  worker lands in will not run code for you at all — the reason the same agent could produce three
+  different tool sets on three tries and look random. The SDK and `pagespace agents config` can set
+  the switch and read the same answers.
+
+- **An agent's sandbox switch now means the same thing everywhere** — an agent whose sandbox
+  access was turned off still received the sandbox tools when someone @-mentioned it in a channel,
+  when consulted through the API, and on a voice call, while the same agent in a page chat
+  correctly had none of them. The ones
+  that run code were still refused when called, by a separate check — but the session tools
+  (spawning and messaging other agents) need no compute and simply worked, so the switch was not
+  the switch on those surfaces. One switch, every surface.
+
+- **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
+  enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no
+  restriction", so an agent someone was trying to lock down came back holding every tool there is.
+  The settings screen always read an empty list as "none"; now both doors agree. To leave the list
+  alone, don't send it at all.
 - **A long agent job no longer wedges itself partway through** — an agent working through a big
   batch (reading thirty files and writing each one into a spreadsheet, say) would get several
   chunks in and then fail every remaining step with the same cryptic complaint that its tool call

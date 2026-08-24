@@ -118,6 +118,7 @@ describe('session + shell + layout tools — frozen wire contract', () => {
         description:
           'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
           'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
+          'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
           'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
         inputSchema: {
           $schema: 'http://json-schema.org/draft-07/schema#',

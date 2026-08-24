@@ -74,6 +74,9 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     create_page: {},
     update_page: {},
     delete_page: {},
+    // A sandbox-family name: valid to store, and granted only when the switch
+    // says so (issue #2460).
+    spawn_session: {},
   },
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
@@ -250,6 +253,67 @@ describe('POST /api/ai/page-agents/create', () => {
       expect(response.status).toBe(400);
       expect(body.error).toContain('Invalid tools');
       expect(body.error).toContain('invalid_tool');
+    });
+  });
+
+  /**
+   * Issue #2460: an agent could be BORN in the contradiction — sandbox tools in
+   * `enabledTools`, no way to say the switch was on, and a response listing
+   * tools it would never be granted.
+   */
+  describe('the per-agent sandbox switch', () => {
+    it('stores the switch and reports what the agent can actually call', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        enabledTools: ['read_page', 'spawn_session'],
+        sandboxEnabled: true,
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.agentConfig.sandboxEnabled).toBe(true);
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page', 'spawn_session']);
+      expect(body.agentConfig.blockedTools).toEqual([]);
+    });
+
+    it('given sandbox tools and no switch, reports them BLOCKED rather than available', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        enabledTools: ['read_page', 'spawn_session'],
+      });
+
+      const response = await POST(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      // Stored in full…
+      expect(body.agentConfig.enabledTools).toEqual(['read_page', 'spawn_session']);
+      // …granted in part, and the nextSteps line says the true number.
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page']);
+      expect(body.agentConfig.blockedTools).toEqual([
+        { tool: 'spawn_session', gate: 'sandbox_disabled' },
+      ]);
+      expect(String(body.warnings.join(' '))).toContain('sandboxEnabled');
+      expect(body.nextSteps.join(' ')).toContain('can call 1 tool(s)');
+    });
+
+    it('rejects a non-boolean switch rather than coercing it', async () => {
+      const request = createRequest({
+        driveId: mockDriveId,
+        title: 'Test Agent',
+        systemPrompt: 'You are helpful.',
+        sandboxEnabled: 'false',
+      });
+
+      const response = await POST(request);
+
+      expect(response.status).toBe(400);
     });
   });
 

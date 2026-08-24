@@ -10,6 +10,7 @@
  * dispatches and persists).
  */
 
+import type { ToolSet } from 'ai';
 import { createId } from '@paralleldrive/cuid2';
 import { canAccessConversation } from '@pagespace/lib/permissions/conversation-access';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -28,6 +29,7 @@ import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import { conversations } from '@pagespace/db/schema/conversations';
 import { buildPageSpaceTools } from '@/lib/ai/core/ai-tools';
+import { filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { getAgentMemoryContext, buildAgentMemorySection } from '@/lib/ai/core/agent-memory';
 import { buildActivePlanPrompt, getActivePlan } from '@/lib/ai/core/plan-binding';
 import { getUserPersonalization } from '@/lib/ai/core/personalization-utils';
@@ -79,6 +81,7 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
       title: pages.title,
       systemPrompt: pages.systemPrompt,
       enabledTools: pages.enabledTools,
+      sandboxEnabled: pages.sandboxEnabled,
     })
     .from(pages)
     .where(eq(pages.id, pageId));
@@ -89,6 +92,7 @@ const loadAgentPage = async (pageId: string): Promise<AgentPage | undefined> => 
         title: row.title,
         systemPrompt: row.systemPrompt,
         enabledTools: Array.isArray(row.enabledTools) ? (row.enabledTools as string[]) : null,
+        sandboxEnabled: Boolean(row.sandboxEnabled),
       }
     : undefined;
 };
@@ -226,9 +230,39 @@ export const voiceTranscriptDeps: TranscriptPersistenceDeps = {
  * kill switch), so freezing its result into a module-level constant would pin
  * whatever the environment looked like at import time.
  */
-export const voiceToolDispatchDeps = (
-  allowlist: ToolAllowlist = null,
-): RealtimeToolDispatchDeps => ({
-  tools: buildRealtimeToolSet(buildPageSpaceTools(), allowlist),
-  logger: loggers.ai,
-});
+/**
+ * The EXECUTABLE tool set for one bridge hop.
+ *
+ * The allowlist alone is not the agent's tool configuration — the per-agent
+ * sandbox switch is part of it, and this is the set `execute_tool` dispatches
+ * from and `tool_search` searches. Filtering only what the SESSION advertises
+ * (`system-context.ts`) would have left a switched-off agent's sandbox tools
+ * discoverable by `tool_search` and runnable through `execute_tool`, which is
+ * half a gate (issue #2460).
+ *
+ * The switch is READ HERE rather than carried on the bridge payload. It could
+ * have travelled beside `enabledTools`, but that is a versioned wire contract
+ * between two separately-deployed services: a required field breaks every tool
+ * call in the window where old realtime echoes a payload that lacks it, and an
+ * optional one leaves the gate open for exactly that window. One indexed read
+ * of the agent's own row has neither problem and cannot be stale. A call with
+ * NO bound agent is not gated at all — there is no agent whose switch it would
+ * be — mirroring the exposure side and the global text path.
+ */
+export const voiceToolDispatchDeps = async (
+  assistant?: { agentPageId: string; enabledTools: readonly string[] | null },
+): Promise<RealtimeToolDispatchDeps> => {
+  const allowlist: ToolAllowlist = assistant?.enabledTools ?? null;
+  // Fail CLOSED on a page that cannot be read: an agent whose row is gone is
+  // not an agent whose sandbox access we can vouch for.
+  const sandboxEnabled = assistant
+    ? ((await loadAgentPage(assistant.agentPageId))?.sandboxEnabled ?? false)
+    : true;
+  return {
+    tools: buildRealtimeToolSet(
+      filterToolsForSandboxEnablement(buildPageSpaceTools(), sandboxEnabled) as ToolSet,
+      allowlist,
+    ),
+    logger: loggers.ai,
+  };
+};

@@ -231,7 +231,17 @@ export async function PATCH(
     }
 
     if (sandboxEnabled !== undefined) {
-      updateData.sandboxEnabled = Boolean(sandboxEnabled);
+      // REJECTED, not coerced, on both doors that write this field: `Boolean("false")`
+      // is `true`, and this switch decides whether a stored sandbox allowlist is
+      // granted at all. Hardening only the sibling route would leave the trap
+      // reachable through this one.
+      if (typeof sandboxEnabled !== 'boolean') {
+        return NextResponse.json(
+          { error: 'sandboxEnabled must be a boolean' },
+          { status: 400 }
+        );
+      }
+      updateData.sandboxEnabled = sandboxEnabled;
     }
 
     // Only update if there are changes

@@ -48,6 +48,7 @@ const agent = (over: Partial<BoundAgent> = {}): BoundAgent => ({
   title: 'Release Notes Bot',
   systemPrompt: null,
   enabledTools: null,
+  sandboxEnabled: false,
   ...over,
 });
 
@@ -77,6 +78,54 @@ const catalog = (prompt: string): string => {
   const at = prompt.indexOf('NON-CORE TOOLS');
   return at === -1 ? '' : prompt.slice(at);
 };
+
+/**
+ * Issue #2460: a call applied the agent's allowlist and ignored its sandbox
+ * switch, so an agent with sandbox access turned off was offered the sandbox
+ * families the moment someone spoke to it — while the same agent in a page chat
+ * correctly saw none of them.
+ */
+describe('buildVoiceCallContext — the per-agent sandbox switch', () => {
+  const toolNamesFor = async (over: Partial<BoundAgent>): Promise<string[]> => {
+    const { deps: d } = deps();
+    const context = await buildVoiceCallContext(d, { userId: 'u1', agent: agent(over) });
+    return context.tools.map((tool) => tool.name);
+  };
+
+  it('given the switch OFF, should not offer the sandbox family even when enabledTools names it', async () => {
+    const names = await toolNamesFor({
+      enabledTools: ['read_page', 'spawn_session'],
+      sandboxEnabled: false,
+    });
+
+    expect(names).toContain('read_page');
+    expect(names).not.toContain('spawn_session');
+    // Nor through the back door: with the tool stripped before the exposure,
+    // there is nothing for tool_search to find or execute_tool to run.
+    expect(names).not.toContain('execute_tool');
+  });
+
+  it('given the switch ON, should offer it', async () => {
+    const names = await toolNamesFor({
+      enabledTools: ['read_page', 'spawn_session'],
+      sandboxEnabled: true,
+    });
+
+    // spawn_session is non-core, so search-mode exposure hands it over through
+    // the discovery pair rather than upfront — present, not missing.
+    expect(names).toContain('execute_tool');
+    expect(names).toContain('tool_search');
+  });
+
+  it('given an UNBOUND call (the Global Assistant), should not gate on a switch no agent owns', async () => {
+    const { deps: d } = deps();
+
+    const context = await buildVoiceCallContext(d, { userId: 'u1' });
+
+    // Mirrors the global text path, which applies no per-agent switch either.
+    expect(context.tools.map((tool) => tool.name)).toContain('execute_tool');
+  });
+});
 
 describe('buildVoiceSystemContext — reaching the tools it is holding', () => {
   it('should tell the model how to reach the tools that are not advertised', async () => {
