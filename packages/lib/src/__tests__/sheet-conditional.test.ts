@@ -12,6 +12,8 @@ import {
 } from '../sheets/conditional';
 import {
   createEmptySheet,
+  evaluateSheet,
+  evaluateSheetSparse,
   parseSheetContent,
   serializeSheetContent,
   type SheetData,
@@ -390,7 +392,7 @@ describe('parseConditionalRule', () => {
       format: { background: '#fee2e2', color: 'javascript:alert(1)' },
     });
     expect(parsed?.kind).toBe('cell');
-    expect((parsed as { format: Record<string, unknown> }).format).toEqual({ background: '#fee2e2' });
+    expect((parsed as unknown as { format: Record<string, unknown> }).format).toEqual({ background: '#fee2e2' });
   });
 
   it('carries an unknown field on an otherwise valid rule, for forward compatibility', () => {
@@ -498,5 +500,117 @@ describe('round trip through the document', () => {
       content = serializeSheetContent(parseSheetContent(content));
     }
     expect(parseSheetContent(content).conditionalFormats).toEqual(withRules().conditionalFormats);
+  });
+});
+
+// --- wired into the evaluator --------------------------------------------
+
+describe('conditional formatting through the evaluator', () => {
+  const budget = (): SheetData => {
+    const sheet = createEmptySheet();
+    Object.assign(sheet.cells, { A1: '10', A2: '80', A3: '150' });
+    sheet.conditionalFormats = [
+      {
+        id: 'over-100', kind: 'cell', ranges: ['A1:A3'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { background: '#fee2e2' },
+      },
+    ];
+    return sheet;
+  };
+
+  it('reaches every renderer through the evaluated format', () => {
+    // Applied in the evaluator, not the grid, so the published page and both
+    // exports see the same thing the editor does.
+    const dense = evaluateSheet(budget());
+    expect(dense.byAddress.A3.format?.background).toBe('#fee2e2');
+    expect(dense.byAddress.A1.format?.background).toBeUndefined();
+  });
+
+  it('agrees between the dense and sparse evaluators', () => {
+    const sparse = evaluateSheetSparse(budget());
+    const dense = evaluateSheet(budget());
+    for (const address of ['A1', 'A2', 'A3']) {
+      expect(sparse.byAddress[address]?.format).toEqual(dense.byAddress[address]?.format);
+    }
+  });
+
+  it('lets an explicit cell format win over a rule', () => {
+    // The colour someone deliberately set is not silently overruled. Note this
+    // is the opposite of Excel and Google Sheets.
+    const sheet = budget();
+    sheet.formats = { A3: { background: '#dcfce7' } };
+    expect(evaluateSheet(sheet).byAddress.A3.format?.background).toBe('#dcfce7');
+  });
+
+  it('places a rule above a column default', () => {
+    const sheet = budget();
+    sheet.columnFormats = { A: { background: '#f1f5f9', italic: true } };
+    const cell = evaluateSheet(sheet).byAddress.A3;
+    expect(cell.format?.background).toBe('#fee2e2');
+    // ...without discarding the fields the column default set.
+    expect(cell.format?.italic).toBe(true);
+  });
+
+  it('paints a rule over cells that hold nothing', () => {
+    // The sparse evaluator is seeded from the cells that exist, so a band
+    // across empty cells would otherwise be stored and invisible.
+    const sheet = createEmptySheet();
+    sheet.conditionalFormats = [
+      {
+        id: 'blanks', kind: 'cell', ranges: ['C3:C5'],
+        condition: { operator: 'isEmpty' },
+        format: { background: '#fef3c7' },
+      },
+    ];
+    expect(evaluateSheetSparse(sheet).byAddress.C4?.format?.background).toBe('#fef3c7');
+    expect(evaluateSheet(sheet).byAddress.C4?.format?.background).toBe('#fef3c7');
+  });
+
+  it('reports data bars separately from formats', () => {
+    const sheet = createEmptySheet();
+    Object.assign(sheet.cells, { A1: '0', A2: '10' });
+    sheet.conditionalFormats = [{ id: 'b', kind: 'dataBar', ranges: ['A1:A2'], color: '#3b82f6' }];
+
+    const dense = evaluateSheet(sheet);
+    expect(dense.bars?.A2).toEqual({ color: '#3b82f6', fraction: 1 });
+    expect(dense.byAddress.A2.format?.background).toBeUndefined();
+  });
+
+  it('evaluates a formula rule against the sheet', () => {
+    const sheet = createEmptySheet();
+    Object.assign(sheet.cells, { A1: '5', B1: '10', A2: '20', B2: '3' });
+    sheet.conditionalFormats = [
+      {
+        id: 'f', kind: 'formula', ranges: ['A1:A2'],
+        formula: '=A1>B1',
+        format: { bold: true },
+      },
+    ];
+    const dense = evaluateSheet(sheet);
+    // A1 (5) is not > B1 (10); A2 (20) is > B2 (3) once the rule shifts.
+    expect(dense.byAddress.A1.format?.bold).toBeUndefined();
+    expect(dense.byAddress.A2.format?.bold).toBe(true);
+  });
+
+  it('rebuilds the display grid so a rule cannot leave it stale', () => {
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '1234.5';
+    sheet.conditionalFormats = [
+      {
+        id: 'money', kind: 'cell', ranges: ['A1'],
+        condition: { operator: 'greaterThan', value: '0' },
+        format: { number: { kind: 'currency', currency: 'USD', decimals: 2 } },
+      },
+    ];
+    expect(evaluateSheet(sheet).display[0][0]).toBe('$1,234.50');
+  });
+
+  it('leaves a sheet with no rules exactly as it was', () => {
+    const plain = createEmptySheet();
+    plain.cells.A1 = '5';
+    const evaluation = evaluateSheet(plain);
+    expect(evaluation.bars).toBeUndefined();
+    expect(evaluation.byAddress.A1.format).toBeUndefined();
   });
 });

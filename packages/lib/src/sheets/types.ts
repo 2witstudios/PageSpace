@@ -201,6 +201,12 @@ export interface SheetEvaluation {
   display: string[][];
   errors: (string | null)[][];
   dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
+  /**
+   * Data-bar fills from conditional formatting, keyed by address. Separate from
+   * `format` because a proportional bar behind the value is a render-layer
+   * concern with no `CellFormat` field to live in.
+   */
+  bars?: Record<SheetCellAddress, import('./conditional').DataBarFill>;
 }
 
 /**
@@ -213,6 +219,7 @@ export interface SheetEvaluation {
 export interface SheetSparseEvaluation {
   byAddress: Record<SheetCellAddress, SheetEvaluationCell>;
   dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
+  bars?: Record<SheetCellAddress, import('./conditional').DataBarFill>;
 }
 
 export interface SheetCellUpdate {
