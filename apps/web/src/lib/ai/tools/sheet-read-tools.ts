@@ -51,6 +51,7 @@ import {
   loadSheetWindow,
   renderSheetTable,
   toSheetViewRow,
+  type SheetTabSummary,
   type SheetViewRow,
 } from './sheet-view';
 
@@ -361,7 +362,7 @@ interface BuildResultParams {
   tabName: string;
   rowCount: number;
   columnCount: number;
-  tabs: { tabIndex: number; name: string; rowCount: number; columnCount: number }[];
+  tabs: SheetTabSummary[];
   materialized: boolean;
   rows: SheetViewRow[];
   hasMore: boolean;

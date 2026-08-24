@@ -24,7 +24,6 @@ import {
   SheetDocumentUnreadableError,
   SheetTabNotFoundError,
   columnsInRows,
-  compareColumnLabels,
   loadSheetWindow,
   renderSheetTable,
   toSheetViewRow,
@@ -45,12 +44,23 @@ beforeEach(() => {
   mockReadRows.mockResolvedValue([]);
 });
 
-describe('compareColumnLabels', () => {
+describe('column ordering', () => {
   it('orders columns the way a sheet does, not the way strings do', () => {
+    // Asserted through the exported surface rather than the comparator, so it
+    // pins what a caller can observe: plain string order would put AA next to
+    // A and silently reorder every sheet wider than 26 columns.
     assert({
-      given: 'a mix of one- and two-letter columns',
-      should: 'put every one-letter column before AA, not sort AA next to A',
-      actual: ['B', 'AA', 'A', 'Z', 'AB'].sort(compareColumnLabels),
+      given: 'a row filling a mix of one- and two-letter columns',
+      should: 'put every one-letter column before AA',
+      actual: columnsInRows([
+        toSheetViewRow(0, {
+          B: { raw: '1', value: 1 },
+          AA: { raw: '2', value: 2 },
+          A: { raw: '3', value: 3 },
+          Z: { raw: '4', value: 4 },
+          AB: { raw: '5', value: 5 },
+        }),
+      ]),
       expected: ['A', 'B', 'Z', 'AA', 'AB'],
     });
   });

@@ -67,7 +67,7 @@ const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
  * that call never arrives — which is why the tool description also tells the
  * model to halve the batch when a large call fails to generate at all.
  */
-export const MAX_SHEET_CELLS_PER_EDIT = 500;
+const MAX_SHEET_CELLS_PER_EDIT = 500;
 
 // Helper: Non-blocking activity logging with AI context (fire-and-forget)
 function logPageActivityAsync(

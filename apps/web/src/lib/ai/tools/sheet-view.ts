@@ -157,7 +157,7 @@ export interface SheetWindow {
  * before "AA". Plain string comparison gets this wrong, which would silently
  * reorder the columns of any sheet wider than 26.
  */
-export function compareColumnLabels(a: string, b: string): number {
+function compareColumnLabels(a: string, b: string): number {
   if (a.length !== b.length) return a.length - b.length;
   return a < b ? -1 : a > b ? 1 : 0;
 }
@@ -339,7 +339,7 @@ function windowFromDocument(
   };
 }
 
-export interface LoadSheetWindowOptions {
+interface LoadSheetWindowOptions {
   tabIndex?: number;
   /** 0-based row index to start at. */
   fromRow?: number;

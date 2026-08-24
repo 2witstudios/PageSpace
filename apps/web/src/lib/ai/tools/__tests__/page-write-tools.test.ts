@@ -191,7 +191,7 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id', driveId: 'driveId', type: 'type', userScopedAccess: 'userScopedAccess' },
 }));
 
-import { pageWriteTools, MAX_SHEET_CELLS_PER_EDIT } from '../page-write-tools';
+import { pageWriteTools } from '../page-write-tools';
 import { ensureTaskListForPage, syncTaskItemOnMove } from '@/services/api/task-sync-service';
 import { canUserEditPage, canUserDeletePage } from '@pagespace/lib/permissions/permissions';
 import { getAgentAccessLevel, hasAgentDriveMembership, hasAgentDriveAdminRole } from '@pagespace/lib/permissions/agent-permissions';
@@ -2140,26 +2140,25 @@ describe('page-write-tools', () => {
       expect(cells).toEqual([{ address: 'A1', value: 'test' }]);
     });
 
-    it('caps the batch at MAX_SHEET_CELLS_PER_EDIT and says so in the schema', () => {
+    // The cap the tool actually enforces, asserted as a literal rather than
+    // imported: the number is a contract with the MODEL, carried in the schema
+    // and the description, so a test that reads it from the same constant the
+    // code does would pass even if both moved together and every published
+    // limit went stale.
+    const CELL_CAP = 500;
+
+    it(`caps the batch at ${CELL_CAP} cells and says so in the schema`, () => {
       // The cap has to be REACHABLE by the model, not just enforced: it is the
       // schema, and the description, that stop an agent from inferring a batch
       // size by trial and error the way issue #2467 reports having to. An
       // enforcement with no advertisement would just move the folklore.
       const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
-      const cell = (index: number) => ({ address: `A${index + 1}`, value: 'x' });
+      const cells = (count: number) =>
+        Array.from({ length: count }, (_, index) => ({ address: `A${index + 1}`, value: 'x' }));
 
-      const atCap = schema.safeParse({
-        pageId: 'page-1',
-        cells: Array.from({ length: MAX_SHEET_CELLS_PER_EDIT }, (_, i) => cell(i)),
-      });
-      const overCap = schema.safeParse({
-        pageId: 'page-1',
-        cells: Array.from({ length: MAX_SHEET_CELLS_PER_EDIT + 1 }, (_, i) => cell(i)),
-      });
-
-      expect(atCap.success).toBe(true);
-      expect(overCap.success).toBe(false);
-      expect(pageWriteTools.edit_sheet_cells.description).toContain(String(MAX_SHEET_CELLS_PER_EDIT));
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP) }).success).toBe(true);
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP + 1) }).success).toBe(false);
+      expect(pageWriteTools.edit_sheet_cells.description).toContain(String(CELL_CAP));
     });
 
     it('still rejects an empty batch', () => {
