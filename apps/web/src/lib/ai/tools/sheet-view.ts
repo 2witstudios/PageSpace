@@ -316,11 +316,21 @@ function documentTabs(sheet: SheetData): SheetTabSummary[] {
 /**
  * A window of a sheet whose rows have not been materialised.
  *
- * Legacy path: parse the stored document and evaluate it sparsely, which is
- * exactly what serialising it for the old read path already did — so this is no
- * more expensive than the behaviour it replaces, and it stays a pure READ.
- * Materialising here instead would be a write, triggered by a reader who may
- * only have view access.
+ * Legacy path: parse the stored document and evaluate it sparsely. It stays a
+ * pure READ — materialising instead would be a write, triggered by a reader who
+ * may only have view access.
+ *
+ * It is NOT free, and an earlier version of this comment wrongly claimed it was
+ * no more expensive than what it replaced. That held for migrated sheets; for
+ * an UNMIGRATED one the old path called `readSheetDocument`, got `null` after a
+ * single empty `listTabs`, and handed back `pages.content` verbatim with no
+ * parse at all. This TOML-parses the document and evaluates every non-empty
+ * cell — on a 500x16 sheet, a ~460KB parse and ~8,000 evaluations. Per read for
+ * `read_page`, per sheet for `list_pages`, and per TURN for a command whose
+ * entry page is one. The cost buys the formula results and the not-a-sheet
+ * detection every caller now depends on, and it applies only to sheets nobody
+ * has edited since the row store shipped — but it is a real cost, and a future
+ * reader should size it rather than trust a claim that it is free.
  *
  * Throws rather than degrading on either thing it cannot honour: a document it
  * cannot parse, and a tab that does not exist. Both would otherwise be answered

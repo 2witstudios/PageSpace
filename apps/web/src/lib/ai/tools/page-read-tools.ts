@@ -120,6 +120,14 @@ function buildSheetPreviewContent(sheet: SheetWindow): string {
   // The pointer rides in the content rather than in `contentClipped`, which
   // promises the rest is reachable with read_page's lineStart — the rest of a
   // sheet is reached with read_sheet. A wrong pointer is worse than none.
+  // "First 0 row(s) below" reads as an empty sheet. It is not: at this budget a
+  // single row of 35+ columns overflows, so the cut leaves the header alone.
+  // Say which it was, or the reader cannot tell a blank sheet from one whose
+  // rows are too wide to preview.
+  if (sheet.rows.length > 0 && rendered.rowsShown === 0) {
+    return `${header} Its rows are too wide to preview here — use read_sheet on this page, with select to name the columns you need.`;
+  }
+
   const framing = `${header} First ${rendered.rowsShown} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
 
   return rendered.text ? `${framing}${rendered.text}` : `${header} No data yet.`;
@@ -1038,8 +1046,18 @@ export const pageReadTools = {
           // 25` above a table holding 8 is a false statement about the one
           // surface a reader can see — and the structured `rows` are clipped to
           // match so the two halves of the response cannot disagree.
-          const rows = rowsInWindow.slice(0, rendered.rowsShown);
+          // At least one row survives whenever the window had one. A single row
+          // too wide to render (165+ columns at the cell cap) left `rowsShown`
+          // at 0, which emptied `rows`, which made the resume point fall back
+          // to that same unrenderable row — the exact non-terminating loop the
+          // empty-fetch and empty-after-clipping guards above exist to prevent,
+          // reachable through the third door. Keeping the row means the DATA is
+          // still returned even when the rendering cannot show it, and the
+          // disagreement is stated rather than silent.
+          const shownCount = rendered.rowsShown > 0 ? rendered.rowsShown : Math.min(1, rowsInWindow.length);
+          const rows = rowsInWindow.slice(0, shownCount);
           const droppedForBudget = rowsInWindow.length - rows.length;
+          const tableOmittedRows = rows.length - rendered.rowsShown;
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
@@ -1154,6 +1172,8 @@ export const pageReadTools = {
             ...(Object.keys(formulas).length > 0 && { formulas }),
             ...(Object.keys(errors).length > 0 && { errors }),
             ...(droppedForBudget > 0 && { rowsDroppedForSize: droppedForBudget }),
+            // The table could not render rows that `rows` still carries.
+            ...(tableOmittedRows > 0 && { tableRowsOmitted: tableOmittedRows }),
             ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
             hasMoreRows: moreRows,
             ...(moreRows && nextStartRow !== null && { nextStartRow }),
@@ -1181,6 +1201,9 @@ export const pageReadTools = {
                 ? [
                     `Only rows up to ${lastRow} of ${rowCount} are shown. Continue with read_sheet (startRow: ${lastRow + 1}), or with read_page again (lineStart: ${lastRow + 1}) if read_sheet is not available to you.`,
                   ]
+                : []),
+              ...(tableOmittedRows > 0
+                ? [`${tableOmittedRows} row(s) were too wide to render in the table above — read them from "rows", which carries them in full.`]
                 : []),
               ...(rendered.truncatedCells > 0
                 ? [`${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters in the content above — read them from "rows", which carries the full text.`]

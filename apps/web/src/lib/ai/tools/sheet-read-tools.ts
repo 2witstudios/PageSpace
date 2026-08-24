@@ -68,6 +68,14 @@ const sheetReadLogger = loggers.ai.child({ module: 'sheet-read-tools' });
  * sheet is megabytes — and this tool returns both, so an unbounded table was
  * the context blow-up read_sheet exists to prevent. Larger than read_page's
  * preview budget because this is the tool asked for bulk.
+ *
+ * This bounds the RENDERING only. `rows` still carries every fetched row with
+ * full, untruncated cell text, which is deliberate — it is the data, and
+ * truncating it silently would be the degradation this tool exists to remove —
+ * but it means `limit` is bounded by ROW COUNT, not by size. A sheet of long
+ * text cells can still return a large result at `limit: 500`. `select` is the
+ * lever for that, and the tool description says so rather than leaving this
+ * budget to read as protection it does not provide.
  */
 const MAX_SHEET_TABLE_CHARS = 40_000;
 
@@ -142,6 +150,8 @@ export const sheetReadTools = {
       'Filters run in the database against each cell\'s COMPUTED, UNFORMATTED value, so formula columns match on their results — ' +
       'a currency cell displayed as "$1,200.00" is filtered as 1200, and a percent shown as "85%" as 0.85. ' +
       'Returns at most ' + MAX_SHEET_READ_ROWS + ' rows per call — page with startRow (range) or offset (filtered). ' +
+      'That cap is on ROW COUNT, not response size: rows carry full cell text, so on a wide sheet or one with long values ' +
+      'use select to name the columns you need rather than a large limit. ' +
       'Prefer this over read_page for any sheet with real data in it. Omit pageId to read the sheet currently in view.',
     inputSchema: z.object({
       pageId: z.string().optional().describe('The unique ID of the SHEET page. Defaults to the page currently in view if omitted.'),

@@ -98,6 +98,14 @@ async function serializeSheetForInjection(
       `(SHEET "${sheet.tabName}": ${sheet.rowCount} rows x ${sheet.columnCount} columns` +
       (sheet.tabs.length > 1 ? `, ${sheet.tabs.length} tabs` : '') + '.)';
 
+    if (sheet.rows.length > 0 && bounded.rowsShown === 0) {
+      // Not "no rows" — rows too wide for this budget, which is only 4,000
+      // characters here. Conflating the two tells the reader the sheet is empty.
+      return (
+        `${header} Its rows are too wide to include here — use read_sheet with pageId "${pageId}" ` +
+        'and select to name the columns you need.'
+      );
+    }
     if (!table) {
       return `${header} No rows yet. Use read_sheet with pageId "${pageId}" once it has data.`;
     }

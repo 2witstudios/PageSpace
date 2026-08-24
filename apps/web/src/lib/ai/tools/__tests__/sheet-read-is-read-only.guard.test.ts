@@ -19,7 +19,19 @@ import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const SOURCE = readFileSync(resolve(HERE, '../sheet-read-tools.ts'), 'utf-8');
+
+/**
+ * BOTH modules, because `read_sheet`'s positional path does almost none of its
+ * work in the tool file: `loadSheetWindow` lives in `sheet-view.ts` and is what
+ * actually touches the store. Guarding only the tool file left the module where
+ * the last regression would naturally be written — "a reasonable-looking
+ * `ensureTab` on a path that genuinely needed rows" — completely uncovered, and
+ * `read_page` and command injection reach the store through it too.
+ */
+const SOURCES: Array<[string, string]> = [
+  ['sheet-read-tools.ts', readFileSync(resolve(HERE, '../sheet-read-tools.ts'), 'utf-8')],
+  ['sheet-view.ts', readFileSync(resolve(HERE, '../sheet-view.ts'), 'utf-8')],
+];
 
 /**
  * Every mutating export of `@pagespace/lib/sheets/store`. `ensureTab` and
@@ -36,15 +48,24 @@ const WRITE_FUNCTIONS = [
   'replaceFromDocument',
 ];
 
-describe('read_sheet is structurally incapable of writing', () => {
-  it.each(WRITE_FUNCTIONS)('does not reference %s', (fn) => {
-    expect(SOURCE.includes(fn), `sheet-read-tools.ts references ${fn}`).toBe(false);
+const READ_ONLY_STORE_IMPORTS: Record<string, string[]> = {
+  'sheet-read-tools.ts': ['getTab', 'listTabs', 'queryRows'],
+  'sheet-view.ts': ['getTab', 'listTabs', 'readRows'],
+};
+
+describe('the sheet read path is structurally incapable of writing', () => {
+  const cases = SOURCES.flatMap(([name, source]) =>
+    WRITE_FUNCTIONS.map((fn) => [name, fn, source] as const),
+  );
+
+  it.each(cases)('%s does not reference %s', (name, fn, source) => {
+    expect(source.includes(fn), `${name} references ${fn}`).toBe(false);
   });
 
-  it('imports from the store only functions that read', () => {
-    const importLine = SOURCE.match(/import \{([^}]*)\} from '@pagespace\/lib\/sheets\/store'/);
-    expect(importLine, 'expected a store import to assert on').not.toBeNull();
+  it.each(SOURCES)('%s imports from the store only functions that read', (name, source) => {
+    const importLine = source.match(/import \{([^}]*)\} from '@pagespace\/lib\/sheets\/store'/);
+    expect(importLine, `expected a store import in ${name}`).not.toBeNull();
     const imported = importLine![1].split(',').map((n) => n.trim()).filter(Boolean);
-    expect(imported.sort()).toEqual(['getTab', 'listTabs', 'queryRows'].sort());
+    expect(imported.sort()).toEqual([...READ_ONLY_STORE_IMPORTS[name]].sort());
   });
 });

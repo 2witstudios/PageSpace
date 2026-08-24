@@ -646,6 +646,37 @@ describe('page-read-tools', () => {
         expect(sheet?.content).not.toContain('No data yet');
       });
 
+      it('says a sheet has rows too wide to preview rather than reporting it empty', async () => {
+        // "First 0 row(s) below" reads as an empty sheet. At this budget a
+        // single row of 35+ columns overflows, so the reader must be able to
+        // tell a blank sheet from one it cannot preview.
+        const sheetPage = {
+          id: 'sheet-3', title: 'Wide', type: 'SHEET', parentId: null, position: 8, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        const wideCells = Object.fromEntries(
+          Array.from({ length: 120 }, (_, i) => [`C${i}`, { raw: 'y'.repeat(120), value: 'y'.repeat(120) }]),
+        );
+        mockListTabs.mockResolvedValue([sheetTab]);
+        mockGetTab.mockResolvedValue(sheetTab);
+        mockReadRows.mockResolvedValue([{ rowIndex: 0, cells: wideCells }]);
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-3', content: '', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-3');
+        expect(sheet?.content).toContain('too wide to preview');
+        expect(sheet?.content).not.toContain('First 0 row(s)');
+        expect(sheet?.content).not.toContain('No data yet');
+      });
+
       it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
         setupDriveAccessWithContent(
           [taskListPage, channelPage, filePage],
@@ -1405,6 +1436,40 @@ describe('page-read-tools', () => {
       expect(result.success).toBe(false);
       expect(result.error).toBe('Sheet tab not found');
       expect(result.tabs).toBeDefined();
+    });
+
+    it('never loops when a row is too wide for the table budget', async () => {
+      // A single row whose rendered line exceeds the table budget left
+      // rowsShown at 0, which emptied `rows`, which made the resume point fall
+      // back to that same row. An agent following nextStartRow re-read the
+      // identical empty result forever — the third door into the loop the two
+      // guards above already close.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      // One row far wider than the 20k table budget, then a normal one.
+      const wideCells = Object.fromEntries(
+        Array.from({ length: 200 }, (_, i) => [`C${i}`, { raw: 'x'.repeat(120), value: 'x'.repeat(120) }]),
+      );
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: wideCells },
+        { rowIndex: 1, cells: { A: { raw: 'next', value: 'next' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Wide', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      // The data survives even though the table could not render it...
+      expect((result.rows as unknown[]).length).toBeGreaterThan(0);
+      // ...and the resume point never points back at the same call.
+      if (result.hasMoreRows) {
+        expect(result.nextStartRow).not.toBe(1);
+      }
+      expect(String((result.nextSteps as string[]).join(' '))).toContain('too wide to render');
     });
 
     it('distinguishes an empty window from an empty sheet', async () => {
