@@ -55,6 +55,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
     describeAgentToolSurface: vi.fn(async () => ({ configured: null, granted: [], blocked: [], conditional: [], deferred: [], notes: [] })),
+    describeWorkerComputeShortfall: vi.fn(async () => null),
     createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
@@ -1217,6 +1218,50 @@ describe('spawn_session: honouring the agent\'s configured tool surface', () => 
     expect(deps.dispatch).toHaveBeenCalled();
     // …and an unchecked surface is reported as unchecked, never as fine.
     expect(String((result.toolSurfaceWarnings as string[])[0])).toContain('not checked');
+  });
+
+  it('given a workspace whose plan excludes compute, should WARN about the tools that landed short', async () => {
+    // The divergence the stored config cannot predict, and the one that made
+    // three spawns of one agent look random: compute eligibility keys on the
+    // WORKSPACE the worker landed in, not on the agent.
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: true, toolSurfaceWarnings: ['no compute in that workspace'] }),
+    );
+    // Asked of the workspace the worker ACTUALLY landed in, not the caller's.
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: WORKSPACE_ID, userId: USER_ID }),
+    );
+  });
+
+  it('given the compute check itself failing, should still spawn and stay quiet about it', async () => {
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => {
+        throw new Error('tier lookup unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).not.toHaveProperty('toolSurfaceWarnings');
+  });
+
+  it('given an unrestricted agent, should ask the compute question with null rather than an empty list', async () => {
+    // `null` is the WIDEST case (the whole registry), not "nothing" — passing
+    // [] would tell the runtime no compute tool is in play.
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ granted: null }),
+    );
   });
 
   it('given a config the gates honour verbatim, should say nothing about tools at all', async () => {

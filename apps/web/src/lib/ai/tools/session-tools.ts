@@ -536,6 +536,34 @@ export interface SessionToolsDeps {
    * surfaces and no error anywhere.
    */
   describeAgentToolSurface: (agentPageId: string) => Promise<AgentToolSurfaceReport | null>;
+  /**
+   * The one divergence the stored config CANNOT predict: whether the workspace
+   * the worker actually landed in will grant the COMPUTE tools its agent is
+   * configured for. That answer keys on the workspace's payer tier, so the same
+   * agent legitimately resolves differently in two workspaces — which is why the
+   * reporter of issue #2460 saw three spawns produce three different surfaces
+   * and read it as randomness.
+   *
+   * Returns a sentence when compute the agent is configured for will NOT be
+   * granted there, otherwise null. A WARNING, never a refusal: the caller cannot
+   * fix a payer's tier by spawning differently, and a worker without bash is
+   * still a worker that can read pages and think.
+   *
+   * The runtime owns the whole judgement — which of `granted` are compute tools,
+   * and the capability check — because this factory imports neither the tool
+   * name sets nor the database.
+   */
+  describeWorkerComputeShortfall: (input: {
+    workspaceId: string;
+    userId: string;
+    /**
+     * What the worker's agent grants, or `null` for "unrestricted" — an agent
+     * with no allowlist, or a global worker, which reaches the whole registry.
+     * `null` is not "nothing": it is the widest case, and the one where compute
+     * is most certainly in play.
+     */
+    granted: readonly string[] | null;
+  }) => Promise<string | null>;
   /** Create the labeled worker conversation (squat-guarded) bound into its workspace. */
   createWorkerSession: (input: {
     /** The WORKER's new conversation id (minted by the caller of this dep). */
@@ -1404,6 +1432,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
         // refusing there would break working spawns to report a non-problem.
         // The warning rides the SUCCESS payload, naming the tools and the gate.
         let toolSurfaceWarnings: string[] = [];
+        // What the agent's own config grants, carried to the post-creation
+        // compute check below — which needs the workspace the worker landed in.
+        // `null` = unrestricted: no allowlist, or a global worker.
+        let grantedForComputeCheck: readonly string[] | null = null;
         if (agentPageId) {
           // DEGRADE, don't refuse, if the check itself cannot run. This is a
           // diagnostic added to a path that worked without it; letting a
@@ -1446,6 +1478,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
               };
             }
             toolSurfaceWarnings = surface.notes;
+            grantedForComputeCheck = surface.configured === null ? null : surface.granted;
           }
         }
 
@@ -1467,6 +1500,19 @@ export function createSessionTools(deps: SessionToolsDeps): {
             reason: created.reason,
           };
         }
+
+        // The worker EXISTS now, so its workspace is known — and with it the one
+        // question the agent's stored config could not answer (see the dep's
+        // docs). Best-effort: a diagnostic must never be the reason a spawned
+        // worker's caller sees an error.
+        const shortfall = await deps
+          .describeWorkerComputeShortfall({
+            workspaceId: created.workspaceId,
+            userId: actor.userId,
+            granted: grantedForComputeCheck,
+          })
+          .catch(() => null);
+        if (shortfall) toolSurfaceWarnings = [...toolSurfaceWarnings, shortfall];
 
         // Placement moved inside `createWorkerSession`, which this tool asks
         // for with `placeInGrid` (issue #2373). It used to sit here, gated on

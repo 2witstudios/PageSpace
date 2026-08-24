@@ -53,6 +53,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
     describeAgentToolSurface: vi.fn(async () => ({ configured: null, granted: [], blocked: [], conditional: [], deferred: [], notes: [] })),
+    describeWorkerComputeShortfall: vi.fn(async () => null),
     createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: ALICE_WORKSPACE })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),

@@ -39,7 +39,10 @@ import { conversations, messages as globalMessages } from '@pagespace/db/schema/
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import {
+  canRunCodeForSession,
+  resolveDriveMembership,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
@@ -1037,6 +1040,37 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
         registeredToolNames: Object.keys(pageSpaceTools),
       });
       return { ...surface, notes: surfaceModule.formatAgentToolSurfaceNotes(surface) };
+    },
+
+    describeWorkerComputeShortfall: async ({ workspaceId, userId, granted }) => {
+      // Lazily, for the same cycle reason `describeAgentToolSurface` explains.
+      const { SANDBOX_COMPUTE_TOOL_NAMES } = await import('../core/tool-filtering');
+      // `null` granted = unrestricted (no allowlist, or a global worker): the
+      // whole registry, so compute is certainly in play.
+      const computeNames =
+        granted === null
+          ? [...SANDBOX_COMPUTE_TOOL_NAMES]
+          : granted.filter((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
+      if (computeNames.length === 0) return null;
+
+      // The SAME question the worker's own turn will ask
+      // (`resolveSandboxToolEligibilityForConversation` → `canRunCodeForSession`),
+      // asked of the workspace it actually landed in and answered with the same
+      // inputs, so this predicts rather than guesses.
+      const { workspaceOwnerId, workspaceDriveId } = await describeWorkspace(workspaceId);
+      const eligible = await canRunCodeForSession({
+        userId,
+        driveId: workspaceDriveId,
+        ownerId: workspaceOwnerId ?? userId,
+      });
+      if (eligible) return null;
+
+      return (
+        'This worker landed in a workspace whose plan does not include code execution, so it will ' +
+        `NOT receive the compute tools (${computeNames.slice(0, 6).join(', ')}${computeNames.length > 6 ? ', …' : ''}) ` +
+        'however its agent is configured. Session and page tools are unaffected. Spawning into a ' +
+        'different workspace, or upgrading that workspace owner\'s plan, is what changes this.'
+      );
     },
 
     createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {

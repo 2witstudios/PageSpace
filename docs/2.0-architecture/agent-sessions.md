@@ -680,6 +680,16 @@ them however its agent is configured. They are reported as runtime-conditional
 granted would be this bug in a new place, and refusing a spawn over them would refuse
 agents that work perfectly in a browser chat.
 
+THE ONE DIVERGENCE A CONFIG CANNOT PREDICT is compute eligibility, and it is the one that made
+the issue read as randomness: `filterToolsForSandboxTier` keys on the PAYER of the workspace the
+worker landed in, so the same agent legitimately resolves differently in two workspaces. A spawn
+now asks that question of the workspace the worker actually landed in — the same question its own
+turn will ask, with the same inputs — and WARNS when compute the agent is configured for will not
+be granted there. A warning, never a refusal: no caller can fix a payer's tier by spawning
+differently, and a worker without `bash` is still a worker that can read pages and think. The
+check is best-effort; a diagnostic must never be the reason a spawned worker's caller sees an
+error.
+
 `'search'` exposure defers non-core tools behind `tool_search`/`execute_tool` without
 losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
 tools only — which is how #2460 was first misread — and because a deferral reported as a
