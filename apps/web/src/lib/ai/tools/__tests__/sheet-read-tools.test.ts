@@ -506,6 +506,38 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
     ).rejects.toThrow('deadlock detected');
   });
 
+  it('refuses a legacy-text SHEET page instead of calling it a blank spreadsheet', async () => {
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({ ...sheetPage, content: '<p>Notes, never a grid</p>' });
+
+    const result = await run({ pageId: 'page-1' });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Page holds text, not a spreadsheet');
+    expect(String(result.suggestion)).toContain('read_page');
+    expect(result.rows).toBeUndefined();
+  });
+
+  it('never materialises a legacy-text page, which would hide its text forever', async () => {
+    // `materializeFromDocument` does NOT throw on text — it parses to an empty
+    // 20x10 sheet and inserts a tab with zero rows. After that every read takes
+    // the store path, documentIsNotASheet can never be true again, and the
+    // page's text is invisible to read_page, list_pages and command injection
+    // permanently. One filtered read would have been enough to cause it.
+    mockListTabs.mockResolvedValue([]);
+    mockFindById.mockResolvedValue({ ...sheetPage, content: '<p>Notes, never a grid</p>' });
+
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Page holds text, not a spreadsheet');
+    expect(mockEnsureTab).not.toHaveBeenCalled();
+    expect(mockQueryRows).not.toHaveBeenCalled();
+  });
+
   it('refuses a filtered read for a view-only actor rather than answering it unfiltered', async () => {
     // Materialising is a WRITE. Falling back to an unfiltered document read
     // would answer a different question than the one asked — worse than saying

@@ -60,7 +60,11 @@ import { PageType } from '@pagespace/lib/utils/enums';
  * rather than empty, for the same reason every other caller does: an agent told
  * a sheet is blank may overwrite data that is still intact.
  */
-async function serializeSheetForInjection(pageId: string, content: string | null): Promise<string> {
+async function serializeSheetForInjection(
+  pageId: string,
+  content: string | null,
+  contentMode: string | null,
+): Promise<string> {
   try {
     const sheet = await loadSheetWindow(pageId, {
       limit: SHEET_PREVIEW_ROWS,
@@ -71,7 +75,7 @@ async function serializeSheetForInjection(pageId: string, content: string | null
     // instructions live on such a page would otherwise inject nothing useful on
     // every single turn.
     if (sheet.documentIsNotASheet) {
-      return serializePageContentForAI({ type: 'SHEET', contentMode: null, content });
+      return serializePageContentForAI({ type: 'SHEET', contentMode, content });
     }
 
     const table = renderSheetTable(sheet.rows).text;
@@ -275,7 +279,7 @@ export async function resolveCommandInjectionById(
   // used as a command resource is a reference table; its shape plus its first
   // rows plus a pointer to `read_sheet` is the useful form.
   const serializedContent = isSheetType(entryPage.type as PageType)
-    ? await serializeSheetForInjection(entryPage.id, entryPage.content)
+    ? await serializeSheetForInjection(entryPage.id, entryPage.content, entryPage.contentMode)
     : isTextSerializablePageType(entryPage.type)
       ? serializePageContentForAI(entryPage)
       : `(This entry page is a ${entryPage.type} page. Use read_page with pageId "${entryPage.id}" to read it.)`;

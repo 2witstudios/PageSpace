@@ -343,6 +343,12 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   // tool fetched it.
   read_sheet: ({ parsedOutput }) => {
     const table = parsedOutput.table;
+    // Returning null here for a failure envelope left an EMPTY card for
+    // precisely the results the tool works hardest to explain — the
+    // wrong-page-type, bad-tabIndex, mixed-paging and "do not overwrite it"
+    // refusals all carry a message and no table. Fall through to the generic
+    // success/failure renderer below, which shows them.
+    if (parsedOutput.success === false) return null;
     if (typeof table !== 'string' || table.length === 0) return null;
     return (
       <RichContentRenderer

@@ -241,6 +241,10 @@ export const sheetReadTools = {
             documentContent: page.content,
           });
 
+          if (window.documentIsNotASheet) {
+            return notASheetResult(page);
+          }
+
           return buildResult({
             page,
             mode: 'range' as const,
@@ -265,6 +269,18 @@ export const sheetReadTools = {
         // than the one asked, which is worse than saying so.
         const materialized = (await listTabs(page.id)).length > 0;
         if (!materialized) {
+          // Check what the document IS before materialising it. Legacy text on
+          // a SHEET page parses to an empty 20x10 sheet without throwing, so
+          // `ensureTab` would happily insert a tab with zero rows — and from
+          // then on every read takes the store path, `documentIsNotASheet` can
+          // never be true again, and the page's text is hidden from read_page,
+          // list_pages and command injection permanently. A filtered READ must
+          // not be able to do that.
+          const probe = await loadSheetWindow(page.id, { limit: 1, documentContent: page.content });
+          if (probe.documentIsNotASheet) {
+            return notASheetResult(page);
+          }
+
           if (!(await canActorEditPage(toolContext, page.id))) {
             return {
               success: false,
@@ -358,6 +374,29 @@ export const sheetReadTools = {
     },
   }),
 };
+
+/**
+ * The answer for a SHEET page whose stored content was never a sheet document.
+ *
+ * Reporting `rows: []` with the default 20x10 dimensions would say "this
+ * spreadsheet is blank" about a page that holds real text — the one answer
+ * every other path in this PR refuses to give, because an agent acts on it by
+ * overwriting. `read_page` shows the text; this tool cannot (it returns rows),
+ * so it names the tool that can.
+ */
+function notASheetResult(page: { id: string; title: string }) {
+  return {
+    success: false as const,
+    error: 'Page holds text, not a spreadsheet',
+    message:
+      `"${page.title}" is a SHEET page, but its stored content is not a spreadsheet document — ` +
+      'it holds plain text or HTML. There are no rows to read.',
+    suggestion:
+      'Read it with read_page, which returns the text. Do not treat this page as an empty sheet ' +
+      'and do not write cells to it: that would replace the content it holds.',
+    pageInfo: { pageId: page.id, title: page.title },
+  };
+}
 
 /**
  * Materialise a sheet's rows, turning an unreadable stored document into the

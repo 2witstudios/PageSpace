@@ -260,21 +260,14 @@ export const pageReadTools = {
                 // table is never cut mid-row into something that reads like a
                 // real value.
                 // Not a sheet document at all — legacy text on a SHEET page.
-                // Fall back to the ordinary text handling below rather than
-                // reporting "no data yet", which loses the content entirely.
-                if (sheet.documentIsNotASheet) {
-                  const fullText = serializePageContentForAI({ type: entry.type, ...row });
-                  entry.content = fullText.length > MAX_CONTENT_CHARS_PER_PAGE
-                    ? fullText.slice(0, MAX_CONTENT_CHARS_PER_PAGE)
-                    : fullText;
-                  if (fullText.length > MAX_CONTENT_CHARS_PER_PAGE) {
-                    entry.contentClipped = true;
-                    entry.contentClippedAfterLine = String(entry.content).split('\n').length;
-                    contentClippedCount++;
-                  }
-                  continue;
-                }
-
+                // Reporting "no data yet" would lose the content entirely, so
+                // this deliberately does NOT `continue`: it drops out of the
+                // sheet branch and the shared text handling below answers,
+                // which also cuts at the last newline rather than an arbitrary
+                // offset that could sever a UTF-16 surrogate pair or an HTML
+                // tag. Duplicating that clip here would reintroduce the very
+                // bug the shared path documents avoiding.
+                if (!sheet.documentIsNotASheet) {
                 let previewRows = sheet.rows;
                 let renderedPreview = renderSheetTable(previewRows);
                 while (renderedPreview.text.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
@@ -317,6 +310,7 @@ export const pageReadTools = {
                   ? `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n${table}`
                   : `${header} No data yet.`;
                 continue;
+                }
               }
 
               const fullContent = serializePageContentForAI({ type: entry.type, ...row });
@@ -1059,10 +1053,20 @@ export const pageReadTools = {
           // declares 20 while storing none. `loadSheetWindow` already gets this
           // right and `read_sheet` inherits it; only this path recomputed it.
           const clippedByLineEnd = sheet.rows.length > rows.length;
-          const moreRows = sheet.rows.length > 0 && (clippedByLineEnd || sheet.hasMore);
-          const nextStartRow = moreRows
-            ? (rows.length > 0 ? rows[rows.length - 1].rowNumber + 1 : requestedStart)
-            : null;
+          // Where to resume comes from what the FETCH reached, never from the
+          // request. Rows are sparse: a sheet storing rows 1-3 and 500-509
+          // answers `lineStart: 4, lineEnd: 10` by fetching from index 3,
+          // getting rows 500+, and clipping every one of them. `rows` is then
+          // empty while the fetch was not, so falling back to `requestedStart`
+          // pointed at the very call that had just returned nothing. The first
+          // fix here only covered the empty-FETCH case; this is the empty-after
+          // -CLIPPING case, and it loops the same way.
+          const resumeAt = rows.length > 0
+            ? rows[rows.length - 1].rowNumber + 1
+            : sheet.nextFromRow !== null ? sheet.nextFromRow + 1 : null;
+          const moreRows =
+            sheet.rows.length > 0 && resumeAt !== null && (clippedByLineEnd || sheet.hasMore);
+          const nextStartRow = moreRows ? resumeAt : null;
           // An empty window is not the same as an empty sheet, and the two must
           // not read alike: a request past the last row, or into a gap in a
           // sparse sheet, still has to report the sheet's real size and say

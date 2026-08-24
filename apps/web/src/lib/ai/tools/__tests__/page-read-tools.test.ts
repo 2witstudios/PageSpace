@@ -621,6 +621,31 @@ describe('page-read-tools', () => {
         expect((sheet?.content ?? '').length).toBeLessThanOrEqual(8000 + 200);
       });
 
+      it('falls back to the text for a SHEET page that never held a spreadsheet', async () => {
+        // Reporting "no data yet" would drop the content. Falling through to
+        // the shared text path also means the clip is newline-aligned rather
+        // than a raw character offset.
+        const sheetPage = {
+          id: 'sheet-2', title: 'Notes', type: 'SHEET', parentId: null, position: 7, driveId,
+          isTrashed: false,
+          permissions: { canView: true, canEdit: true, canShare: false, canDelete: false },
+        };
+        mockListTabs.mockResolvedValue([]);
+        setupDriveAccessWithContent(
+          [sheetPage],
+          [{ id: 'sheet-2', content: '<p>Never a grid</p>', contentMode: 'html', type: 'SHEET' }],
+        );
+
+        const result = await pageReadTools.list_pages.execute!(
+          { driveId, driveSlug, include: 'content' },
+          createAuthContext()
+        ) as { pages: Array<{ id: string; content?: string }> };
+
+        const sheet = result.pages.find(p => p.id === 'sheet-2');
+        expect(sheet?.content).toContain('Never a grid');
+        expect(sheet?.content).not.toContain('No data yet');
+      });
+
       it('omits content with a reason for TASK_LIST, CHANNEL, and FILE pages', async () => {
         setupDriveAccessWithContent(
           [taskListPage, channelPage, filePage],
@@ -1197,6 +1222,33 @@ describe('page-read-tools', () => {
       });
       // The sheet's real size is still reported — empty window, not empty sheet.
       expect(result.dimensions).toEqual({ rowCount: 500, columnCount: 16 });
+    });
+
+    it('never resumes at the requested row when clipping emptied the window', async () => {
+      // Sparse sheet: rows 1-3 then 500+. Asking for rows 4-10 fetches from
+      // index 3, gets row 500, and clips it. `rows` is empty but the FETCH was
+      // not — the earlier fix only covered the empty-fetch case, and this path
+      // still pointed back at the call that had just returned nothing.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 499, cells: { A: { raw: 'far', value: 'far' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 4, lineEnd: 10 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.rowsReturned).toBe(0);
+      // Whatever it says, it must not be "call again with lineStart: 4".
+      expect(result.nextStartRow).not.toBe(4);
+      if (result.hasMoreRows) {
+        expect(result.nextStartRow).toBe(501);
+      }
     });
 
     it('still points past the last returned row when rows really do follow', async () => {
