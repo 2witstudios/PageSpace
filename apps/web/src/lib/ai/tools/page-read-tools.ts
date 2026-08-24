@@ -1009,10 +1009,18 @@ export const pageReadTools = {
               characterCount: table.length,
             },
             nextSteps: [
+              // Both continuations are named on purpose. `read_sheet` is the
+              // right one, but an agent whose saved `enabledTools` allowlist
+              // predates it cannot call it — and pointing only at a tool the
+              // caller may not have would leave it with 25 rows and no way
+              // forward. `lineStart`/`lineEnd` on THIS tool page the same
+              // sheet and are always available.
               ...(moreRows && rows.length > 0
-                ? [`Only rows up to ${lastRow} of ${rowCount} are shown — use read_sheet (startRow: ${lastRow + 1}) rather than paging this tool.`]
+                ? [
+                    `Only rows up to ${lastRow} of ${rowCount} are shown. Continue with read_sheet (startRow: ${lastRow + 1}), or with read_page again (lineStart: ${lastRow + 1}) if read_sheet is not available to you.`,
+                  ]
                 : []),
-              'Use read_sheet to filter rows by column value, sort them, or return only some columns — do not read the whole sheet to search it.',
+              'To find rows rather than page them — filter by column value, sort, or return only some columns — use read_sheet. Do not read a whole sheet to search it.',
               'Use edit_sheet_cells with A1 addresses to write; a row\'s number here is its A1 row.',
             ],
           };

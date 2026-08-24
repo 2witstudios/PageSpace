@@ -1054,6 +1054,31 @@ describe('page-read-tools', () => {
       expect((result.rows as { rowNumber: number }[]).map(row => row.rowNumber)).toEqual([1]);
     });
 
+    it('offers a continuation that does not require a tool the caller may not have', async () => {
+      // An agent whose saved enabledTools allowlist predates read_sheet cannot
+      // call it. Pointing only there would leave it with 25 rows of a 500-row
+      // sheet and no way forward, which is a capability REGRESSION against the
+      // old whole-document read. read_page's own lineStart pages the same sheet
+      // and is always available to whoever just called read_page.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      const steps = (result.nextSteps as string[]).join(' ');
+      expect(steps).toContain('read_sheet (startRow: 2)');
+      expect(steps).toContain('read_page again (lineStart: 2)');
+    });
+
     it('distinguishes an empty window from an empty sheet', async () => {
       // Reading past the end, or into a gap in a sparse sheet, must still
       // report the sheet's real size and say which case it was. "0 rows" with
