@@ -1242,7 +1242,12 @@ export const pageReadTools = {
         // own newlines. The agent needs that BEFORE it writes — the workflow it
         // is told to follow is read, then edit — so the warning belongs on the
         // read, not only on the write result (#2463).
-        const contentModeWarning = describeContentModeMismatch(readable);
+        // `page`, not the `readable` alias master used: that alias existed only
+        // to swap a sheet's empty `pages.content` for its reconstructed
+        // document, and sheets no longer reach this path — they take the branch
+        // above, or fall through as legacy TEXT, for which `page` is the right
+        // subject anyway.
+        const contentModeWarning = describeContentModeMismatch(page);
 
         // Calculate effective range (1-indexed, inclusive)
         const effectiveStart = lineStart ?? 1;
