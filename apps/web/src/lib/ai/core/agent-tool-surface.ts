@@ -205,7 +205,40 @@ export function formatAgentToolSurfaceNotes(surface: AgentToolSurface): string[]
  * every plan (review #2326), so naming it would invent a caveat that does not
  * exist.
  */
-export function describeSandboxTierCaveat(surface: AgentToolSurface): string | null {
+function describeSandboxTierCaveat(surface: AgentToolSurface): string | null {
   if (!surface.granted.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name))) return null;
   return 'Sandbox compute tools (bash/files, git+gh, shells) additionally require an eligible payer tier and a session to run in; that is resolved per conversation, not from this config.';
+}
+
+/**
+ * The notes a CONFIG surface says: every divergence, plus the tier caveat that
+ * only a config audience needs. Named for its audience so the difference from
+ * {@link formatAgentToolSurfaceNotes} — which a spawn uses, and which stays
+ * silent when nothing diverges — is a choice a caller makes on purpose rather
+ * than by remembering to append one more string.
+ */
+export function formatConfigSurfaceNotes(surface: AgentToolSurface): string[] {
+  const tierCaveat = describeSandboxTierCaveat(surface);
+  return [...formatAgentToolSurfaceNotes(surface), ...(tierCaveat ? [tierCaveat] : [])];
+}
+
+/**
+ * The stored-vs-effective block both config doors report, in one place so the
+ * two cannot answer the same question with different field names — which is the
+ * shape of the bug this whole module exists to prevent.
+ */
+export function toolSurfaceEcho(surface: AgentToolSurface): {
+  effectiveTools: string[];
+  effectiveToolsCount: number;
+  blockedTools: BlockedTool[];
+  toolsNeedingComposerToggle: string[];
+  toolsReachedBySearch: string[];
+} {
+  return {
+    effectiveTools: surface.granted,
+    effectiveToolsCount: surface.granted.length,
+    blockedTools: surface.blocked,
+    toolsNeedingComposerToggle: surface.conditional,
+    toolsReachedBySearch: surface.deferred,
+  };
 }

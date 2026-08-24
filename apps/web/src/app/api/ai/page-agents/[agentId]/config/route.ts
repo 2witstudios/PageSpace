@@ -5,7 +5,7 @@ const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
-import { describeAgentToolSurface, describeSandboxTierCaveat, formatAgentToolSurfaceNotes } from '@/lib/ai/core/agent-tool-surface';
+import { describeAgentToolSurface, formatConfigSurfaceNotes, toolSurfaceEcho } from '@/lib/ai/core/agent-tool-surface';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
@@ -258,11 +258,7 @@ export async function PUT(
       toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
       registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
     });
-    const tierCaveat = describeSandboxTierCaveat(toolSurface);
-    const toolSurfaceNotes = [
-      ...formatAgentToolSurfaceNotes(toolSurface),
-      ...(tierCaveat ? [tierCaveat] : []),
-    ];
+    const toolSurfaceNotes = formatConfigSurfaceNotes(toolSurface);
 
     // Broadcast agent update event
     await broadcastPageEvent(
@@ -302,11 +298,7 @@ export async function PUT(
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
         toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront',
         sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
-        effectiveTools: toolSurface.granted,
-        effectiveToolsCount: toolSurface.granted.length,
-        blockedTools: toolSurface.blocked,
-        toolsNeedingComposerToggle: toolSurface.conditional,
-        toolsReachedBySearch: toolSurface.deferred,
+        ...toolSurfaceEcho(toolSurface),
       },
       ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),
       stats: {

@@ -12,7 +12,7 @@ import {
   describeAgentToolSurface,
   blockedByGate,
   formatAgentToolSurfaceNotes,
-  describeSandboxTierCaveat,
+  formatConfigSurfaceNotes,
   RUNTIME_TOGGLE_TOOL_NAMES,
 } from '../agent-tool-surface';
 import { ALWAYS_UPFRONT_TOOLS } from '../../tools/tool-exposure';
@@ -163,7 +163,7 @@ describe('formatAgentToolSurfaceNotes', () => {
   });
 });
 
-describe('describeSandboxTierCaveat', () => {
+describe('formatConfigSurfaceNotes — the config audience hears one thing more', () => {
   it('given granted COMPUTE tools, should name the per-conversation gate this module cannot answer', () => {
     const surface = describeAgentToolSurface({
       enabledTools: ['bash'],
@@ -172,7 +172,7 @@ describe('describeSandboxTierCaveat', () => {
       registeredToolNames: REGISTERED,
     });
 
-    expect(describeSandboxTierCaveat(surface)).toContain('payer tier');
+    expect(formatConfigSurfaceNotes(surface).join(' ')).toContain('payer tier');
   });
 
   it('given only the chat-side session family granted, should say nothing — sessions are free on every plan', () => {
@@ -183,7 +183,7 @@ describe('describeSandboxTierCaveat', () => {
       registeredToolNames: REGISTERED,
     });
 
-    expect(describeSandboxTierCaveat(surface)).toBeNull();
+    expect(formatConfigSurfaceNotes(surface).join(' ')).not.toContain('payer tier');
   });
 });
 

@@ -12,8 +12,8 @@ import { pageSpaceTools } from '../core/ai-tools';
 import { filterToolsForMcpScope } from '../core/tool-filtering';
 import {
   describeAgentToolSurface,
-  describeSandboxTierCaveat,
-  formatAgentToolSurfaceNotes,
+  formatConfigSurfaceNotes,
+  toolSurfaceEcho,
 } from '../core/agent-tool-surface';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
@@ -222,13 +222,7 @@ export const agentTools = {
             filterToolsForMcpScope(pageSpaceTools, isMcpScoped(context as ToolExecutionContext)),
           ),
         });
-        // The tier caveat belongs to a CONFIG audience specifically — see
-        // `describeSandboxTierCaveat`.
-        const tierCaveat = describeSandboxTierCaveat(surface);
-        const surfaceNotes = [
-          ...formatAgentToolSurfaceNotes(surface),
-          ...(tierCaveat ? [tierCaveat] : []),
-        ];
+        const surfaceNotes = formatConfigSurfaceNotes(surface);
 
         // Broadcast update event
         await broadcastPageEvent(
@@ -254,11 +248,7 @@ export const agentTools = {
             // STORED vs EFFECTIVE, always both and always distinguished — the
             // divergence between them is the thing this response exists to
             // make visible.
-            effectiveTools: surface.granted,
-            effectiveToolsCount: surface.granted.length,
-            blockedTools: surface.blocked,
-            toolsNeedingComposerToggle: surface.conditional,
-            toolsReachedBySearch: surface.deferred,
+            ...toolSurfaceEcho(surface),
             sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
             toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
             aiProvider: updatedAgent.aiProvider ?? null,
