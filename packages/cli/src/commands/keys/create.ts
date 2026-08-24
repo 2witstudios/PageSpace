@@ -247,26 +247,31 @@ export function resolveNewKeyName({
   //
   // Only reachable through the flag path — `wizard.ts` trims before it gets
   // here.
-  // Blank FIRST, deliberately. An all-whitespace name satisfies both
-  // conditions, and taking the padding branch made the message suggest the
-  // trimmed form — which for "   " is the empty string the next guard rejects,
-  // i.e. advice to do the one other thing that cannot work.
-  if (resolvedName.trim().length === 0) {
+  // ORDER IS THE POINT HERE. The padding branch is the only one that SUGGESTS
+  // a replacement, so every rejection whose trimmed form is also invalid has to
+  // be caught before it — otherwise the advice names something the very next
+  // guard refuses. Both such cases exist and both were live:
+  //   "   "         → trims to "", which the blank rule rejects
+  //   "  default  " → trims to "default", which the reserved rule rejects
+  // So: blank, then reserved (tested against the TRIMMED name, since that is
+  // what the store would be keyed on), then padding.
+  const trimmedName = resolvedName.trim();
+  if (trimmedName.length === 0) {
     return {
       ok: false,
       message: '--name must not be blank: a key is selected by its name, so an unnamed key could never be used.',
     };
   }
-  if (resolvedName !== resolvedName.trim()) {
+  if (trimmedName === DEFAULT_PROFILE_NAME) {
     return {
       ok: false,
-      message: `--name "${resolvedName}" has leading or trailing whitespace: keys are looked up by their trimmed name, so this one could be created and never found again. Use "${resolvedName.trim()}".`,
+      message: `--name "${resolvedName}" is reserved for the personal credential stored by "pagespace login". Choose another key name.`,
     };
   }
-  if (resolvedName === DEFAULT_PROFILE_NAME) {
+  if (resolvedName !== trimmedName) {
     return {
       ok: false,
-      message: `--name "${DEFAULT_PROFILE_NAME}" is reserved for the personal credential stored by "pagespace login". Choose another key name.`,
+      message: `--name "${resolvedName}" has leading or trailing whitespace: keys are looked up by their trimmed name, so this one could be created and never found again. Use "${trimmedName}".`,
     };
   }
   return { ok: true, name: resolvedName };

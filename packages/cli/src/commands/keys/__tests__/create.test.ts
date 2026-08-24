@@ -329,6 +329,35 @@ describe('resolveNewKeyName', () => {
     });
   });
 
+  // The padding branch is the only rejection that SUGGESTS a replacement, so
+  // every name whose trimmed form is ALSO invalid has to be caught before it.
+  // Two such names exist — "   " trims to "" (blank) and "  default  " trims to
+  // "default" (reserved) — and both used to be told to use the very thing the
+  // next guard refuses.
+  it('rejects a padded reserved name as reserved, not with advice to use the reserved name', () => {
+    const result = resolveNewKeyName({ name: '  default  ', drives: [{ id: 'drv1', role: null }] });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.message).toContain('is reserved');
+    expect(result.ok === false && result.message).not.toMatch(/Use "default"/);
+  });
+
+  // The invariant that makes this class of bug impossible rather than merely
+  // absent: whenever a rejection names a replacement, that replacement must
+  // itself be accepted.
+  it.each([['  x  '], [' lead gen '], ['\tci-bot\t']])(
+    'only ever suggests a name that is itself valid (%j)',
+    (name) => {
+      const result = resolveNewKeyName({ name, drives: [{ id: 'drv1', role: null }] });
+      expect(result.ok).toBe(false);
+      const suggested = result.ok === false && result.message.match(/Use "(.*)"\.$/)?.[1];
+      expect(suggested).toBeTruthy();
+      expect(resolveNewKeyName({ name: suggested as string, drives: [{ id: 'drv1', role: null }] })).toEqual({
+        ok: true,
+        name: suggested,
+      });
+    },
+  );
+
   it('rejects "default" as an explicit --name — that slot is reserved for "pagespace login", and says so in key vocabulary', () => {
     const result = resolveNewKeyName({ name: 'default', drives: [{ id: 'drv1', role: null }] });
     expect(result.ok).toBe(false);
