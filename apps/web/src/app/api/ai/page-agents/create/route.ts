@@ -227,6 +227,7 @@ export async function POST(request: Request) {
     const toolSurface = describeAgentToolSurface({
       enabledTools: Array.isArray(enabledTools) ? enabledTools : null,
       sandboxEnabled: Boolean(agentData.sandboxEnabled),
+      // Creation does not set the exposure mode, so it is the column default.
       toolExposureMode: 'upfront',
       registeredToolNames: Object.keys(filterToolsForMcpScope(pageSpaceTools, isScopedMCPAuth(auth))),
     });
@@ -238,7 +239,9 @@ export async function POST(request: Request) {
       title: newAgent.title,
       type: 'AI_CHAT',
       parentId: parentId || 'root',
-      message: `Successfully created AI agent "${title}" with custom configuration`,
+      message: toolSurface.blocked.length > 0
+        ? `Created AI agent "${title}", but ${toolSurface.blocked.length} configured tool(s) will NOT be granted at runtime.`
+        : `Successfully created AI agent "${title}" with custom configuration`,
       summary: `Created AI agent "${title}" in ${parentId ? `parent ${parentId}` : 'drive root'} with ${enabledTools?.length || 0} tools (${toolSurface.granted.length} of them actually granted)`,
       agentConfig: {
         systemPrompt: systemPrompt.substring(0, 100) + (systemPrompt.length > 100 ? '...' : ''),

@@ -1420,6 +1420,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
                 'If the worker reports missing tools, call update_agent_config to see what it is actually granted.',
             ];
           } else if (surface) {
+            // Filtered inline rather than through `blockedByGate`, which is the
+            // same three lines: this factory deliberately imports nothing that
+            // reaches the tool registry or the database (see the module header),
+            // and that helper's module does both.
             const sandboxBlocked = surface.blocked
               .filter((entry) => entry.gate === 'sandbox_disabled')
               .map((entry) => entry.tool);
