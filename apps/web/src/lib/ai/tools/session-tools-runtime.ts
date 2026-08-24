@@ -1017,6 +1017,28 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       return canUserViewPage(userId, agentPageId);
     },
 
+    describeAgentToolSurface: async (agentPageId) => {
+      const page = await db.query.pages.findFirst({
+        where: and(eq(pages.id, agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
+        columns: { enabledTools: true, sandboxEnabled: true, toolExposureMode: true },
+      });
+      if (!page) return null;
+      // Imported at CALL time: `core/ai-tools` builds this very tool family
+      // (`buildSessionTools`), so a static import here would close a module
+      // cycle through the registry.
+      const [{ pageSpaceTools }, surfaceModule] = await Promise.all([
+        import('../core/ai-tools'),
+        import('../core/agent-tool-surface'),
+      ]);
+      const surface = surfaceModule.describeAgentToolSurface({
+        enabledTools: (page.enabledTools as string[] | null) ?? null,
+        sandboxEnabled: Boolean(page.sandboxEnabled),
+        toolExposureMode: page.toolExposureMode === 'search' ? 'search' : 'upfront',
+        registeredToolNames: Object.keys(pageSpaceTools),
+      });
+      return { ...surface, notes: surfaceModule.formatAgentToolSurfaceNotes(surface) };
+    },
+
     createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {
       const placement = await resolveWorkerPlacement({ workspace, callerConversationId, ownerId, agentPageId, allowedDriveIds });
       if (!placement.ok) return placement;

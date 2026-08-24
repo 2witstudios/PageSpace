@@ -188,6 +188,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **An agent you configure with tools actually gets them, or says why not** — an agent set up
+  entirely through chat (`update_agent_config`) could be given the sandbox tools — `bash`,
+  `readFile`, `spawn_shell`, the git commands — have all of them confirmed back on every save, and
+  then run without a single one of them. The switch that offers an agent the sandbox at all was
+  only reachable from the settings screen, so a tool-configured agent was silently stuck with it
+  off, and every worker spawned under that agent quietly came up unable to do the work. Three
+  things changed: the sandbox switch can be set from chat like every other setting; saving a
+  configuration now reports which tools the agent will ACTUALLY be able to call, which ones are
+  blocked and by what; and spawning a worker under an agent whose tool list contradicts its own
+  sandbox switch fails immediately, naming the tools and the one-line fix, instead of starting a
+  worker that cannot do the job.
+
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
   path", which reads as "your key was revoked" — while the very same key kept reading and writing

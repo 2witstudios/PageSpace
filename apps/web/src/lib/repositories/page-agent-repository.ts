@@ -128,6 +128,7 @@ export const pageAgentRepository = {
       aiProvider: agent.aiProvider,
       aiModel: agent.aiModel,
       toolExposureMode: agent.toolExposureMode,
+      sandboxEnabled: agent.sandboxEnabled,
       isTrashed: agent.isTrashed,
     };
   },
@@ -191,6 +192,7 @@ export interface AgentDetails {
   aiProvider: string | null;
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
+  sandboxEnabled: boolean;
   isTrashed: boolean;
 }
 
@@ -205,6 +207,13 @@ export interface AgentConfigUpdate {
   includePageTree?: boolean;
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
+  /**
+   * The per-agent sandbox switch. Writable here for the same reason it is
+   * writable from `update_agent_config` (issue #2460): a door that can store a
+   * sandbox tool allowlist but not the switch that grants it can only produce
+   * configs that mean nothing.
+   */
+  sandboxEnabled?: boolean;
 }
 
 export interface UpdatedAgent {

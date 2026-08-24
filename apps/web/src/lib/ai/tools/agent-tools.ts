@@ -10,6 +10,10 @@ import { maskIdentifier } from '@/lib/logging/mask';
 import type { ToolExecutionContext } from '../core/types';
 import { pageSpaceTools } from '../core/ai-tools';
 import { filterToolsForMcpScope } from '../core/tool-filtering';
+import {
+  describeAgentToolSurface,
+  formatAgentToolSurfaceNotes,
+} from '../core/agent-tool-surface';
 import { validateAgentModelSelection } from '../core/ai-providers-config';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
 
@@ -33,10 +37,11 @@ export const agentTools = {
       includeDrivePrompt: z.boolean().optional().describe('Include drive-level AI instructions in the agent\'s context.'),
       includePageTree: z.boolean().optional().describe('Include page tree structure in the agent\'s context.'),
       pageTreeScope: z.enum(['children', 'drive']).optional().describe('Scope for page tree: "children" or "drive".'),
+      sandboxEnabled: z.boolean().optional().describe('Whether this agent is offered the sandbox tool families (bash/writeFile/readFile/editFile, the git+gh toolkit, and the session/shell tools). Off by default: while it is off, naming those tools in enabledTools grants NOTHING — the switch strips them whatever the allowlist says.'),
       toolExposureMode: z.enum(['upfront', 'search']).optional().describe('How tools are exposed to the agent: "upfront" sends every enabled tool schema directly, "search" sends only core tools plus tool_search/execute_tool so the model discovers the rest on demand.'),
       userScopedAccess: z.boolean().optional().describe('Owner-only: when true, this agent falls back to the invoking user\'s own access instead of being confined to its own drive memberships. Use for personal/global-style assistants that need the user\'s full reach.'),
     }),
-    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, toolExposureMode, userScopedAccess }, { experimental_context: context }) => {
+    execute: async ({ agentPath, agentId, systemPrompt, enabledTools, aiProvider, aiModel, agentDefinition, visibleToGlobalAssistant, includeDrivePrompt, includePageTree, pageTreeScope, sandboxEnabled, toolExposureMode, userScopedAccess }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
         throw new Error('User authentication required');
@@ -101,6 +106,7 @@ export const agentTools = {
           includeDrivePrompt?: boolean;
           includePageTree?: boolean;
           pageTreeScope?: 'children' | 'drive';
+          sandboxEnabled?: boolean;
           toolExposureMode?: 'upfront' | 'search';
           userScopedAccess?: boolean;
         }
@@ -133,6 +139,15 @@ export const agentTools = {
         }
         if (pageTreeScope !== undefined) {
           updateData.pageTreeScope = pageTreeScope;
+        }
+        if (sandboxEnabled !== undefined) {
+          // Gated on plain edit access, exactly as the settings UI's
+          // `PATCH /api/pages/[pageId]/agent-config` gates it — this tool is a
+          // second door onto the same field, not a second policy. It used to be
+          // the ONE agent field the UI could write and tools could not, which is
+          // how an agent configured entirely through tools could hold a sandbox
+          // allowlist it would never be granted (issue #2460).
+          updateData.sandboxEnabled = sandboxEnabled;
         }
         if (toolExposureMode !== undefined) {
           updateData.toolExposureMode = toolExposureMode;
@@ -185,6 +200,22 @@ export const agentTools = {
         const updatedAgent = refreshedAgent;
         const enabledToolsList = updatedAgent.enabledTools ?? [];
 
+        // What the STORED config becomes at runtime. Echoing `enabledTools`
+        // alone is what let a 24-tool sandbox config be "confirmed" on every
+        // write while the worker ran with page tools only (issue #2460): the
+        // sandbox switch, tool registration and the exposure mode all sit
+        // between the allowlist and the model, and none of them was visible
+        // from this response.
+        const surface = describeAgentToolSurface({
+          enabledTools: updatedAgent.enabledTools ?? null,
+          sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+          toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
+          registeredToolNames: Object.keys(
+            filterToolsForMcpScope(pageSpaceTools, isMcpScoped(context as ToolExecutionContext)),
+          ),
+        });
+        const surfaceNotes = formatAgentToolSurfaceNotes(surface);
+
         // Broadcast update event
         await broadcastPageEvent(
           createPageEventPayload(updatedAgent.driveId, updatedAgent.id, 'updated', {
@@ -197,17 +228,32 @@ export const agentTools = {
           path: agentPath,
           id: updatedAgent.id,
           title: updatedAgent.title,
-          message: `Successfully updated AI agent "${updatedAgent.title}" configuration`,
-          summary: `Updated agent configuration${systemPrompt ? ' with new system prompt' : ''}${enabledTools ? ` and ${enabledTools.length} tools` : ''}`,
+          message: surface.blocked.length > 0
+            ? `Updated AI agent "${updatedAgent.title}" configuration, but ${surface.blocked.length} configured tool(s) will NOT be granted at runtime.`
+            : `Successfully updated AI agent "${updatedAgent.title}" configuration`,
+          summary: `Updated agent configuration${systemPrompt ? ' with new system prompt' : ''}${enabledTools ? ` and ${enabledTools.length} tools (${surface.granted.length} of them actually granted)` : ''}`,
           updatedFields,
           agentConfig: {
             hasSystemPrompt: Boolean(updatedAgent.systemPrompt),
             enabledToolsCount: enabledToolsList.length,
             enabledTools: enabledToolsList,
+            // STORED vs EFFECTIVE, always both and always distinguished — the
+            // divergence between them is the thing this response exists to
+            // make visible.
+            effectiveTools: surface.granted,
+            effectiveToolsCount: surface.granted.length,
+            blockedTools: surface.blocked,
+            toolsReachedBySearch: surface.deferred,
+            sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+            toolExposureMode: updatedAgent.toolExposureMode === 'search' ? 'search' : 'upfront',
             aiProvider: updatedAgent.aiProvider ?? null,
             aiModel: updatedAgent.aiModel ?? null,
           },
+          ...(surfaceNotes.length > 0 ? { warnings: surfaceNotes } : {}),
           nextSteps: [
+            ...(surface.blocked.length > 0
+              ? ['Resolve the warnings above — the stored config and the runtime tool surface do not agree.']
+              : []),
             'Test the agent to ensure the new configuration works as expected',
             'The changes will take effect immediately in new conversations'
           ]

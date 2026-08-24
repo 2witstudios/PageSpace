@@ -596,6 +596,43 @@ and the call degrades to audio without tools or transcripts rather than dropping
 is unaffected either way; it runs inside `apps/realtime` against `@pagespace/lib` and
 crosses no process boundary.
 
+### 3e. A spawn never starts a crippled worker
+
+`pages.enabledTools` is an ALLOWLIST, not a grant. Downstream of it the page pipeline
+applies gates the allowlist cannot re-open — chiefly the per-agent sandbox switch
+(`pages.sandboxEnabled`, `filterToolsForSandboxEnablement`), which strips the whole
+sandbox family (bash/files, git+gh, sessions/shells) whatever the allowlist says, and then
+the payer-tier gate and the exposure mode.
+
+Issue #2460 is what that costs when nothing says so. An agent configured entirely through
+`update_agent_config` — where `sandboxEnabled` was not even a parameter, the one agent
+field the settings UI could write and tools could not — stored 24 tool names including
+`bash`, `readFile` and `spawn_shell`, had them echoed back intact on every write, and
+spawned worker after worker with page tools only. No spawn failed. The workers simply
+could not do the job, and each landed on a different surface (workspace placement decides
+tier eligibility), so the divergence read as randomness.
+
+Three rules now hold, and `agent-tool-surface.ts` is the single place that computes them:
+
+1. `update_agent_config` writes `sandboxEnabled`, gated on the same plain edit access
+   `PATCH /api/pages/[pageId]/agent-config` uses — one field, two doors, one policy. The
+   gate itself is untouched: it is settable and visible now, not weaker.
+2. `update_agent_config` echoes the EFFECTIVE surface beside the stored one
+   (`effectiveTools`, `blockedTools` with the gate that dropped each,
+   `toolsReachedBySearch`), plus a warning sentence per divergence. Confirming a stored
+   list that grants nothing is the lie §5 is about.
+3. `spawn_session` REFUSES (`reason: 'agent_tools_ungrantable'`) when the agent's own
+   config contradicts itself — sandbox tools named while its `sandboxEnabled` switch is
+   off. That is deterministic and one call fixes it either way. Drops the caller cannot
+   fix (a name this deployment does not register) and `'search'`-mode deferral do NOT
+   refuse: they ride the success payload as `toolSurfaceWarnings`, because refusing there
+   would break working spawns over a non-problem.
+
+`'search'` exposure defers non-core tools behind `tool_search`/`execute_tool` without
+losing them. It is worth naming because a search-mode agent LOOKS like an agent with page
+tools only — which is how #2460 was first misread — and because a deferral reported as a
+block would send the next reader after the wrong fix.
+
 ## 4. Vocabulary
 
 "sessionId" carried five meanings. **The epic's final phase (Phase 5) landed the renames,

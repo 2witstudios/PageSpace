@@ -80,6 +80,7 @@ import type { ShellDTO } from '@pagespace/lib/agent-workspaces/shells-contract';
 import type { PaneTargetKind } from '@pagespace/lib/agent-workspaces/workspace-node';
 import { MAX_SIBLINGS } from '@pagespace/lib/agent-workspaces/workspace-node-validate';
 import type { ToolExecutionContext } from '../core/types';
+import type { AgentToolSurface } from '../core/agent-tool-surface';
 
 /** Upper bound on one dispatched input — a task brief or a keystroke burst, not a file. */
 export const MAX_SESSION_INPUT_BYTES = 4000;
@@ -420,6 +421,16 @@ export type ShellSendOutcome =
   | { ok: true; delivered: true; started?: boolean }
   | { ok: false; error: string };
 
+/**
+ * `AgentToolSurface` plus its human sentences — the formatter lives beside the
+ * gates it describes (`../core/agent-tool-surface.ts`), which imports the tool
+ * registry, so this factory takes the finished report rather than importing its
+ * way to the database.
+ */
+export interface AgentToolSurfaceReport extends AgentToolSurface {
+  notes: string[];
+}
+
 export interface SessionToolsDeps {
   /**
    * The caller's WORKSPACE (agent_workspaces row id) resolved from their
@@ -513,6 +524,18 @@ export interface SessionToolsDeps {
    * view permission any agent consult requires. Never called for null (global).
    */
   canUseAgent: (userId: string, agentPageId: string) => Promise<boolean>;
+  /**
+   * What that agent's stored tool config will ACTUALLY become in the worker's
+   * turn, with a sentence per divergence (`../core/agent-tool-surface.ts`).
+   * Null when the page is gone.
+   *
+   * A spawn is the moment the divergence starts costing somebody real work, so
+   * it is the moment to say it: the worker gets whatever the gates leave, and
+   * until issue #2460 nothing at any layer mentioned the difference — three
+   * spawns of a 24-tool sandbox agent produced three different page-only
+   * surfaces and no error anywhere.
+   */
+  describeAgentToolSurface: (agentPageId: string) => Promise<AgentToolSurfaceReport | null>;
   /** Create the labeled worker conversation (squat-guarded) bound into its workspace. */
   createWorkerSession: (input: {
     /** The WORKER's new conversation id (minted by the caller of this dep). */
@@ -1313,6 +1336,7 @@ export function createSessionTools(deps: SessionToolsDeps): {
       description:
         'Spawn a WORKER: a new labeled conversation that starts working on your prompt immediately, visible live in the sidebar like any conversation. By default it runs in this conversation\'s workspace (same sandbox, same filesystem — started automatically if none exists yet, permission permitting). Pass workspace: "new" for a fresh ISOLATED workspace, or a workspaceId from list_sessions to place it in one of your other workspaces. Returns its sessionId — the address for send_session/read_session/kill_session (the name is only a label). ' +
         'Pass agent to run it under another agent (an agentId from list_agents); omit it to use this conversation\'s own agent. ' +
+        'A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off. ' +
         'Default is fire-and-forget: the reply lands in the worker\'s own transcript (read_session), NOT here. Pass wait: true to block for the first reply and get it back directly.',
       inputSchema: spawnSessionInputSchema,
       execute: async ({ name, prompt, agent, workspace: targetWorkspace, wait }, options) => {
@@ -1355,6 +1379,51 @@ export function createSessionTools(deps: SessionToolsDeps): {
             error: `There is no agent "${plan.agentId}" you can use. Call list_agents to see the available agents.`,
             reason: 'agent_not_found',
           };
+        }
+
+        // WHAT THE WORKER WILL ACTUALLY HAVE (issue #2460).
+        //
+        // `enabledTools` is an allowlist, not a grant: the per-agent sandbox
+        // switch strips the whole sandbox family downstream of it, and the
+        // allowlist cannot re-grant them. An agent configured through
+        // `update_agent_config` — where `sandboxEnabled` was, until this change,
+        // not even settable — could therefore name bash/readFile/spawn_shell,
+        // be echoed those names back on every write, and spawn worker after
+        // worker with page tools only. Nothing failed; the workers just could
+        // not do the job.
+        //
+        // FAIL for a config that CONTRADICTS ITSELF — sandbox tools named while
+        // the switch that gates them is off. It is deterministic, it is nobody's
+        // runtime accident, and one `update_agent_config` call fixes it either
+        // way (grant the switch, or drop the tools). Spawning here can only
+        // produce the crippled worker the issue asks us to refuse.
+        //
+        // WARN, don't fail, for everything else: a name that is not registered
+        // in this deployment is not something the caller can fix by trying
+        // again, and `'search'` exposure defers tools without losing them —
+        // refusing there would break working spawns to report a non-problem.
+        // The warning rides the SUCCESS payload, naming the tools and the gate.
+        let toolSurfaceWarning: string[] = [];
+        if (agentPageId) {
+          const surface = await deps.describeAgentToolSurface(agentPageId);
+          if (surface) {
+            const sandboxBlocked = surface.blocked
+              .filter((entry) => entry.gate === 'sandbox_disabled')
+              .map((entry) => entry.tool);
+            if (sandboxBlocked.length > 0) {
+              return {
+                success: false,
+                reason: 'agent_tools_ungrantable',
+                error:
+                  `That agent's configuration cannot be honored: ${sandboxBlocked.join(', ')} ` +
+                  'are in its enabledTools but its sandboxEnabled switch is off, so the worker would run without them. ' +
+                  'Call update_agent_config with sandboxEnabled: true (or remove those tools) and spawn again.',
+                blockedTools: surface.blocked,
+                grantedTools: surface.granted,
+              };
+            }
+            toolSurfaceWarning = surface.notes;
+          }
         }
 
         // The worker's new conversation id — returned on the wire as `sessionId`.
@@ -1414,6 +1483,10 @@ export function createSessionTools(deps: SessionToolsDeps): {
           name: plan.name,
           agent: agentPageId,
           workspaceId: created.workspaceId,
+          // Named `toolSurfaceWarnings`, not folded into `note`: the whole
+          // complaint behind issue #2460 is that a worker's tool surface
+          // diverged from its config with nothing anywhere saying so.
+          ...(toolSurfaceWarning.length > 0 ? { toolSurfaceWarnings: toolSurfaceWarning } : {}),
           ...(dispatched.waited
             ? { reply: dispatched.reply }
             : {

@@ -73,6 +73,9 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
     create_page: {},
     update_page: {},
     delete_page: {},
+    // A sandbox tool is a VALID name to store — which is exactly why storing
+    // one can silently grant nothing (issue #2460).
+    bash: {},
   },
 }));
 
@@ -129,6 +132,7 @@ const mockAgent = (overrides: Partial<{
   aiProvider: string | null;
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
+  sandboxEnabled: boolean;
   isTrashed: boolean;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
@@ -141,6 +145,7 @@ const mockAgent = (overrides: Partial<{
   aiProvider: overrides.aiProvider ?? 'openrouter',
   aiModel: overrides.aiModel ?? 'claude-3-opus',
   toolExposureMode: overrides.toolExposureMode ?? 'upfront',
+  sandboxEnabled: overrides.sandboxEnabled ?? false,
   isTrashed: overrides.isTrashed ?? false,
 });
 
@@ -416,6 +421,41 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
           updates: expect.objectContaining({ toolExposureMode: 'search' }),
         })
       );
+    });
+
+    it('should update sandboxEnabled — the switch that decides whether a stored sandbox allowlist means anything', async () => {
+      const request = createRequest(mockAgentId, { sandboxEnabled: true });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.updatedFields).toContain('sandboxEnabled');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({
+          updates: expect.objectContaining({ sandboxEnabled: true }),
+        })
+      );
+    });
+
+    it('should report the EFFECTIVE tool surface, not just the stored allowlist (issue #2460)', async () => {
+      vi.mocked(pageAgentRepository.getAgentById).mockResolvedValue(
+        mockAgent({ enabledTools: ['read_page', 'bash'], sandboxEnabled: false })
+      );
+      const request = createRequest(mockAgentId, { enabledTools: ['read_page', 'bash'] });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.agentConfig.enabledTools).toEqual(['read_page', 'bash']);
+      expect(body.agentConfig.effectiveTools).toEqual(['read_page']);
+      expect(body.agentConfig.blockedTools).toEqual([
+        { tool: 'bash', gate: 'sandbox_disabled' },
+      ]);
+      expect(String(body.warnings.join(' '))).toContain('sandboxEnabled');
     });
 
     it('should return 400 for an invalid toolExposureMode value', async () => {

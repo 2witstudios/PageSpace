@@ -66,6 +66,7 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     findWorker: vi.fn(async (conversationId: string) => ({ ...OWN_WORKER, conversationId })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
+    describeAgentToolSurface: vi.fn(async () => ({ configured: null, granted: [], blocked: [], deferred: [], notes: [] })),
     createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
@@ -245,6 +246,23 @@ describe('spawn_session description: workspace placement modes', () => {
     vi.clearAllMocks();
     await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
     expect(deps.createWorkerSession).toHaveBeenCalledWith(expect.objectContaining({ agentPageId: CALLER_AGENT }));
+  });
+
+  it('"A spawn REFUSES rather than start a crippled worker when the agent\'s enabledTools name sandbox tools while its sandboxEnabled switch is off" (issue #2460)', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => ({
+        configured: ['read_page', 'bash'],
+        granted: ['read_page'],
+        blocked: [{ tool: 'bash', gate: 'sandbox_disabled' as const }],
+        deferred: [],
+        notes: [],
+      })),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p', agent: 'other-agent' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: false, reason: 'agent_tools_ungrantable' }));
+    expect(deps.createWorkerSession).not.toHaveBeenCalled();
   });
 
   it('"Default is fire-and-forget: the reply lands in the worker\'s own transcript, NOT here" — and the response says so', async () => {
