@@ -23,6 +23,9 @@ const createPageSchema = z.object({
   contentMode: z.enum(['html', 'markdown']).optional(),
   systemPrompt: z.string().optional(),
   enabledTools: z.array(z.string()).optional(),
+  // The switch that decides whether a stored sandbox allowlist grants anything
+  // (issue #2460). A real boolean or nothing — never a coerced string.
+  sandboxEnabled: z.boolean().optional(),
   aiProvider: z.string().optional(),
   aiModel: z.string().optional(),
 });
@@ -88,6 +91,7 @@ export async function POST(request: Request) {
       contentMode: validatedData.contentMode,
       systemPrompt: validatedData.systemPrompt,
       enabledTools: validatedData.enabledTools,
+      sandboxEnabled: validatedData.sandboxEnabled,
       aiProvider: validatedData.aiProvider,
       aiModel: validatedData.aiModel,
     }, createOptions);

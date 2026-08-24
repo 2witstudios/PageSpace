@@ -252,6 +252,13 @@ export interface CreatePageParams {
   contentMode?: 'html' | 'markdown';
   systemPrompt?: string;
   enabledTools?: string[];
+  /**
+   * The per-agent sandbox switch, for an AI_CHAT page. Accepted at creation for
+   * the same reason the dedicated agent-create route accepts it: `enabledTools`
+   * without it can only ever store a sandbox allowlist that grants nothing
+   * (issue #2460).
+   */
+  sandboxEnabled?: boolean;
   aiProvider?: string;
   aiModel?: string;
 }
@@ -850,6 +857,7 @@ export const pageService = {
         aiModel?: string | null;
         systemPrompt?: string | null;
         enabledTools?: string[] | null;
+        sandboxEnabled?: boolean;
       }
 
       const pageData: PageInsertData = {
@@ -877,6 +885,10 @@ export const pageService = {
         if (params.enabledTools && params.enabledTools.length > 0) {
           pageData.enabledTools = params.enabledTools;
         }
+        if (params.sandboxEnabled !== undefined) {
+          pageData.sandboxEnabled = params.sandboxEnabled;
+        }
+
       }
 
       const contentFormat = detectPageContentFormat(pageData.content);
