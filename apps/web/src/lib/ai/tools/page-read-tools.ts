@@ -16,7 +16,7 @@ import { PageType } from '@pagespace/lib/utils/enums';
 import type { ToolExecutionContext } from '../core/types';
 import { getSuggestedVisionModels } from '../core/model-capabilities';
 import { serializePageContentForAI, isTextSerializablePageType } from '../core/page-serializer';
-import { isSheetType } from '@pagespace/lib/sheets/sheet';
+import { isSheetType, isSheetDocString } from '@pagespace/lib/sheets/sheet';
 import {
   loadSheetWindow,
   renderSheetTable,
@@ -230,18 +230,29 @@ export const pageReadTools = {
                 // table is never cut mid-row into something that reads like a
                 // real value.
                 let previewRows = sheet.rows;
-                let table = renderSheetTable(previewRows).text;
-                while (table.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
+                let renderedPreview = renderSheetTable(previewRows);
+                while (renderedPreview.text.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
                   previewRows = previewRows.slice(0, -1);
-                  table = renderSheetTable(previewRows).text;
+                  renderedPreview = renderSheetTable(previewRows);
                 }
-                // A single row wider than the whole budget still has to be cut;
-                // the ellipsis says so.
+                let table = renderedPreview.text;
+                // A single row wider than the whole budget still has to be cut.
+                // Cut at the last newline inside the budget, like the text path
+                // below: an arbitrary character offset can land mid-row and,
+                // worse, split a UTF-16 surrogate pair.
                 if (table.length > MAX_CONTENT_CHARS_PER_PAGE) {
-                  table = `${table.slice(0, MAX_CONTENT_CHARS_PER_PAGE)}…`;
+                  const hardCut = table.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
+                  const lastNewline = hardCut.lastIndexOf('\n');
+                  table = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
                 }
 
-                const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.`;
+                // The same truncation signal read_page and read_sheet surface:
+                // values cut at the cell limit must not be copied back into a
+                // write, and an ellipsis alone does not say how many.
+                const cutNote = renderedPreview.truncatedCells > 0
+                  ? ` ${renderedPreview.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters — read them with read_sheet, which carries the full text.`
+                  : '';
+                const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.${cutNote}`;
                 // The pointer rides in the content rather than in
                 // `contentClipped`, which promises the rest is reachable with
                 // read_page's lineStart — the rest of a sheet is reached with
@@ -955,9 +966,25 @@ export const pageReadTools = {
           const rows = sheet.rows.filter(
             (row) => lineEnd === undefined || row.rowNumber <= lineEnd
           );
+          // A SHEET page can hold legacy plain text or HTML rather than a sheet
+          // document at all. `parseSheetContentSafe` deliberately reports that
+          // as an EMPTY sheet (it is not a parse failure — there is no sheet
+          // data to lose), which would make this branch answer "20 rows x 10
+          // columns, no rows stored" and hide content the old path displayed.
+          // Same failure the rest of this PR removes, on the one input class the
+          // parser waves through, so the text is shown instead.
+          const legacyText =
+            !sheet.materialized &&
+            sheet.rows.length === 0 &&
+            typeof page.content === 'string' &&
+            page.content.trim().length > 0 &&
+            !isSheetDocString(page.content.trim())
+              ? serializePageContentForAI(page)
+              : null;
+
           const columns = columnsInRows(rows);
           const rendered = renderSheetTable(rows, columns);
-          const table = rendered.text;
+          const table = legacyText ?? rendered.text;
           const rowCount = sheet.rowCount;
           const isRangeRequest = lineStart !== undefined || lineEnd !== undefined;
 
@@ -978,7 +1005,23 @@ export const pageReadTools = {
           }
 
           const lastRow = rows.length > 0 ? rows[rows.length - 1].rowNumber : requestedStart - 1;
-          const moreRows = lastRow < rowCount;
+          // Whether anything FOLLOWS comes from the fetch, never from the tab's
+          // declared rowCount.
+          //
+          // `readRows` selects `rowIndex >= from`, so a window that came back
+          // empty proves nothing follows. Comparing `lastRow` (which collapses
+          // to `requestedStart - 1` on an empty window) against `rowCount`
+          // instead answered "more rows, resume at N" for the very call that
+          // had just returned nothing — an agent looping on those fields would
+          // never terminate. Both halves of that are real shapes: a tab can
+          // declare 500 rows while storing rows only up to 60, and a new sheet
+          // declares 20 while storing none. `loadSheetWindow` already gets this
+          // right and `read_sheet` inherits it; only this path recomputed it.
+          const clippedByLineEnd = sheet.rows.length > rows.length;
+          const moreRows = sheet.rows.length > 0 && (clippedByLineEnd || sheet.hasMore);
+          const nextStartRow = moreRows
+            ? (rows.length > 0 ? rows[rows.length - 1].rowNumber + 1 : requestedStart)
+            : null;
           // An empty window is not the same as an empty sheet, and the two must
           // not read alike: a request past the last row, or into a gap in a
           // sparse sheet, still has to report the sheet's real size and say
@@ -1015,9 +1058,12 @@ export const pageReadTools = {
             ...(Object.keys(errors).length > 0 && { errors }),
             ...(isRangeRequest && { rangeStart: requestedStart, rangeEnd: lastRow }),
             hasMoreRows: moreRows,
-            ...(moreRows && { nextStartRow: lastRow + 1 }),
+            ...(moreRows && nextStartRow !== null && { nextStartRow }),
             ...(emptyWindowReason && { rangeMessage: emptyWindowReason }),
-            summary: emptyWindowReason
+            ...(legacyText !== null && { contentIsNotASheet: true }),
+            summary: legacyText !== null
+              ? `"${page.title}" is a SHEET page whose stored content is not a spreadsheet document — its text is shown instead of a grid.`
+              : emptyWindowReason
               ? `Sheet "${page.title}" has ${rowCount} rows x ${sheet.columnCount} columns. ${emptyWindowReason}`
               : isRangeRequest
                 ? `Read rows ${requestedStart}-${lastRow} of sheet "${page.title}" (${rows.length} of ${rowCount} rows, ${sheet.columnCount} columns)`

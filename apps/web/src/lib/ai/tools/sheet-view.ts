@@ -460,7 +460,11 @@ export function renderSheetTable(
   for (const row of rows) {
     const cells = labels.map((label) => {
       const value = row.cells[label] ?? '';
-      const flat = value.replace(/\r?\n/g, '\\n');
+      // The delimiter is escaped for the same reason the newline is: a cell
+      // containing " | " (free text, a piped path, a formula) would otherwise
+      // produce a row with more apparent columns than the header, silently
+      // shifting every value after it onto the wrong column letter.
+      const flat = value.replace(/\r?\n/g, '\\n').replace(/\|/g, '\\|');
       if (flat.length <= MAX_TABLE_CELL_CHARS) return flat;
       truncatedCells++;
       return `${flat.slice(0, MAX_TABLE_CELL_CHARS)}…`;

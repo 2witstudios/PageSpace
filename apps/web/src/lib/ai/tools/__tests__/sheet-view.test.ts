@@ -160,6 +160,21 @@ describe('renderSheetTable', () => {
     expect(table.split('\n')[0]).toBe('columns→A | C');
   });
 
+  it('escapes the column delimiter so one cell cannot become several', () => {
+    // A cell containing " | " would otherwise produce a row with more apparent
+    // columns than the header, shifting every value after it onto the wrong
+    // column letter — silently, and only for the rows that contain one.
+    const piped = toSheetViewRow(0, {
+      A: { raw: 'a | b', value: 'a | b' },
+      B: { raw: 'plain', value: 'plain' },
+    });
+    const line = renderSheetTable([piped]).text.split('\n')[1];
+
+    expect(line).toBe('1→a \\| b | plain');
+    // Exactly one real delimiter, so the row still parses as two columns.
+    expect(line.split(' | ')).toHaveLength(2);
+  });
+
   it('reports how many cells it had to cut, so truncation is stated not inferred', () => {
     // The table is a rendering; `rows` beside it always carries the full value.
     // A reader working from the table alone could otherwise copy a shortened

@@ -331,6 +331,9 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         content={content}
         pageId={parsedOutput.pageId as string | undefined}
         pageType={parsedOutput.type as string | undefined}
+        // read_page on a SHEET returns the same row table, whose leading
+        // numbers are A1 rows rather than display chrome.
+        preserveLineNumbers={parsedOutput.type === 'SHEET'}
       />
     );
   },
@@ -347,6 +350,7 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         content={table}
         pageId={parsedOutput.pageId as string | undefined}
         pageType="SHEET"
+        preserveLineNumbers
       />
     );
   },

@@ -367,6 +367,16 @@ export const sheetReadTools = {
  * `/api/mcp/sheets` already recognise it the same way; this is the third. That
  * shared string is fragile and the store should raise a typed error all three
  * consume instead — a `packages/lib` change, noted rather than smuggled in here.
+ *
+ * Note that this makes a FILTERED `read_sheet` capable of a database write, on
+ * a tool whose name promises a read. It is deliberate and it matches
+ * `/api/mcp/sheets`: filtering compiles to SQL, so the rows have to exist, and
+ * materialisation is a storage migration that preserves the sheet exactly.
+ * `read_sheet` is therefore NOT in `WRITE_TOOLS` — listing it there would strip
+ * the tool entirely in read-only mode, taking away every positional and
+ * filtered READ of a sheet to prevent a content-preserving migration, which is
+ * a far worse trade. The actor-level guard above is the real boundary: a
+ * principal without edit rights is refused before this runs.
  */
 async function materialiseOrRefuse(pageId: string): Promise<void> {
   try {

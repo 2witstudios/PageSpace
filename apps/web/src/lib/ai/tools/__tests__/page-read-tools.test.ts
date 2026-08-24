@@ -1165,6 +1165,77 @@ describe('page-read-tools', () => {
       expect(steps).toContain('read_page again (lineStart: 2)');
     });
 
+    it('never tells the agent to resume at the row it just asked for', async () => {
+      // A tab can DECLARE more rows than it stores — 500 declared, rows only up
+      // to 60; a new sheet declares 20 and stores none. Deriving "more rows"
+      // from the declared count meant an empty window answered
+      // hasMoreRows: true, nextStartRow: <the row just requested> — a loop with
+      // no exit. `readRows` selects rowIndex >= from, so an empty fetch proves
+      // nothing follows.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1', lineStart: 100 },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      assert({
+        given: 'a window past the last STORED row of a tab that declares more',
+        should: 'report no further rows rather than pointing back at the same call',
+        actual: { hasMoreRows: result.hasMoreRows, nextStartRow: result.nextStartRow },
+        expected: { hasMoreRows: false, nextStartRow: undefined },
+      });
+      // The sheet's real size is still reported — empty window, not empty sheet.
+      expect(result.dimensions).toEqual({ rowCount: 500, columnCount: 16 });
+    });
+
+    it('still points past the last returned row when rows really do follow', async () => {
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(createMockPage('', 'SHEET'));
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([sheetTab]);
+      mockGetTab.mockResolvedValue(sheetTab);
+      mockReadRows.mockResolvedValue([
+        { rowIndex: 0, cells: { A: { raw: 'a', value: 'a' } } },
+        { rowIndex: 1, cells: { A: { raw: 'b', value: 'b' } } },
+      ]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Members', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.hasMoreRows).toBe(true);
+      expect(result.nextStartRow).toBe(3);
+    });
+
+    it('shows a SHEET page holding legacy text rather than calling it an empty grid', async () => {
+      // parseSheetContentSafe reports non-sheet text as an EMPTY sheet — not a
+      // parse failure, because there is no sheet data to lose. Taken at face
+      // value that answers "20 rows x 10 columns, nothing stored" and hides
+      // content the old path displayed.
+      mockDb.query.pages.findFirst = vi.fn().mockResolvedValue(
+        createMockPage('<p>Notes that were never a spreadsheet</p>', 'SHEET')
+      );
+      mockDb.query.taskItems = { findFirst: vi.fn().mockResolvedValue(null) } as unknown as typeof mockDb.query.taskItems;
+      mockGetUserAccessLevel.mockResolvedValue(createMockAccessLevel('editor'));
+      mockListTabs.mockResolvedValue([]);
+
+      const result = await pageReadTools.read_page.execute!(
+        { title: 'Odd sheet', pageId: 'page-1' },
+        createAuthContext()
+      ) as Record<string, unknown>;
+
+      expect(result.contentIsNotASheet).toBe(true);
+      expect(String(result.content)).toContain('never a spreadsheet');
+      expect(String(result.summary)).toContain('not a spreadsheet document');
+    });
+
     it('distinguishes an empty window from an empty sheet', async () => {
       // Reading past the end, or into a gap in a sparse sheet, must still
       // report the sheet's real size and say which case it was. "0 rows" with
