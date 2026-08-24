@@ -83,6 +83,48 @@ async function loadSheetWindowForRead(
   });
 }
 
+/**
+ * One SHEET's entry in a `list_pages include: "content"` batch.
+ *
+ * Bounded by CHARACTERS, not by row count: five rows of a wide sheet is still a
+ * lot of text and this call previews up to 50 pages at once, so the budget that
+ * has to hold is the per-page cap every other page type obeys. Whole rows are
+ * dropped until it fits, so the table is never cut mid-row into something that
+ * reads like a real value, and the cap bounds the finished ENTRY — the header
+ * and pointer are prepended after the table, so bounding the table alone let
+ * the result run past the budget.
+ */
+function buildSheetPreviewContent(sheet: SheetWindow): string {
+  let previewRows = sheet.rows;
+  let rendered = renderSheetTable(previewRows);
+  while (rendered.text.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
+    previewRows = previewRows.slice(0, -1);
+    rendered = renderSheetTable(previewRows);
+  }
+
+  // The same truncation signal read_page and read_sheet surface: values cut at
+  // the cell limit must not be copied back into a write, and an ellipsis alone
+  // does not say how many.
+  const cutNote = rendered.truncatedCells > 0
+    ? ` ${rendered.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters — read them with read_sheet, which carries the full text.`
+    : '';
+  const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.${cutNote}`;
+  // The pointer rides in the content rather than in `contentClipped`, which
+  // promises the rest is reachable with read_page's lineStart — the rest of a
+  // sheet is reached with read_sheet. A wrong pointer is worse than none.
+  const framing = `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
+
+  let table = rendered.text;
+  if (framing.length + table.length > MAX_CONTENT_CHARS_PER_PAGE) {
+    const room = Math.max(0, MAX_CONTENT_CHARS_PER_PAGE - framing.length);
+    const hardCut = table.slice(0, room);
+    const lastNewline = hardCut.lastIndexOf('\n');
+    table = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
+  }
+
+  return table ? `${framing}${table}` : `${header} No data yet.`;
+}
+
 export const pageReadTools = {
   /**
    * Explore the folder structure and find content within a workspace
@@ -252,65 +294,16 @@ export const pageReadTools = {
                   }
                   throw error;
                 }
-                // Row COUNT alone does not bound this. A five-row preview of a
-                // wide sheet is five rows of up to 64+ columns, and this call
-                // previews up to 50 pages at once — so the budget that has to
-                // hold is the per-page CHARACTER cap every other type obeys
-                // here, not the row cap. Drop whole rows until it fits, so the
-                // table is never cut mid-row into something that reads like a
-                // real value.
-                // Not a sheet document at all — legacy text on a SHEET page.
-                // Reporting "no data yet" would lose the content entirely, so
-                // this deliberately does NOT `continue`: it drops out of the
-                // sheet branch and the shared text handling below answers,
-                // which also cuts at the last newline rather than an arbitrary
-                // offset that could sever a UTF-16 surrogate pair or an HTML
-                // tag. Duplicating that clip here would reintroduce the very
-                // bug the shared path documents avoiding.
                 if (!sheet.documentIsNotASheet) {
-                let previewRows = sheet.rows;
-                let renderedPreview = renderSheetTable(previewRows);
-                while (renderedPreview.text.length > MAX_CONTENT_CHARS_PER_PAGE && previewRows.length > 1) {
-                  previewRows = previewRows.slice(0, -1);
-                  renderedPreview = renderSheetTable(previewRows);
+                  entry.content = buildSheetPreviewContent(sheet);
+                  continue;
                 }
-                let table = renderedPreview.text;
-                // A single row wider than the whole budget still has to be cut.
-                // Cut at the last newline inside the budget, like the text path
-                // below: an arbitrary character offset can land mid-row and,
-                // worse, split a UTF-16 surrogate pair.
-                if (table.length > MAX_CONTENT_CHARS_PER_PAGE) {
-                  const hardCut = table.slice(0, MAX_CONTENT_CHARS_PER_PAGE);
-                  const lastNewline = hardCut.lastIndexOf('\n');
-                  table = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
-                }
-
-                // The same truncation signal read_page and read_sheet surface:
-                // values cut at the cell limit must not be copied back into a
-                // write, and an ellipsis alone does not say how many.
-                const cutNote = renderedPreview.truncatedCells > 0
-                  ? ` ${renderedPreview.truncatedCells} cell value(s) are cut at ${TABLE_CELL_CHAR_LIMIT} characters — read them with read_sheet, which carries the full text.`
-                  : '';
-                const header = `SHEET: ${sheet.rowCount} rows x ${sheet.columnCount} columns.${cutNote}`;
-                // The cap bounds the ENTRY, not just the table: the header and
-                // the pointer sentence are prepended after it, so bounding the
-                // table alone let the finished content run past the budget.
-                const framing = `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n`;
-                if (framing.length + table.length > MAX_CONTENT_CHARS_PER_PAGE) {
-                  const room = Math.max(0, MAX_CONTENT_CHARS_PER_PAGE - framing.length);
-                  const hardCut = table.slice(0, room);
-                  const lastNewline = hardCut.lastIndexOf('\n');
-                  table = `${lastNewline > 0 ? hardCut.slice(0, lastNewline) : hardCut}…`;
-                }
-                // The pointer rides in the content rather than in
-                // `contentClipped`, which promises the rest is reachable with
-                // read_page's lineStart — the rest of a sheet is reached with
-                // read_sheet. A wrong pointer is worse than none.
-                entry.content = table
-                  ? `${header} First ${previewRows.length} row(s) below; use read_sheet on this page for the rest, or to filter and project.\n${table}`
-                  : `${header} No data yet.`;
-                continue;
-                }
+                // Otherwise the page holds legacy text rather than a sheet
+                // document, and this deliberately does NOT `continue`: it drops
+                // out of the sheet branch so the shared text handling below
+                // answers. Reporting "no data yet" would lose the content, and
+                // clipping it here would duplicate a cut the shared path does
+                // better (last-newline, so no severed surrogate pair or tag).
               }
 
               const fullContent = serializePageContentForAI({ type: entry.type, ...row });
