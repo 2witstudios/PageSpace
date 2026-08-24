@@ -198,15 +198,35 @@ describe('issue #2461 — the fixes', () => {
       given: 'the empty-argument call that wedged the reporter\'s worker',
       should: 'tell the model its output was cut off and to send a smaller payload',
       actual: {
-        namesTruncation: errorText.includes('cut off before the arguments were written'),
-        saysRetryIsFutile: errorText.includes('Retrying this call unchanged will fail identically'),
-        givesTheRecovery: errorText.includes('SMALLER parameters payload'),
+        namesTruncation: errorText.includes('the response was cut off before the arguments finished'),
+        saysRetryIsFutile: errorText.includes('retrying unchanged would fail the same way'),
+        givesTheRecovery: errorText.includes('re-send with fewer items per call'),
       },
       expected: {
         namesTruncation: true,
         saysRetryIsFutile: true,
         givesTheRecovery: true,
       },
+    });
+  });
+
+  it('stays accurate when the arguments DID arrive but tool_name was omitted', async () => {
+    // A field-level zod issue sees only the value at its own path, so `{}` and
+    // `{"parameters": {...}}` both surface as `tool_name: undefined`. The message
+    // must therefore not assert that nothing arrived — a model that merely left
+    // the key out would go off shrinking a payload that was never the problem.
+    const errorText = await toolErrorTextFor(
+      JSON.stringify({ parameters: { pageId: 'p1', cells: [] } })
+    );
+
+    assert({
+      given: 'a call carrying a valid parameters object but no tool_name',
+      should: 'offer the omitted-field recovery without claiming the call was empty',
+      actual: {
+        offersTheFieldFix: errorText.includes('re-send the same call with tool_name set'),
+        claimsNothingArrived: errorText.includes('carried no arguments at all'),
+      },
+      expected: { offersTheFieldFix: true, claimsNothingArrived: false },
     });
   });
 

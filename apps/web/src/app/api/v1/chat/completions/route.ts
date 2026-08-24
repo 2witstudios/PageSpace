@@ -50,6 +50,7 @@ import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
 import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { capStepToolInputs } from '@/lib/ai/core/cap-step-tool-inputs';
 
 export const maxDuration = 300;
 
@@ -612,6 +613,10 @@ export async function POST(request: Request): Promise<Response> {
       messages: compactedModelMessages,
       tools: finalTools,
       stopWhen: stopConditions,
+      // Per-step cap: history is prepared once, but this loop runs many model
+      // calls, so one run's oversized tool payloads would otherwise accumulate
+      // for its whole duration (#2461 — see cap-step-tool-inputs.ts).
+      prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolInputs(stepMessages) }),
       // Aborts when the consumer closes the connection (see abortController above).
       abortSignal: abortController.signal,
       experimental_context: {

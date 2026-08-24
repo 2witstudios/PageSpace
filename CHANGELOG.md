@@ -196,9 +196,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   in the agent's working memory at full size for the rest of the job, so the job eventually had no
   room left to compose its next call, and the empty call it managed to send was reported as a
   missing field. Earlier writes in a run are now summarised once they are done — the newest one is
-  always kept whole — so a long job no longer crowds itself out. If a call does still arrive empty,
-  the agent is now told what actually happened and to send a smaller batch, instead of being sent
-  looking for a field it did not omit.
+  always kept whole — so a long job no longer crowds itself out, on every surface that runs one:
+  chat, the agent API, agent-to-agent calls, and workflow steps. If a call does still arrive
+  incomplete, the agent is now told what actually happened and given the fix, instead of a
+  complaint about a field it did not omit.
 
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh

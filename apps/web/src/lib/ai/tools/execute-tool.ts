@@ -26,16 +26,23 @@ export const EXECUTE_TOOL_DESCRIPTION =
  * that believes it sent `tool_name` has nothing to change, so it re-sends the
  * identical call. #2461 is exactly that loop, ~10 identical failures deep.
  *
- * Naming truncation as the likely cause turns the wedge into a recoverable
- * error, because the recovery (send a smaller payload) is one the model can
- * actually perform. The fact is stated before the diagnosis so the wording stays
- * honest for the rarer case where the model really did omit the field.
+ * Naming truncation turns the wedge into a recoverable error, because the
+ * recovery (send a smaller payload) is one the model can actually perform.
+ *
+ * But this callback fires on the FIELD, and a field-level zod issue carries only
+ * the value at its own path — `undefined` either way. So `{}` (nothing arrived)
+ * and `{"parameters": {...}}` (arguments arrived, the name did not) are
+ * indistinguishable here, and asserting the first would send a model that merely
+ * omitted a key off shrinking a payload that was never the problem. The wording
+ * therefore claims only what is true in both cases — the name did not arrive —
+ * and offers each cause its own recovery, letting the model pick the one that
+ * matches what it actually sent.
  */
 export const MISSING_TOOL_NAME_ERROR =
-  'execute_tool requires tool_name, and this call carried no arguments at all. ' +
-  'If you did send them, the response was almost certainly cut off before the arguments were written — ' +
-  'an oversized parameters payload is the usual reason. Retrying this call unchanged will fail identically: ' +
-  're-send it with tool_name and a SMALLER parameters payload (fewer items per call).';
+  'execute_tool requires tool_name, and this call did not carry one. ' +
+  'If you did set it, the response was cut off before the arguments finished — an oversized ' +
+  'parameters payload is the usual reason, and retrying unchanged would fail the same way, so ' +
+  're-send with fewer items per call. If you left it out, re-send the same call with tool_name set.';
 
 export function createExecuteTool(allowedTools: ToolSet): Tool {
   return {
