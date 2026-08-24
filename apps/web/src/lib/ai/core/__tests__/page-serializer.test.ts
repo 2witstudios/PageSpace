@@ -92,10 +92,22 @@ describe('describeContentModeMismatch (#2463)', () => {
     ).toBeUndefined();
   });
 
-  it('stays quiet for a <br>-laid-out document — that content IS line-structured HTML', () => {
+  it('stays quiet for a <br>-laid-out document — that content IS an HTML document', () => {
     expect(
-      describeContentModeMismatch({ type: 'DOCUMENT', contentMode: 'html', content: 'a<br>b<br>c' })
+      describeContentModeMismatch({ type: 'DOCUMENT', contentMode: 'html', content: '<p>a<br>b<br>c</p>' })
     ).toBeUndefined();
+  });
+
+  it('warns for JSON that happens to carry scraped markup', () => {
+    // The dangerous case: a "contains a tag anywhere" test stays silent here
+    // AND lets the normalizer rewrite the JSON. Both hang off one predicate.
+    expect(
+      describeContentModeMismatch({
+        type: 'DOCUMENT',
+        contentMode: 'html',
+        content: '{"leads":[{"note":"call<br>then email"}]}',
+      })
+    ).toMatch(/html contentMode/);
   });
 
   it('stays quiet for markdown mode, CODE, empty content and non-documents', () => {

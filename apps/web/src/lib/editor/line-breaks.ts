@@ -88,24 +88,34 @@ function voidTagPattern(tags: string[]): string {
 const lineBreakTagPattern = voidTagPattern([...LINE_BREAK_TAGS, ...BLOCK_VOID_TAGS]);
 const blockVoidTagPattern = voidTagPattern(BLOCK_VOID_TAGS);
 
-const STRUCTURAL_MARKUP_REGEX = new RegExp(
-  `(?:${blockOpeningTagPattern})|(?:</(?:${blockTagPattern})>)|(?:${lineBreakTagPattern})`,
+/**
+ * A document written by the editor OPENS with a block element — Tiptap wraps
+ * everything in one. So the question "is this an HTML document?" is answered
+ * at the start of the string, not by whether a tag appears anywhere in it.
+ */
+const HTML_DOCUMENT_REGEX = new RegExp(
+  `^\\s*(?:(?:${blockOpeningTagPattern})|(?:${lineBreakTagPattern}))`,
   'i'
 );
 
 /**
- * True when `html` contains markup that {@link addLineBreaksForAI} gives line
- * structure to — a block element or a `<br>`/`<hr>`.
+ * True when `html` is an HTML document this file should give line structure to.
  *
- * This is the honest test for "is this an HTML document?", as opposed to the
- * `<[a-z]...>` sniff below which a raw JSON blob containing `"<a>"` passes.
- * Content that fails it has no HTML line structure, so its lines are simply
- * its own newlines: that is what an html-mode page holding JSON or markdown
- * (#2463) actually is, and callers use this to say so out loud.
+ * Anchored at the start deliberately. A "does it contain a tag anywhere" test —
+ * which is what this file used to do, and what a first attempt at fixing #2463
+ * also did — says YES to a JSON blob holding scraped markup, and then the
+ * normalizer injects a newline INSIDE a JSON string value and the write path
+ * stores it: invalid JSON, written by the tool that promised not to corrupt
+ * anything. `{"note":"call<br>then email"}` is not a document with a line
+ * break in it; it is one line of JSON.
+ *
+ * Content that fails this test has no HTML line structure, so its lines are
+ * simply its own newlines: that is what an html-mode page holding JSON or
+ * markdown (#2463) actually is, and callers use this to say so out loud.
  */
-export function hasLineStructuringHtml(html: string | null | undefined): boolean {
+export function looksLikeHtmlDocument(html: string | null | undefined): boolean {
   if (!html) return false;
-  return STRUCTURAL_MARKUP_REGEX.test(html);
+  return HTML_DOCUMENT_REGEX.test(html);
 }
 
 /**
@@ -128,8 +138,12 @@ export function addLineBreaksForAI(html: string): string {
   // Handle empty string
   if (html === '') return '';
 
-  // Handle plain text (no HTML tags)
-  if (!/<[a-z][\s\S]*>/i.test(html)) {
+  // Anything that is not an HTML document passes through untouched — plain
+  // text, markdown, JSON. See `looksLikeHtmlDocument`: a tag appearing
+  // somewhere inside a JSON string does not make the blob a document, and
+  // adding newlines to it would corrupt data the caller never asked us to
+  // reshape.
+  if (!looksLikeHtmlDocument(html)) {
     return html;
   }
 
@@ -164,14 +178,17 @@ export function addLineBreaksForAI(html: string): string {
   );
   result = result.replace(adjacentTagRegex, '$1$2\n$3');
 
-  // Add newline before <hr> — it is a block, so it owns its own line.
-  const blockVoidRegex = new RegExp(`(?<!\\n)(${blockVoidTagPattern})`, 'gi');
+  // Add newline before <hr> — it is a block, so it owns its own line. The
+  // lookbehind requires a real preceding character, so an <hr> that OPENS the
+  // document does not gain a blank line 1 and shift every number below it.
+  const blockVoidRegex = new RegExp(`(?<=[^\\n])(${blockVoidTagPattern})`, 'gi');
   result = result.replace(blockVoidRegex, '\n$1');
 
   // Add newline after <br>/<hr>. Runs LAST so that a `<br>` already followed
   // by a newline inserted by the closing-tag pass (`a<br></p>`) is left alone
-  // rather than gaining a second, empty line.
-  const lineBreakRegex = new RegExp(`(${lineBreakTagPattern})(?!\\n)`, 'gi');
+  // rather than gaining a second, empty line — and not at the very end of the
+  // document, where the only thing a newline adds is a phantom blank line.
+  const lineBreakRegex = new RegExp(`(${lineBreakTagPattern})(?!\\n|$)`, 'gi');
   result = result.replace(lineBreakRegex, '$1\n');
 
   return result;

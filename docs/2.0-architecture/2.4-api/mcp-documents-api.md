@@ -102,10 +102,17 @@ content serialized through `serializePageContentForAI`
 in-process `read_page`/`replace_lines` AI tools use. CODE pages and
 `contentMode: 'markdown'` documents pass through raw (their content already
 has natural line structure, and normalizing raw code/markdown would mangle
-it). Everything else (plain HTML documents) is expanded via
-`addLineBreaksForAI` so line numbers correspond to block-level elements (and
-to `<br>`/`<hr>`, which end a line) instead of collapsing the whole stored
-document into one line. A line number seen from a `read` always addresses the
+it). Everything else is expanded via `addLineBreaksForAI` so line numbers
+correspond to block-level elements (and to `<br>`/`<hr>`, which end a line)
+instead of collapsing the whole stored document into one line — but only when
+the content actually IS an HTML document, which it tests by looking at the
+START of the string (`looksLikeHtmlDocument`), since anything the editor wrote
+opens with a block element. Content that fails that test — raw JSON or
+markdown in an html-mode page — passes through untouched and is numbered by
+its own newlines. A "contains a tag anywhere" test would say yes to
+`{"note":"call<br>then email"}` and the normalizer would then inject a newline
+inside a JSON string value, which the write path stores: invalid JSON, written
+by the code that promised not to corrupt anything. A line number seen from a `read` always addresses the
 same content on a subsequent `replace`/`insert`/`delete` against the same page.
 
 Writes go through the same line-accounting core as the in-process AI tools,

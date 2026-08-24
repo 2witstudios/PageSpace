@@ -15,7 +15,7 @@
 
 import { isCodePage } from '@pagespace/lib/content/page-types.config';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { hasLineStructuringHtml } from '@/lib/editor/line-breaks';
+import { looksLikeHtmlDocument } from '@/lib/editor/line-breaks';
 import { canonicalizeForLineEditing } from '@/lib/editor/line-edit';
 
 export interface SerializablePage {
@@ -56,7 +56,7 @@ export function describeContentModeMismatch(page: SerializablePage): string | un
   if (page.contentMode !== 'html') return undefined;
   const content = page.content ?? '';
   if (content.trim() === '') return undefined;
-  if (hasLineStructuringHtml(content)) return undefined;
+  if (looksLikeHtmlDocument(content)) return undefined;
 
   // Deliberately does NOT tell the agent to call
   // /api/pages/{pageId}/convert-content-mode: that route is session-auth only,

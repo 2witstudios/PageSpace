@@ -226,6 +226,16 @@ describe('MCP Documents API — line accounting (#2463)', () => {
         expectedLines: 6,
       },
       {
+        // Review catch: JSON carrying scraped markup. A "contains a tag
+        // anywhere" HTML test lets the normalizer inject a newline INSIDE a
+        // string value and the write path then stores it — the page ends up
+        // holding invalid JSON, which is #2463's own failure mode.
+        name: 'html mode holding JSON that carries scraped markup',
+        page: { contentMode: 'html', content: '{\n  "leads": [{"note": "call<br>then email"}]\n}' },
+        payload: '{\n  "leads": [\n    {"note": "call<br>then email"},\n    {"note": "<p>sent</p>"}\n  ]\n}',
+        expectedLines: 6,
+      },
+      {
         name: 'html mode holding markdown',
         page: { contentMode: 'html', content: 'old report' },
         payload: '# Report\n\n- one\n- two',
@@ -259,8 +269,9 @@ describe('MCP Documents API — line accounting (#2463)', () => {
         expect(read.data.totalLines).toBe(expectedLines);
         expect(written.data.numberedLines).toHaveLength(expectedLines);
         expect(stored.split('\n')).toHaveLength(expectedLines);
-        // Raw-text modes must keep the payload byte-exact.
-        if (page.contentMode === 'markdown' || page.type === 'CODE' || !/</.test(payload)) {
+        // Anything that is not an HTML document must be stored byte-exact —
+        // markdown, CODE, and an html-mode page holding JSON, tags and all.
+        if (!payload.trimStart().startsWith('<')) {
           expect(stored).toBe(payload);
         }
       });
@@ -421,24 +432,27 @@ describe('MCP Documents API — line accounting (#2463)', () => {
   });
 
   describe('<br>-laid-out documents (the totalLines: 1 report)', () => {
-    it('numbers an 18-line <br> document as 18 lines, not 1', async () => {
-      const content = Array.from({ length: 18 }, (_, i) => `line ${i + 1}`).join('<br>');
-      givenPage({ content });
+    // Wrapped in the paragraph Tiptap always emits, which is what such a page
+    // actually holds. The <p> lines make it 20: <p>, 18 text lines, </p>.
+    const brDocument = `<p>${Array.from({ length: 18 }, (_, i) => `line ${i + 1}`).join('<br>')}</p>`;
+
+    it('numbers an 18-line <br> document by its breaks, not as one line', async () => {
+      givenPage({ content: brDocument });
 
       const { data } = await post({ operation: 'read', pageId: 'page_123' });
-      expect(data.totalLines).toBe(18);
-      expect(data.numberedLines).toHaveLength(18);
+      expect(data.totalLines).toBe(20);
+      expect(data.numberedLines).toHaveLength(20);
+      expect(data.numberedLines[4]).toContain('line 4<br>');
     });
 
     it('round-trips an edit to one of those lines', async () => {
-      const content = Array.from({ length: 18 }, (_, i) => `line ${i + 1}`).join('<br>');
       const { written, read, stored } = await writeThenRead(
-        { content },
-        { operation: 'replace', startLine: 4, endLine: 4, content: 'replaced<br>' },
+        { content: brDocument },
+        { operation: 'replace', startLine: 5, endLine: 5, content: 'replaced<br>' },
       );
 
-      expect(written.data.totalLines).toBe(18);
-      expect(read.data.totalLines).toBe(18);
+      expect(written.data.totalLines).toBe(20);
+      expect(read.data.totalLines).toBe(20);
       expect(stored).toContain('replaced<br>');
       expect(stored).not.toContain('line 4<br>');
       expect(stored).toContain('line 5<br>');

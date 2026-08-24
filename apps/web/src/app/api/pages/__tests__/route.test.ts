@@ -421,6 +421,44 @@ describe('POST /api/pages', () => {
         );
       });
 
+      // Finding from review: the route takes a `content` body too. An existing
+      // API-key client that POSTs Tiptap HTML and no contentMode would have
+      // landed in markdown mode, where that whole blob is ONE line and line
+      // editing is unusable — #2463 inverted, and silent.
+      it('does not force markdown onto a body that is actually HTML', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '<h1>Title</h1><p>Body</p>',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: undefined }),
+          expect.anything(),
+        );
+      });
+
+      it('still defaults to markdown when the body is markdown or JSON', async () => {
+        vi.mocked(isMCPAuthResult).mockReturnValue(true);
+
+        await POST(createRequest({
+          title: 'Agent Doc',
+          type: 'DOCUMENT',
+          driveId: mockDriveId,
+          content: '# Title\n\n- one\n- two',
+        }));
+
+        expect(pageService.createPage).toHaveBeenCalledWith(
+          mockUserId,
+          expect.objectContaining({ contentMode: 'markdown' }),
+          expect.anything(),
+        );
+      });
+
       it('honours an explicit contentMode from either caller', async () => {
         vi.mocked(isMCPAuthResult).mockReturnValue(true);
 
