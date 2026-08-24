@@ -73,6 +73,27 @@ describe('describeAgentToolSurface', () => {
     expect(blockedByGate(surface, 'sandbox_disabled')).toEqual(['bash']);
   });
 
+  it('given a deployment whose registry omits the sandbox family (CODE_EXECUTION_ENABLED off), should blame the DEPLOYMENT, not the switch', () => {
+    // `buildPageSpaceTools` registers the compute families only behind the
+    // global kill switch, so on such a deployment `sandboxEnabled: true` would
+    // change nothing. Saying "turn the switch on" there sends the reader after
+    // a fix that cannot work — and a spawn must WARN rather than refuse,
+    // because no config the caller can write will help.
+    const noSandboxRegistry = REGISTERED.filter(
+      (name) => !['bash', 'readFile', 'spawn_shell', 'git_clone'].includes(name),
+    );
+    const surface = describeAgentToolSurface({
+      enabledTools: ['read_page', 'bash'],
+      sandboxEnabled: true,
+      toolExposureMode: 'upfront',
+      registeredToolNames: noSandboxRegistry,
+    });
+
+    expect(blockedByGate(surface, 'not_registered')).toEqual(['bash']);
+    expect(blockedByGate(surface, 'sandbox_disabled')).toEqual([]);
+    expect(formatAgentToolSurfaceNotes(surface).join(' ')).toContain('does not offer them');
+  });
+
   it('given search exposure, should mark non-core granted tools deferred rather than lost', () => {
     const surface = describeAgentToolSurface({
       enabledTools: ['read_page', 'trash_page', 'bash'],

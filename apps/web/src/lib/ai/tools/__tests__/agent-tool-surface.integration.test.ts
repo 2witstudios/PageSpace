@@ -14,13 +14,28 @@
  *    `pageSpaceTools`, which would make the refusal fire on nothing;
  *  - the whole thing throwing on a real page row.
  *
+ * THE KILL SWITCH IS PART OF THE FIXTURE. `pageSpaceTools` registers the
+ * compute families only when `CODE_EXECUTION_ENABLED === 'true'`, evaluated once
+ * at module load, and CI leaves it off. Without the stub below, `bash` and
+ * friends are simply absent from the registry and every assertion here passes
+ * for the WRONG reason — the classification comes back `not_registered`, which
+ * is correct for a deployment that offers no sandbox but proves nothing about
+ * the switch this PR is about. That is not hypothetical: the first CI run of
+ * this file failed exactly that way, which is the whole argument for testing
+ * against the real registry rather than a hand-written name list.
+ *
+ * The switch is set in `beforeAll`, which still lands before any import of the
+ * registry (the production dep loads it lazily, at call time), and the same
+ * hook FAILS LOUDLY if the sandbox family is not registered afterwards — so this
+ * suite can never quietly degrade into the other deployment's answer.
+ *
  * Requires DATABASE_URL → a running Postgres with migrations applied
  * (scripts/test-with-db.sh, port 5433). FAILS LOUDLY when no DB is reachable —
  * a silent skip would be a green, zero-assertion pass. Local runs without
  * Docker opt out explicitly with ALLOW_SKIP_DB_TESTS=1. Mirrors the other
  * integration tests in this repo.
  */
-import { describe, it, expect, beforeAll } from 'vitest';
+import { describe, it, expect, beforeAll, vi } from 'vitest';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
@@ -44,6 +59,10 @@ async function createAgent(enabledTools: string[] | null, sandboxEnabled: boolea
 
 describe('describeAgentToolSurface against a real agent row (issue #2460)', () => {
   beforeAll(async () => {
+    // Set BEFORE the registry is first imported below: `pageSpaceTools` reads
+    // this once, at module evaluation.
+    vi.stubEnv('CODE_EXECUTION_ENABLED', 'true');
+
     try {
       await db.select().from(pages).limit(1);
       dbAvailable = true;
@@ -51,6 +70,13 @@ describe('describeAgentToolSurface against a real agent row (issue #2460)', () =
       requireDb('agent-tool-surface.integration.test.ts', error);
       dbAvailable = false;
     }
+
+    // The fixture guard: without the compute families registered, every
+    // assertion below would pass as `not_registered` and prove nothing about
+    // the sandbox switch.
+    const { pageSpaceTools } = await import('@/lib/ai/core/ai-tools');
+    expect(Object.keys(pageSpaceTools)).toContain('bash');
+    expect(Object.keys(pageSpaceTools)).toContain('spawn_shell');
   });
 
   it('reports the reporter\'s exact config as blocked by the sandbox switch, using the real registry', async () => {
