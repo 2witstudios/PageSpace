@@ -5,6 +5,7 @@ import {
   validateCommandTrigger,
 } from '@pagespace/lib/commands/command-core';
 import { getSkillBody } from '../skill-bodies';
+import { WORKSPACE_TOOL_NAMES } from '@/lib/ai/core/ai-tools';
 
 /**
  * Size guards follow the Agent Skills authoring guidance: a body is a
@@ -20,6 +21,24 @@ describe('skill bodies', () => {
       const body = getSkillBody(skill.trigger);
       expect(body, `missing body for ${skill.trigger}`).toBeTruthy();
     }
+  });
+
+  it('every requiredTools entry names a tool that exists', () => {
+    // `requiredTools` gates skill DISCOVERY (see skill-tools.test.ts): a skill
+    // is offered to an agent that holds those tools. A stale or misspelled name
+    // therefore fails silently and in the worst direction — the skill simply
+    // stops being surfaced, with nothing to notice. Nothing else checks this:
+    // the registry lives in packages/lib, which cannot import the apps/web tool
+    // registry, so the cross-check has to happen here (same reason as
+    // starter-skill-tool-references.test.ts).
+    const known = new Set(WORKSPACE_TOOL_NAMES);
+    const stale = BUILTIN_SKILLS.flatMap((skill) =>
+      (skill.requiredTools ?? [])
+        .filter((tool) => !known.has(tool))
+        .map((tool) => `${skill.trigger} -> ${tool}`),
+    );
+
+    expect(stale, `requiredTools naming tools that do not exist: ${stale.join(', ')}`).toEqual([]);
   });
 
   it('unknown triggers return null', () => {

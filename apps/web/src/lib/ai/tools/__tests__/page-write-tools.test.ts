@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { z } from 'zod';
 
 /**
  * Page Write Tools Tests
@@ -2341,6 +2342,32 @@ describe('page-write-tools', () => {
       const [ref, cells] = mockSetCells.mock.calls[0] as [unknown, unknown];
       expect(ref).toEqual({ pageId: 'page-1' });
       expect(cells).toEqual([{ address: 'A1', value: 'test' }]);
+    });
+
+    // The cap the tool actually enforces, asserted as a literal rather than
+    // imported: the number is a contract with the MODEL, carried in the schema
+    // and the description, so a test that reads it from the same constant the
+    // code does would pass even if both moved together and every published
+    // limit went stale.
+    const CELL_CAP = 500;
+
+    it(`caps the batch at ${CELL_CAP} cells and says so in the schema`, () => {
+      // The cap has to be REACHABLE by the model, not just enforced: it is the
+      // schema, and the description, that stop an agent from inferring a batch
+      // size by trial and error the way issue #2467 reports having to. An
+      // enforcement with no advertisement would just move the folklore.
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      const cells = (count: number) =>
+        Array.from({ length: count }, (_, index) => ({ address: `A${index + 1}`, value: 'x' }));
+
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP) }).success).toBe(true);
+      expect(schema.safeParse({ pageId: 'page-1', cells: cells(CELL_CAP + 1) }).success).toBe(false);
+      expect(pageWriteTools.edit_sheet_cells.description).toContain(String(CELL_CAP));
+    });
+
+    it('still rejects an empty batch', () => {
+      const schema = pageWriteTools.edit_sheet_cells.inputSchema as z.ZodType<unknown>;
+      expect(schema.safeParse({ pageId: 'page-1', cells: [] }).success).toBe(false);
     });
 
     it('returns error for non-sheet pages', async () => {

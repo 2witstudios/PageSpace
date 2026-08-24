@@ -21,6 +21,15 @@ interface RichContentRendererProps {
   maxHeight?: number;
   /** Additional CSS class */
   className?: string;
+  /**
+   * Keep the leading `123→` on each line instead of stripping it.
+   *
+   * For a document those numbers are chrome the reader does not need. For a
+   * SHEET they are the row's A1 row — the number in front of a row is the
+   * number in its cell addresses — so stripping them leaves an unlabelled list
+   * of values with no way to tell which row is which.
+   */
+  preserveLineNumbers?: boolean;
 }
 
 /** Shared prose styles for rendered content */
@@ -59,14 +68,15 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
   pageType,
   isMarkdown = false,
   maxHeight = 300,
-  className
+  className,
+  preserveLineNumbers = false
 }) {
   const { navigateToPage } = usePageNavigation();
 
   // Process content: strip line numbers and convert markdown if needed
   const { processedHtml, hasHtmlContent } = useMemo(() => {
     // Strip line numbers if present
-    const rawContent = stripLineNumbers(content);
+    const rawContent = preserveLineNumbers ? content : stripLineNumbers(content);
 
     // Check if content already looks like HTML (has actual HTML tags)
     // This detects content from TipTap editor which outputs HTML
@@ -85,7 +95,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
     const sanitized = hasHtml ? sanitizeHtmlAllowlist(html) : html;
 
     return { processedHtml: sanitized, hasHtmlContent: hasHtml };
-  }, [content, isMarkdown]);
+  }, [content, isMarkdown, preserveLineNumbers]);
 
   const handleNavigate = () => {
     if (pageId) {

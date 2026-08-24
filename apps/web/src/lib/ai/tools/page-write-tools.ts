@@ -40,6 +40,36 @@ import { resolveOrThrowDriveId } from './drive-context-defaults';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
+/**
+ * The most cells `edit_sheet_cells` accepts in one call.
+ *
+ * There was no cap here at all, and nothing downstream enforced one either:
+ * not the MCP documents route, not the SDK, not the CLI. What agents actually
+ * hit was their OWN output budget — the whole `cells` array has to be generated
+ * as tool-call arguments in a single assistant message, and a model whose
+ * output is cut off mid-JSON produces a malformed call that never reaches this
+ * code. The failure therefore arrived with no server-side error to read, and
+ * the batch size that worked got established by trial and error (issue #2467
+ * reports settling on 240 from a "SDK default of 250" that does not exist).
+ *
+ * Measured: serialized as tool arguments, one cell costs roughly 34 bytes with
+ * a short numeric value, 64 with a typical short text value, and 139 with a
+ * long URL. At 500 cells that is ~17KB / ~32KB / ~69KB of arguments — call it
+ * 4k, 8k and 17k output tokens at the conventional four-characters-per-token
+ * estimate this codebase already uses for budgeting (`SEED_CHARS_PER_TOKEN`).
+ * 500 is therefore the largest round number that still fits a common 8k output
+ * budget for realistic data, and it is double the number the field settled on.
+ *
+ * The cap's real job is to be VISIBLE. It lives in the schema, so it reaches
+ * the model as part of the JSON Schema and it chunks before it tries; and an
+ * over-cap call is rejected with a message that names the limit, instead of
+ * failing somewhere the agent cannot see. It cannot rescue a call whose
+ * arguments were truncated during generation — nothing server-side can, since
+ * that call never arrives — which is why the tool description also tells the
+ * model to halve the batch when a large call fails to generate at all.
+ */
+const MAX_SHEET_CELLS_PER_EDIT = 500;
+
 // Helper: Non-blocking activity logging with AI context (fire-and-forget)
 function logPageActivityAsync(
   userId: string,
@@ -1508,13 +1538,13 @@ export const pageWriteTools = {
    * Edit cells in a sheet page
    */
   edit_sheet_cells: tool({
-    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas. Omit pageId to edit the sheet currently in view.',
+    description: 'Edit one or more cells in a SHEET page. Use A1-style cell addresses. Supports batch updates for efficiency. Values starting with "=" are treated as formulas. Hard limit of ' + MAX_SHEET_CELLS_PER_EDIT + ' cells per call — split larger writes across calls. Note that the whole cells array is generated as one tool call, so a batch of long values can exhaust your own output budget well before that limit; if a large call fails to be produced at all, halve the batch. Omit pageId to edit the sheet currently in view.',
     inputSchema: z.object({
       pageId: z.string().optional().describe('The unique ID of the sheet page to edit. Defaults to the page currently in view if omitted.'),
       cells: z.array(z.object({
         address: z.string().describe('Cell address in A1-style format (e.g., "A1", "B2", "AA100")'),
         value: z.string().describe('Value to set in the cell. Values starting with "=" are formulas. Empty string clears the cell.'),
-      })).min(1).describe('Array of cell updates to apply'),
+      })).min(1).max(MAX_SHEET_CELLS_PER_EDIT).describe(`Array of cell updates to apply. At most ${MAX_SHEET_CELLS_PER_EDIT} per call; send more in separate calls.`),
     }),
     execute: async ({ pageId: pageIdArg, cells }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
