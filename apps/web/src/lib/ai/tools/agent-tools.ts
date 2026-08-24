@@ -30,7 +30,7 @@ export const agentTools = {
       agentPath: z.string().describe('The agent path using titles like "/driveSlug/Agent Name" for semantic context'),
       agentId: z.string().describe('The unique ID of the AI agent to update'),
       systemPrompt: z.string().optional().describe('New system prompt for the agent. Leave empty to keep current prompt.'),
-      enabledTools: z.array(z.string()).optional().describe('New array of enabled tool names. Leave empty to keep current tools.'),
+      enabledTools: z.array(z.string()).optional().describe('New array of enabled tool names. OMIT this parameter to keep the current list; passing an empty array means "no PageSpace tools at all", not "no change".'),
       aiProvider: z.string().optional().describe('New AI provider for the agent'),
       aiModel: z.string().optional().describe('New AI model for the agent'),
       agentDefinition: z.string().max(500).optional().describe('New description of what this agent does (max 500 chars).'),
@@ -118,7 +118,14 @@ export const agentTools = {
           updateData.systemPrompt = systemPrompt || null;
         }
         if (enabledTools !== undefined) {
-          updateData.enabledTools = enabledTools.length > 0 ? enabledTools : null;
+          // An EMPTY array is a DECISION, not an absence. `filterToolsForAgentAllowlist`
+          // reads `[]` as "no PageSpace tools at all" and `null` as "unrestricted", and
+          // the settings UI's PATCH stores it that way — but this tool used to fold `[]`
+          // into null, so an agent someone tried to lock down silently came back with
+          // EVERY tool, the sandbox family included. Same field, two doors, opposite
+          // meanings: the same class of divergence issue #2460 is about, pointing the
+          // dangerous way. Omitting the parameter is how you keep the current list.
+          updateData.enabledTools = enabledTools;
         }
         if (aiProvider !== undefined) {
           updateData.aiProvider = aiProvider || null;

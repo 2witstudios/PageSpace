@@ -819,6 +819,52 @@ describe('agent-tools', () => {
       });
     });
 
+    it('given an EMPTY enabledTools array, stores it as an empty allowlist — never as "unrestricted"', async () => {
+      // `filterToolsForAgentAllowlist` reads [] as "no tools" and null as "every
+      // tool". Folding [] into null turned an attempt to lock an agent down into
+      // a grant of the entire registry — the divergence of #2460 pointing the
+      // dangerous way.
+      const locked = {
+        id: 'agent-1',
+        title: 'My Agent',
+        type: 'AI_CHAT',
+        driveId: 'drive-1',
+        systemPrompt: null,
+        enabledTools: null,
+        aiProvider: null,
+        aiModel: null,
+        agentDefinition: null,
+        visibleToGlobalAssistant: false,
+        includeDrivePrompt: false,
+        includePageTree: false,
+        pageTreeScope: null,
+        sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const,
+        userScopedAccess: false,
+        revision: 1,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(locked)
+        .mockResolvedValueOnce({ ...locked, enabledTools: [] });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      const result = await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: [] },
+        {
+          toolCallId: '1',
+          messages: [],
+          experimental_context: { userId: 'user-123' } as ToolExecutionContext,
+        }
+      ) as Record<string, unknown>;
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: [] }) })
+      );
+      expect(result).toMatchObject({
+        agentConfig: { enabledToolsCount: 0, effectiveTools: [], blockedTools: [] },
+      });
+    });
+
     it('throws error when agent is deleted during mutation', async () => {
       // Arrange
       const mockAgent = {

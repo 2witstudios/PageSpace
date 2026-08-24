@@ -200,6 +200,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   sandbox switch fails immediately, naming the tools and the one-line fix, instead of starting a
   worker that cannot do the job.
 
+- **Turning an agent's tools off no longer turns them all on** — asking an agent to set its own
+  enabled-tools list to nothing (an empty list, through `update_agent_config`) was stored as "no
+  restriction", so an agent someone was trying to lock down came back holding every tool there is.
+  The settings screen always read an empty list as "none"; now both doors agree. To leave the list
+  alone, don't send it at all.
+
 - **A working key is no longer reported as dead** — running `pagespace keys list` (or `revoke`,
   `use`, or the wizard) with an `mcp_` key answered "Static token was invalidated and has no refresh
   path", which reads as "your key was revoked" — while the very same key kept reading and writing
