@@ -18,14 +18,12 @@
  * grid, which is what the issue asked for; it is not what it is.
  *
  * The server cannot see pixels, so a rectangle here is a FRACTION of the
- * workspace ({@link paneRects}) scaled by a nominal surface shape
+ * workspace ({@link paneRects}) scaled by the surface's measured shape
  * ({@link NOMINAL_VIEWPORT_ASPECT}). That approximation is stated rather than
- * hidden, along with which way it is deliberately wrong: a real surface that is
- * narrower than the nominal one moves every pane's aspect the same way, so the
- * only decisions it can change are the ones near the boundary, and the constant
- * is chosen so that those land on `column`. A pane that ends up shorter than it
- * might have been is usable; another column, thinner than the last, is the
- * thing this file exists to stop.
+ * hidden, and it is the only place a real screen enters this file at all. It
+ * decides nothing on a grid of halves, quarters and eighths — those answer the
+ * same for any ratio between 1 and 2 — and everything for a container of
+ * THREE, which is a shape the packing path produces on its own.
  *
  * Pure, and shared by the browser and the server like every other decision in
  * this model: the client applies the identical split optimistically, so a
@@ -43,8 +41,8 @@ import {
 } from './workspace-node';
 
 /**
- * The PANE SURFACE's assumed width-to-height ratio — the one number this file
- * cannot derive.
+ * The PANE SURFACE's width-to-height ratio — the one number this file cannot
+ * derive, so it is MEASURED rather than argued about.
  *
  * A pane's stored geometry is a share of its container, so the tree knows a
  * pane is half as wide as the workspace and knows nothing about how many pixels
@@ -52,23 +50,28 @@ import {
  * back into a shape: a pane is wider than it is tall exactly when
  * `width × (surfaceWidth / surfaceHeight) ≥ height`.
  *
- * **It is deliberately at the LOW end of what that ratio can be, and the
- * direction of the error is the point.** The surface is not the screen — it is
- * the agents layout's main column, with the sidebar and the top chrome already
- * taken out, so a 16:9 monitor presents something nearer 1.6, a windowed
- * browser less, a narrow one less again. Guessing HIGH answers `row` too often,
- * which is the failure this rule exists to remove: another column, thinner than
- * the last. Guessing LOW answers `column`, and a pane that is shorter than it
- * might have been still shows a full-width line of terminal output or chat.
- * 4:3 is below every ordinary desktop surface and above the narrow ones.
+ * **The surface is not the screen.** It is the agents layout's main column,
+ * with the sidebar and the top chrome already taken out. Measured in the
+ * running app — the `session-panes` element's own box, sidebar open:
  *
- * On an untouched grid the choice does not depend on it at all — halves and
- * quarters answer the same for any ratio between 1 and 2 — so what this value
- * actually decides is what happens to a layout somebody has DRAGGED: a pane
- * given 60% of the width and full height is taller than it is wide on any real
- * surface, and this says so.
+ *     viewport      surface       aspect
+ *     1280 x  800   1045 x  702    1.49
+ *     1512 x  916   1235 x  818    1.51
+ *     2560 x 1440   2094 x 1342    1.56
+ *     1920 x 1080   1569 x  982    1.60
+ *
+ * So 3:2 — and the useful part is how NARROW that spread is: the chrome scales
+ * with the window, so the surface stays near 3:2 from a small laptop to a
+ * 27-inch monitor. Collapsing the sidebar widens it, which is a state the user
+ * chose and which moves the answer only for panes already on the boundary.
+ *
+ * **16:9 was the screen's shape, and it was wrong by 12–19%** — not a rounding
+ * error but the difference between "this pane is wider than it is tall" and "it
+ * is not" for a pane a third of the width, which is the commonest shape a
+ * packed container produces. An earlier cut over-corrected to 4:3, wrong by
+ * about as much the other way. Both were guesses; this is the measurement.
  */
-export const NOMINAL_VIEWPORT_ASPECT = 4 / 3;
+export const NOMINAL_VIEWPORT_ASPECT = 3 / 2;
 
 /** A pane's share of the workspace, as fractions of its width and height. */
 export interface PaneRect {

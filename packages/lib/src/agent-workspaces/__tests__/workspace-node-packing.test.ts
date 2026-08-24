@@ -129,25 +129,49 @@ describe('splitAxisFor', () => {
     expect(splitAxisFor(nodes, 'b')).toBe('column');
   });
 
-  it('should call a tall pane TALL, however wide its share of the row is', () => {
-    // The direction the nominal aspect is allowed to be wrong in (review). A
-    // pane holding 60% of the width and the full height is drawn taller than it
-    // is wide on every real surface — the agents layout's main column is
-    // narrower than the screen, sidebar and chrome already taken out — so its
-    // longer edge is vertical and the split has to be `column`. An aspect
-    // guessed too HIGH answers `row` here and carves it into two slivers, which
-    // is the failure this file exists to remove.
+  it('should turn a dragged pane DOWN once it is taller than it is wide', () => {
+    // 60% of the width and the full height is 627x702 on a 1045x702 surface —
+    // taller, so `column`. This is the boundary the constant sits closest to:
+    // the flip is at two thirds of the width.
     const nodes = [root(), pane('wide', 'root-1', 0, 0.6), pane('narrow', 'root-1', 1, 0.4)];
     expect(splitAxisFor(nodes, 'wide')).toBe('column');
+
+    const wider = [root(), pane('wide', 'root-1', 0, 0.7), pane('narrow', 'root-1', 1, 0.3)];
+    expect(splitAxisFor(wider, 'wide')).toBe('row');
   });
 
-  it('should keep the constant between a square and a widescreen surface', () => {
-    // Below 1 it would answer `column` for a pane that is genuinely wider than
-    // it is tall; at or above ~1.8 it is claiming a surface no pane grid is
-    // actually drawn in. The value is stated rather than implied because it is
-    // the one number here that cannot be derived.
-    expect(NOMINAL_VIEWPORT_ASPECT).toBeGreaterThan(1);
-    expect(NOMINAL_VIEWPORT_ASPECT).toBeLessThan(1.6);
+  it('should split a THIRD of the width DOWN, and call the half-height one a tie', () => {
+    // THREE panes in a row is the shape the packing path produces on its own —
+    // no drag involved — and it is the common shape where the surface aspect
+    // actually decides. At 1045x702 (a 1280x800 window) a third of the width is
+    // 348 wide against 702 tall: taller, so `column`. The 16:9 this file started
+    // with called the same pane WIDE and cut it into two 174px slivers.
+    const thirds = [root(), pane('a', 'root-1', 0), pane('b', 'root-1', 1), pane('c', 'root-1', 2)];
+    expect(splitAxisFor(thirds, 'a')).toBe('column');
+
+    // Halve its height and it lands EXACTLY on the boundary: a third of the
+    // width against half the height is square at 3:2, and the measured range
+    // (1.49–1.60) straddles it — genuinely either answer on a real screen. The
+    // tie rule decides, and the tie goes beside.
+    const halved = [
+      root(),
+      container('col', 'root-1', 0, 'column'),
+      pane('tall', 'col', 0),
+      pane('under', 'col', 1),
+      pane('b', 'root-1', 1),
+      pane('c', 'root-1', 2),
+    ];
+    expect(splitAxisFor(halved, 'tall')).toBe('row');
+  });
+
+  it('should keep the constant inside the range the surface was MEASURED at', () => {
+    // 1.49 to 1.60 across viewports from a small laptop to a 27-inch monitor
+    // (the table on the constant's own doc). A value outside that is not an
+    // approximation of this app's layout any more, whatever else it might be —
+    // and the two values this file has already had, 16/9 and 4/3, both fall
+    // outside it.
+    expect(NOMINAL_VIEWPORT_ASPECT).toBeGreaterThanOrEqual(1.45);
+    expect(NOMINAL_VIEWPORT_ASPECT).toBeLessThanOrEqual(1.65);
   });
 
   it('should answer `row` for a pane the tree does not hold, leaving the refusal to the placement', () => {
