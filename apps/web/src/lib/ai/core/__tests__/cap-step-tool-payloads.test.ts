@@ -97,9 +97,7 @@ describe('capStepToolPayloads', () => {
       given: 'a transcript whose most recent call is oversized',
       should: 'leave the step the model just took fully intact',
       actual: inputs[inputs.length - 1],
-      expected: transcript(3, OVERSIZED).length > 0
-        ? { tool_name: 'edit_sheet_cells', blob: 'x'.repeat(OVERSIZED) }
-        : null,
+      expected: { tool_name: 'edit_sheet_cells', blob: 'x'.repeat(OVERSIZED) },
     });
   });
 
