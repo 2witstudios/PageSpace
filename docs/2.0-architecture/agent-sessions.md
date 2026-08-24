@@ -685,7 +685,9 @@ the issue read as randomness: `filterToolsForSandboxTier` keys on the PAYER of t
 worker landed in, so the same agent legitimately resolves differently in two workspaces. A spawn
 now asks that question of the workspace the worker actually landed in — the same question its own
 turn will ask, with the same inputs — and WARNS when compute the agent is configured for will not
-be granted there. A warning, never a refusal: no caller can fix a payer's tier by spawning
+be granted there. The warning states the OUTCOME and lists the possible causes rather than naming
+one: `canRunCode` folds together the deployment kill switch, the payer's tier and the requester's
+own drive role, and a guess dressed as a reason is the failure mode this section exists to end. A warning, never a refusal: no caller can fix a payer's tier by spawning
 differently, and a worker without `bash` is still a worker that can read pages and think. The
 check is best-effort; a diagnostic must never be the reason a spawned worker's caller sees an
 error.

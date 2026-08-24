@@ -1065,11 +1065,17 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       });
       if (eligible) return null;
 
+      // The OUTCOME, not a diagnosis. `canRunCode` folds together the deployment
+      // kill switch, the payer's tier and the requester's own role in that
+      // drive; naming one of them here would be a guess dressed as a reason —
+      // which is the failure mode this whole PR is about.
       return (
-        'This worker landed in a workspace whose plan does not include code execution, so it will ' +
-        `NOT receive the compute tools (${computeNames.slice(0, 6).join(', ')}${computeNames.length > 6 ? ', …' : ''}) ` +
-        'however its agent is configured. Session and page tools are unaffected. Spawning into a ' +
-        'different workspace, or upgrading that workspace owner\'s plan, is what changes this.'
+        'This worker landed in a workspace that will NOT grant it the compute tools ' +
+        `(${computeNames.slice(0, 6).join(', ')}${computeNames.length > 6 ? ', …' : ''}) ` +
+        'however its agent is configured — code execution there is refused for this actor, by the ' +
+        'deployment switch, the workspace owner\'s plan, or your role in that drive. Session and ' +
+        'page tools are unaffected. Spawning into a workspace where you can already run code is ' +
+        'what changes it.'
       );
     },
 
