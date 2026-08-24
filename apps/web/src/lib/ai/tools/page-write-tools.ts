@@ -12,7 +12,7 @@ import { movePagesToDrive } from '@/services/api/page-cross-drive-move-service';
 import { syncPublishedHomeRoot } from '@/lib/canvas/publish-page';
 import { isHomeDrive, homeDriveActionError } from '@pagespace/lib/services/drive-guards';
 import { PageType } from '@pagespace/lib/utils/enums';
-import { isAIChatPage, isDocumentPage, isCodePage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
+import { isAIChatPage, isDocumentPage, getDefaultContent, getCreatablePageTypes, getPageTypeConfig } from '@pagespace/lib/content/page-types.config';
 import { isValidCellAddress, isSheetType } from '@pagespace/lib/sheets/sheet';
 import { setCells } from '@pagespace/lib/sheets/store';
 import { logSheetCellActivity } from '@/services/api/sheet-activity';
