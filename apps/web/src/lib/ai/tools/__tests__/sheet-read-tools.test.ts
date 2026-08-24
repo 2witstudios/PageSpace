@@ -556,6 +556,26 @@ describe('read_sheet — sheet not yet migrated to row storage', () => {
     expect(mockEnsureTab).not.toHaveBeenCalled();
   });
 
+  it('never tells the agent to write to the sheet to make reading work', async () => {
+    // The refusal used to end "editing any cell migrates it". Instructing a
+    // WRITE in order to enable a READ is the thing this tool refusing to
+    // materialise exists to prevent, and an agent acting on it during a
+    // read-only request mutates a user's sheet as a side effect of wanting to
+    // look at it.
+    const result = await run({
+      pageId: 'page-1',
+      where: { conditions: [{ column: 'A', op: 'eq', value: 'x' }] },
+    });
+
+    const advice = `${result.message} ${result.suggestion}`.toLowerCase();
+    expect(result.error).toBe('Sheet not migrated to row storage');
+    for (const nudge of ['editing any cell', 'edit any cell', 'edit a cell', 'write to it once']) {
+      expect(advice, `refusal suggests a write: "${nudge}"`).not.toContain(nudge);
+    }
+    // It still says what DOES work.
+    expect(advice).toContain('startrow/limit');
+  });
+
   it('refuses a legacy-text SHEET page instead of calling it a blank spreadsheet', async () => {
     mockListTabs.mockResolvedValue([]);
     mockFindById.mockResolvedValue({ ...sheetPage, content: '<p>Notes, never a grid</p>' });

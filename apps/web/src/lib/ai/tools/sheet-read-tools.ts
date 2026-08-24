@@ -350,10 +350,16 @@ export const sheetReadTools = {
             message:
               'Filtering and sorting run in the database, and this sheet\'s rows have not been migrated ' +
               'there yet. Reading is never allowed to write, so read_sheet will not migrate it.',
+            // Deliberately does NOT tell the agent to edit a cell to migrate
+            // the sheet. Instructing a WRITE in order to enable a READ is the
+            // thing this tool refusing to materialise exists to prevent — and
+            // an agent acting on it during a read-only request would mutate a
+            // user's sheet as a side effect of wanting to look at it. Reading
+            // positionally answers the same questions on the same data.
             suggestion:
               'Read it positionally instead — drop where/orderBy/offset and use startRow/limit, which ' +
-              'works on an unmigrated sheet. Editing any cell in the app migrates it permanently, after ' +
-              'which filtering works.',
+              'works on an unmigrated sheet and returns the same rows. Filter the results yourself if ' +
+              'you must; do not write to the sheet to make filtering available.',
             pageInfo: { pageId: page.id, title: page.title, type: page.type },
           };
         }

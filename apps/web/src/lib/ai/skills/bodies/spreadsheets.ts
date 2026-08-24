@@ -161,7 +161,7 @@ Reading either way:
 - A sheet whose stored document cannot be parsed is reported as **unreadable**, not as empty. If you see that, do NOT write to the sheet — its data may still be intact, and writing would replace it.
 - Two refusals you may hit on older sheets, both meaning "do not write here":
   - *"Page holds text, not a spreadsheet"* — the page is a SHEET but its content is plain text or HTML. Read it with \`read_page\`. Writing cells would replace that text.
-  - *"Sheet not migrated to row storage"* — only from a FILTERED \`read_sheet\`. Filtering runs in the database and this sheet's rows are not there yet; reading is never allowed to write, so the tool will not migrate it for you. Read it positionally instead (\`startRow\`/\`limit\`, which works regardless), or edit any cell once and filtering works from then on.
+  - *"Sheet not migrated to row storage"* — only from a FILTERED \`read_sheet\`. Filtering runs in the database and this sheet's rows are not there yet; reading is never allowed to write, so the tool will not migrate it for you. Read it positionally instead (\`startRow\`/\`limit\`, which works regardless and returns the same rows). Do NOT edit a cell to make filtering available: that is a write performed to enable a read, and on a read-only request it changes the user's sheet for no reason they asked for. The sheet migrates on its own the next time someone genuinely edits it.
 
 ## Structuring a new sheet
 

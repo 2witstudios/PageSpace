@@ -34,8 +34,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   empty, so an assistant is never invited to overwrite data that is still there — as is a page that
   is a sheet in name but holds ordinary text. Reading a sheet never changes it, including in
   read-only mode: on an older sheet that has not been converted to the new row storage yet, an
-  assistant can still read rows in order, and is told to open the sheet once rather than having the
-  read quietly convert it.
+  assistant can still read rows in order, and is told to do that rather than having the read quietly
+  convert the sheet — or being told to change a cell just to make searching work.
 
 - **Spreadsheets from the terminal and the SDK** — `pagespace sheets describe` shows a sheet's tabs
   and size without reading a row; `query` filters and sorts server-side, so asking a 100,000-row
