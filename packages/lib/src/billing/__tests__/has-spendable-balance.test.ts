@@ -14,7 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const mockIsBillingEnabled = vi.hoisted(() => vi.fn(() => true));
-const mockGetCreditBalance = vi.hoisted(() => vi.fn());
+const mockReadSpendableCents = vi.hoisted(() => vi.fn());
 const mockDb = vi.hoisted(() => ({
   select: vi.fn(),
   insert: vi.fn(),
@@ -24,7 +24,7 @@ const mockDb = vi.hoisted(() => ({
 
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('../../deployment-mode', () => ({ isBillingEnabled: mockIsBillingEnabled }));
-vi.mock('../credit-balance', () => ({ getCreditBalance: mockGetCreditBalance }));
+vi.mock('../credit-balance', () => ({ readSpendableCents: mockReadSpendableCents }));
 vi.mock('@pagespace/db/schema/credits', () => ({
   creditBalances: { userId: 'cb.userId' },
   creditHolds: { id: 'ch.id', userId: 'ch.userId', estCents: 'ch.est', expiresAt: 'ch.exp' },
@@ -55,9 +55,9 @@ vi.mock('@pagespace/db/operators', () => ({
 import { hasSpendableBalance } from '../credit-gate';
 import { RESERVE_FLOOR_CENTS } from '../credit-pricing';
 
-/** The balance summary shape, reduced to the field the answer turns on. */
+/** The lean read returns the spendable figure itself. */
 function balance(spendable: number) {
-  return { spendable, monthlyRemainingCents: spendable, topupRemainingCents: 0, debtCents: 0 };
+  return spendable;
 }
 
 beforeEach(() => {
@@ -67,27 +67,27 @@ beforeEach(() => {
 
 describe('hasSpendableBalance — the same floor the gate applies', () => {
   it('given a balance comfortably above the floor, should allow', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(RESERVE_FLOOR_CENTS + 500));
+    mockReadSpendableCents.mockResolvedValue(balance(RESERVE_FLOOR_CENTS + 500));
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(true);
   });
 
   it('given a balance exactly AT the floor, should refuse — the gate compares strictly greater', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(RESERVE_FLOOR_CENTS));
+    mockReadSpendableCents.mockResolvedValue(balance(RESERVE_FLOOR_CENTS));
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(false);
   });
 
   it('given a balance one cent above the floor, should allow', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(RESERVE_FLOOR_CENTS + 1));
+    mockReadSpendableCents.mockResolvedValue(balance(RESERVE_FLOOR_CENTS + 1));
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(true);
   });
 
   it('given an exhausted balance, should refuse — this is the parked-page path', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(0));
+    mockReadSpendableCents.mockResolvedValue(balance(0));
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(false);
   });
 
   it('given a balance pulled negative by debt, should refuse', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(-1200));
+    mockReadSpendableCents.mockResolvedValue(balance(-1200));
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(false);
   });
 });
@@ -96,13 +96,13 @@ describe('hasSpendableBalance — deployments without billing are unlimited', ()
   it('given billing is disabled, should allow without reading the ledger at all', async () => {
     mockIsBillingEnabled.mockReturnValue(false);
     expect(await hasSpendableBalance('user_1', 'pro')).toBe(true);
-    expect(mockGetCreditBalance).not.toHaveBeenCalled();
+    expect(mockReadSpendableCents).not.toHaveBeenCalled();
   });
 });
 
 describe('hasSpendableBalance — reads only, on a per-request path', () => {
   it('given any call, should never write: no hold, no insert, no update, no transaction', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(5000));
+    mockReadSpendableCents.mockResolvedValue(balance(5000));
 
     await hasSpendableBalance('user_1', 'pro');
 
@@ -112,15 +112,27 @@ describe('hasSpendableBalance — reads only, on a per-request path', () => {
     expect(mockDb.transaction).not.toHaveBeenCalled();
   });
 
-  it("given a tier, should judge the balance against that tier's allowance", async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(5000));
+  it('given a call, should not read credit_holds — the gate discards that figure anyway', async () => {
+    // The whole reason this does not go through getCreditBalance: that read also
+    // runs a SUM over active holds, which this gate throws away, on a path that
+    // executes once per image and per stylesheet of a published page.
+    mockReadSpendableCents.mockResolvedValue(balance(5000));
+
     await hasSpendableBalance('user_1', 'pro');
-    expect(mockGetCreditBalance).toHaveBeenCalledWith('user_1', 'pro');
+
+    expect(mockDb.select).not.toHaveBeenCalled();
+    expect(mockReadSpendableCents).toHaveBeenCalledTimes(1);
+  });
+
+  it("given a tier, should judge the balance against that tier's allowance", async () => {
+    mockReadSpendableCents.mockResolvedValue(balance(5000));
+    await hasSpendableBalance('user_1', 'pro');
+    expect(mockReadSpendableCents).toHaveBeenCalledWith('user_1', 'pro');
   });
 
   it('given no tier, should default to free rather than assume an allowance', async () => {
-    mockGetCreditBalance.mockResolvedValue(balance(5000));
+    mockReadSpendableCents.mockResolvedValue(balance(5000));
     await hasSpendableBalance('user_1');
-    expect(mockGetCreditBalance).toHaveBeenCalledWith('user_1', 'free');
+    expect(mockReadSpendableCents).toHaveBeenCalledWith('user_1', 'free');
   });
 });

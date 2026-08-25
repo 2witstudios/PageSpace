@@ -36,7 +36,7 @@ import {
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
 } from './credit-pricing';
-import { getCreditBalance } from './credit-balance';
+import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -544,10 +544,15 @@ export async function canConsumeAI(
  *
  * The DECISION is the same one `evaluateGate` makes — spendable above the
  * reserve floor, debt netted, billing-disabled deployments unlimited — reached
- * through `getCreditBalance`, which already mirrors those semantics for display
+ * through `readSpendableCents`, which shares its arithmetic with the display read
  * (including the free-tier lapsed-window rollover the gate applies lazily, so a
  * free user whose month has ticked over is not parked for the gap between the
  * rollover being due and the next AI call performing it).
+ *
+ * It reads the funded-balance columns and NOTHING else: ONE indexed row, no
+ * aggregate. Going through `getCreditBalance` here would also run its `SUM` over
+ * active `credit_holds` — a figure this gate then discards — on a path that runs
+ * once per image and per stylesheet.
  *
  * What it deliberately does NOT do is subtract in-flight AI holds: those are
  * reservations against chat calls, and a user with a stream running must not
@@ -563,6 +568,6 @@ export async function hasSpendableBalance(
   tier: SubscriptionTier = 'free',
 ): Promise<boolean> {
   if (!isBillingEnabled()) return true;
-  const summary = await getCreditBalance(userId, tier);
-  return summary.spendable > RESERVE_FLOOR_CENTS;
+  const spendable = await readSpendableCents(userId, tier);
+  return spendable > RESERVE_FLOOR_CENTS;
 }

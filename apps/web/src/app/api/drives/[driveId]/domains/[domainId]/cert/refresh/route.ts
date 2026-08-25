@@ -6,6 +6,7 @@ import {
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { hasFlyCertCredential } from '@/lib/fly/certs';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isCertEligible } from '@pagespace/lib/canvas/cert-action';
 import { db } from '@pagespace/db/db';
@@ -47,9 +48,14 @@ export async function POST(
       );
     }
 
-    if (!process.env.FLY_API_TOKEN) {
-      loggers.api.error('FLY_API_TOKEN not set — cert provisioning unavailable');
-      return NextResponse.json({ error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN)' }, { status: 503 });
+    // Same predicate the certs module uses, so a deployment carrying only
+    // FLY_MACHINES_ORG_TOKEN is not told SSL is unconfigured when it is.
+    if (!hasFlyCertCredential()) {
+      loggers.api.error('No Fly API credential set — cert provisioning unavailable');
+      return NextResponse.json(
+        { error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN or FLY_MACHINES_ORG_TOKEN)' },
+        { status: 503 },
+      );
     }
 
     // Advance the cert one step via the shared service (also used by the lazy

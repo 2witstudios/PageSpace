@@ -46,6 +46,20 @@ function resolveToken(): string {
 }
 
 /**
+ * Whether a Fly credential is configured at all.
+ *
+ * Exported because callers gate on it BEFORE doing cert work — the lazy
+ * reconcile and the "Check SSL" route both bail early when Fly is unconfigured,
+ * rather than marking a healthy domain failed. Those checks must ask the same
+ * question {@link resolveToken} answers: they used to test `FLY_API_TOKEN`
+ * directly, which made the `FLY_MACHINES_ORG_TOKEN` fallback unreachable in
+ * exactly the published-app deployment that configures only that one.
+ */
+export function hasFlyCertCredential(): boolean {
+  return resolveToken().length > 0;
+}
+
+/**
  * The transport, or null when no credential is configured.
  *
  * Null rather than an empty-token transport: an unauthenticated request to Fly

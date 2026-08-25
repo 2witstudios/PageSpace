@@ -57,9 +57,17 @@ not extend to siblings — an authenticated route there should not inherit it.
 The metered tier sets **no `fly-replay-cache`**. The cache exists to skip the
 router hop on subsequent requests — and the router hop *is* the balance gate, so
 a cached replay would keep a machine awake and billing for a payer we would
-refuse today. Every asset of a published page therefore costs one hop plus two
-indexed reads. That is the price of the enforcement property, and it is bounded
-by the fact that only the decision is ours; the bytes are not.
+refuse today.
+
+Every asset of a published page therefore costs one hop plus, for a servable
+metered app, three single-row indexed reads: the `published_apps` lookup, the
+payer's tier, and the payer's funded balance. No aggregates —
+`hasSpendableBalance` deliberately avoids `getCreditBalance`, which would add a
+`SUM` over active `credit_holds` that the gate then discards. A refusal costs
+fewer: an app refused on status alone never reaches the ledger.
+
+That is the price of the enforcement property, and it is bounded by the fact that
+only the decision is ours; the bytes are not.
 
 The flat-rate **dedicated** tier is the only legitimate cache user, because it
 has no balance gate to bypass. See `replayCachePolicyFor`.

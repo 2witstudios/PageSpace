@@ -15,10 +15,16 @@
  *
  * THE COST OF THAT SHAPE IS REAL AND DELIBERATE: with no replay cache on the
  * metered tier, EVERY request to a published app — every asset, not just the
- * document — pays one hop to the web app plus two indexed reads. That is the
- * price of the enforcement property (see `router-core.ts`), and it is bounded by
- * the fact that the replayed response never returns through us: only the
- * decision is ours, the bytes are not.
+ * document — pays one hop to the web app plus, for a servable metered app, three
+ * single-row indexed reads: the `published_apps` lookup, the payer's tier, and
+ * the payer's funded balance. No aggregates: `hasSpendableBalance` deliberately
+ * does NOT go through `getCreditBalance`, which would add a `SUM` over active
+ * `credit_holds` whose result the gate discards. A refusal costs fewer — an app
+ * refused on status alone never reaches the ledger at all.
+ *
+ * That is the price of the enforcement property (see `router-core.ts`), and it is
+ * bounded by the fact that the replayed response never returns through us: only
+ * the decision is ours, the bytes are not.
  *
  * ⚠️ A REPLAYED RESPONSE BYPASSES THE EDGE ENTIRELY. Fly's proxy hands the
  * request straight to the target app and returns its response to the client, so

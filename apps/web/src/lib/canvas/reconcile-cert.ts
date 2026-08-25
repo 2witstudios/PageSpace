@@ -9,7 +9,7 @@ import {
   type FlyOwnershipVerification,
 } from '@pagespace/lib/validators/fly-ownership';
 import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
-import { addCertificate, recheckCertificate } from '@/lib/fly/certs';
+import { addCertificate, hasFlyCertCredential, recheckCertificate } from '@/lib/fly/certs';
 import { resolveTxtRecords } from '@/lib/publish/dns-resolver';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
@@ -129,7 +129,10 @@ export async function reconcileCustomDomainCert(
     return { status: domain.status, action: null };
   }
 
-  if (!process.env.FLY_API_TOKEN) {
+  // Asked through the certs module so the FLY_MACHINES_ORG_TOKEN fallback it
+  // accepts is actually reachable from here; testing FLY_API_TOKEN directly made
+  // this bail in precisely the deployment the fallback exists for.
+  if (!hasFlyCertCredential()) {
     return { status: domain.status, action: null };
   }
   if (!isCertEligible(domain.status)) {

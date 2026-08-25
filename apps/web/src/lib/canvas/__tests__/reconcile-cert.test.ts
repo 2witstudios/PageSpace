@@ -17,6 +17,10 @@ const recheckCertificate = vi.fn();
 vi.mock('@/lib/fly/certs', () => ({
   addCertificate: (...args: unknown[]) => addCertificate(...args),
   recheckCertificate: (...args: unknown[]) => recheckCertificate(...args),
+  // Faithful to the real predicate — it accepts either credential. A stub that
+  // only looked at FLY_API_TOKEN would hide the very bug this replaced.
+  hasFlyCertCredential: () =>
+    Boolean(process.env.FLY_API_TOKEN || process.env.FLY_MACHINES_ORG_TOKEN),
 }));
 
 const dbUpdate = vi.fn();
@@ -66,6 +70,9 @@ beforeEach(() => {
   recheckCertificate.mockResolvedValue({ ok: false, error: 'recheck not stubbed' });
   resolveTxtRecords.mockResolvedValue([]);
   process.env.FLY_API_TOKEN = 'test-token';
+  // Cleared so a test that exercises the fallback cannot leak it into the guard
+  // tests that follow, which assert the no-credential no-op.
+  delete process.env.FLY_MACHINES_ORG_TOKEN;
   process.env.FLY_PROXY_APP_NAME = 'pagespace-proxy';
   setMock.mockReturnValue({ where: vi.fn().mockResolvedValue([]) });
   dbUpdate.mockReturnValue({ set: setMock });
@@ -393,5 +400,31 @@ describe('reconcileCustomDomainCert — nudging Fly once the record is published
 
     expect(result.status).toBe('provisioning');
     expect(clearCustomHost).not.toHaveBeenCalled();
+  });
+});
+
+describe('reconcileCustomDomainCert — which Fly credential counts as configured', () => {
+  it('given only FLY_MACHINES_ORG_TOKEN, should still reconcile', async () => {
+    // The published-app deployment configures that token and not FLY_API_TOKEN.
+    // Gating on FLY_API_TOKEN alone made the documented fallback unreachable from
+    // here, so cert reconciliation silently never ran for exactly that setup.
+    delete process.env.FLY_API_TOKEN;
+    process.env.FLY_MACHINES_ORG_TOKEN = 'org-token';
+    addCertificate.mockResolvedValue({ ok: true, configured: true });
+
+    const result = await reconcileCustomDomainCert(domain('verified'));
+
+    expect(addCertificate).toHaveBeenCalled();
+    expect(result.status).toBe('active');
+  });
+
+  it('given NEITHER credential, should stay a no-op and never flip the domain', async () => {
+    delete process.env.FLY_API_TOKEN;
+    delete process.env.FLY_MACHINES_ORG_TOKEN;
+
+    const result = await reconcileCustomDomainCert(domain('verified'));
+
+    expect(addCertificate).not.toHaveBeenCalled();
+    expect(result).toEqual({ status: 'verified', action: null });
   });
 });
