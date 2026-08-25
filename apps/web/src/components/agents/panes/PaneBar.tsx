@@ -17,7 +17,9 @@
  *
  * Pure presentational by design: no store, no hooks, no network — the caller
  * decides what identity and actions mean, so a terminal pane and a chat pane
- * wear the same bar without either knowing about the other.
+ * wear the same bar without either knowing about the other. That is also what
+ * lets the agent page's session-less chat wear it with no grid behind it at
+ * all: it supplies an identity and one action, and the bar asks no questions.
  *
  * The only thing dropped in the port is the checkout chip (`scopeLabel`), which
  * named a project/branch. That slot is now the agent label, so a grid holding
@@ -174,11 +176,12 @@ export function PaneNewConversationAction({
  * A pane's identity: a status dot, the session name, and an optional label.
  *
  * The dot's FILL means "a live session is bound here" — in the pane grid that
- * is always true, since it only shows sessions that exist server-side. The
- * agent page also wears this bar over a session-less conversation (binding is
- * congenital and permanent, so history is full of them), and passes
- * `bound={false}` for a hollow, muted dot: same bar, honest state. The label
- * carries the agent name for a chat pane, which is what keeps a grid of
+ * is always true, since it only shows sessions that exist server-side, which is
+ * why `bound` defaults to true. The agent page also wears this bar outside any
+ * grid, over a conversation that usually has NO session (binding is congenital
+ * and permanent, so history is full of them); it passes the conversation's own
+ * binding, and a hollow, muted dot is what says so. Same bar, honest state. The
+ * label carries the agent name for a chat pane, which is what keeps a grid of
  * conversations with different agents readable.
  */
 export function PaneSessionIdentity({
