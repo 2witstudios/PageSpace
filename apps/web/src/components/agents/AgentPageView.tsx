@@ -734,13 +734,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             conversations={conversations}
             currentConversationId={current.conversationId}
             onSelectConversation={handleSelectConversation}
-            // The SAME act the bar's "+" performs, so the same session reuse:
-            // without the id this spawns a SECOND workspace and abandons the
-            // live one, which is exactly the loss `reuseSessionId` exists to
-            // prevent. `createDisabled` makes the shared handler's refusals
-            // visible here — the button used to stay enabled while the handler
-            // silently returned.
-            onCreateNew={() => void handleCreateNew({ reuseSessionId: current.sessionId })}
+            // Deliberately NO `reuseSessionId`: History's "New" spawns a
+            // fresh session, and that is a decision, not an oversight — #2263
+            // (point 4) made the DELETE-replacement reuse the session while
+            // leaving this button alone, and a test pins it by name. An
+            // explicit "new conversation" from the history list is read as
+            // asking to leave, where the "+" over a conversation you are
+            // already in is not. (The grid's own History button reuses, so the
+            // two surfaces do differ — worth settling deliberately, not by a
+            // silent change here.)
+            onCreateNew={() => void handleCreateNew()}
+            // The shared handler's refusals, made visible: this button used to
+            // stay enabled while that handler silently returned.
             createDisabled={isCreating || blockedByActiveStream}
             onDeleteConversation={(id) => void deleteConversation(id)}
             onToggleShare={toggleConversationShare}

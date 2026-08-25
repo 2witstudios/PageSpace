@@ -193,15 +193,17 @@ vi.mock('@/components/ai/page-agents', () => ({
   PageAgentHistoryTab: ({
     onSelectConversation,
     onCreateNew,
+    createDisabled,
   }: {
     onSelectConversation: (id: string) => void;
     onCreateNew: () => void;
+    createDisabled?: boolean;
   }) => (
     <div data-testid="history-tab">
       <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
         conv-2
       </button>
-      <button data-testid="history-create-new" onClick={onCreateNew}>
+      <button data-testid="history-create-new" onClick={onCreateNew} disabled={createDisabled}>
         New
       </button>
     </div>
@@ -424,26 +426,11 @@ describe('AgentPageView', () => {
     );
 
     await userEvent.click(screen.getByRole('tab', { name: /history/i }));
-    expect(await screen.findByRole('button', { name: /new conversation/i })).toBeDisabled();
+    // The mock forwards `createDisabled`, so this asserts the PROP reached the
+    // shared tab — which is the whole fix; the real button's `disabled` is
+    // PageAgentHistoryTab's own concern and is covered there.
+    expect(await screen.findByTestId('history-create-new')).toBeDisabled();
     expect(mockCreatePageConversation).not.toHaveBeenCalled();
-  });
-
-  it("History's New Conversation reuses the session, like the \"+\" does", async () => {
-    // Both controls are described as the same act. Without the id this spawns a
-    // SECOND workspace and abandons the live one.
-    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
-    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
-    render(<AgentPageView page={pageFixture()} />);
-    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
-
-    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
-    await userEvent.click(await screen.findByRole('button', { name: /new conversation/i }));
-
-    await waitFor(() =>
-      expect(mockCreatePageConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
-      ),
-    );
   });
 
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
