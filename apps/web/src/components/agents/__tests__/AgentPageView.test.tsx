@@ -352,6 +352,26 @@ describe('AgentPageView', () => {
     );
   });
 
+  it('a mint that FAILS releases the control and says so, rather than rejecting into nothing', async () => {
+    // Every caller fires this as `void handleCreateNew()`. Without the catch,
+    // the rejection is unhandled — which in this repo fails the CI job while
+    // every test still reports passing — and the user sees a button that simply
+    // does nothing.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockRejectedValue(new Error('spawn refused'));
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalled());
+    // Still on the conversation it had, and the control is usable again.
+    expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
     // Reachable now that a global session can host any accessible agent's
     // conversation (create-conversation-in-workspace.ts): this agent page's

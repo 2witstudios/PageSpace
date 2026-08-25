@@ -423,6 +423,15 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     try {
       await newConversation();
       refreshConversations();
+    } catch (error) {
+      // Every caller fires this as `void handleCreateNew()`, so a rejection
+      // escaping here is an unhandled rejection and the user is told nothing —
+      // the button simply appears not to work. Say it, in the same words
+      // `useResolvedConversation` uses when its own create fails.
+      console.error('Failed to create agent conversation:', error);
+      toast.error('Could not start a new conversation', {
+        description: error instanceof Error ? error.message : 'Please try again.',
+      });
     } finally {
       creatingRef.current = false;
       setIsCreating(false);
@@ -633,9 +642,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 isActive={false}
                 identity={<PaneSessionIdentity name={agent.title} bound={false} />}
                 actions={
-                  // Deliberately ungated: this reaches the SAME handleCreateNew
+                  // Disabled only while a mint is in flight. Deliberately NOT
+                  // gated on `isReadOnly`: this reaches the SAME handleCreateNew
                   // the History tab's "New Conversation" button already calls
-                  // ungated. One policy, not two.
+                  // ungated, and one policy for the act beats two.
                   <PaneNewConversationAction disabled={isCreating} onCreate={() => void handleCreateNew()} />
                 }
               />
