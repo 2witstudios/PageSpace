@@ -6,7 +6,7 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
-  isHandoffBridgeRoute,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
@@ -319,12 +319,14 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
-      // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
-      // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
-      // and clobber the route's policy (which allows the page's inline styles).
+      // Some routes deliver their own styled HTML with a bespoke CSP — the
+      // handoff-bridge OAuth callbacks, and the published-app router's parked /
+      // unavailable pages. Skip the middleware CSP for those so it doesn't
+      // intersect with and clobber the route's policy (which allows the page's
+      // inline styles); browsers enforce the intersection of every CSP delivered.
       const { response } = createSecureResponse(isProduction, req, {
         isAPIRoute,
-        skipCSP: isHandoffBridgeRoute(pathname),
+        skipCSP: routeOwnsItsOwnCsp(pathname),
       });
       return response;
     }

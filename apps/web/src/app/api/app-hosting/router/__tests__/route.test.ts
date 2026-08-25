@@ -164,6 +164,21 @@ describe('a refusal is served here, and starts no machine', () => {
     expect(res.headers.get('X-Content-Type-Options')).toBe('nosniff');
     expect(res.headers.get('Content-Security-Policy')).toContain("frame-ancestors 'none'");
   });
+
+  it('given the parked page, should allow the inline styles it is actually built from', async () => {
+    // The page is a single self-contained document styled with `style=`
+    // attributes. Middleware skips its own CSP for this path precisely so this
+    // policy is the one that applies; a policy without style-src would render
+    // the customer-facing enforcement page as unstyled text.
+    resolveAppRoute.mockResolvedValue({ kind: 'parked', reason: 'out_of_credits' });
+    const res = await GET(request());
+    const csp = res.headers.get('Content-Security-Policy') ?? '';
+    expect(csp).toContain("style-src 'unsafe-inline'");
+    expect(await res.text()).toContain('style=');
+    // Everything else stays shut.
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).not.toContain('script-src');
+  });
 });
 
 describe('the 1MB replay ceiling is named, not discovered', () => {

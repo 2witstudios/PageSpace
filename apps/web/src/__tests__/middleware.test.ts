@@ -31,8 +31,12 @@ vi.mock('@/middleware/security-headers', () => ({
   // Real predicate logic — middleware passes its result as `skipCSP` so the
   // handoff-bridge OAuth callbacks don't get a middleware CSP layered on top of
   // their own (see the isHandoffBridgeRoute describe block below).
-  isHandoffBridgeRoute: (pathname: string) =>
-    pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback',
+  // Real predicate logic, matching security-headers.ts: the handoff-bridge
+  // callbacks plus the published-app router all deliver their own CSP.
+  routeOwnsItsOwnCsp: (pathname: string) =>
+    pathname === '/api/auth/google/callback' ||
+    pathname === '/api/auth/apple/callback' ||
+    pathname === '/api/app-hosting/router',
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
   isSecureRequest: () => true,
@@ -148,6 +152,22 @@ describe('middleware — published-app router carve-out', () => {
     // would not catch the carve-out being removed — assert the session lookup
     // was never reached.
     expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it('lets the route own its CSP, so the parked page keeps its inline styles', async () => {
+    // The API CSP is `default-src 'none'`, which falls style-src back to 'none';
+    // browsers enforce the intersection of every delivered policy, so without
+    // the skip the customer-facing "app paused" page renders unstyled.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    await middleware(buildRequest('/api/app-hosting/router'));
+
+    expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ skipCSP: true }),
+    );
   });
 
   it('does not extend the carve-out to sibling app-hosting paths', async () => {

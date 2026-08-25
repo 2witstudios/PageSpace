@@ -63,7 +63,15 @@ function htmlResponse(body: string, status: number, extraHeaders: Record<string,
       // The served app controls its own headers (its response bypasses us
       // entirely); these apply only to the pages this route itself renders.
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "frame-ancestors 'none'",
+      // This route OWNS its CSP — middleware skips its own for this path
+      // (`routeOwnsItsOwnCsp`), because the API default of `default-src 'none'`
+      // falls style-src back to 'none' and browsers enforce the intersection of
+      // every delivered policy, which would render the parked page as unstyled
+      // text. `'unsafe-inline'` here covers style ATTRIBUTES only: the page is a
+      // single self-contained document with no script, no external asset and no
+      // form, and every other directive stays shut.
+      'Content-Security-Policy':
+        "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'",
       'Referrer-Policy': 'no-referrer',
       ...extraHeaders,
     },
