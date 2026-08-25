@@ -23,6 +23,7 @@ export default defineConfig({
       'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
       'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
       'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
+      'src/tags/__tests__/tag-service.integration.test.ts',
     ],
     setupFiles: ['./src/test/setup.ts'],
     // Run test files sequentially to avoid database race conditions
@@ -67,6 +68,7 @@ export default defineConfig({
         'src/services/broadcast/__tests__/claim-recipient.integration.test.ts',
         'src/services/agent-workspaces/__tests__/agent-sessions-store.integration.test.ts',
         'src/services/app-hosting/__tests__/provisioner-claim.integration.test.ts',
+        'src/tags/__tests__/tag-service.integration.test.ts',
       ],
       thresholds: {
         lines: 85,
