@@ -35,7 +35,18 @@ vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ e
 vi.mock('../../../billing/credit-gate', () => ({ hasSpendableBalance: vi.fn() }));
 vi.mock('../../../billing/credit-balance', () => ({ resolveTier: vi.fn() }));
 
-import { resolveAppRoute, type AppRouterDeps, type PublishedAppRouteRow } from '../router';
+import {
+  defaultAppRouterDeps,
+  resolveAppRoute,
+  type AppRouterDeps,
+  type PublishedAppRouteRow,
+} from '../router';
+import { db } from '@pagespace/db/db';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { hasSpendableBalance } from '../../../billing/credit-gate';
+import { resolveTier } from '../../../billing/credit-balance';
+import { isAppHostingEnabled } from '../app-hosting-env';
+import { resolveAppReplaySecret, resolvePublishedAppsApex } from '../routing-env';
 
 const SECRET = 'a'.repeat(48);
 
@@ -219,5 +230,74 @@ describe('resolveAppRoute — an outage is not a miss', () => {
         }),
       ),
     ).rejects.toThrow('ledger unavailable');
+  });
+});
+
+
+/**
+ * The composition root.
+ *
+ * Every other test in this file injects its own deps, and the route test mocks
+ * this module wholesale — so `defaultAppRouterDeps`, the object that decides what
+ * ACTUALLY runs at the serving edge, was asserted by nothing. That is a worse gap
+ * than it sounds: a mistake here is invisible to every mutation check on the
+ * decision function, because the decision function is not what is wrong.
+ *
+ * Bind `hasSpendableBalance` to `getCreditBalance` instead of the read-only twin
+ * and the per-request `SUM` over `credit_holds` comes back — every test still
+ * passes. Point `isEnabled` at anything truthy and hosting serves while the flag
+ * says dark — every test still passes. So the wiring is asserted directly.
+ */
+describe('defaultAppRouterDeps — the real edge is wired to the real readers', () => {
+  it('binds the kill switch, the apex and the replay secret by identity', () => {
+    expect(defaultAppRouterDeps.isEnabled).toBe(isAppHostingEnabled);
+    expect(defaultAppRouterDeps.apex).toBe(resolvePublishedAppsApex);
+    expect(defaultAppRouterDeps.replaySecret).toBe(resolveAppReplaySecret);
+  });
+
+  // `resolveTier` and `hasSpendableBalance` are wrapped in arrows for the tier
+  // cast, so identity cannot be asserted for them — and unwrapping them just to
+  // make `toBe` work would delete the thing being checked. Asserted behaviourally
+  // instead: the wrapper must delegate to the real module, with its own arguments.
+  it('delegates the balance read to the read-only twin, with the arguments it was given', async () => {
+    vi.mocked(hasSpendableBalance).mockResolvedValue(true);
+
+    const answer = await defaultAppRouterDeps.hasSpendableBalance('user_payer', 'metered');
+
+    expect(hasSpendableBalance).toHaveBeenCalledWith('user_payer', 'metered');
+    expect(answer).toBe(true);
+  });
+
+  it('delegates the tier lookup, and returns what it answers', async () => {
+    vi.mocked(resolveTier).mockResolvedValue('pro');
+
+    const tier = await defaultAppRouterDeps.resolveTier('user_payer');
+
+    expect(resolveTier).toHaveBeenCalledWith('user_payer');
+    expect(tier).toBe('pro');
+  });
+
+  // The row reader is module-private, so it is pinned by what it queries: the
+  // published_apps table, keyed on `subdomain`, one row.
+  it('reads the published_apps row for the subdomain it is asked about', async () => {
+    const found = row();
+    const limit = vi.fn().mockResolvedValue([found]);
+    const where = vi.fn(() => ({ limit }));
+    const from = vi.fn(() => ({ where }));
+    vi.mocked(db.select).mockReturnValue({ from } as never);
+
+    const result = await defaultAppRouterDeps.findAppBySubdomain('acme');
+
+    expect(from).toHaveBeenCalledWith(publishedApps);
+    expect(where).toHaveBeenCalledWith({ eq: [publishedApps.subdomain, 'acme'] });
+    expect(limit).toHaveBeenCalledWith(1);
+    expect(result).toEqual(found);
+  });
+
+  it('answers null when the subdomain matches no row, rather than undefined', async () => {
+    const limit = vi.fn().mockResolvedValue([]);
+    vi.mocked(db.select).mockReturnValue({ from: () => ({ where: () => ({ limit }) }) } as never);
+
+    expect(await defaultAppRouterDeps.findAppBySubdomain('nope')).toBeNull();
   });
 });
