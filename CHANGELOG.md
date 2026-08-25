@@ -205,6 +205,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **An older AI conversation keeps its controls** — opening an AI page on a past conversation could
+  drop the whole bar above the chat: no agent name, and no "+" to start a new conversation, so the
+  only way to begin one was to go to the History tab and find the button there. Which of the two the
+  page gave you was invisible — it depended on whether that conversation happened to be tied to a
+  workspace, which is decided when the conversation is created and never changes, so every
+  conversation from before workspaces existed lost the bar for good. Both now wear the same bar with
+  the same "+" in the same place; a conversation with no workspace behind it simply shows a hollow
+  dot instead of a lit one, rather than hiding its controls. Starting one twice in quick succession
+  no longer leaves you with two, and when starting one genuinely fails you are told, instead of the
+  button appearing to do nothing.
+
 - **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
   built-in commands and your personal ones; the drive's own commands were missing, and since a
   command runs from the chip you pick out of that list, they simply could not be used there. That

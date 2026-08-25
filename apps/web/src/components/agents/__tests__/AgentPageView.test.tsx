@@ -9,11 +9,12 @@
  * are mocked; this suite covers the page's own wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useSearchParams } from 'next/navigation';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { ResolvedConversation } from '../useResolvedConversation';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const resolvedConversation = vi.hoisted(() => ({
   current: { resolved: null as ResolvedConversation | null, isLoading: true },
@@ -192,15 +193,17 @@ vi.mock('@/components/ai/page-agents', () => ({
   PageAgentHistoryTab: ({
     onSelectConversation,
     onCreateNew,
+    createDisabled,
   }: {
     onSelectConversation: (id: string) => void;
     onCreateNew: () => void;
+    createDisabled?: boolean;
   }) => (
     <div data-testid="history-tab">
       <button data-testid="history-select-conv-2" onClick={() => onSelectConversation('conv-2')}>
         conv-2
       </button>
-      <button data-testid="history-create-new" onClick={onCreateNew}>
+      <button data-testid="history-create-new" onClick={onCreateNew} disabled={createDisabled}>
         New
       </button>
     </div>
@@ -255,6 +258,7 @@ beforeEach(() => {
   agentPanesState.lastOnConversationClosed = null;
   agentPanesState.firstOnConversationClosed = null;
   __resetWorkspaceQueuesForTests();
+  usePendingStreamsStore.setState({ streams: new Map() });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
     if (url.endsWith('/agent-config'))
@@ -295,6 +299,138 @@ describe('AgentPageView', () => {
     // unresolved — correct for the overwhelming common case.
     expect(screen.getByTestId('agent-panes')).toHaveAttribute('data-drive-id', 'drive-1');
     expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
+  });
+
+  it('a session-less conversation wears the SAME pane bar, carrying the new-conversation control', async () => {
+    // The whole point: which branch the user lands on is a property of the
+    // conversation they cannot see (binding is congenital and permanent), so
+    // the chrome must not differ. Before this, the plain branch rendered no
+    // header at all and the only way to start a conversation was the History
+    // tab.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.getByTestId('pane-bar')).toBeInTheDocument();
+    // The agent names the bar, exactly as a bound pane's identity does.
+    expect(screen.getByTestId('pane-bar')).toHaveTextContent('My Agent');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
+      ),
+    );
+    // The same act the History tab's "New Conversation" performs — it lands on
+    // the Chat tab showing the mint, without the user ever visiting History.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+  });
+
+  it('the bar\'s "+" cannot double-mint — the second click of a pair is swallowed', async () => {
+    // The mint has no idempotency key server-side, so two clicks would be two
+    // conversations. That was survivable while this action lived only behind
+    // the History tab; it now sits permanently beside the chat.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    let release: (value: { conversationId: string; sessionId: string | null }) => void = () => {};
+    mockCreatePageConversation.mockImplementation(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    const plus = screen.getByRole('button', { name: 'Start a new conversation' });
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+
+    expect(mockCreatePageConversation).toHaveBeenCalledTimes(1);
+
+    release({ conversationId: 'conv-2', sessionId: null });
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+
+    // And the guard RELEASES: a mint that finished must not leave the control
+    // dead for the rest of the session.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
+  it('a mint that FAILS releases the control and says so, rather than rejecting into nothing', async () => {
+    // Every caller fires this as `void handleCreateNew()`. Without the catch,
+    // the rejection is unhandled — which in this repo fails the CI job while
+    // every test still reports passing — and the user sees a button that simply
+    // does nothing.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockRejectedValue(new Error('spawn refused'));
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() => expect(mockCreatePageConversation).toHaveBeenCalled());
+    // Still on the conversation it had, and the control is usable again.
+    expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1');
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
+  it('the "+" mints INTO the session when this branch is showing a BOUND conversation', async () => {
+    // The plain branch is not exclusively session-less: it is also where a
+    // bound conversation lands whenever `canUseSessions` goes momentarily
+    // false, which it does on every routine background auth recheck of an
+    // already-signed-in session. Minting without the id there would hand back a
+    // permanently session-less replacement and abandon a live workspace — the
+    // exact loss `mintReplacementForCurrent` passes its own id to prevent.
+    authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: true };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    // No pane grid: canUseSessions is false, so the bound conversation renders plain.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+      ),
+    );
+  });
+
+  it('mid-stream, BOTH new-conversation controls refuse VISIBLY rather than no-op', async () => {
+    // The stream guard lives in the shared handler, which History's button
+    // reaches too. Guarding there without disabling here is a button that looks
+    // live and does nothing — the failure the grid avoids by pairing the same
+    // guard with a visible disabled state.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    act(() => {
+      usePendingStreamsStore.getState().addStream({
+        messageId: 'msg-1',
+        // The channel an agent's own stream is tagged with is its page id,
+        // which for this fixture IS the agent id.
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+        triggeredBy: { userId: 'user-1', displayName: 'Tester' },
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).toBeDisabled(),
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    // The mock forwards `createDisabled`, so this asserts the PROP reached the
+    // shared tab — which is the whole fix; the real button's `disabled` is
+    // PageAgentHistoryTab's own concern and is covered there.
+    expect(await screen.findByTestId('history-create-new')).toBeDisabled();
+    expect(mockCreatePageConversation).not.toHaveBeenCalled();
   });
 
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
@@ -378,6 +514,24 @@ describe('AgentPageView', () => {
     render(<AgentPageView page={pageFixture()} />);
 
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
+  });
+
+  it('a read-only viewer still gets the "+" — the create route gates on VIEW, not edit', async () => {
+    // `isReadOnly` here means "can view, cannot edit". Creating a conversation
+    // is gated server-side on `canPrincipalViewPage`, so a viewer starting
+    // their own conversation with someone else's agent is a supported act.
+    // Pinned so a later "tidy-up" does not gate this control on isReadOnly and
+    // silently take the affordance away from every viewer.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
+    expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled();
   });
 
   it('History is a full-height TAB, not a popover', async () => {
