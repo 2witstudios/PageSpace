@@ -175,7 +175,9 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // no published app is reachable at all.
     if (pathname === APP_ROUTER_ROUTE_PATH) {
       // The route delivers its own CSP for the styled parked/unavailable pages it
-      // renders; ours would intersect with and clobber it.
+      // renders; ours would intersect with and clobber it. Asked through the
+      // shared predicate rather than hardcoded `true` so there is one list of
+      // self-CSP routes rather than two places to keep in step.
       const { response } = createSecureResponse(isProduction, req, {
         isAPIRoute: true,
         skipCSP: routeOwnsItsOwnCsp(pathname),
@@ -344,11 +346,12 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname === '/api/health' ||
       pathname === '/api/version'
     ) {
-      // Some routes deliver their own styled HTML with a bespoke CSP — the
-      // handoff-bridge OAuth callbacks, and the published-app router's parked /
-      // unavailable pages. Skip the middleware CSP for those so it doesn't
-      // intersect with and clobber the route's policy (which allows the page's
-      // inline styles); browsers enforce the intersection of every CSP delivered.
+      // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
+      // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
+      // and clobber the route's policy (which allows the page's inline styles).
+      // Asked through `routeOwnsItsOwnCsp` so the set of self-CSP routes has one
+      // definition; the published-app router is also in that set but returns
+      // above and never reaches this branch.
       const { response } = createSecureResponse(isProduction, req, {
         isAPIRoute,
         skipCSP: routeOwnsItsOwnCsp(pathname),
