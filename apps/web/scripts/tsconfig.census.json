@@ -1,0 +1,9 @@
+{
+  "//": "Alias map for `bun --tsconfig-override`. apps/web/tsconfig.json states its `@/*` path relative to the REPO root (it inherits the root tsconfig's baseUrl), which bun resolves relative to this file's directory instead — so a run from either directory misses the alias. Only the census script needs it; see collab-content-census.ts for the invocation.",
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../src/*"]
+    }
+  }
+}
