@@ -151,6 +151,20 @@ function describeAcceptedValues(requirement: FlyOwnershipRequirement): string {
 }
 
 /**
+ * The same values as a bare list, for a sentence that already supplies the noun.
+ *
+ * The `mismatched` message says "(expected X; found Y)", where "expected"
+ * already does the work "the value" does in the instruction. Reusing the
+ * instruction's phrasing there produced "expected the value org-X; found …" and
+ * "expected either of these values: app-X or org-Y; found …" — a colon and a
+ * semicolon fighting inside one parenthesis. One helper cannot serve both
+ * sentences, so it does not try to.
+ */
+function listAcceptedValues(requirement: FlyOwnershipRequirement): string {
+  return acceptedOwnershipValues(requirement).join(' or ');
+}
+
+/**
  * The message for a requirement that names no value at all. `verifyFlyOwnershipTxt`
  * reports that state as `mismatched` rather than `satisfied`; the instruction has
  * to match, because telling a customer to publish nothing is worse than telling
@@ -171,7 +185,7 @@ export function describeOwnershipVerification(result: FlyOwnershipVerification):
       return `Add a TXT record at ${result.expected.name} with ${expected} — Fly cannot verify ownership of this domain until it resolves.`;
     }
     case 'mismatched': {
-      const expected = describeAcceptedValues(result.expected);
+      const expected = listAcceptedValues(result.expected);
       if (!expected) return UNNAMED_OWNERSHIP_VALUE;
       return `The TXT record at ${result.expected.name} does not carry an accepted ownership value (expected ${expected}; found ${result.found.join(', ')}).`;
     }

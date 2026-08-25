@@ -197,6 +197,32 @@ describe('describeOwnershipVerification — an instruction only when one is owed
     expect(message).not.toContain('the value app-ABC123 or');
   });
 
+  // The gap that let a regression through: the mismatched assertions only checked
+  // that the values APPEAR. "expected" already supplies the noun, so reusing the
+  // instruction's phrasing produced "expected the value org-X" and "expected
+  // either of these values: app-X or org-Y; found …" — a colon and a semicolon
+  // inside one parenthesis. Both sentences are now asserted as sentences.
+  it('given a mismatch, should list the values bare — "expected" already supplies the noun', () => {
+    const both = describeOwnershipVerification({
+      state: 'mismatched',
+      expected: requirement,
+      found: ['app-WRONG'],
+    });
+    expect(both).toContain('(expected app-ABC123 or org-XYZ789; found app-WRONG)');
+    expect(both).not.toContain('expected either of these values');
+    expect(both).not.toContain('expected the value');
+  });
+
+  it('given an org-only mismatch, should not say "expected the value"', () => {
+    const one = describeOwnershipVerification({
+      state: 'mismatched',
+      expected: orgOnlyRequirement,
+      found: ['app-WRONG'],
+    });
+    expect(one).toContain('(expected org-XYZ789; found app-WRONG)');
+    expect(one).not.toContain('expected the value');
+  });
+
   it('given one accepted value, should still say "the value", not offer a choice', () => {
     const message = describeOwnershipVerification({ state: 'missing', expected: orgOnlyRequirement });
     expect(message).toContain('the value org-XYZ789');
