@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { APP_VARIANTS, resolveAppIdentity, type AppVariant } from '../../shared/app-identity';
+import { outRootFor } from '../../shared/out-root';
 
 /**
  * The app identity exists twice by necessity: once in TypeScript, where the
@@ -150,6 +151,58 @@ describe('the two packaging configs', () => {
     for (const config of [pagespace, coder]) {
       expect(config.mac.entitlements).toBeUndefined();
       expect(config.mac.entitlementsInherit).toBeUndefined();
+    }
+  });
+});
+
+/**
+ * One layer below the packaging configs, and the same class of bug.
+ *
+ * `electron-vite dev` launches Electron with entry `.`, which resolves through
+ * package.json's single `main`. A variant that only redirects `outDir` would
+ * therefore compile the coder bundle and then run the PageSpace one — and since
+ * `setupProtocolClient` claims the scheme of whatever is actually running, a
+ * coder dev session would take `pagespace://` from the installed app. The only
+ * thing keeping the dev script and the vite config in agreement is this test.
+ */
+describe('the dev scripts', () => {
+  function electronEntry(script: string): string | undefined {
+    return /ELECTRON_ENTRY=(\S+)/.exec(script)?.[1];
+  }
+
+  it('runs PageSpace from the directory package.json main points at', () => {
+    // No override needed: `main` already names the pagespace bundle.
+    expect(electronEntry(pkg.scripts.dev)).toBeUndefined();
+    expect(pkg.main.split('/')[0]).toBe(outRootFor('pagespace'));
+  });
+
+  it('runs the coder bundle, not whatever main points at', () => {
+    const entry = electronEntry(pkg.scripts['dev:coder']);
+    expect(entry).toBeDefined();
+    expect(entry!.split('/')[0]).toBe(outRootFor('coder'));
+    // The whole point: it must NOT fall through to package.json main.
+    expect(entry).not.toBe(pkg.main);
+    // And it must name a main-process entry, not just the directory.
+    expect(entry).toBe(`${outRootFor('coder')}/main/index.js`);
+  });
+
+  it('builds and runs the same variant', () => {
+    for (const script of [pkg.scripts['dev:coder'], pkg.scripts['build:coder']]) {
+      expect(script).toContain('PAGESPACE_APP_VARIANT=coder');
+    }
+  });
+
+  it('gives every variant its own out root, and PageSpace the one main names', () => {
+    const roots = APP_VARIANTS.map(outRootFor);
+    expect(new Set(roots).size).toBe(APP_VARIANTS.length);
+    expect(outRootFor('pagespace')).toBe(pkg.main.split('/')[0]);
+  });
+
+  it('packages each variant from the out root its dev script runs', () => {
+    // Closes the loop: vite writes outRootFor(v), dev runs it, and the
+    // packaging config reads from it.
+    for (const variant of APP_VARIANTS) {
+      expect(sourceRoot(configs[variant])).toBe(outRootFor(variant));
     }
   });
 });
