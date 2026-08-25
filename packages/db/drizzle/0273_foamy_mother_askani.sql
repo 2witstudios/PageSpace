@@ -1,0 +1,1 @@
+ALTER TABLE "sheet_tabs" ADD COLUMN "conditionalFormats" jsonb;

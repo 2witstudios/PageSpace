@@ -12,6 +12,7 @@ import type {
   SheetEvaluationCell,
   SheetEvaluationOptions,
   SheetCellAddress,
+  SheetPrimitive,
   SheetSparseEvaluation,
   SheetExternalReferenceToken,
   SheetExternalReferenceResolution,
@@ -22,6 +23,11 @@ import { encodeCellAddress, expandRange, numberRegex, columnLabelOf } from './ad
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
 import { applyNumberFormat, resolveCellFormat } from './format';
+import {
+  addressesOfRange,
+  evaluateConditionalFormats,
+  type DataBarFill,
+} from './conditional';
 
 /**
  * Column letters of an A1 address, for column-default format lookup.
@@ -479,6 +485,91 @@ function evaluateCellInternal(
  * Evaluate a sheet and return all cell values, displays, and errors
  */
 /**
+ * Evaluate a bare expression in the sheet's context.
+ *
+ * Conditional formula rules need this: they are formulas that belong to no
+ * cell, so there is no address to evaluate through.
+ */
+function evaluateExpression(
+  formula: string,
+  pageKey: string,
+  env: EvaluationEnvironment
+): SheetPrimitive {
+  const trimmed = formula.trim();
+  const body = trimmed.startsWith('=') ? trimmed.slice(1) : trimmed;
+  const tokens = tokenize(body);
+  if (tokens.length === 0) throw new Error('Empty formula');
+
+  const evaluated = evaluateNode(
+    new FormulaParser(tokens).parse(),
+    {
+      getCell: (reference, ancestors) => evaluateCellInternal(reference, pageKey, env, ancestors),
+      getExternalCell: (pageRef, reference, ancestors) =>
+        evaluateExternalReferenceCell(pageRef, reference, env, ancestors),
+    },
+    new Set()
+  );
+  return flattenValue(evaluated)[0];
+}
+
+/** Every address any rule covers, so a rule over blank cells still paints. */
+export function conditionalAddresses(sheet: SheetData): string[] {
+  const rules = sheet.conditionalFormats;
+  if (!rules || rules.length === 0) return [];
+  return rules.flatMap((rule) => rule.ranges.flatMap((range) => addressesOfRange(range)));
+}
+
+/**
+ * Fold conditional formatting into an already-evaluated set of cells.
+ *
+ * A second pass, not part of `evaluateCellInternal`, because a colour scale
+ * needs every value in its range before it can place any one of them — which
+ * a per-cell, cached evaluation cannot know.
+ *
+ * Precedence is column default < conditional < explicit cell format, so the
+ * merge re-resolves from the parts rather than layering onto the already
+ * resolved format.
+ *
+ * Returns the data bars, which are a render-layer concern with no `CellFormat`
+ * field to live in.
+ */
+function applyConditionalFormats(
+  sheet: SheetData,
+  byAddress: Record<string, SheetEvaluationCell>,
+  pageKey: string,
+  env: EvaluationEnvironment
+): Record<string, DataBarFill> {
+  const rules = sheet.conditionalFormats;
+  if (!rules || rules.length === 0) return {};
+
+  const { formats, bars } = evaluateConditionalFormats(rules, {
+    valueAt: (address) => byAddress[address]?.value ?? '',
+    isError: (address) => Boolean(byAddress[address]?.error),
+    evaluateFormula: (formula) => evaluateExpression(formula, pageKey, env),
+  });
+
+  for (const [address, conditional] of Object.entries(formats)) {
+    const cell = byAddress[address];
+    if (!cell) continue;
+
+    cell.format = {
+      ...sheet.columnFormats?.[columnLettersOf(address)],
+      ...conditional,
+      ...sheet.formats?.[address],
+    };
+
+    // A rule may carry a number format, and `display` was produced before the
+    // rule was known.
+    if (!cell.error) {
+      const formatted = applyNumberFormat(cell.value, cell.format.number);
+      if (formatted !== null) cell.display = formatted;
+    }
+  }
+
+  return bars;
+}
+
+/**
  * Evaluate only the named addresses.
  *
  * `evaluateSheet` walks every cell of the grid and allocates three dense
@@ -573,11 +664,26 @@ export function evaluateSheet(
     };
   }
 
+  // After the grid is evaluated: a colour scale needs every value in its range
+  // before it can place any one of them, which a per-cell cached pass cannot
+  // know. This rewrites `format` and `display` in place, so the display grid
+  // has to be rebuilt from it.
+  const bars = applyConditionalFormats(sheet, byAddress, pageKey, env);
+  if (sheet.conditionalFormats?.length) {
+    for (let row = 0; row < rowCount; row++) {
+      for (let column = 0; column < columnCount; column++) {
+        const cell = byAddress[encodeCellAddress(row, column)];
+        display[row][column] = cell.error ? '#ERROR' : cell.display;
+      }
+    }
+  }
+
   return {
     byAddress,
     display,
     errors,
     dependencies,
+    ...(Object.keys(bars).length > 0 ? { bars } : {}),
   };
 }
 
@@ -687,7 +793,19 @@ export function evaluateSheetSparse(
     };
   }
 
-  return { byAddress, dependencies };
+  // A rule can cover cells that hold nothing — "highlight the blanks", or a
+  // coloured band across an empty row. Those have no entry here, and without
+  // one the rule would be stored correctly and paint nothing, which is exactly
+  // how a blank cell's own formatting was once invisible.
+  for (const address of conditionalAddresses(sheet)) {
+    if (!byAddress[address] && isLocalAddress(address)) {
+      byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
+    }
+  }
+
+  const bars = applyConditionalFormats(sheet, byAddress, pageKey, env);
+
+  return { byAddress, dependencies, ...(Object.keys(bars).length > 0 ? { bars } : {}) };
 }
 
 /**

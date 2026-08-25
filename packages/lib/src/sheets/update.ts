@@ -39,6 +39,12 @@ export function sanitizeSheetData(sheet: SheetData): SheetData {
     }
   }
 
+  // `conditionalFormats` is deliberately carried through by the spread rather
+  // than sanitized alongside the others. A rule's `kind` is a closed set, so
+  // validating here would make an older client silently delete a rule kind a
+  // newer build wrote — the same silent data loss the `ranges` bag exists to
+  // avoid. Rules are validated where they are *read* instead (out of a document
+  // and out of the row store), so an unusable one is never rendered.
   return {
     ...sheet,
     rowCount: Math.max(1, sheet.rowCount),
