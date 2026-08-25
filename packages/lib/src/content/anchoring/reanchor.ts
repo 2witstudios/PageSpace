@@ -172,18 +172,37 @@ export function changedRegionSize(oldText: string, newText: string): number {
  * strategy is sniffed per revision and can flip on unclosed trailing markup
  * (see its own docs), which is one concrete way the two sides drift apart.
  */
-export function portAnchor(
-  anchor: TextAnchor,
-  oldText: string,
-  newText: string
-): AnchorResolution {
-  if (changedRegionSize(oldText, newText) > MAX_EXACT_DIFF_REGION) {
-    return resolveAnchor(newText, anchor);
-  }
+/**
+ * One revision transition, diffed once.
+ *
+ * The diff depends only on `(oldText, newText)`, never on the anchor, but
+ * `portAnchor` recomputes it per call — which is fine for one anchor and
+ * quadratic waste for a page carrying many. Phase 0 measured the diff at 142ms
+ * for 2KB of change, 558ms at 4KB and 13.9s at 20KB, so a bulk caller that
+ * loops `portAnchor` pays that once PER ANCHOR for an identical result.
+ *
+ * `preparePort` + `portPreparedAnchor` is the seam for those callers. The
+ * single-anchor `portAnchor` is now a wrapper over exactly this path, so there
+ * is one implementation and no second copy to drift.
+ */
+export type PreparedPort = {
+  oldText: string;
+  newText: string;
+  /** True when the change is too large to map exactly; every anchor falls back to repair. */
+  exceedsExactRegion: boolean;
+  spans: readonly SurvivingSpan[];
+};
 
-  const located = locateInOldText(anchor, oldText);
-  if (!located) {
-    return orphaned();
+/**
+ * Diff one revision transition so many anchors can be ported against it.
+ *
+ * Returns `spans: []` when the change exceeds MAX_EXACT_DIFF_REGION — the diff
+ * is deliberately NOT computed in that case, since every anchor routes to
+ * `resolveAnchor` and the expensive call would be thrown away.
+ */
+export function preparePort(oldText: string, newText: string): PreparedPort {
+  if (changedRegionSize(oldText, newText) > MAX_EXACT_DIFF_REGION) {
+    return { oldText, newText, exceedsExactRegion: true, spans: [] };
   }
 
   // `format` because both sides are projections, which are plain text by
@@ -198,6 +217,29 @@ export function portAnchor(
   const spans = survivingSpans(
     diffContent(oldText, newText, { format: 'text', timeout: 0 }).changes
   );
+  return { oldText, newText, exceedsExactRegion: false, spans };
+}
+
+/**
+ * Forward-port `anchor` through an already-computed transition.
+ *
+ * Same contract and same results as `portAnchor`; see its docs for the caller
+ * contract about projections and `textHash`.
+ */
+export function portPreparedAnchor(
+  prepared: PreparedPort,
+  anchor: TextAnchor
+): AnchorResolution {
+  const { oldText, newText, spans } = prepared;
+
+  if (prepared.exceedsExactRegion) {
+    return resolveAnchor(newText, anchor);
+  }
+
+  const located = locateInOldText(anchor, oldText);
+  if (!located) {
+    return orphaned();
+  }
 
   if (located.from === located.to) {
     const mapped = mapPoint(spans, located.from);
@@ -258,4 +300,33 @@ export function portAnchor(
     end: portedEnd,
     confidence: Math.min(1, Math.max(0, fidelity * located.confidence)),
   };
+}
+
+/**
+ * Forward-port `anchor` from `oldText` to `newText`.
+ *
+ * Both arguments are projections (see text-projection.ts), never stored blobs.
+ * Being a pure function of `(anchor, oldText, newText)` — rather than of
+ * `(anchor, newText)` alone — is what makes the exact mapping possible.
+ *
+ * CALLER CONTRACT: `oldText` must be the projection the anchor was measured
+ * against, and both projections must have been produced the same way. Neither
+ * can be checked from here — this function receives two strings and has no way
+ * to know which page or revision they came from — and getting it wrong yields a
+ * confident wrong answer rather than an error, because a mislaid quote is still
+ * found and still ported. `anchor.textHash` hashes the exact projection the
+ * anchor was built against, so a call site that cares can compare it against
+ * `hashText(oldText)` before trusting the result. Note that projectContent's
+ * strategy is sniffed per revision and can flip on unclosed trailing markup
+ * (see its own docs), which is one concrete way the two sides drift apart.
+ *
+ * Porting MANY anchors across one transition? Use `preparePort` once and
+ * `portPreparedAnchor` per anchor — this wrapper diffs on every call.
+ */
+export function portAnchor(
+  anchor: TextAnchor,
+  oldText: string,
+  newText: string
+): AnchorResolution {
+  return portPreparedAnchor(preparePort(oldText, newText), anchor);
 }

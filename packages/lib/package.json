@@ -1023,6 +1023,11 @@
       "import": "./dist/tags/tag-core.js",
       "require": "./dist/tags/tag-core.js"
     },
+    "./tags/tag-service": {
+      "types": "./dist/tags/tag-service.d.ts",
+      "import": "./dist/tags/tag-service.js",
+      "require": "./dist/tags/tag-service.js"
+    },
     "./utils/environment": {
       "types": "./dist/utils/environment.d.ts",
       "import": "./dist/utils/environment.js",
