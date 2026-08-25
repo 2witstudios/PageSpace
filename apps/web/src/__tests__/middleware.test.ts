@@ -123,6 +123,45 @@ describe('middleware — /api/public/forms carve-outs', () => {
   });
 });
 
+// Regression coverage for a real bug found while building the published-app
+// routing tier: the router endpoint is called by pagespace-proxy with NO session
+// and no user — it authenticates via the APP_ROUTER_PROXY_SECRET shared secret
+// checked inside the route. Without a middleware carve-out, every such call is
+// 401'd before route.ts ever runs, which does not fail any handler test (those
+// invoke the route directly) but makes EVERY published app unreachable in a real
+// deployment. The route's own tests cannot see this; only this one can.
+describe('middleware — published-app router carve-out', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+  });
+
+  it('skips the session-cookie check for a proxy call carrying no session', async () => {
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const request = buildRequest('/api/app-hosting/router');
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(401);
+    // createSecureResponse is mocked to always return 200, so the status alone
+    // would not catch the carve-out being removed — assert the session lookup
+    // was never reached.
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it('does not extend the carve-out to sibling app-hosting paths', async () => {
+    // Exact match only: a future authenticated /api/app-hosting/* route must not
+    // inherit an exemption meant for the one endpoint the proxy calls.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    await middleware(buildRequest('/api/app-hosting/apps'));
+
+    expect(mockGetSessionFromCookies).toHaveBeenCalled();
+  });
+});
+
 // Regression coverage for a real bug: middleware.ts used to hand-duplicate two
 // of the three bearer prefixes `@/lib/auth` actually authenticates (mcp_,
 // ps_sess_), silently missing ps_at_ (OAuth access tokens, `pagespace login`).
