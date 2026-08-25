@@ -145,6 +145,13 @@ export function addressesOfRange(range: string): string[] {
     return [];
   }
 
+  // `decodeCellAddress` accepts `A0` and returns row -1, because rows are
+  // 1-based on the way in. Expanding that calls `encodeCellAddress(-1, …)`,
+  // which throws — so one malformed stored rule would take the whole sheet's
+  // evaluation and serialization down with it, instead of being ignored the way
+  // this function promises.
+  if (start.row < 0 || start.column < 0 || end.row < 0 || end.column < 0) return [];
+
   const addresses: string[] = [];
   const rowStart = Math.min(start.row, end.row);
   const rowEnd = Math.max(start.row, end.row);
@@ -168,6 +175,7 @@ export function rangeAnchor(range: string): { row: number; column: number } | nu
   try {
     const start = decodeCellAddress(rawStart);
     const end = rawEnd ? decodeCellAddress(rawEnd) : start;
+    if (start.row < 0 || start.column < 0 || end.row < 0 || end.column < 0) return null;
     return { row: Math.min(start.row, end.row), column: Math.min(start.column, end.column) };
   } catch {
     return null;
@@ -418,10 +426,25 @@ export function evaluateConditionalFormats(
           // A flat range has no gradient to place a value on; every cell takes
           // the low colour rather than dividing by zero.
           const position = span === 0 ? 0 : clamp01((value - low) / span);
+
+          // The midpoint sits where its own anchor puts it. Interpolating
+          // around a hardcoded 0.5 would ignore `number`, `percent` and any
+          // non-median `percentile`, so a midpoint configured at 10 on a 0..100
+          // scale would render its colour at 50.
           const color = rule.mid
-            ? position <= 0.5
-              ? mixColors(rule.min.color ?? '', rule.mid.color ?? '', position * 2)
-              : mixColors(rule.mid.color ?? '', rule.max.color ?? '', (position - 0.5) * 2)
+            ? (() => {
+                const midPosition =
+                  span === 0 ? 0 : clamp01((anchorValue(rule.mid, sorted, 'min') - low) / span);
+                if (midPosition <= 0) return rule.mid.color ?? null;
+                if (midPosition >= 1) return rule.mid.color ?? null;
+                return position <= midPosition
+                  ? mixColors(rule.min.color ?? '', rule.mid.color ?? '', position / midPosition)
+                  : mixColors(
+                      rule.mid.color ?? '',
+                      rule.max.color ?? '',
+                      (position - midPosition) / (1 - midPosition)
+                    );
+              })()
             : mixColors(rule.min.color ?? '', rule.max.color ?? '', position);
 
           if (color) contribute(address, { background: color });

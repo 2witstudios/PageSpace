@@ -107,6 +107,75 @@ describe('sheet store (integration)', () => {
     seededUserIds.length = 0;
   });
 
+  describe('conditional formatting survives the store', () => {
+    const RULE = {
+      id: 'over-100',
+      kind: 'cell' as const,
+      ranges: ['A1:A9'],
+      condition: { operator: 'greaterThan' as const, value: '100' },
+      format: { background: '#fee2e2' },
+    };
+
+    const documentWithRule = () => {
+      const sheet = parseSheetContent('');
+      sheet.cells.A1 = '150';
+      sheet.conditionalFormats = [RULE];
+      return serializeSheetContent(sheet);
+    };
+
+    it('carries rules from a document into the tab row and back', async () => {
+      // The projection round-trip is unit-tested, but the projection is not
+      // what persists: the store builds its own insert column list, and a
+      // column missing from it discards the rules with no error anywhere.
+      const { pageId } = await makeUnmigratedSheet(documentWithRule());
+
+      await replaceFromDocument({ pageId }, documentWithRule(), { userId: null });
+
+      const [tab] = await db.select().from(sheetTabs).where(eq(sheetTabs.pageId, pageId));
+      expect(tab.conditionalFormats).toEqual([RULE]);
+
+      const sheet = await readSheetData({ pageId });
+      expect(sheet?.conditionalFormats).toEqual([RULE]);
+    });
+
+    it('restores rules already present in the database on read', async () => {
+      // The read path builds its own column list too, so a rule can be stored
+      // correctly and still never reach a SheetData.
+      const { pageId, tabId } = await makeSheet();
+      await db.update(sheetTabs).set({ conditionalFormats: [RULE] }).where(eq(sheetTabs.id, tabId));
+
+      expect((await readSheetData({ pageId }))?.conditionalFormats).toEqual([RULE]);
+    });
+
+    it('keeps rules through a cell write, which rewrites the tab', async () => {
+      const { pageId, tabId } = await makeSheet({ rowCount: 9 });
+      await db.update(sheetTabs).set({ conditionalFormats: [RULE] }).where(eq(sheetTabs.id, tabId));
+
+      await setCells({ pageId }, [{ address: 'A1', value: '250' }], { userId: null });
+
+      expect((await readSheetData({ pageId }))?.conditionalFormats).toEqual([RULE]);
+    });
+
+    it('copies rules to the destination sheet', async () => {
+      const source = await makeUnmigratedSheet(documentWithRule());
+      await replaceFromDocument({ pageId: source.pageId }, documentWithRule(), { userId: null });
+      const target = await makeSheet();
+      // The target's own tab would collide on (pageId, tabIndex), as the
+      // existing copy test notes — copy onto a page with no tab of its own.
+      await db.delete(sheetTabs).where(eq(sheetTabs.pageId, target.pageId));
+
+      await copySheetRows(source.pageId, target.pageId);
+
+      expect((await readSheetData({ pageId: target.pageId }))?.conditionalFormats).toEqual([RULE]);
+    });
+
+    it('leaves a sheet with no rules with none', async () => {
+      const { pageId } = await makeSheet({ rowCount: 2 });
+      await setCells({ pageId }, [{ address: 'A1', value: '1' }], { userId: null });
+      expect((await readSheetData({ pageId }))?.conditionalFormats).toBeUndefined();
+    });
+  });
+
   describe('writes materialise values', () => {
     it('stores the computed value beside the authored text', async () => {
       const { pageId, tabId, ownerId } = await makeSheet();

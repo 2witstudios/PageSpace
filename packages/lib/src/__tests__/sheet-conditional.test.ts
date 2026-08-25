@@ -48,6 +48,15 @@ describe('addressesOfRange', () => {
     expect(addressesOfRange(range)).toEqual([]);
   });
 
+  it.each(['A0', 'A0:A2', 'A1:B0'])('yields nothing for %j rather than throwing', (range) => {
+    // `decodeCellAddress` accepts `A0` and hands back row -1, because rows are
+    // 1-based going in. Expanding that threw, so one malformed stored rule took
+    // the whole sheet's evaluation down with it.
+    expect(() => addressesOfRange(range)).not.toThrow();
+    expect(addressesOfRange(range)).toEqual([]);
+    expect(rangeAnchor(range)).toBeNull();
+  });
+
   it('finds the top-left anchor regardless of how the range was written', () => {
     expect(rangeAnchor('D4:B2')).toEqual({ row: 1, column: 1 });
     expect(rangeAnchor('bogus')).toBeNull();
@@ -207,6 +216,18 @@ describe('formula rules', () => {
     expect(Object.keys(result.formats)).toEqual(['A2']);
   });
 
+  it('shifts lowercase references too', () => {
+    // The tokenizer accepts and normalises `a1`, so a rule can legitimately
+    // hold lowercase references. They used to be left unshifted, so `=a1>b1`
+    // evaluated the identical expression for every cell in the range.
+    const seen: string[] = [];
+    evaluateConditionalFormats(
+      [{ id: 'r', kind: 'formula', ranges: ['A1:A3'], formula: '=a1>b1', format: { bold: true } }],
+      contextOf({}, { formula: (formula) => { seen.push(formula); return false; } })
+    );
+    expect(seen).toEqual(['=A1>B1', '=A2>B2', '=A3>B3']);
+  });
+
   it('does not take the sheet down when a rule formula throws', () => {
     const result = evaluateConditionalFormats(
       [{ id: 'r', kind: 'formula', ranges: ['A1:A2'], formula: '=BROKEN(', format: { bold: true } }],
@@ -273,11 +294,46 @@ describe('colour scales', () => {
       ...scale,
       mid: { type: 'percentile', value: 50, color: '#ff0000' },
     } as ConditionalRule;
+    // A percentile-50 midpoint tracks the data's own median, so the middle of
+    // three values always lands exactly on it. Partial blending is asserted
+    // against a fixed midpoint below, where the anchor does not move.
     const result = evaluateConditionalFormats([threeColour], contextOf({ A1: 0, A2: 5, A3: 10 }));
     expect(result.formats.A2.background).toBe('#ff0000');
-    // Quarter of the way up is halfway between the low colour and the midpoint.
-    const quarter = evaluateConditionalFormats([threeColour], contextOf({ A1: 0, A2: 2.5, A3: 10 }));
-    expect(quarter.formats.A2.background).toBe('#ff8080');
+
+    const skewed = evaluateConditionalFormats([threeColour], contextOf({ A1: 0, A2: 2, A3: 10 }));
+    // Median is 2, so A3 sits between the midpoint and the max.
+    expect(skewed.formats.A2.background).toBe('#ff0000');
+    expect(skewed.formats.A1.background).toBe('#ffffff');
+  });
+
+  it('places the midpoint colour where its anchor says, not at the halfway mark', () => {
+    // A midpoint configured at 10 on a fixed 0..100 scale must render its
+    // colour AT 10. Interpolating around a hardcoded 0.5 put it at 50 and left
+    // the `number`, `percent` and non-median `percentile` settings inert.
+    const anchored: ConditionalRule = {
+      id: 's', kind: 'colorScale', ranges: ['A1:A3'],
+      min: { type: 'number', value: 0, color: '#000000' },
+      mid: { type: 'number', value: 10, color: '#ff0000' },
+      max: { type: 'number', value: 100, color: '#ffffff' },
+    };
+    const result = evaluateConditionalFormats([anchored], contextOf({ A1: 0, A2: 10, A3: 100 }));
+    expect(result.formats.A2.background).toBe('#ff0000');
+
+    // ...and the value halfway to it takes half the blend from the low colour.
+    const half = evaluateConditionalFormats([anchored], contextOf({ A1: 0, A2: 5, A3: 100 }));
+    expect(half.formats.A2.background).toBe('#800000');
+  });
+
+  it('does not divide by zero when the midpoint sits on an end anchor', () => {
+    const degenerate: ConditionalRule = {
+      id: 's', kind: 'colorScale', ranges: ['A1:A2'],
+      min: { type: 'number', value: 0, color: '#000000' },
+      mid: { type: 'number', value: 0, color: '#ff0000' },
+      max: { type: 'number', value: 10, color: '#ffffff' },
+    };
+    const result = evaluateConditionalFormats([degenerate], contextOf({ A1: 0, A2: 10 }));
+    expect(result.formats.A1.background).toBe('#ff0000');
+    expect(result.formats.A2.background).toBe('#ff0000');
   });
 
   it('anchors to explicit numbers when asked', () => {
