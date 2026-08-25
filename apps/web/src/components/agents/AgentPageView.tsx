@@ -424,8 +424,8 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // state, is what the guard READS: two clicks in the same tick would both see
   // a stale `false` from state. State exists alongside it purely to disable the
   // button, which is feedback, not the guard. A COUNTER rather than a boolean,
-  // so an `ignoreInFlight` caller (below) overlapping a user click cannot clear
-  // the flag out from under the one still running.
+  // so an `isRecovery` caller (below) overlapping a user click cannot clear the
+  // flag out from under the one still running.
   const inFlightRef = useRef(0);
   const [isCreating, setIsCreating] = useState(false);
 
@@ -443,18 +443,18 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
      */
     reuseSessionId?: string | null;
     /**
-     * Not a user click — a recovery mint that must happen even while one is in
-     * flight. The guard exists to dedupe ONE user intent, not to make the
+     * Not a user click — a recovery mint, which bypasses BOTH refusals below.
+     * The in-flight guard exists to dedupe one user intent, not to make the
      * session-ended recovery a no-op because History's button happened to be
-     * mid-round-trip.
+     * mid-round-trip; and the stream guard protects a response still arriving,
+     * which by definition is not the case once the session that was producing
+     * it has ended. Refusing here would strand the user on a conversation
+     * whose session is gone.
      */
-    ignoreInFlight?: boolean;
+    isRecovery?: boolean;
   }) => {
-    if (inFlightRef.current > 0 && !options?.ignoreInFlight) return;
-    // The session-ended recovery is exempt: its whole point is that the old
-    // stream is already over, and refusing it would strand the user on a
-    // conversation whose session is gone.
-    if (blockedByActiveStream && !options?.ignoreInFlight) return;
+    if (inFlightRef.current > 0 && !options?.isRecovery) return;
+    if (blockedByActiveStream && !options?.isRecovery) return;
     inFlightRef.current += 1;
     setIsCreating(true);
     try {
@@ -637,7 +637,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               chatContext="page"
               hostConversationId={current.conversationId}
               isReadOnly={isReadOnly}
-              onSessionEnded={() => void handleCreateNew({ ignoreInFlight: true })}
+              onSessionEnded={() => void handleCreateNew({ isRecovery: true })}
               onConversationClosed={handleConversationClosed}
             />
           ) : agentLoading ? (
