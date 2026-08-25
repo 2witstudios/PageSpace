@@ -324,6 +324,34 @@ describe('AgentPageView', () => {
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
   });
 
+  it('the bar\'s "+" cannot double-mint — the second click of a pair is swallowed', async () => {
+    // The mint has no idempotency key server-side, so two clicks would be two
+    // conversations. That was survivable while this action lived only behind
+    // the History tab; it now sits permanently beside the chat.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    let release: (value: { conversationId: string; sessionId: string | null }) => void = () => {};
+    mockCreatePageConversation.mockImplementation(
+      () => new Promise((resolve) => { release = resolve; }),
+    );
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    const plus = screen.getByRole('button', { name: 'Start a new conversation' });
+    fireEvent.click(plus);
+    fireEvent.click(plus);
+
+    expect(mockCreatePageConversation).toHaveBeenCalledTimes(1);
+
+    release({ conversationId: 'conv-2', sessionId: null });
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+
+    // And the guard RELEASES: a mint that finished must not leave the control
+    // dead for the rest of the session.
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
     // Reachable now that a global session can host any accessible agent's
     // conversation (create-conversation-in-workspace.ts): this agent page's

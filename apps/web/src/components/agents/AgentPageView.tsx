@@ -406,9 +406,27 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     [conversations],
   );
 
+  // In-flight guard. `newConversation` mints server-side with no idempotency
+  // key, so two clicks are two conversations — and the "+" this now feeds sits
+  // permanently beside the chat, where a double-click is ordinary, rather than
+  // behind the History tab where it used to be the only way in. A ref, not
+  // state, is what the guard READS: two clicks in the same tick would both see
+  // a stale `false` from state. State exists alongside it purely to disable the
+  // button, which is feedback, not the guard.
+  const creatingRef = useRef(false);
+  const [isCreating, setIsCreating] = useState(false);
+
   const handleCreateNew = useCallback(async () => {
-    await newConversation();
-    refreshConversations();
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    setIsCreating(true);
+    try {
+      await newConversation();
+      refreshConversations();
+    } finally {
+      creatingRef.current = false;
+      setIsCreating(false);
+    }
   }, [newConversation, refreshConversations]);
 
   const toggleConversationShare = useCallback(
@@ -618,7 +636,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                   // Deliberately ungated: this reaches the SAME handleCreateNew
                   // the History tab's "New Conversation" button already calls
                   // ungated. One policy, not two.
-                  <PaneNewConversationAction disabled={false} onCreate={() => void handleCreateNew()} />
+                  <PaneNewConversationAction disabled={isCreating} onCreate={() => void handleCreateNew()} />
                 }
               />
               <div className="min-h-0 flex-1 overflow-hidden">

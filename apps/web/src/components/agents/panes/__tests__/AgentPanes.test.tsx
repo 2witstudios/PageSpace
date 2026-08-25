@@ -743,6 +743,34 @@ describe('AgentPanes — the mint lifecycle', () => {
   });
 
   /**
+   * The pane bar's own "+", which every mint test above reaches through the
+   * PICKER instead — so nothing in this suite actually exercised the control a
+   * BOUND chat pane offers. It now lives in `PaneNewConversationAction`, shared
+   * with the agent page's session-less chat; this pins the wiring on this side
+   * of that share.
+   */
+  it('the pane bar\'s "+" mints a fresh conversation for the SAME agent, into the same pane', async () => {
+    mockPost.mockResolvedValue({});
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const user = userEvent.setup();
+    renderPanes();
+
+    const plus = await screen.findByRole('button', { name: 'Start a new conversation' });
+    await waitFor(() => expect(plus).not.toBeDisabled());
+    await user.click(plus);
+
+    await waitFor(() =>
+      expect(mockPost).toHaveBeenCalledWith('/api/ai/page-agents/agent-1/conversations', {
+        conversationId: 'new-id-1',
+        sessionId: 'ses-1',
+        activeNodeId: 'n1',
+      }),
+    );
+    await waitFor(() => expect(nodeShowingChat('new-id-1')).toBeDefined());
+  });
+
+  /**
    * THE REBIND THE MODEL DELETED. A mint used to set the pane to `{kind,
    * targetId: null}` and then to the real target; a `PaneTarget` cannot be
    * half-bound, so a failed mint leaves the pane exactly as the user left it and

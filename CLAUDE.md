@@ -65,3 +65,14 @@ bun run test:security      # Security tests
 bun run db:generate        # Generate Drizzle migrations
 bun run db:migrate         # Run migrations
 ```
+
+## Task Boards (PageSpace)
+
+Work is tracked in the PageSpace drive (`lng6q95adrfndmdnnf9z8g6p`) under the **Features** task list (`as9sf4gjwj26tm2djzcdbzie`). **Before creating or restructuring any task list, read "How to Build Tasks in PageSpace": page `o3n3c2e0fkq17mh2uqx2nyqg`** — `pagespace pages read o3n3c2e0fkq17mh2uqx2nyqg`. It is the authority on hierarchy (Category → Epic → Phase/PR → Named Task → RED/GREEN pairs), naming (em-dash separators, middle-dot steps, no status in titles), statuses, and agent gating.
+
+Non-negotiables it enforces:
+
+- Every named task body is a `## Spec` of "Given X, should Y" acceptance criteria and decomposes into `RED —` / `GREEN —` sub-tasks. Parents cannot be closed while any child is open — do not fight the gate; decompose.
+- **RED first**: the failing test is written, run, and marked Done before GREEN implementation begins.
+- New logic lands as **pure functions** (functional core / imperative shell); effects (db, clock, id-gen, fetch, DOM) are injected, never reached for.
+- GREEN is not done until **every branch** of the new pure function has a test (100% branch coverage on pure/core modules) and typecheck + test:unit are green.
