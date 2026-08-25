@@ -58,6 +58,20 @@ describe('classifyImageSource', () => {
   it('calls an empty src malformed rather than relative', () => {
     expect(classifyImageSource('   ')).toEqual({ bucket: IMAGE_SOURCE_KEYS.malformed, host: null });
   });
+
+  it('calls a src that announces a scheme and then will not parse malformed', () => {
+    // A truncated paste. Filed as a relative path it looks like a migration
+    // problem; it is a broken image.
+    for (const src of ['https://', '//', 'http://']) {
+      expect(classifyImageSource(src)).toEqual({ bucket: IMAGE_SOURCE_KEYS.malformed, host: null });
+    }
+    // `mailto:` parses, so it is a scheme the census can name rather than a
+    // broken one — the guard only catches what announces a scheme and fails.
+    expect(classifyImageSource('mailto:')).toEqual({
+      bucket: IMAGE_SOURCE_KEYS.otherScheme,
+      host: null,
+    });
+  });
 });
 
 describe('what leaves this module', () => {

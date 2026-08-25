@@ -36,9 +36,11 @@ export const IMAGE_SOURCE_KEYS = {
   malformed: 'img-src:malformed',
 } as const;
 
+/** The bucket keys themselves, so a tally cannot be filed under a typo. */
+export type ImageSourceBucket = (typeof IMAGE_SOURCE_KEYS)[keyof typeof IMAGE_SOURCE_KEYS];
+
 export interface ImageSource {
-  /** One of `IMAGE_SOURCE_KEYS`. */
-  bucket: string;
+  bucket: ImageSourceBucket;
   /** Bare hostname for external images; null for everything else. */
   host: string | null;
 }
@@ -51,6 +53,14 @@ const PAGESPACE_FILE_PATH = /^\/api\/files\/[^/]+\/(view|thumbnail)$/;
  * production is https. Parsing it needs a base, and the base is never reported.
  */
 const SCHEME_RELATIVE_BASE = 'https://scheme.relative.invalid';
+
+/**
+ * A src that announces itself as absolute — `https://`, `mailto:`, `//host` —
+ * and then fails to parse is broken, not relative. `https://` on its own is the
+ * case that matters: a truncated paste, which would otherwise be filed as a
+ * relative path and look like a migration problem instead of a broken image.
+ */
+const ANNOUNCES_A_SCHEME = /^([a-z][a-z0-9+.-]*:|\/\/)/i;
 
 function hostOf(url: URL): string | null {
   // Credentials in a src are rare enough to be interesting and sensitive enough
@@ -76,6 +86,9 @@ export function classifyImageSource(src: string): ImageSource {
     // written elsewhere and pasted in carries `./images/x.png` paths that
     // resolve against nothing here, and they are a migration problem whether or
     // not they are well-formed.
+    if (ANNOUNCES_A_SCHEME.test(trimmed)) {
+      return { bucket: IMAGE_SOURCE_KEYS.malformed, host: null };
+    }
     return {
       bucket: PAGESPACE_FILE_PATH.test(trimmed.split('?')[0])
         ? IMAGE_SOURCE_KEYS.pagespaceFile

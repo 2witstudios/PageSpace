@@ -314,6 +314,11 @@ export interface ReportOptions {
    * writes that column today — `DocumentView` hardcodes `isPaginated={false}` —
    * so the count answers whether the switch is genuinely unused or whether the
    * API has been setting it all along.
+   *
+   * A whole-table aggregate, and labelled as one in the report: every other
+   * total counts what the scan reached, and under `--limit` or a Ctrl-C the two
+   * scopes differ. Scoping it to the scanned batch would need the ids, which
+   * would mean holding every id in memory to answer a question about a boolean.
    */
   paginatedPages?: number;
 }
@@ -333,7 +338,9 @@ export function formatCensusReport(snapshot: CensusSnapshot, { partial, paginate
     `  text lost in the round trip     ${totals.textLost}`,
     `  text lost, no named construct   ${totals.textLostWithNoNamedConstruct}`,
     `  images found (instances)        ${totals.images}`,
-    ...(paginatedPages === undefined ? [] : [`  pages with isPaginated set      ${paginatedPages}`]),
+    ...(paginatedPages === undefined
+      ? []
+      : [`  isPaginated set (whole table)   ${paginatedPages}`]),
     '',
     ...table('HTML documents — constructs the schema drops', snapshot.htmlConstructs),
     ...table('markdown documents — source syntax the schema has no node for', snapshot.markdownConstructs),

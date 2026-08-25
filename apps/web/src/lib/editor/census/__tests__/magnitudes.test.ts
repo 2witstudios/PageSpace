@@ -50,20 +50,20 @@ describe('htmlMagnitudes', () => {
 describe('markdown magnitudes', () => {
   it('counts the header as a row, because the page has to fit it', () => {
     const markdown = '| a | b |\n| --- | --- |\n| 1 | 2 |\n| 3 | 4 |\n';
-    expect(analyzeMarkdown(markdown).magnitudes).toMatchObject({ tableRows: 3, tableColumns: 2 });
+    expect(analyzeMarkdown(markdown, workspace).magnitudes).toMatchObject({ tableRows: 3, tableColumns: 2 });
   });
 
   it('counts the lines in a fenced block', () => {
-    expect(analyzeMarkdown('```ts\none\ntwo\n```\n').magnitudes.codeBlockLines).toBe(2);
+    expect(analyzeMarkdown('```ts\none\ntwo\n```\n', workspace).magnitudes.codeBlockLines).toBe(2);
   });
 
   it('counts images, including one inside a table cell', () => {
     const markdown = '![a](a.png)\n\n| x |\n| --- |\n| ![b](b.png) |\n';
-    expect(analyzeMarkdown(markdown).magnitudes.images).toBe(2);
+    expect(analyzeMarkdown(markdown, workspace).magnitudes.images).toBe(2);
   });
 
   it('measures the longest block without reporting it', () => {
-    const result = analyzeMarkdown('short\n\na considerably longer paragraph of prose\n');
+    const result = analyzeMarkdown('short\n\na considerably longer paragraph of prose\n', workspace);
     expect(result.magnitudes.blockCharacters).toBeGreaterThan('short'.length);
     expect(JSON.stringify(result.magnitudes)).not.toContain('prose');
   });

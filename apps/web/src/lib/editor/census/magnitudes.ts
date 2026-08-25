@@ -84,3 +84,19 @@ export function htmlMagnitudes(container: DomElement): Magnitudes {
 
   return magnitudes;
 }
+
+/**
+ * Fold one document's measurements into another's. Images SUM because they are
+ * a count of things on the page; everything else is a maximum, because the
+ * question is whether any single block fits.
+ *
+ * Used where markdown source embeds raw HTML: the two halves of one document
+ * are measured by two different readers and have to come out as one document.
+ */
+export function absorb(into: Magnitudes, from: Magnitudes): void {
+  into.images += from.images;
+  into.tableRows = Math.max(into.tableRows, from.tableRows);
+  into.tableColumns = Math.max(into.tableColumns, from.tableColumns);
+  into.codeBlockLines = Math.max(into.codeBlockLines, from.codeBlockLines);
+  into.blockCharacters = Math.max(into.blockCharacters, from.blockCharacters);
+}

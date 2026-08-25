@@ -41,9 +41,12 @@ board; Phase E's "Refuse a lossy seed" carries it as a hard precondition.
 It also resizes Phase K: the markdown migration is ~4,200 pages, not the 1,009 that carry the label.
 
 **3,169, not the 3,003 first reported.** That figure came from an ad-hoc query run beside the
-census; this one is measured by the scan itself and excludes the parser's own artefacts. The gap is
-the 183 pages that contain an unescaped `<` in prose or a code sample: a query looking for a tag
-finds `<string>` in `Set<string>` and calls the page HTML.
+census; this one is measured by the scan itself and excludes the parser's own artefacts. A query
+looking for a tag finds `<string>` in `Set<string>` and calls the page HTML, which is the direction
+of the 166-page difference — 183 pages contain an unescaped `<` in prose or a code sample. It does
+not decompose exactly, and should not be presented as if it did: the 3,003 came from a rule that was
+not written down, so only the 3,169 is a measurement. Take the older number as superseded rather
+than as explained.
 
 ### The headline text-loss number was a false positive
 
@@ -140,7 +143,23 @@ characters. Overflow handling is a precondition for the pagination work, not a p
 images are about to join that list as the one block whose height is unknown until it loads, which is
 the argument for intrinsic `width`/`height` on the node at insert time.
 
-### 4. `md:strikethrough` was never a gap
+### 4. Raw HTML inside markdown was going unread
+
+Raised in review on #2497 as a P1, and correct: `marked` emits raw HTML as one opaque `html` token
+and never looks inside it. An `<img src="data:...">`, a 60-row `<table>` or a long `<pre>` written
+into a markdown document was invisible to both the image classification and the magnitudes — and
+those are precisely the two conclusions this run exists to draw. 24 pages carry `md:raw-html`.
+
+Fixed by handing the markdown walk the same DOM the HTML half of the census uses. **The re-run
+returned every number unchanged**, which is the good outcome and also the only reason "no data URIs,
+no external hosts" is now a measurement rather than an assumption.
+
+Two smaller review points fixed alongside it: a table cell is measured as a block, the way the HTML
+half already measured `td`/`th` (a table-only document reported no block at all), and a src that
+announces a scheme and then will not parse — `https://`, a truncated paste — is malformed rather
+than relative.
+
+### 5. `md:strikethrough` was never a gap
 
 Raised in review on #2495 and confirmed: StarterKit ships the `strike` mark and the bubble menu
 exposes it, so 17 documents were sitting in a table headed "syntax the schema has no node for" that
@@ -149,11 +168,13 @@ surviving the round trip so the claim is pinned rather than asserted.
 
 ## Gates
 
-- `bun run --filter web test -- src/lib/editor/census` — 124 passed
-- Mutation-checked, each independently red: the credentials check in `hostOf`, the `data:` branch,
-  `hasHtmlElement` ignoring the unescaped-bracket bucket, the markdown table header counting as a
-  row, the mislabelled tally being kept separate, image buckets counting pages not instances, the
-  ten-host cap, and magnitudes measuring the stored document rather than the round trip.
+- `bun run --filter web test -- src/lib/editor/census` — 131 passed
+- Mutation-checked, twelve of them, each independently red: the credentials check in `hostOf`, the
+  `data:` branch, the malformed-scheme guard, `hasHtmlElement` ignoring the unescaped-bracket
+  bucket, the markdown table header counting as a row, table cells counting as blocks, raw HTML
+  being read at all, `absorb` summing images rather than taking their maximum, the mislabelled
+  tally being kept separate, image buckets counting pages not instances, the ten-host cap, and
+  magnitudes measuring the stored document rather than the round trip.
 - Production run: read-only via `fly proxy`, `default_transaction_read_only` asserted at startup.
   The html construct tallies and the text-loss counts are **unchanged** from round one, which is
   what makes the two runs comparable.

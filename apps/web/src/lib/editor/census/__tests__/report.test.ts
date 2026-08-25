@@ -3,7 +3,7 @@ import { createCensusAccumulator, formatCensusReport, TRACKED_HTML_CONSTRUCTS } 
 import { emptyMagnitudes, type Magnitudes } from '../magnitudes';
 import type { HtmlDocumentAnalysis } from '../round-trip';
 import type { MarkdownAnalysis } from '../markdown';
-import type { ImageSource } from '../images';
+import type { ImageSource, ImageSourceBucket } from '../images';
 
 /**
  * The fields these tests are not about, filled in once. Spelling out
@@ -136,7 +136,7 @@ describe('formatCensusReport', () => {
   });
 });
 
-const image = (bucket: string, host: string | null = null): ImageSource => ({ bucket, host });
+const image = (bucket: ImageSourceBucket, host: string | null = null): ImageSource => ({ bucket, host });
 
 describe('the mislabelled markdown tally', () => {
   it('keeps markdown found in html-mode pages apart from the pages that carry the label', () => {
@@ -262,7 +262,7 @@ describe('formatCensusReport, the new sections', () => {
 
   it('prints the isPaginated count only when the run asked the database for it', () => {
     expect(formatCensusReport(snapshot(), { partial: false, paginatedPages: 7 })).toContain(
-      'pages with isPaginated set      7',
+      'isPaginated set (whole table)   7',
     );
     expect(formatCensusReport(snapshot(), { partial: false })).not.toContain('isPaginated');
   });

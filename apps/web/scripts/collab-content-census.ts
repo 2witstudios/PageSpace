@@ -178,7 +178,7 @@ async function main(): Promise<void> {
         if (!/\S/.test(page.content)) {
           census.recordEmpty(page.contentMode);
         } else if (page.contentMode === 'markdown') {
-          census.recordMarkdown(page.id, analyzeMarkdown(page.content));
+          census.recordMarkdown(page.id, analyzeMarkdown(page.content, workspace));
         } else {
           const analysis = analyzeHtmlDocument(page.content, schema, workspace);
           census.recordHtml(page.id, analysis);
@@ -187,7 +187,7 @@ async function main(): Promise<void> {
           // a second time as what it is — otherwise the markdown numbers are
           // drawn from a quarter of the markdown documents that exist.
           if (analysis.status === 'analysed' && analysis.tagless) {
-            census.recordMislabelledMarkdown(page.id, analyzeMarkdown(page.content));
+            census.recordMislabelledMarkdown(page.id, analyzeMarkdown(page.content, workspace));
           }
         }
 

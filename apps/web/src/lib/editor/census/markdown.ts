@@ -1,6 +1,7 @@
 import { lexer, type Token, type Tokens } from 'marked';
-import { classifyImageSource, type ImageSource } from './images';
-import { emptyMagnitudes, lineCount, type Magnitudes } from './magnitudes';
+import { classifyImageSource, htmlImageSources, type ImageSource } from './images';
+import { absorb, emptyMagnitudes, htmlMagnitudes, lineCount, type Magnitudes } from './magnitudes';
+import type { DomWorkspace } from './constructs';
 
 /**
  * Markdown constructs the ProseMirror schema has no node or mark for.
@@ -69,6 +70,7 @@ interface Walk {
   found: Set<string>;
   images: ImageSource[];
   magnitudes: Magnitudes;
+  workspace: DomWorkspace;
 }
 
 /** Markdown tokens the editor renders as one block the paginator cannot split. */
@@ -101,11 +103,27 @@ function collect(tokens: Token[], walk: Walk): void {
         // row more than `rows.length` says.
         walk.magnitudes.tableRows = Math.max(walk.magnitudes.tableRows, table.rows.length + 1);
         walk.magnitudes.tableColumns = Math.max(walk.magnitudes.tableColumns, table.header.length);
+        // A cell is a block the layout has to place whole, and the HTML half
+        // measures `td`/`th` for that reason. Without this a table-only
+        // document reported no block at all.
+        for (const cell of [...table.header, ...table.rows.flat()]) {
+          walk.magnitudes.blockCharacters = Math.max(walk.magnitudes.blockCharacters, cell.text.length);
+        }
         break;
       }
-      case 'html':
+      case 'html': {
         found.add(Construct.RawHtml);
+        // `marked` hands raw HTML over as one opaque token and never looks
+        // inside it, so `<img src="data:...">`, a 60-row `<table>` and a long
+        // `<pre>` written into a markdown document were all invisible here —
+        // and the conclusions this census draws about images and about page
+        // sizes are exactly the ones that would have been wrong. Read it with
+        // the same DOM the HTML half of the census uses.
+        const container = walk.workspace.parse(token.raw);
+        walk.images.push(...htmlImageSources(container));
+        absorb(walk.magnitudes, htmlMagnitudes(container));
         break;
+      }
       case 'heading':
         if ((token as Tokens.Heading).depth >= 4) found.add(Construct.DeepHeading);
         break;
@@ -129,8 +147,13 @@ function collect(tokens: Token[], walk: Walk): void {
   }
 }
 
-export function analyzeMarkdown(markdown: string): MarkdownAnalysis {
-  const walk: Walk = { found: new Set<string>(), images: [], magnitudes: emptyMagnitudes() };
+/**
+ * The workspace is required rather than optional on purpose: markdown embeds
+ * raw HTML, and a signature that lets the caller omit the reader for it is a
+ * signature that silently under-measures.
+ */
+export function analyzeMarkdown(markdown: string, workspace: DomWorkspace): MarkdownAnalysis {
+  const walk: Walk = { found: new Set<string>(), images: [], magnitudes: emptyMagnitudes(), workspace };
   collect(lexer(markdown), walk);
   return {
     constructs: [...walk.found].sort(),
@@ -139,6 +162,6 @@ export function analyzeMarkdown(markdown: string): MarkdownAnalysis {
   };
 }
 
-export function markdownConstructs(markdown: string): string[] {
-  return analyzeMarkdown(markdown).constructs;
+export function markdownConstructs(markdown: string, workspace: DomWorkspace): string[] {
+  return analyzeMarkdown(markdown, workspace).constructs;
 }
