@@ -235,6 +235,31 @@ describe('the 1MB replay ceiling is named, not discovered', () => {
     const res = await GET(request());
     expect(res.status).toBe(204);
   });
+
+  // Measuring the body is the only step on this path that can throw, and a body
+  // that fails mid-read is ordinary at a serving edge: a client hangs up, an
+  // upload truncates. Before this was handled it propagated out of the handler
+  // as an unhandled 500 with a stack trace, on the hottest route in the system.
+  it('given a body that errors mid-read, should answer 400 rather than throw', async () => {
+    const erroring = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new Uint8Array(1024));
+      },
+      pull(controller) {
+        controller.error(new TypeError('terminated'));
+      },
+    });
+
+    const res = await POST(
+      request({}, { method: 'POST', body: erroring, duplex: 'half' } as RequestInit),
+    );
+
+    expect(res.status).toBe(400);
+    // Refused before any routing decision, and with no replay emitted — we could
+    // not establish the size, so Fly must not be handed the request.
+    expect(res.headers.get('fly-replay')).toBeNull();
+    expect(resolveAppRoute).not.toHaveBeenCalled();
+  });
 });
 
 describe('an outage reads as an outage', () => {

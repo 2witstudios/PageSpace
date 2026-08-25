@@ -138,9 +138,29 @@ async function handle(request: Request): Promise<Response> {
   // check the limit is trivially bypassed by omitting Content-Length, which is
   // the shape a streaming upload takes by default.
   const declaredLength = request.headers.get('content-length');
-  const tooLarge = declaredLength
-    ? exceedsReplayableBody(declaredLength)
-    : await exceedsStreamedBody(request.body);
+  let tooLarge: boolean;
+  try {
+    tooLarge = declaredLength
+      ? exceedsReplayableBody(declaredLength)
+      : await exceedsStreamedBody(request.body);
+  } catch {
+    // The body failed mid-read — a client that hung up, or a truncated upload.
+    // Measuring it is the ONLY step on this path that can throw, and letting it
+    // propagate would answer the hottest route in the system with an unhandled
+    // 500 and a stack trace. Refusing is also the safe answer on the merits: we
+    // could not establish the size, so emitting `fly-replay` would hand Fly a
+    // body it may not be able to replay. 400 rather than 413 because the body
+    // did not exceed anything — it did not arrive.
+    //
+    // Deliberately not logged: a client hanging up mid-request is routine at a
+    // serving edge, and this route runs once per ASSET of every published page,
+    // so logging it would bury the genuine failures the two `error` calls below
+    // exist to surface.
+    return htmlResponse(
+      '<!doctype html><meta charset="utf-8"><title>Bad request</title><p>The request body could not be read.',
+      400,
+    );
+  }
   if (tooLarge) {
     return htmlResponse(
       `<!doctype html><meta charset="utf-8"><title>Payload too large</title><p>Request bodies above ${MAX_REPLAYABLE_BODY_BYTES} bytes cannot be routed to a published app. Upload directly to storage instead.`,
