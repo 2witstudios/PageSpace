@@ -11,6 +11,7 @@ import {
   type ReconcileSandboxStorageDeps,
   type AgentSessionStorageRow,
   type DriveEnvStorageRow,
+  type PublishedAppStorageRow,
 } from '../sandbox-storage-reconcile';
 
 describe('bytesToGB', () => {
@@ -136,13 +137,16 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
   chargeCalls: ChargeCall[];
   agentSessionAdvanceCalls: Array<{ workspaceId: string; billedThrough: Date }>;
   driveEnvAdvanceCalls: Array<{ envId: string; billedThrough: Date }>;
+  publishedAppAdvanceCalls: Array<{ publishedAppId: string; billedThrough: Date }>;
 } {
   const chargeCalls: ChargeCall[] = [];
   const agentSessionAdvanceCalls: Array<{ workspaceId: string; billedThrough: Date }> = [];
   const driveEnvAdvanceCalls: Array<{ envId: string; billedThrough: Date }> = [];
+  const publishedAppAdvanceCalls: Array<{ publishedAppId: string; billedThrough: Date }> = [];
   const deps: ReconcileSandboxStorageDeps = {
     listAgentSessionSprites: async () => [],
     listDriveEnvSprites: async () => [],
+    listPublishedAppRootfs: async () => [],
     lookupDriveOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
@@ -159,10 +163,14 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
       driveEnvAdvanceCalls.push(input);
       return 'advanced';
     },
+    advancePublishedAppWatermark: async (input) => {
+      publishedAppAdvanceCalls.push(input);
+      return 'advanced';
+    },
     now: () => new Date('2026-07-01T00:00:00.000Z'),
     ...over,
   };
-  return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls };
+  return { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls, publishedAppAdvanceCalls };
 }
 
 /**
@@ -193,6 +201,22 @@ function driveEnv(over: Partial<DriveEnvStorageRow> = {}): DriveEnvStorageRow {
     measuredBytes: 1_000_000_000, // 1 GB
     measuredAt: new Date('2026-06-30T23:00:00.000Z'),
     lastActiveAt: new Date('2026-06-30T23:59:00.000Z'),
+    ...over,
+  };
+}
+
+/**
+ * A published app's ROOTFS row, same one-span-old watermark as the two Sprite
+ * sources. Its measurement is a BUILD-TIME registry size rather than a live `du`,
+ * so it carries no `lastActiveAt` of its own.
+ */
+function publishedAppRootfs(over: Partial<PublishedAppStorageRow> = {}): PublishedAppStorageRow {
+  return {
+    publishedAppId: 'app-1',
+    driveId: 'drive-1',
+    storageLastBilledAt: new Date(new Date('2026-07-01T00:00:00.000Z').getTime() - MAX_BILLABLE_SPAN_MS),
+    measuredBytes: 1_000_000_000, // 1 GB
+    measuredAt: new Date('2026-06-30T23:00:00.000Z'),
     ...over,
   };
 }
@@ -404,6 +428,128 @@ describe('reconcileSandboxStorage', () => {
       actual: { charged: result.charged, charges: chargeCalls.length, advanced: driveEnvAdvanceCalls.length },
       expected: { charged: 0, charges: 0, advanced: 1 },
     });
+  });
+
+  // -------------------------------------------------------------------------
+  // Published-app ROOTFS — the THIRD row source on the same meter. The only cost
+  // a stopped published app still incurs, and for a fleet of mostly-idle apps the
+  // entire per-app floor.
+  // -------------------------------------------------------------------------
+
+  it("bills a published app's rootfs to its DRIVE OWNER and advances the APP's own watermark", async () => {
+    const lookup = vi.fn(async (driveId: string) => `owner-of-${driveId}`);
+    const { deps, chargeCalls, publishedAppAdvanceCalls, driveEnvAdvanceCalls, agentSessionAdvanceCalls } = makeDeps({
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-9', driveId: 'drive-9' })],
+      lookupDriveOwnerId: lookup,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    expect(lookup).toHaveBeenCalledWith('drive-9');
+    assert({
+      given: 'a published app holding a measured 1GB image',
+      should: "charge the DRIVE OWNER, attributed to the app's drive and named as a hosting subject",
+      actual: {
+        charged: result.charged,
+        payerId: chargeCalls[0]?.payerId,
+        driveId: chargeCalls[0]?.driveId,
+        subjectKind: chargeCalls[0]?.subjectKind,
+        subjectId: chargeCalls[0]?.subjectId,
+      },
+      expected: {
+        charged: 1,
+        payerId: 'owner-of-drive-9',
+        driveId: 'drive-9',
+        subjectKind: 'hosting',
+        subjectId: 'app-9',
+      },
+    });
+    expect(chargeCalls[0].gbMonths).toBeCloseTo(MAX_BILLABLE_SPAN_MS / MS_PER_STORAGE_MONTH, 8);
+    // Its OWN watermark moved, and neither of the other two writers was touched.
+    expect(publishedAppAdvanceCalls).toEqual([
+      { publishedAppId: 'app-9', billedThrough: new Date('2026-07-01T00:00:00.000Z') },
+    ]);
+    expect(driveEnvAdvanceCalls).toEqual([]);
+    expect(agentSessionAdvanceCalls).toEqual([]);
+  });
+
+  it('SKIPS a published app whose drive owner cannot be resolved — never a fallback to its `ownerId` column', async () => {
+    // `published_apps.ownerId` is a denormalized cascade handle, not an answer to
+    // "who pays". Billing it would be a money movement that cannot be taken back.
+    const { deps, chargeCalls, publishedAppAdvanceCalls } = makeDeps({
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ driveId: 'drive-mid-delete' })],
+      lookupDriveOwnerId: async () => null,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a published app whose drive is mid-delete',
+      should: 'skip the cycle rather than bill anybody else',
+      actual: { charged: result.charged, skipped: result.skipped, charges: chargeCalls.length, advanced: publishedAppAdvanceCalls.length },
+      expected: { charged: 0, skipped: 1, charges: 0, advanced: 0 },
+    });
+  });
+
+  it('bills the never-measured 0 floor for an app with no build yet, and still advances its watermark', async () => {
+    // `imageSizeMeasuredAt` is NOT NULL exactly when `imageSizeBytes` is, so this
+    // branch means precisely "no build has landed" — an app holding no rootfs.
+    const { deps, chargeCalls, publishedAppAdvanceCalls } = makeDeps({
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ measuredBytes: null, measuredAt: null })],
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a published app whose image has never been measured',
+      should: 'charge nothing but still advance its watermark',
+      actual: { charged: result.charged, charges: chargeCalls.length, advanced: publishedAppAdvanceCalls.length },
+      expected: { charged: 0, charges: 0, advanced: 1 },
+    });
+  });
+
+  it('reports an unreadable published-app source as a failed SOURCE without stopping the other two', async () => {
+    // A dark row source must never stop the live one's money.
+    const { deps, chargeCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession()],
+      listPublishedAppRootfs: async () => {
+        throw new Error('published_apps unreadable');
+      },
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'the published-app row source throwing mid-tick',
+      should: 'name it in failedSources and still bill the session',
+      actual: { failedSources: result.failedSources, charged: result.charged, charges: chargeCalls.length },
+      expected: { failedSources: ['hosting'], charged: 1, charges: 1 },
+    });
+  });
+
+  it('meters ALL THREE row sources in one run, each to its own payer and its own watermark', async () => {
+    const { deps, chargeCalls, agentSessionAdvanceCalls, driveEnvAdvanceCalls, publishedAppAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-a', driveId: null, ownerId: 'global-owner' })],
+      listDriveEnvSprites: async () => [driveEnv({ envId: 'env-b', driveId: 'drive-b' })],
+      listPublishedAppRootfs: async () => [publishedAppRootfs({ publishedAppId: 'app-c', driveId: 'drive-c' })],
+      lookupDriveOwnerId: async (driveId) => `owner-of-${driveId}`,
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'one session, one env and one published app in the same tick',
+      should: 'charge each subject once, under its own kind',
+      actual: {
+        processed: result.processed,
+        charged: result.charged,
+        kinds: chargeCalls.map((c) => c.subjectKind).sort(),
+      },
+      expected: { processed: 3, charged: 3, kinds: ['env', 'hosting', 'session'] },
+    });
+    expect(agentSessionAdvanceCalls).toHaveLength(1);
+    expect(driveEnvAdvanceCalls).toHaveLength(1);
+    expect(publishedAppAdvanceCalls).toHaveLength(1);
   });
 
   it('meters BOTH row sources in one run, attributing each to its own payer and its own watermark', async () => {
@@ -768,6 +914,7 @@ describe('reconcileSandboxStorage', () => {
       expected: {
         session: { live: 1, neverMeasured: 0, stale: 0 },
         env: { live: 2, neverMeasured: 0, stale: 2 },
+        hosting: { live: 0, neverMeasured: 0, stale: 0 },
       },
     });
     // The flat totals still hold — the split is additive detail, not a redefinition.
@@ -785,6 +932,7 @@ describe('reconcileSandboxStorage', () => {
     expect(result.measurementHealth).toEqual({
       session: { live: 1, neverMeasured: 1, stale: 0 },
       env: { live: 1, neverMeasured: 1, stale: 0 },
+      hosting: { live: 0, neverMeasured: 0, stale: 0 },
     });
   });
 
@@ -957,6 +1105,7 @@ describe('reconcileSandboxStorage', () => {
       expected: {
         session: { billable: 2, charged: 0, skipped: 2, failed: 0 },
         env: { billable: 1, charged: 1, skipped: 0, failed: 0 },
+        hosting: { billable: 0, charged: 0, skipped: 0, failed: 0 },
       },
     });
     // The flat totals still add up — the split is detail, not a redefinition.
@@ -1051,6 +1200,7 @@ describe('reconcileSandboxStorage', () => {
     expect(result.measurementHealth).toEqual({
       session: { live: 1, neverMeasured: 0, stale: 0 },
       env: { live: 1, neverMeasured: 0, stale: 0 },
+      hosting: { live: 0, neverMeasured: 0, stale: 0 },
     });
   });
 

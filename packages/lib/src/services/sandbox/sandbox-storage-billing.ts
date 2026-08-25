@@ -1,8 +1,8 @@
 /**
  * Default (real) IO composition for the storage reconcile cron (Sprites
  * Platform Alignment 6-1) — binds `reconcileSandboxStorage`'s deps seam to its
- * TWO row sources (`agent_workspaces` and `drive_envs`) and the credit
- * pipeline. Reads the last PERSISTED measured bytes (never the provisioned cap,
+ * THREE row sources (`agent_workspaces`, `drive_envs` and `published_apps`) and
+ * the credit pipeline. Reads the last PERSISTED measured bytes (never the provisioned cap,
  * never waking a sprite).
  *
  * **Envs are a row source here, not a meter of their own.** A drive environment
@@ -35,6 +35,14 @@
  * All three are throttled per session and best-effort: a billing observation
  * must never wake a paused Sprite, delay a tool call, or fail one.
  *
+ * **A PUBLISHED APP's measurement has no such seam and needs none.** Its billed
+ * footprint is the registry size of the image it serves, recorded at BUILD time
+ * into `imageSizeBytes`/`imageSizeMeasuredAt` — the only moment the number is
+ * cheaply knowable (reading it later costs a registry round-trip per app; reading
+ * it after the image is replaced is impossible). So there is nothing to refresh
+ * opportunistically, and an app billing the never-measured 0 floor means precisely
+ * that no build has landed yet, which is an app that genuinely holds no rootfs.
+ *
  * An ENV's measurements come from the same seam, bound once at
  * `buildEnvProvisionDeps` (`services/drive-envs/env-provision-deps.ts`) — the
  * single path the web tier's rebuild and a session's ensure in both the web and
@@ -43,11 +51,12 @@
  * forever while this cron kept advancing its watermark.
  */
 
-import { eq, and, isNotNull, isNull, sql } from '@pagespace/db/operators';
+import { eq, and, isNotNull, isNull, ne, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { lookupDriveOwnerId } from '../../billing/sandbox-payer';
 import { MACHINE_MARKUP_BPS } from '../../billing/credit-pricing';
 import { AIMonitoring } from '../../monitoring/ai-monitoring';
@@ -56,7 +65,19 @@ import {
   reconcileSandboxStorage,
   type ReconcileSandboxStorageDeps,
   type ReconcileSandboxStorageResult,
+  type StorageSubjectKind,
 } from './sandbox-storage-reconcile';
+
+/**
+ * The `metadata.type` tag per persistence unit — the freeform companion to the
+ * `model` label above. A `Record` keyed on `StorageSubjectKind` rather than a
+ * ternary, so a new unit cannot be silently filed under an existing one.
+ */
+const STORAGE_METADATA_TYPES: Record<StorageSubjectKind, string> = {
+  session: 'terminal_storage',
+  env: 'env_storage',
+  hosting: 'published_app_storage',
+};
 
 /**
  * Read a watermark write's outcome off the value the UPDATE returned.
@@ -127,6 +148,33 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
     return rows.map((row) => ({ ...row, lastActiveAt: row.lastActiveAt ?? new Date(0) }));
   },
 
+  /**
+   * The PUBLISHED-APP row source — every app's rootfs, whatever its status.
+   *
+   * No liveness predicate, unlike the two Sprite sources: their filter exists
+   * because a torn-down Sprite holds no filesystem, whereas a published app holds
+   * its image from the moment a build pins one until the row is destroyed.
+   * `destroying` rows are the one exclusion — their Fly app is being killed, and
+   * billing a resource we are actively removing bills for our own teardown latency.
+   *
+   * `imageSizeMeasuredAt` is NOT NULL exactly when `imageSizeBytes` is (a CHECK
+   * constraint), so the never-measured branch here means precisely "no build has
+   * landed yet" — an app with no image, which genuinely holds no rootfs and
+   * correctly bills the 0 floor.
+   */
+  async listPublishedAppRootfs() {
+    return db
+      .select({
+        publishedAppId: publishedApps.id,
+        driveId: publishedApps.driveId,
+        storageLastBilledAt: publishedApps.storageLastBilledAt,
+        measuredBytes: publishedApps.imageSizeBytes,
+        measuredAt: publishedApps.imageSizeMeasuredAt,
+      })
+      .from(publishedApps)
+      .where(ne(publishedApps.status, 'destroying'));
+  },
+
   lookupDriveOwnerId,
 
   /**
@@ -157,7 +205,11 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Hence the shared constant rather than a literal spelled at each end —
       // the breakdown's environments section keys off the same value
       // (`apps/web/src/lib/subscription/usage-breakdown.ts`).
-      model: subjectKind === 'env' ? SANDBOX_STORAGE_MODELS.env : SANDBOX_STORAGE_MODELS.session,
+      // Keyed off the subject kind through the shared constant map, never an
+      // inline ternary chain: adding a fourth persistence unit must be a new key,
+      // not another `subjectKind === ... ? ... :` that silently defaults a new
+      // unit's charges into the session label.
+      model: SANDBOX_STORAGE_MODELS[subjectKind],
       // One feature bucket for both: this is sandbox persistence either way, and
       // splitting the source would fragment the usage breakdown's totals.
       source: 'terminal',
@@ -187,7 +239,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       // Same 1.5x substrate floor as active-runtime billing (machine-billing.ts),
       // independent of the shared AI MARKUP_BPS default.
       markupBpsOverride: MACHINE_MARKUP_BPS,
-      metadata: { type: subjectKind === 'env' ? 'env_storage' : 'terminal_storage', gbMonths },
+      metadata: { type: STORAGE_METADATA_TYPES[subjectKind], gbMonths },
     });
   },
 
@@ -234,6 +286,19 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
       .set({ storageLastBilledAt: sql`GREATEST(${driveEnvs.storageLastBilledAt}, ${sql.param(billedThrough, driveEnvs.storageLastBilledAt)})` })
       .where(eq(driveEnvs.id, envId))
       .returning({ storageLastBilledAt: driveEnvs.storageLastBilledAt });
+    return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
+  },
+
+  // The published app's OWN watermark, same literal per-row design and the same
+  // monotonic guard. Deliberately NOT predicated on status: the charge it follows
+  // has already happened, so refusing the advance because the app was stopped or
+  // parked mid-tick would re-bill that window on the next run.
+  async advancePublishedAppWatermark({ publishedAppId, billedThrough }) {
+    const [row] = await db
+      .update(publishedApps)
+      .set({ storageLastBilledAt: sql`GREATEST(${publishedApps.storageLastBilledAt}, ${sql.param(billedThrough, publishedApps.storageLastBilledAt)})` })
+      .where(eq(publishedApps.id, publishedAppId))
+      .returning({ storageLastBilledAt: publishedApps.storageLastBilledAt });
     return classifyWatermarkWrite(row?.storageLastBilledAt, billedThrough);
   },
 

@@ -608,6 +608,41 @@
       "import": "./dist/services/app-hosting/provisioner.js",
       "require": "./dist/services/app-hosting/provisioner.js"
     },
+    "./services/app-hosting/app-billing": {
+      "types": "./dist/services/app-hosting/app-billing.d.ts",
+      "import": "./dist/services/app-hosting/app-billing.js",
+      "require": "./dist/services/app-hosting/app-billing.js"
+    },
+    "./services/app-hosting/app-lifecycle-metering": {
+      "types": "./dist/services/app-hosting/app-lifecycle-metering.d.ts",
+      "import": "./dist/services/app-hosting/app-lifecycle-metering.js",
+      "require": "./dist/services/app-hosting/app-lifecycle-metering.js"
+    },
+    "./services/app-hosting/app-machine-events": {
+      "types": "./dist/services/app-hosting/app-machine-events.d.ts",
+      "import": "./dist/services/app-hosting/app-machine-events.js",
+      "require": "./dist/services/app-hosting/app-machine-events.js"
+    },
+    "./services/app-hosting/app-metering-core": {
+      "types": "./dist/services/app-hosting/app-metering-core.d.ts",
+      "import": "./dist/services/app-hosting/app-metering-core.js",
+      "require": "./dist/services/app-hosting/app-metering-core.js"
+    },
+    "./services/app-hosting/awake-meter": {
+      "types": "./dist/services/app-hosting/awake-meter.d.ts",
+      "import": "./dist/services/app-hosting/awake-meter.js",
+      "require": "./dist/services/app-hosting/awake-meter.js"
+    },
+    "./services/app-hosting/awake-reconcile": {
+      "types": "./dist/services/app-hosting/awake-reconcile.d.ts",
+      "import": "./dist/services/app-hosting/awake-reconcile.js",
+      "require": "./dist/services/app-hosting/awake-reconcile.js"
+    },
+    "./services/fly/prometheus-client": {
+      "types": "./dist/services/fly/prometheus-client.d.ts",
+      "import": "./dist/services/fly/prometheus-client.js",
+      "require": "./dist/services/fly/prometheus-client.js"
+    },
     "./services/fly/flaps-retry": {
       "types": "./dist/services/fly/flaps-retry.d.ts",
       "import": "./dist/services/fly/flaps-retry.js",

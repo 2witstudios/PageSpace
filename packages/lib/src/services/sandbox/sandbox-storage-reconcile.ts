@@ -1,8 +1,9 @@
 /**
  * Storage reconcile (Sprites Platform Alignment 6-1) — periodically meters the
  * cost of a PERSISTENT filesystem, whether its sandbox is active or
- * hibernating. TWO row sources, ONE meter: an agent session
- * (`agent_workspaces`) and a drive ENVIRONMENT (`drive_envs`). The platform bills for the bytes actually
+ * hibernating. THREE row sources, ONE meter: an agent session
+ * (`agent_workspaces`), a drive ENVIRONMENT (`drive_envs`), and a PUBLISHED APP's
+ * rootfs (`published_apps`). The platform bills for the bytes actually
  * written (TRIM-friendly — deleting files lowers the bill), NOT the
  * provisioned volume size (docs.sprites.dev/concepts/lifecycle). So this
  * bills the last PERSISTED MEASURED footprint, never the provisioned cap — a
@@ -111,6 +112,16 @@
  * audit only), so its payer is the drive owner or nobody — see
  * `resolveEnvPayerId`, and the skip-on-unresolvable rule below.
  *
+ * **Widened once more by published apps, on exactly the same terms.** A published
+ * app's rootfs is the only cost a stopped app still incurs — its awake-seconds go
+ * to zero and its image keeps costing $0.15/GB-month — and for a fleet of
+ * mostly-idle apps that drip IS the per-app floor. It joins as a third row source
+ * for the same reason envs did: a second meter would be a second place for a
+ * double-bill to hide. Its measurement is not a filesystem `du` but the registry
+ * size recorded at BUILD time (`imageSizeBytes` + `imageSizeMeasuredAt`), and its
+ * payer is the drive owner with no fallback, identical to an env's — a published
+ * app hangs off an env, and an env is drive-owned. See `PublishedAppStorageRow`.
+ *
  * **`reconcileSandboxStorage` NEVER THROWS**, and `reconcileSandboxStorageSerialized`
  * relies on that to tell an advisory-lock connection error apart from a failure
  * of the work itself. Every per-row failure is already isolated in its own
@@ -196,7 +207,7 @@ export const MAX_BILLABLE_SPAN_MS = 24 * 60 * 60 * 1000;
  * only, because forgiving revenue on a LIVE meter is a product decision this PR
  * deliberately does not make.
  */
-const CLAMPED_SUBJECT_KINDS: readonly StorageSubjectKind[] = ['env'];
+const CLAMPED_SUBJECT_KINDS: readonly StorageSubjectKind[] = ['env', 'hosting'];
 
 /** Pure: bytes → DECIMAL gigabytes (÷1e9), matching how the platform expresses its allocation ("100 GB") and its per-GB-month rate — NOT binary GiB. Invalid or non-positive input floors to 0. */
 export function bytesToGB(bytes: number): number {
@@ -292,8 +303,48 @@ export interface DriveEnvStorageRow {
   lastActiveAt: Date;
 }
 
-/** WHICH kind of row a charge is for. The meter is one; the persistence units it meters are two. */
-export type StorageSubjectKind = 'session' | 'env';
+/**
+ * A PUBLISHED APP's ROOTFS — the third row source, and the only per-app cost that
+ * does not stop when the app does.
+ *
+ * A published app's machine is stopped by the idle reaper and costs zero
+ * awake-seconds while it sits there; its IMAGE still costs $0.15/GB-month for as
+ * long as the app exists. For a fleet of mostly-idle published apps that drip is
+ * the entire per-app floor, which is why it is metered at all — and why it is
+ * metered HERE, as a row source on the existing meter, rather than as a meter of
+ * its own. One cron, one advisory lock, one credit pipeline, one watermark
+ * discipline.
+ *
+ * Two differences from the two Sprite-backed sources, both structural:
+ *
+ *  - the measurement is not a `du` of a live filesystem. It is
+ *    `published_apps.imageSizeBytes`, recorded from the registry manifest at BUILD
+ *    time — which is also the only moment it is cheaply knowable, since reading it
+ *    later costs a registry round-trip per app and reading it after the image is
+ *    replaced is impossible. So this source is never "measured while awake"; it is
+ *    measured when the thing being measured is created.
+ *  - it is billed whatever the app's status. A stopped, or even a `parked`, app
+ *    holds its rootfs. Only a DESTROYED app stops costing, and that row is gone.
+ *
+ * The payer is the same as an env's, for the same reason and through the same
+ * function: a published app hangs off an environment, and an environment is
+ * drive-owned. `published_apps.ownerId` is a denormalized cascade handle and is
+ * deliberately not read here.
+ */
+export interface PublishedAppStorageRow {
+  /** The `published_apps` row's own id. Where THIS app's watermark is persisted. */
+  publishedAppId: string;
+  /** The owning drive — NOT NULL, and the ONLY route to a payer. */
+  driveId: string;
+  storageLastBilledAt: Date;
+  /** The pinned image's registry size, from `imageSizeBytes`; null until the first build lands. */
+  measuredBytes: number | null;
+  /** When that size was recorded — the build that pinned the digest. Null alongside null bytes. */
+  measuredAt: Date | null;
+}
+
+/** WHICH kind of row a charge is for. The meter is one; the persistence units it meters are three. */
+export type StorageSubjectKind = 'session' | 'env' | 'hosting';
 
 /**
  * What a watermark write actually did. Three outcomes, because collapsing the
@@ -314,10 +365,15 @@ export interface ReconcileSandboxStorageDeps {
    */
   listDriveEnvSprites: () => Promise<DriveEnvStorageRow[]>;
   /**
+   * Every published app's ROOTFS to meter — the third row source. Billed whatever
+   * the app's status: a stopped published app still holds its image.
+   */
+  listPublishedAppRootfs: () => Promise<PublishedAppStorageRow[]>;
+  /**
    * Resolves a drive's ownerId; null when it can't be resolved (e.g. a stale
-   * read of a drive mid-delete). Used for every env row, and for a session
-   * subject whose `driveId` is set — the session `driveId === null` case
-   * bypasses this entirely (see `storageBillingTarget`, whose `{ ownerId }`
+   * read of a drive mid-delete). Used for every env and published-app row, and
+   * for a session subject whose `driveId` is set — the session `driveId === null`
+   * case bypasses this entirely (see `storageBillingTarget`, whose `{ ownerId }`
    * branch is already resolved, pure data with no IO needed).
    */
   lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
@@ -354,6 +410,11 @@ export interface ReconcileSandboxStorageDeps {
   advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
   /** The same per-row watermark write, against `drive_envs`, with the same monotonic contract. */
   advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
+  /** The same per-row watermark write, against `published_apps`, with the same monotonic contract. */
+  advancePublishedAppWatermark: (input: {
+    publishedAppId: string;
+    billedThrough: Date;
+  }) => Promise<WatermarkWriteOutcome>;
   now: () => Date;
 }
 
@@ -610,6 +671,35 @@ function toEnvSubject(
   };
 }
 
+function toHostingSubject(
+  app: PublishedAppStorageRow,
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  deps: ReconcileSandboxStorageDeps,
+): BillableStorageSubject {
+  return {
+    kind: 'hosting',
+    subjectId: app.publishedAppId,
+    // Always attributed: a published app's `driveId` is NOT NULL.
+    attributionDriveId: app.driveId,
+    // The drive owner, with no fallback — identical to an env's, because a
+    // published app hangs off an env and an env is drive-owned. The memoized
+    // closure, not a bare deps reference (see `toEnvSubject`).
+    resolvePayerId: () => resolveEnvPayerId({ driveId: app.driveId, lookupDriveOwnerId }),
+    advanceWatermark: (billedThrough) =>
+      deps.advancePublishedAppWatermark({ publishedAppId: app.publishedAppId, billedThrough }),
+    storageLastBilledAt: app.storageLastBilledAt,
+    measuredBytes: app.measuredBytes,
+    measuredAt: app.measuredAt,
+    // A rootfs has no "awake" state to refresh a measurement from — the size is
+    // recorded once, at build. The epoch reads as "not awake", which is the
+    // honest input to the staleness flag: an app that has not been rebuilt in a
+    // day genuinely is billing from an ageing (and still perfectly correct)
+    // measurement. See `measurementHealth` on why that saturation is expected
+    // rather than alarming for a build-time-measured source.
+    lastActiveAt: new Date(0),
+  };
+}
+
 /** What one subject's window prices to this tick. Pure — no IO, no counters, no decisions about what to DO with it. */
 interface SubjectWindowPrice {
   /** The span actually billed, after any cap. */
@@ -721,20 +811,23 @@ export async function reconcileSandboxStorage(
   // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
   // see `listSource` for why one source's failure must not stop the other's
   // money.
-  const [sessions, envs] = await Promise.all([
+  const [sessions, envs, hosting] = await Promise.all([
     // Called through a closure, not passed unbound: a deps implementation is
     // free to be a real object whose row source reads `this`, and an unbound
     // reference would break it in a way only production would show.
     listSource('session', () => deps.listAgentSessionSprites()),
     listSource('env', () => deps.listDriveEnvSprites()),
+    listSource('hosting', () => deps.listPublishedAppRootfs()),
   ]);
   const subjects: BillableStorageSubject[] = [
     ...sessions.rows.map((session) => toSessionSubject(session, lookupDriveOwnerIdOnce, deps)),
     ...envs.rows.map((env) => toEnvSubject(env, lookupDriveOwnerIdOnce, deps)),
+    ...hosting.rows.map((app) => toHostingSubject(app, lookupDriveOwnerIdOnce, deps)),
   ];
   const failedSources: StorageSubjectKind[] = [];
   if (sessions.failed) failedSources.push('session');
   if (envs.failed) failedSources.push('env');
+  if (hosting.failed) failedSources.push('hosting');
   const now = deps.now();
 
 
@@ -746,6 +839,7 @@ export async function reconcileSandboxStorage(
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
     session: { live: 0, neverMeasured: 0, stale: 0 },
     env: { live: 0, neverMeasured: 0, stale: 0 },
+    hosting: { live: 0, neverMeasured: 0, stale: 0 },
   };
   const billingByKind: Record<
     StorageSubjectKind,
@@ -753,6 +847,7 @@ export async function reconcileSandboxStorage(
   > = {
     session: { billable: 0, charged: 0, skipped: 0, failed: 0 },
     env: { billable: 0, charged: 0, skipped: 0, failed: 0 },
+    hosting: { billable: 0, charged: 0, skipped: 0, failed: 0 },
   };
 
   // Failures on rows we never established were BILLABLE — a pricing throw, or
