@@ -445,10 +445,12 @@ describe('reconcileSandboxStorageSerialized', () => {
     return {
       listAgentSessionSprites: vi.fn(async () => []),
       listDriveEnvSprites: vi.fn(async () => []),
+      listPublishedAppRootfs: vi.fn(async () => []),
       lookupDriveOwnerId: vi.fn(async () => null),
       chargeStorage: vi.fn(async () => {}),
       advanceAgentSessionWatermark: vi.fn(async () => 'advanced' as const),
       advanceDriveEnvWatermark: vi.fn(async () => 'advanced' as const),
+      advancePublishedAppWatermark: vi.fn(async () => 'advanced' as const),
       now: () => new Date('2026-07-13T00:00:00.000Z'),
       ...overrides,
     };

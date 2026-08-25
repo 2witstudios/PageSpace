@@ -17,13 +17,13 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * footprint. It NEVER wakes a sprite to measure; a never-measured row bills a
  * conservative 0 for that window.
  *
- * TWO persistence units, ONE meter and ONE schedule: agent SESSIONS (billed to
+ * THREE persistence units, ONE meter and ONE schedule: agent SESSIONS (billed to
  * the session's drive owner, or to its own owner for a global-assistant
- * session) and drive ENVIRONMENTS (billed to the DRIVE OWNER, with no
- * fallback — an unresolvable drive skips the cycle rather than misattributing
- * a charge). Envs joined as a row source deliberately, rather than as a second
- * cron: the counters below aggregate both, and there is exactly one advisory
- * lock standing between a rolling deploy and a double-bill.
+ * session), drive ENVIRONMENTS, and published-app ROOTFS (both billed to the
+ * DRIVE OWNER, with no fallback — an unresolvable drive skips the cycle rather
+ * than misattributing a charge). Each joined as a row source deliberately, rather
+ * than as another cron: the counters below aggregate all three, and there is
+ * exactly one advisory lock standing between a rolling deploy and a double-bill.
  *
  * A tick that accomplished nothing it should have raises a SENTRY alert and
  * fails this endpoint (500, after the work that succeeded is reported) — left
@@ -32,10 +32,11 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * unreadable unit never stops the other's billing; what changes here is only how
  * the tick is reported.
  *
- * Severity is split by whether the unit is LIVE. Envs ship dark, so an
- * unreadable `drive_envs` is captured as a warning and the tick still succeeds —
- * a dark feature must not redden a cron that is metering real sessions
- * correctly. The session source, and a whole-tick billing wipeout, are loud.
+ * Severity is split by whether the unit is LIVE. Envs and published apps both
+ * ship dark, so an unreadable `drive_envs` or `published_apps` is captured as a
+ * warning and the tick still succeeds — a dark feature must not redden a cron that
+ * is metering real sessions correctly. The session source, and a whole-tick
+ * billing wipeout, are loud.
  *
  * The Sentry call is the part that actually alerts, and it is not belt-and-braces:
  * the docker cron invokes this through `cron-curl`, which runs `curl -sS`
@@ -84,7 +85,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, superseded ${run.watermarkSuperseded}, spanClamped ${run.spanClamped}, billable ${run.billableRows}, neverMeasured ${run.neverMeasured} (sessions ${run.measurementHealth.session.neverMeasured}/${run.measurementHealth.session.live}, envs ${run.measurementHealth.env.neverMeasured}/${run.measurementHealth.env.live}), failedSources [${run.failedSources.join(', ')}], total $${run.totalCostDollars.toFixed(6)}`,
+      `[Cron] Terminal storage reconcile: processed ${run.processed}, charged ${run.charged}, skipped ${run.skipped}, failed ${run.failed}, chargedButUnadvanced ${run.chargedButUnadvanced}, stale ${run.staleMeasurements}, superseded ${run.watermarkSuperseded}, spanClamped ${run.spanClamped}, billable ${run.billableRows}, neverMeasured ${run.neverMeasured} (sessions ${run.measurementHealth.session.neverMeasured}/${run.measurementHealth.session.live}, envs ${run.measurementHealth.env.neverMeasured}/${run.measurementHealth.env.live}, hosting ${run.measurementHealth.hosting.neverMeasured}/${run.measurementHealth.hosting.live}), failedSources [${run.failedSources.join(', ')}], total $${run.totalCostDollars.toFixed(6)}`,
     );
 
     audit({
@@ -149,6 +150,10 @@ export async function GET(request: Request) {
     // fault is discoverable without being an incident. When envs become
     // user-visible this distinction goes away and the env source joins the loud
     // set; the `LOUD_SOURCES` list below is the one line that changes.
+    //
+    // Published-app rootfs is the same case for the same reason — dark behind
+    // APP_HOSTING_ENABLED, nothing provisions one yet — and joins the loud set on
+    // that same line when hosting launches.
     //
     // What IS loud: the SESSION source failing (real money, live feature), and a
     // tick where every row of more than one failed to bill. That `> 1` is the
