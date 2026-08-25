@@ -18,13 +18,15 @@
  * Zero I/O — no db, no fetch, no clock, no env — enforced by the purity test in
  * __tests__/purity.test.ts.
  *
- * COST: portAnchor diffs the whole document once per anchor, which is the right
- * shape for a pure function of (anchor, oldText, newText) and the wrong shape
- * for a page carrying many anchors. The diff depends only on the two texts, so
- * the call site that ports a page's anchors in bulk should compute it once and
- * reuse it. That call site does not exist yet — wiring this into
- * applyPageMutation is a later phase — so the hoist belongs there, not here,
- * where it would mean inventing an API with no caller to shape it.
+ * COST: a diff of the whole document is the right shape for a pure function of
+ * (anchor, oldText, newText) and the wrong shape for a page carrying many
+ * anchors, because the diff depends only on the two texts. The bulk call site
+ * now exists — `reanchorPageTags` in ../../tags/tag-service.ts — so the hoist
+ * is a real seam rather than an invented one: `preparePort` computes the
+ * transition once and `portPreparedAnchor` ports each anchor against it.
+ * `portAnchor` remains for single-anchor callers and is a thin wrapper over
+ * exactly that path, so there is one implementation and no second copy to
+ * drift.
  *
  * @module @pagespace/lib/content/anchoring/reanchor
  */
@@ -39,9 +41,10 @@ import type { AnchorResolution, TextAnchor } from './types';
  *
  * A character diff is quadratic in the size of the differing region. Measured
  * on this repo's diff-match-patch, two fully dissimilar strings take ~142ms at
- * 2KB, ~558ms at 4KB and ~13.9s at 20KB — and portAnchor runs once per anchor,
- * so an unbounded diff of a wholesale rewrite would block the event loop for
- * minutes on a page carrying a handful of tags.
+ * 2KB, ~558ms at 4KB and ~13.9s at 20KB. `portAnchor` pays that per call, so an
+ * unbounded diff of a wholesale rewrite would block the event loop for minutes
+ * on a page carrying a handful of tags — which is what this cap, and the
+ * `preparePort` hoist, exist to prevent.
  *
  * Capping the CLOCK instead would be worse than useless here: diff-match-patch
  * does not fail when its deadline expires, it returns a valid but suboptimal
