@@ -9,6 +9,7 @@ vi.mock('@/middleware/monitoring', () => ({ monitoringMiddleware: vi.fn() }));
 vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse: vi.fn(),
   createSecureErrorResponse: vi.fn(),
+  APP_ROUTER_ROUTE_PATH: '/api/app-hosting/router',
   isHandoffBridgeRoute: vi.fn(),
   routeOwnsItsOwnCsp: vi.fn(),
   isPublicPageRoute: vi.fn(),

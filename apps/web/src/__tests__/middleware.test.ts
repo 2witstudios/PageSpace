@@ -33,6 +33,7 @@ vi.mock('@/middleware/security-headers', () => ({
   // their own (see the isHandoffBridgeRoute describe block below).
   // Real predicate logic, matching security-headers.ts: the handoff-bridge
   // callbacks plus the published-app router all deliver their own CSP.
+  APP_ROUTER_ROUTE_PATH: '/api/app-hosting/router',
   routeOwnsItsOwnCsp: (pathname: string) =>
     pathname === '/api/auth/google/callback' ||
     pathname === '/api/auth/apple/callback' ||
@@ -168,6 +169,44 @@ describe('middleware — published-app router carve-out', () => {
       expect.anything(),
       expect.objectContaining({ skipCSP: true }),
     );
+  });
+
+  it('never runs origin validation — published apps have unbounded origins', async () => {
+    // A published app's own fetch carries its own origin, which is not and can
+    // never be in our allowlist. If origin validation ran here in blocking mode,
+    // every non-GET request a published app made to itself would 403.
+    mockValidateOriginForMiddleware.mockReturnValue({
+      valid: false,
+      origin: 'https://acme.pagespace.app',
+      skipped: false,
+      reason: 'origin not in allowlist',
+    });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const response = await middleware(
+      buildRequest('/api/app-hosting/router', { origin: 'https://acme.pagespace.app' }),
+    );
+
+    expect(response.status).not.toBe(403);
+    expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+  });
+
+  it('lets an OPTIONS preflight reach the route instead of answering it with our CORS policy', async () => {
+    // A preflight for a published app belongs to THAT app and must be replayed to
+    // it. The Bearer-API short-circuit would answer 204 with our own
+    // Access-Control-Allow-Headers, so a published app could never allow a custom
+    // request header on a cross-origin call.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const response = await middleware(
+      buildRequest('/api/app-hosting/router', {}, 'OPTIONS'),
+    );
+
+    // The mocked createSecureResponse returns 200; the CORS short-circuit would
+    // have returned a 204 carrying Access-Control-Allow-Methods.
+    expect(response.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(response.status).not.toBe(204);
   });
 
   it('does not extend the carve-out to sibling app-hosting paths', async () => {

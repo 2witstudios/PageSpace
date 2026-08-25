@@ -6,6 +6,7 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
+  APP_ROUTER_ROUTE_PATH,
   routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
@@ -152,6 +153,36 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       return response;
     }
 
+    // Published-app serving edge: pagespace-proxy calls this for EVERY request to
+    // a published app, with no session and no user — it authenticates via the
+    // APP_ROUTER_PROXY_SECRET shared secret checked inside the route, which
+    // refuses everything when that secret is unset.
+    //
+    // Returned HERE, above origin validation and above the Bearer-API OPTIONS
+    // short-circuit, and both of those positions are load-bearing:
+    //
+    //   • Origin validation is INAPPLICABLE. Valid callers are arbitrary
+    //     published-app hosts and their custom domains, with no fixed allowlist —
+    //     a published app's own fetch carries its own origin, which is not and can
+    //     never be in ours. Same rationale as the public-form route above.
+    //   • OPTIONS must REACH the route rather than be answered by the preflight
+    //     short-circuit below. A CORS preflight for a published app belongs to
+    //     that app and has to be replayed to it; answering it here would hand the
+    //     browser our CORS policy instead of the app's, so a published app could
+    //     never allow a custom request header on a cross-origin call.
+    //
+    // Without this the middleware also 401s the proxy before route.ts runs, and
+    // no published app is reachable at all.
+    if (pathname === APP_ROUTER_ROUTE_PATH) {
+      // The route delivers its own CSP for the styled parked/unavailable pages it
+      // renders; ours would intersect with and clobber it.
+      const { response } = createSecureResponse(isProduction, req, {
+        isAPIRoute: true,
+        skipCSP: routeOwnsItsOwnCsp(pathname),
+      });
+      return response;
+    }
+
     const ip = getClientIP(req);
 
     // CORS preflight for the Bearer-authenticated API surface (@pagespace/sdk and
@@ -264,11 +295,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // `/api/internal/*` (contact, monitoring/ingest) authenticate via a shared secret in a
     // custom header or a non-prefixed Bearer value — never a session or a recognized MCP/
     // session/OAuth bearer prefix — same rationale as the webhooks above.
-    // `/api/app-hosting/router` is the published-app serving edge: pagespace-proxy calls it
-    // for every request to a published app, with no session and no user — it authenticates
-    // via the APP_ROUTER_PROXY_SECRET shared secret in a custom header, checked inside the
-    // route, which refuses everything when that secret is unset. Without this entry the
-    // middleware 401s the proxy before route.ts runs and NO published app is reachable.
     // `/api/notifications/unsubscribe/[token]` is an opaque-token email unsubscribe link,
     // clicked by (often logged-out) recipients.
     // `/api/ai/models`, `/api/compiled-css`, `/api/avatar/[userId]/[filename]`, and
@@ -289,7 +315,6 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       pathname.startsWith('/api/auth/mobile/') ||
       pathname.startsWith('/api/auth/desktop/') ||
       pathname.startsWith('/api/internal/') ||
-      pathname === '/api/app-hosting/router' ||
       pathname.startsWith('/api/notifications/unsubscribe/') ||
       pathname.startsWith('/api/avatar/') ||
       pathname.startsWith('/api/provisioning-status/') ||

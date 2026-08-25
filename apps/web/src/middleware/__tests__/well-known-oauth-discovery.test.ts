@@ -23,6 +23,7 @@ vi.mock('@/middleware/security-headers', () => ({
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse: vi.fn(),
+  APP_ROUTER_ROUTE_PATH: '/api/app-hosting/router',
   isHandoffBridgeRoute: vi.fn((pathname: string) => pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback'),
   // Middleware asks this (not isHandoffBridgeRoute) for skipCSP: the routes that
   // deliver their own CSP are the handoff bridges plus the published-app router.
