@@ -37,6 +37,14 @@ interface PageAgentHistoryTabProps {
   currentConversationId: string | null;
   onSelectConversation: (conversationId: string) => void;
   onCreateNew: () => void;
+  /**
+   * Refuses "New Conversation" for a reason the LIST does not know about —
+   * a response still streaming on the Chat tab, or a mint already in flight.
+   * Without it this button stays enabled while its handler silently returns,
+   * which reads as a broken button. Both surfaces that host this tab guard the
+   * same action; this is how the guard becomes visible instead of mute.
+   */
+  createDisabled?: boolean;
   onDeleteConversation: (conversationId: string) => void;
   onToggleShare?: (conversationId: string, isShared: boolean) => void;
   isLoading: boolean;
@@ -148,6 +156,7 @@ export default function PageAgentHistoryTab({
   currentConversationId,
   onSelectConversation,
   onCreateNew,
+  createDisabled = false,
   onDeleteConversation,
   onToggleShare,
   isLoading,
@@ -174,7 +183,7 @@ export default function PageAgentHistoryTab({
   return (
     <div className="flex flex-col h-full p-4">
       <div className="mb-4">
-        <Button onClick={onCreateNew} className="w-full" disabled={isLoading}>
+        <Button onClick={onCreateNew} className="w-full" disabled={isLoading || createDisabled}>
           <Plus className="h-4 w-4 mr-2" />
           New Conversation
         </Button>

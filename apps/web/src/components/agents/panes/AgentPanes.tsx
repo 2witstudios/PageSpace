@@ -1777,9 +1777,10 @@ function ChatPane({
   const creatingRef = useRef(false);
 
   const handleCreateNewFromHistory = useCallback(async () => {
-    // Blocks only on an active stream — History's "New Conversation" button
-    // reaches this same action with no button-level guard of its own, so it is
-    // checked here once instead of threading a prop through the shared tab.
+    // Checked here once for both controls that reach it — the bar's "+" and
+    // History's "New Conversation" — each of which also wears the refusal
+    // visibly (`disabled` / `createDisabled`), so neither is a live-looking
+    // button that silently does nothing.
     if (blockedByActiveStream) return;
     if (creatingRef.current) return;
     creatingRef.current = true;
@@ -1898,6 +1899,11 @@ function ChatPane({
             currentConversationId={conversationId}
             onSelectConversation={handleSelectHistoryConversation}
             onCreateNew={handleCreateNewFromHistory}
+            // The same refusals the bar's "+" wears. This button reaches the
+            // identical handler, and used to stay enabled while that handler
+            // silently returned mid-stream — the mute guard the shared tab's
+            // own comment described as "no button-level guard of its own".
+            createDisabled={disabledNewConversation}
             onDeleteConversation={(id) => {
               // Only act on panes once the delete actually succeeded — a refused
               // delete (the never-empty guard's 409) or a network failure both

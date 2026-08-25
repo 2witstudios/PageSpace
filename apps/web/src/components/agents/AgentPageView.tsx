@@ -237,6 +237,56 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
   // issue #2263, finding 4) and prune the pane that was showing the old id,
   // wherever it lives in the grid (not necessarily the active pane: the
   // grid's own selection and this page's `current` are independent state).
+  /**
+   * Tell every `/api/agent-workspaces**` reader about a conversation that was
+   * just minted INTO a session, before any GET confirms it.
+   *
+   * A background revalidate alone leaves a real window: a consumer reading the
+   * still-stale listing sees the brand-new row as absent — `AgentPanes` can
+   * even offer to end the session on a grid whose only cached listing no longer
+   * matches. Extracted so the page's "+" gets the same treatment the
+   * delete-replacement mint already had; before this, only one of the two
+   * session-reusing mints on this page kept the listing honest.
+   */
+  const recordMintedIntoSession = useCallback(
+    (created: ResolvedConversation, reusedSessionId: string | null) => {
+      if (created.sessionId) {
+        const insertedSessionId = created.sessionId;
+        // A REUSED session (id set going in) keeps its own drive — which for a
+        // global session hosting this cross-drive agent's conversation is NOT
+        // `page.driveId` — while a freshly SPAWNED one is always minted scoped
+        // to this page's own drive (`createPageConversation`'s spawn branch).
+        // Using `page.driveId` unconditionally patches the wrong SWR cache
+        // entry for the reused-global case.
+        void mutate(
+          agentWorkspacesKey(reusedSessionId !== null ? panesDriveId : page.driveId),
+          (cached: { sessions: SessionListEntry[] } | undefined) => {
+            if (!cached) return cached;
+            return {
+              sessions: cached.sessions.map((session) =>
+                session.workspaceId === insertedSessionId
+                  ? {
+                      ...session,
+                      conversations: [
+                        { conversationId: created.conversationId, agentPageId: page.id, lastMessageAt: null },
+                        ...session.conversations,
+                      ],
+                    }
+                  : session,
+              ),
+            };
+          },
+          { revalidate: false },
+        );
+      }
+      // ...and a broader revalidate for every OTHER `/api/agent-workspaces**`
+      // consumer (the sidebar, other panes) whose differently-scoped cache key
+      // the local insert above doesn't touch.
+      void mutate(isAgentWorkspacesKey);
+    },
+    [panesDriveId, page.driveId, page.id],
+  );
+
   const mintReplacementForCurrent = useCallback(
     (deletedConversationId: string) => {
       // `deletedConversationId` is the ACTUAL id the caller confirmed is gone
@@ -266,43 +316,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
           // the earlier revalidate-only fix here missed the same optimistic
           // LOCAL insert `handlePickAgent` already does via
           // `recordMintedConversation` before it ever revalidates).
-          if (created.sessionId) {
-            const insertedSessionId = created.sessionId;
-            // A REUSED session (sessionId set) keeps its own drive — which for
-            // a global session hosting this cross-drive agent's conversation
-            // is NOT `page.driveId` — while a freshly SPAWNED one (sessionId
-            // null going in) is always minted scoped to this page's own drive
-            // (`createPageConversation`'s spawn branch). Using `page.driveId`
-            // unconditionally here silently patched the wrong SWR cache entry
-            // for the reused-global case (`agentWorkspacesKey`'s own doc
-            // comment warns against exactly this drift) — the broader
-            // `mutate(isAgentWorkspacesKey)` below still catches it, just not
-            // instantly.
-            void mutate(
-              agentWorkspacesKey(sessionId !== null ? panesDriveId : page.driveId),
-              (current: { sessions: SessionListEntry[] } | undefined) => {
-                if (!current) return current;
-                return {
-                  sessions: current.sessions.map((session) =>
-                    session.workspaceId === insertedSessionId
-                      ? {
-                          ...session,
-                          conversations: [
-                            { conversationId: created.conversationId, agentPageId: page.id, lastMessageAt: null },
-                            ...session.conversations,
-                          ],
-                        }
-                      : session,
-                  ),
-                };
-              },
-              { revalidate: false },
-            );
-          }
-          // ...and a broader revalidate for every OTHER `/api/agent-workspaces**`
-          // consumer (the sidebar, other panes) whose differently-scoped
-          // cache key the local insert above doesn't touch.
-          void mutate(isAgentWorkspacesKey);
+          recordMintedIntoSession(created, sessionId);
           if (sessionId && staleConversationId) {
             // The grid's pane binding is repointed regardless: a pane still
             // showing the now-gone `staleConversationId` is a dangling reference
@@ -356,7 +370,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         }
       })();
     },
-    [newConversation, page.id, page.driveId, panesDriveId, currentRef],
+    [newConversation, page.id, page.driveId, panesDriveId, currentRef, recordMintedIntoSession],
   );
 
   const {
@@ -458,7 +472,11 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     inFlightRef.current += 1;
     setIsCreating(true);
     try {
-      await newConversation(options?.reuseSessionId ?? null);
+      const created = await newConversation(options?.reuseSessionId ?? null);
+      // Same optimistic listing insert the delete-replacement mint does — a
+      // conversation minted into a live session must not be invisible to the
+      // grid that is about to mount against a cached listing.
+      recordMintedIntoSession(created, options?.reuseSessionId ?? null);
       refreshConversations();
     } catch (error) {
       // Every caller fires this as `void handleCreateNew()`, so a rejection
@@ -473,7 +491,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
       inFlightRef.current -= 1;
       setIsCreating(inFlightRef.current > 0);
     }
-  }, [newConversation, refreshConversations, blockedByActiveStream]);
+  }, [newConversation, refreshConversations, blockedByActiveStream, recordMintedIntoSession]);
 
   const toggleConversationShare = useCallback(
     async (targetConversationId: string, isShared: boolean) => {
@@ -716,7 +734,14 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
             conversations={conversations}
             currentConversationId={current.conversationId}
             onSelectConversation={handleSelectConversation}
-            onCreateNew={() => void handleCreateNew()}
+            // The SAME act the bar's "+" performs, so the same session reuse:
+            // without the id this spawns a SECOND workspace and abandons the
+            // live one, which is exactly the loss `reuseSessionId` exists to
+            // prevent. `createDisabled` makes the shared handler's refusals
+            // visible here — the button used to stay enabled while the handler
+            // silently returned.
+            onCreateNew={() => void handleCreateNew({ reuseSessionId: current.sessionId })}
+            createDisabled={isCreating || blockedByActiveStream}
             onDeleteConversation={(id) => void deleteConversation(id)}
             onToggleShare={toggleConversationShare}
             isLoading={isLoadingConversations}

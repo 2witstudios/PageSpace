@@ -9,11 +9,12 @@
  * are mocked; this suite covers the page's own wiring.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useSearchParams } from 'next/navigation';
 import type { TreePage } from '@/hooks/usePageTree';
 import type { ResolvedConversation } from '../useResolvedConversation';
+import { usePendingStreamsStore } from '@/stores/usePendingStreamsStore';
 
 const resolvedConversation = vi.hoisted(() => ({
   current: { resolved: null as ResolvedConversation | null, isLoading: true },
@@ -255,6 +256,7 @@ beforeEach(() => {
   agentPanesState.lastOnConversationClosed = null;
   agentPanesState.firstOnConversationClosed = null;
   __resetWorkspaceQueuesForTests();
+  usePendingStreamsStore.setState({ streams: new Map() });
   mockFetchWithAuth.mockImplementation(async (url: string) => {
     if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: true });
     if (url.endsWith('/agent-config'))
@@ -388,6 +390,53 @@ describe('AgentPageView', () => {
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
 
     await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+      ),
+    );
+  });
+
+  it('mid-stream, BOTH new-conversation controls refuse VISIBLY rather than no-op', async () => {
+    // The stream guard lives in the shared handler, which History's button
+    // reaches too. Guarding there without disabling here is a button that looks
+    // live and does nothing — the failure the grid avoids by pairing the same
+    // guard with a visible disabled state.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    act(() => {
+      usePendingStreamsStore.getState().addStream({
+        messageId: 'msg-1',
+        // The channel an agent's own stream is tagged with is its page id,
+        // which for this fixture IS the agent id.
+        pageId: 'agent-1',
+        conversationId: 'conv-1',
+        isOwn: true,
+      });
+    });
+
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Start a new conversation' })).toBeDisabled(),
+    );
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    expect(await screen.findByRole('button', { name: /new conversation/i })).toBeDisabled();
+    expect(mockCreatePageConversation).not.toHaveBeenCalled();
+  });
+
+  it("History's New Conversation reuses the session, like the \"+\" does", async () => {
+    // Both controls are described as the same act. Without the id this spawns a
+    // SECOND workspace and abandons the live one.
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+    await waitFor(() => expect(screen.getByTestId('agent-panes')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByRole('tab', { name: /history/i }));
+    await userEvent.click(await screen.findByRole('button', { name: /new conversation/i }));
 
     await waitFor(() =>
       expect(mockCreatePageConversation).toHaveBeenCalledWith(
