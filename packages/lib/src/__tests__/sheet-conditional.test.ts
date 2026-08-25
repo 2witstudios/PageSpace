@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
+  MAX_CONDITIONAL_RANGE_CELLS,
   addressesOfRange,
   parseConditionalRule,
   parseConditionalRules,
@@ -16,6 +17,7 @@ import {
   evaluateSheet,
   evaluateSheetSparse,
   parseSheetContent,
+  sanitizeSheetData,
   serializeSheetContent,
   type SheetData,
   type SheetPrimitive,
@@ -55,6 +57,20 @@ describe('addressesOfRange', () => {
     expect(() => addressesOfRange(range)).not.toThrow();
     expect(addressesOfRange(range)).toEqual([]);
     expect(rangeAnchor(range)).toBeNull();
+  });
+
+  it('refuses a range too large to expand, instead of hanging on it', () => {
+    // `A1:ZZZ5000000` is a *valid* range naming ~90 billion cells. Rules are
+    // stored as jsonb the API can write, so this has to be bounded rather than
+    // trusted. Timed, because the failure mode is a hang, not a wrong answer.
+    const started = Date.now();
+    expect(addressesOfRange('A1:ZZZ5000000')).toEqual([]);
+    expect(Date.now() - started).toBeLessThan(1000);
+  });
+
+  it('still expands a range at the ceiling', () => {
+    // 500,000 cells exactly: 500 columns x 1,000 rows.
+    expect(addressesOfRange('A1:SF1000')).toHaveLength(MAX_CONDITIONAL_RANGE_CELLS);
   });
 
   it('finds the top-left anchor regardless of how the range was written', () => {
@@ -727,5 +743,27 @@ describe('round trip through stored rows', () => {
     const viaDocument = parseSheetContent(serializeSheetContent(ruled())).conditionalFormats;
     const { tab, rows } = rowsFromSheetData(ruled(), 0);
     expect(sheetDataFromRows(tab, rows).conditionalFormats).toEqual(viaDocument);
+  });
+});
+
+describe('the write path', () => {
+  it('carries a rule kind it does not recognise, rather than deleting it', () => {
+    // sanitizeSheetData validates formats but deliberately does not validate
+    // rules: `kind` is a closed set, so an older client would silently delete a
+    // rule a newer build wrote. Unusable rules are filtered where they are read
+    // instead, so nothing renders them.
+    const sheet = createEmptySheet();
+    sheet.conditionalFormats = [
+      { id: 'future', kind: 'iconSet', ranges: ['A1:A9'] } as unknown as never,
+    ];
+    expect(sanitizeSheetData(sheet).conditionalFormats).toHaveLength(1);
+  });
+
+  it('still filters that rule out on read, so it is never rendered', () => {
+    const sheet = createEmptySheet();
+    sheet.conditionalFormats = [
+      { id: 'future', kind: 'iconSet', ranges: ['A1:A9'] } as unknown as never,
+    ];
+    expect(parseSheetContent(serializeSheetContent(sheet)).conditionalFormats).toBeUndefined();
   });
 });

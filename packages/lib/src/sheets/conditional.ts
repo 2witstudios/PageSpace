@@ -126,6 +126,20 @@ export interface ConditionalContext {
 
 const EMPTY: ConditionalResult = { formats: {}, bars: {} };
 
+/**
+ * The most cells one rule range may cover.
+ *
+ * Addresses go up to ZZZ5000000, so `A1:ZZZ5000000` is a *valid* range naming
+ * roughly ninety billion cells. Expanding one would hang the process, and rules
+ * are stored as jsonb that the API can write — so the ceiling is enforced here,
+ * where every caller goes through, rather than trusted not to be reached.
+ *
+ * Generous against real use: a rule over a 10,000-row block of 26 columns is
+ * 260,000 cells. A range beyond this formats nothing, which is the same
+ * treatment any other unusable range gets.
+ */
+export const MAX_CONDITIONAL_RANGE_CELLS = 500_000;
+
 /** Every address of an `A1:B2` range, or of a bare `A1`. Invalid ranges yield none. */
 export function addressesOfRange(range: string): string[] {
   const normalized = range.trim().toUpperCase();
@@ -152,12 +166,17 @@ export function addressesOfRange(range: string): string[] {
   // this function promises.
   if (start.row < 0 || start.column < 0 || end.row < 0 || end.column < 0) return [];
 
-  const addresses: string[] = [];
   const rowStart = Math.min(start.row, end.row);
   const rowEnd = Math.max(start.row, end.row);
   const columnStart = Math.min(start.column, end.column);
   const columnEnd = Math.max(start.column, end.column);
 
+  // Counted before allocating: the point is not to build the array at all.
+  if ((rowEnd - rowStart + 1) * (columnEnd - columnStart + 1) > MAX_CONDITIONAL_RANGE_CELLS) {
+    return [];
+  }
+
+  const addresses: string[] = [];
   for (let row = rowStart; row <= rowEnd; row++) {
     for (let column = columnStart; column <= columnEnd; column++) {
       addresses.push(encodeCellAddress(row, column));
