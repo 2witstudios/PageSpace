@@ -53,11 +53,11 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
 }> = [
   { full: '• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.' },
   {
-    full: '• DOCUMENT: Markdown text, or rich text stored as HTML (contentMode says which; documents you create default to markdown). Write the format the page is in. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
+    full: '• DOCUMENT: Markdown text, or rich text stored as HTML (contentMode says which; documents you create default to markdown). Write the format the page is in. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits. If the content already exists on another page or in a sandbox file, use copy_content instead of retyping it.',
     slim: '• DOCUMENT: Markdown or rich text stored as HTML (check contentMode). Load the writing-documents skill before non-trivial writing or line-range editing.',
     skill: 'writing-documents',
   },
-  { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).' },
+  { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing), or copy_content to move a sandbox file in without retyping it.' },
   {
     // Composed rather than picked from fixed variants. A bullet naming a tool
     // the agent does not hold produces an unknown-tool call before the model

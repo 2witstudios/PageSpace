@@ -149,7 +149,14 @@ function logPageActivityAsync(
     });
 }
 
-async function buildAiMutationContext(
+/**
+ * Exported for `copy-content-tools-runtime.ts`: a copy into a page is a page
+ * mutation like any other and must carry the same AI-authorship metadata
+ * (actor, provider/model, agent chain). Rebuilding that shape there would let
+ * the two drift, and the drift would be invisible — activity rows would simply
+ * start disagreeing about who made the change.
+ */
+export async function buildAiMutationContext(
   context: ToolExecutionContext,
   options?: {
     metadata?: Record<string, unknown>;

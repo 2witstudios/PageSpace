@@ -75,6 +75,19 @@ Use it for: rewriting a section, fixing specific lines, deleting content, any ed
 
 Use it for: appending sections relative to headings or landmarks, adding items near known text — anywhere counting lines is unnecessary risk. Prefer it over \`replace_lines\` when you are adding (not changing) content.
 
+### copy_content — move content you already have, without retyping it
+
+If the content already exists somewhere the system can read — a page you read, a file you wrote in the sandbox — **do not paste it into \`replace_lines\`, \`insert_content\` or \`writeFile\`.** Call \`copy_content\` instead. The bytes move server-side, so you never emit them: copying a 500-line file costs one short tool call rather than 500 lines of output, and it is byte-exact rather than whatever you managed to retype.
+
+- \`from\`: \`{ kind: 'page', pageId, lineStart?, lineEnd? }\` or \`{ kind: 'file', path }\`. The line numbers are the ones \`read_page\` showed you.
+- \`to\`: \`{ kind: 'page', pageId, mode }\` where mode is \`replace\` (whole page), \`replaceLines\` (a range), \`insertAfter\` (an anchor, like \`insert_content\`), or \`append\`; or \`{ kind: 'file', path }\` to write a whole file.
+- It **converts nothing**. Copying raw text (a sandbox file, a markdown or CODE page) into an html-mode DOCUMENT is refused rather than silently producing literal characters. Create the destination with a matching \`contentMode\` — \`create_page\` defaults to markdown — and copy into that.
+- To copy into a NEW page: \`create_page\` first (it takes no content), then \`copy_content\` into it.
+- \`insertAfter\` reports \`inserted: false\` on a missing anchor, exactly like \`insert_content\`.
+- It refuses rather than truncating if the source is over the size limit. Narrow it with \`from.lineStart\`/\`from.lineEnd\`.
+
+Only compose content by hand when you are actually authoring it. Moving existing bytes is what this tool is for.
+
 ## Writing HTML for html-mode DOCUMENTs
 
 The rich editor's Tiptap 3 schema accepts a specific set of elements. Verified supported:
