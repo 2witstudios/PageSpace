@@ -33,9 +33,20 @@ import { normalizeTagName, validateTarget, type TagTarget } from './tag-core';
 import type { TextAnchor } from '../content/anchoring/types';
 import { preparePort, portPreparedAnchor } from '../content/anchoring/reanchor';
 import { projectContent, resolveProjectionFormat } from '../content/anchoring/text-projection';
+import { resolveAnchor } from '../content/anchoring/resolve';
 import { hashText } from '../content/anchoring/anchor';
 
 const log = loggers.system;
+
+/**
+ * A drizzle transaction, or the `db` singleton when there is no outer one.
+ *
+ * Same spelling the other lib repositories use (page-content-store,
+ * drive-service, storage-repository). Only `reanchorPageTags` takes one: it is
+ * the one entry point that MUST commit atomically with somebody else's write.
+ */
+type Tx = Parameters<Parameters<typeof db.transaction>[0]>[0];
+export type TagExecutor = Tx | typeof db;
 
 /**
  * Machine-readable failure codes. Callers map these to status codes, so they
@@ -51,6 +62,8 @@ export type TagErrorCode =
   | 'invalid_target'
   | 'tag_not_found'
   | 'assignment_not_found'
+  /** This exact assignment already exists. A user re-tagging, not a server fault. */
+  | 'assignment_exists'
   | 'internal_error';
 
 export type TagResult<T> = { ok: true; data: T } | { ok: false; error: TagErrorCode; message?: string };
@@ -94,6 +107,19 @@ export type PageTagAssignment = {
 function unexpected(operation: string, error: unknown): { ok: false; error: TagErrorCode } {
   log.error(`tag-service: ${operation} failed`, error as Error, { operation });
   return { ok: false, error: 'internal_error' };
+}
+
+/**
+ * Postgres unique-violation, seen through drizzle.
+ *
+ * drizzle 0.45.2 rethrows driver errors wrapped as `DrizzleQueryError` with the
+ * pg error on `.cause`, so a top-level `error.code` check never matches and the
+ * conflict silently becomes a 500. Both levels are checked here for that reason.
+ */
+function isUniqueViolation(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  const causeCode = (error as { cause?: { code?: unknown } })?.cause?.code;
+  return code === '23505' || causeCode === '23505';
 }
 
 /**
@@ -200,6 +226,33 @@ export async function upsertTag(
   }
 }
 
+/**
+ * Whether a value is structurally a TextAnchor.
+ *
+ * `validateTarget` (the pure core) answers which KINDS a page type accepts; it
+ * does not inspect the anchor's scalars, and the compiler cannot help at a
+ * service boundary that receives parsed JSON. Without this, `exact: 1` persists
+ * happily and every later sweep casts it back to TextAnchor and either resolves
+ * against nonsense or throws mid-loop, taking the whole sweep with it.
+ */
+function isTextAnchor(value: unknown): value is TextAnchor {
+  if (typeof value !== 'object' || value === null) return false;
+  const a = value as Record<string, unknown>;
+  return (
+    a.v === 1 &&
+    typeof a.exact === 'string' &&
+    typeof a.prefix === 'string' &&
+    typeof a.suffix === 'string' &&
+    Number.isInteger(a.start) &&
+    Number.isInteger(a.end) &&
+    (a.start as number) >= 0 &&
+    (a.end as number) >= (a.start as number) &&
+    Number.isInteger(a.revision) &&
+    typeof a.textHash === 'string' &&
+    a.textHash.length > 0
+  );
+}
+
 /** Columns a target kind contributes to a `content_tags` row. */
 function targetColumns(target: TagTarget): {
   targetKind: TagTarget['kind'];
@@ -253,7 +306,13 @@ export async function applyTag(
     if (!(await canUserEditPage(userId, input.pageId))) return fail('forbidden');
 
     const page = await db
-      .select({ id: pages.id, type: pages.type, driveId: pages.driveId })
+      .select({
+        id: pages.id,
+        type: pages.type,
+        driveId: pages.driveId,
+        content: pages.content,
+        contentMode: pages.contentMode,
+      })
       .from(pages)
       .where(eq(pages.id, input.pageId))
       .limit(1);
@@ -262,6 +321,48 @@ export async function applyTag(
     // The pure core owns which kinds this page type accepts.
     const targetCheck = validateTarget(page[0].type, input.target);
     if (!targetCheck.ok) return fail('invalid_target', targetCheck.reason);
+
+    // A text target carries an anchor built by a CLIENT, which makes it
+    // untrusted twice over: structurally (it is parsed JSON, so the compiler
+    // guarantees nothing) and temporally (a collaborative edit can land between
+    // the client measuring it and this call).
+    let target = input.target;
+    /**
+     * Set when a client anchor had to be repaired onto the current revision.
+     *
+     * Includes 'exact': a repair CAN land back on the recorded offsets with the
+     * quote byte-identical, and that is a genuine exact match against the
+     * revision now being stored, not a claim inherited from a stale one.
+     */
+    let staleAnchorStatus: 'exact' | 'shifted' | 'fuzzy' | null = null;
+    if (target.kind === 'text') {
+      if (!isTextAnchor(target.anchor)) {
+        return fail('invalid_target', 'anchor is not a well-formed TextAnchor');
+      }
+
+      // Storing a client anchor as 'exact' against a revision it was not
+      // measured on is a lie the next sweep pays for: the staleness guard
+      // rejects it and the anchor is never ported again. Repair it against the
+      // page as it stands NOW, and record what that repair actually achieved.
+      const currentText = projectContent(page[0].content ?? '', page[0].contentMode);
+      const currentHash = hashText(currentText);
+      if (target.anchor.textHash !== currentHash) {
+        const repaired = resolveAnchor(currentText, target.anchor);
+        if (repaired.status === 'orphaned') {
+          return fail('invalid_target', 'anchored text is not present in the current revision');
+        }
+        target = {
+          kind: 'text',
+          anchor: {
+            ...target.anchor,
+            start: repaired.start,
+            end: repaired.end,
+            textHash: currentHash,
+          },
+        };
+        staleAnchorStatus = repaired.status;
+      }
+    }
 
     let tagId = input.tagId;
     if (!tagId) {
@@ -281,7 +382,10 @@ export async function applyTag(
       if (owned.length === 0) return fail('tag_not_found');
     }
 
-    const cols = targetColumns(input.target);
+    const cols = targetColumns(target);
+    // 'exact' means confidence 1 against the stored revision. A repaired anchor
+    // reached its offsets by search, so it says so rather than claiming exact.
+    const anchorStatus = staleAnchorStatus ?? cols.anchorStatus;
     const inserted = await db
       .insert(contentTags)
       .values({
@@ -289,7 +393,7 @@ export async function applyTag(
         pageId: input.pageId,
         targetKind: cols.targetKind,
         anchor: cols.anchor,
-        anchorStatus: cols.anchorStatus,
+        anchorStatus,
         channelMessageId: cols.channelMessageId,
         aiMessageId: cols.aiMessageId,
         source: input.source,
@@ -300,6 +404,10 @@ export async function applyTag(
 
     return ok({ id: inserted[0].id });
   } catch (error) {
+    // A second page-level assignment of the same tag trips
+    // `content_tags_page_target_unique`. That is a user tagging something
+    // twice, not a fault — callers need to tell it apart from a real failure.
+    if (isUniqueViolation(error)) return fail('assignment_exists');
     return unexpected('applyTag', error);
   }
 }
@@ -461,11 +569,38 @@ export type ReanchorSummary = {
  * the caller has already authorized, not a user action. It takes no `userId`
  * precisely so it cannot be mistaken for one.
  */
+export type ReanchorOptions = {
+  /**
+   * The caller's transaction. `applyPageMutation` holds `previousContent` and
+   * `nextContent` in ONE transaction and writes a version row there; the sweep
+   * has to commit with it or not at all. Running outside it means either
+   * anchors ported to content that then rolls back, or a committed page whose
+   * anchors were only partly updated before an error. Defaults to `db` for a
+   * standalone sweep (a backfill), which is the only case with no outer write.
+   */
+  executor?: TagExecutor;
+  /**
+   * `pages.contentMode` for the OLD revision, when it differs from the new one.
+   *
+   * Needed for `convert-content-mode`, where the two revisions are genuinely in
+   * different modes. Reading one mode for both is wrong in both directions: the
+   * old mode makes the formats look like an accidental flip and skips the
+   * sweep, while the new mode projects the old HTML as raw text so every
+   * correctly built anchor fails its hash check. Omit both for an ordinary
+   * edit, where the page's stored mode applies to both revisions.
+   */
+  oldContentMode?: string;
+  /** `pages.contentMode` for the NEW revision. See `oldContentMode`. */
+  newContentMode?: string;
+};
+
 export async function reanchorPageTags(
   pageId: string,
   oldContent: string,
   newContent: string,
+  options: ReanchorOptions = {},
 ): Promise<TagResult<ReanchorSummary>> {
+  const exec = options.executor ?? db;
   const summary: ReanchorSummary = {
     considered: 0,
     updated: 0,
@@ -475,16 +610,20 @@ export async function reanchorPageTags(
   };
 
   try {
-    const page = await db
+    const page = await exec
       .select({ contentMode: pages.contentMode })
       .from(pages)
       .where(eq(pages.id, pageId))
       .limit(1);
     if (page.length === 0) return fail('assignment_not_found', 'page not found');
 
-    const mode = page[0].contentMode;
+    const storedMode = page[0].contentMode;
+    const oldMode = options.oldContentMode ?? storedMode;
+    const newMode = options.newContentMode ?? storedMode;
+    /** The caller told us the modes differ, so a format difference is intended. */
+    const conversion = oldMode !== newMode;
 
-    const rows = await db
+    const rows = await exec
       .select({ id: contentTags.id, anchor: contentTags.anchor, anchorStatus: contentTags.anchorStatus })
       .from(contentTags)
       .where(and(eq(contentTags.pageId, pageId), eq(contentTags.targetKind, 'text')));
@@ -494,14 +633,30 @@ export async function reanchorPageTags(
 
     // Both guards are per-transition, so they are decided once, before any
     // per-anchor work.
-    if (resolveProjectionFormat(oldContent, mode) !== resolveProjectionFormat(newContent, mode)) {
+    // An UNDECLARED format change is the accidental flip: same mode, but the
+    // sniffer read the two revisions differently (unclosed trailing markup is
+    // the usual cause). The two projections are then incompatible coordinate
+    // systems and porting across them mislays every anchor confidently, so the
+    // sweep does nothing and says so.
+    //
+    // A DECLARED conversion is not that. The modes differ because the caller
+    // converted the document on purpose, and the two projections are expected
+    // to disagree — which is exactly why the epic routes convert-content-mode
+    // to quote repair rather than forward-porting. Letting it through is what
+    // makes that fallback reachable: the old projection still validates each
+    // anchor's hash, and the wholesale difference then routes every anchor to
+    // `resolveAnchor` against the new text.
+    if (
+      !conversion &&
+      resolveProjectionFormat(oldContent, oldMode) !== resolveProjectionFormat(newContent, newMode)
+    ) {
       summary.skippedFormatFlip = rows.length;
       log.warn('tag-service: projection format flipped between revisions; skipping re-anchor', { pageId, anchors: rows.length });
       return ok(summary);
     }
 
-    const oldText = projectContent(oldContent, mode);
-    const newText = projectContent(newContent, mode);
+    const oldText = projectContent(oldContent, oldMode);
+    const newText = projectContent(newContent, newMode);
     const oldHash = hashText(oldText);
 
     const newHash = hashText(newText);
@@ -526,17 +681,27 @@ export async function reanchorPageTags(
           ? { start: anchor.start, end: anchor.end }
           : { start: resolution.start, end: resolution.end };
 
-      // Nothing moved and nothing changed status: skip the write rather than
-      // touch `updatedAt` on every anchor of every edit.
+      // Skip the write only when NOTHING the row stores would change —
+      // including the hash.
+      //
+      // An earlier version compared status and offsets alone. That is wrong in
+      // the most ordinary case there is: an edit BELOW the anchored range
+      // leaves the status 'exact' and the offsets untouched, so the write was
+      // skipped and the row kept the PREVIOUS revision's textHash. The next
+      // sweep's staleness guard then rejected that anchor and it silently
+      // stopped being forward-ported, permanently. Writing below your anchors
+      // is how documents get written, so this quietly killed the primary
+      // mechanism for most tags on most pages.
       if (
         resolution.status === row.anchorStatus &&
         ported.start === anchor.start &&
-        ported.end === anchor.end
+        ported.end === anchor.end &&
+        anchor.textHash === newHash
       ) {
         continue;
       }
 
-      await db
+      await exec
         .update(contentTags)
         .set({
           // textHash re-pins the anchor to the projection it now describes, so
