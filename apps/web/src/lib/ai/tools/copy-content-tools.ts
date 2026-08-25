@@ -172,12 +172,12 @@ export const copyContentInputSchema = z
         'Line ranges apply to pages, not files. Copy the whole file, or narrow it in the sandbox first.'
       );
     }
-    if (
-      value.from.lineStart !== undefined &&
-      value.from.lineEnd !== undefined &&
-      value.from.lineEnd < value.from.lineStart
-    ) {
-      require(false, ['from', 'lineEnd'], 'from.lineEnd must be >= from.lineStart.');
+    if (value.from.lineStart !== undefined && value.from.lineEnd !== undefined) {
+      require(
+        value.from.lineEnd >= value.from.lineStart,
+        ['from', 'lineEnd'],
+        'from.lineEnd must be >= from.lineStart.'
+      );
     }
 
     if (value.to.kind === 'file') {
@@ -196,12 +196,13 @@ export const copyContentInputSchema = z
       require(!!value.to.mode, ['to', 'mode'], 'to.mode is required when to.kind is "page".');
       if (value.to.mode === 'replaceLines') {
         require(value.to.startLine !== undefined, ['to', 'startLine'], 'mode "replaceLines" needs startLine.');
-      }
-      if (value.to.mode === 'replaceLines' &&
-          value.to.startLine !== undefined &&
-          value.to.endLine !== undefined &&
-          value.to.endLine < value.to.startLine) {
-        require(false, ['to', 'endLine'], 'to.endLine must be >= to.startLine.');
+        if (value.to.startLine !== undefined && value.to.endLine !== undefined) {
+          require(
+            value.to.endLine >= value.to.startLine,
+            ['to', 'endLine'],
+            'to.endLine must be >= to.startLine.'
+          );
+        }
       }
       if (value.to.mode === 'insertAfter') {
         require(!!value.to.anchor, ['to', 'anchor'], 'mode "insertAfter" needs anchor.');
@@ -210,9 +211,9 @@ export const copyContentInputSchema = z
       // offering one — most of all on `replace`, which overwrites the whole
       // page. Only replaceLines threads it through, so only replaceLines takes
       // it.
-      if (value.to.mode !== 'replaceLines' && value.to.expectedTotalLines !== undefined) {
+      if (value.to.mode !== 'replaceLines') {
         require(
-          false,
+          value.to.expectedTotalLines === undefined,
           ['to', 'expectedTotalLines'],
           'expectedTotalLines only applies to mode "replaceLines"; it would be ignored here.'
         );
@@ -236,12 +237,20 @@ interface ResolvedSource {
 
 type Refusal = { success: false; error: string; message: string; [key: string]: unknown };
 
-const refuse = (error: string, message: string, extra: Record<string, unknown> = {}): Refusal => ({
-  success: false,
-  error,
-  message,
-  ...extra,
-});
+/**
+ * A copy that landed. The fields differ per arm — page vs file, insertion vs
+ * replace — and both the tests and RichDiffRenderer read them by name, so the
+ * shape stays open. What is pinned is what every arm owes a caller: the
+ * discriminant, and a sentence a human can read.
+ */
+type Success = { success: true; message: string; [key: string]: unknown };
+
+/** Every value the two write arms can return. */
+type CopyResult = Success | Refusal;
+
+function refuse(error: string, message: string, extra: Record<string, unknown> = {}): Refusal {
+  return { success: false, error, message, ...extra };
+}
 
 /**
  * What the bytes of a page ARE: raw text, HTML, or not yet determinable.
@@ -385,7 +394,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     to: CopyTo,
     source: ResolvedSource,
     context: ToolExecutionContext
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CopyResult> {
     const pageId = resolveOrThrowPageId(to.pageId, context);
     const page = await deps.findPage(pageId);
     if (!page) return refuse('Destination page not found', `No page with ID "${pageId}".`);
@@ -508,6 +517,11 @@ export function createCopyContentTools(deps: CopyContentDeps) {
           break;
         }
         default:
+          // Unreachable through the schema, which requires one of the four
+          // modes for a page destination. Kept because `mode` is still
+          // optional in the inferred type, so this is what keeps `edit`
+          // definitely assigned — and it is the honest answer if a future
+          // mode is added to the enum and not to this switch.
           return refuse('Unsupported mode', `Unknown destination mode "${String(to.mode)}".`);
       }
     } catch (error) {
@@ -583,7 +597,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     to: CopyTo,
     source: ResolvedSource,
     context: ToolExecutionContext
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CopyResult> {
     if (!(await deps.isSandboxEnabledForContext(context))) {
       return refuse(
         'Sandbox access is off for this agent',
@@ -638,7 +652,9 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         const source = await resolveSource(from, context);
         if ('success' in source) return source;
 
-        const bytes = Buffer.byteLength(source.bytes, 'utf8');
+        // Named for the field it is reported as, and so it does not read as a
+        // sibling of `source.bytes` — which is the copied TEXT, not a count.
+        const sourceBytes = Buffer.byteLength(source.bytes, 'utf8');
         // A zero-byte source is the limit case of the truncation this tool
         // refuses to do: `replace` would empty the destination and report
         // success, with only `bytesCopied: 0` to say so. It nearly always means
@@ -652,23 +668,24 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         // Unless the caller NARROWED the source explicitly — asking for lines
         // 2-2 of a document is a deliberate selection, and a blank separator
         // line is a legitimate thing to copy.
-        const deliberatelyNarrowed = from.kind === 'page' && (from.lineStart !== undefined || from.lineEnd !== undefined);
+        const deliberatelyNarrowed =
+          from.kind === 'page' && (from.lineStart !== undefined || from.lineEnd !== undefined);
         if (source.bytes.trim() === '' && !deliberatelyNarrowed) {
           return refuse(
             'Source is empty',
             `${source.label} has no content, so there is nothing to copy. Copying it would empty the destination rather than fill it. ` +
               `If the source is an uploaded file, its text may not have been extracted yet. ` +
               `To copy blank lines on purpose, name them with from.lineStart/from.lineEnd.`,
-            { sourceBytes: bytes }
+            { sourceBytes }
           );
         }
-        if (bytes > MAX_COPY_BYTES) {
+        if (sourceBytes > MAX_COPY_BYTES) {
           return refuse(
             'Source is too large to copy',
-            `${source.label} is ${bytes} bytes, over the ${MAX_COPY_BYTES}-byte limit. ` +
+            `${source.label} is ${sourceBytes} bytes, over the ${MAX_COPY_BYTES}-byte limit. ` +
               `Narrow it with from.lineStart/from.lineEnd. It is NOT copied partially — a half-copied ` +
               `document looks complete, so this refuses instead.`,
-            { sourceBytes: bytes, limit: MAX_COPY_BYTES }
+            { sourceBytes, limit: MAX_COPY_BYTES }
           );
         }
 
