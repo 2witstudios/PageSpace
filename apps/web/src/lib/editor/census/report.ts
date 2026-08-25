@@ -61,6 +61,7 @@ export interface CensusSnapshot {
   markdownConstructs: ConstructTally[];
   /** Keyed by error type rather than construct — see `recordHtml`. */
   failures: ConstructTally[];
+  textLoss: ConstructTally[];
 }
 
 export interface CensusAccumulator {
@@ -94,6 +95,10 @@ export function createCensusAccumulator(): CensusAccumulator {
   const htmlTallies: Tallies = new Map(TRACKED_HTML_CONSTRUCTS.map((construct) => [construct, { pages: 0, examplePageIds: [] }]));
   const markdownTallies: Tallies = new Map();
   const failureTallies: Tallies = new Map();
+  // Diagnostic bucket: the text-loss counters are the most alarming numbers in
+  // the report and, as bare counts, the least actionable — there is no way to go
+  // and look at a page that lost text. Ids only, same rule as everywhere else.
+  const textLossTallies: Tallies = new Map();
   const totals: Omit<CensusTotals, 'documents'> = {
     html: 0,
     markdown: 0,
@@ -125,6 +130,9 @@ export function createCensusAccumulator(): CensusAccumulator {
         totals.textLost += 1;
         if (analysis.dropped.length === 0) {
           totals.textLostWithNoNamedConstruct += 1;
+          tally(textLossTallies, 'text-lost:no-named-construct', pageId);
+        } else {
+          tally(textLossTallies, 'text-lost:with-construct', pageId);
         }
       }
     },
@@ -151,6 +159,7 @@ export function createCensusAccumulator(): CensusAccumulator {
         htmlConstructs: rows(htmlTallies),
         markdownConstructs: rows(markdownTallies),
         failures: rows(failureTallies),
+        textLoss: rows(textLossTallies),
       };
     },
   };
@@ -189,6 +198,14 @@ export function formatCensusReport(snapshot: CensusSnapshot, { partial }: { part
     ...table('HTML documents — constructs the schema drops', snapshot.htmlConstructs),
     ...table('markdown documents — source syntax the schema has no node for', snapshot.markdownConstructs),
   ];
+
+  if (snapshot.textLoss.length > 0) {
+    lines.push(
+      '',
+      'text loss — example pages (ids only; go and read these)',
+      ...snapshot.textLoss.map((row) => `  ${row.construct}  ${row.pages}  ${row.examplePageIds.join(' ')}`),
+    );
+  }
 
   if (snapshot.failures.length > 0) {
     lines.push(

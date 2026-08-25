@@ -1,5 +1,10 @@
 import { describe, it, expect, afterAll } from 'vitest';
-import { collectConstructs, createDomWorkspace, droppedConstructs } from '../constructs';
+import {
+  collectConstructs,
+  createDomWorkspace,
+  droppedConstructs,
+  UNESCAPED_ANGLE_BRACKET_KEY,
+} from '../constructs';
 
 const workspace = createDomWorkspace();
 afterAll(() => workspace.close());
@@ -78,5 +83,40 @@ describe('droppedConstructs', () => {
   it('sorts its output so a report is stable between runs', () => {
     const result = dropped('<mark>a</mark><figure>b</figure><sup>c</sup>', '<p>abc</p>');
     expect(result).toEqual(['<figure>', '<mark>', '<sup>']);
+  });
+});
+
+describe('unescaped angle brackets in text', () => {
+  it('given a generic like ActionResult<void>, buckets it instead of naming a phantom element', () => {
+    const ws = createDomWorkspace();
+    const constructs = collectConstructs(ws.parse('<p>ActionResult<void> here</p>'));
+    // The census answers "what must v1 represent". `<actionresult<void>` is not
+    // an answer to that — it is an unescaped `<` in a code sample.
+    expect(constructs.elements).toContain(UNESCAPED_ANGLE_BRACKET_KEY);
+    expect(constructs.elements).not.toContain('void');
+    ws.close();
+  });
+
+  it('given many distinct placeholders, names none of them', () => {
+    const ws = createDomWorkspace();
+    const constructs = collectConstructs(
+      ws.parse('<p>use <task-id> and <drive-id> and <page-id></p>'),
+    );
+    // Before the fix each of these was its own row in the report, and 200-odd
+    // like them buried the findings that mattered.
+    for (const phantom of ['task-id', 'drive-id', 'page-id']) {
+      expect(constructs.elements).not.toContain(phantom);
+    }
+    expect(constructs.elements).toContain(UNESCAPED_ANGLE_BRACKET_KEY);
+    ws.close();
+  });
+
+  it('still reports a real HTML element the schema drops', () => {
+    const ws = createDomWorkspace();
+    const constructs = collectConstructs(ws.parse('<figure><img src="x.png"></figure>'));
+    expect(constructs.elements).toContain('figure');
+    expect(constructs.elements).toContain('img');
+    expect(constructs.elements).not.toContain(UNESCAPED_ANGLE_BRACKET_KEY);
+    ws.close();
   });
 });
