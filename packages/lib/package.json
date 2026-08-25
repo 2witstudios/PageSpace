@@ -2012,6 +2012,36 @@
       "types": "./dist/services/agent-workspaces/workspace-membership-store.d.ts",
       "import": "./dist/services/agent-workspaces/workspace-membership-store.js",
       "require": "./dist/services/agent-workspaces/workspace-membership-store.js"
+    },
+    "./services/app-hosting/routing-env": {
+      "types": "./dist/services/app-hosting/routing-env.d.ts",
+      "import": "./dist/services/app-hosting/routing-env.js",
+      "require": "./dist/services/app-hosting/routing-env.js"
+    },
+    "./services/app-hosting/router-core": {
+      "types": "./dist/services/app-hosting/router-core.d.ts",
+      "import": "./dist/services/app-hosting/router-core.js",
+      "require": "./dist/services/app-hosting/router-core.js"
+    },
+    "./services/app-hosting/router": {
+      "types": "./dist/services/app-hosting/router.d.ts",
+      "import": "./dist/services/app-hosting/router.js",
+      "require": "./dist/services/app-hosting/router.js"
+    },
+    "./services/app-hosting/app-replay-key": {
+      "types": "./dist/services/app-hosting/app-replay-key.d.ts",
+      "import": "./dist/services/app-hosting/app-replay-key.js",
+      "require": "./dist/services/app-hosting/app-replay-key.js"
+    },
+    "./services/app-hosting/parked-page": {
+      "types": "./dist/services/app-hosting/parked-page.d.ts",
+      "import": "./dist/services/app-hosting/parked-page.js",
+      "require": "./dist/services/app-hosting/parked-page.js"
+    },
+    "./validators/fly-ownership": {
+      "types": "./dist/validators/fly-ownership.d.ts",
+      "import": "./dist/validators/fly-ownership.js",
+      "require": "./dist/validators/fly-ownership.js"
     }
   },
   "typesVersions": {
@@ -2765,6 +2795,24 @@
       ],
       "canvas/cert-action": [
         "./dist/canvas/cert-action.d.ts"
+      ],
+      "services/app-hosting/routing-env": [
+        "./dist/services/app-hosting/routing-env.d.ts"
+      ],
+      "services/app-hosting/router-core": [
+        "./dist/services/app-hosting/router-core.d.ts"
+      ],
+      "services/app-hosting/router": [
+        "./dist/services/app-hosting/router.d.ts"
+      ],
+      "services/app-hosting/app-replay-key": [
+        "./dist/services/app-hosting/app-replay-key.d.ts"
+      ],
+      "services/app-hosting/parked-page": [
+        "./dist/services/app-hosting/parked-page.d.ts"
+      ],
+      "validators/fly-ownership": [
+        "./dist/validators/fly-ownership.d.ts"
       ]
     }
   },

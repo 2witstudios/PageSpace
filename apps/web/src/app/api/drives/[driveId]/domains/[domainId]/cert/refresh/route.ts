@@ -55,7 +55,7 @@ export async function POST(
     // Advance the cert one step via the shared service (also used by the lazy
     // reconcile on the domains-list GET). It commits the status, then runs the
     // active/cert_failed side effects best-effort.
-    const { status: nextStatus, action } = await reconcileCustomDomainCert({
+    const { status: nextStatus, action, ownershipInstruction } = await reconcileCustomDomainCert({
       id: domain.id,
       driveId,
       hostname: domain.hostname,
@@ -75,7 +75,11 @@ export async function POST(
       },
     });
 
-    return NextResponse.json({ status: nextStatus, action });
+    // `ownershipInstruction` is the actionable half of a cert that is stuck:
+    // without it the UI can only say "still provisioning" for a hostname that
+    // will never provision until the customer publishes a TXT record nobody has
+    // told them about. Null whenever nothing is waiting on them.
+    return NextResponse.json({ status: nextStatus, action, ownershipInstruction: ownershipInstruction ?? null });
   } catch (error) {
     loggers.api.error('Error refreshing cert:', error as Error);
     return NextResponse.json({ error: 'Failed to refresh cert' }, { status: 500 });

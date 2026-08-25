@@ -2,15 +2,54 @@ import 'server-only';
 
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { nextCertAction, certActionToDbStatus, isCertEligible } from '@pagespace/lib/canvas/cert-action';
-import type { CertAction, CertEligibleStatus } from '@pagespace/lib/canvas/cert-action';
-import { addCertificate } from '@/lib/fly/certs';
+import type { CertAction, CertEligibleStatus, FlyCertResponse } from '@pagespace/lib/canvas/cert-action';
+import {
+  describeOwnershipVerification,
+  verifyFlyOwnershipTxt,
+  type FlyOwnershipVerification,
+} from '@pagespace/lib/validators/fly-ownership';
+import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
+import { addCertificate, recheckCertificate } from '@/lib/fly/certs';
+import { resolveTxtRecords } from '@/lib/publish/dns-resolver';
 import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { mirrorDriveToCustomHost, clearCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { regeneratePublishedSiteFiles, renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 
-const FLY_APP_NAME = process.env.FLY_PROXY_APP_NAME ?? 'pagespace-proxy';
+/**
+ * Certs attach to the ROUTER app — the app Fly TLS-terminates for us. Resolved
+ * through `resolveAppRouterFlyAppName()` (which still falls back to
+ * `FLY_PROXY_APP_NAME`) rather than read here, so custom-domain certs and the
+ * published-app routing tier can never end up naming two different apps: a cert
+ * issued on app A does not terminate traffic arriving at app B.
+ */
+function routerAppName(): string {
+  return resolveAppRouterFlyAppName();
+}
+
+/**
+ * Pre-validate the `_fly-ownership` TXT record, when Fly asked for one.
+ *
+ * Runs ONLY when Fly reports an ownership requirement it has not already
+ * satisfied — the common case (a hostname whose A/AAAA already point at us
+ * validates by reachability) does no DNS work at all. Returns null when there is
+ * nothing to check, which `nextCertAction` reads as "no pre-validation was run"
+ * and treats exactly as it did before this existed.
+ *
+ * Never throws: a DNS failure here must not turn into a cert failure. The
+ * resolver already collapses NXDOMAIN/ENODATA/timeout to `[]`, and `[]` reads as
+ * `missing` — which is non-destructive (it maps to `provisioning`, see the
+ * `blocked-on-ownership` action) and merely means the next poll asks again.
+ */
+async function preValidateOwnership(flyCert: FlyCertResponse): Promise<FlyOwnershipVerification | null> {
+  if (!flyCert.ok) return null;
+  if (flyCert.ownershipTxtConfigured) return null;
+  const requirement = flyCert.ownership ?? null;
+  if (!requirement) return null;
+  const records = await resolveTxtRecords(requirement.name).catch(() => [] as string[][]);
+  return verifyFlyOwnershipTxt({ requirement, records });
+}
 
 /** The minimal domain shape `reconcileCustomDomainCert` needs. */
 export interface CertReconcileDomain {
@@ -27,6 +66,15 @@ export interface CertReconcileResult {
   status: string;
   /** The cert action taken, or `null` when reconcile was a no-op. */
   action: CertAction['action'] | null;
+  /**
+   * What the customer still has to do, when the certificate is blocked on a DNS
+   * record they have not published. Null whenever nothing is waiting on them.
+   *
+   * Returned rather than persisted: it is derived from Fly's live answer plus a
+   * live DNS read, so a column holding it would be stale the moment the customer
+   * fixed their zone — and the status column already records the state.
+   */
+  ownershipInstruction?: string | null;
 }
 
 export interface CertReconcileOptions {
@@ -88,8 +136,43 @@ export async function reconcileCustomDomainCert(
     return { status: domain.status, action: null };
   }
 
-  const flyCert = await addCertificate(FLY_APP_NAME, domain.hostname);
-  const action = nextCertAction(domain.status as CertEligibleStatus, flyCert);
+  const flyCert = await addCertificate(routerAppName(), domain.hostname);
+  let ownership = await preValidateOwnership(flyCert);
+  let cert = flyCert;
+
+  // The customer published the record, but Fly has not noticed yet.
+  //
+  // This is the ONE state a re-check helps, and it is why `recheckCertificate`
+  // exists: `addCertificate` above resolves an existing hostname with a GET, and
+  // a GET does not make Fly re-read DNS — so without this the domain waits on
+  // Fly's own polling cadence even though everything it needs is already
+  // published. Narrow by construction: it fires only while our resolver can see
+  // an accepted value AND Fly still reports the TXT unconfigured, a window that
+  // closes as soon as Fly agrees.
+  if (ownership?.state === 'satisfied' && cert.ok && !cert.ownershipTxtConfigured) {
+    const rechecked = await recheckCertificate(routerAppName(), domain.hostname);
+    if (rechecked.ok) {
+      cert = rechecked;
+      ownership = await preValidateOwnership(rechecked);
+    }
+    // A failed re-check is deliberately ignored: it is an optimization on top of
+    // a state that already resolves on its own, and letting a Fly blip here turn
+    // into `mark-failed` would flip a healthy domain to cert_failed.
+  }
+
+  const action = nextCertAction(domain.status as CertEligibleStatus, cert, ownership);
+
+  // Blocked on a record the customer has not published: the domain is fine and
+  // the certificate will issue the moment it appears, so this stays at
+  // `provisioning` and clears nothing. Logged at warn because it is the one
+  // cert state that will NEVER resolve on its own — somebody has to be told.
+  if (action.action === 'blocked-on-ownership') {
+    loggers.api.warn('Fly certificate is waiting on an _fly-ownership TXT record', {
+      driveId: domain.driveId,
+      hostname: domain.hostname,
+      reason: action.reason,
+    });
+  }
 
   // Non-destructive read path: a Fly error/timeout maps to `mark-failed`, which
   // would flip the domain to `cert_failed` and wipe its mirrored prefix. On the
@@ -138,5 +221,9 @@ export async function reconcileCustomDomainCert(
     }
   }
 
-  return { status: nextStatus, action: action.action };
+  return {
+    status: nextStatus,
+    action: action.action,
+    ownershipInstruction: ownership ? describeOwnershipVerification(ownership) : null,
+  };
 }

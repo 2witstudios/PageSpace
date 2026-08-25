@@ -14,6 +14,8 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { clearCustomHost, mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { regeneratePublishedSiteFiles, republishDriveCanonical, renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
+import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
+import { removeCertificate } from '@/lib/fly/certs';
 import { isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -237,6 +239,30 @@ export async function DELETE(
           hostname: deleted.hostname,
           error: err instanceof Error ? err.message : String(err),
         });
+      });
+    }
+
+    // Detach the hostname from the router app at Fly. Certificates bill PER
+    // HOSTNAME ($0.10/mo past the first ten), and this row was the only record
+    // that the hostname was ever attached — so a delete that skips this leaves a
+    // charge with nothing in our database pointing at it, which is the same
+    // orphaned-billing-resource shape `app_hosting_reclaims` exists to prevent
+    // for Fly apps. Best-effort and fire-and-forget, like the storage cleanup
+    // above: `deleteCertificate` is idempotent (a hostname Fly does not have is
+    // already in the desired state), so a failed attempt is safely retried by
+    // re-adding and re-removing the domain, and a Fly outage must not block the
+    // user's removal. Platform-owned rows are skipped — their TLS comes from the
+    // app's own domain and Fly never issued a per-hostname cert for them.
+    if (!deleted.platformOwned) {
+      const routerApp = resolveAppRouterFlyAppName();
+      void removeCertificate(routerApp, deleted.hostname).then((result) => {
+        if (!result.ok) {
+          loggers.api.warn('Failed to remove Fly certificate after domain removal', {
+            hostname: deleted.hostname,
+            routerApp,
+            error: result.error,
+          });
+        }
       });
     }
 

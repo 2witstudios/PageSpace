@@ -178,6 +178,34 @@ export const serverEnvSchema = z
     // networks, so all published apps must share one.
     PUBLISHED_APPS_NETWORK: z.string().optional(),
 
+    // The apex published apps are served from (`<subdomain>.<apex>`). Optional:
+    // unset falls back to PUBLISHED_APPS_APEX_DEFAULT. Deliberately a DIFFERENT
+    // apex from `*.pagespace.site`, which is not on the Public Suffix List — a
+    // published app runs customer server code on its own origin, so sharing a
+    // registrable domain with other published content would let one app set
+    // cookies every other one sends. Read via resolvePublishedAppsApex.
+    PUBLISHED_APPS_APEX: z.string().optional(),
+
+    // The Fly app that terminates the published-apps apex, emits fly-replay, and
+    // holds custom-domain certs. Optional: falls back to FLY_PROXY_APP_NAME and
+    // then to APP_ROUTER_FLY_APP_DEFAULT. It MUST have been created on
+    // PUBLISHED_APPS_NETWORK — fly-replay cannot cross Fly 6PN networks, and an
+    // app's network is fixed at create time. See routing-env.ts.
+    APP_ROUTER_FLY_APP_NAME: z.string().optional(),
+
+    // Server secret the per-app fly-replay `state` key is derived from (see
+    // services/app-hosting/app-replay-key.ts). A configured value must be >= 32
+    // chars, but a blank placeholder is accepted — mirroring
+    // SANDBOX_SESSION_SECRET — so an empty value makes the router refuse to
+    // emit replays (fail closed) rather than failing app-wide env validation.
+    APP_REPLAY_SECRET: z.string().min(32).optional().or(z.literal('')),
+
+    // Shared secret proving a router request came from the edge proxy. Optional
+    // and blank-tolerant for the same reason; the router treats an unset value
+    // as "refuse everything", never as "skip the check" — the endpoint would
+    // otherwise be a world-callable fly-replay emitter for the whole Fly org.
+    APP_ROUTER_PROXY_SECRET: z.string().min(1).optional().or(z.literal('')),
+
     // Sentry server/edge DSN. Fail-loud in production for cloud/tenant (see
     // superRefine below) — a missing DSN previously meant Sentry.init({dsn:
     // undefined}) silently no-op'd with zero alerts ever reaching a human.

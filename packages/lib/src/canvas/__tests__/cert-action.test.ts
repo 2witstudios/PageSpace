@@ -97,6 +97,15 @@ describe('certActionToDbStatus', () => {
   it('mark-failed action maps to cert_failed DB status', () => {
     expect(certActionToDbStatus({ action: 'mark-failed', reason: 'boom' })).toBe('cert_failed');
   });
+
+  it('blocked-on-ownership maps to provisioning, NOT cert_failed', () => {
+    // The domain is fine and the cert will issue the moment the record appears.
+    // Mapping this to cert_failed would clear the mirrored prefix of a working
+    // site because its customer had not yet been told to add a TXT record.
+    expect(certActionToDbStatus({ action: 'blocked-on-ownership', reason: 'add a TXT' })).toBe(
+      'provisioning',
+    );
+  });
 });
 
 describe('isCertEligible', () => {
@@ -120,4 +129,54 @@ describe('isServingStatus', () => {
   it('returns false for cert_failed', () => expect(isServingStatus('cert_failed')).toBe(false));
   it('returns false for failed (legacy)', () => expect(isServingStatus('failed')).toBe(false));
   it('returns false for an unknown status', () => expect(isServingStatus('bogus')).toBe(false));
+});
+
+describe('nextCertAction — ownership pre-validation', () => {
+  const requirement = {
+    name: '_fly-ownership.docs.acme.com',
+    appValue: 'app-ABC',
+    orgValue: 'org-XYZ',
+  };
+
+  it('given no pre-validation was run, should behave exactly as before it existed', () => {
+    // The default argument is the compatibility contract: a caller that does not
+    // resolve DNS must get the answer it always got.
+    expect(nextCertAction('verified', ok(false))).toEqual({ action: 'provision' });
+    expect(nextCertAction('provisioning', ok(false))).toEqual({ action: 'poll-again' });
+  });
+
+  it.each([
+    ['missing', { state: 'missing' as const, expected: requirement }],
+    ['mismatched', { state: 'mismatched' as const, expected: requirement, found: ['app-WRONG'] }],
+  ])('given the ownership record is %s, should report what is blocking rather than poll blindly', (_l, ownership) => {
+    const action = nextCertAction('provisioning', ok(false), ownership);
+    expect(action.action).toBe('blocked-on-ownership');
+    if (action.action !== 'blocked-on-ownership') throw new Error('expected blocked-on-ownership');
+    expect(action.reason).toContain('_fly-ownership.docs.acme.com');
+  });
+
+  it.each([
+    ['satisfied', { state: 'satisfied' as const }],
+    ['not_required', { state: 'not_required' as const }],
+  ])('given ownership is %s, should fall through to the ordinary decision', (_l, ownership) => {
+    expect(nextCertAction('provisioning', ok(false), ownership)).toEqual({ action: 'poll-again' });
+    expect(nextCertAction('verified', ok(false), ownership)).toEqual({ action: 'provision' });
+  });
+
+  it('given a LIVE certificate, should mark it active whatever the record says', () => {
+    // A live cert is live; ownership is a precondition for issuance, not a
+    // condition of serving. Checking ownership first would un-activate a
+    // working certificate whose customer later deleted the TXT record.
+    expect(
+      nextCertAction('provisioning', ok(true), { state: 'missing', expected: requirement }),
+    ).toEqual({ action: 'mark-active' });
+  });
+
+  it('given a Fly error, should still mark failed rather than blame the record', () => {
+    const action = nextCertAction('verified', err('Fly API timeout'), {
+      state: 'missing',
+      expected: requirement,
+    });
+    expect(action).toEqual({ action: 'mark-failed', reason: 'Fly API timeout' });
+  });
 });

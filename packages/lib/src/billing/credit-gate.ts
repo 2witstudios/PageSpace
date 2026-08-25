@@ -36,6 +36,7 @@ import {
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
 } from './credit-pricing';
+import { getCreditBalance } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -527,4 +528,41 @@ export async function canConsumeAI(
   // no longer affects the displayed balance, so no gate-time push is needed.
 
   return result;
+}
+
+/**
+ * hasSpendableBalance — the READ-ONLY twin of {@link canConsumeAI}: "could this
+ * user spend right now?", asked without reserving anything.
+ *
+ * Exists for the published-app routing edge's BALANCE-CHECK-BEFORE-WAKE, and the
+ * difference from `canConsumeAI` is the whole reason it exists: `canConsumeAI`
+ * INSERTS A HOLD. That is right for an AI call — one gate check, one bounded
+ * unit of work, one settle — and catastrophic on a serving edge, where the gate
+ * runs once per HTTP request (the metered tier has no replay cache, by design)
+ * and would write a `credit_holds` row per image, per stylesheet, per favicon,
+ * each of them reserving spend against a run that has no settle to release it.
+ *
+ * The DECISION is the same one `evaluateGate` makes — spendable above the
+ * reserve floor, debt netted, billing-disabled deployments unlimited — reached
+ * through `getCreditBalance`, which already mirrors those semantics for display
+ * (including the free-tier lapsed-window rollover the gate applies lazily, so a
+ * free user whose month has ticked over is not parked for the gap between the
+ * rollover being due and the next AI call performing it).
+ *
+ * What it deliberately does NOT do is subtract in-flight AI holds: those are
+ * reservations against chat calls, and a user with a stream running must not
+ * have their published site go dark for the duration. The awake-seconds meter
+ * settles separately, and overspend on this path is bounded by the metering
+ * cron parking the app — not by this read.
+ *
+ * Never lazy-inits and never rolls the period: this is a hot read-only path, and
+ * both of those writes belong to `canConsumeAI`, which owns the row lock.
+ */
+export async function hasSpendableBalance(
+  userId: string,
+  tier: SubscriptionTier = 'free',
+): Promise<boolean> {
+  if (!isBillingEnabled()) return true;
+  const summary = await getCreditBalance(userId, tier);
+  return summary.spendable > RESERVE_FLOOR_CENTS;
 }

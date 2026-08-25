@@ -1,177 +1,256 @@
+/**
+ * apps/web's Fly certificate wrapper, after the port off GraphQL.
+ *
+ * The previous version of this file asserted the shape of hand-written GraphQL
+ * mutations against a stubbed global `fetch`. None of that survives the port:
+ * the transport is now the shared flaps client, so what is worth asserting is
+ * the BEHAVIOUR the callers depend on, which deliberately did not change —
+ * `FlyCertResponse`, its `configured` boolean, idempotence, and degrading to
+ * `ok: false` instead of throwing into a settings page.
+ *
+ * What is new, and is the reason for the port: `ownership` and `status` are
+ * carried through, so a certificate stuck on an `_fly-ownership` TXT can be
+ * told apart from one that is simply still validating.
+ */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-vi.stubGlobal('fetch', vi.fn());
+const {
+  getCertificateMock,
+  requestAcmeCertificateMock,
+  checkCertificateMock,
+  deleteCertificateMock,
+  StubFlapsError,
+} = vi.hoisted(() => ({
+  getCertificateMock: vi.fn(),
+  requestAcmeCertificateMock: vi.fn(),
+  checkCertificateMock: vi.fn(),
+  deleteCertificateMock: vi.fn(),
+  // Hoisted with the mocks: the module factory below references it, and a class
+  // declared at file scope is still in its temporal dead zone when that runs.
+  StubFlapsError: class extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'FlapsError';
+    }
+  },
+}));
 
-import { addCertificate, getCertificate } from '../certs';
+vi.mock('@pagespace/lib/services/fly/flaps-client', () => ({
+  FlapsError: StubFlapsError,
+  getCertificate: getCertificateMock,
+  requestAcmeCertificate: requestAcmeCertificateMock,
+  checkCertificate: checkCertificateMock,
+  deleteCertificate: deleteCertificateMock,
+}));
 
-const FLY_API_URL = 'https://api.fly.io/graphql';
-const TOKEN = 'fly-test-token';
+import {
+  addCertificate,
+  ownershipRequirementOf,
+  recheckCertificate,
+  removeCertificate,
+} from '../certs';
+
 const APP_NAME = 'pagespace-proxy';
 const HOSTNAME = 'docs.acme.com';
 
-function mockFetchOk(body: unknown) {
-  (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-    ok: true,
-    json: () => Promise.resolve(body),
-  } as Response);
-}
-
-function mockFetchNetworkError() {
-  (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error('network failure'));
-}
-
-function mockFetchHttpError(status: number) {
-  (fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-    ok: false,
-    status,
-    json: () => Promise.resolve({ errors: [{ message: `HTTP ${status}` }] }),
-  } as unknown as Response);
-}
-
-function addCertOk(clientStatus: string) {
-  return {
-    data: { addCertificate: { certificate: { configured: true, clientStatus, hostname: HOSTNAME } } },
-  };
-}
-
-function getCertOk(clientStatus: string) {
-  return {
-    data: { app: { certificate: { configured: true, clientStatus, hostname: HOSTNAME } } },
-  };
-}
+const ACTIVE = { hostname: HOSTNAME, status: 'active', configured: true };
+const PENDING = {
+  hostname: HOSTNAME,
+  status: 'pending_validation',
+  configured: false,
+  dns_requirements: {
+    ownership: { name: `_fly-ownership.${HOSTNAME}`, app_value: 'app-ABC', org_value: 'org-XYZ' },
+  },
+  validation: { ownership_txt_configured: false },
+};
 
 beforeEach(() => {
   vi.clearAllMocks();
-  process.env.FLY_API_TOKEN = TOKEN;
+  process.env.FLY_API_TOKEN = 'fly-test-token';
 });
 
 afterEach(() => {
   delete process.env.FLY_API_TOKEN;
+  delete process.env.FLY_MACHINES_ORG_TOKEN;
 });
 
-describe('addCertificate', () => {
-  it('sends POST to Fly GraphQL with correct Authorization header', async () => {
-    mockFetchOk(addCertOk('Awaiting certificates'));
+describe('addCertificate — reads before it writes', () => {
+  it('given a hostname Fly already has, should return its state without requesting a new cert', async () => {
+    getCertificateMock.mockResolvedValueOnce(ACTIVE);
 
-    await addCertificate(APP_NAME, HOSTNAME);
+    const result = await addCertificate(APP_NAME, HOSTNAME);
 
-    expect(fetch).toHaveBeenCalledOnce();
-    const [url, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    expect(url).toBe(FLY_API_URL);
-    expect((init.headers as Record<string, string>)['Authorization']).toBe(`Bearer ${TOKEN}`);
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('application/json');
-    expect(init.method).toBe('POST');
+    expect(result).toEqual({
+      ok: true,
+      configured: true,
+      status: 'active',
+      ownership: null,
+      ownershipTxtConfigured: false,
+    });
+    // The poll cycle this serves runs on every domains-list load; it must not be
+    // a stream of mutations.
+    expect(requestAcmeCertificateMock).not.toHaveBeenCalled();
   });
 
-  it('passes a bounded AbortSignal (timeout) to fetch so a hung Fly response cannot block the caller', async () => {
-    mockFetchOk(addCertOk('Awaiting certificates'));
+  it('given a hostname Fly has never seen, should request an ACME certificate', async () => {
+    getCertificateMock.mockResolvedValueOnce(null);
+    requestAcmeCertificateMock.mockResolvedValueOnce(PENDING);
 
-    await addCertificate(APP_NAME, HOSTNAME);
+    const result = await addCertificate(APP_NAME, HOSTNAME);
 
-    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    expect(init.signal).toBeInstanceOf(AbortSignal);
-  });
-
-  it('returns ok:false when the Fly request times out (aborted)', async () => {
-    (fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      Object.assign(new Error('The operation timed out.'), { name: 'TimeoutError' }),
+    expect(requestAcmeCertificateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'fly-test-token' }),
+      APP_NAME,
+      HOSTNAME,
     );
+    expect(result).toMatchObject({ ok: true, configured: false, status: 'pending_validation' });
+  });
+
+  it('given a pending cert, should surface the ownership record the customer still owes', async () => {
+    getCertificateMock.mockResolvedValueOnce(PENDING);
 
     const result = await addCertificate(APP_NAME, HOSTNAME);
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/timed out/i);
+    expect(result).toEqual({
+      ok: true,
+      configured: false,
+      status: 'pending_validation',
+      ownership: { name: `_fly-ownership.${HOSTNAME}`, appValue: 'app-ABC', orgValue: 'org-XYZ' },
+      ownershipTxtConfigured: false,
+    });
   });
 
-  it('sends the mutation with appId (not appName) and hostname variables', async () => {
-    mockFetchOk(addCertOk('Awaiting certificates'));
-
-    await addCertificate(APP_NAME, HOSTNAME);
-
-    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { query: string; variables: Record<string, string> };
-    expect(body.variables.appId).toBe(APP_NAME);
-    expect(body.variables.hostname).toBe(HOSTNAME);
-    expect(body.variables.appName).toBeUndefined();
-    expect(body.query).toContain('addCertificate(appId: $appId');
-  });
-
-  it('returns ok:true configured:false while the cert is not yet Ready', async () => {
-    mockFetchOk(addCertOk('Awaiting configuration'));
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: false });
-  });
-
-  it('returns ok:true configured:true when clientStatus is Ready', async () => {
-    mockFetchOk(addCertOk('Ready'));
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: true });
-  });
-
-  it('treats "Hostname already exists" as non-fatal and reads the existing cert status', async () => {
-    // 1st call: addCertificate → "already exists" error
-    mockFetchOk({ data: null, errors: [{ message: 'Hostname already exists on app' }] });
-    // 2nd call: getCertificate → Ready
-    mockFetchOk(getCertOk('Ready'));
+  it('given Fly reports the ownership TXT as seen, should say so', async () => {
+    getCertificateMock.mockResolvedValueOnce({
+      ...PENDING,
+      validation: { ownership_txt_configured: true },
+    });
 
     const result = await addCertificate(APP_NAME, HOSTNAME);
-
-    expect(result).toEqual({ ok: true, configured: true });
-    expect(fetch).toHaveBeenCalledTimes(2);
-    const [, secondInit] = (fetch as ReturnType<typeof vi.fn>).mock.calls[1] as [string, RequestInit];
-    const secondBody = JSON.parse(secondInit.body as string) as { query: string; variables: Record<string, string> };
-    expect(secondBody.query).toContain('app(name: $appName)');
-    expect(secondBody.variables.appName).toBe(APP_NAME);
+    expect(result).toMatchObject({ ok: true, ownershipTxtConfigured: true });
   });
 
-  it('returns ok:false when FLY_API_TOKEN is absent', async () => {
-    delete process.env.FLY_API_TOKEN;
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-    expect(fetch).not.toHaveBeenCalled();
+  it('given a cert that is DNS-configured but not yet ISSUED, should not call it configured', async () => {
+    // The distinction the old `clientStatus === 'Ready'` check drew, preserved
+    // across the port: Fly's own `configured` boolean reflects DNS, and a
+    // hostname can be correctly configured for minutes before a certificate
+    // actually issues. Serving on the strength of it would mean serving without
+    // TLS.
+    getCertificateMock.mockResolvedValueOnce({
+      hostname: HOSTNAME,
+      status: 'pending_validation',
+      configured: true,
+    });
+    expect(await addCertificate(APP_NAME, HOSTNAME)).toMatchObject({ ok: true, configured: false });
   });
 
-  it('returns ok:false on network error', async () => {
-    mockFetchNetworkError();
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/network failure/);
+  it('given a Fly failure, should degrade to ok:false rather than throw into the settings page', async () => {
+    getCertificateMock.mockRejectedValueOnce(new StubFlapsError('Fly Machines API 403'));
+
+    expect(await addCertificate(APP_NAME, HOSTNAME)).toEqual({
+      ok: false,
+      error: 'Fly Machines API 403',
+    });
   });
 
-  it('returns ok:false on HTTP error', async () => {
-    mockFetchHttpError(401);
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-  });
-
-  it('returns ok:false on a non-"already exists" GraphQL error', async () => {
-    mockFetchOk({ data: null, errors: [{ message: 'app not found' }] });
-    const result = await addCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error).toMatch(/app not found/);
+  it('given a non-Error rejection, should still report an error response', async () => {
+    getCertificateMock.mockRejectedValueOnce('something odd');
+    expect(await addCertificate(APP_NAME, HOSTNAME)).toEqual({
+      ok: false,
+      error: 'Unknown Fly API error',
+    });
   });
 });
 
-describe('getCertificate', () => {
-  it('queries app(name:) and maps Ready → configured:true', async () => {
-    mockFetchOk(getCertOk('Ready'));
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: true });
-    const [, init] = (fetch as ReturnType<typeof vi.fn>).mock.calls[0] as [string, RequestInit];
-    const body = JSON.parse(init.body as string) as { variables: Record<string, string> };
-    expect(body.variables.appName).toBe(APP_NAME);
-    expect(body.variables.hostname).toBe(HOSTNAME);
+describe('the token is required before any request is attempted', () => {
+  it('given no token at all, should report it without spending a request on a guaranteed 401', async () => {
+    delete process.env.FLY_API_TOKEN;
+
+    const result = await addCertificate(APP_NAME, HOSTNAME);
+
+    expect(result).toEqual({ ok: false, error: 'FLY_API_TOKEN is not configured' });
+    expect(getCertificateMock).not.toHaveBeenCalled();
   });
 
-  it('maps a non-Ready status to configured:false', async () => {
-    mockFetchOk(getCertOk('Awaiting configuration'));
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result).toEqual({ ok: true, configured: false });
+  it('given only FLY_MACHINES_ORG_TOKEN, should use it as the fallback credential', async () => {
+    delete process.env.FLY_API_TOKEN;
+    process.env.FLY_MACHINES_ORG_TOKEN = 'org-token';
+    getCertificateMock.mockResolvedValueOnce(ACTIVE);
+
+    await addCertificate(APP_NAME, HOSTNAME);
+
+    expect(getCertificateMock).toHaveBeenCalledWith(
+      expect.objectContaining({ token: 'org-token' }),
+      APP_NAME,
+      HOSTNAME,
+    );
+  });
+});
+
+describe('recheckCertificate — the endpoint behind "Check SSL"', () => {
+  it('given a hostname, should ask Fly to re-read its DNS', async () => {
+    checkCertificateMock.mockResolvedValueOnce(ACTIVE);
+    expect(await recheckCertificate(APP_NAME, HOSTNAME)).toMatchObject({ ok: true, configured: true });
+    expect(checkCertificateMock).toHaveBeenCalledWith(expect.anything(), APP_NAME, HOSTNAME);
   });
 
-  it('returns ok:false when the app/cert is missing', async () => {
-    mockFetchOk({ data: { app: { certificate: null } } });
-    const result = await getCertificate(APP_NAME, HOSTNAME);
-    expect(result.ok).toBe(false);
+  it('given Fly does not have the hostname, should report no certificate', async () => {
+    checkCertificateMock.mockResolvedValueOnce(null);
+    expect(await recheckCertificate(APP_NAME, HOSTNAME)).toEqual({
+      ok: false,
+      error: 'Fly did not return a certificate',
+    });
+  });
+});
+
+describe('removeCertificate — a hostname left attached bills forever', () => {
+  it('given an attached hostname, should detach it', async () => {
+    deleteCertificateMock.mockResolvedValueOnce(undefined);
+    expect(await removeCertificate(APP_NAME, HOSTNAME)).toEqual({ ok: true });
+  });
+
+  it('given the delete fails, should report the failure rather than assume removal', async () => {
+    deleteCertificateMock.mockRejectedValueOnce(new StubFlapsError('Fly Machines API 403'));
+    expect(await removeCertificate(APP_NAME, HOSTNAME)).toEqual({
+      ok: false,
+      error: 'Fly Machines API 403',
+    });
+  });
+
+  it('given no token, should report it', async () => {
+    delete process.env.FLY_API_TOKEN;
+    expect(await removeCertificate(APP_NAME, HOSTNAME)).toEqual({
+      ok: false,
+      error: 'FLY_API_TOKEN is not configured',
+    });
+  });
+});
+
+describe('ownershipRequirementOf — a half-populated requirement names nothing actionable', () => {
+  it('given no ownership block, should return null', () => {
+    expect(ownershipRequirementOf(ACTIVE)).toBeNull();
+  });
+
+  it('given a complete requirement, should normalize it', () => {
+    expect(ownershipRequirementOf(PENDING)).toEqual({
+      name: `_fly-ownership.${HOSTNAME}`,
+      appValue: 'app-ABC',
+      orgValue: 'org-XYZ',
+    });
+  });
+
+  it('given only an org value, should still be actionable', () => {
+    expect(
+      ownershipRequirementOf({
+        dns_requirements: { ownership: { name: 'n', org_value: 'org-XYZ' } },
+      }),
+    ).toEqual({ name: 'n', appValue: '', orgValue: 'org-XYZ' });
+  });
+
+  it.each([
+    ['no name', { name: '', app_value: 'app-ABC' }],
+    ['no values', { name: 'n' }],
+  ])('given a requirement with %s, should return null rather than an instruction with blanks in it', (_l, ownership) => {
+    expect(ownershipRequirementOf({ dns_requirements: { ownership } })).toBeNull();
   });
 });

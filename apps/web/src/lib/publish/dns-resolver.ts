@@ -115,3 +115,38 @@ export async function resolveHostname(hostname: string): Promise<ResolvedRecords
   //    still bypasses the stale local Fly resolver.
   return queryRecords(publicResolver, hostname);
 }
+
+/**
+ * Resolve a hostname's TXT records, using the same authoritative-then-recursive
+ * strategy (and the same SSRF filter on nameserver IPs) as {@link resolveHostname}.
+ *
+ * Separate from `queryRecords` rather than folded into it because the two are
+ * asked at different moments and one must not slow the other: A/AAAA/CNAME are
+ * read on every domain verify, TXT only when a certificate turns out to be
+ * blocked on an `_fly-ownership` record. Adding a fourth always-on lookup would
+ * make every verify pay for the rare case.
+ *
+ * The authoritative path matters MORE here than for A records: the whole point
+ * of reading this record is that the customer has just published it, and a
+ * caching resolver's negative answer is exactly the false "you didn't add it"
+ * that would send them round the loop again.
+ *
+ * Returns Node's `string[][]` shape verbatim — one inner array per record, TXT
+ * character-strings unjoined. Joining is the caller's job
+ * (`parseOwnershipTxtValues` in `@pagespace/lib/validators/fly-ownership`),
+ * because a >255-byte value arrives chunked and only the caller knows whether
+ * the chunks concatenate or are separate values. Never throws: NXDOMAIN,
+ * ENODATA and timeouts all surface as `[]` ("not set yet").
+ */
+export async function resolveTxtRecords(hostname: string): Promise<string[][]> {
+  const publicResolver = makeResolver(PUBLIC_DNS_SERVERS);
+
+  const nsIps = await resolveAuthoritativeNsIps(hostname, publicResolver).catch(() => [] as string[]);
+  if (nsIps.length > 0) {
+    const authoritativeResolver = makeResolver(nsIps);
+    const records = await authoritativeResolver.resolveTxt(hostname).catch(() => [] as string[][]);
+    if (records.length > 0) return records;
+  }
+
+  return publicResolver.resolveTxt(hostname).catch(() => [] as string[][]);
+}

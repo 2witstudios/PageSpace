@@ -237,7 +237,11 @@ export default function DomainsSettingsPage() {
       const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/cert/refresh`, {
         method: 'POST',
       });
-      const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as {
+        status?: string;
+        error?: string;
+        ownershipInstruction?: string | null;
+      };
       if (!res.ok) {
         if (res.status === 503) {
           toast.error('SSL provisioning is not yet configured');
@@ -249,6 +253,12 @@ export default function DomainsSettingsPage() {
       await mutateDomains();
       if (data.status === 'active') {
         toast.success('SSL certificate is active');
+      } else if (data.ownershipInstruction) {
+        // The certificate is blocked on a DNS record the customer has not
+        // published. "Check back in a few minutes" would be false here: this is
+        // the one waiting state that never resolves on its own, so it gets the
+        // actual instruction and a duration long enough to copy a record out of.
+        toast.warning(data.ownershipInstruction, { duration: 30_000 });
       } else if (data.status === 'provisioning') {
         toast.success('SSL cert provisioned — check back in a few minutes');
       } else if (data.status === 'cert_failed') {
