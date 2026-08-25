@@ -72,6 +72,26 @@ beforeEach(() => {
 });
 
 describe('resolveHostname — authoritative DNS', () => {
+  it('given a zone answering with a huge NS RRset, should follow only a bounded number of them', async () => {
+    // The NS RRset comes from a zone the requester controls, and its COUNT is as
+    // attacker-controlled as its content: each entry costs one outbound resolve4
+    // that can sit for the full DNS timeout. Without a cap, one authenticated
+    // verify request fans out to as many queries as the zone cares to list.
+    const huge = Array.from({ length: 200 }, (_, i) => `ns${i}.hostile.test`);
+    resolveNsImpl.mockResolvedValue(huge);
+    resolve4Impl.mockImplementation(async (_servers, host) =>
+      host.endsWith('.hostile.test') ? ['198.51.100.7'] : [],
+    );
+    resolve6Impl.mockResolvedValue([]);
+    resolveCnameImpl.mockResolvedValue([]);
+
+    await resolveHostname('hostile.test');
+
+    const nsLookups = resolve4Impl.mock.calls.filter(([, host]) => host.endsWith('.hostile.test'));
+    // Counted, not merely "fewer than 200": the point is a fixed ceiling.
+    expect(nsLookups).toHaveLength(8);
+  });
+
   it('queries the authoritative nameservers (not the public resolver) for the target', async () => {
     const NS_IPS = ['9.9.9.1', '9.9.9.2'];
     resolveNsImpl.mockResolvedValue(['ns1.registrar-servers.com', 'ns2.registrar-servers.com']);

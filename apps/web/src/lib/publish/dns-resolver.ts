@@ -36,6 +36,12 @@ const PUBLIC_DNS_SERVERS = ['1.1.1.1', '8.8.8.8', '9.9.9.9'];
 /** Per-lookup timeout so a dead/slow NS can't hang the verify request. */
 const DNS_TIMEOUT_MS = 5000;
 const DNS_TRIES = 2;
+/**
+ * How many of a zone's nameservers we will follow. Real delegations carry a
+ * handful; the cap exists because the RRset comes from an attacker-controlled
+ * zone and each entry costs an outbound lookup.
+ */
+const MAX_NS_HOSTS = 8;
 
 function makeResolver(servers: string[]): Resolver {
   const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: DNS_TRIES });
@@ -56,6 +62,13 @@ function makeResolver(servers: string[]): Resolver {
  * would otherwise turn this verifier into an SSRF vector that fires DNS queries
  * at internal hosts. Filtered-out IPs simply drop us to the public-resolver
  * fallback.
+ *
+ * The NS RRset is attacker-controlled in COUNT as well as content, and each
+ * entry costs a concurrent `resolve4` (up to DNS_TIMEOUT_MS x DNS_TRIES). A
+ * hostile zone answering with a large RRset would turn one authenticated verify
+ * request into that many outbound queries, so only the first MAX_NS_HOSTS are
+ * followed. That loses nothing real: a delegation needs a couple of nameservers
+ * to be reachable, not all of them, and any honest zone is far under the cap.
  */
 async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resolver): Promise<string[]> {
   const domain = registrableDomain(hostname);
@@ -65,7 +78,7 @@ async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resol
   if (nsHosts.length === 0) return [];
 
   const ipLists = await Promise.all(
-    nsHosts.map((ns) => publicResolver.resolve4(ns).catch(() => [] as string[])),
+    nsHosts.slice(0, MAX_NS_HOSTS).map((ns) => publicResolver.resolve4(ns).catch(() => [] as string[])),
   );
   // De-dupe, and only ever hand globally-routable public IPs to setServers.
   return [...new Set(ipLists.flat())].filter(isPublicIp);
