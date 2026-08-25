@@ -331,6 +331,12 @@ async function settleAndClose(
         // lose the app's last awake window. The status still moves below — the
         // machine really did stop, and leaving a `running` row over it would be
         // worse than a window that gets retried.
+        //
+        // Reached only when the settle actually THROWS. The default binding runs
+        // through `AIMonitoring.trackUsage`, which swallows its own persistence
+        // failures and resolves — see the caveat on `AppBillingDeps.trackUsage`.
+        // So this covers a deps-level or transport failure, not a lost ledger
+        // write, and it is not the whole guarantee the shape suggests.
         loggers.ai.error(
           'Published-app final settle failed — the awake window stays open for the next tick to retry',
           error instanceof Error ? error : new Error(String(error)),

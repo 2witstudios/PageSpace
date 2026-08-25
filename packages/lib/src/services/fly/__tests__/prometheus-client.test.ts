@@ -68,13 +68,20 @@ describe('awakeSamplesQuery', () => {
       given: 'an app name and a one-hour window',
       should: 'build a count_over_time query',
       actual: awakeSamplesQuery('pgs-app-1', 3600),
-      expected: 'count_over_time(fly_instance_up{app="pgs-app-1"}[3600s])',
+      expected: 'sum(count_over_time(fly_instance_up{app="pgs-app-1"}[3600s]))',
     });
+  });
+
+  it('AGGREGATES every matching series, so a replaced machine is not read as drift', () => {
+    // `count_over_time` keeps the labels the selector did not pin, so an app whose
+    // machine has been replaced has one series per machine id. Without `sum()` the
+    // client reads only the first and reports the rest as missing awake time.
+    expect(awakeSamplesQuery('pgs-app-1', 3600).startsWith('sum(')).toBe(true);
   });
 
   it('escapes quotes and backslashes in the app label', () => {
     expect(awakeSamplesQuery('a"b\\c', 60)).toBe(
-      'count_over_time(fly_instance_up{app="a\\"b\\\\c"}[60s])',
+      'sum(count_over_time(fly_instance_up{app="a\\"b\\\\c"}[60s]))',
     );
   });
 

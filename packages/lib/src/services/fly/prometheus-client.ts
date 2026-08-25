@@ -134,7 +134,13 @@ export function awakeSamplesQuery(flyAppName: string, windowSeconds: number): st
   // quote or backslash — but escaping it anyway keeps this function safe to call
   // with any string rather than only with names we happen to generate.
   const escaped = flyAppName.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return `count_over_time(fly_instance_up{app="${escaped}"}[${Math.max(1, Math.floor(windowSeconds))}s])`;
+  // WRAPPED IN `sum()`, which is what collapses this to ONE series.
+  // `count_over_time` preserves every label the selector did not pin, so an app
+  // whose machine has been replaced (a blue/green deploy, a host migration) has a
+  // separate series per machine id. Reading the first of those would silently
+  // discard the other machine's samples and report the difference as drift on
+  // exactly the apps that were most recently deployed.
+  return `sum(count_over_time(fly_instance_up{app="${escaped}"}[${Math.max(1, Math.floor(windowSeconds))}s]))`;
 }
 
 /**

@@ -28,7 +28,7 @@
  * reads nothing.
  */
 
-import { and, eq, isNull, sql } from '@pagespace/db/operators';
+import { and, eq, isNotNull, isNull, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
@@ -45,8 +45,17 @@ import {
   type SettleAndCloseResult,
 } from './app-lifecycle-metering';
 
-/** What a watermark write did. Same three-way answer, and the same reasoning, as the storage reconcile's. */
-export type AwakeWatermarkOutcome = 'advanced' | 'superseded' | 'row_gone';
+/**
+ * What a watermark write did.
+ *
+ * TWO answers, not the storage reconcile's three: this write is a compare-and-set
+ * over "still running, window still open", so every way of losing that race —
+ * a newer wake, a stop that closed the window, a destroyed row — is the same fact
+ * to the caller, that somebody else owns this window now. Distinguishing a
+ * vanished row from a stopped one would cost a second query per settle and change
+ * nothing about what the caller then does (release the reservation it placed).
+ */
+export type AwakeWatermarkOutcome = 'advanced' | 'superseded';
 
 export interface AwakeMeterDeps {
   isEnabled: () => boolean;
@@ -117,11 +126,27 @@ export const defaultAwakeMeterDeps: AwakeMeterDeps = {
         // settling against a reservation made for a window that no longer
         // exists. `GREATEST` decides the watermark, so the same comparison has
         // to decide the hold.
-        awakeHoldId: sql`CASE WHEN ${publishedApps.awakeBilledThrough} IS NULL OR ${publishedApps.awakeBilledThrough} <= ${watermark} THEN ${sql.param(holdId, publishedApps.awakeHoldId)} ELSE ${publishedApps.awakeHoldId} END`,
+        awakeHoldId: sql`CASE WHEN ${publishedApps.awakeBilledThrough} <= ${watermark} THEN ${sql.param(holdId, publishedApps.awakeHoldId)} ELSE ${publishedApps.awakeHoldId} END`,
       })
-      .where(eq(publishedApps.id, publishedAppId))
+      // A COMPARE-AND-SET over the window this tick actually metered, not an
+      // id-only write. A stop can land between this tick's read and this write:
+      // it sets `status = stopped` and NULLs the watermark, and an unguarded
+      // update would then compute `GREATEST(NULL, billedThrough)` and REOPEN a
+      // billing window on a stopped row — installing a hold that no later tick
+      // can ever settle or release, because `listRunningApps` only sees
+      // `running`. Requiring the row to still be running with a window open
+      // makes the stop the unambiguous winner and turns this into a clean
+      // `superseded`, whose caller releases the reservation.
+      .where(
+        and(
+          eq(publishedApps.id, publishedAppId),
+          eq(publishedApps.status, 'running'),
+          isNotNull(publishedApps.awakeBilledThrough),
+        ),
+      )
       .returning({ awakeBilledThrough: publishedApps.awakeBilledThrough });
-    if (!row?.awakeBilledThrough) return 'row_gone';
+    // No row matched the CAS: stopped, parked or destroyed under us.
+    if (!row?.awakeBilledThrough) return 'superseded';
     return row.awakeBilledThrough.getTime() > billedThrough.getTime() ? 'superseded' : 'advanced';
   },
 
@@ -350,9 +375,15 @@ async function meterOneApp(
     const gate = await deps.billing.gate({ payerId });
     if (!gate.allowed) {
       // Insolvent: stop the machine and park it, through the status machine's own
-      // legal `running -> parked` edge. The watermark is NOT advanced here — the
-      // park path's final settle owns closing this window, and advancing first
-      // would leave it to bill the same span twice.
+      // legal `running -> parked` edge.
+      //
+      // ADVANCE THE WATERMARK FIRST. The span above is already CHARGED, and
+      // `stopPublishedApp` re-reads the row and settles from whatever watermark it
+      // finds — so parking on the stale one bills this same span a second time, on
+      // every single insolvency park. Advancing first leaves the park's own final
+      // settle with nothing to bill (it plans a `skip`) and lets it do what it is
+      // actually for: stopping the machine and closing the window.
+      await advanceSettledWatermark(row, plan.billedThrough, null, deps, result);
       await deps.parkInsolvent(row.id);
       result.parked += 1;
       return;
@@ -369,19 +400,34 @@ async function meterOneApp(
     );
   }
 
+  await advanceSettledWatermark(row, plan.billedThrough, nextHoldId, deps, result);
+}
+
+/**
+ * Persist a settle that has already CHARGED: advance the watermark and install
+ * whatever reservation now covers the window.
+ *
+ * Shared by the ordinary settle and the insolvency park, because both have moved
+ * money by the time they get here and both must record that fact before anything
+ * else reads the row. The park path in particular hands the row straight to
+ * `stopPublishedApp`, which settles from the watermark it finds.
+ */
+async function advanceSettledWatermark(
+  row: PublishedApp,
+  billedThrough: Date,
+  holdId: string | null,
+  deps: AwakeMeterDeps,
+  result: MeterAwakeResult,
+): Promise<void> {
   try {
-    const outcome = await deps.writeSettle({
-      publishedAppId: row.id,
-      billedThrough: plan.billedThrough,
-      holdId: nextHoldId,
-    });
+    const outcome = await deps.writeSettle({ publishedAppId: row.id, billedThrough, holdId });
     if (outcome !== 'advanced') {
       result.watermarkSuperseded += 1;
       // The write declined to install our re-hold — a wake already carried this
-      // row past our tick and owns the window, or the row is gone. Either way
-      // nothing will ever settle or release the reservation we just placed, so
-      // return it here.
-      if (nextHoldId) await deps.billing.releaseHold(nextHoldId);
+      // row past our tick and owns the window, a stop already closed it, or the
+      // row is gone. Either way nothing will ever settle or release the
+      // reservation we just placed, so return it here.
+      if (holdId) await deps.billing.releaseHold(holdId);
     }
   } catch (error) {
     // The charge already committed. Only the watermark write failed, so this span

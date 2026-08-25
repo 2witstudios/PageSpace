@@ -55,7 +55,24 @@ export interface AppBillingDeps {
    * not meant to be one.
    */
   gate: (input: { payerId: string }) => Promise<{ allowed: boolean; holdId?: string; reason?: string }>;
-  /** Settles accrued awake-seconds against the wake's hold. Called by every heartbeat and once more at the stop boundary. */
+  /**
+   * Settles accrued awake-seconds against the wake's hold. Called by every
+   * heartbeat and once more at the stop boundary.
+   *
+   * CAVEAT, and it is a real one: the default binding goes through
+   * `AIMonitoring.trackUsage`, which CATCHES its own persistence failures — a
+   * failed `writeAiUsage`, or a `consumeCredits` that rejects — logs them, and
+   * resolves normally. So a resolved call here is NOT proof that a usage row or a
+   * ledger claim exists, and the callers' "a failed settle leaves the window open
+   * for the next tick" behaviour only covers a settle that actually throws.
+   *
+   * This is a property of the shared credit pipeline rather than of hosting —
+   * every meter in the repo that calls `trackUsage` inherits it, the sandbox
+   * storage reconcile included — so it is deliberately NOT worked around here
+   * with a second, hosting-only write path. Fixing it means giving
+   * `trackUsage` a durable-persistence result, which is a change with a
+   * platform-wide blast radius and belongs in its own PR.
+   */
   trackUsage: (input: {
     payerId: string;
     holdId?: string;

@@ -38,6 +38,7 @@ import { publishedApps, publishedAppMachineEvents } from '@pagespace/db/schema/p
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { assert } from '../../sandbox/__tests__/riteway';
 import { defaultAwakeMeterDeps } from '../awake-meter';
+import { awakeSecondsFromEvents } from '../app-metering-core';
 import {
   mirrorFlyMachineEvents,
   recordOrchestratorBoundary,
@@ -258,6 +259,53 @@ describe.skipIf(dbSkipExplicitlyAllowed())('findStopBoundarySince / listBoundary
     });
   });
 
+  it('given a machine that was ALREADY UP at the window start, should seed an open start at the edge', async () => {
+    // The false-alarm this guards: an app woken ten days ago and still running has
+    // NO events inside a seven-day window, so it reconciled as zero local seconds
+    // against a full week of `fly_instance_up` — a standing `under_billed` alert on
+    // exactly the longest-running apps.
+    const from = ago(7 * 24 * 60 * 60 * 1000);
+    await recordOrchestratorBoundary(ref(), 'start', ago(10 * 24 * 60 * 60 * 1000));
+
+    const boundaries = await listBoundaryEvents(appId, from, NOW);
+
+    assert({
+      given: 'a start ten days ago and nothing since',
+      should: 'seed one start clamped to the window edge, not an empty stream',
+      actual: boundaries.map((b) => ({ action: b.action, at: b.occurredAt.toISOString() })),
+      expected: [{ action: 'start', at: from.toISOString() }],
+    });
+  });
+
+  it('given the machine was DOWN at the window start, should seed nothing', async () => {
+    // Claiming an app was running because we have no evidence either way would
+    // invent awake time. Only a start as the last prior boundary seeds a window.
+    const from = ago(7 * 24 * 60 * 60 * 1000);
+    await recordOrchestratorBoundary(ref(), 'start', ago(12 * 24 * 60 * 60 * 1000));
+    await recordOrchestratorBoundary(ref(), 'stop', ago(10 * 24 * 60 * 60 * 1000));
+
+    assert({
+      given: 'a stop as the last boundary before the window',
+      should: 'read back no boundaries at all',
+      actual: await listBoundaryEvents(appId, from, NOW),
+      expected: [],
+    });
+  });
+
+  it('given an app already up that STOPS inside the window, should bill the prefix rather than dropping it', async () => {
+    // Without the seed this stop is unmatched, and `awakeSecondsFromEvents`
+    // correctly ignores an unmatched stop — so the whole span silently vanished.
+    const from = ago(7 * 24 * 60 * 60 * 1000);
+    await recordOrchestratorBoundary(ref(), 'start', ago(9 * 24 * 60 * 60 * 1000));
+    await recordOrchestratorBoundary(ref(), 'stop', ago(6 * 24 * 60 * 60 * 1000));
+
+    const boundaries = await listBoundaryEvents(appId, from, NOW);
+
+    expect(boundaries.map((b) => b.action)).toEqual(['start', 'stop']);
+    // One full day of the window elapsed before the stop.
+    expect(awakeSecondsFromEvents(boundaries, NOW)).toBe(24 * 60 * 60);
+  });
+
   it('returns both origins as one ordered boundary stream', async () => {
     await recordOrchestratorBoundary(ref(), 'start', ago(3_600_000));
     await mirrorFlyMachineEvents(ref(), [flyEvent({ id: 'ev-stop', type: 'exit', timestamp: ago(1_800_000).getTime() })]);
@@ -317,7 +365,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     });
   });
 
-  it('given the row vanished mid-tick, should report `row_gone` rather than throwing', async () => {
+  it('given the row vanished mid-tick, should report `superseded` rather than throwing', async () => {
     await db.delete(publishedApps).where(eq(publishedApps.id, appId));
 
     expect(
@@ -326,7 +374,29 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
         billedThrough: NOW,
         holdId: 'hold-next',
       }),
-    ).toBe('row_gone');
+    ).toBe('superseded');
+  });
+
+  it('given a STOP closed the window mid-tick, should refuse rather than REOPEN a window on a stopped row', async () => {
+    // The regression this guards: an id-only UPDATE would compute
+    // `GREATEST(NULL, billedThrough)` on the closed window and reopen it, installing
+    // a hold that no later tick can settle or release — `listRunningApps` only ever
+    // sees `running` rows, so it would be stranded until its TTL.
+    await seedApp({ status: 'stopped', awakeBilledThrough: null, awakeHoldId: null, lastStopAt: NOW });
+
+    const outcome = await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      holdId: 'hold-next',
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a stop that closed the window between this tick’s read and its write',
+      should: 'leave the window closed and install no hold',
+      actual: { outcome, billedThrough: row?.awakeBilledThrough, holdId: row?.awakeHoldId },
+      expected: { outcome: 'superseded', billedThrough: null, holdId: null },
+    });
   });
 });
 

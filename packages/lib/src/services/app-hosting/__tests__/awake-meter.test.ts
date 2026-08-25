@@ -114,19 +114,35 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     expect(gate).toHaveBeenCalledWith({ payerId: 'payer-1' });
   });
 
-  it('given the re-gate REFUSES, should stop and PARK the app without advancing the watermark', async () => {
-    // The park path's own final settle owns closing this window; advancing first
-    // would leave it to bill the same span twice.
+  it('given the re-gate REFUSES, should ADVANCE THE WATERMARK BEFORE parking — the span is already charged', async () => {
+    // The regression this guards: parking on the stale watermark makes
+    // `stopPublishedApp` re-read it and settle the same span a SECOND time, so
+    // every insolvency park double-charged nearly a whole heartbeat interval.
+    const order: string[] = [];
     const { deps, gate, parkInsolvent, writeSettle } = makeDeps();
     gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    writeSettle.mockImplementation(async () => {
+      order.push('advance');
+      return 'advanced' as const;
+    });
+    parkInsolvent.mockImplementation(async () => {
+      order.push('park');
+    });
 
     const run = await meter(deps);
 
     assert({
       given: 'a payer who ran out of credits mid-window',
-      should: 'park the app and leave the watermark alone',
-      actual: { parked: run.parked, parkCalls: parkInsolvent.mock.calls.length, advanced: writeSettle.mock.calls.length },
-      expected: { parked: 1, parkCalls: 1, advanced: 0 },
+      should: 'record the charge it already made, then park',
+      actual: { parked: run.parked, order },
+      expected: { parked: 1, order: ['advance', 'park'] },
+    });
+    // Advanced to the instant just billed, carrying NO hold: the settle consumed
+    // the wake's, and the gate refused to give another.
+    expect(writeSettle).toHaveBeenCalledWith({
+      publishedAppId: 'app-1',
+      billedThrough: NOW,
+      holdId: null,
     });
   });
 
@@ -355,8 +371,8 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     });
   });
 
-  it('given the row vanished mid-tick, should also return the re-hold rather than strand it', async () => {
-    const { deps, releaseHold } = makeDeps({ writeSettle: vi.fn(async () => 'row_gone' as const) });
+  it('given a stop closed the window mid-tick, should also return the re-hold rather than strand it', async () => {
+    const { deps, releaseHold } = makeDeps({ writeSettle: vi.fn(async () => 'superseded' as const) });
 
     const run = await meter(deps);
 

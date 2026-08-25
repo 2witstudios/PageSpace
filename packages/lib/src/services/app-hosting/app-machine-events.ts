@@ -225,9 +225,51 @@ export async function listBoundaryEvents(
     .orderBy(publishedAppMachineEvents.occurredAt);
   // The column is a plain text column with a CHECK, so narrow at the boundary
   // rather than casting: an unexpected value is dropped, never billed as a start.
-  return rows.flatMap((row) =>
+  // Annotated rather than inferred: assigning to a local drops the contextual
+  // typing the return position used to supply, and the narrowing collapses to
+  // `string`.
+  const inWindow: Array<{ action: 'start' | 'stop'; occurredAt: Date }> = rows.flatMap((row) =>
     row.action === 'start' || row.action === 'stop'
       ? [{ action: row.action, occurredAt: row.occurredAt }]
       : [],
   );
+
+  // SEED THE WINDOW WITH THE STATE AT `from`.
+  //
+  // Boundaries inside the window are not enough to say whether the machine was up
+  // at the start of it. An app woken ten days ago and still running has NO events
+  // in a seven-day window, and would otherwise reconcile as zero local seconds
+  // against a full week of `fly_instance_up` — a fleet-wide false `under_billed`
+  // on exactly the longest-running apps. The mirror image is an app that was
+  // already up and stopped inside the window: its stop has no matching start, and
+  // `awakeSecondsFromEvents` correctly ignores an unmatched stop, so that span
+  // would vanish too.
+  //
+  // So look at the last boundary at or before `from`. If the machine was UP then,
+  // synthesise a start at the window edge — the seconds before `from` belong to
+  // the previous window, and clamping here is what keeps them out of this one.
+  const openAtStart = await wasAwakeAt(publishedAppId, from);
+  return openAtStart ? [{ action: 'start' as const, occurredAt: from }, ...inWindow] : inWindow;
+}
+
+/**
+ * Was this app's machine up at `instant`, per the last boundary recorded at or
+ * before it? False when the mirror holds nothing that early — an app with no
+ * history before the window is one we cannot claim was running, and claiming it
+ * was would invent awake time.
+ */
+async function wasAwakeAt(publishedAppId: string, instant: Date): Promise<boolean> {
+  const [row] = await db
+    .select({ action: publishedAppMachineEvents.action })
+    .from(publishedAppMachineEvents)
+    .where(
+      and(
+        eq(publishedAppMachineEvents.publishedAppId, publishedAppId),
+        lte(publishedAppMachineEvents.occurredAt, instant),
+        inArray(publishedAppMachineEvents.action, ['start', 'stop']),
+      ),
+    )
+    .orderBy(desc(publishedAppMachineEvents.occurredAt))
+    .limit(1);
+  return row?.action === 'start';
 }
