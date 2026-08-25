@@ -18,10 +18,16 @@ const key = (flyAppName: string, secret = SECRET) =>
   derivePublishedAppReplayKey({ flyAppName, secret });
 
 describe('derivePublishedAppReplayKey — deterministic, per app, per secret', () => {
+  // The two derivations are bound to separate names on purpose: comparing the
+  // call expression against itself reads as a self-comparison to the linter,
+  // and the property under test is that two SEPARATE derivations agree.
+  const firstDerivation = key('pgs-app-abc');
+  const secondDerivation = key('pgs-app-abc');
+
   assert({
     given: 'the same app name and secret twice',
     should: 'derive the same key, so the router and the guest agree without exchanging anything',
-    actual: key('pgs-app-abc') === key('pgs-app-abc'),
+    actual: firstDerivation === secondDerivation,
     expected: true,
   });
 

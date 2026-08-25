@@ -95,20 +95,37 @@ request with a `413` naming the limit rather than letting it surface as an opaqu
 502 from the platform.
 
 **Upload paths must go direct to Tigris via presigned URLs** and never traverse
-the replay edge. No upload plumbing is built here; `MAX_REPLAYABLE_BODY_BYTES`
-and `exceedsReplayableBody` exist so the constraint is enforced and legible at
-the edge.
+the replay edge. No upload plumbing is built here; `MAX_REPLAYABLE_BODY_BYTES`,
+`exceedsReplayableBody` and `exceedsStreamedBody` exist so the constraint is
+enforced and legible at the edge.
+
+The limit is checked two ways, because there are two ways to arrive:
+
+| Request declares | Checked by | Cost |
+| --- | --- | --- |
+| `Content-Length` | `exceedsReplayableBody` | a header read |
+| nothing (chunked) | `exceedsStreamedBody` | the body, measured, bounded at the limit |
+
+The second is not redundant. A chunked request carries no length, so the header
+check answers false and the request would reach `fly-replay` — where Fly, unable
+to replay a body over the limit, fails it at the platform and the client sees an
+opaque 502 instead of the 413. Omitting `Content-Length` is the default shape of
+a streaming upload, not an exotic case, so the header check alone is bypassed by
+accident as easily as on purpose. The measured read is bounded: it stops and
+cancels at the first byte past the limit, and it only ever runs for a request
+that gave us no length to read, so a request that declares its size still pays
+nothing.
 
 ## Configuration
 
 | Variable | Required | Meaning |
 | --- | --- | --- |
 | `APP_HOSTING_ENABLED` | to serve at all | Kill switch. Exactly `"true"` enables. |
-| `PUBLISHED_APPS_APEX` | no | Apex apps serve from. Defaults to `PUBLISHED_APPS_APEX_DEFAULT`. Normalized (`*.`/trailing dot/case). |
+| `PUBLISHED_APPS_APEX` | **yes, once enabled** | Apex apps serve from. Normalized (`*.`/trailing dot/case). `validateEnv` refuses to boot with `APP_HOSTING_ENABLED=true` and no explicit value — see the PSL note below. `PUBLISHED_APPS_APEX_DEFAULT` remains the fallback only while hosting is dark, so `resolvePublishedAppsApex` never returns `''`. |
 | `APP_ROUTER_FLY_APP_NAME` | no | Fly app that terminates the apex and holds custom-domain certs. Falls back to `FLY_PROXY_APP_NAME`, then `pagespace-proxy`. |
 | `PUBLISHED_APPS_NETWORK` | yes, in practice | The shared 6PN network. See the invariant below. |
 | `APP_REPLAY_SECRET` | to emit replays | ≥32 chars. Server-held secret the per-app `state` key is derived from. Unset ⇒ the router refuses to replay. |
-| `APP_ROUTER_PROXY_SECRET` | to answer at all | Shared secret the proxy presents. Unset ⇒ the endpoint refuses **everything**. |
+| `APP_ROUTER_PROXY_SECRET` | to answer at all | ≥32 chars. Shared secret the proxy presents. Unset — **or shorter than the floor** — ⇒ the endpoint refuses **everything**. |
 
 Both secrets fail **closed**. An unset `APP_ROUTER_PROXY_SECRET` is read as
 "refuse everything", never as "skip the check" — the route is mounted on the web
@@ -182,3 +199,11 @@ apex to the PSL is not performed by this repo.** Before GA:
 
 Until that lands, published apps must not be exposed to untrusted end users on a
 shared apex. `APP_HOSTING_ENABLED` is what holds that line.
+
+Because the checklist above is the only thing that can satisfy the PSL
+requirement — no code can verify a browser's bundled list — the boot gate does
+the one thing code *can* do: `validateEnv` refuses to start with
+`APP_HOSTING_ENABLED=true` and no explicit `PUBLISHED_APPS_APEX`. That converts
+"the apex is whatever the default is" into a value somebody typed, and therefore
+owns. It does **not** verify PSL registration, and it is not a substitute for
+working the list above.

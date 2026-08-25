@@ -105,6 +105,17 @@ export function resolveAppReplaySecret(): string {
 }
 
 /**
+ * The length floor both router secrets have to clear.
+ *
+ * Matches the floor `derivePublishedAppReplayKey` already enforces on
+ * `APP_REPLAY_SECRET`, and the one `CSRF_SECRET` and `ENCRYPTION_KEY` are held to
+ * in `env-validation.ts`. Stated once so the two secrets cannot drift apart:
+ * both authenticate a caller by equality against a value nobody may guess, and
+ * that property is a function of length.
+ */
+export const MIN_ROUTER_SECRET_LENGTH = 32;
+
+/**
  * Shared secret proving a router request actually came from the edge proxy.
  *
  * The router endpoint lives on `pagespace-web`, which is also reachable at
@@ -118,9 +129,19 @@ export function resolveAppReplaySecret(): string {
  * Returns '' when unset, and the router treats '' as "refuse everything" rather
  * than "no check" — an unconfigured secret must not silently disable the check
  * that stops the endpoint being world-callable.
+ *
+ * A configured value SHORTER than {@link MIN_ROUTER_SECRET_LENGTH} resolves to ''
+ * too, and therefore also refuses everything. A one-character secret is not a
+ * weaker version of this protection, it is the absence of it: the header is
+ * guessable, and the endpoint becomes the world-callable replay emitter the
+ * check exists to prevent. This module deliberately reads `process.env` directly
+ * rather than going through `validateEnv`, so the floor has to be enforced here
+ * as well as in the schema — a process that skipped validation must not end up
+ * with a weaker router than one that did.
  */
 export function resolveAppRouterProxySecret(): string {
-  return process.env.APP_ROUTER_PROXY_SECRET ?? '';
+  const configured = process.env.APP_ROUTER_PROXY_SECRET ?? '';
+  return configured.length >= MIN_ROUTER_SECRET_LENGTH ? configured : '';
 }
 
 /** The request header the edge proxy carries the real published-app hostname in. */

@@ -23,7 +23,8 @@ vi.mock('@pagespace/lib/services/app-hosting/router', () => ({
 
 import { GET, POST, HEAD } from '../route';
 
-const PROXY_SECRET = 'proxy-secret-value';
+// >=32 chars: resolveAppRouterProxySecret reads anything shorter as unset.
+const PROXY_SECRET = 'proxy-secret-value-padded-to-32ch';
 const HOST = 'acme.pagespace.app';
 
 function request(
@@ -190,6 +191,48 @@ describe('the 1MB replay ceiling is named, not discovered', () => {
 
   it('given a body at the limit, should route normally', async () => {
     const res = await POST(request({ 'content-length': String(1_048_576) }, { method: 'POST' }));
+    expect(res.status).toBe(204);
+  });
+
+  /**
+   * A chunked body: no `Content-Length`, delivered as a stream. This is the
+   * shape a streaming upload takes by default, and before the streamed check it
+   * walked straight past the header gate into a `fly-replay` Fly could not
+   * perform — surfacing to the client as an opaque 502 from the platform rather
+   * than as the 413 this edge exists to give them.
+   */
+  const chunkedRequest = (totalBytes: number): Request => {
+    const chunk = 64 * 1024;
+    let sent = 0;
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (sent >= totalBytes) {
+          controller.close();
+          return;
+        }
+        const size = Math.min(chunk, totalBytes - sent);
+        sent += size;
+        controller.enqueue(new Uint8Array(size));
+      },
+    });
+    return request({}, { method: 'POST', body, duplex: 'half' } as RequestInit);
+  };
+
+  it('given a chunked body past the limit, should answer 413 rather than emit an unreplayable fly-replay', async () => {
+    const res = await POST(chunkedRequest(1_048_577));
+    expect(res.status).toBe(413);
+    expect(res.headers.get('fly-replay')).toBeNull();
+    expect(resolveAppRoute).not.toHaveBeenCalled();
+  });
+
+  it('given a chunked body within the limit, should route normally', async () => {
+    const res = await POST(chunkedRequest(128 * 1024));
+    expect(res.status).toBe(204);
+    expect(res.headers.get('fly-replay')).toBe('app=pgs-app-abc;state=ff00;timeout=1500');
+  });
+
+  it('given a bodyless GET, should route without paying for a stream read', async () => {
+    const res = await GET(request());
     expect(res.status).toBe(204);
   });
 });

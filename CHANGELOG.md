@@ -207,7 +207,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 - **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
   waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
-  where it goes, and the exact value to publish. Previously that domain simply sat at "provisioning"
+  where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
+  value, and whichever ones it offers are the ones you are shown. Previously that domain simply sat at "provisioning"
   indefinitely with nothing to act on, because through the certificate's status alone "the
   certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
   only one of them ever resolves on its own. The domain also stays healthy while it waits instead of

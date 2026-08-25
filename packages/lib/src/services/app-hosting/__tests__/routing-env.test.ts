@@ -12,6 +12,7 @@ import {
   APP_ROUTER_FLY_APP_DEFAULT,
   APP_ROUTER_HOST_HEADER,
   APP_ROUTER_KEY_HEADER,
+  MIN_ROUTER_SECRET_LENGTH,
   PUBLISHED_APPS_APEX_DEFAULT,
   describeRouterNetworkInvariant,
   resolveAppReplaySecret,
@@ -102,11 +103,30 @@ describe('the two secrets fail closed when unset', () => {
     expect(resolveAppRouterProxySecret()).toBe('');
   });
 
-  it('given the secrets are configured, should return them verbatim', () => {
+  it('given the secrets are configured above the floor, should return them verbatim', () => {
     process.env.APP_REPLAY_SECRET = 'r'.repeat(40);
-    process.env.APP_ROUTER_PROXY_SECRET = 'p'.repeat(20);
+    process.env.APP_ROUTER_PROXY_SECRET = 'p'.repeat(40);
     expect(resolveAppReplaySecret()).toBe('r'.repeat(40));
-    expect(resolveAppRouterProxySecret()).toBe('p'.repeat(20));
+    expect(resolveAppRouterProxySecret()).toBe('p'.repeat(40));
+  });
+
+  // A guessable proxy secret is not a weaker check, it is the absence of one:
+  // the route compares the header against this value, so a short secret leaves
+  // the endpoint a world-callable fly-replay emitter. It has to read as unset.
+  it.each([
+    ['one character', 'a'],
+    ['one below the floor', 'p'.repeat(MIN_ROUTER_SECRET_LENGTH - 1)],
+  ])(
+    'given APP_ROUTER_PROXY_SECRET is %s, should resolve to "" so the route refuses everything',
+    (_label, value) => {
+      process.env.APP_ROUTER_PROXY_SECRET = value;
+      expect(resolveAppRouterProxySecret()).toBe('');
+    },
+  );
+
+  it('given a secret exactly at the floor, should accept it', () => {
+    process.env.APP_ROUTER_PROXY_SECRET = 'p'.repeat(MIN_ROUTER_SECRET_LENGTH);
+    expect(resolveAppRouterProxySecret()).toBe('p'.repeat(MIN_ROUTER_SECRET_LENGTH));
   });
 });
 

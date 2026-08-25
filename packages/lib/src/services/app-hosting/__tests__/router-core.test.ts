@@ -14,6 +14,7 @@ import {
   buildFlyReplayHeader,
   decideAppRoute,
   exceedsReplayableBody,
+  exceedsStreamedBody,
   normalizeRequestHost,
   parseAppHost,
   replayCachePolicyFor,
@@ -282,6 +283,65 @@ describe('exceedsReplayableBody — the 1MB replay ceiling', () => {
     should: 'be 1MB, the value the upload-to-Tigris constraint is derived from',
     actual: MAX_REPLAYABLE_BODY_BYTES,
     expected: 1_048_576,
+  });
+});
+
+describe('exceedsStreamedBody — the half the header check cannot see', () => {
+  /** A body delivered in chunks, the way a request with no Content-Length arrives. */
+  const streamOf = (...sizes: number[]): ReadableStream<Uint8Array> =>
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const size of sizes) controller.enqueue(new Uint8Array(size));
+        controller.close();
+      },
+    });
+
+  it('given no body at all, should answer false without reading', async () => {
+    expect(await exceedsStreamedBody(null)).toBe(false);
+    expect(await exceedsStreamedBody(undefined)).toBe(false);
+  });
+
+  it('given a stream exactly at the limit, should be replayable', async () => {
+    expect(await exceedsStreamedBody(streamOf(MAX_REPLAYABLE_BODY_BYTES))).toBe(false);
+  });
+
+  it('given a stream one byte past the limit, should be refused', async () => {
+    expect(await exceedsStreamedBody(streamOf(MAX_REPLAYABLE_BODY_BYTES + 1))).toBe(true);
+  });
+
+  // The bypass this function exists to close: the total is what matters, and a
+  // sender that splits a large body into small chunks is the ordinary case, not
+  // an attack. Summing per chunk rather than judging any single one is the point.
+  it('given many small chunks summing past the limit, should be refused', async () => {
+    const chunk = 64 * 1024;
+    const chunks = Array.from({ length: MAX_REPLAYABLE_BODY_BYTES / chunk + 1 }, () => chunk);
+    expect(await exceedsStreamedBody(streamOf(...chunks))).toBe(true);
+  });
+
+  it('given an empty stream, should be replayable', async () => {
+    expect(await exceedsStreamedBody(streamOf())).toBe(false);
+  });
+
+  // Bounded, not buffered: the read stops at the first byte past the limit
+  // rather than draining a body of unknown size into memory.
+  it('given an endless stream, should terminate at the limit instead of reading forever', async () => {
+    let enqueued = 0;
+    const endless = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        enqueued += 1;
+        controller.enqueue(new Uint8Array(64 * 1024));
+      },
+    });
+
+    expect(await exceedsStreamedBody(endless)).toBe(true);
+    // 1MB / 64KB = 16 chunks to reach the limit, 17 to pass it. A read that kept
+    // going would be unbounded, so the assertion is that it stopped promptly.
+    expect(enqueued).toBeLessThanOrEqual(18);
+  });
+
+  it('given a custom limit, should honour it rather than the 1MB constant', async () => {
+    expect(await exceedsStreamedBody(streamOf(11), 10)).toBe(true);
+    expect(await exceedsStreamedBody(streamOf(10), 10)).toBe(false);
   });
 });
 

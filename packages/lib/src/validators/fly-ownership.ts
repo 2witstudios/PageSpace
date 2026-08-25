@@ -93,6 +93,17 @@ export function parseOwnershipTxtValues(records: readonly (readonly string[])[])
  * Comparison is case-insensitive: these values travel through DNS UIs that
  * normalize case, and a case-folded record still satisfies Fly.
  */
+/**
+ * The ownership values Fly will accept for this requirement, in preference order.
+ *
+ * Either value satisfies Fly, and either may be absent, so the empties are
+ * filtered here ONCE — both the comparison and the customer-facing instruction
+ * read this list, so they cannot disagree about what counts as acceptable.
+ */
+export function acceptedOwnershipValues(requirement: FlyOwnershipRequirement): string[] {
+  return [requirement.appValue, requirement.orgValue].filter((v) => v.length > 0);
+}
+
 export function verifyFlyOwnershipTxt(args: {
   requirement: FlyOwnershipRequirement | null;
   records: readonly (readonly string[])[];
@@ -103,9 +114,7 @@ export function verifyFlyOwnershipTxt(args: {
   const found = parseOwnershipTxtValues(args.records);
   if (found.length === 0) return { state: 'missing', expected: requirement };
 
-  const accepted = [requirement.appValue, requirement.orgValue]
-    .filter((v) => v.length > 0)
-    .map((v) => v.toLowerCase());
+  const accepted = acceptedOwnershipValues(requirement).map((v) => v.toLowerCase());
   // No accepted value means Fly asked for ownership but named nothing to publish.
   // Treat that as mismatched rather than satisfied: it is a state we cannot act
   // on, and calling it satisfied would let a cert be declared blocked-on-nothing.
@@ -115,15 +124,48 @@ export function verifyFlyOwnershipTxt(args: {
   return matched ? { state: 'satisfied' } : { state: 'mismatched', expected: requirement, found };
 }
 
+/**
+ * What Fly says it will accept, rendered for a human.
+ *
+ * Reads the SAME list `verifyFlyOwnershipTxt` compares against, because the two
+ * had already drifted: verification accepts an app-only OR an org-only
+ * requirement (it filters empties), while the instruction always printed
+ * `appValue`. On an org-only requirement — Fly names an org value and no app
+ * value — that produced an instruction with a blank where the value belongs, in
+ * exactly the state where the customer has nothing but this message to act on.
+ *
+ * Both are shown when Fly names both, joined with "or", since either satisfies
+ * it and publishing the wrong one of a pair the message never mentioned is a
+ * failure mode of its own.
+ */
+function describeAcceptedValues(requirement: FlyOwnershipRequirement): string {
+  return acceptedOwnershipValues(requirement).join(' or ');
+}
+
+/**
+ * The message for a requirement that names no value at all. `verifyFlyOwnershipTxt`
+ * reports that state as `mismatched` rather than `satisfied`; the instruction has
+ * to match, because telling a customer to publish nothing is worse than telling
+ * them the requirement itself is unusable.
+ */
+const UNNAMED_OWNERSHIP_VALUE =
+  'Fly reported an ownership requirement without naming a value to publish — retry the certificate check, and contact support if it persists.';
+
 /** A human-readable instruction for a verification that is not yet satisfied. */
 export function describeOwnershipVerification(result: FlyOwnershipVerification): string | null {
   switch (result.state) {
     case 'not_required':
     case 'satisfied':
       return null;
-    case 'missing':
-      return `Add a TXT record at ${result.expected.name} with the value ${result.expected.appValue} — Fly cannot verify ownership of this domain until it resolves.`;
-    case 'mismatched':
-      return `The TXT record at ${result.expected.name} does not carry an accepted ownership value (expected ${result.expected.appValue}; found ${result.found.join(', ')}).`;
+    case 'missing': {
+      const expected = describeAcceptedValues(result.expected);
+      if (!expected) return UNNAMED_OWNERSHIP_VALUE;
+      return `Add a TXT record at ${result.expected.name} with the value ${expected} — Fly cannot verify ownership of this domain until it resolves.`;
+    }
+    case 'mismatched': {
+      const expected = describeAcceptedValues(result.expected);
+      if (!expected) return UNNAMED_OWNERSHIP_VALUE;
+      return `The TXT record at ${result.expected.name} does not carry an accepted ownership value (expected ${expected}; found ${result.found.join(', ')}).`;
+    }
   }
 }

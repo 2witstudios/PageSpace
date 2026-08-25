@@ -10,6 +10,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   FLY_OWNERSHIP_TXT_PREFIX,
+  acceptedOwnershipValues,
   describeOwnershipVerification,
   flyOwnershipTxtName,
   parseOwnershipTxtValues,
@@ -22,6 +23,20 @@ const requirement: FlyOwnershipRequirement = {
   name: '_fly-ownership.docs.acme.com',
   appValue: 'app-ABC123',
   orgValue: 'org-XYZ789',
+};
+
+/** Fly names an org value and no app value — a state `verifyFlyOwnershipTxt` accepts. */
+const orgOnlyRequirement: FlyOwnershipRequirement = {
+  name: '_fly-ownership.docs.acme.com',
+  appValue: '',
+  orgValue: 'org-XYZ789',
+};
+
+/** The mirror case: an app value and no org value. */
+const appOnlyRequirement: FlyOwnershipRequirement = {
+  name: '_fly-ownership.docs.acme.com',
+  appValue: 'app-ABC123',
+  orgValue: '',
 };
 
 const verify = (records: string[][], req: FlyOwnershipRequirement | null = requirement) =>
@@ -164,5 +179,74 @@ describe('describeOwnershipVerification — an instruction only when one is owed
     });
     expect(message).toContain('app-ABC123');
     expect(message).toContain('app-WRONG');
+  });
+
+  it('given a requirement naming both values, should name both, since either satisfies Fly', () => {
+    const message = describeOwnershipVerification({ state: 'missing', expected: requirement });
+    expect(message).toContain('app-ABC123');
+    expect(message).toContain('org-XYZ789');
+  });
+
+  // The regression: `verifyFlyOwnershipTxt` accepts an org-only requirement (it
+  // filters empty values), but the instruction used to print `appValue`
+  // unconditionally — so this state produced a message with a blank where the
+  // value belongs, in the one place the customer has nothing else to act on.
+  it.each([
+    ['missing', { state: 'missing', expected: orgOnlyRequirement } as const],
+    [
+      'mismatched',
+      { state: 'mismatched', expected: orgOnlyRequirement, found: ['app-WRONG'] } as const,
+    ],
+  ])('given an org-only requirement reported as %s, should name the org value', (_label, result) => {
+    const message = describeOwnershipVerification(result);
+    expect(message).toContain('org-XYZ789');
+    expect(message).not.toContain('the value  ');
+    expect(message).not.toContain('(expected ;');
+  });
+
+  it('given an app-only requirement, should name the app value and not trail an empty alternative', () => {
+    const message = describeOwnershipVerification({
+      state: 'missing',
+      expected: appOnlyRequirement,
+    });
+    expect(message).toContain('app-ABC123');
+    expect(message).not.toContain(' or ');
+  });
+
+  // Unreachable through `ownershipRequirementOf`, which returns null when Fly
+  // names neither value — asserted anyway because the type permits it and the
+  // alternative is an instruction telling the customer to publish nothing.
+  it('given a requirement naming no value at all, should say the requirement is unusable', () => {
+    const message = describeOwnershipVerification({
+      state: 'mismatched',
+      expected: { name: '_fly-ownership.docs.acme.com', appValue: '', orgValue: '' },
+      found: ['app-WRONG'],
+    });
+    expect(message).toContain('without naming a value');
+  });
+});
+
+describe('acceptedOwnershipValues — one definition of acceptable, shared', () => {
+  assert({
+    given: 'a requirement naming both an app and an org value',
+    should: 'offer both, because Fly accepts either',
+    actual: acceptedOwnershipValues(requirement),
+    expected: ['app-ABC123', 'org-XYZ789'],
+  });
+
+  assert({
+    given: 'a requirement naming only an org value',
+    should: 'drop the empty app value rather than offering a blank',
+    actual: acceptedOwnershipValues(orgOnlyRequirement),
+    expected: ['org-XYZ789'],
+  });
+
+  // The property the shared helper exists for: whatever verification is willing
+  // to match against is exactly what the instruction is willing to print.
+  it('given an org-only requirement, should agree with what verification accepts', () => {
+    expect(verify([['org-XYZ789']], orgOnlyRequirement)).toEqual({ state: 'satisfied' });
+    expect(describeOwnershipVerification({ state: 'missing', expected: orgOnlyRequirement })).toContain(
+      acceptedOwnershipValues(orgOnlyRequirement)[0],
+    );
   });
 });

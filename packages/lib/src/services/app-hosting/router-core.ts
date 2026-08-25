@@ -220,19 +220,60 @@ export function buildFlyReplayHeader(args: {
 }
 
 /**
- * Whether a request's declared body size is past what Fly can replay.
+ * Whether a request's DECLARED body size is past what Fly can replay.
  *
- * Reads `Content-Length` only. A chunked request declares no length, so this
- * answers false and the request is replayed — that is the honest answer: we do
- * not know, and buffering the body at the edge to find out would cost every
- * request to pay for the rare one. See {@link MAX_REPLAYABLE_BODY_BYTES} for
- * where large payloads are supposed to go instead.
+ * Reads `Content-Length` only, and is therefore only half the check: a chunked
+ * request declares no length, so this answers false. {@link exceedsStreamedBody}
+ * covers that case — see the note there for why the split is deliberate rather
+ * than an oversight. See {@link MAX_REPLAYABLE_BODY_BYTES} for where large
+ * payloads are supposed to go instead.
  */
 export function exceedsReplayableBody(contentLengthHeader: string | null | undefined): boolean {
   if (!contentLengthHeader) return false;
   const bytes = Number(contentLengthHeader);
   if (!Number.isFinite(bytes) || bytes < 0) return false;
   return bytes > MAX_REPLAYABLE_BODY_BYTES;
+}
+
+/**
+ * Whether a body with no declared length runs past what Fly can replay.
+ *
+ * A chunked request carries no `Content-Length`, so the header check above sees
+ * nothing and would let the request through to `fly-replay` — where Fly, unable
+ * to replay a body over the limit, fails it at the platform. The client gets an
+ * opaque 502 instead of the 413 this edge exists to give them, and it happens on
+ * the one path nobody tests.
+ *
+ * So the body is measured, but ONLY when there is no length to read, and only up
+ * to the limit: the read stops and the stream is cancelled at the first byte past
+ * it. That keeps the original design property — a request that declares its size
+ * pays nothing, which is nearly all of them — while closing the case that
+ * declares nothing. Cancelling loses no replayable data: the only bodies
+ * cancelled are ones already too large for Fly to replay.
+ *
+ * Returns false for a bodyless request (GET, HEAD, a POST with no body), which
+ * is the same answer measuring an empty stream would give, without the read.
+ */
+export async function exceedsStreamedBody(
+  body: ReadableStream<Uint8Array> | null | undefined,
+  limit: number = MAX_REPLAYABLE_BODY_BYTES,
+): Promise<boolean> {
+  if (!body) return false;
+
+  const reader = body.getReader();
+  let seen = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return false;
+      seen += value?.byteLength ?? 0;
+      if (seen > limit) return true;
+    }
+  } finally {
+    // Releases the lock in both directions — the early return above leaves the
+    // stream mid-flight, and an unreleased reader would keep it open.
+    await reader.cancel().catch(() => {});
+  }
 }
 
 /**

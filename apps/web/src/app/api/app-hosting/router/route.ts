@@ -31,6 +31,7 @@ import { resolveAppRoute } from '@pagespace/lib/services/app-hosting/router';
 import {
   buildFlyReplayHeader,
   exceedsReplayableBody,
+  exceedsStreamedBody,
   MAX_REPLAYABLE_BODY_BYTES,
 } from '@pagespace/lib/services/app-hosting/router-core';
 import {
@@ -129,7 +130,18 @@ async function handle(request: Request): Promise<Response> {
   // names the limit is the difference between a documented constraint and a
   // mystery 502 from the platform. Upload paths are supposed to go direct to
   // Tigris via presigned URLs and never reach this edge at all.
-  if (exceedsReplayableBody(request.headers.get('content-length'))) {
+  //
+  // Two checks, because there are two ways to arrive. A request that declares
+  // its size is refused on the header alone and costs nothing. A chunked request
+  // declares nothing, so its body is measured — bounded at the limit, and only
+  // ever for the request that gave us no length to read. Without the second
+  // check the limit is trivially bypassed by omitting Content-Length, which is
+  // the shape a streaming upload takes by default.
+  const declaredLength = request.headers.get('content-length');
+  const tooLarge = declaredLength
+    ? exceedsReplayableBody(declaredLength)
+    : await exceedsStreamedBody(request.body);
+  if (tooLarge) {
     return htmlResponse(
       `<!doctype html><meta charset="utf-8"><title>Payload too large</title><p>Request bodies above ${MAX_REPLAYABLE_BODY_BYTES} bytes cannot be routed to a published app. Upload directly to storage instead.`,
       413,
