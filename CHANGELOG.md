@@ -205,15 +205,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
-- **A custom domain that is stuck on SSL now says what is missing** — a domain whose certificate
-  needed an ownership record sat at "provisioning" indefinitely with nothing to act on: through the
-  certificate's status alone, "the certificate has not issued yet" and "you were never told to add a
-  DNS record" look identical, and only one of them will resolve on its own. Domain settings now name
-  the exact record and value to publish when Fly is waiting on one, and the domain stays healthy
-  while it waits rather than being marked failed. "Check SSL" also does more than re-read a cached
-  answer: once the record is visible in DNS it asks Fly to look again, instead of leaving you to wait
-  out its own polling schedule. Removing a domain now also detaches its certificate, which
-  previously kept billing after the domain was gone.
+- **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
+  waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
+  where it goes, and the exact value to publish. Previously that domain simply sat at "provisioning"
+  indefinitely with nothing to act on, because through the certificate's status alone "the
+  certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
+  only one of them ever resolves on its own. The domain also stays healthy while it waits instead of
+  being marked failed, so a site already being served keeps serving. "Check SSL" now does more than
+  re-read a cached answer: once the record is visible in DNS it asks the certificate authority to
+  look again, rather than leaving you to wait out its own polling schedule. And removing a domain
+  now detaches its certificate, which previously kept billing after the domain was gone.
 
 - **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
   built-in commands and your personal ones; the drive's own commands were missing, and since a
