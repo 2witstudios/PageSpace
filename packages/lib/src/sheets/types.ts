@@ -101,6 +101,11 @@ export interface SheetData {
    */
   ranges?: Record<string, Record<string, unknown>>;
   /**
+   * Conditional formatting rules, applied in order. Evaluated by
+   * `sheets/conditional` and merged beneath each cell's explicit format.
+   */
+  conditionalFormats?: import('./conditional').ConditionalRule[];
+  /**
    * Tabs after the first, carried verbatim so a multi-tab document survives a
    * load/save cycle. The editor renders only the first sheet today; without
    * this, saving would silently delete every other tab.
@@ -196,6 +201,12 @@ export interface SheetEvaluation {
   display: string[][];
   errors: (string | null)[][];
   dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
+  /**
+   * Data-bar fills from conditional formatting, keyed by address. Separate from
+   * `format` because a proportional bar behind the value is a render-layer
+   * concern with no `CellFormat` field to live in.
+   */
+  bars?: Record<SheetCellAddress, import('./conditional').DataBarFill>;
 }
 
 /**
@@ -208,6 +219,7 @@ export interface SheetEvaluation {
 export interface SheetSparseEvaluation {
   byAddress: Record<SheetCellAddress, SheetEvaluationCell>;
   dependencies: Record<SheetCellAddress, SheetDocDependencyRecord>;
+  bars?: Record<SheetCellAddress, import('./conditional').DataBarFill>;
 }
 
 export interface SheetCellUpdate {

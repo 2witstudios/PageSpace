@@ -181,7 +181,11 @@ export function adjustFormulaReferences(
     }
 
     const colStart = index;
-    while (index < formula.length && isUpperAsciiLetter(formula.charCodeAt(index))) {
+    // Case-insensitive: the tokenizer accepts `a1` and normalises it, so a
+    // formula can legitimately hold lowercase references. Scanning only for
+    // uppercase left them unshifted — `=a1>b1` stayed itself for every cell it
+    // was applied to. The rebuilt reference is emitted in canonical uppercase.
+    while (index < formula.length && isAsciiLetter(formula.charCodeAt(index))) {
       index += 1;
     }
     const colEnd = index;
@@ -235,6 +239,10 @@ export function adjustFormulaReferences(
 // Internal helper functions
 function isUpperAsciiLetter(charCode: number): boolean {
   return charCode >= 65 && charCode <= 90;
+}
+
+function isAsciiLetter(charCode: number): boolean {
+  return isUpperAsciiLetter(charCode) || (charCode >= 97 && charCode <= 122);
 }
 
 function isAsciiDigit(charCode: number): boolean {

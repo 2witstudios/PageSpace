@@ -83,6 +83,18 @@ export const sheetTabs = pgTable('sheet_tabs', {
    */
   ranges: jsonb('ranges').$type<Record<string, Record<string, unknown>>>(),
 
+  /**
+   * Conditional formatting rules, in application order — later rules layer over
+   * earlier ones, so this is a list and not a map.
+   *
+   * Typed loosely on purpose. The discriminated union lives in
+   * `@pagespace/lib/sheets/conditional`, and mirroring it here the way
+   * `CellFormat` is mirrored would give two definitions free to drift. Rules
+   * are validated by `parseConditionalRules` as they cross this boundary, which
+   * is the same treatment they get coming out of a document.
+   */
+  conditionalFormats: jsonb('conditionalFormats').$type<unknown[]>(),
+
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({

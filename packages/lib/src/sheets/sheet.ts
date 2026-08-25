@@ -14,6 +14,7 @@ export * from './parser';
 export * from './functions';
 export * from './format';
 export * from './format-ops';
+export * from './conditional';
 export * from './evaluation';
 export * from './io';
 export * from './external';
