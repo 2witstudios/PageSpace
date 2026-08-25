@@ -38,6 +38,15 @@ interface CustomDomain {
   publishLandingPageId: string | null;
   /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
   publishNotFoundPageId: string | null;
+  /**
+   * What the customer must publish in DNS for a certificate stuck on Fly's
+   * `_fly-ownership` TXT check, or null when nothing is owed.
+   *
+   * Recomputed by the list route on every load rather than stored — it would be
+   * stale the moment the customer fixed their zone. Optional because it is only
+   * present for a domain still in a non-terminal cert state.
+   */
+  ownershipInstruction?: string | null;
 }
 
 interface DomainsResponse {
@@ -1085,6 +1094,26 @@ function DomainRow({
 
       {(domain.status === 'failed' || domain.status === 'dns_failed') && verifyReason && (
         <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
+      )}
+
+      {/*
+        A certificate waiting on an ownership TXT is the ONE cert state that never
+        resolves on its own, so the instruction has to be visible without the
+        customer first guessing to press "Check SSL". Rendered in the row, beside
+        the DNS records panel it mirrors, rather than only as a toast that takes
+        the record name and value away with it.
+      */}
+      {domain.status === 'provisioning' && domain.ownershipInstruction && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            SSL is waiting on a DNS record you still need to add:
+          </p>
+          <p className="text-xs font-mono break-all">{domain.ownershipInstruction}</p>
+          <p className="text-xs text-muted-foreground">
+            Once it propagates, click Check SSL — the certificate cannot be issued until this
+            record resolves.
+          </p>
+        </div>
       )}
 
       {showDns && (

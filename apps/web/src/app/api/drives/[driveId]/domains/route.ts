@@ -76,8 +76,16 @@ export async function GET(
       domains.map(async (domain) => {
         if (!CERT_NON_TERMINAL.has(domain.status)) return domain;
         try {
-          const { status } = await reconcileCustomDomainCert(domain, { allowFailureTransition: false });
-          return { ...domain, status };
+          // `ownershipInstruction` is kept, not discarded: it is the actionable
+          // half of a certificate stuck on an ownership TXT, and that is the one
+          // cert state that never resolves on its own — somebody has to be told.
+          // Returned per request rather than stored, deliberately: a column
+          // holding it would be stale the moment the customer fixed their zone,
+          // whereas this is recomputed from live DNS on every list.
+          const { status, ownershipInstruction } = await reconcileCustomDomainCert(domain, {
+            allowFailureTransition: false,
+          });
+          return { ...domain, status, ownershipInstruction: ownershipInstruction ?? null };
         } catch (err) {
           loggers.api.warn('Lazy cert reconcile failed during domains list', {
             driveId,
