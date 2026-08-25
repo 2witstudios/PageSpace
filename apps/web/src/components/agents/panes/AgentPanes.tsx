@@ -46,7 +46,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
+import { Check, History, Loader2, MessageSquare, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 import type { Cache } from 'swr';
@@ -78,7 +78,7 @@ import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
 import { useSessionRecord } from '../useSessionRecord';
 import SessionPanes from './SessionPanes';
-import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
+import PaneBar, { PaneNewConversationAction, PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
@@ -1765,13 +1765,31 @@ function ChatPane({
     [conversations, onPickHistoryConversation, refreshConversations],
   );
 
+  // In-flight guard for THIS action only — deliberately not inside
+  // `handlePickAgent`, which the picker also drives, and where a rapid second
+  // pick of a DIFFERENT agent should supersede the first rather than be
+  // swallowed. Here both clicks mean the identical thing, and `handlePickAgent`
+  // mints a fresh `createId()` and POSTs on every invocation: two quick clicks
+  // are two conversations server-side, the second merely superseding the
+  // first's DISPLAY, leaving an orphan that still counts against the session's
+  // conversation cap. `disabledNewConversation` does not cover this — neither
+  // of its terms becomes true synchronously on click.
+  const creatingRef = useRef(false);
+
   const handleCreateNewFromHistory = useCallback(async () => {
-    // Blocks only on an active stream — History's "New Conversation" button
-    // reaches this same action with no button-level guard of its own, so it is
-    // checked here once instead of threading a prop through the shared tab.
+    // Checked here once for both controls that reach it — the bar's "+" and
+    // History's "New Conversation" — each of which also wears the refusal
+    // visibly (`disabled` / `createDisabled`), so neither is a live-looking
+    // button that silently does nothing.
     if (blockedByActiveStream) return;
-    const landed = await onCreateNewFromHistory();
-    if (landed) setActiveTab('chat');
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const landed = await onCreateNewFromHistory();
+      if (landed) setActiveTab('chat');
+    } finally {
+      creatingRef.current = false;
+    }
   }, [blockedByActiveStream, onCreateNewFromHistory]);
 
   return (
@@ -1851,19 +1869,10 @@ function ChatPane({
                 {settingsSaveState === 'saved' ? 'Saved' : 'Save'}
               </button>
             )}
-            <button
-              type="button"
-              aria-label="Start a new conversation"
-              title="Start a new conversation"
+            <PaneNewConversationAction
               disabled={disabledNewConversation}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleCreateNewFromHistory();
-              }}
-              className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-            </button>
+              onCreate={() => void handleCreateNewFromHistory()}
+            />
             <PaneSplitCloseActions
               canSplit={canSplit}
               canClose
@@ -1890,6 +1899,11 @@ function ChatPane({
             currentConversationId={conversationId}
             onSelectConversation={handleSelectHistoryConversation}
             onCreateNew={handleCreateNewFromHistory}
+            // The same refusals the bar's "+" wears. This button reaches the
+            // identical handler, and used to stay enabled while that handler
+            // silently returned mid-stream — the mute guard the shared tab's
+            // own comment described as "no button-level guard of its own".
+            createDisabled={disabledNewConversation}
             onDeleteConversation={(id) => {
               // Only act on panes once the delete actually succeeded — a refused
               // delete (the never-empty guard's 409) or a network failure both

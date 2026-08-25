@@ -391,6 +391,37 @@ export const toolRenderers: Record<string, ToolRenderer> = {
   },
 
   // === PAGE WRITE TOOLS ===
+  // A copy into a page is exactly the "diff a human should review" case, so it
+  // renders like the other line edits. A copy into a FILE has no prior content
+  // to diff against, so it falls through to the action summary.
+  copy_content: ({ parsedOutput }) => {
+    // `inserted: false` rides on a success:true envelope (a missing insertAfter
+    // anchor is a no-op the agent can act on, not a fault). Nothing was written
+    // in that case, so it must not render as a completed update.
+    const copied = parsedOutput.success !== false && parsedOutput.inserted !== false;
+    if (copied && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
+      return (
+        <RichDiffRenderer
+          title={(parsedOutput.title as string | undefined) || 'Document'}
+          oldContent={parsedOutput.oldContent}
+          newContent={parsedOutput.newContent}
+          pageId={parsedOutput.pageId as string | undefined}
+          changeSummary={parsedOutput.message as string | undefined}
+        />
+      );
+    }
+    return (
+      <ActionResultRenderer
+        actionType="update"
+        success={copied}
+        title={(parsedOutput.title as string | undefined) ?? (parsedOutput.path as string | undefined)}
+        pageId={parsedOutput.pageId as string | undefined}
+        message={parsedOutput.message as string | undefined}
+        errorMessage={parsedOutput.error as string | undefined}
+      />
+    );
+  },
+
   insert_content: ({ parsedOutput }) => {
     if (parsedOutput.success && typeof parsedOutput.oldContent === 'string' && typeof parsedOutput.newContent === 'string') {
       return (

@@ -53,11 +53,35 @@ const PAGE_TYPE_BULLETS: ReadonlyArray<{
 }> = [
   { full: '• FOLDER: Container with list/icon view of children. Accepts file uploads via drag-drop.' },
   {
-    full: '• DOCUMENT: Markdown text, or rich text stored as HTML (contentMode says which; documents you create default to markdown). Write the format the page is in. Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
-    slim: '• DOCUMENT: Markdown or rich text stored as HTML (check contentMode). Load the writing-documents skill before non-trivial writing or line-range editing.',
+    // Composed for the same reason the SHEET bullet is: it names tools that may
+    // be absent from a saved allowlist. Every agent configured before
+    // copy_content existed has one, and telling those agents to call it buys an
+    // unknown-tool round trip. The skill/slim branch is reproduced here because
+    // `compose` takes precedence over `slim` in buildPageTypes.
+    compose: (availableTools?: string[]) => {
+      if (skillPointerUsable(availableTools, 'writing-documents')) {
+        return '• DOCUMENT: Markdown or rich text stored as HTML (check contentMode). Load the writing-documents skill before non-trivial writing or line-range editing.';
+      }
+      const parts = [
+        '• DOCUMENT: Markdown text, or rich text stored as HTML (contentMode says which; documents you create default to markdown).',
+        'Write the format the page is in.',
+        'Use insert_content to add lines before/after a heading or landmark, or replace_lines for precise line-range edits.',
+      ];
+      if (hasAny(availableTools, ['copy_content'])) {
+        parts.push('If the content already exists on another page or in a sandbox file, use copy_content instead of retyping it.');
+      }
+      return parts.join(' ');
+    },
     skill: 'writing-documents',
   },
-  { full: '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing).' },
+  {
+    compose: (availableTools?: string[]) => {
+      const base = '• CODE: Plain-text source code with syntax highlighting. Use replace_lines for edits (raw text, no HTML processing)';
+      return hasAny(availableTools, ['copy_content'])
+        ? `${base}, or copy_content to move a sandbox file in without retyping it.`
+        : `${base}.`;
+    },
+  },
   {
     // Composed rather than picked from fixed variants. A bullet naming a tool
     // the agent does not hold produces an unknown-tool call before the model

@@ -95,6 +95,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   'read_page': 'Read',
   'replace_lines': 'Replace',
   'insert_content': 'Insert',
+  'copy_content': 'Copy',
   'create_page': 'Create',
   'rename_page': 'Rename',
   'send_channel_message': 'Send Message',
@@ -142,6 +143,7 @@ export function useCompactToolCallDisplay(part: ToolPart, toolName: string, isEx
         return <MessageSquare className={iconClass} />;
       case 'replace_lines':
       case 'insert_content':
+      case 'copy_content':
         return <Edit className={iconClass} />;
       case 'create_page':
         return <Plus className={iconClass} />;
