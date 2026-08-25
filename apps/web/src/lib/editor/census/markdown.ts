@@ -1,4 +1,6 @@
 import { lexer, type Token, type Tokens } from 'marked';
+import { classifyImageSource, type ImageSource } from './images';
+import { emptyMagnitudes, lineCount, type Magnitudes } from './magnitudes';
 
 /**
  * Markdown constructs the ProseMirror schema has no node or mark for.
@@ -16,6 +18,12 @@ import { lexer, type Token, type Tokens } from 'marked';
  * fenced block, an indented block or a backtick span is an EXAMPLE of an image
  * rather than an image, which is exactly the content a knowledge base about
  * markdown is full of.
+ *
+ * Only syntax the schema has NO home for is listed. `~~strikethrough~~` was
+ * here and is not: StarterKit ships the `strike` mark and the bubble menu
+ * exposes it, so counting it as a gap put 17 documents in a table headed
+ * "source syntax the schema has no node for" that the schema represents
+ * perfectly well. `round-trip.test.ts` holds the schema to that.
  */
 const enum Construct {
   Image = 'md:image',
@@ -24,7 +32,6 @@ const enum Construct {
   RawHtml = 'md:raw-html',
   Footnote = 'md:footnote',
   Highlight = 'md:highlight',
-  Strikethrough = 'md:strikethrough',
 }
 
 /** `==highlight==` is an extension marked's core does not tokenize. */
@@ -43,15 +50,59 @@ function childTokens(token: Token): Token[] {
   return children;
 }
 
-function collect(tokens: Token[], found: Set<string>): void {
+/**
+ * Everything one pass of the lexer can answer, gathered in that one pass.
+ *
+ * The census re-reads the whole `pages` table to produce this, and after the
+ * mislabelled population is routed through here too it re-reads most of it
+ * twice. Lexing markdown three times to answer three questions about it is the
+ * kind of cost that turns a scan into an afternoon.
+ */
+export interface MarkdownAnalysis {
+  constructs: string[];
+  /** Scheme buckets and bare hostnames — never a URL. See `images.ts`. */
+  images: ImageSource[];
+  magnitudes: Magnitudes;
+}
+
+interface Walk {
+  found: Set<string>;
+  images: ImageSource[];
+  magnitudes: Magnitudes;
+}
+
+/** Markdown tokens the editor renders as one block the paginator cannot split. */
+const BLOCK_TOKEN_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'code', 'list_item']);
+
+function collect(tokens: Token[], walk: Walk): void {
+  const { found } = walk;
   for (const token of tokens) {
+    if (BLOCK_TOKEN_TYPES.has(token.type)) {
+      walk.magnitudes.blockCharacters = Math.max(walk.magnitudes.blockCharacters, token.raw.length);
+    }
+
     switch (token.type) {
       case 'image':
         found.add(Construct.Image);
+        walk.magnitudes.images += 1;
+        walk.images.push(classifyImageSource((token as Tokens.Image).href ?? ''));
         break;
-      case 'del':
-        found.add(Construct.Strikethrough);
+      case 'code': {
+        walk.magnitudes.codeBlockLines = Math.max(
+          walk.magnitudes.codeBlockLines,
+          lineCount((token as Tokens.Code).text),
+        );
         break;
+      }
+      case 'table': {
+        const table = token as Tokens.Table;
+        // The header is a row on the page even though `marked` keeps it apart
+        // from `rows`, and a table that overflows a page overflows it by one
+        // row more than `rows.length` says.
+        walk.magnitudes.tableRows = Math.max(walk.magnitudes.tableRows, table.rows.length + 1);
+        walk.magnitudes.tableColumns = Math.max(walk.magnitudes.tableColumns, table.header.length);
+        break;
+      }
       case 'html':
         found.add(Construct.RawHtml);
         break;
@@ -74,12 +125,20 @@ function collect(tokens: Token[], found: Set<string>): void {
         break;
     }
 
-    collect(childTokens(token), found);
+    collect(childTokens(token), walk);
   }
 }
 
+export function analyzeMarkdown(markdown: string): MarkdownAnalysis {
+  const walk: Walk = { found: new Set<string>(), images: [], magnitudes: emptyMagnitudes() };
+  collect(lexer(markdown), walk);
+  return {
+    constructs: [...walk.found].sort(),
+    images: walk.images,
+    magnitudes: walk.magnitudes,
+  };
+}
+
 export function markdownConstructs(markdown: string): string[] {
-  const found = new Set<string>();
-  collect(lexer(markdown), found);
-  return [...found].sort();
+  return analyzeMarkdown(markdown).constructs;
 }

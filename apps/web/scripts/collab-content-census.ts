@@ -28,6 +28,24 @@
  * them onto this surface, and markdown natively carries images and checkboxes
  * the schema has no node for. Their tally is source-syntax detection.
  *
+ * A `contentMode='html'` page that parses to NO element is markdown under the
+ * wrong label — the first production run found 3,003 of them — so it is read a
+ * second time by the markdown detector and tallied in its own table. Without
+ * that, markdown syntax is measured over a quarter of the markdown documents
+ * that exist, and images live almost entirely in the other three quarters.
+ *
+ * Images get a section of their own because the headline `<img>: 0` is a
+ * tautology: the editor has no image node, so no document can contain one. What
+ * the census can answer is where the images in MARKDOWN source point — a data
+ * URI, a host somebody else controls, or a file PageSpace already stores — and
+ * that decides what an image node's attributes have to hold before v1 freezes
+ * them. Scheme and bare hostname only, never a URL (see census/images.ts).
+ *
+ * Magnitudes are the one measurement here that is a size rather than a
+ * presence, and they exist for pagination: PaginationPlus breaks BETWEEN
+ * blocks, so a table, a code fence or an image taller than a page cannot be
+ * paginated at all (see census/magnitudes.ts).
+ *
  * Trashed pages are included: a restored page is seeded like any other, so its
  * content is as much at stake.
  *
@@ -65,7 +83,7 @@ import { getSchema } from '@tiptap/core';
 import { buildRichEditorExtensions } from '../src/lib/editor/rich-editor-extensions';
 import { createDomWorkspace } from '../src/lib/editor/census/constructs';
 import { analyzeHtmlDocument } from '../src/lib/editor/census/round-trip';
-import { markdownConstructs } from '../src/lib/editor/census/markdown';
+import { analyzeMarkdown } from '../src/lib/editor/census/markdown';
 import { createCensusAccumulator, formatCensusReport } from '../src/lib/editor/census/report';
 import { assertReadOnlySession, enforceReadOnlySession } from '../src/lib/editor/census/read-only-session';
 
@@ -110,6 +128,19 @@ async function main(): Promise<void> {
   // same content. readOnly only adds the placeholder, which has no schema.
   // round-trip.test.ts holds all four combinations to one schema.
   const schema = getSchema(buildRichEditorExtensions({ readOnly: false, isPaginated: false }));
+
+  // The one aggregate in the run. `isPaginated` has a column, an API field and
+  // a paginated-layout extension behind it, and no UI that writes it, so
+  // whether anything has it set is worth one query and cannot be answered by
+  // reading page content.
+  const [paginated] = (
+    await db
+      .select({ pages: sql<number>`count(*)` })
+      .from(pages)
+      .where(and(eq(pages.type, 'DOCUMENT'), eq(pages.isPaginated, true)))
+  );
+  const paginatedPages = Number(paginated?.pages ?? 0);
+
   const workspace = createDomWorkspace();
   const census = createCensusAccumulator();
 
@@ -147,9 +178,17 @@ async function main(): Promise<void> {
         if (!/\S/.test(page.content)) {
           census.recordEmpty(page.contentMode);
         } else if (page.contentMode === 'markdown') {
-          census.recordMarkdown(page.id, markdownConstructs(page.content));
+          census.recordMarkdown(page.id, analyzeMarkdown(page.content));
         } else {
-          census.recordHtml(page.id, analyzeHtmlDocument(page.content, schema, workspace));
+          const analysis = analyzeHtmlDocument(page.content, schema, workspace);
+          census.recordHtml(page.id, analysis);
+          // An html-mode page that parsed to no element is markdown wearing the
+          // wrong label, and the HTML scan is blind to everything in it. Read it
+          // a second time as what it is — otherwise the markdown numbers are
+          // drawn from a quarter of the markdown documents that exist.
+          if (analysis.status === 'analysed' && analysis.tagless) {
+            census.recordMislabelledMarkdown(page.id, analyzeMarkdown(page.content));
+          }
         }
 
         scanned += 1;
@@ -166,7 +205,9 @@ async function main(): Promise<void> {
     await getMigrationPool().end();
   }
 
-  process.stdout.write(`${formatCensusReport(census.snapshot(), { partial: interrupted })}\n`);
+  process.stdout.write(
+    `${formatCensusReport(census.snapshot(), { partial: interrupted, paginatedPages })}\n`,
+  );
 }
 
 await main();

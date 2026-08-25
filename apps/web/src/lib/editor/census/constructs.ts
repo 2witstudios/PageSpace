@@ -46,11 +46,16 @@ export interface DomWorkspace {
  */
 export interface DomElement {
   innerHTML: string;
-  querySelectorAll(selector: string): Iterable<{
-    tagName: string;
-    getAttributeNames(): string[];
-    getAttribute(name: string): string | null;
-  }>;
+  /**
+   * Read by the magnitude measurements only, and never reported — what leaves
+   * `magnitudes.ts` is a length, not the text it was measured from.
+   */
+  textContent: string;
+  tagName: string;
+  getAttributeNames(): string[];
+  getAttribute(name: string): string | null;
+  /** Recursive: measuring a table means asking it for its own rows. */
+  querySelectorAll(selector: string): Iterable<DomElement>;
 }
 
 /**
@@ -173,6 +178,26 @@ export function collectConstructs(container: DomElement): DocumentConstructs {
   }
 
   return { elements, attributesByElement };
+}
+
+/**
+ * Whether a stored `contentMode='html'` document contains any HTML at all.
+ *
+ * A document that parses to no element is not HTML — it is markdown source
+ * filed under the wrong content mode, and it is the population the first
+ * production run found 3,003 of. Those pages carry images, headings and code
+ * fences the HTML scan cannot see, so the census has to route them through the
+ * markdown detector as well.
+ *
+ * `text:unescaped-angle-bracket` does not count as an element: it exists
+ * precisely because the parser turned a `<` in prose into one, and prose with a
+ * generic in it is exactly what a mislabelled markdown document looks like.
+ */
+export function hasHtmlElement(constructs: DocumentConstructs): boolean {
+  for (const element of constructs.elements) {
+    if (element !== UNESCAPED_ANGLE_BRACKET_KEY) return true;
+  }
+  return false;
 }
 
 /**

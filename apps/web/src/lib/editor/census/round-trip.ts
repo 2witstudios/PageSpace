@@ -1,7 +1,9 @@
 import type { Schema } from '@tiptap/pm/model';
 import { DOMParser as ProseMirrorDOMParser, DOMSerializer } from '@tiptap/pm/model';
 import { projectContent } from '@pagespace/lib/content/anchoring/text-projection';
-import { collectConstructs, droppedConstructs, type DomWorkspace } from './constructs';
+import { collectConstructs, droppedConstructs, hasHtmlElement, type DomWorkspace } from './constructs';
+import { htmlImageSources, type ImageSource } from './images';
+import { emptyMagnitudes, htmlMagnitudes, type Magnitudes } from './magnitudes';
 
 export type HtmlDocumentAnalysis =
   | {
@@ -16,6 +18,16 @@ export type HtmlDocumentAnalysis =
        * to carry — that the schema lost something the census does not name.
        */
       textPreserved: boolean;
+      /**
+       * The stored document parsed to no HTML element at all — markdown source
+       * filed under `contentMode='html'`. The census routes these through the
+       * markdown detector as well, because the HTML scan is blind to every
+       * construct they contain.
+       */
+      tagless: boolean;
+      /** Scheme buckets and bare hostnames — never a URL. See `images.ts`. */
+      images: ImageSource[];
+      magnitudes: Magnitudes;
     }
   | {
       /**
@@ -61,7 +73,14 @@ export function analyzeHtmlDocument(
     // `empty` tally before it gets here. Round-tripping '' would compare it
     // against TipTap's `<p></p>` and report every empty page as changed.
     if (!/\S/.test(html)) {
-      return { status: 'analysed', dropped: [], textPreserved: true };
+      return {
+        status: 'analysed',
+        dropped: [],
+        textPreserved: true,
+        tagless: false,
+        images: [],
+        magnitudes: emptyMagnitudes(),
+      };
     }
 
     const source = workspace.parse(html);
@@ -71,6 +90,9 @@ export function analyzeHtmlDocument(
     return {
       status: 'analysed',
       dropped: droppedConstructs(constructs, collectConstructs(output)),
+      tagless: !hasHtmlElement(constructs),
+      images: htmlImageSources(source),
+      magnitudes: htmlMagnitudes(source),
       // projectContent is the repo's shared page-text flattener: it ends a run
       // of text at every block boundary and drops <script>/<style> bodies.
       // Element.textContent does neither, so two paragraphs merging into one
