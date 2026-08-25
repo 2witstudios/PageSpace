@@ -5,22 +5,30 @@
 Ran read-only against production: **4,769 DOCUMENT pages** (3,762 html-mode, 1,007 markdown-mode,
 318 empty). Every number below is from that run.
 
-### The `<img>` alarm was wrong
+### What the census can and cannot answer
 
-Phase B scoping predicted that seeding would permanently delete images, and named five more
-constructs alongside. In real HTML documents:
+It measures what documents **contain**. The schema must represent what the product **intends**.
+Those diverge exactly where a feature is missing, and that is the trap this run walked into.
 
-| predicted | actual |
+| construct | pages |
 |---|---|
 | `<img>` | **0** |
 | `<h5>` `<h6>` `<figure>` `<mark>` `<sub>` `<sup>` `<iframe>` | **0** |
-| `style:text-align`, `attr:data-type=taskList` | **0** |
-| `<h4>` | 14 pages |
+| `text-align`, task-list markup | **0** |
+| `<h4>` | 14 |
 
-The editor has never been able to produce them, so no document contains them. The constructs *do*
-appear in markdown source — `md:task-list` 34, `md:strikethrough` 17, `md:raw-html` 11,
-`md:heading-4-6` 8, `md:image` 2, `md:highlight` 1 — which makes them Phase K's problem, not
-Phase E's.
+Most of those zeros are tautologies. The editor has no image node, so no document has an image.
+**That is not evidence against an `image` node in v1** — images in documents are wanted, they are
+simply unbuilt. Under the irreversibility model, adding a node once documents exist is Class B
+(version skew, a lockstep client upgrade); including it in v1 is free. Maximal in what it can
+represent, minimal in what it commits to keeping.
+
+Positive evidence points the same way: `md:image` appears in markdown source, and ~4,000 markdown
+documents migrate onto this surface in Phase K. Without the node they flatten on seed.
+
+What the census does settle is narrower and still worth having: nothing in stored HTML is
+*silently* at risk today beyond `<h4>` on 14 pages. Read a zero as a licence to omit only when the
+feature already exists and nobody used it.
 
 ### The real finding: 3,003 documents are markdown mislabelled as HTML
 
