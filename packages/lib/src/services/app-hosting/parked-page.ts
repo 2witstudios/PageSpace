@@ -84,7 +84,16 @@ function copyFor(decision: AppRouteDecision): PageCopy {
         : {
             title: 'App unavailable',
             heading: 'This app is unavailable',
-            body: 'It is not currently able to serve requests. Its owner has been able to see why.',
+            // Says nothing about what the owner can see. The previous copy told
+            // the visitor "its owner has been able to see why", which is not
+            // true: two of the four things that produce this page are route-level
+            // outages (the database is unreachable, the replay header came out
+            // invalid) that are logged server-side and surfaced to nobody. There
+            // is no owner-facing view of the reason. Telling a stranger that
+            // somebody else already has an explanation is both wrong and useless
+            // to the person reading it, so this points the one reader who can act
+            // at the place where they can.
+            body: 'It is not currently able to serve requests. If this is your app, check its status in PageSpace.',
           };
     case 'not_found':
       return {

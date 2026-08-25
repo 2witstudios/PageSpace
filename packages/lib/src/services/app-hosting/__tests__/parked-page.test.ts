@@ -78,6 +78,22 @@ describe('retryAfterFor — back a caller off by how long the state will last', 
   });
 });
 
+// The page is PUBLIC — anyone who visits the hostname sees it — so it must not
+// claim anything about the owner that is not true. The unavailable copy used to
+// say "its owner has been able to see why"; two of the four producers of that
+// state are route-level outages logged server-side and surfaced to nobody.
+describe('the unavailable page does not promise the owner an explanation', () => {
+  it('given a failed app, should not claim the owner can see the reason', () => {
+    const html = renderAppRouterPage(failed, 'acme.pagespace.app');
+    expect(html).not.toContain('has been able to see');
+    expect(html).not.toMatch(/owner.{0,30}(see|knows) why/i);
+  });
+
+  it('given a failed app, should point the one reader who can act at where to look', () => {
+    expect(renderAppRouterPage(failed, 'acme.pagespace.app')).toContain('check its status in PageSpace');
+  });
+});
+
 describe('renderAppRouterPage — self-contained, and it escapes the host header', () => {
   it('given any decision, should reference no external asset that would need fetching', () => {
     const html = renderAppRouterPage(parked, 'acme.pagespace.app');
