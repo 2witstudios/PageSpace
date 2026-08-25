@@ -162,8 +162,15 @@ async function handle(request: Request): Promise<Response> {
     );
   }
   if (tooLarge) {
+    // Both units, and BOTH DERIVED from the constant. Naming the mebibyte
+    // matters here for the same reason it matters in the proxy config: "1 MB"
+    // reads as 1,000,000 to a size parser and to half the people who see it,
+    // and this limit is 1,048,576. Hardcoding "1 MiB" beside the constant would
+    // just move the drift — the text would keep claiming 1 MiB after somebody
+    // changed the number.
+    const limitMiB = MAX_REPLAYABLE_BODY_BYTES / 1024 / 1024;
     return htmlResponse(
-      `<!doctype html><meta charset="utf-8"><title>Payload too large</title><p>Request bodies above ${MAX_REPLAYABLE_BODY_BYTES} bytes cannot be routed to a published app. Upload directly to storage instead.`,
+      `<!doctype html><meta charset="utf-8"><title>Payload too large</title><p>Request bodies above ${limitMiB} MiB (${MAX_REPLAYABLE_BODY_BYTES.toLocaleString('en-US')} bytes) cannot be routed to a published app. Upload directly to storage instead.`,
       413,
     );
   }

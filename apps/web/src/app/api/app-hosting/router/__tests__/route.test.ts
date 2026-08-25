@@ -189,6 +189,20 @@ describe('the 1MB replay ceiling is named, not discovered', () => {
     expect(resolveAppRoute).not.toHaveBeenCalled();
   });
 
+  // The figure in the page has to come FROM the constant. A hardcoded "1 MiB"
+  // beside it would keep claiming 1 MiB after somebody changed the number, which
+  // is the drift this whole limit already has one instance of at the proxy.
+  it('given an oversized body, should name the limit in MiB and bytes, both derived', async () => {
+    const res = await POST(request({ 'content-length': String(1_048_577) }, { method: 'POST' }));
+    const body = await res.text();
+
+    expect(body).toContain('1 MiB');
+    expect(body).toContain('1,048,576 bytes');
+    // Not "MB": a size parser reads that as 1,000,000, and the proxy mirroring
+    // this cap has to agree with it exactly.
+    expect(body).not.toMatch(/\d\s?MB\b/);
+  });
+
   it('given a body at the limit, should route normally', async () => {
     const res = await POST(request({ 'content-length': String(1_048_576) }, { method: 'POST' }));
     expect(res.status).toBe(204);
