@@ -182,6 +182,94 @@ describe('copy_content — destination modes', () => {
   });
 });
 
+describe('copy_content — review regressions', () => {
+  it('append into an empty page should not start with a blank line', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'COPY' }), page({ id: 'dst', content: '' })],
+    });
+    await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(h.writes[0].newContent.startsWith('\n')).toBe(false);
+    expect(h.writes[0].newContent).toContain('COPY');
+  });
+
+  it('append onto content ending in a newline should not double the newline', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'COPY' }), page({ id: 'dst', content: 'a\n' })],
+    });
+    await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(h.writes[0].newContent).not.toContain('\n\n');
+    expect(h.writes[0].newContent).toBe('a\nCOPY\n');
+  });
+
+  it('append onto content with no trailing newline should still separate the lines', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'COPY' }), page({ id: 'dst', content: 'a\nb' })],
+    });
+    await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(h.writes[0].newContent).toBe('a\nb\nCOPY');
+  });
+
+  it('a FILE-page source is extracted plaintext, so copying it into an html page is refused', async () => {
+    // FILE rows keep the schema default contentMode 'html' while holding
+    // extracted TEXT, so trusting that default would let a .md upload through
+    // into an html document as literal characters.
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'FILE', contentMode: 'html', content: '# Heading\n- bullet' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '<p>hi</p>' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Content mode mismatch');
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('a FILE-page source copies cleanly into a markdown page, unmangled', async () => {
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'FILE', contentMode: 'html', content: '# Heading\n- bullet' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'markdown', content: 'old' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    // Not line-broken as if it were HTML.
+    expect(h.writes[0].newContent).toBe('# Heading\n- bullet');
+  });
+
+  it('should not disclose a page title or type before the edit permission check', async () => {
+    // Every type refusal names the page, so the permission gate has to run
+    // first or it leaks what the page is to a caller who cannot edit it.
+    const h = harness({
+      pages: [page({ id: 'src' }), page({ id: 'dst', type: 'SHEET', title: 'Payroll 2026' })],
+      canEditPage: async () => false,
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(JSON.stringify(result)).not.toContain('Payroll 2026');
+    expect(JSON.stringify(result)).not.toContain('SHEET');
+  });
+});
+
 describe('copy_content — the token win', () => {
   it('should not hand the copied bytes back to the model', async () => {
     // If oldContent/newContent reach the model, the tool costs in input tokens

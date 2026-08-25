@@ -26,16 +26,13 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import {
   LineRangeError,
+  canonicalizeForLineEditing,
   projectLines,
   replaceLines,
   insertLines,
   type LineEditResult,
 } from '@/lib/editor/line-edit';
-import {
-  isRawTextPage,
-  describeContentModeMismatch,
-  serializePageContentForAI,
-} from '../core/page-serializer';
+import { isRawTextPage, describeContentModeMismatch } from '../core/page-serializer';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { toModelOutputForCopyContent } from './copy-content-model-output';
@@ -217,6 +214,23 @@ const refuse = (error: string, message: string, extra: Record<string, unknown> =
   ...extra,
 });
 
+/**
+ * Whether a page's content is RAW TEXT rather than HTML.
+ *
+ * `isRawTextPage` answers this for documents and code, but a FILE page is a
+ * third case it does not cover: the processor stores EXTRACTED PLAINTEXT in
+ * `page.content` while the row keeps the schema default `contentMode: 'html'`.
+ * Trusting that default would label a .md or .json upload as HTML and let it
+ * through the compatibility check into an html-mode document, which is exactly
+ * the literal-text corruption that check exists to prevent.
+ *
+ * `describeContentModeMismatch` already states the same thing in prose — "a
+ * FILE [serializes] from extracted text — neither is HTML".
+ */
+function isRawTextSource(page: CopyPageRecord): boolean {
+  return page.type === PageType.FILE || isRawTextPage(page);
+}
+
 /** Page types whose content is not line-addressable text. */
 function rejectNonTextPage(page: CopyPageRecord, side: 'source' | 'destination'): Refusal | null {
   if (isSheetType(page.type as PageType)) {
@@ -269,12 +283,12 @@ export function createCopyContentTools(deps: CopyContentDeps) {
 
     // The SAME projection read_page shows, so a range copied from a fresh read
     // addresses the same lines the agent saw.
-    const serialized = serializePageContentForAI(page);
+    const serialized = canonicalizeForLineEditing(page.content, isRawTextSource(page));
     const allLines = serialized.split('\n');
     const totalLines = allLines.length;
 
     if (from.lineStart === undefined && from.lineEnd === undefined) {
-      return { bytes: serialized, label: `page:${page.id}`, isRawText: isRawTextPage(page) };
+      return { bytes: serialized, label: `page:${page.id}`, isRawText: isRawTextSource(page) };
     }
 
     const start = from.lineStart ?? 1;
@@ -289,7 +303,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     return {
       bytes: allLines.slice(start - 1, end).join('\n'),
       label: `page:${page.id} lines ${start}-${end}`,
-      isRawText: isRawTextPage(page),
+      isRawText: isRawTextSource(page),
     };
   }
 
@@ -301,6 +315,12 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     const pageId = resolveOrThrowPageId(to.pageId, context);
     const page = await deps.findPage(pageId);
     if (!page) return refuse('Destination page not found', `No page with ID "${pageId}".`);
+    // Permission FIRST: every refusal below names the page's title or type, so
+    // running them ahead of the check would tell a caller without edit access
+    // what the page is.
+    if (!(await deps.canEditPage(context, page.id))) {
+      return refuse('Insufficient permissions', 'You do not have edit access to this page.');
+    }
     if (page.type === PageType.FILE) {
       return refuse(
         'Cannot write to FILE pages',
@@ -310,10 +330,6 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     }
     const rejected = rejectNonTextPage(page, 'destination');
     if (rejected) return rejected;
-    if (!(await deps.canEditPage(context, page.id))) {
-      return refuse('Insufficient permissions', `You do not have edit access to "${page.title}".`);
-    }
-
     // Byte-for-byte means byte-for-byte: this tool converts nothing. Raw text
     // written into an html-mode document renders as literal characters, which
     // is exactly the "literal garbage, not formatting" the writing-documents
@@ -358,16 +374,25 @@ export function createCopyContentTools(deps: CopyContentDeps) {
             expectedTotalLines: to.expectedTotalLines,
           });
           break;
-        case 'append':
-          // insertLines clamps to one past the last line, so "the end" is
-          // expressible without a separate append primitive.
+        case 'append': {
+          // insertLines clamps to one past the last line, so "the end" needs no
+          // separate primitive — but a trailing newline projects as a final
+          // EMPTY line, and inserting after that empty line yields a blank line
+          // between the old content and the copy ('a\n' -> 'a\n\n<copy>').
+          // Empty content is the same trap: it projects as one empty line, so
+          // a copy into an empty page would start with a blank line. Insert
+          // BEFORE that trailing empty line instead, which keeps the document's
+          // terminal newline exactly where it was.
+          const destLines = projectLines(page.content, destIsRawText);
+          const endsWithBlank = destLines[destLines.length - 1] === '';
           edit = insertLines({
             content: page.content,
-            startLine: lineCount + 1,
+            startLine: endsWithBlank ? destLines.length : destLines.length + 1,
             insertion: source.bytes,
             isRawText: destIsRawText,
           });
           break;
+        }
         case 'insertAfter': {
           const anchorIndex = projectLines(page.content, destIsRawText).findIndex((line) =>
             line.includes(to.anchor as string)

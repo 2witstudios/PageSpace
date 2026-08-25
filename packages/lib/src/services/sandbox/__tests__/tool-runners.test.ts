@@ -1681,6 +1681,51 @@ describe('readSandboxFileForCopy', () => {
     expect(slots.released).toBe(1);
   });
 
+  it('given a binary file, should refuse rather than hand back a lossily-decoded copy', async () => {
+    // 0xFF/0xFE are not valid UTF-8. toString('utf8') turns them into U+FFFD
+    // without complaint, so a PNG would "copy" successfully and arrive corrupt.
+    const binary = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0xff, 0xfe, 0x00, 0x01]);
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => binary }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'logo.png', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'binary_content' });
+  });
+
+  it('given valid multi-byte UTF-8, should NOT mistake it for binary', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('héllo 😀 ünïcødé') }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'u.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe('héllo 😀 ünïcødé');
+  });
+
+  it('should measure the cap in BYTES, not characters', async () => {
+    // A multi-byte file whose character count sits exactly at the cap is twice
+    // that many bytes on disk, and must be refused.
+    //
+    // (Measuring the buffer rather than the decoded string is also more honest,
+    // but it is not independently observable: anything that reaches the success
+    // path round-trips, so the two lengths agree there by construction.)
+    const overCap = Buffer.from('é'.repeat(MAX_WRITE_BYTES)); // 2 bytes each
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => overCap }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'big.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+  });
+
+  it('should report bytes as the file size on disk', async () => {
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from('é') }),
+    });
+    const result = await readSandboxFileForCopy({ path: 'e.txt', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.bytes).toBe(2);
+  });
+
   it('preserves bytes exactly — CRLF, tabs, trailing newline, unicode', async () => {
     const tricky = 'a\r\n\tb\n😀\n\n';
     const { deps } = makeDeps({ reconnect: async () => fileOf(tricky) });

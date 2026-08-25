@@ -372,6 +372,7 @@ export type SandboxToolDenialReason =
   | 'github_over_bash'
   | 'path_escape'
   | 'content_too_large'
+  | 'binary_content'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
@@ -449,6 +450,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
+  binary_content:
+    'This file is not valid UTF-8 text, so it cannot be copied byte-for-byte through this tool — decoding it would silently replace the undecodable bytes. Use bash (cp/mv) to move binary files inside the sandbox.',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -1275,8 +1278,11 @@ export async function readSandboxFileForCopy({
         return fail('not_found');
       }
 
-      const content = buffer.toString('utf8');
-      const bytes = Buffer.byteLength(content, 'utf8');
+      // The cap is measured on the SOURCE BYTES, not on a decoded string: for
+      // anything that does not round-trip, the decoded form has a different
+      // length than the file on disk, and the wrong number would be the one
+      // enforced.
+      const bytes = buffer.byteLength;
       if (bytes > MAX_WRITE_BYTES) {
         await safeAudit(deps, ctx, {
           code: `copyRead ${path} (${bytes} bytes, over cap)`,
@@ -1284,6 +1290,21 @@ export async function readSandboxFileForCopy({
           durationMs,
         });
         return fail('content_too_large');
+      }
+
+      // `toString('utf8')` is LOSSY: undecodable bytes become U+FFFD, silently.
+      // A tool promising byte-exact copies must not hand back content that no
+      // longer matches the file — an image or archive would arrive corrupted
+      // and look like it copied fine. Re-encoding and comparing is the only
+      // honest check, so a non-text file is refused instead.
+      const content = buffer.toString('utf8');
+      if (Buffer.compare(Buffer.from(content, 'utf8'), buffer) !== 0) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (not utf-8)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('binary_content');
       }
 
       await safeAudit(deps, ctx, {
