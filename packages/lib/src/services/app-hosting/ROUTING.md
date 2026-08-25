@@ -116,6 +116,20 @@ cancels at the first byte past the limit, and it only ever runs for a request
 that gave us no length to read, so a request that declares its size still pays
 nothing.
 
+The edge proxy carries the same cap as defence in depth —
+`request_body { max_size 1MiB }` in the `@published_apps` block of
+`fly/Caddyfile.fly` in **PageSpace-Deploy**. That is not redundant with the check
+here: it stops an oversized body crossing the internet into the flycast hop and
+being streamed into this route only to be refused. The route keeps its own check
+because it is the layer that decides whether to emit `fly-replay` at all, and
+because a direct-to-web deployment has no proxy in front of it.
+
+> **Write it `1MiB`, never `1MB`.** Caddy parses `MB` as 1,000,000 and `MiB` as
+> 1,048,576, and `MAX_REPLAYABLE_BODY_BYTES` is 1,048,576. Written as `MB` the
+> two layers would disagree about every body between those two figures: the proxy
+> would refuse it while the router's own 413 page names a limit that allows it —
+> a refusal the user cannot reconcile with the message explaining it.
+
 ## Configuration
 
 | Variable | Required | Meaning |

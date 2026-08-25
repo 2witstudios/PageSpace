@@ -42,6 +42,10 @@ export const FLY_REPLAY_TIMEOUT_MS = 1500;
  * limit) instead of surfacing as an opaque 502 from Fly.
  */
 export const MAX_REPLAYABLE_BODY_BYTES = 1_048_576;
+// 1,048,576 — one MEBIbyte. Any proxy mirroring this cap must say `1MiB`, never
+// `1MB`: Caddy (and most size parsers) read `MB` as 1,000,000, which would refuse
+// every body between the two figures while this route's own 413 page names a
+// limit that allows them. See `fly/Caddyfile.fly` in PageSpace-Deploy.
 
 /** A published app, reduced to exactly what the routing decision reads. */
 export interface RoutableApp {
