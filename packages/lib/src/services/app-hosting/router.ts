@@ -155,13 +155,17 @@ export async function resolveAppRoute(
   if (preliminary.kind !== 'replay') return preliminary;
 
   // Only a servable METERED app is worth asking the ledger about; a dedicated
-  // app is billed flat and has no gate. `decideAppRoute` re-checks the tier
-  // below, so this cannot quietly become the policy.
-  let balanceOk = true;
+  // app is billed flat and has no gate. The refusal returns from inside the
+  // branch, so past this block the payer is known to be able to spend — which is
+  // what lets the final decision below pass `balanceOk: true` as a fact rather
+  // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
+  // here can never quietly become the policy.
   if (app.tier === 'metered') {
     const tier = await deps.resolveTier(app.ownerId);
-    balanceOk = await deps.hasSpendableBalance(app.ownerId, tier);
-    if (!balanceOk) return decideAppRoute({ app: routable, balanceOk, replayState: 'pending' });
+    const balanceOk = await deps.hasSpendableBalance(app.ownerId, tier);
+    if (!balanceOk) {
+      return decideAppRoute({ app: routable, balanceOk: false, replayState: 'pending' });
+    }
   }
 
   // Derive the state key only once the route is otherwise decided-servable: an
@@ -169,7 +173,6 @@ export async function resolveAppRoute(
   // authenticate its replays must refuse to emit them rather than send traffic
   // to a published app with a blank state it has no way to distinguish from a
   // direct 6PN caller.
-
   let replayState: string;
   try {
     replayState = derivePublishedAppReplayKey({
@@ -180,5 +183,5 @@ export async function resolveAppRoute(
     return { kind: 'unavailable', reason: 'failed' };
   }
 
-  return decideAppRoute({ app: routable, balanceOk, replayState });
+  return decideAppRoute({ app: routable, balanceOk: true, replayState });
 }
