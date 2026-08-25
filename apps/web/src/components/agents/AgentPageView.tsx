@@ -58,6 +58,7 @@ import { buildAgentSelectionUrl } from '@/lib/agents/agent-selection';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAuth } from '@/hooks/useAuth';
 import { useLatestRef } from '@/hooks/useLatestRef';
+import { useConversationActiveStream } from '@/hooks/useActiveStream';
 import { usePermissionsCheck } from './usePermissionsCheck';
 import {
   useResolvedConversation,
@@ -406,22 +407,58 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
     [conversations],
   );
 
+  // Mid-stream, "+" is refused here for the same reason the grid refuses it
+  // (AgentPanes' `blockedByActiveStream`): replacing what is showing would yank
+  // a still-arriving response, and any in-flight tool work, out from under
+  // itself with no way back. The grid had this guard and the page did not,
+  // which is exactly the kind of same-control-different-behaviour split this
+  // change exists to remove. `page.id` is the channel an agent's own stream is
+  // tagged with — this surface has no Assistant case to fall back to.
+  const activeStream = useConversationActiveStream(page.id, current?.conversationId ?? null);
+  const blockedByActiveStream = activeStream !== undefined;
+
   // In-flight guard. `newConversation` mints server-side with no idempotency
   // key, so two clicks are two conversations — and the "+" this now feeds sits
   // permanently beside the chat, where a double-click is ordinary, rather than
   // behind the History tab where it used to be the only way in. A ref, not
   // state, is what the guard READS: two clicks in the same tick would both see
   // a stale `false` from state. State exists alongside it purely to disable the
-  // button, which is feedback, not the guard.
-  const creatingRef = useRef(false);
+  // button, which is feedback, not the guard. A COUNTER rather than a boolean,
+  // so an `ignoreInFlight` caller (below) overlapping a user click cannot clear
+  // the flag out from under the one still running.
+  const inFlightRef = useRef(0);
   const [isCreating, setIsCreating] = useState(false);
 
-  const handleCreateNew = useCallback(async () => {
-    if (creatingRef.current) return;
-    creatingRef.current = true;
+  const handleCreateNew = useCallback(async (options?: {
+    /**
+     * Mint INTO this session rather than spawning or going plain. Set by the
+     * page's own "+", which can be showing a session-BOUND conversation: the
+     * plain branch is reached whenever `canUseSessions` is momentarily false,
+     * and it does go false after mount — `useAuthStore.loadSession()` sets
+     * `isLoading` on every routine background recheck of an already-signed-in
+     * session (see Layout.tsx's own note on exactly that). Minting without the
+     * id there would hand the user a permanently session-less replacement and
+     * abandon a live workspace, which is precisely what
+     * `mintReplacementForCurrent` passes its own session id to prevent.
+     */
+    reuseSessionId?: string | null;
+    /**
+     * Not a user click — a recovery mint that must happen even while one is in
+     * flight. The guard exists to dedupe ONE user intent, not to make the
+     * session-ended recovery a no-op because History's button happened to be
+     * mid-round-trip.
+     */
+    ignoreInFlight?: boolean;
+  }) => {
+    if (inFlightRef.current > 0 && !options?.ignoreInFlight) return;
+    // The session-ended recovery is exempt: its whole point is that the old
+    // stream is already over, and refusing it would strand the user on a
+    // conversation whose session is gone.
+    if (blockedByActiveStream && !options?.ignoreInFlight) return;
+    inFlightRef.current += 1;
     setIsCreating(true);
     try {
-      await newConversation();
+      await newConversation(options?.reuseSessionId ?? null);
       refreshConversations();
     } catch (error) {
       // Every caller fires this as `void handleCreateNew()`, so a rejection
@@ -433,10 +470,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
         description: error instanceof Error ? error.message : 'Please try again.',
       });
     } finally {
-      creatingRef.current = false;
-      setIsCreating(false);
+      inFlightRef.current -= 1;
+      setIsCreating(inFlightRef.current > 0);
     }
-  }, [newConversation, refreshConversations]);
+  }, [newConversation, refreshConversations, blockedByActiveStream]);
 
   const toggleConversationShare = useCallback(
     async (targetConversationId: string, isShared: boolean) => {
@@ -600,7 +637,7 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               chatContext="page"
               hostConversationId={current.conversationId}
               isReadOnly={isReadOnly}
-              onSessionEnded={() => void handleCreateNew()}
+              onSessionEnded={() => void handleCreateNew({ ignoreInFlight: true })}
               onConversationClosed={handleConversationClosed}
             />
           ) : agentLoading ? (
@@ -654,7 +691,10 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                   // viewer starting their OWN conversation with someone else's
                   // agent is a supported act, not one the server will refuse.
                   // The History tab's button is ungated for the same reason.
-                  <PaneNewConversationAction disabled={isCreating} onCreate={() => void handleCreateNew()} />
+                  <PaneNewConversationAction
+                    disabled={isCreating || blockedByActiveStream}
+                    onCreate={() => void handleCreateNew({ reuseSessionId: current.sessionId })}
+                  />
                 }
               />
               <div className="min-h-0 flex-1 overflow-hidden">

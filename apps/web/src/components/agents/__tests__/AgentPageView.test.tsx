@@ -316,7 +316,7 @@ describe('AgentPageView', () => {
 
     await waitFor(() =>
       expect(mockCreatePageConversation).toHaveBeenCalledWith(
-        expect.objectContaining({ agentId: 'agent-1' }),
+        expect.objectContaining({ agentId: 'agent-1', sessionId: null }),
       ),
     );
     // The same act the History tab's "New Conversation" performs — it lands on
@@ -369,6 +369,30 @@ describe('AgentPageView', () => {
     expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1');
     await waitFor(() =>
       expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled(),
+    );
+  });
+
+  it('the "+" mints INTO the session when this branch is showing a BOUND conversation', async () => {
+    // The plain branch is not exclusively session-less: it is also where a
+    // bound conversation lands whenever `canUseSessions` goes momentarily
+    // false, which it does on every routine background auth recheck of an
+    // already-signed-in session. Minting without the id there would hand back a
+    // permanently session-less replacement and abandon a live workspace — the
+    // exact loss `mintReplacementForCurrent` passes its own id to prevent.
+    authState.current = { user: { id: 'user-1', role: 'user' }, isLoading: true };
+    resolveTo({ conversationId: 'conv-1', sessionId: 'ses-1' });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: 'ses-1' });
+    render(<AgentPageView page={pageFixture()} />);
+
+    // No pane grid: canUseSessions is false, so the bound conversation renders plain.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1', sessionId: 'ses-1' }),
+      ),
     );
   });
 

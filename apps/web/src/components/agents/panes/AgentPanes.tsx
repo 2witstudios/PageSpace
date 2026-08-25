@@ -1765,13 +1765,30 @@ function ChatPane({
     [conversations, onPickHistoryConversation, refreshConversations],
   );
 
+  // In-flight guard for THIS action only — deliberately not inside
+  // `handlePickAgent`, which the picker also drives, and where a rapid second
+  // pick of a DIFFERENT agent should supersede the first rather than be
+  // swallowed. Here both clicks mean the identical thing, and `handlePickAgent`
+  // mints a fresh `createId()` and POSTs on every invocation: two quick clicks
+  // are two conversations server-side, the second merely superseding the
+  // first's DISPLAY, leaving an orphan that still counts against the session's
+  // conversation cap. `disabledNewConversation` does not cover this — neither
+  // of its terms becomes true synchronously on click.
+  const creatingRef = useRef(false);
+
   const handleCreateNewFromHistory = useCallback(async () => {
     // Blocks only on an active stream — History's "New Conversation" button
     // reaches this same action with no button-level guard of its own, so it is
     // checked here once instead of threading a prop through the shared tab.
     if (blockedByActiveStream) return;
-    const landed = await onCreateNewFromHistory();
-    if (landed) setActiveTab('chat');
+    if (creatingRef.current) return;
+    creatingRef.current = true;
+    try {
+      const landed = await onCreateNewFromHistory();
+      if (landed) setActiveTab('chat');
+    } finally {
+      creatingRef.current = false;
+    }
   }, [blockedByActiveStream, onCreateNewFromHistory]);
 
   return (

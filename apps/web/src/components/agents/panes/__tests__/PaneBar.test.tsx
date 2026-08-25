@@ -191,6 +191,17 @@ describe('PaneSessionIdentity', () => {
     });
   });
 
+  test('the dot has a screen-reader reading — it is the only signal of binding', () => {
+    render(<PaneSessionIdentity name="plain-thread" bound={false} />);
+
+    assert({
+      given: 'an unbound identity, whose dot is aria-hidden',
+      should: 'still announce that there is no workspace session behind it',
+      actual: screen.queryByText(/No workspace session/i) !== null,
+      expected: true,
+    });
+  });
+
   test('omits the label chip when none is given', () => {
     render(<PaneSessionIdentity name="shell-b2c3d4" />);
 
@@ -198,7 +209,7 @@ describe('PaneSessionIdentity', () => {
       given: 'an identity without a label',
       should: 'render the name alone, no empty chip',
       actual: screen.getByText('shell-b2c3d4').parentElement?.childElementCount,
-      expected: 2, // dot + name
+      expected: 3, // dot + its sr-only reading + name
     });
   });
 });

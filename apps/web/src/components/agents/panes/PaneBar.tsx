@@ -202,6 +202,11 @@ export function PaneSessionIdentity({
           bound ? 'bg-emerald-500' : 'border border-muted-foreground/60',
         )}
       />
+      {/* The dot itself is decorative, but what it now ENCODES is not: it is
+          the only thing distinguishing a workspace-backed conversation from a
+          plain one. While it was always-green that cost a screen-reader user
+          nothing; now it would cost them the whole signal. */}
+      <span className="sr-only">{bound ? 'Workspace session: ' : 'No workspace session: '}</span>
       <span className="truncate font-mono text-[11px]">{name}</span>
       {label !== undefined && (
         <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] font-normal text-muted-foreground">
