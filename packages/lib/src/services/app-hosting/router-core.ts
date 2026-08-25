@@ -250,14 +250,14 @@ export function exceedsReplayableBody(contentLengthHeader: string | null | undef
  *
  * A request without `Content-Length` gives the header check above nothing to
  * read, so it would let the request through to `fly-replay` — where Fly, unable
- * to replay a body over the limit, fails it at the platform.
+ * to replay a body over the limit, fails it at the platform. The client gets an
+ * opaque 502 instead of the 413 this edge exists to give them, and it happens on
+ * the one path nobody tests.
  *
  * Deliberately NOT called "chunked": that names an HTTP/1.1 transfer-encoding,
  * and HTTP/2 forbids it outright, carrying request content in DATA frames with
  * no length at all. Keying on the ABSENCE of `Content-Length` covers both, which
- * matters because the edge in front of this serves HTTP/2. The client gets an
- * opaque 502 instead of the 413 this edge exists to give them, and it happens on
- * the one path nobody tests.
+ * matters because the edge in front of this serves HTTP/2.
  *
  * So the body is measured, but ONLY when there is no length to read, and only up
  * to the limit: the read stops and the stream is cancelled at the first byte past
