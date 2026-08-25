@@ -3,6 +3,7 @@ import {
   runBashInSandbox,
   writeSandboxFile,
   readSandboxFile,
+  readSandboxFileForCopy,
   editSandboxFile,
   MAX_WRITE_BYTES,
   CHECKPOINT_TIMEOUT_MS,
@@ -12,7 +13,8 @@ import {
 import type { ExecutableSandbox, SandboxRunResult } from '../sandbox-client/types';
 import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
-import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES } from '../execution-policy';
+import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
+import { LINE_ELISION_MARKER } from '../output-limit';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -1593,5 +1595,97 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
         workspaceId: 'shared-session-1',
       },
     ]);
+  });
+});
+
+describe('readSandboxFileForCopy', () => {
+  // This runner exists because everything readSandboxFile does to make a file
+  // safe for a MODEL corrupts bytes destined for STORAGE. Each case below pins
+  // one of those three transforms as absent.
+
+  const fileOf = (content: string) =>
+    makeSandbox({ readFileToBuffer: async () => Buffer.from(content) });
+
+  it('given a file longer than the read window, should return every line, not the first page', async () => {
+    const long = Array.from({ length: DEFAULT_READ_LINES * 2 }, (_, i) => `line ${i + 1}`).join('\n') + '\n';
+    const { deps } = makeDeps({ reconnect: async () => fileOf(long) });
+    const result = await readSandboxFileForCopy({ path: 'long.ts', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe(long);
+  });
+
+  it('given a line longer than MAX_LINE_BYTES, should not clip it or staple on an elision marker', async () => {
+    const longLine = 'x'.repeat(MAX_LINE_BYTES * 3);
+    const { deps } = makeDeps({ reconnect: async () => fileOf(longLine) });
+    const result = await readSandboxFileForCopy({ path: 'min.js', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe(longLine);
+    expect(result.content).not.toContain(LINE_ELISION_MARKER);
+  });
+
+  it('given a screenOutput hook, should NOT annotate — a copy is not model-visible output', async () => {
+    // readSandboxFile screens here on purpose. This path must not: the banner
+    // would land inside the user's document.
+    const { deps } = makeDeps({ screenOutput: async (t) => `[SCREENED]${t}` });
+    const result = await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+    expect(result.content).toBe('file-contents');
+    expect(result.content).not.toContain('[SCREENED]');
+  });
+
+  it('given a file over the write cap, should refuse rather than return a short copy', async () => {
+    const { deps } = makeDeps({ reconnect: async () => fileOf('y'.repeat(MAX_WRITE_BYTES + 1)) });
+    const result = await readSandboxFileForCopy({ path: 'huge.bin', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'content_too_large' });
+  });
+
+  it('given a file exactly at the cap, should allow it', async () => {
+    const { deps } = makeDeps({ reconnect: async () => fileOf('y'.repeat(MAX_WRITE_BYTES)) });
+    const result = await readSandboxFileForCopy({ path: 'edge.bin', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+  });
+
+  it('given a missing file, should deny not_found', async () => {
+    const { deps } = makeDeps({ reconnect: async () => makeSandbox({ readFileToBuffer: async () => null }) });
+    const result = await readSandboxFileForCopy({ path: 'nope.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'not_found' });
+  });
+
+  it('given a traversal path, should deny path_escape before provisioning', async () => {
+    let acquired = false;
+    const { deps } = makeDeps({
+      acquireSandbox: async () => {
+        acquired = true;
+        return { ok: true, sandboxId: 'sbx-1', resumed: false, workspaceId: 'ws-1' };
+      },
+    });
+    const result = await readSandboxFileForCopy({ path: '/etc/passwd', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'path_escape' });
+    expect(acquired).toBe(false);
+  });
+
+  it('given the kill switch off, should deny before touching a sandbox', async () => {
+    const { deps } = makeDeps({ isEnabled: () => false });
+    const result = await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(result).toMatchObject({ success: false, reason: 'kill_switch_off' });
+  });
+
+  it('given a successful copy read, should release its slot and audit', async () => {
+    const { deps, audits, slots } = makeDeps();
+    await readSandboxFileForCopy({ path: 'a.txt', ctx: makeCtx(), deps });
+    expect(audits[0]?.exitCode).toBe(0);
+    expect(audits[0]?.code).toContain('copyRead');
+    expect(slots.released).toBe(1);
+  });
+
+  it('preserves bytes exactly — CRLF, tabs, trailing newline, unicode', async () => {
+    const tricky = 'a\r\n\tb\n😀\n\n';
+    const { deps } = makeDeps({ reconnect: async () => fileOf(tricky) });
+    const result = await readSandboxFileForCopy({ path: 't.txt', ctx: makeCtx(), deps });
+    if (!result.success) return;
+    expect(result.content).toBe(tricky);
   });
 });

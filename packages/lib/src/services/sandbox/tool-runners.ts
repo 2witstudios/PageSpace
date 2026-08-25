@@ -412,6 +412,15 @@ export type ReadFileToolResult =
     }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
+/**
+ * `readSandboxFileForCopy`'s result. Deliberately NOT ReadFileToolResult: there
+ * is no `truncated`, no window and no notice, because this read either returns
+ * the file whole or fails. A partial success is not representable on purpose.
+ */
+export type ReadFileForCopyResult =
+  | { success: true; path: string; content: string; bytes: number }
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
 export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
@@ -1187,6 +1196,105 @@ export async function readSandboxFile({
   } finally {
     session.release();
   }
+  });
+}
+
+/**
+ * Read a sandbox file VERBATIM, for copying its bytes somewhere else.
+ *
+ * A sibling of `readSandboxFile`, not a caller of it, because everything that
+ * function does to make a file safe and affordable to put in front of a MODEL is
+ * corruption when the bytes are destined for storage:
+ *
+ *   - the line window (DEFAULT_READ_LINES) would copy the first page of a file
+ *     and call it the whole thing;
+ *   - the per-line clip (MAX_LINE_BYTES) would silently rewrite long lines and
+ *     staple LINE_ELISION_MARKER into the middle of the content;
+ *   - `deps.screenOutput` would, on a flagged file, wrap the copy in
+ *     `[UNTRUSTED TOOL OUTPUT …]` banners — text that exists to frame content
+ *     for a model, written here into a user's document.
+ *
+ * The injection seam is skipped rather than forgotten. It annotates
+ * model-visible output; these bytes are never returned to the model (the copy
+ * tool's `toModelOutput` reduces its result to counts), so there is no prompt to
+ * inject. Whatever later reads the destination applies its own seam.
+ *
+ * Refuses above MAX_WRITE_BYTES instead of truncating. A half-copied document
+ * looks complete — there is no notice attached to a page to say it was cut — so
+ * silently short content is a worse failure here than in a read.
+ */
+export async function readSandboxFileForCopy({
+  path,
+  ctx,
+  deps,
+}: {
+  path: string;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<ReadFileForCopyResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `copyRead ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+
+  return withMachineBilling<Extract<ReadFileForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      let buffer: Buffer | null;
+      try {
+        buffer = await session.sandbox.readFileToBuffer({ path: resolved });
+      } catch {
+        const durationMs = deps.now().getTime() - startedAt.getTime();
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: null,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('execution_failed');
+      }
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      if (buffer === null) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: 1,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('not_found');
+      }
+
+      const content = buffer.toString('utf8');
+      const bytes = Buffer.byteLength(content, 'utf8');
+      if (bytes > MAX_WRITE_BYTES) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (${bytes} bytes, over cap)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('content_too_large');
+      }
+
+      await safeAudit(deps, ctx, {
+        code: `copyRead ${path} (${bytes} bytes)`,
+        exitCode: 0,
+        durationMs,
+      });
+      return { success: true, path, content, bytes };
+    } finally {
+      session.release();
+    }
   });
 }
 
