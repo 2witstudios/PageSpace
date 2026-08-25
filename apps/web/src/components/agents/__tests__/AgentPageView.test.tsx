@@ -455,6 +455,24 @@ describe('AgentPageView', () => {
     await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
   });
 
+  it('a read-only viewer still gets the "+" — the create route gates on VIEW, not edit', async () => {
+    // `isReadOnly` here means "can view, cannot edit". Creating a conversation
+    // is gated server-side on `canPrincipalViewPage`, so a viewer starting
+    // their own conversation with someone else's agent is a supported act.
+    // Pinned so a later "tidy-up" does not gate this control on isReadOnly and
+    // silently take the affordance away from every viewer.
+    mockFetchWithAuth.mockImplementation(async (url: string) => {
+      if (url.endsWith('/permissions/check')) return jsonResponse({ canEdit: false });
+      return jsonResponse({});
+    });
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveAttribute('data-readonly', 'true'));
+    expect(screen.getByRole('button', { name: 'Start a new conversation' })).not.toBeDisabled();
+  });
+
   it('History is a full-height TAB, not a popover', async () => {
     resolveTo({ conversationId: 'conv-1', sessionId: null });
     render(<AgentPageView page={pageFixture()} />);

@@ -212,7 +212,9 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   workspace, which is decided when the conversation is created and never changes, so every
   conversation from before workspaces existed lost the bar for good. Both now wear the same bar with
   the same "+" in the same place; a conversation with no workspace behind it simply shows a hollow
-  dot instead of a lit one, rather than hiding its controls.
+  dot instead of a lit one, rather than hiding its controls. Starting one twice in quick succession
+  no longer leaves you with two, and when starting one genuinely fails you are told, instead of the
+  button appearing to do nothing.
 
 - **Drive commands work in an agent's own chat** — opening an AI page and typing `/` listed only the
   built-in commands and your personal ones; the drive's own commands were missing, and since a

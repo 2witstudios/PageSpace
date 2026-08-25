@@ -648,9 +648,12 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
                 identity={<PaneSessionIdentity name={agent.title} bound={current.sessionId !== null} />}
                 actions={
                   // Disabled only while a mint is in flight. Deliberately NOT
-                  // gated on `isReadOnly`: this reaches the SAME handleCreateNew
-                  // the History tab's "New Conversation" button already calls
-                  // ungated, and one policy for the act beats two.
+                  // gated on `isReadOnly`, which here means "can view, cannot
+                  // edit": the create route gates on `canPrincipalViewPage`
+                  // (api/ai/page-agents/[agentId]/conversations/route.ts), so a
+                  // viewer starting their OWN conversation with someone else's
+                  // agent is a supported act, not one the server will refuse.
+                  // The History tab's button is ungated for the same reason.
                   <PaneNewConversationAction disabled={isCreating} onCreate={() => void handleCreateNew()} />
                 }
               />
