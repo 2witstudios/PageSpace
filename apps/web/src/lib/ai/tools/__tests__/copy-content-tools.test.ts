@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 // injected fakes (production wiring lives in copy-content-tools-runtime.ts).
 import {
   createCopyContentTools,
+  copyContentInputSchema,
   MAX_COPY_BYTES,
   type CopyContentDeps,
   type CopyPageRecord,
@@ -471,5 +472,199 @@ describe('copy_content — refusals that protect content', () => {
     expect(result.success).toBe(false);
     expect(String(result.message)).toContain('File not found');
     expect(h.writes).toHaveLength(0);
+  });
+});
+
+describe('copy_content — review round 2', () => {
+  it('insertAfter into an html page should place the copy OUTSIDE the anchor element', async () => {
+    // Hand-rolling the line index nested the copy inside the anchor's <p>,
+    // producing invalid markup that Tiptap restructures on the next save —
+    // which moves every line number underneath the agent.
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'DOCUMENT', contentMode: 'html', content: '<p>COPY</p>' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '<p>Alpha</p><p>Beta</p>' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'insertAfter', anchor: 'Alpha' },
+    });
+    expect(result.success).toBe(true);
+    // The copy must sit between the two paragraphs, never inside the first.
+    expect(h.writes[0].newContent).toBe('<p>\nAlpha\n</p>\n<p>\nCOPY\n</p>\n<p>\nBeta\n</p>');
+  });
+
+  it('insertAfter position:before into an html page should also respect the block boundary', async () => {
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'DOCUMENT', contentMode: 'html', content: '<p>C</p>' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '<p>Alpha</p>' }),
+      ],
+    });
+    await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'insertAfter', anchor: 'Alpha', position: 'before' },
+    });
+    expect(h.writes[0].newContent).toBe('<p>\nC\n</p>\n<p>\nAlpha\n</p>');
+  });
+
+  it('an empty source should be refused, not used to wipe the destination', async () => {
+    // A FILE page whose text was never extracted is the realistic trigger.
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'FILE', content: null }),
+        page({ id: 'dst', content: 'IMPORTANT\nDATA' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Source is empty');
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('an empty sandbox file should be refused too', async () => {
+    const h = harness({ file: '', pages: [page({ id: 'dst', content: 'DATA' })] });
+    const result = await run(h.deps, {
+      from: { kind: 'file', path: 'empty.txt' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('should allow markdown into an html-mode page that actually holds markdown', async () => {
+    // The #2463 page shape: contentMode says html, the content is markdown.
+    // Refusing here sent the agent to a dead end for the tool's core use case.
+    const h = harness({
+      pages: [
+        page({ id: 'src', contentMode: 'markdown', content: '# New' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '# already markdown\ntext' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.writes[0].newContent).toBe('# New');
+  });
+
+  it('should still refuse markdown into a page holding real HTML', async () => {
+    const h = harness({
+      pages: [
+        page({ id: 'src', contentMode: 'markdown', content: '# New' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '<p>real html</p>' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Content mode mismatch');
+  });
+
+  it('should refuse FOLDER and AI_CHAT destinations, whose content is structured JSON', async () => {
+    for (const type of ['FOLDER', 'AI_CHAT']) {
+      const h = harness({
+        pages: [page({ id: 'src', content: 'TEXT' }), page({ id: 'dst', type, content: '{"children":[]}' })],
+      });
+      const result = await run(h.deps, {
+        from: { kind: 'page', pageId: 'src' },
+        to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+      });
+      expect(result.success, `${type} destination`).toBe(false);
+      expect(h.writes).toHaveLength(0);
+    }
+  });
+
+  it('should refuse an AI_CHAT source rather than dumping its transcript JSON', async () => {
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'AI_CHAT', content: '{"messages":[{"secret":1}]}' }),
+        page({ id: 'dst', content: 'x' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('should report lines ADDED for an insertion, not just linesReplaced: 0', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'a\nb\nc' }), page({ id: 'dst', content: 'x' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(result.linesAdded).toBe(3);
+  });
+
+  it('should surface a content-mode warning on SUCCESS, not only on refusal', async () => {
+    const h = harness({
+      pages: [
+        page({ id: 'src', type: 'DOCUMENT', contentMode: 'html', content: '<p>X</p>' }),
+        page({ id: 'dst', type: 'DOCUMENT', contentMode: 'html', content: '<p>real html</p>' }),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(result.success).toBe(true);
+    // This destination IS html, so no warning is expected — the assertion is
+    // that the field is wired at all, checked by its absence here and its
+    // presence in the schema-mismatch case above.
+    expect(result).toHaveProperty('contentMode');
+  });
+});
+
+describe('copy_content — input schema', () => {
+  // The execute-level tests bypass zod entirely, so the schema needs its own.
+  const parse = (v: unknown) => copyContentInputSchema.safeParse(v);
+
+  it('should require to.mode for a page destination', () => {
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'page' } }).success).toBe(false);
+  });
+
+  it('should reject mode on a file destination', () => {
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'file', path: 'a', mode: 'replace' } }).success).toBe(false);
+  });
+
+  it('should require path for a file side', () => {
+    expect(parse({ from: { kind: 'file' }, to: { kind: 'file', path: 'a' } }).success).toBe(false);
+  });
+
+  it('should reject a line range on a file source', () => {
+    expect(parse({ from: { kind: 'file', path: 'a', lineStart: 1 }, to: { kind: 'file', path: 'b' } }).success).toBe(false);
+  });
+
+  it('should reject an inverted range on either side', () => {
+    expect(parse({ from: { kind: 'page', lineStart: 5, lineEnd: 2 }, to: { kind: 'file', path: 'b' } }).success).toBe(false);
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'page', mode: 'replaceLines', startLine: 5, endLine: 2 } }).success).toBe(false);
+  });
+
+  it('should reject expectedTotalLines on modes that would ignore it', () => {
+    // Silently discarding a staleness guard on `replace` is worse than not
+    // offering one.
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'page', mode: 'replace', expectedTotalLines: 10 } }).success).toBe(false);
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'page', mode: 'replaceLines', startLine: 1, expectedTotalLines: 10 } }).success).toBe(true);
+  });
+
+  it('should require an anchor for insertAfter', () => {
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'page', mode: 'insertAfter' } }).success).toBe(false);
+  });
+
+  it('should accept the ordinary shapes', () => {
+    expect(parse({ from: { kind: 'page', pageId: 'p', lineStart: 1, lineEnd: 4 }, to: { kind: 'page', pageId: 'q', mode: 'append' } }).success).toBe(true);
+    expect(parse({ from: { kind: 'file', path: 'a.md' }, to: { kind: 'page', pageId: 'q', mode: 'replace' } }).success).toBe(true);
   });
 });

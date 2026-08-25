@@ -32,7 +32,9 @@ import {
   insertLines,
   type LineEditResult,
 } from '@/lib/editor/line-edit';
+import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { isRawTextPage, describeContentModeMismatch } from '../core/page-serializer';
+import { looksLikeHtmlDocument } from '@/lib/editor/line-breaks';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
 import { PageType } from '@pagespace/lib/utils/enums';
 import { toModelOutputForCopyContent } from './copy-content-model-output';
@@ -188,8 +190,25 @@ export const copyContentInputSchema = z
       if (value.to.mode === 'replaceLines') {
         require(value.to.startLine !== undefined, ['to', 'startLine'], 'mode "replaceLines" needs startLine.');
       }
+      if (value.to.mode === 'replaceLines' &&
+          value.to.startLine !== undefined &&
+          value.to.endLine !== undefined &&
+          value.to.endLine < value.to.startLine) {
+        require(false, ['to', 'endLine'], 'to.endLine must be >= to.startLine.');
+      }
       if (value.to.mode === 'insertAfter') {
         require(!!value.to.anchor, ['to', 'anchor'], 'mode "insertAfter" needs anchor.');
+      }
+      // Accepting a staleness guard and then ignoring it is worse than not
+      // offering one — most of all on `replace`, which overwrites the whole
+      // page. Only replaceLines threads it through, so only replaceLines takes
+      // it.
+      if (value.to.mode !== 'replaceLines' && value.to.expectedTotalLines !== undefined) {
+        require(
+          false,
+          ['to', 'expectedTotalLines'],
+          'expectedTotalLines only applies to mode "replaceLines"; it would be ignored here.'
+        );
       }
     }
   });
@@ -231,6 +250,38 @@ function isRawTextSource(page: CopyPageRecord): boolean {
   return page.type === PageType.FILE || isRawTextPage(page);
 }
 
+/**
+ * Whether a page's content should be treated as raw text when WRITING to it.
+ *
+ * `isRawTextPage` alone is not enough here. Everything predates content modes
+ * defaulting to html, so a large population of html-mode DOCUMENTs actually
+ * hold markdown, JSON or plain prose — the exact shape #2463 was reported
+ * against. Classifying those as HTML both refuses the copy this tool exists to
+ * perform (markdown into a page already holding markdown) AND accepts the one
+ * it should refuse (HTML into a page holding JSON).
+ *
+ * So the stored content gets a vote, using the same signal
+ * `describeContentModeMismatch` already relies on. An EMPTY page has no content
+ * to conflict with, so it accepts either.
+ */
+function isRawTextDestination(page: CopyPageRecord): boolean {
+  if (isRawTextPage(page)) return true;
+  const content = page.content ?? '';
+  if (content.trim() === '') return true;
+  return !looksLikeHtmlDocument(content);
+}
+
+/**
+ * Page types whose `content` holds structured records rather than editable
+ * text. Copying bytes into (or out of) one of these is never meaningful.
+ */
+const STRUCTURED_PAGE_TYPES: ReadonlySet<string> = new Set<string>([
+  PageType.CHANNEL,
+  PageType.TASK_LIST,
+  PageType.FOLDER,
+  PageType.AI_CHAT,
+]);
+
 /** Page types whose content is not line-addressable text. */
 function rejectNonTextPage(page: CopyPageRecord, side: 'source' | 'destination'): Refusal | null {
   if (isSheetType(page.type as PageType)) {
@@ -242,7 +293,12 @@ function rejectNonTextPage(page: CopyPageRecord, side: 'source' | 'destination')
       { pageId: page.id, type: page.type }
     );
   }
-  if (page.type === PageType.CHANNEL || page.type === PageType.TASK_LIST) {
+  // FOLDER and AI_CHAT are seeded with structured JSON by create_page
+  // (`{"children":[]}` / `{"messages":[]}`), so writing text over them destroys
+  // the page rather than editing it — and reading one dumps that raw JSON into
+  // the destination. CANVAS is deliberately absent: it genuinely is an HTML
+  // page.
+  if (STRUCTURED_PAGE_TYPES.has(page.type)) {
     return refuse(
       'Not a text page',
       `"${page.title}" is a ${page.type}, whose content is structured records rather than text. There is nothing to copy byte-for-byte.`,
@@ -334,7 +390,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     // written into an html-mode document renders as literal characters, which
     // is exactly the "literal garbage, not formatting" the writing-documents
     // skill tells agents to avoid — so refuse rather than produce it.
-    const destIsRawText = isRawTextPage(page);
+    const destIsRawText = isRawTextDestination(page);
     if (source.isRawText !== destIsRawText) {
       return refuse(
         'Content mode mismatch',
@@ -353,6 +409,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
 
     const lineCount = projectLines(page.content, destIsRawText).length;
     let edit: LineEditResult;
+    let anchorLine: number | null = null;
     try {
       switch (to.mode) {
         case 'replace':
@@ -394,10 +451,20 @@ export function createCopyContentTools(deps: CopyContentDeps) {
           break;
         }
         case 'insertAfter': {
-          const anchorIndex = projectLines(page.content, destIsRawText).findIndex((line) =>
-            line.includes(to.anchor as string)
-          );
-          if (anchorIndex === -1) {
+          // insertAtAnchor, NOT a hand-rolled findIndex + insertLines. On an
+          // html page it snaps to the block boundary, so the copy lands outside
+          // the anchor's element instead of nested inside it — hand-rolling the
+          // index produced `<p>Alpha<p>COPY</p></p>`, invalid markup that Tiptap
+          // restructures on the next save, moving every line number underneath
+          // the agent. insert_content has always used this; so does this now.
+          const anchored = insertAtAnchor({
+            content: page.content,
+            anchor: to.anchor as string,
+            insertion: source.bytes,
+            position: to.position ?? 'after',
+            isRawText: destIsRawText,
+          });
+          if (!anchored.inserted) {
             // Mirrors insert_content: a missing anchor is a no-op the agent can
             // act on, not a failure — and nothing is written.
             return {
@@ -408,13 +475,15 @@ export function createCopyContentTools(deps: CopyContentDeps) {
               message: `No line containing "${to.anchor}" was found in "${page.title}". Nothing was copied.`,
             };
           }
-          const at = (to.position ?? 'after') === 'after' ? anchorIndex + 2 : anchorIndex + 1;
-          edit = insertLines({
-            content: page.content,
-            startLine: at,
-            insertion: source.bytes,
-            isRawText: destIsRawText,
-          });
+          edit = {
+            oldContent: anchored.oldContent,
+            newContent: anchored.newContent,
+            newLineCount: anchored.newLineCount,
+            previousLineCount: anchored.oldContent.split('\n').length,
+            linesReplaced: 0,
+            changeType: 'insertion',
+          };
+          anchorLine = anchored.anchorLine;
           break;
         }
         default:
@@ -439,22 +508,40 @@ export function createCopyContentTools(deps: CopyContentDeps) {
       page,
       newContent: edit.newContent,
       context,
-      metadata: { copiedFrom: source.label, changeType: edit.changeType, linesChanged: edit.linesReplaced },
+      metadata: {
+        copiedFrom: source.label,
+        changeType: edit.changeType,
+        linesChanged: edit.changeType === 'insertion' ? edit.newLineCount - edit.previousLineCount : edit.linesReplaced,
+      },
     });
+
+    // An insertion replaces nothing, so `linesReplaced` is 0 by construction —
+    // reporting only that for a 400-line append reads as "nothing happened".
+    // The lines ADDED is the number that describes an insertion.
+    const linesAdded = edit.newLineCount - edit.previousLineCount;
+    // Surfaced on SUCCESS, not only on the mismatch refusal: replace_lines and
+    // insert_content both attach it to the result, and a page whose stored
+    // content disagrees with its declared mode is exactly what an agent needs
+    // told after a write, not just when one is refused.
+    const contentModeWarning = describeContentModeMismatch(page);
 
     return {
       success: true,
       pageId: page.id,
       title: page.title,
       type: page.type,
+      contentMode: page.contentMode || 'html',
       mode: to.mode,
+      ...(anchorLine !== null ? { anchorLine } : {}),
       sourceLabel: source.label,
       bytesCopied: Buffer.byteLength(source.bytes, 'utf8'),
       // From the edit result, never recomputed — five copies of this
       // arithmetic disagreeing is what #2463 was.
       linesReplaced: edit.linesReplaced,
+      linesAdded,
       newLineCount: edit.newLineCount,
       previousLineCount: edit.previousLineCount,
+      ...(contentModeWarning ? { contentModeWarning } : {}),
       // Stripped before the model sees them (copy-content-model-output.ts);
       // kept here because RichDiffRenderer draws from them.
       oldContent: edit.oldContent,
@@ -502,12 +589,41 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         const context = readContext(options);
         if (!context?.userId) throw new Error('User authentication required');
 
+        // Resolve BOTH page ids before doing any work. resolveOrThrowPageId
+        // throws when neither an explicit id nor a page-in-view is available,
+        // and resolving the destination lazily meant that throw landed AFTER
+        // the source had been read — provisioning a sandbox, spending machine
+        // time and writing an audit row for a copy that could never land.
+        try {
+          if (from.kind === 'page') resolveOrThrowPageId(from.pageId, context);
+          if (to.kind === 'page') resolveOrThrowPageId(to.pageId, context);
+        } catch (error) {
+          return refuse(
+            'No page specified',
+            error instanceof Error ? error.message : String(error)
+          );
+        }
+
         // Source first, destination second, write last. Nothing is written
         // until BOTH sides have been authorized.
         const source = await resolveSource(from, context);
         if ('success' in source) return source;
 
         const bytes = Buffer.byteLength(source.bytes, 'utf8');
+        // A zero-byte source is the limit case of the truncation this tool
+        // refuses to do: `replace` would empty the destination and report
+        // success, with only `bytesCopied: 0` to say so. It nearly always means
+        // the source is not what the agent thinks — an unextracted upload
+        // (image, scanned PDF, extraction still pending) or an empty file — so
+        // it is refused rather than executed.
+        if (bytes === 0) {
+          return refuse(
+            'Source is empty',
+            `${source.label} has no content, so there is nothing to copy. Copying it would empty the destination rather than fill it. ` +
+              `If the source is an uploaded file, its text may not have been extracted yet.`,
+            { sourceBytes: 0 }
+          );
+        }
         if (bytes > MAX_COPY_BYTES) {
           return refuse(
             'Source is too large to copy',
