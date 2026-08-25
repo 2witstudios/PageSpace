@@ -1108,7 +1108,16 @@ function DomainRow({
           <p className="text-xs text-muted-foreground">
             SSL is waiting on a DNS record you still need to add:
           </p>
-          <p className="text-xs font-mono break-all">{domain.ownershipInstruction}</p>
+          {/*
+            `break-words`, not `break-all`, and no `font-mono`: this is a prose
+            sentence with a hostname and a record value embedded in it, unlike the
+            DNS panel below, which is a table of bare field values. `break-all`
+            would chop ordinary words mid-character, and monospacing the whole
+            sentence makes it harder to read to save the few tokens that benefit.
+            `break-words` still wraps the long `_fly-ownership.<host>` label rather
+            than letting it overflow the row.
+          */}
+          <p className="text-xs break-words">{domain.ownershipInstruction}</p>
           <p className="text-xs text-muted-foreground">
             Once it propagates, click Check SSL — the certificate cannot be issued until this
             record resolves.
