@@ -37,9 +37,11 @@ Two consequences of this shape are easy to get wrong later:
 `apps/web/src/middleware.ts` runs in front of every `/api` path, and the router
 endpoint has to be carved out of it explicitly — in the right *place*, not just
 at all. It returns alongside `/api/public/forms`, above origin validation and
-above the Bearer-API `OPTIONS` short-circuit. Three separate things break if that
-carve-out is missing or too late, and none of them fail a handler test, because
-handler tests invoke the route directly and all three live above it:
+above the Bearer-API `OPTIONS` short-circuit. There are **three ways to get it
+wrong** — never carved out, carved out but without skipping the CSP, or carved
+out too late — and they produce **four distinct symptoms**, because the last one
+breaks in two independent places. None of the four fails a handler test: handler
+tests invoke the route directly, and all four of these live above it.
 
 | missing/misplaced | symptom |
 | --- | --- |
@@ -48,7 +50,7 @@ handler tests invoke the route directly and all three live above it:
 | below origin validation | a published app's own fetch carries its own origin, which is never in our allowlist → 403 on every non-GET |
 | below the `OPTIONS` short-circuit | a published app's CORS preflight is answered with *our* policy instead of being replayed to the app |
 
-`middleware.test.ts` guards all four; each is mutation-checked. If you add another
+`middleware.test.ts` guards all four symptoms; each is mutation-checked. If you add another
 `/api/app-hosting/*` route, note the exemption is an **exact path match** and does
 not extend to siblings — an authenticated route there should not inherit it.
 
