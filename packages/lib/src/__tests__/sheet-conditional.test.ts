@@ -324,16 +324,30 @@ describe('colour scales', () => {
     expect(half.formats.A2.background).toBe('#800000');
   });
 
-  it('does not divide by zero when the midpoint sits on an end anchor', () => {
-    const degenerate: ConditionalRule = {
-      id: 's', kind: 'colorScale', ranges: ['A1:A2'],
+  it('still blends across the remaining side when the midpoint sits on an end anchor', () => {
+    // A midpoint pinned to the low end leaves no room below it, but the whole
+    // range above it must still blend mid -> max. Collapsing the entire scale
+    // to the midpoint colour would be a flat block of one colour.
+    const atLow: ConditionalRule = {
+      id: 's', kind: 'colorScale', ranges: ['A1:A3'],
       min: { type: 'number', value: 0, color: '#000000' },
       mid: { type: 'number', value: 0, color: '#ff0000' },
       max: { type: 'number', value: 10, color: '#ffffff' },
     };
-    const result = evaluateConditionalFormats([degenerate], contextOf({ A1: 0, A2: 10 }));
-    expect(result.formats.A1.background).toBe('#ff0000');
-    expect(result.formats.A2.background).toBe('#ff0000');
+    const low = evaluateConditionalFormats([atLow], contextOf({ A1: 0, A2: 5, A3: 10 }));
+    expect(low.formats.A1.background).toBe('#ff0000');
+    expect(low.formats.A2.background).toBe('#ff8080');
+    expect(low.formats.A3.background).toBe('#ffffff');
+
+    // ...and the mirror image, pinned to the high end.
+    const atHigh: ConditionalRule = {
+      ...atLow,
+      mid: { type: 'number', value: 10, color: '#ff0000' },
+    } as ConditionalRule;
+    const high = evaluateConditionalFormats([atHigh], contextOf({ A1: 0, A2: 5, A3: 10 }));
+    expect(high.formats.A1.background).toBe('#000000');
+    expect(high.formats.A2.background).toBe('#800000');
+    expect(high.formats.A3.background).toBe('#ff0000');
   });
 
   it('anchors to explicit numbers when asked', () => {

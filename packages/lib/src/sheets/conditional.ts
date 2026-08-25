@@ -348,6 +348,31 @@ export function mixColors(from: string, to: string, amount: number): string | nu
 }
 
 /**
+ * Blend a position through a three-colour scale whose midpoint sits at
+ * `midPosition`.
+ *
+ * Each side is interpolated across its own span, so a midpoint anchored at 10
+ * on a 0..100 scale really does put its colour at 10. Only two inputs divide by
+ * zero — a value sitting exactly on a midpoint pinned to either end — and each
+ * resolves to the midpoint colour, which is the limit approached from the side
+ * that still has width.
+ */
+function mixThroughMidpoint(
+  rule: ConditionalColorScaleRule,
+  position: number,
+  midPosition: number
+): string | null {
+  const minColor = rule.min.color ?? '';
+  const midColor = rule.mid?.color ?? '';
+  const maxColor = rule.max.color ?? '';
+
+  if (position <= midPosition) {
+    return mixColors(minColor, midColor, midPosition === 0 ? 1 : position / midPosition);
+  }
+  return mixColors(midColor, maxColor, midPosition >= 1 ? 1 : (position - midPosition) / (1 - midPosition));
+}
+
+/**
  * Apply rules to a sheet, in order.
  *
  * Later rules layer over earlier ones for the fields they set, which is how
@@ -432,19 +457,9 @@ export function evaluateConditionalFormats(
           // non-median `percentile`, so a midpoint configured at 10 on a 0..100
           // scale would render its colour at 50.
           const color = rule.mid
-            ? (() => {
-                const midPosition =
-                  span === 0 ? 0 : clamp01((anchorValue(rule.mid, sorted, 'min') - low) / span);
-                if (midPosition <= 0) return rule.mid.color ?? null;
-                if (midPosition >= 1) return rule.mid.color ?? null;
-                return position <= midPosition
-                  ? mixColors(rule.min.color ?? '', rule.mid.color ?? '', position / midPosition)
-                  : mixColors(
-                      rule.mid.color ?? '',
-                      rule.max.color ?? '',
-                      (position - midPosition) / (1 - midPosition)
-                    );
-              })()
+            ? mixThroughMidpoint(rule, position, span === 0
+                ? 0
+                : clamp01((anchorValue(rule.mid, sorted, 'min') - low) / span))
             : mixColors(rule.min.color ?? '', rule.max.color ?? '', position);
 
           if (color) contribute(address, { background: color });
