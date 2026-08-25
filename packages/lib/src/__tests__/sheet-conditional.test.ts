@@ -10,6 +10,7 @@ import {
   type ConditionalContext,
   type ConditionalRule,
 } from '../sheets/conditional';
+import { rowsFromSheetData, sheetDataFromRows } from '../sheets/projection';
 import {
   createEmptySheet,
   evaluateSheet,
@@ -612,5 +613,49 @@ describe('conditional formatting through the evaluator', () => {
     const evaluation = evaluateSheet(plain);
     expect(evaluation.bars).toBeUndefined();
     expect(evaluation.byAddress.A1.format).toBeUndefined();
+  });
+});
+
+// --- through the row store -----------------------------------------------
+
+describe('round trip through stored rows', () => {
+  const ruled = (): SheetData => {
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '5';
+    sheet.conditionalFormats = [
+      {
+        id: 'r1', kind: 'cell', ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '3' },
+        format: { background: '#fee2e2' },
+      },
+    ];
+    return sheet;
+  };
+
+  it('survives the row projection', () => {
+    // Sheets live in rows now. Carrying rules only through the document would
+    // mean a save through the store silently dropped every one of them.
+    const { tab, rows } = rowsFromSheetData(ruled(), 0);
+    expect(sheetDataFromRows(tab, rows).conditionalFormats).toEqual(ruled().conditionalFormats);
+  });
+
+  it('stores null rather than an empty list when a sheet has no rules', () => {
+    expect(rowsFromSheetData(createEmptySheet(), 0).tab.conditionalFormats).toBeNull();
+  });
+
+  it('validates on the way out, so a malformed stored rule is not rendered', () => {
+    // The column is deliberately untyped; this boundary decides what a rule is.
+    const { tab, rows } = rowsFromSheetData(createEmptySheet(), 0);
+    const restored = sheetDataFromRows(
+      { ...tab, conditionalFormats: [{ id: 'x', kind: 'telepathy', ranges: ['A1'] }] },
+      rows
+    );
+    expect(restored.conditionalFormats).toBeUndefined();
+  });
+
+  it('keeps the rules a document and the row store agree on identical', () => {
+    const viaDocument = parseSheetContent(serializeSheetContent(ruled())).conditionalFormats;
+    const { tab, rows } = rowsFromSheetData(ruled(), 0);
+    expect(sheetDataFromRows(tab, rows).conditionalFormats).toEqual(viaDocument);
   });
 });
