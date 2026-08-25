@@ -255,6 +255,18 @@ export async function DELETE(
     // app's own domain and Fly never issued a per-hostname cert for them.
     if (!deleted.platformOwned) {
       const routerApp = resolveAppRouterFlyAppName();
+      // SCOPE LIMIT, stated because it is easy to read this as solved: this is the
+      // ONLY caller of `removeCertificate`, and `custom_domains.drive_id` cascades
+      // off `drives`. So deleting a DRIVE — or the 30-day GDPR purge, or the
+      // account-erasure worker — destroys every domain row without ever running
+      // this, stranding a per-hostname certificate charge whose only pointer is
+      // gone. That is the same shape `app_hosting_reclaims` exists to prevent for
+      // Fly apps, and per that table's own docblock the fix is NOT to guard each
+      // delete path ("unenforceable — there is always one more path", and it
+      // cannot work for erasure) but to invert the dependency with an AFTER DELETE
+      // trigger writing to a FK-less outbox. Certificates have no such outbox yet.
+      // Explicit removal detaching the cert is strictly better than the previous
+      // behaviour of never detaching it; it is not complete coverage.
       const warnCertRemovalFailed = (error: string) => {
         loggers.api.warn('Failed to remove Fly certificate after domain removal', {
           hostname: deleted.hostname,
