@@ -146,7 +146,9 @@ export const copyToSchema = z
     expectedTotalLines: z
       .number()
       .int()
-      .min(0)
+      // A page always projects to at least one line, so 0 could only ever be a
+      // guaranteed staleness failure.
+      .min(1)
       .optional()
       .describe(
         'mode=replaceLines: the line count you last read. The edit is refused if the page has changed since.'
@@ -180,11 +182,16 @@ export const copyContentInputSchema = z
 
     if (value.to.kind === 'file') {
       require(!!value.to.path, ['to', 'path'], 'to.path is required when to.kind is "file".');
-      require(
-        value.to.mode === undefined,
-        ['to', 'mode'],
-        'A file destination is always a whole-file write; mode applies to pages only.'
-      );
+      // Every page-only field, not just `mode`. Accepting a field and then
+      // ignoring it is the thing this rule exists to prevent, so it has to
+      // cover all of them or it only pretends to.
+      for (const field of ['mode', 'startLine', 'endLine', 'anchor', 'expectedTotalLines'] as const) {
+        require(
+          value.to[field] === undefined,
+          ['to', field],
+          `to.${field} applies to page destinations only; a file destination is always a whole-file write.`
+        );
+      }
     } else {
       require(!!value.to.mode, ['to', 'mode'], 'to.mode is required when to.kind is "page".');
       if (value.to.mode === 'replaceLines') {
@@ -220,8 +227,11 @@ interface ResolvedSource {
   bytes: string;
   /** How the source is described back to the caller and in activity metadata. */
   label: string;
-  /** Whether the source text is raw (a file always is; a page depends on mode). */
-  isRawText: boolean;
+  /**
+   * What the copied bytes are. A sandbox file is always raw text; a page is
+   * classified by `contentShapeOf`.
+   */
+  shape: ContentShape;
 }
 
 type Refusal = { success: false; error: string; message: string; [key: string]: unknown };
@@ -234,41 +244,47 @@ const refuse = (error: string, message: string, extra: Record<string, unknown> =
 });
 
 /**
- * Whether a page's content is RAW TEXT rather than HTML.
+ * What the bytes of a page ARE: raw text, HTML, or not yet determinable.
  *
- * `isRawTextPage` answers this for documents and code, but a FILE page is a
- * third case it does not cover: the processor stores EXTRACTED PLAINTEXT in
- * `page.content` while the row keeps the schema default `contentMode: 'html'`.
- * Trusting that default would label a .md or .json upload as HTML and let it
- * through the compatibility check into an html-mode document, which is exactly
- * the literal-text corruption that check exists to prevent.
+ * ONE classifier, used for the source and the destination alike. Round 2 gave
+ * the two sides different rules — the destination sniffed its stored content
+ * while the source went on `contentMode` alone — and the asymmetry broke the
+ * two most ordinary copies there are: an HTML page into a freshly created
+ * (empty) page, and a page into a sibling of the very shape the sniffing was
+ * added for. Whatever the rule is, both sides have to be asked the same
+ * question.
  *
- * `describeContentModeMismatch` already states the same thing in prose — "a
- * FILE [serializes] from extracted text — neither is HTML".
+ * `unknown` is the load-bearing case. An empty page has no content to conflict
+ * with, so it is compatible with anything; treating "no evidence" as "HTML"
+ * is what refused the create_page -> copy_content flow.
+ *
+ * The content vote is DOCUMENT-only, matching `describeContentModeMismatch`
+ * exactly. Everything predates contentMode defaulting to markdown, so a large
+ * population of html-mode DOCUMENTs actually hold markdown or JSON (#2463) and
+ * their real format is only knowable by looking. Other html-typed pages are not
+ * in that population: a CANVAS genuinely is an HTML document, and
+ * `looksLikeHtmlDocument` would not recognize one anyway — it keys on block
+ * tags and knows nothing of `<!DOCTYPE>`, `<html>` or `<body>`.
  */
-function isRawTextSource(page: CopyPageRecord): boolean {
-  return page.type === PageType.FILE || isRawTextPage(page);
+type ContentShape = 'raw' | 'html' | 'unknown';
+
+function contentShapeOf(page: CopyPageRecord): ContentShape {
+  // markdown-mode documents and CODE pages: raw by declaration.
+  if (isRawTextPage(page)) return 'raw';
+  // A FILE page holds extracted PLAINTEXT while the row keeps the schema
+  // default contentMode 'html'. `describeContentModeMismatch` says the same.
+  if (page.type === PageType.FILE) return 'raw';
+  // Not a DOCUMENT, not raw-by-declaration: an html-typed page that means it.
+  if (page.type !== PageType.DOCUMENT) return 'html';
+
+  const content = page.content ?? '';
+  if (content.trim() === '') return 'unknown';
+  return looksLikeHtmlDocument(content) ? 'html' : 'raw';
 }
 
-/**
- * Whether a page's content should be treated as raw text when WRITING to it.
- *
- * `isRawTextPage` alone is not enough here. Everything predates content modes
- * defaulting to html, so a large population of html-mode DOCUMENTs actually
- * hold markdown, JSON or plain prose — the exact shape #2463 was reported
- * against. Classifying those as HTML both refuses the copy this tool exists to
- * perform (markdown into a page already holding markdown) AND accepts the one
- * it should refuse (HTML into a page holding JSON).
- *
- * So the stored content gets a vote, using the same signal
- * `describeContentModeMismatch` already relies on. An EMPTY page has no content
- * to conflict with, so it accepts either.
- */
-function isRawTextDestination(page: CopyPageRecord): boolean {
-  if (isRawTextPage(page)) return true;
-  const content = page.content ?? '';
-  if (content.trim() === '') return true;
-  return !looksLikeHtmlDocument(content);
+/** Two shapes conflict only when both are known and they differ. */
+function shapesConflict(source: ContentShape, destination: ContentShape): boolean {
+  return source !== 'unknown' && destination !== 'unknown' && source !== destination;
 }
 
 /**
@@ -325,7 +341,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
       }
       const read = await deps.readSandboxFile({ path: from.path as string, context });
       if (!read.success) return refuse('Could not read the source file', read.error);
-      return { bytes: read.content, label: `file:${from.path}`, isRawText: true };
+      return { bytes: read.content, label: `file:${from.path}`, shape: 'raw' };
     }
 
     const pageId = resolveOrThrowPageId(from.pageId, context);
@@ -339,12 +355,14 @@ export function createCopyContentTools(deps: CopyContentDeps) {
 
     // The SAME projection read_page shows, so a range copied from a fresh read
     // addresses the same lines the agent saw.
-    const serialized = canonicalizeForLineEditing(page.content, isRawTextSource(page));
+    const sourceShape = contentShapeOf(page);
+    // 'unknown' means an empty page — nothing to line-break either way.
+    const serialized = canonicalizeForLineEditing(page.content, sourceShape !== 'html');
     const allLines = serialized.split('\n');
     const totalLines = allLines.length;
 
     if (from.lineStart === undefined && from.lineEnd === undefined) {
-      return { bytes: serialized, label: `page:${page.id}`, isRawText: isRawTextSource(page) };
+      return { bytes: serialized, label: `page:${page.id}`, shape: sourceShape };
     }
 
     const start = from.lineStart ?? 1;
@@ -359,7 +377,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     return {
       bytes: allLines.slice(start - 1, end).join('\n'),
       label: `page:${page.id} lines ${start}-${end}`,
-      isRawText: isRawTextSource(page),
+      shape: sourceShape,
     };
   }
 
@@ -390,19 +408,22 @@ export function createCopyContentTools(deps: CopyContentDeps) {
     // written into an html-mode document renders as literal characters, which
     // is exactly the "literal garbage, not formatting" the writing-documents
     // skill tells agents to avoid — so refuse rather than produce it.
-    const destIsRawText = isRawTextDestination(page);
-    if (source.isRawText !== destIsRawText) {
+    const destShape = contentShapeOf(page);
+    // The line projection follows the page's DECLARED mode, unchanged — only the
+    // compatibility gate consults the sniffed shape.
+    const destIsRawText = isRawTextPage(page);
+    if (shapesConflict(source.shape, destShape)) {
       return refuse(
         'Content mode mismatch',
-        `The source is ${source.isRawText ? 'raw text (markdown/code/a file)' : 'HTML'} but "${page.title}" is ` +
-          `${destIsRawText ? 'a raw-text page' : 'an html-mode document'}. copy_content never converts between them — ` +
+        `The source is ${source.shape === 'raw' ? 'raw text (markdown, code, or a file)' : 'HTML'} but "${page.title}" holds ` +
+          `${destShape === 'raw' ? 'raw text' : 'HTML'}. copy_content never converts between them — ` +
           `writing one into the other produces literal characters, not formatting. ` +
           `Create a page with the matching mode (create_page defaults to markdown) and copy into that.`,
         {
           pageId: page.id,
-          sourceIsRawText: source.isRawText,
+          sourceShape: source.shape,
+          destinationShape: destShape,
           destinationContentMode: page.contentMode ?? 'html',
-          ...(describeContentModeMismatch(page) ? { contentModeWarning: describeContentModeMismatch(page) } : {}),
         }
       );
     }
@@ -511,19 +532,27 @@ export function createCopyContentTools(deps: CopyContentDeps) {
       metadata: {
         copiedFrom: source.label,
         changeType: edit.changeType,
-        linesChanged: edit.changeType === 'insertion' ? edit.newLineCount - edit.previousLineCount : edit.linesReplaced,
+        // An insertion replaces nothing, so its size is the lines it ADDED.
+        linesChanged:
+          edit.changeType === 'insertion'
+            ? edit.newLineCount - edit.previousLineCount
+            : edit.linesReplaced,
       },
     });
 
     // An insertion replaces nothing, so `linesReplaced` is 0 by construction —
     // reporting only that for a 400-line append reads as "nothing happened".
-    // The lines ADDED is the number that describes an insertion.
-    const linesAdded = edit.newLineCount - edit.previousLineCount;
+    // Insertion ONLY: on a replace this delta goes negative, and a field named
+    // `linesAdded` reading -4 is a number an agent will misread. The replace
+    // modes already describe themselves with linesReplaced + newLineCount.
+    const isInsertion = edit.changeType === 'insertion';
     // Surfaced on SUCCESS, not only on the mismatch refusal: replace_lines and
     // insert_content both attach it to the result, and a page whose stored
     // content disagrees with its declared mode is exactly what an agent needs
     // told after a write, not just when one is refused.
-    const contentModeWarning = describeContentModeMismatch(page);
+    // From the content just STORED, not the pre-write row: a warning that
+    // describes the document as it used to be is worse than none.
+    const contentModeWarning = describeContentModeMismatch({ ...page, content: edit.newContent });
 
     return {
       success: true,
@@ -538,7 +567,7 @@ export function createCopyContentTools(deps: CopyContentDeps) {
       // From the edit result, never recomputed — five copies of this
       // arithmetic disagreeing is what #2463 was.
       linesReplaced: edit.linesReplaced,
-      linesAdded,
+      ...(isInsertion ? { linesAdded: edit.newLineCount - edit.previousLineCount } : {}),
       newLineCount: edit.newLineCount,
       previousLineCount: edit.previousLineCount,
       ...(contentModeWarning ? { contentModeWarning } : {}),
@@ -616,12 +645,21 @@ export function createCopyContentTools(deps: CopyContentDeps) {
         // the source is not what the agent thinks — an unextracted upload
         // (image, scanned PDF, extraction still pending) or an empty file — so
         // it is refused rather than executed.
-        if (bytes === 0) {
+        // Whitespace-only counts as empty: an unextracted upload commonly yields
+        // a lone newline or a run of spaces rather than a truly empty string,
+        // and copying that over a page is the same silent wipe.
+        //
+        // Unless the caller NARROWED the source explicitly — asking for lines
+        // 2-2 of a document is a deliberate selection, and a blank separator
+        // line is a legitimate thing to copy.
+        const deliberatelyNarrowed = from.kind === 'page' && (from.lineStart !== undefined || from.lineEnd !== undefined);
+        if (source.bytes.trim() === '' && !deliberatelyNarrowed) {
           return refuse(
             'Source is empty',
             `${source.label} has no content, so there is nothing to copy. Copying it would empty the destination rather than fill it. ` +
-              `If the source is an uploaded file, its text may not have been extracted yet.`,
-            { sourceBytes: 0 }
+              `If the source is an uploaded file, its text may not have been extracted yet. ` +
+              `To copy blank lines on purpose, name them with from.lineStart/from.lineEnd.`,
+            { sourceBytes: bytes }
           );
         }
         if (bytes > MAX_COPY_BYTES) {

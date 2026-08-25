@@ -668,3 +668,207 @@ describe('copy_content — input schema', () => {
     expect(parse({ from: { kind: 'file', path: 'a.md' }, to: { kind: 'page', pageId: 'q', mode: 'replace' } }).success).toBe(true);
   });
 });
+
+describe('copy_content — content shape, one classifier for both sides', () => {
+  const doc = (id: string, contentMode: string, content: string | null, type = 'DOCUMENT') =>
+    page({ id, type, contentMode, content });
+
+  it('an HTML page should copy into a freshly created empty page', async () => {
+    // The canonical create_page -> copy_content flow. A one-sided classifier
+    // called the empty destination "raw" and the html source "html", and
+    // refused the most ordinary copy there is.
+    const h = harness({
+      pages: [doc('src', 'html', '<p>Hello</p>'), doc('dst', 'html', '')],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.writes).toHaveLength(1);
+  });
+
+  it('a RAW source should copy into an empty html-mode page', async () => {
+    // The discriminating case for "empty means unknown": if an empty page were
+    // classified html, this raw source would conflict and be refused — and this
+    // is exactly what create_page (which still yields html-mode rows for
+    // non-DOCUMENT types and legacy callers) followed by a file copy looks like.
+    const h = harness({ pages: [doc('src', 'markdown', '# md'), doc('dst', 'html', '')] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.writes[0].newContent).toBe('# md');
+  });
+
+  it('a sandbox FILE should copy into an empty html-mode page', async () => {
+    const h = harness({ file: 'plain report text\n', pages: [doc('dst', 'html', '')] });
+    const result = await run(h.deps, {
+      from: { kind: 'file', path: 'report.md' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('an HTML page should copy into a page whose content is null', async () => {
+    const h = harness({ pages: [doc('src', 'html', '<p>Hi</p>'), doc('dst', 'html', null)] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('two pages of the SAME shape should copy, whichever shape that is', async () => {
+    // html-mode rows holding markdown: the #2463 population. Both sides must be
+    // asked the same question, or a page cannot be copied into its own sibling.
+    const h = harness({
+      pages: [doc('src', 'html', '# Heading\ntext'), doc('dst', 'html', '# Other\ntext')],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(h.writes[0].newContent).toBe('# Heading\ntext');
+  });
+
+  it('a page should be able to append into itself', async () => {
+    const h = harness({ pages: [doc('p1', 'html', '# Heading\ntext')] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'p1' },
+      to: { kind: 'page', pageId: 'p1', mode: 'append' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('a CANVAS holding a real HTML document should reject a markdown source', async () => {
+    // looksLikeHtmlDocument keys on block tags and knows nothing of <!DOCTYPE>
+    // or <html>, so sniffing a CANVAS misreads it as raw text. CANVAS is html
+    // by type, and is classified that way rather than sniffed.
+    const h = harness({
+      pages: [
+        doc('src', 'markdown', '# md'),
+        doc('dst', 'html', '<!DOCTYPE html><html><body><p>hi</p></body></html>', 'CANVAS'),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Content mode mismatch');
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('a CANVAS holding a real HTML document should accept an HTML source', async () => {
+    const h = harness({
+      pages: [
+        doc('src', 'html', '<p>X</p>'),
+        doc('dst', 'html', '<!DOCTYPE html><html><body><p>hi</p></body></html>', 'CANVAS'),
+      ],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should still refuse raw text into a page holding real HTML', async () => {
+    const h = harness({ pages: [doc('src', 'markdown', '# md'), doc('dst', 'html', '<p>real</p>')] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+  });
+
+  it('should still refuse HTML into a markdown-mode page', async () => {
+    const h = harness({ pages: [doc('src', 'html', '<p>x</p>'), doc('dst', 'markdown', '# md')] });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+  });
+});
+
+describe('copy_content — round 3 details', () => {
+  it('a whitespace-only source should be refused like an empty one', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: '   \n  \n' }), page({ id: 'dst', content: 'IMPORTANT' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(false);
+    expect(result.error).toBe('Source is empty');
+    expect(h.writes).toHaveLength(0);
+  });
+
+  it('but an explicitly named blank line range should still copy', async () => {
+    // Asking for lines 2-2 of 'a\n\nb' is a deliberate selection.
+    const h = harness({
+      pages: [page({ id: 'src', content: 'a\n\nb' }), page({ id: 'dst', content: 'x' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src', lineStart: 2, lineEnd: 2 },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+  });
+
+  it('should not report a negative linesAdded on a replace', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'one' }), page({ id: 'dst', content: 'a\nb\nc\nd\ne' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'replace' },
+    });
+    expect(result.success).toBe(true);
+    expect(result.linesAdded).toBeUndefined();
+    expect(result.linesReplaced).toBe(5);
+  });
+
+  it('should report linesAdded on an insertion', async () => {
+    const h = harness({
+      pages: [page({ id: 'src', content: 'a\nb\nc' }), page({ id: 'dst', content: 'x' })],
+    });
+    const result = await run(h.deps, {
+      from: { kind: 'page', pageId: 'src' },
+      to: { kind: 'page', pageId: 'dst', mode: 'append' },
+    });
+    expect(result.linesAdded).toBe(3);
+  });
+});
+
+describe('copy_content — schema, round 3', () => {
+  const parse = (v: unknown) => copyContentInputSchema.safeParse(v);
+
+  it('should reject every page-only field on a file destination', () => {
+    for (const extra of [
+      { startLine: 1 },
+      { endLine: 2 },
+      { anchor: 'x' },
+      { expectedTotalLines: 5 },
+    ]) {
+      const r = parse({ from: { kind: 'page' }, to: { kind: 'file', path: 'a', ...extra } });
+      expect(r.success, JSON.stringify(extra)).toBe(false);
+    }
+  });
+
+  it('should reject expectedTotalLines: 0, which could only ever fail', () => {
+    expect(parse({
+      from: { kind: 'page' },
+      to: { kind: 'page', mode: 'replaceLines', startLine: 1, expectedTotalLines: 0 },
+    }).success).toBe(false);
+  });
+
+  it('should still accept a plain file destination', () => {
+    expect(parse({ from: { kind: 'page' }, to: { kind: 'file', path: 'a.md' } }).success).toBe(true);
+  });
+});
