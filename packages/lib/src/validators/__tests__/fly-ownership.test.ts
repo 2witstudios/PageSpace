@@ -188,6 +188,21 @@ describe('describeOwnershipVerification — an instruction only when one is owed
     expect(message).toContain('org-XYZ789');
   });
 
+  // "with the value A or B" reads as ONE value whose text is "A or B" — a string
+  // a customer can paste into a TXT record verbatim. The phrasing has to say
+  // these are alternatives, and only when there is more than one.
+  it('given two accepted values, should present them as alternatives, not as one value', () => {
+    const message = describeOwnershipVerification({ state: 'missing', expected: requirement });
+    expect(message).toContain('either of these values: app-ABC123 or org-XYZ789');
+    expect(message).not.toContain('the value app-ABC123 or');
+  });
+
+  it('given one accepted value, should still say "the value", not offer a choice', () => {
+    const message = describeOwnershipVerification({ state: 'missing', expected: orgOnlyRequirement });
+    expect(message).toContain('the value org-XYZ789');
+    expect(message).not.toContain('either of these values');
+  });
+
   // The regression: `verifyFlyOwnershipTxt` accepts an org-only requirement (it
   // filters empty values), but the instruction used to print `appValue`
   // unconditionally — so this state produced a message with a blank where the

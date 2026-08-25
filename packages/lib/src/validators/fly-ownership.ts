@@ -134,12 +134,20 @@ export function verifyFlyOwnershipTxt(args: {
  * value — that produced an instruction with a blank where the value belongs, in
  * exactly the state where the customer has nothing but this message to act on.
  *
- * Both are shown when Fly names both, joined with "or", since either satisfies
- * it and publishing the wrong one of a pair the message never mentioned is a
- * failure mode of its own.
+ * Both are shown when Fly names both, since either satisfies it and publishing
+ * the wrong one of a pair the message never mentioned is a failure mode of its
+ * own.
+ *
+ * The phrasing changes with the count, and that is not fussiness: "with the
+ * value A or B" reads as one value whose text is "A or B", which is a string a
+ * customer can and will paste into a TXT record. Naming them as alternatives
+ * removes the reading.
  */
 function describeAcceptedValues(requirement: FlyOwnershipRequirement): string {
-  return acceptedOwnershipValues(requirement).join(' or ');
+  const accepted = acceptedOwnershipValues(requirement);
+  if (accepted.length === 0) return '';
+  if (accepted.length === 1) return `the value ${accepted[0]}`;
+  return `either of these values: ${accepted.join(' or ')}`;
 }
 
 /**
@@ -160,7 +168,7 @@ export function describeOwnershipVerification(result: FlyOwnershipVerification):
     case 'missing': {
       const expected = describeAcceptedValues(result.expected);
       if (!expected) return UNNAMED_OWNERSHIP_VALUE;
-      return `Add a TXT record at ${result.expected.name} with the value ${expected} — Fly cannot verify ownership of this domain until it resolves.`;
+      return `Add a TXT record at ${result.expected.name} with ${expected} — Fly cannot verify ownership of this domain until it resolves.`;
     }
     case 'mismatched': {
       const expected = describeAcceptedValues(result.expected);
