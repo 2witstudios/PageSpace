@@ -640,7 +640,12 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               <PaneBar
                 // No sibling panes here, so there is no focus state to indicate.
                 isActive={false}
-                identity={<PaneSessionIdentity name={agent.title} bound={false} />}
+                // The dot reports the CONVERSATION's binding, not this branch's.
+                // Almost always null here — that is what put us in this branch —
+                // but the branch is also where a bound conversation lands when
+                // `canUseSessions` is false, and a hardcoded `false` would then
+                // state something untrue about it.
+                identity={<PaneSessionIdentity name={agent.title} bound={current.sessionId !== null} />}
                 actions={
                   // Disabled only while a mint is in flight. Deliberately NOT
                   // gated on `isReadOnly`: this reaches the SAME handleCreateNew
