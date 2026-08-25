@@ -5,6 +5,7 @@ import { roleManagementTools } from '../tools/role-management-tools';
 import { driveTools } from '../tools/drive-tools';
 import { pageReadTools } from '../tools/page-read-tools';
 import { pageWriteTools } from '../tools/page-write-tools';
+import { copyContentTools } from '../tools/copy-content-tools-runtime';
 import { sheetReadTools } from '../tools/sheet-read-tools';
 import { searchTools } from '../tools/search-tools';
 import { taskManagementTools } from '../tools/task-management-tools';
@@ -48,6 +49,11 @@ const TOOL_MODULES = {
   drives: driveTools,
   pagesRead: pageReadTools,
   pagesWrite: pageWriteTools,
+  // Registered as a WORKSPACE tool, not a sandbox one: its page->page arm
+  // touches no sandbox, and the code-execution kill-switch is default-OFF, so
+  // gating it there would hide page copying on every deployment. The per-agent
+  // sandbox switch is enforced at call time inside the file arms instead.
+  copyContent: copyContentTools,
   sheetsRead: sheetReadTools,
   search: searchTools,
   tasks: taskManagementTools,

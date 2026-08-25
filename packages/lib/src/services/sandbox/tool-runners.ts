@@ -372,6 +372,7 @@ export type SandboxToolDenialReason =
   | 'github_over_bash'
   | 'path_escape'
   | 'content_too_large'
+  | 'binary_content'
   | 'edit_no_match'
   | 'edit_not_unique'
   | 'no_session'
@@ -412,6 +413,15 @@ export type ReadFileToolResult =
     }
   | { success: false; error: string; reason: SandboxToolDenialReason };
 
+/**
+ * `readSandboxFileForCopy`'s result. Deliberately NOT ReadFileToolResult: there
+ * is no `truncated`, no window and no notice, because this read either returns
+ * the file whole or fails. A partial success is not representable on purpose.
+ */
+export type ReadFileForCopyResult =
+  | { success: true; path: string; content: string; bytes: number }
+  | { success: false; error: string; reason: SandboxToolDenialReason };
+
 export type EditFileToolResult =
   | { success: true; path: string; replacements: number }
   | { success: false; error: string; reason: SandboxToolDenialReason };
@@ -440,6 +450,8 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
     'The bash sandbox has no GitHub credentials. Use the dedicated git_*/gh_* tools for GitHub operations (e.g. git_clone, git_push, gh_pr_create) — they carry your connected GitHub auth.',
   path_escape: 'The path is invalid or escapes the sandbox root.',
   content_too_large: 'The file content is too large.',
+  binary_content:
+    'This file is not valid UTF-8 text, so it cannot be copied byte-for-byte through this tool — decoding it would silently replace the undecodable bytes. Use bash (cp/mv) to move binary files inside the sandbox.',
   edit_no_match:
     'The oldString was not found in the file. Read the file and copy the exact text to replace. '
     + 'If you read a windowed page of a long file, the text you are targeting may be in a part you have not read yet.',
@@ -1187,6 +1199,123 @@ export async function readSandboxFile({
   } finally {
     session.release();
   }
+  });
+}
+
+/**
+ * Read a sandbox file VERBATIM, for copying its bytes somewhere else.
+ *
+ * A sibling of `readSandboxFile`, not a caller of it, because everything that
+ * function does to make a file safe and affordable to put in front of a MODEL is
+ * corruption when the bytes are destined for storage:
+ *
+ *   - the line window (DEFAULT_READ_LINES) would copy the first page of a file
+ *     and call it the whole thing;
+ *   - the per-line clip (MAX_LINE_BYTES) would silently rewrite long lines and
+ *     staple LINE_ELISION_MARKER into the middle of the content;
+ *   - `deps.screenOutput` would, on a flagged file, wrap the copy in
+ *     `[UNTRUSTED TOOL OUTPUT …]` banners — text that exists to frame content
+ *     for a model, written here into a user's document.
+ *
+ * The injection seam is skipped rather than forgotten. It annotates
+ * model-visible output; these bytes are never returned to the model (the copy
+ * tool's `toModelOutput` reduces its result to counts), so there is no prompt to
+ * inject. Whatever later reads the destination applies its own seam.
+ *
+ * Refuses above MAX_WRITE_BYTES instead of truncating. A half-copied document
+ * looks complete — there is no notice attached to a page to say it was cut — so
+ * silently short content is a worse failure here than in a read.
+ */
+export async function readSandboxFileForCopy({
+  path,
+  ctx,
+  deps,
+}: {
+  path: string;
+  ctx: SandboxActorContext;
+  deps: SandboxRunDeps;
+}): Promise<ReadFileForCopyResult> {
+  if (!deps.isEnabled()) return fail('kill_switch_off');
+
+  const resolved = resolveSandboxPath(path);
+  if (!resolved) {
+    await safeAudit(deps, ctx, {
+      code: `copyRead ${path}`,
+      exitCode: null,
+      durationMs: 0,
+      anomaly: 'blocked_command',
+    });
+    return fail('path_escape');
+  }
+
+  return withMachineBilling<Extract<ReadFileForCopyResult, { success: true }>>(ctx, deps, async () => {
+    const session = await openSession(ctx, deps);
+    if (!session.ok) return fail(session.reason);
+
+    try {
+      const startedAt = deps.now();
+      let buffer: Buffer | null;
+      try {
+        buffer = await session.sandbox.readFileToBuffer({ path: resolved });
+      } catch {
+        const durationMs = deps.now().getTime() - startedAt.getTime();
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: null,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('execution_failed');
+      }
+      const durationMs = deps.now().getTime() - startedAt.getTime();
+      if (buffer === null) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path}`,
+          exitCode: 1,
+          durationMs,
+          anomaly: 'nonzero_exit',
+        });
+        return fail('not_found');
+      }
+
+      // The cap is measured on the SOURCE BYTES, not on a decoded string: for
+      // anything that does not round-trip, the decoded form has a different
+      // length than the file on disk, and the wrong number would be the one
+      // enforced.
+      const bytes = buffer.byteLength;
+      if (bytes > MAX_WRITE_BYTES) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (${bytes} bytes, over cap)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('content_too_large');
+      }
+
+      // `toString('utf8')` is LOSSY: undecodable bytes become U+FFFD, silently.
+      // A tool promising byte-exact copies must not hand back content that no
+      // longer matches the file — an image or archive would arrive corrupted
+      // and look like it copied fine. Re-encoding and comparing is the only
+      // honest check, so a non-text file is refused instead.
+      const content = buffer.toString('utf8');
+      if (Buffer.compare(Buffer.from(content, 'utf8'), buffer) !== 0) {
+        await safeAudit(deps, ctx, {
+          code: `copyRead ${path} (not utf-8)`,
+          exitCode: 1,
+          durationMs,
+        });
+        return fail('binary_content');
+      }
+
+      await safeAudit(deps, ctx, {
+        code: `copyRead ${path} (${bytes} bytes)`,
+        exitCode: 0,
+        durationMs,
+      });
+      return { success: true, path, content, bytes };
+    } finally {
+      session.release();
+    }
   });
 }
 

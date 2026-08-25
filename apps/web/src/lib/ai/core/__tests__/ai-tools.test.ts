@@ -21,6 +21,12 @@ vi.mock('../../tools/page-read-tools', () => ({
   },
 }));
 
+vi.mock('../../tools/copy-content-tools-runtime', () => ({
+  copyContentTools: {
+    copy_content: { name: 'copy_content', description: 'Copy content' },
+  },
+}));
+
 vi.mock('../../tools/page-write-tools', () => ({
   pageWriteTools: {
     replace_lines: { name: 'replace_lines', description: 'Replace lines' },
@@ -180,6 +186,7 @@ import { roleManagementTools } from '../../tools/role-management-tools';
 import { driveTools } from '../../tools/drive-tools';
 import { pageReadTools } from '../../tools/page-read-tools';
 import { pageWriteTools } from '../../tools/page-write-tools';
+import { copyContentTools } from '../../tools/copy-content-tools-runtime';
 import { sheetReadTools } from '../../tools/sheet-read-tools';
 import { searchTools } from '../../tools/search-tools';
 import { taskManagementTools } from '../../tools/task-management-tools';
@@ -233,6 +240,7 @@ describe('ai-tools', () => {
         ...driveTools,
         ...pageReadTools,
         ...pageWriteTools,
+        ...copyContentTools,
         ...sheetReadTools,
         ...searchTools,
         ...taskManagementTools,

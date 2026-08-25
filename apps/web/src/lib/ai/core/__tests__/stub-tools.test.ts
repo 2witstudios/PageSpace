@@ -3,12 +3,13 @@ import { assert } from './riteway';
 import { CORE_TOOL_NAMES } from '../stub-tools';
 
 describe('CORE_TOOL_NAMES', () => {
-  it('contains exactly the 10 designated core tools', () => {
+  it('contains exactly the 11 designated core tools', () => {
     assert({
       given: 'the CORE_TOOL_NAMES set',
-      should: 'list exactly the 10 core tools',
+      should: 'list exactly the 11 core tools',
       actual: [...CORE_TOOL_NAMES].sort(),
       expected: [
+        'copy_content',
         'create_page',
         'get_page_details',
         'insert_content',

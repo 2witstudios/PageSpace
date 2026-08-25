@@ -45,6 +45,7 @@ export const TOOL_NAME_MAP: Record<string, string> = {
   // Page write tools
   'replace_lines': 'Edit Document',
   'insert_content': 'Insert Content',
+  'copy_content': 'Copy Content',
   'create_page': 'Create Page',
   'rename_page': 'Rename Page',
   'trash_page': 'Move to Trash',

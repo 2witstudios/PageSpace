@@ -18,6 +18,11 @@ export const WRITE_TOOLS = new Set([
   'insert_content',
   'move_page',
   'edit_sheet_cells',
+  // Mutates a page or a sandbox file, so a read-only agent must not get it.
+  // Deliberately NOT in SANDBOX_TOOL_NAMES: that set is stripped wholesale when
+  // an agent's sandbox switch is off, which would also remove the page->page
+  // arm. The file arms check the switch at call time instead.
+  'copy_content',
   // Drive operations
   'create_drive',
   'rename_drive',
