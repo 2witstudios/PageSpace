@@ -536,6 +536,84 @@ describe('env-validation', () => {
     });
   });
 
+  describe('app hosting — the apex and the proxy secret are gated at boot', () => {
+    const bootable = () => {
+      process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+      process.env.CSRF_SECRET = 'b'.repeat(32);
+      process.env.ENCRYPTION_KEY = 'c'.repeat(32);
+    };
+
+    // The apex carries customer-authored SERVER code on its subdomains, so it
+    // must be on the PSL before it does — a prerequisite no code can check.
+    // What code CAN do is refuse to let a deployment inherit the apex silently:
+    // validateEnv() runs from instrumentation.ts and throws, so enabling hosting
+    // without naming the apex stops the process rather than serving on a default.
+    it('given APP_HOSTING_ENABLED=true and no PUBLISHED_APPS_APEX, should refuse to boot', () => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+
+      expect(() => validateEnv()).toThrow(/PUBLISHED_APPS_APEX must be set explicitly/);
+    });
+
+    it.each([
+      ['blank', ''],
+      ['whitespace only', '   '],
+    ])('given APP_HOSTING_ENABLED=true and a %s apex, should refuse to boot', (_label, value) => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = value;
+
+      expect(() => validateEnv()).toThrow(/PUBLISHED_APPS_APEX must be set explicitly/);
+    });
+
+    it('given APP_HOSTING_ENABLED=true and an explicit apex, should boot', () => {
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // The gate is on ENABLING hosting, not on the variable: while hosting is
+    // dark the apex is unused, and requiring it would fail every deployment
+    // that has never heard of app hosting.
+    it.each([
+      ['unset', undefined],
+      ['not exactly "true"', '1'],
+    ])('given APP_HOSTING_ENABLED is %s, should boot without an apex', (_label, value) => {
+      bootable();
+      if (value === undefined) delete process.env.APP_HOSTING_ENABLED;
+      else process.env.APP_HOSTING_ENABLED = value;
+      delete process.env.PUBLISHED_APPS_APEX;
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // A guessable proxy secret leaves the router endpoint a world-callable
+    // fly-replay emitter, so it is rejected rather than accepted-but-weak. The
+    // blank form still passes: that is read as "refuse everything", not "no check".
+    it('given a configured APP_ROUTER_PROXY_SECRET below 32 chars, should refuse to boot', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = 'a';
+
+      expect(() => validateEnv()).toThrow(/APP_ROUTER_PROXY_SECRET/);
+    });
+
+    it('given a blank APP_ROUTER_PROXY_SECRET, should boot — the router reads it as refuse-everything', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = '';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    it('given a 32-char APP_ROUTER_PROXY_SECRET, should boot', () => {
+      bootable();
+      process.env.APP_ROUTER_PROXY_SECRET = 'p'.repeat(32);
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+  });
+
   describe('getEnvErrors', () => {
     it('given valid environment, should return empty array', () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';

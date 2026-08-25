@@ -718,3 +718,181 @@ export async function updateMachineConfig(
   assertOk(status, body, path);
   return asMachine(body, status, path);
 }
+
+// ── TLS certificates ─────────────────────────────────────────────────────────
+//
+// Custom hostnames are attached to the ROUTER app (`resolveAppRouterFlyAppName`),
+// never to an individual published app: the router is what Fly TLS-terminates,
+// and the replay target has no public IP at all.
+//
+// These live on the Machines API (`api.machines.dev`) rather than Fly's GraphQL,
+// which is what `apps/web/src/lib/fly/certs.ts` used to call. The REST resource is
+// the reason that port is worth doing: GraphQL's `addCertificate` returns a bare
+// `{configured, clientStatus}` and nothing about WHY a cert is stuck, while
+// `dns_requirements` / `validation` here name the exact records the customer is
+// missing — including the `_fly-ownership` TXT, which has no GraphQL equivalent
+// and is the only validation path available to a domain behind a CDN.
+
+/** The DNS records Fly needs in place before it can issue for a hostname. */
+export interface FlyCertificateDnsRequirements {
+  a?: string[];
+  aaaa?: string[];
+  cname?: string;
+  acme_challenge?: { name?: string; target?: string };
+  /**
+   * The `_fly-ownership` TXT record. Present when Fly cannot validate by
+   * reachability — a CDN-fronted host, an imported certificate, or an apex the
+   * customer will not point at us until the cert exists.
+   */
+  ownership?: { name?: string; app_value?: string; org_value?: string };
+  [key: string]: unknown;
+}
+
+/** Which validation methods Fly has confirmed for a hostname. */
+export interface FlyCertificateValidation {
+  dns_configured?: boolean;
+  alpn_configured?: boolean;
+  http_configured?: boolean;
+  ownership_txt_configured?: boolean;
+  [key: string]: unknown;
+}
+
+/**
+ * A hostname's certificate state.
+ *
+ * Named fields are the ones we read; the index signature preserves everything
+ * else, for the same reason `MachineConfig` does — Fly adds fields, and a type
+ * that dropped them would make every future response lossy at the boundary.
+ */
+export interface FlyCertificate {
+  hostname?: string;
+  /** `'pending_validation' | 'active'` are the documented values. */
+  status?: string;
+  configured?: boolean;
+  acme_requested?: boolean;
+  dns_provider?: string;
+  rate_limited_until?: string | null;
+  validation?: FlyCertificateValidation;
+  dns_requirements?: FlyCertificateDnsRequirements;
+  validation_errors?: unknown[];
+  [key: string]: unknown;
+}
+
+/** A 2xx whose body is not an object is not a certificate. */
+function asCertificate(body: unknown, status: number, endpoint: string): FlyCertificate {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+    throw new FlapsError(`Fly Machines API ${endpoint} returned no certificate`, status, endpoint);
+  }
+  return body as FlyCertificate;
+}
+
+function certificatesPath(appName: string): string {
+  return `/v1/apps/${encodeURIComponent(appName)}/certificates`;
+}
+
+function certificatePath(appName: string, hostname: string): string {
+  return `${certificatesPath(appName)}/${encodeURIComponent(hostname)}`;
+}
+
+/**
+ * Request a Let's Encrypt certificate for `hostname` on `appName`.
+ * `POST /v1/apps/{app}/certificates/acme`, body `{hostname}`.
+ *
+ * IDEMPOTENT BY KEY (the hostname): a hostname already registered on the app
+ * resolves to that existing certificate rather than failing, so a re-provision,
+ * a poll cycle, or a retried ambiguous request all converge instead of
+ * alternating between "created" and "already exists". This mirrors `createApp`,
+ * and it is what makes retrying a lost response safe.
+ *
+ * Returns the certificate's CURRENT state, which for a fresh request is
+ * `status: 'pending_validation'` with `dns_requirements` filled in — that is the
+ * useful part, not the status: it names the records the customer still has to
+ * publish.
+ */
+export async function requestAcmeCertificate(
+  transport: FlapsTransport,
+  appName: string,
+  hostname: string,
+): Promise<FlyCertificate> {
+  const path = `${certificatesPath(appName)}/acme`;
+  const { status, body } = await flapsRequest(transport, 'POST', path, {
+    body: { hostname },
+  });
+  if (isAlreadyExists(status, body)) {
+    const existing = await getCertificate(transport, appName, hostname);
+    if (existing) return existing;
+  }
+  assertOk(status, body, path);
+  return asCertificate(body, status, path);
+}
+
+/**
+ * Read a hostname's certificate. `GET /v1/apps/{app}/certificates/{hostname}`.
+ *
+ * Returns null on 404 — "this app has no certificate for that hostname" is an
+ * ANSWER on this endpoint, and the whole point of calling it before requesting
+ * one. Every other non-2xx still throws.
+ */
+export async function getCertificate(
+  transport: FlapsTransport,
+  appName: string,
+  hostname: string,
+): Promise<FlyCertificate | null> {
+  const path = certificatePath(appName, hostname);
+  const { status, body } = await flapsRequest(transport, 'GET', path);
+  if (status === 404) return null;
+  assertOk(status, body, path);
+  return asCertificate(body, status, path);
+}
+
+/**
+ * Force Fly to re-run validation for a hostname.
+ * `POST /v1/apps/{app}/certificates/{hostname}/check`.
+ *
+ * A POST that mutates nothing we own — it makes Fly re-read DNS — so it is safe
+ * to retry. Its whole purpose is TIMING: a customer who has just published the
+ * record would otherwise wait out Fly's own polling cadence before anything
+ * changed, and this is what makes the settings UI's "Check SSL" actually check.
+ * `reconcile-cert.ts` calls it in exactly that window — our resolver can already
+ * see an accepted ownership value while Fly still reports the TXT unconfigured.
+ *
+ * It is NOT the source of "we see your TXT, but it says X". That message comes
+ * from resolving the record with our own resolver and reporting `mismatched`
+ * with the values found — see {@link verifyFlyOwnershipTxt} in
+ * `validators/fly-ownership.ts`. Nothing here reads the response's DNS detail,
+ * and a second source for that message would be exactly the drift the shared
+ * `acceptedOwnershipValues` exists to prevent.
+ *
+ * Returns null on 404, same reasoning as {@link getCertificate}.
+ */
+export async function checkCertificate(
+  transport: FlapsTransport,
+  appName: string,
+  hostname: string,
+): Promise<FlyCertificate | null> {
+  const path = `${certificatePath(appName, hostname)}/check`;
+  const { status, body } = await flapsRequest(transport, 'POST', path);
+  if (status === 404) return null;
+  assertOk(status, body, path);
+  return asCertificate(body, status, path);
+}
+
+/**
+ * Remove a hostname and all its certificates from the app.
+ * `DELETE /v1/apps/{app}/certificates/{hostname}` (204 on success).
+ *
+ * IDEMPOTENT: a 404 is success — the desired end state is "this app does not
+ * serve that hostname", and it already holds. Certs bill per hostname, so the
+ * delete path must converge rather than strand a charge behind a retry that
+ * refuses to run twice.
+ */
+export async function deleteCertificate(
+  transport: FlapsTransport,
+  appName: string,
+  hostname: string,
+): Promise<void> {
+  const path = certificatePath(appName, hostname);
+  const { status, body } = await flapsRequest(transport, 'DELETE', path);
+  if (status === 404) return;
+  assertOk(status, body, path);
+}

@@ -205,6 +205,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
+  waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
+  where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
+  value, and whichever ones it offers are the ones you are shown. Previously that domain simply sat at "provisioning"
+  indefinitely with nothing to act on, because through the certificate's status alone "the
+  certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
+  only one of them ever resolves on its own. The domain also stays healthy while it waits instead of
+  being marked failed, so a site already being served keeps serving. "Check SSL" now does more than
+  re-read a cached answer: once the record is visible in DNS it asks the certificate authority to
+  look again, rather than leaving you to wait out its own polling schedule. And removing a domain
+  now detaches its certificate, which previously kept billing after the domain was gone. Deleting an
+  entire drive does not yet do this, so remove its domains individually first if you want their
+  certificates released.
 - **An older AI conversation keeps its controls** — opening an AI page on a past conversation could
   drop the whole bar above the chat: no agent name, and no "+" to start a new conversation, so the
   only way to begin one was to go to the History tab and find the button there. Which of the two the

@@ -36,6 +36,7 @@ import {
   MAX_FREE_INFLIGHT,
   dailyExposureCapForTier,
 } from './credit-pricing';
+import { readSpendableCents } from './credit-balance';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // The partial unique index credit_ledger_stripe_ref_unique is defined WHERE
@@ -527,4 +528,49 @@ export async function canConsumeAI(
   // no longer affects the displayed balance, so no gate-time push is needed.
 
   return result;
+}
+
+/**
+ * hasSpendableBalance — the READ-ONLY twin of {@link canConsumeAI}: "could this
+ * user spend right now?", asked without reserving anything.
+ *
+ * Exists for the published-app routing edge's BALANCE-CHECK-BEFORE-WAKE, and the
+ * difference from `canConsumeAI` is the whole reason it exists: `canConsumeAI`
+ * INSERTS A HOLD. That is right for an AI call — one gate check, one bounded
+ * unit of work, one settle — and catastrophic on a serving edge, where the gate
+ * runs once per HTTP request (the metered tier has no replay cache, by design)
+ * and would write a `credit_holds` row per image, per stylesheet, per favicon,
+ * each of them reserving spend against a run that has no settle to release it.
+ *
+ * The decision RULE is the one `evaluateGate` applies — spendable above the
+ * reserve floor, debt netted, billing-disabled deployments unlimited — reached
+ * through `readSpendableCents`, which shares its arithmetic with the display read
+ * (including the free-tier lapsed-window rollover the gate applies lazily, so a
+ * free user whose month has ticked over is not parked for the gap between the
+ * rollover being due and the next AI call performing it).
+ *
+ * It reads the funded-balance columns and NOTHING else: ONE indexed row, no
+ * aggregate. Going through `getCreditBalance` here would also run its `SUM` over
+ * active `credit_holds` — a figure this gate then discards — on a path that runs
+ * once per image and per stylesheet.
+ *
+ * The INPUT differs by one term, and deliberately: `evaluateGate` nets out
+ * `reserved` and this call's `estCost`, and this does not subtract in-flight AI
+ * holds at all. So the two can disagree for a user mid-stream, which is the
+ * intended behaviour rather than drift — those holds are reservations against
+ * chat calls, and a user with a stream running must not have their published
+ * site go dark for the duration. The awake-seconds meter
+ * settles separately, and overspend on this path is bounded by the metering
+ * cron parking the app — not by this read.
+ *
+ * Never lazy-inits and never rolls the period: this is a hot read-only path, and
+ * both of those writes belong to `canConsumeAI`, which owns the row lock.
+ */
+export async function hasSpendableBalance(
+  userId: string,
+  tier: SubscriptionTier = 'free',
+): Promise<boolean> {
+  if (!isBillingEnabled()) return true;
+  const spendable = await readSpendableCents(userId, tier);
+  return spendable > RESERVE_FLOOR_CENTS;
 }

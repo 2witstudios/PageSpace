@@ -1,120 +1,189 @@
+/**
+ * Fly TLS certificates for custom domains — the REST certificates resource.
+ *
+ * PORTED OFF GRAPHQL. This module used to POST hand-written mutations to
+ * `api.fly.io/graphql` (`addCertificate(appId:)`, `app(name:){certificate}`).
+ * Two things were wrong with that beyond it being the legacy API:
+ *
+ *   1. The GraphQL response is `{configured, clientStatus, hostname}` and nothing
+ *      more, so a certificate stuck in validation was indistinguishable from one
+ *      about to issue — the customer got "not configured yet" forever with no
+ *      instruction. The REST resource returns `dns_requirements` and
+ *      `validation`, which name the exact records that are missing, including
+ *      the `_fly-ownership` TXT that has no GraphQL equivalent at all.
+ *   2. It carried its own bespoke `fetch`, timeout and error parsing, duplicating
+ *      what `services/fly/flaps-client.ts` already does properly — including
+ *      Fly's per-object rate limiting (~1 r/s, burst 3), which this path hit
+ *      unprotected every time the domains list lazily reconciled several rows.
+ *
+ * So the transport is now the shared flaps client and the shape of the answer is
+ * unchanged: `FlyCertResponse` is still what `nextCertAction` consumes, extended
+ * additively with the ownership fields. Existing callers do not change.
+ *
+ * TOKEN: `FLY_API_TOKEN` stays the primary credential so no deployment has to be
+ * reconfigured for this port; `FLY_MACHINES_ORG_TOKEN` is accepted as a fallback
+ * because it is the same class of org-scoped credential and a deployment that has
+ * configured published-app hosting has already set it.
+ */
+
 import type { FlyCertResponse } from '@pagespace/lib/canvas/cert-action';
+import type { FlyOwnershipRequirement } from '@pagespace/lib/validators/fly-ownership';
+import {
+  checkCertificate,
+  deleteCertificate,
+  getCertificate as getFlyCertificate,
+  requestAcmeCertificate,
+  FlapsError,
+  type FlapsTransport,
+  type FlyCertificate,
+} from '@pagespace/lib/services/fly/flaps-client';
 
-const FLY_API_URL = 'https://api.fly.io/graphql';
+/** A certificate is live and servable when Fly reports its status as active. */
+const CERT_ACTIVE_STATUS = 'active';
 
-// Bound the Fly request so a hung response can't block the caller indefinitely.
-// addCertificate is invoked from the domains-list GET (lazy cert reconcile), so
-// an unbounded fetch would stall the settings UI. On timeout the AbortSignal
-// rejects the fetch and we degrade to an ok:false error response.
-const FLY_API_TIMEOUT_MS = 10_000;
-
-// Fly's GraphQL `addCertificate` takes `appId` (an ID! whose value is the app
-// NAME), NOT `appName` — passing `appName` is rejected with a schema error, so
-// this mutation never succeeded until this was corrected.
-const ADD_CERTIFICATE_MUTATION = `
-  mutation AddCertificate($appId: ID!, $hostname: String!) {
-    addCertificate(appId: $appId, hostname: $hostname) {
-      certificate {
-        configured
-        clientStatus
-        hostname
-      }
-    }
-  }
-`;
-
-// Reading an existing cert's status uses `app(name:)` (a String!, not the ID!
-// that addCertificate wants). Used when a cert already exists on the app.
-const GET_CERTIFICATE_QUERY = `
-  query GetCertificate($appName: String!, $hostname: String!) {
-    app(name: $appName) {
-      certificate(hostname: $hostname) {
-        configured
-        clientStatus
-        hostname
-      }
-    }
-  }
-`;
-
-// A Fly cert is live/servable when its clientStatus is "Ready". The boolean
-// `configured` field only reflects DNS configuration, not issuance, so we key
-// "active" off clientStatus.
-const CERT_READY_STATUS = 'Ready';
-
-type CertNode = { configured: boolean; clientStatus: string; hostname: string } | null;
-type AddCertData = { addCertificate: { certificate: CertNode } | null };
-type GetCertData = { app: { certificate: CertNode } | null };
-
-async function flyGraphQL<T>(
-  query: string,
-  variables: Record<string, string>,
-): Promise<{ data: T } | { error: string }> {
-  const token = process.env.FLY_API_TOKEN ?? null;
-  if (!token) {
-    return { error: 'FLY_API_TOKEN is not configured' };
-  }
-
-  try {
-    const response = await fetch(FLY_API_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${token}`,
-      },
-      body: JSON.stringify({ query, variables }),
-      signal: AbortSignal.timeout(FLY_API_TIMEOUT_MS),
-    });
-
-    if (!response.ok) {
-      let msg = `Fly API HTTP ${response.status}`;
-      try {
-        const body = (await response.json()) as { errors?: Array<{ message: string }> };
-        if (body.errors?.[0]?.message) msg = body.errors[0].message;
-      } catch {
-        // ignore parse failure
-      }
-      return { error: msg };
-    }
-
-    const body = (await response.json()) as { data: T; errors?: Array<{ message: string }> };
-    if (body.errors?.length) {
-      return { error: body.errors.map((e) => e.message).join('; ') };
-    }
-
-    return { data: body.data };
-  } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Unknown Fly API error' };
-  }
-}
-
-/** Map a Fly cert node to our response; `configured` means "Ready/live". */
-function certToResponse(cert: CertNode): FlyCertResponse {
-  if (!cert) return { ok: false, error: 'Fly did not return a certificate' };
-  return { ok: true, configured: cert.clientStatus === CERT_READY_STATUS };
+function resolveToken(): string {
+  return process.env.FLY_API_TOKEN || process.env.FLY_MACHINES_ORG_TOKEN || '';
 }
 
 /**
- * Request a TLS certificate from Fly for the given hostname on the given app.
+ * Whether a Fly credential is configured at all.
  *
- * Idempotent: if the cert already exists (Fly returns "Hostname already exists
- * on app"), that is NOT a failure — we read the existing cert's status instead,
- * so re-provision / poll cycles converge to active.
+ * Exported because callers gate on it BEFORE doing cert work — the lazy
+ * reconcile and the "Check SSL" route both bail early when Fly is unconfigured,
+ * rather than marking a healthy domain failed. Those checks must ask the same
+ * question {@link resolveToken} answers: they used to test `FLY_API_TOKEN`
+ * directly, which made the `FLY_MACHINES_ORG_TOKEN` fallback unreachable in
+ * exactly the published-app deployment that configures only that one.
  */
-export async function addCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
-  const result = await flyGraphQL<AddCertData>(ADD_CERTIFICATE_MUTATION, { appId: appName, hostname });
-  if ('error' in result) {
-    if (/already exists/i.test(result.error)) {
-      return getCertificate(appName, hostname);
-    }
-    return { ok: false, error: result.error };
-  }
-  return certToResponse(result.data.addCertificate?.certificate ?? null);
+export function hasFlyCertCredential(): boolean {
+  return resolveToken().length > 0;
 }
 
-/** Read the status of an existing cert for a hostname on the given app. */
-export async function getCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
-  const result = await flyGraphQL<GetCertData>(GET_CERTIFICATE_QUERY, { appName, hostname });
-  if ('error' in result) return { ok: false, error: result.error };
-  return certToResponse(result.data.app?.certificate ?? null);
+/**
+ * The transport, or null when no credential is configured.
+ *
+ * Null rather than an empty-token transport: an unauthenticated request to Fly
+ * would spend the retry budget on three guaranteed 401s before reporting a
+ * failure that was knowable before the first one.
+ */
+function transportOrNull(): FlapsTransport | null {
+  const token = resolveToken();
+  return token ? { token } : null;
+}
+
+/**
+ * The message for "Fly is not configured at all".
+ *
+ * Names BOTH variables, because {@link resolveToken} accepts either and the
+ * message is read by an operator deciding which one to set. Naming only
+ * `FLY_API_TOKEN` — as this did — tells someone debugging a leaked certificate
+ * charge on a published-app deployment, which configures only
+ * `FLY_MACHINES_ORG_TOKEN`, that the variable they set was not the missing
+ * piece. Stated once so the two call sites cannot drift back apart.
+ */
+const NO_CREDENTIAL_ERROR =
+  'Neither FLY_API_TOKEN nor FLY_MACHINES_ORG_TOKEN is configured';
+
+const NO_TOKEN: FlyCertResponse = {
+  ok: false,
+  error: NO_CREDENTIAL_ERROR,
+};
+
+/** Normalize Fly's ownership requirement, dropping a half-populated one. */
+export function ownershipRequirementOf(cert: FlyCertificate): FlyOwnershipRequirement | null {
+  const ownership = cert.dns_requirements?.ownership;
+  if (!ownership) return null;
+  const name = typeof ownership.name === 'string' ? ownership.name : '';
+  const appValue = typeof ownership.app_value === 'string' ? ownership.app_value : '';
+  const orgValue = typeof ownership.org_value === 'string' ? ownership.org_value : '';
+  // A requirement with no name and no value names nothing the customer can act
+  // on; reporting it would produce an instruction with blanks in it.
+  if (!name || (!appValue && !orgValue)) return null;
+  return { name, appValue, orgValue };
+}
+
+/** Map a Fly certificate onto the response shape `nextCertAction` consumes. */
+function certToResponse(cert: FlyCertificate | null): FlyCertResponse {
+  if (!cert) return { ok: false, error: 'Fly did not return a certificate' };
+  return {
+    ok: true,
+    // Keyed off `status`, not the `configured` boolean: `configured` reflects DNS
+    // configuration, and a hostname can be correctly configured for minutes
+    // before a certificate is actually issued. This is the same distinction the
+    // GraphQL path drew with `clientStatus === 'Ready'`.
+    configured: cert.status === CERT_ACTIVE_STATUS,
+    status: typeof cert.status === 'string' ? cert.status : undefined,
+    ownership: ownershipRequirementOf(cert),
+    ownershipTxtConfigured: cert.validation?.ownership_txt_configured === true,
+  };
+}
+
+/** Turn a thrown Flaps failure into the module's error response. */
+function toErrorResponse(err: unknown): FlyCertResponse {
+  if (err instanceof FlapsError) return { ok: false, error: err.message };
+  return { ok: false, error: err instanceof Error ? err.message : 'Unknown Fly API error' };
+}
+
+/**
+ * Ensure a certificate exists for `hostname` on `appName`, and report its state.
+ *
+ * READS BEFORE IT WRITES, which the GraphQL version could not do cheaply: a GET
+ * that finds an existing certificate returns its full validation state without
+ * asking Fly to request anything, so the poll cycle this function serves (the
+ * domains-list lazy reconcile calls it on every load) stops being a stream of
+ * mutations. Only a hostname Fly has never seen reaches the ACME request.
+ *
+ * Idempotent either way — `requestAcmeCertificate` resolves an "already exists"
+ * race back to the existing certificate — so concurrent reconciles converge.
+ */
+export async function addCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
+  const transport = transportOrNull();
+  if (!transport) return NO_TOKEN;
+  try {
+    const existing = await getFlyCertificate(transport, appName, hostname);
+    if (existing) return certToResponse(existing);
+    return certToResponse(await requestAcmeCertificate(transport, appName, hostname));
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+/**
+ * Ask Fly to RE-READ the hostname's DNS and re-evaluate validation.
+ *
+ * The endpoint behind "the customer says they added the record". Without it, a
+ * hostname whose DNS was fixed sits at Fly's own polling cadence; with it, the
+ * settings UI's "Check SSL" actually checks.
+ */
+export async function recheckCertificate(appName: string, hostname: string): Promise<FlyCertResponse> {
+  const transport = transportOrNull();
+  if (!transport) return NO_TOKEN;
+  try {
+    return certToResponse(await checkCertificate(transport, appName, hostname));
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
+
+/**
+ * Detach a hostname from the router app.
+ *
+ * Certificates bill per hostname ($0.10/mo beyond the first ten), so a domain
+ * removed from a drive has to be removed from Fly too or it bills forever with
+ * nothing in our database pointing at it. Idempotent: a hostname Fly does not
+ * have is already in the desired state.
+ */
+export async function removeCertificate(
+  appName: string,
+  hostname: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const transport = transportOrNull();
+  if (!transport) return { ok: false, error: NO_CREDENTIAL_ERROR };
+  try {
+    await deleteCertificate(transport, appName, hostname);
+    return { ok: true };
+  } catch (err) {
+    const mapped = toErrorResponse(err);
+    return mapped.ok ? { ok: true } : { ok: false, error: mapped.error };
+  }
 }

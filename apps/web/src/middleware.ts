@@ -6,7 +6,8 @@ import {
   createSecureResponse,
   createSecureRewrite,
   createSecureErrorResponse,
-  isHandoffBridgeRoute,
+  APP_ROUTER_ROUTE_PATH,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
   isSecureRequest,
@@ -149,6 +150,38 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     // let alone allowed to block, regardless of ORIGIN_VALIDATION_MODE.
     if (pathname.startsWith('/api/public/forms/')) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute: true });
+      return response;
+    }
+
+    // Published-app serving edge: pagespace-proxy calls this for EVERY request to
+    // a published app, with no session and no user — it authenticates via the
+    // APP_ROUTER_PROXY_SECRET shared secret checked inside the route, which
+    // refuses everything when that secret is unset.
+    //
+    // Returned HERE, above origin validation and above the Bearer-API OPTIONS
+    // short-circuit, and both of those positions are load-bearing:
+    //
+    //   • Origin validation is INAPPLICABLE. Valid callers are arbitrary
+    //     published-app hosts and their custom domains, with no fixed allowlist —
+    //     a published app's own fetch carries its own origin, which is not and can
+    //     never be in ours. Same rationale as the public-form route above.
+    //   • OPTIONS must REACH the route rather than be answered by the preflight
+    //     short-circuit below. A CORS preflight for a published app belongs to
+    //     that app and has to be replayed to it; answering it here would hand the
+    //     browser our CORS policy instead of the app's, so a published app could
+    //     never allow a custom request header on a cross-origin call.
+    //
+    // Without this the middleware also 401s the proxy before route.ts runs, and
+    // no published app is reachable at all.
+    if (pathname === APP_ROUTER_ROUTE_PATH) {
+      // The route delivers its own CSP for the styled parked/unavailable pages it
+      // renders; ours would intersect with and clobber it. Asked through the
+      // shared predicate rather than hardcoded `true` so there is one list of
+      // self-CSP routes rather than two places to keep in step.
+      const { response } = createSecureResponse(isProduction, req, {
+        isAPIRoute: true,
+        skipCSP: routeOwnsItsOwnCsp(pathname),
+      });
       return response;
     }
 
@@ -316,9 +349,12 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
       // Handoff-bridge OAuth callbacks (google/apple) return their own styled HTML
       // with a bespoke CSP — skip the middleware CSP so it doesn't intersect with
       // and clobber the route's policy (which allows the page's inline styles).
+      // Asked through `routeOwnsItsOwnCsp` so the set of self-CSP routes has one
+      // definition; the published-app router is also in that set but returns
+      // above and never reaches this branch.
       const { response } = createSecureResponse(isProduction, req, {
         isAPIRoute,
-        skipCSP: isHandoffBridgeRoute(pathname),
+        skipCSP: routeOwnsItsOwnCsp(pathname),
       });
       return response;
     }

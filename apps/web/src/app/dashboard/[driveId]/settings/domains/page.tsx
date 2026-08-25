@@ -38,6 +38,15 @@ interface CustomDomain {
   publishLandingPageId: string | null;
   /** Canvas page overriding this domain's 404.html; null = use the drive-wide 404 page. */
   publishNotFoundPageId: string | null;
+  /**
+   * What the customer must publish in DNS for a certificate stuck on Fly's
+   * `_fly-ownership` TXT check, or null when nothing is owed.
+   *
+   * Recomputed by the list route on every load rather than stored — it would be
+   * stale the moment the customer fixed their zone. Optional because it is only
+   * present for a domain still in a non-terminal cert state.
+   */
+  ownershipInstruction?: string | null;
 }
 
 interface DomainsResponse {
@@ -237,7 +246,11 @@ export default function DomainsSettingsPage() {
       const res = await fetchWithAuth(`/api/drives/${driveId}/domains/${domainId}/cert/refresh`, {
         method: 'POST',
       });
-      const data = await res.json().catch(() => ({})) as { status?: string; error?: string };
+      const data = await res.json().catch(() => ({})) as {
+        status?: string;
+        error?: string;
+        ownershipInstruction?: string | null;
+      };
       if (!res.ok) {
         if (res.status === 503) {
           toast.error('SSL provisioning is not yet configured');
@@ -249,6 +262,12 @@ export default function DomainsSettingsPage() {
       await mutateDomains();
       if (data.status === 'active') {
         toast.success('SSL certificate is active');
+      } else if (data.ownershipInstruction) {
+        // The certificate is blocked on a DNS record the customer has not
+        // published. "Check back in a few minutes" would be false here: this is
+        // the one waiting state that never resolves on its own, so it gets the
+        // actual instruction and a duration long enough to copy a record out of.
+        toast.warning(data.ownershipInstruction, { duration: 30_000 });
       } else if (data.status === 'provisioning') {
         toast.success('SSL cert provisioned — check back in a few minutes');
       } else if (data.status === 'cert_failed') {
@@ -1075,6 +1094,35 @@ function DomainRow({
 
       {(domain.status === 'failed' || domain.status === 'dns_failed') && verifyReason && (
         <p className="text-xs text-destructive bg-destructive/5 rounded px-2 py-1">{verifyReason}</p>
+      )}
+
+      {/*
+        A certificate waiting on an ownership TXT is the ONE cert state that never
+        resolves on its own, so the instruction has to be visible without the
+        customer first guessing to press "Check SSL". Rendered in the row, beside
+        the DNS records panel it mirrors, rather than only as a toast that takes
+        the record name and value away with it.
+      */}
+      {domain.status === 'provisioning' && domain.ownershipInstruction && (
+        <div className="bg-muted rounded p-3 space-y-2">
+          <p className="text-xs text-muted-foreground">
+            SSL is waiting on a DNS record you still need to add:
+          </p>
+          {/*
+            `break-words`, not `break-all`, and no `font-mono`: this is a prose
+            sentence with a hostname and a record value embedded in it, unlike the
+            DNS panel below, which is a table of bare field values. `break-all`
+            would chop ordinary words mid-character, and monospacing the whole
+            sentence makes it harder to read to save the few tokens that benefit.
+            `break-words` still wraps the long `_fly-ownership.<host>` label rather
+            than letting it overflow the row.
+          */}
+          <p className="text-xs break-words">{domain.ownershipInstruction}</p>
+          <p className="text-xs text-muted-foreground">
+            Once it propagates, click Check SSL — the certificate cannot be issued until this
+            record resolves.
+          </p>
+        </div>
       )}
 
       {showDns && (

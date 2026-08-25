@@ -315,6 +315,29 @@ export const isPublishedSiteHost = (host: string | null | undefined): boolean =>
 export const isHandoffBridgeRoute = (pathname: string): boolean =>
   (HANDOFF_BRIDGE_ROUTE_PATHS as readonly string[]).includes(pathname);
 
+/**
+ * The published-app serving edge. It answers a routing decision either as a
+ * bodiless `fly-replay` (no CSP needed) or as its OWN styled parked /
+ * unavailable / not-found page, which carries a bespoke CSP allowing the inline
+ * style attributes it is built from — the page must be self-contained, because
+ * fetching a stylesheet to render "this app is paused" adds a dependency to the
+ * one response that has to work when things are broken.
+ *
+ * Same reasoning as isHandoffBridgeRoute: the API CSP's `default-src 'none'`
+ * falls style-src back to 'none', and browsers enforce the intersection of every
+ * delivered CSP — so without this the customer-facing enforcement page renders
+ * as unstyled text.
+ */
+export const APP_ROUTER_ROUTE_PATH = '/api/app-hosting/router';
+
+/**
+ * Routes that deliver their own Content-Security-Policy and must not have the
+ * middleware's layered on top. One predicate so the middleware asks the question
+ * once rather than growing a chain of ORs.
+ */
+export const routeOwnsItsOwnCsp = (pathname: string): boolean =>
+  isHandoffBridgeRoute(pathname) || pathname === APP_ROUTER_ROUTE_PATH;
+
 export const shouldDisableCOEP = (pathname: string): boolean =>
   pathname.startsWith('/settings/plan') ||
   pathname.startsWith('/settings/billing') ||

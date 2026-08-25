@@ -31,8 +31,13 @@ vi.mock('@/middleware/security-headers', () => ({
   // Real predicate logic — middleware passes its result as `skipCSP` so the
   // handoff-bridge OAuth callbacks don't get a middleware CSP layered on top of
   // their own (see the isHandoffBridgeRoute describe block below).
-  isHandoffBridgeRoute: (pathname: string) =>
-    pathname === '/api/auth/google/callback' || pathname === '/api/auth/apple/callback',
+  // Real predicate logic, matching security-headers.ts: the handoff-bridge
+  // callbacks plus the published-app router all deliver their own CSP.
+  APP_ROUTER_ROUTE_PATH: '/api/app-hosting/router',
+  routeOwnsItsOwnCsp: (pathname: string) =>
+    pathname === '/api/auth/google/callback' ||
+    pathname === '/api/auth/apple/callback' ||
+    pathname === '/api/app-hosting/router',
   isPublicPageRoute: () => false,
   isPublishedSiteHost: () => false,
   isSecureRequest: () => true,
@@ -120,6 +125,99 @@ describe('middleware — /api/public/forms carve-outs', () => {
     // Origin validation must never even run for this route — it's inapplicable
     // by design (valid callers have unbounded custom-domain origins).
     expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+  });
+});
+
+// Regression coverage for a real bug found while building the published-app
+// routing tier: the router endpoint is called by pagespace-proxy with NO session
+// and no user — it authenticates via the APP_ROUTER_PROXY_SECRET shared secret
+// checked inside the route. Without a middleware carve-out, every such call is
+// 401'd before route.ts ever runs, which does not fail any handler test (those
+// invoke the route directly) but makes EVERY published app unreachable in a real
+// deployment. The route's own tests cannot see this; only this one can.
+describe('middleware — published-app router carve-out', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockGetSessionFromCookies.mockReturnValue(undefined);
+  });
+
+  it('skips the session-cookie check for a proxy call carrying no session', async () => {
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const request = buildRequest('/api/app-hosting/router');
+    const response = await middleware(request);
+
+    expect(response.status).not.toBe(401);
+    // createSecureResponse is mocked to always return 200, so the status alone
+    // would not catch the carve-out being removed — assert the session lookup
+    // was never reached.
+    expect(mockGetSessionFromCookies).not.toHaveBeenCalled();
+  });
+
+  it('lets the route own its CSP, so the parked page keeps its inline styles', async () => {
+    // The API CSP is `default-src 'none'`, which falls style-src back to 'none';
+    // browsers enforce the intersection of every delivered policy, so without
+    // the skip the customer-facing "app paused" page renders unstyled.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    await middleware(buildRequest('/api/app-hosting/router'));
+
+    expect(mockCreateSecureResponse).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ skipCSP: true }),
+    );
+  });
+
+  it('never runs origin validation — published apps have unbounded origins', async () => {
+    // A published app's own fetch carries its own origin, which is not and can
+    // never be in our allowlist. If origin validation ran here in blocking mode,
+    // every non-GET request a published app made to itself would 403.
+    mockValidateOriginForMiddleware.mockReturnValue({
+      valid: false,
+      origin: 'https://acme.pagespace.app',
+      skipped: false,
+      reason: 'origin not in allowlist',
+    });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const response = await middleware(
+      buildRequest('/api/app-hosting/router', { origin: 'https://acme.pagespace.app' }),
+    );
+
+    expect(response.status).not.toBe(403);
+    expect(mockValidateOriginForMiddleware).not.toHaveBeenCalled();
+  });
+
+  it('lets an OPTIONS preflight reach the route instead of answering it with our CORS policy', async () => {
+    // A preflight for a published app belongs to THAT app and must be replayed to
+    // it. The Bearer-API short-circuit would answer 204 with our own
+    // Access-Control-Allow-Headers, so a published app could never allow a custom
+    // request header on a cross-origin call.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    const response = await middleware(
+      buildRequest('/api/app-hosting/router', {}, 'OPTIONS'),
+    );
+
+    // The mocked createSecureResponse returns 200; the CORS short-circuit would
+    // have returned a 204 carrying Access-Control-Allow-Methods.
+    expect(response.headers.get('Access-Control-Allow-Methods')).toBeNull();
+    expect(response.status).not.toBe(204);
+  });
+
+  it('does not extend the carve-out to sibling app-hosting paths', async () => {
+    // Exact match only: a future authenticated /api/app-hosting/* route must not
+    // inherit an exemption meant for the one endpoint the proxy calls.
+    mockValidateOriginForMiddleware.mockReturnValue({ valid: true, origin: null, skipped: true, reason: 'no origin' });
+    mockIsOriginValidationBlocking.mockReturnValue(true);
+
+    await middleware(buildRequest('/api/app-hosting/apps'));
+
+    expect(mockGetSessionFromCookies).toHaveBeenCalled();
   });
 });
 

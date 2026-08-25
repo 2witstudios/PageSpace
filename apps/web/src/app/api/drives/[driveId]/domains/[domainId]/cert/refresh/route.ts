@@ -6,6 +6,7 @@ import {
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { hasFlyCertCredential } from '@/lib/fly/certs';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isCertEligible } from '@pagespace/lib/canvas/cert-action';
 import { db } from '@pagespace/db/db';
@@ -47,15 +48,20 @@ export async function POST(
       );
     }
 
-    if (!process.env.FLY_API_TOKEN) {
-      loggers.api.error('FLY_API_TOKEN not set — cert provisioning unavailable');
-      return NextResponse.json({ error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN)' }, { status: 503 });
+    // Same predicate the certs module uses, so a deployment carrying only
+    // FLY_MACHINES_ORG_TOKEN is not told SSL is unconfigured when it is.
+    if (!hasFlyCertCredential()) {
+      loggers.api.error('No Fly API credential set — cert provisioning unavailable');
+      return NextResponse.json(
+        { error: 'SSL provisioning is not configured (ops: set FLY_API_TOKEN or FLY_MACHINES_ORG_TOKEN)' },
+        { status: 503 },
+      );
     }
 
     // Advance the cert one step via the shared service (also used by the lazy
     // reconcile on the domains-list GET). It commits the status, then runs the
     // active/cert_failed side effects best-effort.
-    const { status: nextStatus, action } = await reconcileCustomDomainCert({
+    const { status: nextStatus, action, ownershipInstruction } = await reconcileCustomDomainCert({
       id: domain.id,
       driveId,
       hostname: domain.hostname,
@@ -75,7 +81,11 @@ export async function POST(
       },
     });
 
-    return NextResponse.json({ status: nextStatus, action });
+    // `ownershipInstruction` is the actionable half of a cert that is stuck:
+    // without it the UI can only say "still provisioning" for a hostname that
+    // will never provision until the customer publishes a TXT record nobody has
+    // told them about. Null whenever nothing is waiting on them.
+    return NextResponse.json({ status: nextStatus, action, ownershipInstruction: ownershipInstruction ?? null });
   } catch (error) {
     loggers.api.error('Error refreshing cert:', error as Error);
     return NextResponse.json({ error: 'Failed to refresh cert' }, { status: 500 });

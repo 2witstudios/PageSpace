@@ -27,6 +27,9 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 const addCertificate = vi.fn();
 vi.mock('@/lib/fly/certs', () => ({
   addCertificate: (...args: unknown[]) => addCertificate(...args),
+  // Faithful to the real predicate: either credential counts.
+  hasFlyCertCredential: () =>
+    Boolean(process.env.FLY_API_TOKEN || process.env.FLY_MACHINES_ORG_TOKEN),
 }));
 
 const dbSelect = vi.fn();

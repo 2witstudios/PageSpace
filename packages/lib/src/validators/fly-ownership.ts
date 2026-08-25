@@ -1,0 +1,193 @@
+/**
+ * `_fly-ownership` TXT pre-validation (pure).
+ *
+ * Fly issues a certificate for a hostname only once it can prove the requester
+ * controls it. The usual proof is reachability — the hostname's A/AAAA/CNAME
+ * already point at Fly — which is what `verifyDnsRecords` in `./custom-domain`
+ * checks and what the existing custom-domain flow requires before it will ask
+ * for a cert at all.
+ *
+ * That proof is unavailable for a hostname the customer will not (or cannot)
+ * point at us yet: a domain behind a CDN that terminates TLS itself, an apex
+ * being migrated with no downtime, an imported certificate. For those, Fly asks
+ * for a TXT record at `_fly-ownership.<hostname>` carrying the app's or the
+ * org's ownership value, and reports it back as
+ * `dns_requirements.ownership` / `validation.ownership_txt_configured`.
+ *
+ * PRE-validation, not post-mortem: the point of checking the record ourselves,
+ * before treating a stuck certificate as failed, is that "Fly has not issued
+ * yet" and "the customer never published the record" are the same observable
+ * state through the certificate status alone — and they need opposite responses.
+ * The first is waiting; the second is an instruction the customer has not been
+ * given. Resolving the TXT here separates them.
+ *
+ * Pure: TXT records come in as data. The resolution itself is `apps/web/src/lib/
+ * publish/dns-resolver.ts`, which already owns the authoritative-then-recursive
+ * strategy and its SSRF guard.
+ */
+
+/** The subdomain Fly reads the ownership proof from. */
+export const FLY_OWNERSHIP_TXT_PREFIX = '_fly-ownership';
+
+/** Where the TXT record for a hostname must live. */
+export function flyOwnershipTxtName(hostname: string): string {
+  return `${FLY_OWNERSHIP_TXT_PREFIX}.${hostname.trim().toLowerCase().replace(/\.$/, '')}`;
+}
+
+/** What Fly said it wants, normalized out of a certificate response. */
+export interface FlyOwnershipRequirement {
+  /** The record name, e.g. `_fly-ownership.example.com`. */
+  name: string;
+  /** The app-scoped value, e.g. `app-XXXXXXXXXX`. */
+  appValue: string;
+  /** The org-scoped value, e.g. `org-XXXXXXXXXX`. Either value satisfies Fly. */
+  orgValue: string;
+}
+
+export type FlyOwnershipVerification =
+  /** Fly did not ask for an ownership TXT — nothing to pre-validate. */
+  | { state: 'not_required' }
+  /** The record is published and carries a value Fly will accept. */
+  | { state: 'satisfied' }
+  /** Nothing resolves at the record name. */
+  | { state: 'missing'; expected: FlyOwnershipRequirement }
+  /** Something resolves, but none of its values match. */
+  | { state: 'mismatched'; expected: FlyOwnershipRequirement; found: string[] };
+
+/**
+ * Split raw TXT strings into candidate ownership values.
+ *
+ * Two shapes have to survive this. A DNS TXT record is a LIST of character
+ * strings (Node's `resolveTxt` returns `string[][]`, one inner array per record,
+ * chunked at 255 bytes) — the chunks of one record concatenate with no
+ * separator, or a long value silently fails to match. And Fly documents that
+ * MULTIPLE ownership values may share one record, "separated with semicolons" —
+ * which is how a hostname serves two Fly apps at once, and why a strict equality
+ * test against the whole string would reject a correctly-configured domain.
+ *
+ * Surrounding quotes are stripped: several DNS UIs store the value with the
+ * quoting from the zone-file syntax included, and a resolver hands that back
+ * verbatim.
+ */
+export function parseOwnershipTxtValues(records: readonly (readonly string[])[]): string[] {
+  const values: string[] = [];
+  for (const chunks of records) {
+    const joined = chunks.join('');
+    for (const part of joined.split(';')) {
+      const trimmed = part.trim().replace(/^"(.*)"$/s, '$1').trim();
+      if (trimmed.length > 0) values.push(trimmed);
+    }
+  }
+  return values;
+}
+
+/**
+ * The ownership values Fly will accept for this requirement, in preference order.
+ *
+ * Either value satisfies Fly, and either may be absent, so the empties are
+ * filtered here ONCE — both the comparison and the customer-facing instruction
+ * read this list, so they cannot disagree about what counts as acceptable.
+ */
+export function acceptedOwnershipValues(requirement: FlyOwnershipRequirement): string[] {
+  return [requirement.appValue, requirement.orgValue].filter((v) => v.length > 0);
+}
+
+/**
+ * Compare the published TXT values against what Fly asked for.
+ *
+ * `null` requirement means Fly reported no ownership requirement at all, which
+ * is the common case (a hostname already pointing at us validates by
+ * reachability) — and it is reported as `not_required` rather than `satisfied`
+ * so a caller cannot read "we verified ownership" out of "we never checked".
+ *
+ * EITHER the app value or the org value is accepted, because Fly accepts either.
+ * Comparison is case-insensitive: these values travel through DNS UIs that
+ * normalize case, and a case-folded record still satisfies Fly.
+ */
+export function verifyFlyOwnershipTxt(args: {
+  requirement: FlyOwnershipRequirement | null;
+  records: readonly (readonly string[])[];
+}): FlyOwnershipVerification {
+  const { requirement } = args;
+  if (!requirement) return { state: 'not_required' };
+
+  const found = parseOwnershipTxtValues(args.records);
+  if (found.length === 0) return { state: 'missing', expected: requirement };
+
+  const accepted = acceptedOwnershipValues(requirement).map((v) => v.toLowerCase());
+  // No accepted value means Fly asked for ownership but named nothing to publish.
+  // Treat that as mismatched rather than satisfied: it is a state we cannot act
+  // on, and calling it satisfied would let a cert be declared blocked-on-nothing.
+  if (accepted.length === 0) return { state: 'mismatched', expected: requirement, found };
+
+  const matched = found.some((value) => accepted.includes(value.toLowerCase()));
+  return matched ? { state: 'satisfied' } : { state: 'mismatched', expected: requirement, found };
+}
+
+/**
+ * What Fly says it will accept, rendered for a human.
+ *
+ * Reads the SAME list `verifyFlyOwnershipTxt` compares against, because the two
+ * had already drifted: verification accepts an app-only OR an org-only
+ * requirement (it filters empties), while the instruction always printed
+ * `appValue`. On an org-only requirement — Fly names an org value and no app
+ * value — that produced an instruction with a blank where the value belongs, in
+ * exactly the state where the customer has nothing but this message to act on.
+ *
+ * Both are shown when Fly names both, since either satisfies it and publishing
+ * the wrong one of a pair the message never mentioned is a failure mode of its
+ * own.
+ *
+ * The phrasing changes with the count, and that is not fussiness: "with the
+ * value A or B" reads as one value whose text is "A or B", which is a string a
+ * customer can and will paste into a TXT record. Naming them as alternatives
+ * removes the reading.
+ */
+function describeAcceptedValues(requirement: FlyOwnershipRequirement): string {
+  const accepted = acceptedOwnershipValues(requirement);
+  if (accepted.length === 0) return '';
+  if (accepted.length === 1) return `the value ${accepted[0]}`;
+  return `either of these values: ${accepted.join(' or ')}`;
+}
+
+/**
+ * The same values as a bare list, for a sentence that already supplies the noun.
+ *
+ * The `mismatched` message says "(expected X; found Y)", where "expected"
+ * already does the work "the value" does in the instruction. Reusing the
+ * instruction's phrasing there produced "expected the value org-X; found …" and
+ * "expected either of these values: app-X or org-Y; found …" — a colon and a
+ * semicolon fighting inside one parenthesis. One helper cannot serve both
+ * sentences, so it does not try to.
+ */
+function listAcceptedValues(requirement: FlyOwnershipRequirement): string {
+  return acceptedOwnershipValues(requirement).join(' or ');
+}
+
+/**
+ * The message for a requirement that names no value at all. `verifyFlyOwnershipTxt`
+ * reports that state as `mismatched` rather than `satisfied`; the instruction has
+ * to match, because telling a customer to publish nothing is worse than telling
+ * them the requirement itself is unusable.
+ */
+const UNNAMED_OWNERSHIP_VALUE =
+  'Fly reported an ownership requirement without naming a value to publish — retry the certificate check, and contact support if it persists.';
+
+/** A human-readable instruction for a verification that is not yet satisfied. */
+export function describeOwnershipVerification(result: FlyOwnershipVerification): string | null {
+  switch (result.state) {
+    case 'not_required':
+    case 'satisfied':
+      return null;
+    case 'missing': {
+      const expected = describeAcceptedValues(result.expected);
+      if (!expected) return UNNAMED_OWNERSHIP_VALUE;
+      return `Add a TXT record at ${result.expected.name} with ${expected} — Fly cannot verify ownership of this domain until it resolves.`;
+    }
+    case 'mismatched': {
+      const expected = listAcceptedValues(result.expected);
+      if (!expected) return UNNAMED_OWNERSHIP_VALUE;
+      return `The TXT record at ${result.expected.name} does not carry an accepted ownership value (expected ${expected}; found ${result.found.join(', ')}).`;
+    }
+  }
+}
