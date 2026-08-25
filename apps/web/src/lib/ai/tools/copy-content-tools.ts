@@ -41,7 +41,12 @@ import { toModelOutputForCopyContent } from './copy-content-model-output';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import type { ToolExecutionContext } from '../core/types';
 
-/** Mirrors MAX_WRITE_BYTES; asserted equal to the runner's cap by its test. */
+/**
+ * Mirrors `MAX_WRITE_BYTES` in the sandbox runner. Duplicated rather than
+ * imported because this module must not pull in the sandbox package; the two
+ * are pinned equal by a test, since a silent drift would mean the tool accepts
+ * a source the runner then refuses (or vice versa).
+ */
 export const MAX_COPY_BYTES = 1024 * 1024;
 
 /** Longest path this tool will accept, matching the sandbox tools. */

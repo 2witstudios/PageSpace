@@ -10,6 +10,7 @@ import {
   type CopyPageRecord,
 } from '../copy-content-tools';
 import { toModelOutputForCopyContent } from '../copy-content-model-output';
+import { MAX_WRITE_BYTES } from '@pagespace/lib/services/sandbox/tool-runners';
 
 const CONTEXT = { userId: 'u1', chatSource: { type: 'page', agentPageId: 'agent-1' } };
 
@@ -870,5 +871,14 @@ describe('copy_content — schema, round 3', () => {
 
   it('should still accept a plain file destination', () => {
     expect(parse({ from: { kind: 'page' }, to: { kind: 'file', path: 'a.md' } }).success).toBe(true);
+  });
+});
+
+describe('copy_content — cap parity with the sandbox runner', () => {
+  it('MAX_COPY_BYTES must equal the runner MAX_WRITE_BYTES', () => {
+    // The two are hand-duplicated across a package boundary (this module must
+    // not import the sandbox package at runtime). If they drift, the tool
+    // accepts a source the runner then refuses, or refuses one it would take.
+    expect(MAX_COPY_BYTES).toBe(MAX_WRITE_BYTES);
   });
 });

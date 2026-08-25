@@ -268,3 +268,39 @@ describe('SHEET bullet vs the agent allowlist', () => {
     expect(sheetLine).toContain('lineStart');
   });
 });
+
+describe('PAGE TYPES bullets — copy_content is only named to agents that hold it', () => {
+  // Every agent configured before copy_content existed has a saved
+  // enabledTools array without it. Naming a tool the agent does not hold buys
+  // an unknown-tool round trip before the model recovers — the same reason the
+  // SHEET bullet is composed rather than fixed.
+  const withoutCopy = ['read_page', 'replace_lines', 'insert_content'];
+  const withCopy = [...withoutCopy, 'copy_content'];
+
+  it('should not mention copy_content when the agent lacks it', () => {
+    expect(buildInlineInstructions(withoutCopy)).not.toContain('copy_content');
+  });
+
+  it('should mention copy_content when the agent holds it', () => {
+    expect(buildInlineInstructions(withCopy)).toContain('copy_content');
+  });
+
+  it('should still describe DOCUMENT and CODE pages either way', () => {
+    for (const tools of [withoutCopy, withCopy]) {
+      const out = buildInlineInstructions(tools);
+      expect(out).toContain('• DOCUMENT:');
+      expect(out).toContain('• CODE:');
+    }
+  });
+
+  it('should keep the slim DOCUMENT bullet when the writing-documents skill is reachable', () => {
+    // compose() takes precedence over `slim` in buildPageTypes, so the skill
+    // branch has to be reproduced inside it — this pins that it still is.
+    const out = buildInlineInstructions([...withCopy, 'load_skill']);
+    expect(out).toContain('Load the writing-documents skill');
+  });
+
+  it('should include copy_content for the undefined sentinel (admin viewer shows everything)', () => {
+    expect(buildInlineInstructions(undefined)).toContain('copy_content');
+  });
+});

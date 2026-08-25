@@ -52,25 +52,37 @@ async function openSandbox(context: ToolExecutionContext) {
  * The per-agent sandbox switch, read at CALL time.
  *
  * `filterToolsForSandboxEnablement` strips by tool NAME and runs once when the
- * tool set is assembled. `copy_content` is a workspace tool (its page→page arm
+ * tool set is assembled. `copy_content` is a workspace tool (its page->page arm
  * touches no sandbox and must work everywhere), so it is not in
  * `SANDBOX_TOOL_NAMES` and survives that filter — which would otherwise make it
  * a way around the switch. Checking here closes that, and only the file arms
  * ever call it.
  *
- * No agent page in context (the Global Assistant, a workflow step) means there
- * is no per-agent switch to consult, which is exactly the case where the
- * assembly-time filter is not applied either — so the answer is yes, and the
- * `gate` above remains the real authority.
+ * WHICH agent is the acting one matters. `ask_agent` builds a nested context
+ * for the CONSULTED agent but inherits `chatSource` from the CALLER
+ * (`agent-communication-tools.ts`), so keying on `chatSource.agentPageId` alone
+ * would read the caller's switch while the consulted agent does the IO — the
+ * same "one surface answers differently from the others" contradiction that
+ * comment block warns about (#2460). `currentAgentId` is the nested context's
+ * record of who is actually running, so it wins when present.
+ *
+ * No agent page at all means the Global Assistant or a workflow step, neither of
+ * which applies the assembly-time filter either, so the answer is yes and the
+ * `gate` remains the real authority. (The page-agent CONSULT route is the one
+ * surface that applies the filter without setting `chatSource`; its file arms
+ * are unreachable regardless, because its synthetic conversation id has no
+ * session, so they fail `no_session` before touching a sandbox.)
  */
 async function isSandboxEnabledForContext(context: ToolExecutionContext): Promise<boolean> {
-  const agentPageId = context.chatSource?.agentPageId;
-  if (!agentPageId) return true;
+  const actingAgentId =
+    (context as ToolExecutionContext & { currentAgentId?: string }).currentAgentId ??
+    context.chatSource?.agentPageId;
+  if (!actingAgentId) return true;
   try {
     const [row] = await db
       .select({ sandboxEnabled: pages.sandboxEnabled })
       .from(pages)
-      .where(eq(pages.id, agentPageId))
+      .where(eq(pages.id, actingAgentId))
       .limit(1);
     return Boolean(row?.sandboxEnabled);
   } catch (error) {

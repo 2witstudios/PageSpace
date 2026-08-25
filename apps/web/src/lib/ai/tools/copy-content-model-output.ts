@@ -12,7 +12,7 @@ type ToolResultOutput = Awaited<ReturnType<ToolModelOutputFn>>;
  * Keys carrying copied BYTES. Present in the persisted result (the diff
  * renderer needs them) and stripped before the result reaches the model.
  */
-const BYTE_CARRYING_KEYS = ['oldContent', 'newContent', 'copiedContent'] as const;
+const BYTE_CARRYING_KEYS = ['oldContent', 'newContent'] as const;
 
 /**
  * Strip the copied bytes out of a `copy_content` result before the model sees it.
@@ -28,9 +28,9 @@ const BYTE_CARRYING_KEYS = ['oldContent', 'newContent', 'copiedContent'] as cons
  * model-facing projection is reduced — to counts and identity, which is all an
  * agent needs to decide what to do next.
  *
- * Mirrors `toModelOutputForReadPage`; kept in its own module with its own test
- * so the invariant is pinned by a test rather than by a comment someone can
- * delete.
+ * Mirrors `toModelOutputForReadPage`. `copy-content-model-output.test.ts` pins
+ * BOTH halves: that this function strips, and that the tool actually wires it
+ * up — deleting the `toModelOutput:` line used to leave every test green.
  */
 export function toModelOutputForCopyContent(output: unknown): ToolResultOutput {
   if (output === null || typeof output !== 'object') {
