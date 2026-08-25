@@ -40,6 +40,12 @@ export interface SheetCellProps {
   isReadOnly: boolean;
   /** Presentation resolved by the evaluator (`cellFormatToStyle`). */
   formatStyle: React.CSSProperties;
+  /**
+   * A conditional data bar, drawn behind the value. Separate from
+   * `formatStyle` because a proportional fill is not something `CellFormat` can
+   * express.
+   */
+  bar?: { color: string; fraction: number };
   handlers: SheetCellHandlers;
 }
 
@@ -62,6 +68,7 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
   wraps,
   isReadOnly,
   formatStyle,
+  bar,
   handlers,
 }) => (
   <div
@@ -108,7 +115,25 @@ const SheetCellComponent: React.FC<SheetCellProps> = ({
     onTouchMove={handlers.onTouchMove}
     onTouchEnd={(event) => handlers.onTouchEnd(row, column, event)}
   >
-    {wraps ? display : <span className="block w-full truncate">{display}</span>}
+    {bar && bar.fraction > 0 && (
+      // Behind the value, not instead of it: the number stays readable, which
+      // is the whole reason a data bar beats a fill. `inset-y` leaves the cell's
+      // hairline seams visible rather than painting over them.
+      <span
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-y-[2px] left-0 rounded-[2px]"
+        style={{
+          width: `${Math.min(100, bar.fraction * 100)}%`,
+          backgroundColor: bar.color,
+          opacity: 0.35,
+        }}
+      />
+    )}
+    {wraps ? (
+      <span className="relative">{display}</span>
+    ) : (
+      <span className="relative block w-full truncate">{display}</span>
+    )}
   </div>
 );
 
@@ -124,13 +149,21 @@ const styleEqual = (a: React.CSSProperties, b: React.CSSProperties): boolean => 
  * identity is never stable; comparing it by value is what keeps a keystroke in
  * one cell from re-rendering every other visible cell.
  */
+const barEqual = (
+  a: SheetCellProps['bar'],
+  b: SheetCellProps['bar'],
+): boolean => a === b || (!!a && !!b && a.color === b.color && a.fraction === b.fraction);
+
 export const SheetCell = React.memo(SheetCellComponent, (previous, next) => {
   const keys = Object.keys(previous) as Array<keyof SheetCellProps>;
-  return keys.every((key) =>
-    key === 'formatStyle'
-      ? styleEqual(previous.formatStyle, next.formatStyle)
-      : previous[key] === next[key],
-  );
+  return keys.every((key) => {
+    // `formatStyle` and `bar` are both rebuilt by the evaluator on every sheet
+    // change, so neither ever has a stable identity — comparing them by value
+    // is what keeps one keystroke from re-rendering every visible cell.
+    if (key === 'formatStyle') return styleEqual(previous.formatStyle, next.formatStyle);
+    if (key === 'bar') return barEqual(previous.bar, next.bar);
+    return previous[key] === next[key];
+  });
 });
 
 SheetCell.displayName = 'SheetCell';

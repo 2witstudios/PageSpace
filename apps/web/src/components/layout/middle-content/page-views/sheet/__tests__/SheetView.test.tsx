@@ -215,6 +215,54 @@ describe('SheetView', () => {
     expect(cellAt('B4').style.backgroundColor).toBe('rgb(254, 226, 226)');
   });
 
+  it('paints a conditional rule without the grid knowing about rules', () => {
+    // Rules are folded in by the evaluator, so the grid renders them through
+    // the same `cell.format` it already used. This pins that: if the evaluator
+    // ever stopped resolving them, the grid would quietly go back to plain.
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '150';
+    sheet.conditionalFormats = [
+      {
+        id: 'over-100',
+        kind: 'cell',
+        ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { background: '#fee2e2' },
+      },
+    ];
+    const content = serializeSheetContent(sheet);
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('A1').style.backgroundColor).toBe('rgb(254, 226, 226)');
+    // A cell the rule does not match stays unpainted.
+    expect(cellAt('A2').style.backgroundColor).toBe('');
+  });
+
+  it('draws a data bar behind the value, not instead of it', () => {
+    // A data bar has no CellFormat field to live in, so it travels separately
+    // on the evaluation and is drawn as its own layer. The value must stay
+    // readable — that is the whole reason a bar beats a fill.
+    const sheet = createEmptySheet();
+    Object.assign(sheet.cells, { A1: '0', A2: '10' });
+    sheet.conditionalFormats = [
+      { id: 'bar', kind: 'dataBar', ranges: ['A1:A2'], color: '#3b82f6' },
+    ];
+    const content = serializeSheetContent(sheet);
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    const full = cellAt('A2').querySelector('[aria-hidden="true"]') as HTMLElement;
+    expect(full).not.toBeNull();
+    expect(full.style.width).toBe('100%');
+    expect(cellAt('A2').textContent).toContain('10');
+
+    // A zero-length bar is not drawn at all, rather than a zero-width sliver.
+    expect(cellAt('A1').querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
   it('extends the selection on shift-click', () => {
     // Dragging was the only way to select a range, which makes formatting a
     // wide block of a large sheet impractical. Every other spreadsheet binds
