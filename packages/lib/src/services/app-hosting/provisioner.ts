@@ -500,6 +500,10 @@ export interface TransitionPatch {
   /**
    * Travels with `imageDigest` and never alone — a size attributed to the wrong
    * digest is worse than an absent one.
+   *
+   * Supplying this also STAMPS `imageSizeMeasuredAt` (see `transitionPublishedApp`):
+   * the storage meter cannot use a measurement it cannot date, and the pair is a
+   * CHECK constraint, so the caller never sets the timestamp itself.
    */
   imageSizeBytes?: number | null;
   lastError?: string | null;
@@ -551,7 +555,19 @@ export async function transitionPublishedApp(
 
     const [updated] = await tx
       .update(publishedApps)
-      .set({ status: to, ...patch })
+      .set({
+        status: to,
+        ...patch,
+        // The size and its timestamp are one fact and land in one statement, which
+        // is what `published_apps_image_size_measured_coherent` enforces. Stamped
+        // HERE rather than by each caller because this is the only writer of
+        // `imageSizeBytes`, and a size the storage meter cannot date reads to it as
+        // "never measured" — billing the 0 floor forever while the watermark
+        // advances over real rootfs. Clearing the size clears the stamp with it.
+        ...(patch.imageSizeBytes === undefined
+          ? {}
+          : { imageSizeMeasuredAt: patch.imageSizeBytes === null ? null : new Date() }),
+      })
       .where(eq(publishedApps.id, publishedAppId))
       .returning();
     return { ok: true as const, app: updated };

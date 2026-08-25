@@ -140,3 +140,30 @@
 # this window (an orphan reaped mid-tick on any OTHER minute) remains an
 # accepted residual risk — see findStorageDriftCandidates's doc.
 5,20,35,50 * * * * flock -n /run/reconcile-storage.lock cron-curl GET __WEB_URL__/api/cron/reconcile-storage >> /var/log/cron/reconcile-storage.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-storage.log
+
+# Published-app awake meter - Every 10 minutes
+# Heartbeat-settles awake-seconds for every published app whose machine is up, and
+# re-holds against the payer's balance on each tick. A published app's machine runs
+# with autostop off so that every awake boundary is an API call we made — but it can
+# stay up for weeks between those boundaries, and settling only at stop would leave
+# the whole of that time riding on one process not crashing. Ten minutes matches the
+# realtime shell handler's settle cadence and bounds the loss to one tick.
+# The re-hold is also what makes the credit gate keep binding on a long-lived app:
+# a payer who runs out mid-window has their machine stopped and PARKED rather than
+# staying awake for free (parking on the DAILY CAP stays with the idle reaper).
+# The route holds a Postgres advisory lock across ALL callers — trackUsage and the
+# watermark advance are two separate un-transactioned writes, so overlapping runs
+# could double-bill; flock -n is this container's own defense in depth.
+# Dark until APP_HOSTING_ENABLED=true, when it reports `disabled` and reads nothing.
+*/10 * * * * flock -n /run/meter-published-apps.lock cron-curl GET __WEB_URL__/api/cron/meter-published-apps >> /var/log/cron/meter-published-apps.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/meter-published-apps.log
+
+# Published-app awake-seconds reconcile - Weekly on Mondays at 3:30am UTC
+# Compares the awake-seconds implied by our own mirrored start/stop boundaries
+# against Fly's managed Prometheus (fly_instance_up), which retains ~15 days. That
+# retention is what fixes the cadence: weekly leaves a full window of slack for one
+# missed run, where monthly would routinely ask about samples that no longer exist.
+# Fly's own machine event log keeps only the last 20 entries, so awake history is
+# NOT rebuildable after the fact — published_app_machine_events is the record, and
+# this is the check on it. It COMPARES AND ALERTS; it never moves money (a scraped
+# gauge is not evidence of a charge). Inert with no FLY_PROMETHEUS_ORG_SLUG.
+30 3 * * 1 flock -n /run/reconcile-app-awake-seconds.lock cron-curl GET __WEB_URL__/api/cron/reconcile-app-awake-seconds >> /var/log/cron/reconcile-app-awake-seconds.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-app-awake-seconds.log

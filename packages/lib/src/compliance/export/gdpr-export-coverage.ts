@@ -207,6 +207,17 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
     // confirmed kill.
     'app_hosting_reclaims',
+    // The local mirror of a published app's MACHINE lifecycle — start/stop
+    // boundaries kept because Fly retains only the last 20 events per machine.
+    // Every column is fleet telemetry: a Fly app name, a machine id, a
+    // normalized start/stop, Fly's own event id and a timestamp. Nothing is
+    // authored by or about the subject, and the row keys on a `published_apps`
+    // id, which is itself the DRIVE's infrastructure record. The money these
+    // boundaries produced is exported under the subject's billing categories
+    // (`ai_usage_logs`, the credit ledger), which is where a charge is actually
+    // evidenced — this table is how we priced the drive's machine, not a record
+    // of anything the subject did.
+    'published_app_machine_events',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',
