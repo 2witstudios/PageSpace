@@ -297,6 +297,33 @@ describe('AgentPageView', () => {
     expect(screen.queryByTestId('plain-chat')).not.toBeInTheDocument();
   });
 
+  it('a session-less conversation wears the SAME pane bar, carrying the new-conversation control', async () => {
+    // The whole point: which branch the user lands on is a property of the
+    // conversation they cannot see (binding is congenital and permanent), so
+    // the chrome must not differ. Before this, the plain branch rendered no
+    // header at all and the only way to start a conversation was the History
+    // tab.
+    resolveTo({ conversationId: 'conv-1', sessionId: null });
+    mockCreatePageConversation.mockResolvedValue({ conversationId: 'conv-2', sessionId: null });
+    render(<AgentPageView page={pageFixture()} />);
+
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-1'));
+    expect(screen.getByTestId('pane-bar')).toBeInTheDocument();
+    // The agent names the bar, exactly as a bound pane's identity does.
+    expect(screen.getByTestId('pane-bar')).toHaveTextContent('My Agent');
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    await waitFor(() =>
+      expect(mockCreatePageConversation).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: 'agent-1' }),
+      ),
+    );
+    // The same act the History tab's "New Conversation" performs — it lands on
+    // the Chat tab showing the mint, without the user ever visiting History.
+    await waitFor(() => expect(screen.getByTestId('plain-chat')).toHaveTextContent('conv-2'));
+  });
+
   it('a conversation whose SESSION is a global-assistant session passes the SESSION drive (null), not the agent page drive', async () => {
     // Reachable now that a global session can host any accessible agent's
     // conversation (create-conversation-in-workspace.ts): this agent page's

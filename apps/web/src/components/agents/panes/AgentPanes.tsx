@@ -46,7 +46,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createId } from '@paralleldrive/cuid2';
-import { Check, History, Loader2, MessageSquare, Plus, Save, Settings } from 'lucide-react';
+import { Check, History, Loader2, MessageSquare, Save, Settings } from 'lucide-react';
 import { toast } from 'sonner';
 import useSWR, { useSWRConfig } from 'swr';
 import type { Cache } from 'swr';
@@ -78,7 +78,7 @@ import EndSessionDialog from '../EndSessionDialog';
 import { useResolvedAgent } from '../useResolvedAgent';
 import { useSessionRecord } from '../useSessionRecord';
 import SessionPanes from './SessionPanes';
-import PaneBar, { PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
+import PaneBar, { PaneNewConversationAction, PaneSessionIdentity, PaneSplitCloseActions } from './PaneBar';
 import PanePicker, { type PickableAgent, type ReattachableShell } from './PanePicker';
 import { resolvePaneSurface } from './pane-surface';
 import { selectPaneAgent } from './select-pane-agent';
@@ -1851,19 +1851,10 @@ function ChatPane({
                 {settingsSaveState === 'saved' ? 'Saved' : 'Save'}
               </button>
             )}
-            <button
-              type="button"
-              aria-label="Start a new conversation"
-              title="Start a new conversation"
+            <PaneNewConversationAction
               disabled={disabledNewConversation}
-              onClick={(e) => {
-                e.stopPropagation();
-                void handleCreateNewFromHistory();
-              }}
-              className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
-            >
-              <Plus className="size-3.5" aria-hidden="true" />
-            </button>
+              onCreate={() => void handleCreateNewFromHistory()}
+            />
             <PaneSplitCloseActions
               canSplit={canSplit}
               canClose

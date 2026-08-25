@@ -8,7 +8,11 @@ import { describe, test, vi } from 'vitest';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { assert } from '@/stores/__tests__/riteway';
-import PaneBar, { PaneSplitCloseActions, PaneSessionIdentity } from '../PaneBar';
+import PaneBar, {
+  PaneSplitCloseActions,
+  PaneSessionIdentity,
+  PaneNewConversationAction,
+} from '../PaneBar';
 
 describe('PaneBar', () => {
   test('renders identity and actions, and marks the active state on the bar itself', () => {
@@ -119,6 +123,41 @@ describe('PaneSplitCloseActions', () => {
   });
 });
 
+describe('PaneNewConversationAction', () => {
+  test('fires onCreate, and does not bubble into the pane\'s own click handler', async () => {
+    const onPaneClick = vi.fn();
+    const onCreate = vi.fn();
+    render(
+      <div onClick={onPaneClick}>
+        <PaneNewConversationAction disabled={false} onCreate={onCreate} />
+      </div>,
+    );
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    assert({
+      given: 'a new-conversation click inside a pane whose root selects-on-click',
+      should: 'create, and stop propagation so the pane is not re-selected first',
+      actual: { created: onCreate.mock.calls.length, paneClicked: onPaneClick.mock.calls.length },
+      expected: { created: 1, paneClicked: 0 },
+    });
+  });
+
+  test('disabled swallows the click — a stream is still arriving', async () => {
+    const onCreate = vi.fn();
+    render(<PaneNewConversationAction disabled onCreate={onCreate} />);
+
+    await userEvent.click(screen.getByRole('button', { name: 'Start a new conversation' }));
+
+    assert({
+      given: 'a disabled new-conversation control',
+      should: 'not create',
+      actual: onCreate.mock.calls.length,
+      expected: 0,
+    });
+  });
+});
+
 describe('PaneSessionIdentity', () => {
   test('shows the session name and its agent label', () => {
     render(<PaneSessionIdentity name="shell-b2c3d4" label="Research Agent" />);
@@ -131,6 +170,24 @@ describe('PaneSessionIdentity', () => {
         agent: screen.queryByText('Research Agent') !== null,
       },
       expected: { name: true, agent: true },
+    });
+  });
+
+  test('an unbound identity shows a hollow dot, not the live one', () => {
+    const { container: live } = render(<PaneSessionIdentity name="bound" />);
+    const liveDot = live.querySelector('span > span');
+    const { container: plain } = render(<PaneSessionIdentity name="plain" bound={false} />);
+    const plainDot = plain.querySelector('span > span');
+
+    assert({
+      given: 'a session-less conversation wearing the same pane bar',
+      should: 'keep the dot slot but drop the live fill — the bar must not claim a session that is not there',
+      actual: {
+        liveFilled: liveDot?.className.includes('bg-emerald-500'),
+        plainFilled: plainDot?.className.includes('bg-emerald-500'),
+        plainHollow: plainDot?.className.includes('border'),
+      },
+      expected: { liveFilled: true, plainFilled: false, plainHollow: true },
     });
   });
 

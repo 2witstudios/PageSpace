@@ -68,6 +68,7 @@ import { useResolvedAgent } from './useResolvedAgent';
 import { useSessionRecord } from './useSessionRecord';
 import SessionChat from './chat/SessionChat';
 import AgentPanes from './panes/AgentPanes';
+import PaneBar, { PaneNewConversationAction, PaneSessionIdentity } from './panes/PaneBar';
 import { agentWorkspacesKey, isAgentWorkspacesKey, type SessionListEntry } from './panes/workspace-conversations';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
 import type { TreePage } from '@/hooks/usePageTree';
@@ -600,13 +601,36 @@ export default function AgentPageView({ page }: AgentPageViewProps) {
               </Button>
             </div>
           ) : (
-            <SessionChat
-              sessionId={null}
-              agent={agent}
-              conversationId={current.conversationId}
-              context="page"
-              isReadOnly={isReadOnly}
-            />
+            // A session-less conversation gets no pane GRID — but it wears the
+            // same bar the grid's panes do. Binding is congenital and permanent
+            // (see useResolvedConversation), so which branch the user lands on
+            // is a property of the conversation they cannot see; without this,
+            // the "+ new conversation" the pane bar carries simply vanished on
+            // any older/history thread and the only way to start one was the
+            // History tab. `group/pane` so the bar's actions reveal on hover
+            // exactly as they do in the grid.
+            <div className="group/pane flex h-full min-h-0 flex-col">
+              <PaneBar
+                // No sibling panes here, so there is no focus state to indicate.
+                isActive={false}
+                identity={<PaneSessionIdentity name={agent.title} bound={false} />}
+                actions={
+                  // Deliberately ungated: this reaches the SAME handleCreateNew
+                  // the History tab's "New Conversation" button already calls
+                  // ungated. One policy, not two.
+                  <PaneNewConversationAction disabled={false} onCreate={() => void handleCreateNew()} />
+                }
+              />
+              <div className="min-h-0 flex-1 overflow-hidden">
+                <SessionChat
+                  sessionId={null}
+                  agent={agent}
+                  conversationId={current.conversationId}
+                  context="page"
+                  isReadOnly={isReadOnly}
+                />
+              </div>
+            </div>
           )}
         </TabsContent>
 

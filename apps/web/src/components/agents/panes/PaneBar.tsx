@@ -25,7 +25,7 @@
  */
 
 import type { MouseEvent, ReactNode } from 'react';
-import { SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
+import { Plus, SquareSplitHorizontal, SquareSplitVertical, X } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 
@@ -144,17 +144,61 @@ export function PaneSplitCloseActions({
 }
 
 /**
- * A bound pane's identity: a live dot, the session name, and an optional label.
+ * "Start a new conversation" — the one action a chat surface offers from its
+ * bar whether or not it has a grid to split. Shared rather than inlined so the
+ * pane grid and the agent page's plain (session-less) chat cannot drift into
+ * two differently-worded, differently-shaped buttons for the same act.
+ */
+export function PaneNewConversationAction({
+  disabled,
+  onCreate,
+}: {
+  disabled: boolean;
+  onCreate(): void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-label="Start a new conversation"
+      title="Start a new conversation"
+      disabled={disabled}
+      onClick={guarded(onCreate)}
+      className="flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+    >
+      <Plus className="size-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * A pane's identity: a status dot, the session name, and an optional label.
  *
- * The dot means "a live session is bound here" — this surface only shows
- * sessions that exist server-side, so bound IS the running state it has. The
- * label carries the agent name for a chat pane, which is what keeps a grid of
+ * The dot's FILL means "a live session is bound here" — in the pane grid that
+ * is always true, since it only shows sessions that exist server-side. The
+ * agent page also wears this bar over a session-less conversation (binding is
+ * congenital and permanent, so history is full of them), and passes
+ * `bound={false}` for a hollow, muted dot: same bar, honest state. The label
+ * carries the agent name for a chat pane, which is what keeps a grid of
  * conversations with different agents readable.
  */
-export function PaneSessionIdentity({ name, label }: { name: string; label?: string }) {
+export function PaneSessionIdentity({
+  name,
+  label,
+  bound = true,
+}: {
+  name: string;
+  label?: string;
+  bound?: boolean;
+}) {
   return (
     <span className="flex min-w-0 items-center gap-1.5">
-      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
+      <span
+        aria-hidden
+        className={cn(
+          'size-1.5 shrink-0 rounded-full',
+          bound ? 'bg-emerald-500' : 'border border-muted-foreground/60',
+        )}
+      />
       <span className="truncate font-mono text-[11px]">{name}</span>
       {label !== undefined && (
         <span className="shrink-0 rounded border border-border px-1 py-px text-[10px] font-normal text-muted-foreground">
