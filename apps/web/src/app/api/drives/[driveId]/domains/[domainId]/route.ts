@@ -255,15 +255,26 @@ export async function DELETE(
     // app's own domain and Fly never issued a per-hostname cert for them.
     if (!deleted.platformOwned) {
       const routerApp = resolveAppRouterFlyAppName();
-      void removeCertificate(routerApp, deleted.hostname).then((result) => {
-        if (!result.ok) {
-          loggers.api.warn('Failed to remove Fly certificate after domain removal', {
-            hostname: deleted.hostname,
-            routerApp,
-            error: result.error,
-          });
-        }
-      });
+      const warnCertRemovalFailed = (error: string) => {
+        loggers.api.warn('Failed to remove Fly certificate after domain removal', {
+          hostname: deleted.hostname,
+          routerApp,
+          error,
+        });
+      };
+      // `removeCertificate` returns a discriminated result and does not reject
+      // today. The `.catch` is here because that is an invariant of ANOTHER
+      // module, not of this call site: a fire-and-forget promise that starts
+      // rejecting surfaces as an unhandled rejection, which fails the coverage
+      // job while every test still reports passing — a failure that would not
+      // point back at this line.
+      void removeCertificate(routerApp, deleted.hostname)
+        .then((result) => {
+          if (!result.ok) warnCertRemovalFailed(result.error);
+        })
+        .catch((err: unknown) => {
+          warnCertRemovalFailed(err instanceof Error ? err.message : 'unknown error');
+        });
     }
 
     auditRequest(request, {

@@ -71,9 +71,22 @@ function transportOrNull(): FlapsTransport | null {
   return token ? { token } : null;
 }
 
+/**
+ * The message for "Fly is not configured at all".
+ *
+ * Names BOTH variables, because {@link resolveToken} accepts either and the
+ * message is read by an operator deciding which one to set. Naming only
+ * `FLY_API_TOKEN` — as this did — tells someone debugging a leaked certificate
+ * charge on a published-app deployment, which configures only
+ * `FLY_MACHINES_ORG_TOKEN`, that the variable they set was not the missing
+ * piece. Stated once so the two call sites cannot drift back apart.
+ */
+const NO_CREDENTIAL_ERROR =
+  'Neither FLY_API_TOKEN nor FLY_MACHINES_ORG_TOKEN is configured';
+
 const NO_TOKEN: FlyCertResponse = {
   ok: false,
-  error: 'FLY_API_TOKEN is not configured',
+  error: NO_CREDENTIAL_ERROR,
 };
 
 /** Normalize Fly's ownership requirement, dropping a half-populated one. */
@@ -165,7 +178,7 @@ export async function removeCertificate(
   hostname: string,
 ): Promise<{ ok: true } | { ok: false; error: string }> {
   const transport = transportOrNull();
-  if (!transport) return { ok: false, error: 'FLY_API_TOKEN is not configured' };
+  if (!transport) return { ok: false, error: NO_CREDENTIAL_ERROR };
   try {
     await deleteCertificate(transport, appName, hostname);
     return { ok: true };

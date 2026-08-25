@@ -82,6 +82,17 @@ export function parseOwnershipTxtValues(records: readonly (readonly string[])[])
 }
 
 /**
+ * The ownership values Fly will accept for this requirement, in preference order.
+ *
+ * Either value satisfies Fly, and either may be absent, so the empties are
+ * filtered here ONCE — both the comparison and the customer-facing instruction
+ * read this list, so they cannot disagree about what counts as acceptable.
+ */
+export function acceptedOwnershipValues(requirement: FlyOwnershipRequirement): string[] {
+  return [requirement.appValue, requirement.orgValue].filter((v) => v.length > 0);
+}
+
+/**
  * Compare the published TXT values against what Fly asked for.
  *
  * `null` requirement means Fly reported no ownership requirement at all, which
@@ -93,17 +104,6 @@ export function parseOwnershipTxtValues(records: readonly (readonly string[])[])
  * Comparison is case-insensitive: these values travel through DNS UIs that
  * normalize case, and a case-folded record still satisfies Fly.
  */
-/**
- * The ownership values Fly will accept for this requirement, in preference order.
- *
- * Either value satisfies Fly, and either may be absent, so the empties are
- * filtered here ONCE — both the comparison and the customer-facing instruction
- * read this list, so they cannot disagree about what counts as acceptable.
- */
-export function acceptedOwnershipValues(requirement: FlyOwnershipRequirement): string[] {
-  return [requirement.appValue, requirement.orgValue].filter((v) => v.length > 0);
-}
-
 export function verifyFlyOwnershipTxt(args: {
   requirement: FlyOwnershipRequirement | null;
   records: readonly (readonly string[])[];

@@ -168,7 +168,10 @@ describe('the token is required before any request is attempted', () => {
 
     const result = await addCertificate(APP_NAME, HOSTNAME);
 
-    expect(result).toEqual({ ok: false, error: 'FLY_API_TOKEN is not configured' });
+    expect(result).toEqual({
+      ok: false,
+      error: 'Neither FLY_API_TOKEN nor FLY_MACHINES_ORG_TOKEN is configured',
+    });
     expect(getCertificateMock).not.toHaveBeenCalled();
   });
 
@@ -221,8 +224,27 @@ describe('removeCertificate — a hostname left attached bills forever', () => {
     delete process.env.FLY_API_TOKEN;
     expect(await removeCertificate(APP_NAME, HOSTNAME)).toEqual({
       ok: false,
-      error: 'FLY_API_TOKEN is not configured',
+      error: 'Neither FLY_API_TOKEN nor FLY_MACHINES_ORG_TOKEN is configured',
     });
+  });
+
+  // The message is read by an operator deciding WHICH variable to set, and
+  // `resolveToken` accepts either. A message naming only FLY_API_TOKEN tells
+  // someone on a published-app deployment — which configures only
+  // FLY_MACHINES_ORG_TOKEN — that the variable they set was not the problem.
+  it.each([
+    ['addCertificate', () => addCertificate(APP_NAME, HOSTNAME)],
+    ['removeCertificate', () => removeCertificate(APP_NAME, HOSTNAME)],
+  ])('given no credential, %s should name BOTH accepted variables', async (_label, call) => {
+    delete process.env.FLY_API_TOKEN;
+    delete process.env.FLY_MACHINES_ORG_TOKEN;
+
+    const result = await call();
+
+    expect(result.ok).toBe(false);
+    const error = result.ok ? '' : result.error;
+    expect(error).toContain('FLY_API_TOKEN');
+    expect(error).toContain('FLY_MACHINES_ORG_TOKEN');
   });
 });
 
