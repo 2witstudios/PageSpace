@@ -270,7 +270,7 @@ describe('exceedsReplayableBody — the 1MB replay ceiling', () => {
   });
 
   it.each([
-    ['a chunked request declaring no length', null],
+    ['a request declaring no length', null],
     ['an absent header', undefined],
     ['a non-numeric header', 'banana'],
     ['a negative length', '-5'],
@@ -287,7 +287,7 @@ describe('exceedsReplayableBody — the 1MB replay ceiling', () => {
 });
 
 describe('exceedsStreamedBody — the half the header check cannot see', () => {
-  /** A body delivered in chunks, the way a request with no Content-Length arrives. */
+  /** A body delivered in pieces, the way a request with no Content-Length arrives. */
   const streamOf = (...sizes: number[]): ReadableStream<Uint8Array> =>
     new ReadableStream<Uint8Array>({
       start(controller) {

@@ -132,11 +132,12 @@ async function handle(request: Request): Promise<Response> {
   // Tigris via presigned URLs and never reach this edge at all.
   //
   // Two checks, because there are two ways to arrive. A request that declares
-  // its size is refused on the header alone and costs nothing. A chunked request
-  // declares nothing, so its body is measured — bounded at the limit, and only
-  // ever for the request that gave us no length to read. Without the second
+  // its size is refused on the header alone and costs nothing. A request that
+  // sends no Content-Length has its body measured — bounded at the limit, and
+  // only ever for the request that gave us no length to read. Without the second
   // check the limit is trivially bypassed by omitting Content-Length, which is
-  // the shape a streaming upload takes by default.
+  // the default shape of a streaming upload AND of every HTTP/2 request, since
+  // HTTP/2 forbids Transfer-Encoding and carries content in DATA frames.
   const declaredLength = request.headers.get('content-length');
   let tooLarge: boolean;
   try {

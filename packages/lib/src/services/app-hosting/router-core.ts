@@ -232,8 +232,8 @@ export function buildFlyReplayHeader(args: {
 /**
  * Whether a request's DECLARED body size is past what Fly can replay.
  *
- * Reads `Content-Length` only, and is therefore only half the check: a chunked
- * request declares no length, so this answers false. {@link exceedsStreamedBody}
+ * Reads `Content-Length` only, and is therefore only half the check: a request
+ * that sends no length makes this answer false. {@link exceedsStreamedBody}
  * covers that case — see the note there for why the split is deliberate rather
  * than an oversight. See {@link MAX_REPLAYABLE_BODY_BYTES} for where large
  * payloads are supposed to go instead.
@@ -248,9 +248,14 @@ export function exceedsReplayableBody(contentLengthHeader: string | null | undef
 /**
  * Whether a body with no declared length runs past what Fly can replay.
  *
- * A chunked request carries no `Content-Length`, so the header check above sees
- * nothing and would let the request through to `fly-replay` — where Fly, unable
- * to replay a body over the limit, fails it at the platform. The client gets an
+ * A request without `Content-Length` gives the header check above nothing to
+ * read, so it would let the request through to `fly-replay` — where Fly, unable
+ * to replay a body over the limit, fails it at the platform.
+ *
+ * Deliberately NOT called "chunked": that names an HTTP/1.1 transfer-encoding,
+ * and HTTP/2 forbids it outright, carrying request content in DATA frames with
+ * no length at all. Keying on the ABSENCE of `Content-Length` covers both, which
+ * matters because the edge in front of this serves HTTP/2. The client gets an
  * opaque 502 instead of the 413 this edge exists to give them, and it happens on
  * the one path nobody tests.
  *

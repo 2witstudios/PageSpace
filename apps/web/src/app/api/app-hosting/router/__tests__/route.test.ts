@@ -209,13 +209,14 @@ describe('the 1MB replay ceiling is named, not discovered', () => {
   });
 
   /**
-   * A chunked body: no `Content-Length`, delivered as a stream. This is the
-   * shape a streaming upload takes by default, and before the streamed check it
-   * walked straight past the header gate into a `fly-replay` Fly could not
-   * perform — surfacing to the client as an opaque 502 from the platform rather
-   * than as the 413 this edge exists to give them.
+   * A body with no `Content-Length`, delivered as a stream. Not merely HTTP/1.1
+   * `chunked`: HTTP/2 forbids that encoding and carries content in DATA frames
+   * with no length at all, so this is the ordinary shape on a modern edge as well
+   * as the default for a streaming upload. Before the streamed check it walked
+   * straight past the header gate into a `fly-replay` Fly could not perform —
+   * surfacing as an opaque 502 rather than the 413 this edge exists to give.
    */
-  const chunkedRequest = (totalBytes: number): Request => {
+  const lengthlessRequest = (totalBytes: number): Request => {
     const chunk = 64 * 1024;
     let sent = 0;
     const body = new ReadableStream<Uint8Array>({
@@ -232,15 +233,15 @@ describe('the 1MB replay ceiling is named, not discovered', () => {
     return request({}, { method: 'POST', body, duplex: 'half' } as RequestInit);
   };
 
-  it('given a chunked body past the limit, should answer 413 rather than emit an unreplayable fly-replay', async () => {
-    const res = await POST(chunkedRequest(1_048_577));
+  it('given a lengthless body past the limit, should answer 413 rather than emit an unreplayable fly-replay', async () => {
+    const res = await POST(lengthlessRequest(1_048_577));
     expect(res.status).toBe(413);
     expect(res.headers.get('fly-replay')).toBeNull();
     expect(resolveAppRoute).not.toHaveBeenCalled();
   });
 
-  it('given a chunked body within the limit, should route normally', async () => {
-    const res = await POST(chunkedRequest(128 * 1024));
+  it('given a lengthless body within the limit, should route normally', async () => {
+    const res = await POST(lengthlessRequest(128 * 1024));
     expect(res.status).toBe(204);
     expect(res.headers.get('fly-replay')).toBe('app=pgs-app-abc;state=ff00;timeout=1500');
   });

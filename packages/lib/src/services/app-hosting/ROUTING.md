@@ -108,13 +108,16 @@ The limit is checked two ways, because there are two ways to arrive:
 | Request declares | Checked by | Cost |
 | --- | --- | --- |
 | `Content-Length` | `exceedsReplayableBody` | a header read |
-| nothing (chunked) | `exceedsStreamedBody` | the body, measured, bounded at the limit |
+| no `Content-Length` | `exceedsStreamedBody` | the body, measured, bounded at the limit |
 
-The second is not redundant. A chunked request carries no length, so the header
-check answers false and the request would reach `fly-replay` — where Fly, unable
-to replay a body over the limit, fails it at the platform and the client sees an
-opaque 502 instead of the 413. Omitting `Content-Length` is the default shape of
-a streaming upload, not an exotic case, so the header check alone is bypassed by
+The second is not redundant. A request that sends no `Content-Length` gives the
+header check nothing to read, so it answers false and the request would reach
+`fly-replay` — where Fly, unable to replay a body over the limit, fails it at the
+platform and the client sees an opaque 502 instead of the 413. This is NOT only
+HTTP/1.1 `Transfer-Encoding: chunked`: HTTP/2 forbids that header entirely and
+carries request content in DATA frames with no length at all, so on a modern edge
+the lengthless case is the norm rather than the exception. It is the default
+shape of a streaming upload too, so the header check alone is bypassed by
 accident as easily as on purpose. The measured read is bounded: it stops and
 cancels at the first byte past the limit, and it only ever runs for a request
 that gave us no length to read, so a request that declares its size still pays
