@@ -331,6 +331,32 @@ export const toolRenderers: Record<string, ToolRenderer> = {
         content={content}
         pageId={parsedOutput.pageId as string | undefined}
         pageType={parsedOutput.type as string | undefined}
+        // read_page on a SHEET returns the same row table, whose leading
+        // numbers are A1 rows rather than display chrome.
+        preserveLineNumbers={parsedOutput.type === 'SHEET'}
+      />
+    );
+  },
+
+  // A sheet read renders as the table it already carries — the same
+  // RichContentRenderer read_page uses, so a sheet looks the same whichever
+  // tool fetched it.
+  read_sheet: ({ parsedOutput }) => {
+    const table = parsedOutput.table;
+    // Returning null here for a failure envelope left an EMPTY card for
+    // precisely the results the tool works hardest to explain — the
+    // wrong-page-type, bad-tabIndex, mixed-paging and "do not overwrite it"
+    // refusals all carry a message and no table. Fall through to the generic
+    // success/failure renderer below, which shows them.
+    if (parsedOutput.success === false) return null;
+    if (typeof table !== 'string' || table.length === 0) return null;
+    return (
+      <RichContentRenderer
+        title={(parsedOutput.title as string | undefined) || 'Sheet'}
+        content={table}
+        pageId={parsedOutput.pageId as string | undefined}
+        pageType="SHEET"
+        preserveLineNumbers
       />
     );
   },

@@ -14,6 +14,7 @@
 
 import {
   voiceBridgeRequestSchema,
+  type VoiceAssistant,
   type VoiceBridgeResponse,
 } from '@pagespace/lib/realtime/voice-bridge-contract';
 import { dispatchRealtimeToolCall, type RealtimeToolDispatchDeps } from './tool-dispatch';
@@ -31,7 +32,15 @@ export type VoiceBridgeDeps = {
    * shared by every live call in the process, and each call is bound to a
    * different assistant.
    */
-  readonly toolDeps: (allowlist: readonly string[] | null) => RealtimeToolDispatchDeps;
+  /**
+   * The executable tool set for this hop. Takes the whole ASSISTANT, not just
+   * its allowlist: the per-agent sandbox switch is part of the same decision and
+   * is read server-side from the agent's own row (issue #2460), so it may be
+   * async. Undefined for an unbound (Global Assistant) call.
+   */
+  readonly toolDeps: (
+    assistant: VoiceAssistant | undefined,
+  ) => RealtimeToolDispatchDeps | Promise<RealtimeToolDispatchDeps>;
   readonly transcriptDeps: TranscriptPersistenceDeps;
   /** Resolved from env at the edge, for tool-call attribution. */
   readonly model: string;
@@ -81,7 +90,7 @@ export const handleVoiceBridgeRequest = async (
     // off the execution context. An agent with no allowlist configured is
     // `null` — unrestricted — and the Global Assistant has no agent at all.
     const outcome = await dispatchRealtimeToolCall(
-      deps.toolDeps(request.assistant?.enabledTools ?? null),
+      await deps.toolDeps(request.assistant),
       {
         name: request.name,
         argumentsJson: request.argumentsJson,

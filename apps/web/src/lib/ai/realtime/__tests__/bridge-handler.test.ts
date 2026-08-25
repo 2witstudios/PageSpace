@@ -195,9 +195,11 @@ describe('handleVoiceBridgeRequest — the bound assistant', () => {
     enabledTools: ['read_page'],
   };
 
-  it("should build the executable tool set under the agent's OWN allowlist", async () => {
+  it("should build the executable tool set from the agent's OWN configuration", async () => {
     // Built unrestricted, the model would be offered the agent's allowed tools
-    // and permitted to run any of them — the wider list winning.
+    // and permitted to run any of them — the wider list winning. The whole
+    // assistant travels, not just its allowlist: the sandbox switch is read from
+    // the agent's own row on the far side (issue #2460), and the id is how.
     const toolDeps = vi.fn(() => ({
       tools: { read_page: tool(() => ({ title: 'Notes' })) },
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -205,11 +207,12 @@ describe('handleVoiceBridgeRequest — the bound assistant', () => {
 
     await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody({ assistant }));
 
-    expect(toolDeps).toHaveBeenCalledWith(['read_page']);
+    expect(toolDeps).toHaveBeenCalledWith(assistant);
   });
 
   it('given NO assistant, should build it unrestricted rather than blocked', async () => {
-    // The Global Assistant has no agent page, and null is "never restricted".
+    // The Global Assistant has no agent page: nothing to restrict by, and no
+    // agent whose sandbox switch it would be.
     const toolDeps = vi.fn(() => ({
       tools: { read_page: tool(() => ({ title: 'Notes' })) },
       logger: { warn: vi.fn(), error: vi.fn() },
@@ -217,7 +220,7 @@ describe('handleVoiceBridgeRequest — the bound assistant', () => {
 
     await handleVoiceBridgeRequest(deps({ toolDeps }), toolBody());
 
-    expect(toolDeps).toHaveBeenCalledWith(null);
+    expect(toolDeps).toHaveBeenCalledWith(undefined);
   });
 
   it('should reach the tool as the AGENT, not merely as the user who started the call', async () => {

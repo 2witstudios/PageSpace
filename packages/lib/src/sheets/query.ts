@@ -26,19 +26,36 @@ export const MAX_FILTER_DEPTH = 8;
 export const MAX_FILTER_CONDITIONS = 64;
 export const MAX_IN_VALUES = 500;
 
-export type SheetFilterOp =
-  | 'eq'
-  | 'neq'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'contains'
-  | 'startsWith'
-  | 'endsWith'
-  | 'isEmpty'
-  | 'isNotEmpty'
-  | 'in';
+/**
+ * The operators `compileWhere` understands, as a value so the callers that must
+ * validate against them can derive their check instead of retyping the list.
+ *
+ * Every caller-facing filter surface re-declared these twelve by hand — the MCP
+ * route's `conditionSchema`, `read_sheet`'s, and the type below. Three copies of
+ * one list is drift waiting to happen, and the neighbouring `columnSchema`
+ * already shows what that costs: a hand-written cap there disagreed with
+ * `assertColumn` and turned valid columns into a 400. An operator added here and
+ * missed in a schema fails the same way — rejected on input the store handles.
+ *
+ * Deriving `SheetFilterOp` FROM the list, rather than declaring both, is what
+ * makes the two impossible to disagree.
+ */
+export const SHEET_FILTER_OPS = [
+  'eq',
+  'neq',
+  'gt',
+  'gte',
+  'lt',
+  'lte',
+  'contains',
+  'startsWith',
+  'endsWith',
+  'isEmpty',
+  'isNotEmpty',
+  'in',
+] as const;
+
+export type SheetFilterOp = (typeof SHEET_FILTER_OPS)[number];
 
 export interface SheetCondition {
   /** Column letter, e.g. "A", "AB". */

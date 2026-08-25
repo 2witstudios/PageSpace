@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { convertToModelMessages, generateText, stepCountIs, hasToolCall } from 'ai';
 import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
-import { filterToolsForMcpScope, filterToolsForImageGen } from '@/lib/ai/core/tool-filtering';
+import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
 import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
 
@@ -32,6 +32,7 @@ import { estimateChatHoldCentsForModel } from '@pagespace/lib/monitoring/chat-pr
 import { releaseHold } from '@pagespace/lib/billing/credit-consume';
 import { creditGateErrorResponse } from '@/lib/subscription/credit-gate-response';
 import type { SubscriptionTier } from '@pagespace/lib/services/subscription-utils';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
 
 /**
  * Format tool execution results into human-readable text
@@ -458,14 +459,24 @@ export async function POST(request: Request) {
       false,
     );
 
-    // Filter tools based on agent's enabled tools
-    const availableTools = Array.isArray(enabledTools) && enabledTools.length > 0
+    // Filter tools based on agent's enabled tools, then apply the per-agent
+    // SANDBOX SWITCH (issue #2460). The allowlist is the agent owner's list of
+    // what their agent may do; `pages.sandboxEnabled` is whether the sandbox
+    // families are on the table at all, and it strips them whatever the
+    // allowlist says. This route assembled its own set and asked only the first
+    // question, so an agent with the switch off was handed the session/shell
+    // family here while the same agent in a page chat correctly saw none of it.
+    const allowedTools = Array.isArray(enabledTools) && enabledTools.length > 0
       ? Object.fromEntries(
           Object.entries(scopedPageSpaceTools).filter(([toolName]) =>
             enabledTools.includes(toolName)
           )
         )
       : {};
+    const availableTools = filterToolsForSandboxEnablement(
+      allowedTools,
+      Boolean(agent.sandboxEnabled),
+    );
 
     // INTEGRATION TOOLS: resolve and merge integration tools for this agent
     let toolsForRun: Record<string, unknown> = availableTools;
@@ -531,6 +542,10 @@ export async function POST(request: Request) {
             // same ask_agent tool and must not allow a far larger budget for an
             // externally/MCP-triggered call than an internally-triggered one.
             stopWhen: [hasToolCall(FINISH_TOOL_NAME), stepCountIs(20)],
+            // Per-step cap: history is prepared once, but this loop runs many model
+            // calls, so one run's oversized tool payloads would otherwise accumulate
+            // for its whole duration (#2461 — see cap-step-tool-payloads.ts).
+            prepareStep: ({ messages: stepMessages }) => ({ messages: capStepToolPayloads(stepMessages) }),
             onStepFinish: ({ toolCalls, toolResults, text }) => {
               loggers.api.debug('Agent tool execution step completed', {
                 agentId,

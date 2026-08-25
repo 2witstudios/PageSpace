@@ -229,3 +229,42 @@ describe('buildInlineInstructions — skill-aware slimming', () => {
     expect(buildGlobalAssistantInstructions()).toContain('provision_form_target');
   });
 });
+
+describe('SHEET bullet vs the agent allowlist', () => {
+  it('names read_sheet when the agent holds it', () => {
+    const text = buildInlineInstructions(['read_page', 'read_sheet', 'edit_sheet_cells']);
+    expect(text).toContain('read_sheet');
+  });
+
+  it('names no tool the agent lacks, whichever subset it holds', () => {
+    // The bullet can name three tools. Gating only read_sheet left the other
+    // two able to do exactly what the gate exists to prevent: an agent holding
+    // only read_sheet was still told about edit_sheet_cells.
+    const sheetLine = (tools: string[]) =>
+      buildInlineInstructions(tools).split('\n').find(l => l.startsWith('• SHEET')) ?? '';
+
+    const readOnly = sheetLine(['read_sheet']);
+    expect(readOnly).toContain('read_sheet');
+    expect(readOnly).not.toContain('edit_sheet_cells');
+
+    const writeOnly = sheetLine(['edit_sheet_cells']);
+    expect(writeOnly).toContain('edit_sheet_cells');
+    expect(writeOnly).not.toContain('read_sheet');
+    expect(writeOnly).not.toContain('read_page');
+
+    const nothing = sheetLine([]);
+    expect(nothing).not.toContain('read_sheet');
+    expect(nothing).not.toContain('read_page');
+    expect(nothing).not.toContain('edit_sheet_cells');
+  });
+
+  it('points at read_page instead when the agent does not', () => {
+    // An allowlist saved before read_sheet existed cannot contain it, and
+    // naming it produces an unknown-tool call before the model recovers.
+    const text = buildInlineInstructions(['read_page', 'edit_sheet_cells']);
+    const sheetLine = text.split('\n').find(l => l.startsWith('• SHEET')) ?? '';
+    expect(sheetLine).not.toContain('read_sheet');
+    expect(sheetLine).toContain('read_page');
+    expect(sheetLine).toContain('lineStart');
+  });
+});

@@ -32,6 +32,8 @@ import {
   type ElisionMessage,
 } from '@pagespace/lib/ai/tool-result-eliding';
 import { WRITE_TOOLS } from '@/lib/ai/core/tool-filtering';
+import { capStepToolPayloads } from '@/lib/ai/core/cap-step-tool-payloads';
+import { withCacheBreakpoints } from '@/lib/ai/core/prompt-assembly';
 
 // ─── Elision config ────────────────────────────────────────────────────────────
 
@@ -251,4 +253,33 @@ export async function finishModelRequest(params: FinishRequestParams): Promise<F
     ? [{ role: 'user' as const, content: prepared.summaryText }, ...tailModelMessages]
     : tailModelMessages;
   return { modelMessages, stableBoundaryIndex: prepared.stableBoundaryIndex };
+}
+
+// ─── Per-step seam ─────────────────────────────────────────────────────────────
+
+/**
+ * The per-step counterpart to prepareHistoryForModel.
+ *
+ * That seam runs ONCE per turn. A turn is up to AGENT_MAX_STEPS model calls, and
+ * between them nothing reclaims context, so an agent moving large payloads pays
+ * for every earlier one on every later step (#2461). This composes the two things
+ * every agent loop must do to the messages it is about to send:
+ *
+ *   1. capStepToolPayloads — bound the turn's own oversized tool payloads
+ *   2. withCacheBreakpoints — re-mark A) the last message and B) the stable
+ *      boundary, so mid-loop tool results stay cacheable
+ *
+ * Capping runs FIRST so the breakpoint lands on the bytes actually sent.
+ *
+ * Shared rather than written out at each call site: page-chat-turn and
+ * global-chat-turn had byte-identical copies of this, which is exactly what
+ * turn-duplication-ratchet.test.ts exists to stop. Loops with no cache-breakpoint
+ * boundary to re-mark call capStepToolPayloads directly instead.
+ */
+export function agentLoopPrepareStep(
+  stableBoundaryIndex: number,
+): (options: { messages: ModelMessage[] }) => { messages: ModelMessage[] } {
+  return ({ messages }) => ({
+    messages: withCacheBreakpoints(capStepToolPayloads(messages), stableBoundaryIndex),
+  });
 }

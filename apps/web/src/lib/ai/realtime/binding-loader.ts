@@ -54,6 +54,13 @@ export type AgentPage = {
   readonly title: string;
   readonly systemPrompt: string | null;
   readonly enabledTools: string[] | null;
+  /**
+   * The per-agent sandbox switch, carried for the same reason `enabledTools` is:
+   * the call's tool exposure is the agent's configuration, and this switch is
+   * part of it (issue #2460). Without it a voice call answered differently from
+   * every other surface — the allowlist applied, the switch ignored.
+   */
+  readonly sandboxEnabled: boolean;
 };
 
 export type BindingLoaderDeps = {
@@ -196,6 +203,7 @@ export const loadVoiceBinding = async (
               title: agent.title,
               systemPrompt: agent.systemPrompt,
               enabledTools: agent.enabledTools,
+              sandboxEnabled: agent.sandboxEnabled,
             },
           }),
     });

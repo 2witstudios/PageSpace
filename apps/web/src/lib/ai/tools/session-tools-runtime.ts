@@ -39,7 +39,10 @@ import { conversations, messages as globalMessages } from '@pagespace/db/schema/
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { findChatMembership } from '@pagespace/lib/services/agent-workspaces/workspace-membership-store';
 import { canUserViewPage, getDriveIdsForUser } from '@pagespace/lib/permissions/permissions';
-import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
+import {
+  canRunCodeForSession,
+  resolveDriveMembership,
+} from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDriveWithinCredentialScope } from '@pagespace/lib/agent-workspaces/credential-scope';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { redactConversationTitleForViewer } from '@pagespace/lib/agent-workspaces/redact-conversation-listing';
@@ -1015,6 +1018,65 @@ export function buildSessionToolsDeps(): SessionToolsDeps {
       });
       if (!page) return false;
       return canUserViewPage(userId, agentPageId);
+    },
+
+    describeAgentToolSurface: async (agentPageId) => {
+      const page = await db.query.pages.findFirst({
+        where: and(eq(pages.id, agentPageId), eq(pages.type, 'AI_CHAT'), eq(pages.isTrashed, false)),
+        columns: { enabledTools: true, sandboxEnabled: true, toolExposureMode: true },
+      });
+      if (!page) return null;
+      // Imported at CALL time: `core/ai-tools` builds this very tool family
+      // (`buildSessionTools`), so a static import here would close a module
+      // cycle through the registry.
+      const [{ pageSpaceTools }, surfaceModule] = await Promise.all([
+        import('../core/ai-tools'),
+        import('../core/agent-tool-surface'),
+      ]);
+      const surface = surfaceModule.describeAgentToolSurface({
+        enabledTools: (page.enabledTools as string[] | null) ?? null,
+        sandboxEnabled: Boolean(page.sandboxEnabled),
+        toolExposureMode: page.toolExposureMode === 'search' ? 'search' : 'upfront',
+        registeredToolNames: Object.keys(pageSpaceTools),
+      });
+      return { ...surface, notes: surfaceModule.formatAgentToolSurfaceNotes(surface) };
+    },
+
+    describeWorkerComputeShortfall: async ({ workspaceId, userId, granted }) => {
+      // Lazily, for the same cycle reason `describeAgentToolSurface` explains.
+      const { SANDBOX_COMPUTE_TOOL_NAMES } = await import('../core/tool-filtering');
+      // `null` granted = unrestricted (no allowlist, or a global worker): the
+      // whole registry, so compute is certainly in play.
+      const computeNames =
+        granted === null
+          ? [...SANDBOX_COMPUTE_TOOL_NAMES]
+          : granted.filter((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
+      if (computeNames.length === 0) return null;
+
+      // The SAME question the worker's own turn will ask
+      // (`resolveSandboxToolEligibilityForConversation` → `canRunCodeForSession`),
+      // asked of the workspace it actually landed in and answered with the same
+      // inputs, so this predicts rather than guesses.
+      const { workspaceOwnerId, workspaceDriveId } = await describeWorkspace(workspaceId);
+      const eligible = await canRunCodeForSession({
+        userId,
+        driveId: workspaceDriveId,
+        ownerId: workspaceOwnerId ?? userId,
+      });
+      if (eligible) return null;
+
+      // The OUTCOME, not a diagnosis. `canRunCode` folds together the deployment
+      // kill switch, the payer's tier and the requester's own role in that
+      // drive; naming one of them here would be a guess dressed as a reason —
+      // which is the failure mode this whole PR is about.
+      return (
+        'This worker landed in a workspace that will NOT grant it the compute tools ' +
+        `(${computeNames.slice(0, 6).join(', ')}${computeNames.length > 6 ? ', …' : ''}) ` +
+        'however its agent is configured — code execution there is refused for this actor, by the ' +
+        'deployment switch, the workspace owner\'s plan, or your role in that drive. Session and ' +
+        'page tools are unaffected. Spawning into a workspace where you can already run code is ' +
+        'what changes it.'
+      );
     },
 
     createWorkerSession: async ({ conversationId, callerConversationId, ownerId, agentPageId, name, workspace, allowedDriveIds }) => {

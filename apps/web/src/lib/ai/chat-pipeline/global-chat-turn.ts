@@ -112,7 +112,7 @@ import {
   appendTurnContextToLastUserMessage,
   withCacheBreakpoints,
 } from '@/lib/ai/core/prompt-assembly';
-import { prepareHistoryForModel, finishModelRequest } from '@/lib/ai/core/context-assembly';
+import { prepareHistoryForModel, finishModelRequest, agentLoopPrepareStep } from '@/lib/ai/core/context-assembly';
 import {
   resolveOrCreateConversation,
   ConversationOwnershipError,
@@ -1384,10 +1384,9 @@ export async function runGlobalChatTurn(ctx: GlobalChatTurnContext): Promise<Res
               });
               lifecycle!.finish(true);
             },
-            // Re-mark breakpoints per step; stableBoundaryIndex is fixed for this request.
-            prepareStep: ({ messages: stepMessages }) => ({
-              messages: withCacheBreakpoints(stepMessages, stableBoundaryIndex),
-            }),
+            // Cap this turn's own oversized tool payloads, then re-mark breakpoints.
+            // stableBoundaryIndex is fixed for this request. See agentLoopPrepareStep.
+            prepareStep: agentLoopPrepareStep(stableBoundaryIndex),
             })
           },
         });

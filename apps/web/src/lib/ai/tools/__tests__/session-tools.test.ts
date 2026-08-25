@@ -5,6 +5,7 @@ import {
   MAX_TRANSCRIPT_MESSAGE_CHARS,
   UNTRUSTED_TRANSCRIPT_NOTE,
   type SessionToolsDeps,
+  type AgentToolSurfaceReport,
 } from '../session-tools';
 import { MAX_AGENT_DEPTH } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
 import type { ToolExecutionContext } from '../../core/types';
@@ -53,6 +54,8 @@ function makeDeps(over: Partial<SessionToolsDeps> = {}): SessionToolsDeps {
     })),
     countOpenConversations: vi.fn(async () => 0),
     canUseAgent: vi.fn(async () => true),
+    describeAgentToolSurface: vi.fn(async () => ({ configured: null, granted: [], blocked: [], conditional: [], deferred: [], notes: [] })),
+    describeWorkerComputeShortfall: vi.fn(async () => null),
     createWorkerSession: vi.fn(async () => ({ ok: true as const, workspaceId: WORKSPACE_ID })),
     dispatch: vi.fn(async () => ({ ok: true as const, waited: false as const })),
     readTranscript: vi.fn(async () => []),
@@ -1110,5 +1113,202 @@ describe('a drive-scoped credential is held to its ceiling, whoever owns the wor
     expect((result.otherWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-in']);
     expect((result.sharedWorkspaces as Array<{ workspaceId: string }>).map((w) => w.workspaceId)).toEqual(['ws-shared-in']);
     expect(JSON.stringify(result)).not.toContain('drive-out-of-scope');
+  });
+});
+
+/**
+ * Issue #2460: three spawns of an agent whose enabledTools named 24 sandbox
+ * tools produced three different page-only surfaces and no error anywhere. The
+ * allowlist was never ignored — the sandbox switch stripped the family
+ * downstream of it — so the spawn is where the divergence has to become
+ * audible.
+ */
+describe('spawn_session: honouring the agent\'s configured tool surface', () => {
+  const surface = (over: Partial<AgentToolSurfaceReport> = {}): AgentToolSurfaceReport => ({
+    configured: null,
+    granted: [],
+    blocked: [],
+    conditional: [],
+    deferred: [],
+    notes: [],
+    ...over,
+  });
+
+  it('given an agent whose enabledTools name sandbox tools its own switch strips, should REFUSE and name the tools and the gate', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'bash', 'spawn_shell'],
+          granted: ['read_page'],
+          blocked: [
+            { tool: 'bash', gate: 'sandbox_disabled' as const },
+            { tool: 'spawn_shell', gate: 'sandbox_disabled' as const },
+          ],
+          notes: ['also: read_file is not a tool here'],
+        }),
+      ),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: false, reason: 'agent_tools_ungrantable' }),
+    );
+    expect(String(result.error)).toContain('bash, spawn_shell');
+    expect(String(result.error)).toContain('sandboxEnabled');
+    // Everything wrong with the config, not only the half that refused — a
+    // caller fixing one problem should not have to spawn again to discover the
+    // next one.
+    expect(result.toolSurfaceWarnings).toEqual(['also: read_file is not a tool here']);
+    // A crippled worker is worse than no worker: nothing was created, nothing
+    // was dispatched, and the caller has an actionable fix instead of a
+    // silently useless session id.
+    expect(deps.createWorkerSession).not.toHaveBeenCalled();
+    expect(deps.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('given drops the caller cannot fix (unregistered names, search-mode deferral), should spawn anyway and WARN on the success payload', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'read_file'],
+          granted: ['read_page'],
+          blocked: [{ tool: 'read_file', gate: 'not_registered' as const }],
+          deferred: ['trash_page'],
+          notes: ['no tool named read_file', 'trash_page is reached through tool_search'],
+        }),
+      ),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    expect(result).toEqual(
+      expect.objectContaining({
+        success: true,
+        toolSurfaceWarnings: ['no tool named read_file', 'trash_page is reached through tool_search'],
+      }),
+    );
+    expect(deps.dispatch).toHaveBeenCalled();
+  });
+
+  it('given the check itself failing, should still spawn — and say the surface was NOT checked', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () => {
+        throw new Error('database unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // A diagnostic added to a path that worked without it must not become a new
+    // way for that path to fail…
+    expect(result).toEqual(expect.objectContaining({ success: true, sessionId: 'new-session-id' }));
+    expect(deps.dispatch).toHaveBeenCalled();
+    // …and an unchecked surface is reported as unchecked, never as fine.
+    expect(String((result.toolSurfaceWarnings as string[])[0])).toContain('not checked');
+  });
+
+  it('given a workspace whose plan excludes compute, should WARN about the tools that landed short', async () => {
+    // The divergence the stored config cannot predict, and the one that made
+    // three spawns of one agent look random: compute eligibility keys on the
+    // WORKSPACE the worker landed in, not on the agent.
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(
+      expect.objectContaining({ success: true, toolSurfaceWarnings: ['no compute in that workspace'] }),
+    );
+    // Asked of the workspace the worker ACTUALLY landed in, not the caller's.
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: WORKSPACE_ID, userId: USER_ID }),
+    );
+  });
+
+  it('should ACCUMULATE the config warnings and the workspace one, not replace either', async () => {
+    const deps = makeDeps({
+      describeAgentToolSurface: vi.fn(async () =>
+        surface({
+          configured: ['read_page', 'read_file'],
+          granted: ['read_page'],
+          blocked: [{ tool: 'read_file', gate: 'not_registered' as const }],
+          notes: ['no tool named read_file'],
+        }),
+      ),
+      describeWorkerComputeShortfall: vi.fn(async () => 'no compute in that workspace'),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p', agent: 'scraper-runner' },
+      contextOptions(),
+    );
+
+    // Two independent divergences, two sentences: a caller told only the second
+    // would fix the workspace and still find the tool missing.
+    expect(result.toolSurfaceWarnings).toEqual([
+      'no tool named read_file',
+      'no compute in that workspace',
+    ]);
+  });
+
+  it('given the compute check itself failing, should still spawn and stay quiet about it', async () => {
+    const deps = makeDeps({
+      describeWorkerComputeShortfall: vi.fn(async () => {
+        throw new Error('tier lookup unavailable');
+      }),
+    });
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).not.toHaveProperty('toolSurfaceWarnings');
+  });
+
+  it('given an unrestricted agent, should ask the compute question with null rather than an empty list', async () => {
+    // `null` is the WIDEST case (the whole registry), not "nothing" — passing
+    // [] would tell the runtime no compute tool is in play.
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(deps.describeWorkerComputeShortfall).toHaveBeenCalledWith(
+      expect.objectContaining({ granted: null }),
+    );
+  });
+
+  it('given a config the gates honour verbatim, should say nothing about tools at all', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    const result = await run(tools.spawn_session, { name: 'w', prompt: 'p' }, contextOptions());
+
+    expect(result).toEqual(expect.objectContaining({ success: true }));
+    expect(result).not.toHaveProperty('toolSurfaceWarnings');
+  });
+
+  it('given a global-assistant caller with no agent, should not ask about a tool surface there is no agent to describe', async () => {
+    const deps = makeDeps();
+    const tools = createSessionTools(deps);
+    await run(
+      tools.spawn_session,
+      { name: 'w', prompt: 'p' },
+      contextOptions({ chatSource: { type: 'global' } as ToolExecutionContext['chatSource'] }),
+    );
+
+    expect(deps.describeAgentToolSurface).not.toHaveBeenCalled();
   });
 });

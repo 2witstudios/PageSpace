@@ -142,6 +142,16 @@ describe('agents.updateConfig — request shape', () => {
     expect(JSON.parse(request.body!)).toEqual({ enabledTools: null });
   });
 
+  it('carries sandboxEnabled — the switch that decides whether a stored sandbox allowlist grants anything', () => {
+    const request = buildRequest(updateAgentConfig, { agentId: 'a1', sandboxEnabled: true }, config);
+    expect(JSON.parse(request.body!)).toEqual({ sandboxEnabled: true });
+  });
+
+  it('rejects a non-boolean sandboxEnabled before it reaches the wire', () => {
+    const result = updateAgentConfig.inputSchema.safeParse({ agentId: 'a1', sandboxEnabled: 'true' });
+    expect(result.success).toBe(false);
+  });
+
   it('rejects a toolExposureMode outside upfront/search', () => {
     const result = updateAgentConfig.inputSchema.safeParse({ agentId: 'a1', toolExposureMode: 'always' });
     expect(result.success).toBe(false);
@@ -170,6 +180,35 @@ describe('agents.updateConfig — response contract (route truth: ai/page-agents
   };
 
   it('parses the updated agent config', () => {
+    const result = parseResponse(updateAgentConfig, 200, new Headers(), JSON.stringify(fixture));
+    expect(result).toEqual(fixture);
+  });
+
+  it('parses the EFFECTIVE surface and warnings a current server returns', () => {
+    const body = {
+      ...fixture,
+      agentConfig: {
+        ...fixture.agentConfig,
+        enabledToolsCount: 2,
+        enabledTools: ['read_page', 'bash'],
+        effectiveTools: ['read_page'],
+        effectiveToolsCount: 1,
+        blockedTools: [{ tool: 'bash', gate: 'sandbox_disabled' }],
+        toolsNeedingComposerToggle: [],
+        toolsReachedBySearch: [],
+        sandboxEnabled: false,
+      },
+      warnings: ['These configured tools are NOT granted…'],
+    };
+
+    const result = parseResponse(updateAgentConfig, 200, new Headers(), JSON.stringify(body));
+
+    expect(result).toEqual(body);
+  });
+
+  it('still parses a response from a server that predates the effective fields', () => {
+    // They are optional for exactly this reason: a client should not fail a
+    // call over a field it did not need.
     const result = parseResponse(updateAgentConfig, 200, new Headers(), JSON.stringify(fixture));
     expect(result).toEqual(fixture);
   });
