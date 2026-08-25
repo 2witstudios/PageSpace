@@ -1,4 +1,7 @@
 import { lexer, type Token, type Tokens } from 'marked';
+import { classifyImageSource, htmlImageSources, type ImageSource } from './images';
+import { absorb, emptyMagnitudes, htmlMagnitudes, lineCount, type Magnitudes } from './magnitudes';
+import type { DomWorkspace } from './constructs';
 
 /**
  * Markdown constructs the ProseMirror schema has no node or mark for.
@@ -16,6 +19,12 @@ import { lexer, type Token, type Tokens } from 'marked';
  * fenced block, an indented block or a backtick span is an EXAMPLE of an image
  * rather than an image, which is exactly the content a knowledge base about
  * markdown is full of.
+ *
+ * Only syntax the schema has NO home for is listed. `~~strikethrough~~` was
+ * here and is not: StarterKit ships the `strike` mark and the bubble menu
+ * exposes it, so counting it as a gap put 17 documents in a table headed
+ * "source syntax the schema has no node for" that the schema represents
+ * perfectly well. `round-trip.test.ts` holds the schema to that.
  */
 const enum Construct {
   Image = 'md:image',
@@ -24,7 +33,6 @@ const enum Construct {
   RawHtml = 'md:raw-html',
   Footnote = 'md:footnote',
   Highlight = 'md:highlight',
-  Strikethrough = 'md:strikethrough',
 }
 
 /** `==highlight==` is an extension marked's core does not tokenize. */
@@ -43,18 +51,79 @@ function childTokens(token: Token): Token[] {
   return children;
 }
 
-function collect(tokens: Token[], found: Set<string>): void {
+/**
+ * Everything one pass of the lexer can answer, gathered in that one pass.
+ *
+ * The census re-reads the whole `pages` table to produce this, and after the
+ * mislabelled population is routed through here too it re-reads most of it
+ * twice. Lexing markdown three times to answer three questions about it is the
+ * kind of cost that turns a scan into an afternoon.
+ */
+export interface MarkdownAnalysis {
+  constructs: string[];
+  /** Scheme buckets and bare hostnames — never a URL. See `images.ts`. */
+  images: ImageSource[];
+  magnitudes: Magnitudes;
+}
+
+interface Walk {
+  found: Set<string>;
+  images: ImageSource[];
+  magnitudes: Magnitudes;
+  workspace: DomWorkspace;
+}
+
+/** Markdown tokens the editor renders as one block the paginator cannot split. */
+const BLOCK_TOKEN_TYPES = new Set(['paragraph', 'heading', 'blockquote', 'code', 'list_item']);
+
+function collect(tokens: Token[], walk: Walk): void {
+  const { found } = walk;
   for (const token of tokens) {
+    if (BLOCK_TOKEN_TYPES.has(token.type)) {
+      walk.magnitudes.blockCharacters = Math.max(walk.magnitudes.blockCharacters, token.raw.length);
+    }
+
     switch (token.type) {
       case 'image':
         found.add(Construct.Image);
+        walk.magnitudes.images += 1;
+        walk.images.push(classifyImageSource((token as Tokens.Image).href ?? ''));
         break;
-      case 'del':
-        found.add(Construct.Strikethrough);
+      case 'code': {
+        walk.magnitudes.codeBlockLines = Math.max(
+          walk.magnitudes.codeBlockLines,
+          lineCount((token as Tokens.Code).text),
+        );
         break;
-      case 'html':
+      }
+      case 'table': {
+        const table = token as Tokens.Table;
+        // The header is a row on the page even though `marked` keeps it apart
+        // from `rows`, and a table that overflows a page overflows it by one
+        // row more than `rows.length` says.
+        walk.magnitudes.tableRows = Math.max(walk.magnitudes.tableRows, table.rows.length + 1);
+        walk.magnitudes.tableColumns = Math.max(walk.magnitudes.tableColumns, table.header.length);
+        // A cell is a block the layout has to place whole, and the HTML half
+        // measures `td`/`th` for that reason. Without this a table-only
+        // document reported no block at all.
+        for (const cell of [...table.header, ...table.rows.flat()]) {
+          walk.magnitudes.blockCharacters = Math.max(walk.magnitudes.blockCharacters, cell.text.length);
+        }
+        break;
+      }
+      case 'html': {
         found.add(Construct.RawHtml);
+        // `marked` hands raw HTML over as one opaque token and never looks
+        // inside it, so `<img src="data:...">`, a 60-row `<table>` and a long
+        // `<pre>` written into a markdown document were all invisible here —
+        // and the conclusions this census draws about images and about page
+        // sizes are exactly the ones that would have been wrong. Read it with
+        // the same DOM the HTML half of the census uses.
+        const container = walk.workspace.parse(token.raw);
+        walk.images.push(...htmlImageSources(container));
+        absorb(walk.magnitudes, htmlMagnitudes(container));
         break;
+      }
       case 'heading':
         if ((token as Tokens.Heading).depth >= 4) found.add(Construct.DeepHeading);
         break;
@@ -74,12 +143,25 @@ function collect(tokens: Token[], found: Set<string>): void {
         break;
     }
 
-    collect(childTokens(token), found);
+    collect(childTokens(token), walk);
   }
 }
 
-export function markdownConstructs(markdown: string): string[] {
-  const found = new Set<string>();
-  collect(lexer(markdown), found);
-  return [...found].sort();
+/**
+ * The workspace is required rather than optional on purpose: markdown embeds
+ * raw HTML, and a signature that lets the caller omit the reader for it is a
+ * signature that silently under-measures.
+ */
+export function analyzeMarkdown(markdown: string, workspace: DomWorkspace): MarkdownAnalysis {
+  const walk: Walk = { found: new Set<string>(), images: [], magnitudes: emptyMagnitudes(), workspace };
+  collect(lexer(markdown), walk);
+  return {
+    constructs: [...walk.found].sort(),
+    images: walk.images,
+    magnitudes: walk.magnitudes,
+  };
+}
+
+export function markdownConstructs(markdown: string, workspace: DomWorkspace): string[] {
+  return analyzeMarkdown(markdown, workspace).constructs;
 }

@@ -51,21 +51,21 @@ describe('roundTripHtml', () => {
 describe('analyzeHtmlDocument', () => {
   it('reports nothing dropped for content the schema fully represents', () => {
     const result = analyse('<p><strong>a</strong> <em>b</em></p><h2>c</h2>');
-    expect(result).toEqual({ status: 'analysed', dropped: [], textPreserved: true });
+    expect(result).toMatchObject({ status: 'analysed', dropped: [], textPreserved: true });
   });
 
   it('does not call a document changed because the Link extension added attributes', () => {
     // TipTap stamps target/rel onto every <a> it parses. Byte comparison would
     // report every linked document as changed and bury the real signal.
     const result = analyse('<p><a href="https://example.test">link</a></p>');
-    expect(result).toEqual({ status: 'analysed', dropped: [], textPreserved: true });
+    expect(result).toMatchObject({ status: 'analysed', dropped: [], textPreserved: true });
   });
 
   it('reports text loss when the round trip deletes words rather than unwrapping them', () => {
     // Most unknown elements unwrap and keep their text (<details> becomes a
     // paragraph); <object> is one whose contents ProseMirror discards outright.
     const result = analyse('<p>kept</p><object>lost</object>');
-    expect(result).toEqual({ status: 'analysed', dropped: ['<object>'], textPreserved: false });
+    expect(result).toMatchObject({ status: 'analysed', dropped: ['<object>'], textPreserved: false });
   });
 
   it('reports an <img> as dropped', () => {
@@ -97,11 +97,11 @@ describe('analyzeHtmlDocument', () => {
     // <div> unwraps to its children: the construct is named as dropped, the
     // words inside it are not lost.
     const result = analyse('<div><p>a</p></div>');
-    expect(result).toEqual({ status: 'analysed', dropped: ['<div>'], textPreserved: true });
+    expect(result).toMatchObject({ status: 'analysed', dropped: ['<div>'], textPreserved: true });
   });
 
   it('treats empty content as an intact round trip', () => {
-    expect(analyse('')).toEqual({ status: 'analysed', dropped: [], textPreserved: true });
+    expect(analyse('')).toMatchObject({ status: 'analysed', dropped: [], textPreserved: true });
   });
 
   it('records only the error type when a document will not parse, never its content', () => {
@@ -117,5 +117,49 @@ describe('analyzeHtmlDocument', () => {
     };
     const result = analyzeHtmlDocument('<p>a</p>', schema, workspaceThatThrows);
     expect(result).toEqual({ status: 'failed', errorName: 'unknown' });
+  });
+});
+
+describe('mislabelled markdown, and what a stored document held', () => {
+  it('reports a document with no HTML element at all as tagless', () => {
+    const result = analyse('# a heading\n\n- one\n- two\n');
+    expect(result.status === 'analysed' && result.tagless).toBe(true);
+  });
+
+  it('is still tagless when an unescaped angle bracket in prose parsed as an element', () => {
+    // `Set<string>` in markdown source becomes a `<string>` element in the
+    // parser. Counting that as HTML would hide the mislabelled page that is
+    // most likely to be full of code samples.
+    const result = analyse('# a\n\nreturns Set<string> for each row\n');
+    expect(result.status === 'analysed' && result.tagless).toBe(true);
+  });
+
+  it('is not tagless when the document is real HTML', () => {
+    const result = analyse('<p>a</p>');
+    expect(result.status === 'analysed' && result.tagless).toBe(false);
+  });
+
+  it('reports where an <img> pointed, though the schema drops the node itself', () => {
+    // The measurement is of the STORED document, not of what survives: the
+    // point is what v1 would have to be able to represent.
+    const result = analyse('<p>a</p><img src="https://cdn.example.test/a.png">');
+    expect(result.status === 'analysed' && result.images).toEqual([
+      { bucket: 'img-src:external-https', host: 'cdn.example.test' },
+    ]);
+    expect(result.status === 'analysed' && result.dropped).toContain('<img>');
+  });
+
+  it('measures the stored document rather than the round trip', () => {
+    const result = analyse('<p>a</p><img src="a.png"><table><tr><td>1</td></tr><tr><td>2</td></tr></table>');
+    expect(result.status === 'analysed' && result.magnitudes).toMatchObject({ images: 1, tableRows: 2 });
+  });
+});
+
+describe('the constructs the census deliberately does not count', () => {
+  it('keeps <s>, because the schema has the strike mark markdown maps onto', () => {
+    // The reason `md:strikethrough` is not in the markdown tally: the gap it
+    // claimed does not exist.
+    const result = analyse('<p><s>struck</s></p>');
+    expect(result.status === 'analysed' && result.dropped).toEqual([]);
   });
 });
