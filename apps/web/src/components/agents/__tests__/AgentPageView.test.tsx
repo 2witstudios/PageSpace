@@ -415,6 +415,7 @@ describe('AgentPageView', () => {
         pageId: 'agent-1',
         conversationId: 'conv-1',
         isOwn: true,
+        triggeredBy: { userId: 'user-1', displayName: 'Tester' },
       });
     });
 
