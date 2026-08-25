@@ -542,7 +542,7 @@ export async function canConsumeAI(
  * and would write a `credit_holds` row per image, per stylesheet, per favicon,
  * each of them reserving spend against a run that has no settle to release it.
  *
- * The DECISION is the same one `evaluateGate` makes — spendable above the
+ * The decision RULE is the one `evaluateGate` applies — spendable above the
  * reserve floor, debt netted, billing-disabled deployments unlimited — reached
  * through `readSpendableCents`, which shares its arithmetic with the display read
  * (including the free-tier lapsed-window rollover the gate applies lazily, so a
@@ -554,9 +554,12 @@ export async function canConsumeAI(
  * active `credit_holds` — a figure this gate then discards — on a path that runs
  * once per image and per stylesheet.
  *
- * What it deliberately does NOT do is subtract in-flight AI holds: those are
- * reservations against chat calls, and a user with a stream running must not
- * have their published site go dark for the duration. The awake-seconds meter
+ * The INPUT differs by one term, and deliberately: `evaluateGate` nets out
+ * `reserved` and this call's `estCost`, and this does not subtract in-flight AI
+ * holds at all. So the two can disagree for a user mid-stream, which is the
+ * intended behaviour rather than drift — those holds are reservations against
+ * chat calls, and a user with a stream running must not have their published
+ * site go dark for the duration. The awake-seconds meter
  * settles separately, and overspend on this path is bounded by the metering
  * cron parking the app — not by this read.
  *
