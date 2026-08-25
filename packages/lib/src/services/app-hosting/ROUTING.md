@@ -82,7 +82,9 @@ clawback — there is no credit to claw back from an account that has none.
 
 Order is load-bearing: the persisted `parked` status is checked **before** the
 live balance read, because un-parking (and restarting) belongs to the metering
-cron, not to a router that never writes. Conversely a `running` row whose payer
+cron, not to a router that never writes. **That cron lands separately** — the
+awake-seconds metering work in PR #2493, not this branch — so nothing here
+un-parks anything yet; both halves ship dark behind `APP_HOSTING_ENABLED`. Conversely a `running` row whose payer
 has run out is refused anyway: the row lags by up to one cron tick, the balance
 does not.
 

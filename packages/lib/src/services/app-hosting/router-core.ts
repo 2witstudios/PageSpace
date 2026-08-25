@@ -159,10 +159,16 @@ export interface AppRouteInput {
  * The routing decision.
  *
  * ORDER IS LOAD-BEARING. The persisted `parked` status is checked BEFORE the
- * live balance read: parking is an enforcement action the metering cron already
- * took, and a payer who has since topped up gets un-parked by that cron
- * (which can also restart the machine), not by a router that silently forgives
- * the state on the next request. The router NEVER writes — a status write on a
+ * live balance read: parking is an enforcement action the metering cron took,
+ * and a payer who has since topped up gets un-parked by that cron (which can
+ * also restart the machine), not by a router that silently forgives the state on
+ * the next request.
+ *
+ * That cron is NOT in this branch — it arrives with the awake-seconds metering
+ * work (PR #2493), which is why grepping for it here finds nothing. The ordering
+ * is built now because it is the router's half of the contract and retrofitting
+ * it later would mean revisiting every decision below; both halves ship dark
+ * behind `APP_HOSTING_ENABLED`, so neither is load-bearing until they meet. The router NEVER writes — a status write on a
  * per-request path would put a database mutation in front of every asset a
  * published page loads.
  *
