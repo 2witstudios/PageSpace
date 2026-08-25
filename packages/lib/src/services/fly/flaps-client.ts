@@ -850,10 +850,18 @@ export async function getCertificate(
  * `POST /v1/apps/{app}/certificates/{hostname}/check`.
  *
  * A POST that mutates nothing we own — it makes Fly re-read DNS — so it is safe
- * to retry, and it is the endpoint that answers "the customer says they added
- * the record; has Fly seen it?". Its response carries `dns_records`, i.e. what
- * Fly ACTUALLY resolved, which is the difference between telling a customer
- * "still not configured" and telling them "we see your TXT, but it says X".
+ * to retry. Its whole purpose is TIMING: a customer who has just published the
+ * record would otherwise wait out Fly's own polling cadence before anything
+ * changed, and this is what makes the settings UI's "Check SSL" actually check.
+ * `reconcile-cert.ts` calls it in exactly that window — our resolver can already
+ * see an accepted ownership value while Fly still reports the TXT unconfigured.
+ *
+ * It is NOT the source of "we see your TXT, but it says X". That message comes
+ * from resolving the record with our own resolver and reporting `mismatched`
+ * with the values found — see {@link verifyFlyOwnershipTxt} in
+ * `validators/fly-ownership.ts`. Nothing here reads the response's DNS detail,
+ * and a second source for that message would be exactly the drift the shared
+ * `acceptedOwnershipValues` exists to prevent.
  *
  * Returns null on 404, same reasoning as {@link getCertificate}.
  */
