@@ -274,8 +274,13 @@ export async function exceedsStreamedBody(
       if (seen > limit) return true;
     }
   } finally {
-    // Releases the lock in both directions — the early return above leaves the
-    // stream mid-flight, and an unreleased reader would keep it open.
+    // Signals the producer to stop sending. This matters on the `return true`
+    // path, which leaves the stream mid-flight by design: without it the sender
+    // keeps streaming a body we have already decided to refuse. On the `done`
+    // path the stream is already closed and this is a no-op. It does NOT release
+    // the reader's lock, and does not need to — nothing else reads this body.
+    // Swallowing the rejection is deliberate: we are refusing the request either
+    // way, and a failure to cancel must not become the error the caller sees.
     await reader.cancel().catch(() => {});
   }
 }

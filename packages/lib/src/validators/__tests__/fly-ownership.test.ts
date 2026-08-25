@@ -16,6 +16,7 @@ import {
   parseOwnershipTxtValues,
   verifyFlyOwnershipTxt,
   type FlyOwnershipRequirement,
+  type FlyOwnershipVerification,
 } from '../fly-ownership';
 import { assert } from '../../__tests__/riteway';
 
@@ -191,12 +192,12 @@ describe('describeOwnershipVerification — an instruction only when one is owed
   // filters empty values), but the instruction used to print `appValue`
   // unconditionally — so this state produced a message with a blank where the
   // value belongs, in the one place the customer has nothing else to act on.
-  it.each([
-    ['missing', { state: 'missing', expected: orgOnlyRequirement } as const],
-    [
-      'mismatched',
-      { state: 'mismatched', expected: orgOnlyRequirement, found: ['app-WRONG'] } as const,
-    ],
+  // Typed rather than `as const`: the tuple type checks each row against the real
+  // union (which is what `as const` was reaching for) without freezing `found`
+  // into a readonly tuple that no longer matches the shipped `string[]`.
+  it.each<[string, FlyOwnershipVerification]>([
+    ['missing', { state: 'missing', expected: orgOnlyRequirement }],
+    ['mismatched', { state: 'mismatched', expected: orgOnlyRequirement, found: ['app-WRONG'] }],
   ])('given an org-only requirement reported as %s, should name the org value', (_label, result) => {
     const message = describeOwnershipVerification(result);
     expect(message).toContain('org-XYZ789');
