@@ -737,6 +737,14 @@ export async function enforceUnpaidDedicated(
     lastError: UNPAID_DOWNGRADE_REASON,
   });
   if (!result.ok) {
+    // ALREADY METERED IS SUCCESS, not a fault. Stripe redelivers events, so a
+    // second `deleted` for a subscription already enforced lands here with nothing
+    // left to do — and a machine that is already stopped and already metered is
+    // exactly the state this function exists to reach. Reporting it as a refusal
+    // would raise an operator alert, on every redelivery, for work that is done.
+    if (result.reason === 'same_tier') {
+      return { outcome: 'downgraded', publishedAppId, tierChanged: false };
+    }
     loggers.ai.error(
       'Unpaid dedicated app was stopped but could not be returned to the metered tier',
       new Error(result.reason),

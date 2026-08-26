@@ -653,6 +653,20 @@ describe('enforceUnpaidDedicated', () => {
     });
   });
 
+  it('treats an already-enforced app as done, not as a fault', async () => {
+    // Stripe redelivers, so a second `deleted` for a subscription already enforced
+    // arrives with nothing left to do. Reporting that as a refusal would raise an
+    // operator alert on every redelivery for work that is finished.
+    mockDb.__state.rows = [{ ...APP, tier: 'metered', guestPreset: 'shared-cpu-1x-512', status: 'stopped' }];
+    const outcome = await enforceUnpaidDedicated('app_1', deps());
+    assert({
+      given: 'an app already stopped and already metered',
+      should: 'report the state reached, with nothing changed',
+      actual: outcome,
+      expected: { outcome: 'downgraded', publishedAppId: 'app_1', tierChanged: false },
+    });
+  });
+
   it('ABORTS when the stop was REFUSED rather than thrown', async () => {
     // `stopPublishedApp` reports every refusal as a VALUE — `stop_failed` when Fly
     // refused, `lock_busy` when the awake meter's advisory lock meant nothing was
