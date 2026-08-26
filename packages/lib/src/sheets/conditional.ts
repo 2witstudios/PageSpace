@@ -140,6 +140,31 @@ const EMPTY: ConditionalResult = { formats: {}, bars: {} };
  */
 export const MAX_CONDITIONAL_RANGE_CELLS = 500_000;
 
+/**
+ * The most rules a sheet's conditional-format list may hold.
+ *
+ * `MAX_CONDITIONAL_RANGE_CELLS` bounds one range; nothing bounded the rule
+ * count itself, and rules are stored as API-writable jsonb — so a write with
+ * thousands of rules (each individually under the per-range cap) passed
+ * through untouched and made every render/save re-walk all of them. Enforced
+ * at the parse boundary (`parseConditionalRules`), where every stored value
+ * — API write or load — passes through.
+ */
+export const MAX_CONDITIONAL_RULES = 200;
+
+/**
+ * The most cells conditional-format evaluation may cover in total, across
+ * every rule and every range of a sheet combined.
+ *
+ * `MAX_CONDITIONAL_RANGE_CELLS` only bounds one range at a time; a rule list
+ * with many rules, or many ranges per rule, each individually under that cap,
+ * could still sum to unbounded work — and a `formula` rule shifts, tokenizes,
+ * parses and evaluates a formula per covered cell, making that work
+ * expensive per cell rather than cheap. This is the aggregate ceiling that
+ * catches what the per-range cap alone cannot.
+ */
+export const MAX_CONDITIONAL_TOTAL_CELLS = 2_000_000;
+
 /** Every address of an `A1:B2` range, or of a bare `A1`. Invalid ranges yield none. */
 export function addressesOfRange(range: string): string[] {
   const normalized = range.trim().toUpperCase();
@@ -412,12 +437,23 @@ export function evaluateConditionalFormats(
     formats[address] = { ...(formats[address] ?? {}), ...format };
   };
 
+  // Aggregate budget across every rule and range combined — see
+  // `MAX_CONDITIONAL_TOTAL_CELLS`. Decremented as ranges are consumed below;
+  // once it hits zero, remaining rules/ranges contribute nothing further,
+  // the same treatment an individually-oversized range already gets.
+  let remainingCellBudget = MAX_CONDITIONAL_TOTAL_CELLS;
+
   for (const rule of rules) {
-    const addresses = rule.ranges.flatMap((range) => addressesOfRange(range));
+    if (remainingCellBudget <= 0) break;
+
+    const addresses = rule.ranges
+      .flatMap((range) => addressesOfRange(range))
+      .slice(0, remainingCellBudget);
     if (addresses.length === 0) continue;
 
     switch (rule.kind) {
       case 'cell': {
+        remainingCellBudget -= addresses.length;
         for (const address of addresses) {
           if (matchesCondition(context.valueAt(address), context.isError(address), rule.condition)) {
             contribute(address, rule.format);
@@ -428,10 +464,15 @@ export function evaluateConditionalFormats(
 
       case 'formula': {
         for (const range of rule.ranges) {
+          if (remainingCellBudget <= 0) break;
+
           const anchor = rangeAnchor(range);
           if (!anchor) continue;
 
-          for (const address of addressesOfRange(range)) {
+          const rangeAddresses = addressesOfRange(range).slice(0, remainingCellBudget);
+          remainingCellBudget -= rangeAddresses.length;
+
+          for (const address of rangeAddresses) {
             const { row, column } = decodeCellAddress(address);
             // Relative references shift from the range's top-left, so one rule
             // written against the first cell reads correctly for all of them.
@@ -455,6 +496,7 @@ export function evaluateConditionalFormats(
       }
 
       case 'colorScale': {
+        remainingCellBudget -= addresses.length;
         const sorted = numbersIn(addresses, context).sort((a, b) => a - b);
         if (sorted.length === 0) break;
 
@@ -487,10 +529,17 @@ export function evaluateConditionalFormats(
       }
 
       case 'dataBar': {
+        remainingCellBudget -= addresses.length;
         const sorted = numbersIn(addresses, context).sort((a, b) => a - b);
         if (sorted.length === 0) break;
 
-        const low = Math.min(0, anchorValue(rule.min, sorted, 'min'));
+        // Excel's baseline-at-zero default only applies to the auto anchor —
+        // an explicit anchor (e.g. a positive `number`/`percent`/`percentile`
+        // min) must be honored as the user configured it, not forced ≤0.
+        const low =
+          rule.min && rule.min.type !== 'min'
+            ? anchorValue(rule.min, sorted, 'min')
+            : Math.min(0, anchorValue(rule.min, sorted, 'min'));
         const high = anchorValue(rule.max, sorted, 'max');
         const span = high - low;
 
@@ -647,5 +696,11 @@ export function parseConditionalRules(value: unknown): ConditionalRule[] | undef
     .map((entry) => parseConditionalRule(entry))
     .filter((rule): rule is ConditionalRule => rule !== null);
 
-  return rules.length > 0 ? rules : undefined;
+  // Capped here — the API write door every stored rule set passes through —
+  // rather than at evaluation time, so an oversized write never round-trips
+  // back out any larger than what will actually be evaluated. See
+  // `MAX_CONDITIONAL_RULES`.
+  const capped = rules.slice(0, MAX_CONDITIONAL_RULES);
+
+  return capped.length > 0 ? capped : undefined;
 }

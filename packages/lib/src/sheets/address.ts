@@ -172,6 +172,24 @@ export function adjustFormulaReferences(
 
   while (index < formula.length) {
     const start = index;
+
+    // String literals: the tokenizer (`parser.ts`) has no escape convention —
+    // a `"` always closes the string — so mirror that exactly and copy the
+    // span verbatim. Otherwise a letters+digits run inside a quoted literal
+    // (e.g. `"q1"`) gets mistaken for a cell reference and shifted/uppercased.
+    if (formula.charCodeAt(index) === 34 /* " */) {
+      let end = index + 1;
+      while (end < formula.length && formula.charCodeAt(end) !== 34) {
+        end += 1;
+      }
+      if (end < formula.length) {
+        end += 1; // include closing quote
+      }
+      result += formula.slice(start, end);
+      index = end;
+      continue;
+    }
+
     let colDollar = '';
     let rowDollar = '';
 

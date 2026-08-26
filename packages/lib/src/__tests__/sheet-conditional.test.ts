@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_CONDITIONAL_RANGE_CELLS,
+  MAX_CONDITIONAL_RULES,
+  MAX_CONDITIONAL_TOTAL_CELLS,
   addressesOfRange,
   parseConditionalRule,
   parseConditionalRules,
@@ -411,6 +413,71 @@ describe('data bars', () => {
     const result = evaluateConditionalFormats([bar], contextOf({ A1: 1, A2: 'text' }));
     expect(result.bars.A2).toBeUndefined();
   });
+
+  it('honors an explicit positive `number` min anchor rather than forcing the baseline to zero', () => {
+    // All-positive data with a configured min of 50: the baseline should sit
+    // at 50, not silently clamp to 0 and compress every bar toward the low end.
+    const explicitMin: ConditionalRule = {
+      id: 'b2',
+      kind: 'dataBar',
+      ranges: ['A1:A3'],
+      color: '#3b82f6',
+      min: { type: 'number', value: 50 },
+      max: { type: 'number', value: 100 },
+    };
+    const result = evaluateConditionalFormats(
+      [explicitMin],
+      contextOf({ A1: 50, A2: 75, A3: 100 })
+    );
+    expect(result.bars.A1.fraction).toBe(0);
+    expect(result.bars.A2.fraction).toBeCloseTo(0.5);
+    expect(result.bars.A3.fraction).toBe(1);
+  });
+
+  it('still clamps the default auto min anchor to zero for all-positive data', () => {
+    const result = evaluateConditionalFormats([bar], contextOf({ A1: 50, A2: 75, A3: 100 }));
+    // Auto anchor (no explicit `min`) measures from 0, not from the smallest
+    // value (50) — otherwise A1 would render as an empty bar.
+    expect(result.bars.A1.fraction).toBeCloseTo(0.5);
+  });
+});
+
+describe('aggregate cell budget across all rules combined', () => {
+  it('bounds total conditional evaluation work at MAX_CONDITIONAL_TOTAL_CELLS, even split across rules and ranges each individually under MAX_CONDITIONAL_RANGE_CELLS', () => {
+    // Four ranges of exactly MAX_CONDITIONAL_RANGE_CELLS each, in one rule,
+    // exhaust the whole aggregate budget on their own.
+    const bigRule: ConditionalRule = {
+      id: 'big',
+      kind: 'cell',
+      ranges: ['A1:A500000', 'B1:B500000', 'C1:C500000', 'D1:D500000'],
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    };
+    const extraRule: ConditionalRule = {
+      id: 'extra',
+      kind: 'cell',
+      ranges: ['E1'],
+      condition: { operator: 'isNotEmpty' },
+      format: { italic: true },
+    };
+    expect(
+      bigRule.ranges.reduce((sum, r) => sum + addressesOfRange(r).length, 0)
+    ).toBe(MAX_CONDITIONAL_TOTAL_CELLS);
+
+    const context: ConditionalContext = {
+      valueAt: () => 'x',
+      isError: () => false,
+      evaluateFormula: () => '',
+    };
+    const result = evaluateConditionalFormats([bigRule, extraRule], context);
+
+    expect(result.formats.A1).toEqual({ bold: true });
+    expect(result.formats.D500000).toEqual({ bold: true });
+    // The aggregate budget was fully spent by `bigRule`, so `extraRule` —
+    // despite covering just one cell, well under any per-range cap —
+    // contributes nothing.
+    expect(result.formats.E1).toBeUndefined();
+  }, 20000);
 });
 
 describe('mixColors', () => {
@@ -527,6 +594,14 @@ describe('parseConditionalRules', () => {
     expect(parseConditionalRules([{ junk: true }])).toBeUndefined();
     expect(parseConditionalRules(undefined)).toBeUndefined();
     expect(parseConditionalRules('nope')).toBeUndefined();
+  });
+
+  it('caps the rule count at MAX_CONDITIONAL_RULES, an API write cannot exceed the parse boundary', () => {
+    const many = Array.from({ length: MAX_CONDITIONAL_RULES + 50 }, (_, i) => rule(`r${i}`));
+    const parsed = parseConditionalRules(many);
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
   });
 });
 
