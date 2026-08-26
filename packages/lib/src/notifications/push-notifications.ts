@@ -25,6 +25,20 @@ interface SendPushResult {
   shouldRemoveToken?: boolean;
 }
 
+// Both the APNs JWT (ES256) and the FCM OAuth2 assertion (RS256) are JWTs, so
+// they share one base64url encoder.
+function base64UrlEncode(input: object | string | Buffer): string {
+  const buffer =
+    Buffer.isBuffer(input)
+      ? input
+      : Buffer.from(typeof input === 'string' ? input : JSON.stringify(input));
+  return buffer
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=/g, '');
+}
+
 // APNs JWT token cache
 let apnsJwtToken: string | null = null;
 let apnsJwtExpiry: number = 0;
@@ -56,16 +70,8 @@ function getApnsJwtToken(): string {
     iat: now,
   };
 
-  // Base64url encode
-  const base64url = (obj: object) =>
-    Buffer.from(JSON.stringify(obj))
-      .toString('base64')
-      .replace(/\+/g, '-')
-      .replace(/\//g, '_')
-      .replace(/=/g, '');
-
-  const headerB64 = base64url(header);
-  const claimsB64 = base64url(claims);
+  const headerB64 = base64UrlEncode(header);
+  const claimsB64 = base64UrlEncode(claims);
   const signingInput = `${headerB64}.${claimsB64}`;
 
   // Sign with ES256 (ECDSA P-256)
@@ -109,12 +115,7 @@ function getApnsJwtToken(): string {
     return Buffer.concat([rPadded, sPadded]);
   };
 
-  const rawSignature = derToRaw(signature);
-  const signatureB64 = rawSignature
-    .toString('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=/g, '');
+  const signatureB64 = base64UrlEncode(derToRaw(signature));
 
   apnsJwtToken = `${signingInput}.${signatureB64}`;
   apnsJwtExpiry = now + 3600; // Token is valid for 1 hour
@@ -346,6 +347,310 @@ async function sendToApns(
   }
 }
 
+
+// ---------------------------------------------------------------------------
+// FCM (Firebase Cloud Messaging) HTTP v1
+//
+// The v1 API is OAuth2-only: every send needs a Bearer access token minted from
+// the service-account credentials via a JWT-bearer grant. That mint is a real
+// network round-trip, so — exactly like the APNs JWT above — the token is cached
+// at module level and refreshed ahead of expiry rather than per send.
+//
+// Config lives in one env var, `FCM_SERVICE_ACCOUNT_JSON` (the raw service
+// account JSON Firebase hands you). The project id is derived from it, so there
+// is no second variable to keep in sync. When the secret is absent the send
+// fails with a configuration error — the dispatch loop keeps going and other
+// platforms still deliver.
+// ---------------------------------------------------------------------------
+
+const FCM_SCOPE = 'https://www.googleapis.com/auth/firebase.messaging';
+const FCM_DEFAULT_TOKEN_URI = 'https://oauth2.googleapis.com/token';
+
+interface FcmServiceAccount {
+  projectId: string;
+  clientEmail: string;
+  privateKey: string;
+  tokenUri: string;
+}
+
+function parseFcmServiceAccount(raw: string): FcmServiceAccount {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error('FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON is not valid JSON');
+  }
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error('FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON must be a JSON object');
+  }
+
+  const account = parsed as Record<string, unknown>;
+  const str = (key: string): string =>
+    typeof account[key] === 'string' ? (account[key] as string) : '';
+
+  const projectId = str('project_id');
+  const clientEmail = str('client_email');
+  const privateKey = str('private_key');
+
+  const missing = [
+    ...(projectId ? [] : ['project_id']),
+    ...(clientEmail ? [] : ['client_email']),
+    ...(privateKey ? [] : ['private_key']),
+  ];
+  if (missing.length > 0) {
+    throw new Error(
+      `FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON is missing ${missing.join(', ')}`
+    );
+  }
+
+  return {
+    projectId,
+    clientEmail,
+    // Secret stores (Fly, .env) commonly deliver the PEM with literal backslash-n
+    // rather than real newlines; crypto rejects that outright.
+    privateKey: privateKey.includes('\\n') ? privateKey.replace(/\\n/g, '\n') : privateKey,
+    tokenUri: str('token_uri') || FCM_DEFAULT_TOKEN_URI,
+  };
+}
+
+// FCM OAuth2 access token cache. `fcmAccessTokenSource` pins the cache to the
+// exact credential string it was minted from, so a rotated secret is never
+// served a stale token from the previous service account.
+let fcmAccessToken: string | null = null;
+let fcmAccessTokenExpiry: number = 0;
+let fcmAccessTokenSource: string | null = null;
+
+async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: string }> {
+  const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
+  if (!raw) {
+    throw new Error('FCM configuration missing: FCM_SERVICE_ACCOUNT_JSON is required');
+  }
+
+  const account = parseFcmServiceAccount(raw);
+  const now = Math.floor(Date.now() / 1000);
+
+  // Google access tokens live for 1 hour; refresh at 50 min, as APNs does.
+  if (fcmAccessToken && fcmAccessTokenSource === raw && fcmAccessTokenExpiry > now + 600) {
+    return { accessToken: fcmAccessToken, projectId: account.projectId };
+  }
+
+  const header = { alg: 'RS256', typ: 'JWT' };
+  const claims = {
+    iss: account.clientEmail,
+    scope: FCM_SCOPE,
+    aud: account.tokenUri,
+    iat: now,
+    exp: now + 3600,
+  };
+
+  const signingInput = `${base64UrlEncode(header)}.${base64UrlEncode(claims)}`;
+
+  const sign = crypto.createSign('RSA-SHA256');
+  sign.update(signingInput);
+  sign.end();
+  // RS256 signatures are already the raw value JWT wants — no DER unwrapping,
+  // unlike the ES256 path APNs uses.
+  const assertion = `${signingInput}.${base64UrlEncode(sign.sign(account.privateKey))}`;
+
+  // No cache invalidation is needed on any failure below: the cache is only ever
+  // written by a fully successful mint, and we only get here when it was already
+  // stale or minted from a different credential. sendToFcm's 401 handler is the
+  // one place a *populated* cache has to be dropped.
+  const response = await fetch(account.tokenUri, {
+    method: 'POST',
+    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+      assertion,
+    }).toString(),
+    signal: AbortSignal.timeout(10000),
+  });
+
+  const text = await response.text();
+
+  if (!response.ok) {
+    throw new Error(
+      `FCM OAuth token request failed (${response.status}): ${text.slice(0, 200)}`
+    );
+  }
+
+  let grant: { access_token?: unknown; expires_in?: unknown };
+  try {
+    grant = JSON.parse(text) as { access_token?: unknown; expires_in?: unknown };
+  } catch {
+    throw new Error('FCM OAuth token response was not valid JSON');
+  }
+
+  if (typeof grant.access_token !== 'string' || grant.access_token.length === 0) {
+    throw new Error('FCM OAuth token response did not include an access_token');
+  }
+
+  const expiresIn = typeof grant.expires_in === 'number' ? grant.expires_in : 3600;
+
+  fcmAccessToken = grant.access_token;
+  fcmAccessTokenExpiry = now + expiresIn;
+  fcmAccessTokenSource = raw;
+
+  return { accessToken: fcmAccessToken, projectId: account.projectId };
+}
+
+// FCM data payloads are string→string only; anything else is rejected by the API.
+function toFcmDataRecord(data: Record<string, unknown> | undefined): Record<string, string> {
+  const record: Record<string, string> = {};
+  for (const [key, value] of Object.entries(data ?? {})) {
+    if (value === undefined) continue;
+    record[key] = typeof value === 'string' ? value : JSON.stringify(value);
+  }
+  return record;
+}
+
+// FCM reports the actionable reason in `error.details[].errorCode`; `error.status`
+// is the coarser gRPC status. Prefer the former, fall back to the latter.
+function extractFcmError(body: string): { code: string; message: string } {
+  try {
+    const parsed = JSON.parse(body) as {
+      error?: {
+        status?: unknown;
+        message?: unknown;
+        details?: Array<Record<string, unknown>>;
+      };
+    };
+    const error = parsed.error;
+    const detail = error?.details?.find((d) => typeof d.errorCode === 'string');
+    const code =
+      (typeof detail?.errorCode === 'string' ? detail.errorCode : undefined) ??
+      (typeof error?.status === 'string' ? error.status : undefined) ??
+      'UNKNOWN';
+    const message = typeof error?.message === 'string' ? error.message : 'Unknown error';
+    return { code, message };
+  } catch {
+    return { code: 'UNKNOWN', message: 'Unknown error' };
+  }
+}
+
+// Codes that mean "this token will never work again" — the dispatch loop
+// deactivates the row, mirroring the APNs BadDeviceToken/Unregistered handling.
+// INVALID_ARGUMENT is included per the FCM guidance that it signals a malformed
+// registration token; note it is also what a malformed *message* returns, so a
+// payload regression would deactivate tokens — keep the message builder honest.
+const FCM_INVALID_TOKEN_CODES = ['UNREGISTERED', 'INVALID_ARGUMENT', 'NOT_FOUND'];
+
+async function sendToFcm(
+  deviceToken: string,
+  payload: PushNotificationPayload,
+  tokenId: string
+): Promise<SendPushResult> {
+  const isSilent = payload.silent === true;
+
+  try {
+    const { accessToken, projectId } = await getFcmAccessToken();
+
+    const data = toFcmDataRecord(payload.data);
+    if (payload.badge !== undefined) data.badge = String(payload.badge);
+    if (payload.threadId) data.threadId = payload.threadId;
+    if (payload.category) data.category = payload.category;
+
+    // A silent push must be data-only: including a `notification` block makes
+    // Android render a tray notification itself, no matter what the app does.
+    // Title/body ride along as data so the client can decide for itself.
+    if (isSilent) {
+      data.silent = 'true';
+      if (payload.title !== undefined) data.title = payload.title;
+      if (payload.body !== undefined) data.body = payload.body;
+    }
+
+    const message: Record<string, unknown> = {
+      token: deviceToken,
+      data,
+      android: {
+        // Match APNs: alerts go at high priority, background pushes at normal.
+        priority: isSilent ? 'normal' : 'high',
+        ...(isSilent
+          ? {}
+          : {
+              notification: {
+                sound: payload.sound || 'default',
+                ...(payload.badge !== undefined && { notification_count: payload.badge }),
+                ...(payload.threadId ? { tag: payload.threadId } : {}),
+                ...(payload.category ? { click_action: payload.category } : {}),
+              },
+            }),
+      },
+    };
+
+    if (!isSilent) {
+      message.notification = {
+        title: payload.title ?? '',
+        body: payload.body ?? '',
+      };
+    }
+
+    console.log('[FCM] send', {
+      projectId,
+      tokenId,
+      tokenPrefix: deviceToken.slice(0, 8),
+      isSilent,
+    });
+
+    const response = await fetch(
+      `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
+      {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${accessToken}`,
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({ message }),
+        signal: AbortSignal.timeout(10000),
+      }
+    );
+
+    const body = await response.text();
+
+    if (response.ok) {
+      console.log('[FCM] accepted', { tokenId });
+      return { success: true, tokenId };
+    }
+
+    const { code, message: reason } = extractFcmError(body);
+
+    // A 401 means the cached access token was revoked or rotated out from under
+    // us; drop it so the next send mints a fresh one instead of looping on 401.
+    if (response.status === 401) {
+      fcmAccessToken = null;
+      fcmAccessTokenExpiry = 0;
+      fcmAccessTokenSource = null;
+    }
+
+    console.error('[FCM] reject', {
+      status: response.status,
+      code,
+      reason,
+      projectId,
+      tokenId,
+    });
+
+    return {
+      success: false,
+      tokenId,
+      error: `${code}: ${reason}`,
+      shouldRemoveToken: FCM_INVALID_TOKEN_CODES.includes(code),
+    };
+  } catch (error) {
+    console.error('[FCM] send error', {
+      tokenId,
+      isSilent,
+      error: error instanceof Error ? (error.stack ?? error.message) : error,
+    });
+    return {
+      success: false,
+      tokenId,
+      error: error instanceof Error ? error.message : 'Unknown error',
+    };
+  }
+}
+
 export async function registerPushToken(
   userId: string,
   token: string,
@@ -466,12 +771,7 @@ export async function sendPushNotification(
         result = await sendToApns(tokenRecord.token, payload, tokenRecord.id);
         break;
       case 'android':
-        // TODO: Implement FCM when Android app is added
-        result = {
-          success: false,
-          tokenId: tokenRecord.id,
-          error: 'Android push not yet implemented',
-        };
+        result = await sendToFcm(tokenRecord.token, payload, tokenRecord.id);
         break;
       case 'web':
         // TODO: Implement Web Push when PWA push is added

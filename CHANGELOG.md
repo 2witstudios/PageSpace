@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Android phones can be sent a notification** — the server has always accepted and stored Android
+  push tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub.
+  It now delivers through Firebase Cloud Messaging, so a mention or a share reaches an Android
+  device the same way it reaches an iPhone. A background sync is sent as a data-only message, which
+  is what stops Android from putting a notification in the tray for something the app was only meant
+  to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
+  token was replaced — is deactivated on the spot rather than retried forever, matching how expired
+  Apple tokens are already handled. If the Firebase credential is missing or malformed the Android
+  send fails with a message that says exactly which field is wrong, and every other device on the
+  account still receives the notification.
+
 - **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
   the machine is using: which drives it reaches, the role it holds in each, and what that role
   actually resolves to — can it read, write, share, delete. That answer comes from the same

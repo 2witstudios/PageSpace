@@ -366,15 +366,6 @@ describe('sendPushNotification', () => {
     expect(result).toEqual({ sent: 0, failed: 0, errors: [] });
   });
 
-  it('handles android platform (not yet implemented)', async () => {
-    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'android' })] as never);
-    setupUpdateChain();
-
-    const result = await sendPushNotification('user-1', payload);
-    expect(result.failed).toBe(1);
-    expect(result.errors).toContain('Android push not yet implemented');
-  });
-
   it('handles web platform (not yet implemented)', async () => {
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'web' })] as never);
     setupUpdateChain();
@@ -821,5 +812,509 @@ describe('silent push payload', () => {
 
     expect(h2.connectedHosts).toContain('https://api.push.apple.com');
     expect(h2.connectedHosts.some((host) => host.includes('sandbox'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// FCM (Android) sender
+//
+// The FCM path is plain HTTPS (unlike APNs' HTTP/2), so these tests stub
+// globalThis.fetch and route by URL: the OAuth2 token endpoint vs the
+// messages:send endpoint. The module-level access-token cache is pinned to the
+// exact credential string it was minted from, so each test that wants a cold
+// cache simply uses a fresh service-account JSON.
+// ---------------------------------------------------------------------------
+
+interface FakeResponse {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+}
+
+function fakeResponse(status: number, body: string): FakeResponse {
+  return {
+    ok: status >= 200 && status < 300,
+    status,
+    text: async () => body,
+  };
+}
+
+let serviceAccountCounter = 0;
+
+// A distinct project id per call gives a distinct credential string, which busts
+// the module-level token cache — pass a fixed id to deliberately share it.
+function serviceAccountJson(overrides: Record<string, unknown> = {}, projectId?: string) {
+  serviceAccountCounter += 1;
+  const pid = projectId ?? `pagespace-test-${serviceAccountCounter}`;
+  const account: Record<string, unknown> = {
+    type: 'service_account',
+    project_id: pid,
+    client_email: `push@${pid}.iam.gserviceaccount.com`,
+    // Literal backslash-n, the way secret stores hand PEMs back.
+    private_key: '-----BEGIN PRIVATE KEY-----\\nFAKEFCMKEY\\n-----END PRIVATE KEY-----\\n',
+    token_uri: 'https://oauth2.googleapis.com/token',
+    ...overrides,
+  };
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete account[key];
+  }
+  return JSON.stringify(account);
+}
+
+const OAUTH_OK = JSON.stringify({ access_token: 'ya29.fake-access-token', expires_in: 3600 });
+const FCM_SEND_OK = JSON.stringify({ name: 'projects/p/messages/0:1234' });
+
+interface FetchCall {
+  url: string;
+  init: RequestInit;
+}
+
+function installFetchStub(handlers: {
+  oauth?: (call: FetchCall) => FakeResponse;
+  send?: (message: Record<string, unknown>, call: FetchCall) => FakeResponse;
+} = {}) {
+  const calls: FetchCall[] = [];
+  const stub = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+    const call: FetchCall = { url: String(url), init };
+    calls.push(call);
+    if (call.url.includes('oauth2.googleapis.com')) {
+      return (handlers.oauth ?? (() => fakeResponse(200, OAUTH_OK)))(call);
+    }
+    const parsed = JSON.parse(String(init.body)) as { message: Record<string, unknown> };
+    return (handlers.send ?? (() => fakeResponse(200, FCM_SEND_OK)))(parsed.message, call);
+  });
+  globalThis.fetch = stub as unknown as typeof fetch;
+  return calls;
+}
+
+// crypto.createSign is mocked module-wide; dispatch on the algorithm so a test
+// that sends to both platforms gets a usable signer for each.
+function primeSign() {
+  const rsaSign = {
+    update: vi.fn().mockReturnThis(),
+    end: vi.fn().mockReturnThis(),
+    sign: vi.fn().mockReturnValue(Buffer.from('fake-rsa-signature')),
+  };
+  const derSignature = Buffer.alloc(72, 0);
+  derSignature[0] = 0x30; derSignature[1] = 70;
+  derSignature[2] = 0x02; derSignature[3] = 32;
+  derSignature[36] = 0x02; derSignature[37] = 32;
+  const ecdsaSign = {
+    update: vi.fn().mockReturnThis(),
+    end: vi.fn().mockReturnThis(),
+    sign: vi.fn().mockReturnValue(derSignature),
+  };
+  vi.mocked(crypto.createSign).mockImplementation((algorithm: string) =>
+    (algorithm === 'RSA-SHA256' ? rsaSign : ecdsaSign) as unknown as ReturnType<typeof crypto.createSign>
+  );
+  return { rsaSign, ecdsaSign };
+}
+
+function androidToken(overrides: Record<string, unknown> = {}) {
+  return tokenRecord({ platform: 'android', token: 'fcm-token-abc123', ...overrides });
+}
+
+function sentMessage(calls: FetchCall[]): Record<string, unknown> {
+  const send = calls.find((c) => c.url.includes('fcm.googleapis.com'));
+  if (!send) throw new Error('no messages:send call was made');
+  return (JSON.parse(String(send.init.body)) as { message: Record<string, unknown> }).message;
+}
+
+describe('sendToFcm (Android)', () => {
+  const originalFetch = globalThis.fetch;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    resetH2();
+    primeSign();
+  });
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+    delete process.env.FCM_SERVICE_ACCOUNT_JSON;
+    delete process.env.APNS_TEAM_ID;
+    delete process.env.APNS_KEY_ID;
+    delete process.env.APNS_PRIVATE_KEY;
+  });
+
+  it('sends via FCM HTTP v1 with an OAuth2 bearer token minted from the service account', async () => {
+    const raw = serviceAccountJson();
+    const projectId = (JSON.parse(raw) as { project_id: string }).project_id;
+    process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result).toEqual({ sent: 1, failed: 0, errors: [] });
+
+    // OAuth2 leg: JWT-bearer grant against the service account's token_uri.
+    const oauth = calls[0];
+    expect(oauth.url).toBe('https://oauth2.googleapis.com/token');
+    expect(oauth.init.method).toBe('POST');
+    const grant = new URLSearchParams(String(oauth.init.body));
+    expect(grant.get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:jwt-bearer');
+    const assertion = grant.get('assertion') ?? '';
+    expect(assertion.split('.')).toHaveLength(3);
+    const jwtClaims = JSON.parse(
+      Buffer.from(assertion.split('.')[1], 'base64url').toString()
+    ) as Record<string, unknown>;
+    expect(jwtClaims.scope).toBe('https://www.googleapis.com/auth/firebase.messaging');
+    expect(jwtClaims.aud).toBe('https://oauth2.googleapis.com/token');
+    expect(jwtClaims.iss).toBe(`push@${projectId}.iam.gserviceaccount.com`);
+
+    // Send leg: v1 endpoint scoped to the project id derived from the JSON.
+    const send = calls[1];
+    expect(send.url).toBe(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`);
+    expect(send.init.method).toBe('POST');
+    expect((send.init.headers as Record<string, string>).authorization).toBe(
+      'Bearer ya29.fake-access-token'
+    );
+    expect((send.init.headers as Record<string, string>)['content-type']).toBe('application/json');
+
+    const message = sentMessage(calls);
+    expect(message.token).toBe('fcm-token-abc123');
+    expect(message.notification).toEqual({ title: 'Hello', body: 'World' });
+    expect((message.android as Record<string, unknown>).priority).toBe('high');
+  });
+
+  it('unescapes a literal backslash-n private key before signing', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const { rsaSign } = primeSign();
+    installFetchStub();
+
+    await sendPushNotification('user-1', payload);
+
+    const key = rsaSign.sign.mock.calls[0][0] as string;
+    expect(key).toContain('-----BEGIN PRIVATE KEY-----\n');
+    expect(key).not.toContain('\\n');
+  });
+
+  it('sends a data-only message for a silent payload so Android shows nothing', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', { silent: true, badge: 3, data: { pageId: 'p1' } });
+
+    const message = sentMessage(calls);
+    expect('notification' in message).toBe(false);
+    const android = message.android as Record<string, unknown>;
+    expect('notification' in android).toBe(false);
+    expect(android.priority).toBe('normal');
+    expect(message.data).toMatchObject({ silent: 'true', badge: '3', pageId: 'p1' });
+  });
+
+  it('includes a visible notification block and android notification options when not silent', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', {
+      title: 'T',
+      body: 'B',
+      badge: 7,
+      sound: 'chime',
+      threadId: 'thread-9',
+      category: 'MESSAGE',
+    });
+
+    const message = sentMessage(calls);
+    expect(message.notification).toEqual({ title: 'T', body: 'B' });
+    const android = message.android as Record<string, unknown>;
+    expect(android.notification).toEqual({
+      sound: 'chime',
+      notification_count: 7,
+      tag: 'thread-9',
+      click_action: 'MESSAGE',
+    });
+    expect(message.data).toMatchObject({ badge: '7', threadId: 'thread-9', category: 'MESSAGE' });
+  });
+
+  it('stringifies non-string data values (FCM data is string-to-string only)', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', {
+      ...payload,
+      data: { count: 4, nested: { a: 1 }, kept: 'raw', dropped: undefined },
+    });
+
+    const data = sentMessage(calls).data as Record<string, string>;
+    expect(data.count).toBe('4');
+    expect(data.nested).toBe('{"a":1}');
+    expect(data.kept).toBe('raw');
+    expect('dropped' in data).toBe(false);
+  });
+
+  it('deactivates the token when FCM reports UNREGISTERED', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(
+          404,
+          JSON.stringify({
+            error: {
+              code: 404,
+              message: 'Requested entity was not found.',
+              status: 'NOT_FOUND',
+              details: [
+                { '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' },
+              ],
+            },
+          })
+        ),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('UNREGISTERED');
+    // Same shape the APNs invalid-token path uses: deactivate, don't count a failure.
+    expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('deactivates the token when FCM reports INVALID_ARGUMENT', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(
+          400,
+          JSON.stringify({
+            error: {
+              message: 'The registration token is not a valid FCM registration token',
+              status: 'INVALID_ARGUMENT',
+            },
+          })
+        ),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('keeps the token when FCM rejects with a retryable code', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(
+          503,
+          JSON.stringify({ error: { message: 'The service is unavailable.', status: 'UNAVAILABLE' } })
+        ),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('UNAVAILABLE');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '1', isActive: true })
+    );
+  });
+
+  it('falls back to UNKNOWN when the FCM error body is not JSON', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({ send: () => fakeResponse(500, '<html>gateway</html>') });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('UNKNOWN');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('fails only that send when FCM_SERVICE_ACCOUNT_JSON is absent, without breaking the dispatch loop', async () => {
+    delete process.env.FCM_SERVICE_ACCOUNT_JSON;
+    process.env.APNS_TEAM_ID = 'team-id';
+    process.env.APNS_KEY_ID = 'key-id';
+    process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nfakekey\n-----END PRIVATE KEY-----';
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
+      androidToken({ id: 'android-1' }),
+      tokenRecord({ id: 'ios-1', platform: 'ios' }),
+    ] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.sent).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('FCM configuration missing');
+    expect(result.errors[0]).toContain('FCM_SERVICE_ACCOUNT_JSON');
+    // No network call was attempted for the misconfigured platform.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('reports a configuration error when the service account JSON is malformed', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = 'not-json-at-all';
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('not valid JSON');
+  });
+
+  it('reports a configuration error when the service account JSON is not an object', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = '["nope"]';
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('must be a JSON object');
+  });
+
+  it('names the missing service account fields', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({
+      project_id: undefined,
+      private_key: undefined,
+    });
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('project_id');
+    expect(result.errors[0]).toContain('private_key');
+    expect(result.errors[0]).not.toContain('client_email');
+  });
+
+  it('reuses a recently minted access token instead of re-minting per send', async () => {
+    const raw = serviceAccountJson({}, 'shared-cache-project');
+    process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', payload);
+    await sendPushNotification('user-1', payload);
+
+    const oauthCalls = calls.filter((c) => c.url.includes('oauth2.googleapis.com'));
+    const sendCalls = calls.filter((c) => c.url.includes('fcm.googleapis.com'));
+    expect(oauthCalls).toHaveLength(1);
+    expect(sendCalls).toHaveLength(2);
+  });
+
+  it('re-mints when the service account credential rotates', async () => {
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'rotate-a');
+    await sendPushNotification('user-1', payload);
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'rotate-b');
+    await sendPushNotification('user-1', payload);
+
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+    expect(calls[3].url).toContain('/projects/rotate-b/');
+  });
+
+  it('drops the cached access token after a 401 so the next send re-mints', async () => {
+    const raw = serviceAccountJson({}, 'unauthorized-project');
+    process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    let sendCount = 0;
+    const calls = installFetchStub({
+      send: () => {
+        sendCount += 1;
+        return sendCount === 1
+          ? fakeResponse(401, JSON.stringify({ error: { status: 'UNAUTHENTICATED', message: 'bad creds' } }))
+          : fakeResponse(200, FCM_SEND_OK);
+      },
+    });
+
+    const first = await sendPushNotification('user-1', payload);
+    const second = await sendPushNotification('user-1', payload);
+
+    expect(first.failed).toBe(1);
+    expect(second.sent).toBe(1);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+  });
+
+  it('surfaces an OAuth token endpoint rejection as the send error', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    const calls = installFetchStub({
+      oauth: () => fakeResponse(400, JSON.stringify({ error: 'invalid_grant' })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('FCM OAuth token request failed (400)');
+    expect(result.errors[0]).toContain('invalid_grant');
+    // The send leg is never attempted, and the token is not deactivated.
+    expect(calls.filter((c) => c.url.includes('fcm.googleapis.com'))).toHaveLength(0);
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('reports a transport failure at the OAuth leg and mints cleanly on the next send', async () => {
+    const raw = serviceAccountJson({}, 'transport-fail-project');
+    process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    let attempt = 0;
+    const calls = installFetchStub({
+      oauth: () => {
+        attempt += 1;
+        if (attempt === 1) throw new Error('ECONNRESET');
+        return fakeResponse(200, OAUTH_OK);
+      },
+    });
+
+    const first = await sendPushNotification('user-1', payload);
+    expect(first.failed).toBe(1);
+    expect(first.errors[0]).toContain('ECONNRESET');
+
+    const second = await sendPushNotification('user-1', payload);
+    expect(second.sent).toBe(1);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+  });
+
+  it('rejects an OAuth response with no access_token', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub({ oauth: () => fakeResponse(200, JSON.stringify({ expires_in: 3600 })) });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('did not include an access_token');
+  });
+
+  it('rejects a non-JSON OAuth response body', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub({ oauth: () => fakeResponse(200, 'totally not json') });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('was not valid JSON');
   });
 });
