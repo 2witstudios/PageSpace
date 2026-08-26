@@ -192,7 +192,16 @@ export interface MeterAwakeResult {
   unresolvedPayer: number;
   /** Rows stopped and parked because the payer ran out of credits at the re-gate. */
   parked: number;
-  /** Rows where something threw. Isolated; the window is left open so the span is retried. */
+  /**
+   * Rows where the span was NOT billed — something threw, or the settle resolved
+   * without persisting a usage row. Isolated either way; the window is left open so
+   * the span is retried on the next tick, which is safe precisely because nothing
+   * was written.
+   *
+   * The non-persisted case used to be invisible: `trackUsage` returned
+   * `Promise<void>` and swallowed its own failures, so a lost charge was counted as
+   * `settled` and its watermark advanced over it.
+   */
   failed: number;
   /** Settles whose span exceeded {@link MAX_AWAKE_SETTLE_SPAN_MS} and was shortened — expected to be ZERO in steady state. */
   clamped: number;
@@ -354,13 +363,54 @@ async function meterOneApp(
     return;
   }
 
-  await deps.billing.trackUsage({
+  const settle = await deps.billing.trackUsage({
     payerId,
     holdId: row.awakeHoldId ?? undefined,
     activeSeconds: plan.activeSeconds,
     driveId: row.driveId,
     publishedAppId: row.id,
   });
+  if (!settle.persisted) {
+    // The settle resolved but reported NO persisted usage row, so nothing — not the
+    // ledger, not the backfill cron, which reads `ai_usage_logs` — will ever bill
+    // this span. Leave the watermark alone: the window stays open and the next tick
+    // re-bills the whole span, and the only alternative is losing the charge
+    // outright.
+    //
+    // "Nothing was CONFIRMED written", not "nothing was written": a connection
+    // dropped at the commit boundary reports a failed write over a row that
+    // committed, and the retry then bills the span twice. Bounded at ONE duplicate
+    // span; the deterministic per-window idempotency key that would close it is a
+    // filed follow-up. The re-gate below is skipped with
+    // it — the seam already returned this wake's reservation on its way out, so the
+    // next tick settles the retried span unreserved and re-gates after it. That is
+    // one tick of unreserved spend, bounded by the settle cadence, and strictly
+    // better than closing the window over a charge nobody will ever make.
+    //
+    // Counted as `failed` rather than thrown: this function is run under the
+    // meter's advisory lock and a throw here would be caught by the per-row guard
+    // anyway — a counted failure keeps the tick's accounting honest without
+    // pretending an exception happened.
+    //
+    // NOT gated on `creditsSettled`: a persisted row whose ledger settle was
+    // deferred is already owned by the backfill cron, and re-billing the window for
+    // it would charge the payer twice.
+    result.failed += 1;
+    loggers.ai.error(
+      'Published-app awake settle did not persist a usage row — the window stays open and is retried next tick',
+      new Error('awake settle was not persisted'),
+      { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+    );
+    return;
+  }
+  if (!settle.creditsSettled) {
+    // Late, not lost: the usage row exists, so `credit-backfill.ts` collects this
+    // charge on its next sweep. The window still closes below.
+    loggers.ai.warn(
+      'Published-app awake settle persisted but its ledger settle was deferred to the backfill cron',
+      { publishedAppId: row.id, driveId: row.driveId },
+    );
+  }
   result.settled += 1;
   result.totalAwakeSeconds += plan.activeSeconds;
   if (plan.clamped) result.clamped += 1;

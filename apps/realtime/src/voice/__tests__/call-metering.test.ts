@@ -81,7 +81,9 @@ function harness(over: Partial<CallMeterOptions> = {}) {
     reason: 'ok' as const,
     holdId: `hold-${++holdCounter}`,
   }));
-  const track = vi.fn(async () => {});
+  // `trackUsage` reports whether the usage row landed; a stub resolving with
+  // nothing would claim a LOST window, which the meter now treats as a failed settle.
+  const track = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const release = vi.fn(async () => {});
   const limits: { reason: MeterStopReason; message: string }[] = [];
   let clock = 1_000;
@@ -478,6 +480,38 @@ describe('startCallMeter — stopping', () => {
 
     expect(h.release).toHaveBeenCalledWith('hold-1');
     expect(h.gate).toHaveBeenCalledTimes(2);
+  });
+
+  it('given a settle that RESOLVES WITHOUT PERSISTING, should treat it as a failed settle and keep the call up', async () => {
+    // `trackUsage` never throws, so before it reported an outcome this was the
+    // failure the catch above could not see: the settle resolved, the window was
+    // consumed, and no `ai_usage_logs` row existed for anything to recover from.
+    // A live call has no window to reopen — the honest response is to return the
+    // reservation, log the window as unbilled, and let the user keep talking.
+    const { options, h } = harness({
+      track: (async () => ({ persisted: false, creditsSettled: false })) as unknown as CallMeterOptions['track'],
+    });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    expect(h.release).toHaveBeenCalledWith('hold-1');
+    expect(h.gate).toHaveBeenCalledTimes(2); // re-held for the next window
+    expect(h.limits).toEqual([]); // the call was NOT taken down
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, should treat it as a normal settle (the backfill cron owns that charge)', async () => {
+    const { options, h } = harness({
+      track: (async () => ({ persisted: true, creditsSettled: false })) as unknown as CallMeterOptions['track'],
+    });
+    const meter = await startedMeter(options);
+
+    meter.record(usage());
+    await meter.settle();
+
+    // `trackUsage` took ownership of the hold, so nothing is released here.
+    expect(h.release).not.toHaveBeenCalled();
   });
 
   it('should clear every timer so a stopped call cannot fire a limit', async () => {

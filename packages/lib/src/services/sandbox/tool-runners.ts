@@ -46,6 +46,7 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
+import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -128,6 +129,12 @@ export interface SandboxBillingDeps {
    * agent page; `driveId` is the realtime shell bridge's session-level
    * attribution (a session is drive-scoped, not page-anchored) — a caller
    * sets whichever one its own model has, never both.
+   *
+   * REPORTS ITS OUTCOME: resolving is not the same as settling.
+   * `UsageTrackingOutcome.persisted` says whether the usage row landed, and the
+   * realtime shell's heartbeat keeps its billing window OPEN when it did not.
+   * A one-shot run (this file) has no window to keep, so it only disposes of the
+   * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
     payerId: string;
@@ -139,7 +146,7 @@ export interface SandboxBillingDeps {
     driveId?: string;
     /** The `agent_workspaces.id` this run belongs to — first-class attribution, mirroring `driveId`. */
     workspaceId?: string;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -610,9 +617,8 @@ export async function withMachineBilling<S>(
   try {
     const result = await run();
     if (result.success) {
-      handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({
+      const settle = await billing.trackUsage({
         payerId,
         holdId,
         activeSeconds,
@@ -622,6 +628,18 @@ export async function withMachineBilling<S>(
         driveId: billingSession.driveId ?? undefined,
         workspaceId: billingSession.workspaceId,
       });
+      // The hand-off is what the settle ACHIEVED, not what it was asked to do. A
+      // settle that persisted owns the reservation from here (the credit pipeline
+      // deletes it inside the decrement, or the backfill cron settles the row and
+      // the hold expires on its TTL). A settle that did not persist wrote nothing
+      // and owns nothing, so the `finally` below returns the reservation instead of
+      // leaving it to suppress the payer's spendable balance for its whole TTL.
+      // Idempotent either way: releasing an already-deleted hold deletes zero rows.
+      //
+      // A one-shot run has no window to reopen — there is no next tick for a
+      // finished command — so the lost charge is reported by the seam's own ERROR
+      // log and not retried here.
+      handedOff = settle.persisted;
     }
     return result;
   } finally {

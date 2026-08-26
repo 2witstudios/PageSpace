@@ -881,9 +881,81 @@ export interface AIUsageData {
 }
 
 /**
- * Track AI usage with automatic cost calculation
+ * What one `trackAIUsage` call durably achieved. The seam used to return
+ * `Promise<void>` and swallow every failure below it, so no caller could tell a
+ * committed charge from a lost one — and every meter that advances a watermark
+ * after awaiting it (the sandbox storage reconcile, the realtime shell settle, the
+ * published-app awake meter) could close a window over a charge that never landed.
+ *
+ * READ {@link UsageTrackingOutcome.persisted} FIRST: it is the load-bearing field,
+ * and {@link UsageTrackingOutcome.creditsSettled} is deliberately NOT a second one.
  */
-export async function trackAIUsage(data: AIUsageData): Promise<void> {
+export interface UsageTrackingOutcome {
+  /**
+   * The `ai_usage_logs` row for this call is durably written.
+   *
+   * THIS is what a meter gates its watermark/window on, because this row is what
+   * every recovery path keys off: `credit-backfill.ts` sweeps usage rows that have
+   * no ledger entry and re-runs the charge. With the row, a charge is at worst
+   * late. Without it there is nothing to recover from and the spend is gone for
+   * good — the provider already billed us and nobody will ever bill the payer.
+   *
+   * False means: keep the window OPEN. Nothing was written, so the next tick
+   * re-bills the same span and cannot double-charge for it.
+   */
+  persisted: boolean;
+  /**
+   * The credit settle completed IN-LINE — or there was legitimately nothing to
+   * settle (a metering-exempt provider, a token-less failure, a $0 call, or a
+   * deployment with billing off).
+   *
+   * NOT a watermark gate, and gating on it would be a bug in the opposite
+   * direction. `consumeCredits` reports `deferred` for a claim/settle that did not
+   * land, and the backfill cron then settles that very charge from the usage row —
+   * so a meter that held its window open on `creditsSettled === false` would bill
+   * the payer a second time for a span the cron is already collecting. Reported so
+   * failures are visible in logs and counters, nothing more.
+   */
+  creditsSettled: boolean;
+}
+
+/**
+ * Explicitly drop a tracking outcome, for a call site that is pure telemetry and
+ * has no window, watermark or hold to keep open on a failure. Named rather than
+ * implicit so "this call ignores the outcome" is a decision visible in the diff,
+ * not the absence of one — and so a future meter added at such a site is not
+ * silently born with the old swallow. `trackAIUsage` already logs the failure at
+ * ERROR; this only stops the promise floating.
+ */
+export function discardUsageOutcome(tracking: Promise<UsageTrackingOutcome>): void {
+  // `Promise.resolve` rather than `tracking.then` directly: the only job here is to
+  // stop the promise floating, and it must not itself become a new way for a call
+  // site to blow up on something it has explicitly declared it does not care about.
+  void Promise.resolve(tracking).then(
+    () => undefined,
+    () => undefined,
+  );
+}
+
+/**
+ * Nothing was confirmed written and nothing was billed — every failure path's
+ * outcome. FROZEN because this one object is handed to every caller on every
+ * failure: an unfrozen shared literal is one careless `outcome.persisted = true`
+ * away from making a meter believe every later failure succeeded.
+ */
+const USAGE_TRACKING_LOST: UsageTrackingOutcome = Object.freeze({
+  persisted: false,
+  creditsSettled: false,
+});
+
+/**
+ * Track AI usage with automatic cost calculation.
+ *
+ * Never throws (an AI request must not die because a monitoring write did), but it
+ * no longer hides that: the {@link UsageTrackingOutcome} it resolves with says
+ * whether the usage row landed and whether the charge settled.
+ */
+export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutcome> {
   try {
     // Calculate tokens if not provided
     let { inputTokens, outputTokens, totalTokens } = data;
@@ -1004,6 +1076,29 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         },
         reconcileStatus,
       });
+      // `writeAiUsage` CATCHES its own failure and returns null rather than
+      // throwing, so a null id here is a lost usage row — the one unrecoverable
+      // outcome in this function, since the backfill cron's orphan sweep reads
+      // `ai_usage_logs` and therefore has nothing to find. Report it instead of
+      // falling through to the hold release as if nothing had gone wrong.
+      if (!aiUsageLogId) {
+        // A metering-exempt provider never owed anything, so the lost row costs
+        // observability rather than revenue — say which, so an operator reading the
+        // log is not sent hunting for money that was never going to be charged.
+        const exempt = isMeteringExempt(data.provider);
+        loggers.ai.error(
+          exempt
+            ? 'AI usage row was NOT persisted (metering-exempt provider) — observability only, nothing was owed'
+            : 'AI usage row was NOT persisted — this spend is unbilled and unrecoverable',
+          new Error('writeAiUsage returned no id'),
+          { model: data.model, provider: data.provider, source: data.source, holdId: data.holdId },
+        );
+        // The gate's reservation would otherwise sit against the payer's spendable
+        // balance until its TTL, and nothing downstream will ever settle it.
+        if (data.holdId) await releaseHold(data.holdId);
+        return { persisted: false, creditsSettled: exempt };
+      }
+
       // Bill when real tokens were consumed, regardless of success. A token-less
       // failure (pre-generation error) carries 0 tokens and is skipped; a
       // zero-charge call still reaches consumeCredits, which settles it as
@@ -1014,8 +1109,17 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
         // shared credit pool. The gate is normally skipped for this provider so no
         // hold exists; release one defensively if a caller placed it anyway.
         if (data.holdId) await releaseHold(data.holdId);
-      } else if (aiUsageLogId && (success || (totalTokens ?? 0) > 0)) {
-        await consumeCredits({
+        // Nothing was owed, so nothing is outstanding: a settle that was never
+        // meant to happen is `creditsSettled: true`, not a silent false that would
+        // read as a failure in every meter's log.
+        return { persisted: true, creditsSettled: true };
+      }
+
+      if (success || (totalTokens ?? 0) > 0) {
+        // `consumeCredits` never throws; the `.catch` here is belt-and-braces for a
+        // future rejection, and its outcome — not the mere fact that it resolved —
+        // is what `creditsSettled` reports.
+        const settle = await consumeCredits({
           aiUsageLogId,
           userId: data.userId,
           costDollars: cost,
@@ -1025,32 +1129,53 @@ export async function trackAIUsage(data: AIUsageData): Promise<void> {
           conversationId: data.conversationId,
           pageId: data.pageId,
           markupBpsOverride: data.markupBpsOverride,
-        })
-          .catch((error) => {
-            loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+        }).catch((error) => {
+          loggers.ai.debug('credit consume failed', { error: (error as Error).message });
+          return 'deferred' as const;
+        });
+        if (settle !== 'settled') {
+          // The usage row IS written, so the backfill cron owns this charge from
+          // here (pending sweep for a claimed row, orphan sweep for an unclaimed
+          // one). Logged at WARN, not ERROR: late is not lost.
+          loggers.ai.warn('credit settle did not complete in-line; left to the backfill cron', {
+            aiUsageLogId,
+            status: settle,
+            model: data.model,
+            provider: data.provider,
+            source: data.source,
           });
-      } else if (data.holdId) {
+        }
+        return { persisted: true, creditsSettled: settle === 'settled' };
+      }
+
+      if (data.holdId) {
         // Token-less failure (pre-generation error): nothing to bill, but the gate
         // already placed a hold. Release it now instead of leaving it to the cron.
         await releaseHold(data.holdId);
       }
+      // Deliberately unbilled (a pre-generation failure that burned no tokens) —
+      // an outcome, not a loss.
+      return { persisted: true, creditsSettled: true };
     } catch (error) {
-      // This swallow is the ONLY thing standing between a failed usage write and a silent
-      // billing gap: if writeAiUsage (or the settle below it) throws, the provider has
-      // already charged us but no ai_usage_logs row exists — so nothing debits the user and
-      // the orphan sweep, which keys off ai_usage_logs, can never find it. Log at ERROR (not
-      // debug) so unbilled spend is visible instead of disappearing into a debug channel.
+      // A throw here means the provider has already charged us but no ai_usage_logs
+      // row exists — so nothing debits the user and the orphan sweep, which keys off
+      // ai_usage_logs, can never find it. Logged at ERROR (not debug) so unbilled
+      // spend is visible instead of disappearing into a debug channel, and — unlike
+      // before — REPORTED to the caller, so a meter can keep its window open over it
+      // instead of advancing a watermark past a charge that never landed.
       loggers.ai.error('AI usage tracking failed — spend may be UNBILLED', error as Error, {
         model: data.model,
         provider: data.provider,
         source: data.source,
         holdId: data.holdId,
       });
+      return USAGE_TRACKING_LOST;
     }
   } catch (error) {
     loggers.ai.debug('AI usage calculation failed', { 
       error: (error as Error).message 
     });
+    return USAGE_TRACKING_LOST;
   }
 }
 
@@ -1072,11 +1197,12 @@ export interface AIToolUsage {
   pageId?: string;
 }
 
-export function trackAIToolUsage(data: AIToolUsage): Promise<void> {
+export function trackAIToolUsage(data: AIToolUsage): Promise<UsageTrackingOutcome> {
   // Return (not just call) trackAIUsage so the same durability guarantee applies
   // here: a caller that `await`s trackAIToolUsage waits for the tool-analytics log
   // (and its zero-charge ledger settlement) to persist before returning, instead
-  // of resolving immediately and risking a dropped write on a serverless freeze.
+  // of resolving immediately and risking a dropped write on a serverless freeze —
+  // and receives the same {@link UsageTrackingOutcome} it would from trackAIUsage.
   return trackAIUsage({
     userId: data.userId,
     provider: data.provider,

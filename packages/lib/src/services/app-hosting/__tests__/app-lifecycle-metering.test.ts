@@ -88,7 +88,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   stopMachine: ReturnType<typeof vi.fn>;
 } {
   const gate = vi.fn(async () => ({ allowed: true, holdId: 'hold-1' }));
-  const trackUsage = vi.fn(async () => {});
+  const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const releaseHold = vi.fn(async () => {});
   const startMachine = vi.fn(async () => {});
   const stopMachine = vi.fn(async () => {});
@@ -238,6 +238,97 @@ describe('wakePublishedApp', () => {
   });
 });
 
+describe('wakePublishedApp — the abandoned tail a failed close left behind', () => {
+  // `closeStatusOnly` preserves `awakeBilledThrough` when a final settle does not
+  // land, but the awake meter reads `status = 'running'` rows ONLY, so nothing
+  // revisits a stopped row — and the wake's own UPDATE resets that watermark to
+  // `wokenAt`. Without this step the preserved span is silently discarded at the
+  // next wake, which makes the failed-settle path's "the window stays open"
+  // promise false exactly where it matters most.
+
+  const abandoned = () =>
+    appRow({
+      status: 'stopped',
+      awakeBilledThrough: new Date('2026-08-20T10:00:00.000Z'),
+      lastStopAt: new Date('2026-08-20T10:10:00.000Z'),
+      awakeHoldId: 'hold-stranded',
+    });
+
+  it('bills the stranded span at the boundary the window REALLY ended on, not up to now', async () => {
+    const { deps, trackUsage } = makeDeps();
+    seed(abandoned(), [[appRow({ status: 'running' })]]);
+
+    await wakePublishedApp('app-1', deps);
+
+    // 10:00 -> 10:10 is 600s. Billing to `now` (12:00) would charge 7200s — two
+    // hours of a machine that was STOPPED.
+    expect(trackUsage).toHaveBeenCalledWith({
+      payerId: 'payer-1',
+      holdId: 'hold-stranded',
+      activeSeconds: 600,
+      driveId: 'drive-1',
+      publishedAppId: 'app-1',
+    });
+  });
+
+  it('does NOT bill a tail on a live (running) row — that is an open window, not an abandoned one', async () => {
+    const { deps, trackUsage } = makeDeps();
+    seed(
+      appRow({
+        status: 'running',
+        awakeBilledThrough: new Date('2026-08-20T10:00:00.000Z'),
+        lastStopAt: new Date('2026-08-20T10:10:00.000Z'),
+      }),
+      [[appRow({ status: 'running' })]],
+    );
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('returns the stranded reservation when the tail prices to nothing', async () => {
+    const { deps, trackUsage, releaseHold } = makeDeps();
+    seed(
+      appRow({
+        status: 'stopped',
+        awakeBilledThrough: new Date('2026-08-20T10:10:00.000Z'),
+        lastStopAt: new Date('2026-08-20T10:10:00.000Z'), // zero-length window
+        awakeHoldId: 'hold-stranded',
+      }),
+      [[appRow({ status: 'running' })]],
+    );
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-stranded');
+  });
+
+  it('NEVER blocks the wake, even when the tail settle fails outright', async () => {
+    // A billing failure must not leave an app unservable. The span is lost at this
+    // point — two independent failures at two separate moments — and said so.
+    const { deps, trackUsage, startMachine } = makeDeps();
+    trackUsage.mockRejectedValue(new Error('ledger down'));
+    seed(abandoned(), [[appRow({ status: 'running' })]]);
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    expect(startMachine).toHaveBeenCalled();
+    expect(result.outcome).toBe('woken');
+  });
+
+  it('does not bill anyone when the gate REFUSES — a parked wake moves no money', async () => {
+    const { deps, gate, trackUsage } = makeDeps();
+    gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    seed(abandoned());
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('stopPublishedApp', () => {
   const running = () =>
     appRow({ status: 'running', lastWakeAt: WOKEN_AT, awakeBilledThrough: WOKEN_AT, awakeHoldId: 'hold-1' });
@@ -342,6 +433,50 @@ describe('stopPublishedApp', () => {
         clearedWatermark: 'awakeBilledThrough' in written,
       },
       expected: { status: 'stopped', clearedWatermark: false },
+    });
+  });
+
+  // ── The persistence CONTRACT (issue: trackUsage must report its outcome) ────
+  // The default binding runs through `AIMonitoring.trackUsage`, which never throws.
+  // Before it reported an outcome, a settle whose `ai_usage_logs` write failed
+  // RESOLVED — so the test above covered only a deps-level throw and the app's last
+  // awake window was silently closed over lost spend on the real path.
+
+  it('given a settle that resolves WITHOUT persisting, should close the STATUS but keep the window open for a retry', async () => {
+    const { deps, trackUsage } = makeDeps();
+    trackUsage.mockResolvedValue({ persisted: false, creditsSettled: false });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(result).toMatchObject({ outcome: 'stopped', billedSeconds: 0 });
+    const written = mockDb.__state.updateSets[0];
+    assert({
+      given: 'a settle that resolved but wrote no usage row',
+      should: 'move the status without clearing the billing watermark',
+      actual: { status: written.status, clearedWatermark: 'awakeBilledThrough' in written },
+      expected: { status: 'stopped', clearedWatermark: false },
+    });
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, should still CLOSE the window (the backfill cron owns that charge)', async () => {
+    // Reopening the window here would re-bill a span the credit backfill cron is
+    // already collecting from the usage row.
+    const { deps, trackUsage } = makeDeps();
+    trackUsage.mockResolvedValue({ persisted: true, creditsSettled: false });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    const written = mockDb.__state.updateSets[0];
+    assert({
+      given: 'a persisted settle whose ledger claim was deferred to the backfill cron',
+      should: 'bill the span and close the window exactly as a fully settled charge would',
+      actual: {
+        billedSeconds: result.outcome === 'stopped' ? result.billedSeconds : -1,
+        clearedWatermark: 'awakeBilledThrough' in written,
+      },
+      expected: { billedSeconds: 3600, clearedWatermark: true },
     });
   });
 

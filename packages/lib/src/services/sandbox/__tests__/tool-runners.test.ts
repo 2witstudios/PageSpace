@@ -1295,6 +1295,7 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
     },
     trackUsage: async (input) => {
       trackUsageCalls.push(input);
+      return { persisted: true, creditsSettled: true };
     },
     releaseHold: async (holdId) => {
       releaseHoldCalls.push(holdId);
@@ -1399,6 +1400,68 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(trackUsageCalls).toEqual([
       { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
     ]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given a settle that resolves WITHOUT persisting, RETURNS the hold instead of handing it off', async () => {
+    // A one-shot run has no window to reopen, so the honest response to a lost
+    // charge is to stop pretending the credit pipeline owns the reservation:
+    // `trackUsage` wrote nothing, so nothing downstream will ever settle or delete
+    // the hold, and leaving it would suppress the payer's spendable until its TTL.
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    let settleAttempts = 0;
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => {
+        settleAttempts += 1;
+        return { persisted: false, creditsSettled: false };
+      },
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The user's command still succeeds — billing never fails a run.
+    expect(result).toMatchObject({ success: true });
+    expect(settleAttempts).toBe(1);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, still hands the hold off to the credit pipeline', async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => ({ persisted: true, creditsSettled: false }),
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The usage row exists, so the backfill cron owns the CHARGE and will settle it
+    // from that row; releasing the hold here would under-reserve that pending debit.
+    // The hold itself is disposed of by whichever lands first — the cron's settle
+    // transaction, or its own TTL expiry (the cron sweeps expired holds; it does not
+    // dispose of live ones).
     expect(releaseHoldCalls).toEqual([]);
   });
 

@@ -205,6 +205,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **A charge that fails to record is retried instead of silently dropped** — usage metering used to
+  report success whether or not it had actually written anything. If the database write for a usage
+  record failed, the failure was logged and then swallowed: the meter above it saw a normal result,
+  moved its billing marker past the window it had just tried to charge for, and that spend was gone
+  for good — with no record left behind for the nightly reconciliation to find. It affected every
+  running meter: sandbox storage, terminal sessions, and published-app runtime. Metering now reports
+  whether the record was actually written, and a meter that hears "no" leaves its window open so the
+  next cycle bills the whole span again — safe precisely because nothing was written the first time.
+  The reverse case is handled just as deliberately: when the record IS written but the ledger entry
+  is deferred to the reconciliation job, the window closes normally, because reopening it would
+  charge you twice for the same span.
+
 - **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
   waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
   where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
