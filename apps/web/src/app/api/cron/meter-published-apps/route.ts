@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     }
 
     console.log(
-      `[Cron] Published-app awake meter: processed ${run.processed}, settled ${run.settled}, repaired ${run.repaired}, stamped ${run.stamped}, skipped ${run.skipped}, unresolvedPayer ${run.unresolvedPayer}, parked ${run.parked}, failed ${run.failed}, clamped ${run.clamped}, superseded ${run.watermarkSuperseded}, settledButUnadvanced ${run.settledButUnadvanced}, awakeSeconds ${run.totalAwakeSeconds.toFixed(1)}`,
+      `[Cron] Published-app awake meter: processed ${run.processed}, settled ${run.settled}, repaired ${run.repaired}, stamped ${run.stamped}, skipped ${run.skipped}, unresolvedPayer ${run.unresolvedPayer}, parked ${run.parked}, cappedParked ${run.cappedParked}, failed ${run.failed}, clamped ${run.clamped}, superseded ${run.watermarkSuperseded}, settledButUnadvanced ${run.settledButUnadvanced}, awakeSeconds ${run.totalAwakeSeconds.toFixed(1)}`,
     );
 
     audit({
@@ -88,6 +88,11 @@ export async function GET(request: Request) {
         skipped: run.skipped,
         unresolvedPayer: run.unresolvedPayer,
         parked: run.parked,
+        // Apps parked for spending their OWN daily awake budget, as opposed to
+        // `parked`, which is a payer with no credits left. Counted apart because
+        // they call for different responses: one is a billing conversation, the
+        // other is an app that has outgrown the metered tier or is running away.
+        cappedParked: run.cappedParked,
         failed: run.failed,
         // Expected to be ZERO in steady state: a settle whose span exceeded a day
         // and was shortened, which forgives revenue.
@@ -98,6 +103,20 @@ export async function GET(request: Request) {
         sourceFailed: run.sourceFailed,
       },
     });
+
+    if (run.cappedParked > 0) {
+      // NOT an error and NOT a 500: the daily cap firing is enforcement working as
+      // designed. But it takes somebody's app off the internet with no human in the
+      // loop, and the structured log the service writes does not reach Sentry — so
+      // this is the one signal an operator actually sees. Fingerprinted on the
+      // cause so repeated ticks fold into one issue.
+      Sentry.captureMessage('Published app(s) parked for exceeding the daily awake cap', {
+        level: 'warning',
+        fingerprint: ['awake-meter-daily-cap-park'],
+        tags: { check: 'published_app_awake_meter', reason: 'daily_cap_park' },
+        extra: { cappedParked: run.cappedParked, processed: run.processed },
+      });
+    }
 
     const alertReason = run.sourceFailed
       ? 'could not read its row source — no app was metered this tick'

@@ -28,12 +28,14 @@
  * Everything is dark behind `APP_HOSTING_ENABLED`, checked before any read.
  */
 
-import { and, eq } from '@pagespace/db/operators';
-import { db } from '@pagespace/db/db';
+import { and, eq, sql } from '@pagespace/db/operators';
+import { db, getAdvisoryLockPool } from '@pagespace/db/db';
+import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import {
   isAppHostingEnabled,
+  resolveDailyAwakeSecondsCap,
   resolveFlyMachinesToken,
 } from './app-hosting-env';
 import {
@@ -49,7 +51,13 @@ import {
   mirrorFlyMachineEvents,
   recordOrchestratorBoundary,
 } from './app-machine-events';
-import { planAwakeSettle } from './app-metering-core';
+import {
+  METER_AWAKE_LOCK_KEY,
+  latestActivityAt,
+  planAwakeSettle,
+  planDailyAwakeCap,
+  utcDayOf,
+} from './app-metering-core';
 import { planTransition } from './provisioner-core';
 
 export interface AppLifecycleMeteringDeps {
@@ -59,7 +67,52 @@ export interface AppLifecycleMeteringDeps {
   stopMachine: (flyAppName: string, machineId: string) => Promise<void>;
   /** Fly's last-20 event window for one machine. Mirroring is best-effort, so a throw here is caught and counted, never propagated. */
   listMachineEvents: (flyAppName: string, machineId: string) => Promise<MachineEvent[]>;
+  /**
+   * Run `fn` under the awake meter's advisory lock, or answer `lock_busy` without
+   * running it — see {@link stopPublishedApp} for why the STOP takes the METER's
+   * lock rather than one of its own.
+   *
+   * Injected rather than called directly for two reasons. It makes the stop seam
+   * testable without a Postgres pool, and it is the seam through which a caller
+   * that ALREADY HOLDS the lock passes {@link passThroughSettleLock} — the
+   * heartbeat's insolvency park runs inside the meter's own locked region, and a
+   * second acquisition on a second connection would answer `lock_busy` and quietly
+   * skip the park (a session-level advisory lock is re-entrant only within the
+   * SAME session, and this helper takes a fresh connection every time).
+   */
+  serializeSettle: <T>(fn: () => Promise<T>) => Promise<{ locked: false } | { locked: true; result: T }>;
+  /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
+  dailyAwakeCapSeconds: () => number;
   now: () => Date;
+}
+
+/**
+ * Acquire the awake-meter advisory lock for the duration of `fn`, or decline.
+ *
+ * `connection_error` is rethrown rather than folded into `lock_busy`: a pool that
+ * cannot hand out a connection is an outage, and reporting it as "another run has
+ * the lock" would present an outage as an ordinary, self-correcting skip.
+ */
+export function serializeUnderMeterLock(pgPool: AdvisoryLockPool = getAdvisoryLockPool()) {
+  return async <T>(fn: () => Promise<T>): Promise<{ locked: false } | { locked: true; result: T }> => {
+    const locked = await withAdvisoryLock(pgPool, METER_AWAKE_LOCK_KEY, fn);
+    if (locked.outcome === 'lock_busy') return { locked: false };
+    if (locked.outcome === 'connection_error') throw locked.error;
+    return { locked: true, result: locked.result };
+  };
+}
+
+/**
+ * A serializer for a caller that is ALREADY inside the meter's locked region: run
+ * `fn` immediately, take nothing.
+ *
+ * The alternative — letting the heartbeat's park re-acquire — is not a deadlock
+ * (the try-lock does not block) but something quieter and worse: it answers
+ * `lock_busy`, the park is skipped, and an insolvent app stays awake while the
+ * counters report a clean tick.
+ */
+export async function passThroughSettleLock<T>(fn: () => Promise<T>): Promise<{ locked: true; result: T }> {
+  return { locked: true, result: await fn() };
 }
 
 function defaultTransport(): FlapsTransport {
@@ -73,6 +126,10 @@ export const defaultAppLifecycleMeteringDeps: AppLifecycleMeteringDeps = {
   stopMachine: (flyAppName, machineId) => flapsStopMachine(defaultTransport(), flyAppName, machineId),
   listMachineEvents: (flyAppName, machineId) =>
     flapsListMachineEvents(defaultTransport(), flyAppName, machineId),
+  // Bound lazily: `getAdvisoryLockPool()` opens a pool, and this module is imported
+  // by services that never stop a machine (the router's package graph included).
+  serializeSettle: (fn) => serializeUnderMeterLock()(fn),
+  dailyAwakeCapSeconds: resolveDailyAwakeSecondsCap,
   now: () => new Date(),
 };
 
@@ -126,6 +183,24 @@ export async function wakePublishedApp(
     tier: row.tier,
   });
   if (!plan.allowed) return { outcome: 'refused', reason: 'not_wakeable' };
+
+  // The per-app daily budget is asked BEFORE the payer is resolved and before the
+  // ledger is touched: it is a comparison between two columns already in hand, and
+  // an app that has spent its day must not be woken however solvent its owner is.
+  // Same enforcement shape as the credit gate — park, do not start — so there is
+  // nothing to claw back.
+  const budget = planDailyAwakeCap({
+    tier: row.tier,
+    counterDay: row.awakeSecondsDay,
+    secondsToday: row.awakeSecondsToday,
+    today: utcDayOf(deps.now()),
+    capSeconds: deps.dailyAwakeCapSeconds(),
+  });
+  if (budget.exceeded) {
+    await parkPublishedApp(row, DAILY_CAP_PARK_REASON);
+    reportDailyCapPark(row);
+    return { outcome: 'parked', reason: DAILY_CAP_PARK_REASON };
+  }
 
   const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
   // No fallback, by design: an app is drive-owned, and `published_apps.ownerId`
@@ -187,14 +262,149 @@ export async function wakePublishedApp(
   return { outcome: 'woken', app: updated, holdId: gate.holdId };
 }
 
-/** Why a stop happened. `insolvent` parks the app instead of merely stopping it — the credit gate refusing to keep it awake. */
-export type StopReason = 'idle' | 'insolvent' | 'operator';
+/**
+ * Advisory-lock key serializing the WAKES of one app — per app, never global.
+ *
+ * A cold published app is not visited once: a browser asks for the document and
+ * then twenty assets, and with no replay cache on the metered tier every one of
+ * those reaches the router within milliseconds. Unserialized, each would gate,
+ * place a hold and call Fly's start endpoint — twenty starts for one machine
+ * against a per-object rate limit of ~1/s (burst 3), so most would come back 429,
+ * and the page's assets would be served the unavailable page while the machine the
+ * first request started was coming up.
+ *
+ * With it, exactly one request wakes and the rest are told a wake is in flight and
+ * replay anyway — Fly's proxy then holds their request for the machine that is
+ * already starting, which is the behaviour they wanted.
+ */
+function wakeLockKeyFor(publishedAppId: string): string {
+  return `wake-published-app:${publishedAppId}`;
+}
+
+export type WakePublishedAppRunResult =
+  | WakePublishedAppResult
+  /**
+   * Another request is waking this app right now. NOTHING was gated, held or
+   * started here. The caller should serve as though the wake succeeded — the app
+   * IS being started, by the request that holds the lock.
+   */
+  | { outcome: 'wake_in_progress' };
+
+/**
+ * Wake an app, serialized per app: one winner starts the machine, everybody else
+ * is told a wake is in flight.
+ *
+ * A TRY-lock, never a waiting one: a request that blocks on a lock is a request
+ * that is slower than the cold start it is waiting for.
+ */
+export async function wakePublishedAppSerialized(
+  publishedAppId: string,
+  deps: AppLifecycleMeteringDeps = defaultAppLifecycleMeteringDeps,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<WakePublishedAppRunResult> {
+  // The kill switch is checked BEFORE the pool is touched: a dark deployment must
+  // not open a connection just to decline.
+  if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
+  const locked = await withAdvisoryLock(pgPool, wakeLockKeyFor(publishedAppId), () =>
+    wakePublishedApp(publishedAppId, deps),
+  );
+  if (locked.outcome === 'lock_busy') return { outcome: 'wake_in_progress' };
+  if (locked.outcome === 'connection_error') throw locked.error;
+  return locked.result;
+}
+
+/**
+ * Why a stop happened. `insolvent` and `daily_cap` PARK the app instead of merely
+ * stopping it — the two enforcement refusals — while `idle` and `operator` leave it
+ * `stopped`, i.e. free to wake on the next request.
+ */
+export type StopReason = 'idle' | 'insolvent' | 'daily_cap' | 'operator';
+
+/**
+ * The `lastError` a daily-cap park writes, and the reason the wake gate reports.
+ *
+ * A constant because it is the ONE user-facing explanation of this state. See
+ * {@link reportDailyCapPark} for why it is carried on the row rather than raised as
+ * a notification.
+ */
+export const DAILY_CAP_PARK_REASON = 'daily_awake_cap_exceeded';
+
+/**
+ * Tell the drive owner — and an operator — that an app was parked for spending its
+ * daily awake budget.
+ *
+ * THIS IS THE WHOLE NOTIFICATION, and the shape is a decision rather than a
+ * shortcut. `createNotification` only accepts a member of the `NotificationType`
+ * pg enum, so raising a first-class in-app notification means a migration on that
+ * enum, a new member of the in-app `Notification` discriminated union, a renderer
+ * in the notification list and an `email_notification_preferences` row for opt-out
+ * — user-visible UI work, in a PR whose entire safety property is that it ships
+ * dark behind `APP_HOSTING_ENABLED`, for a state no user can reach yet. So the
+ * owner-facing half is `published_apps.lastError` (the column the publish surface
+ * already reads to answer "why is my app not serving", written by the park itself)
+ * and the operator-facing half is this log plus the parking counters the two crons
+ * report, which is what actually reaches a human today.
+ *
+ * A first-class notification belongs with the publish surface that will display
+ * it; this is deliberately not a TODO, because nothing here has to change for that
+ * to be added — the enum value and the renderer land there, and this call site
+ * gains one line.
+ *
+ * Logged at ERROR rather than warn: an app being taken off the internet is the
+ * single most consequential thing this module does to somebody's product, and it
+ * happens with no human in the loop.
+ */
+export function reportDailyCapPark(row: Pick<PublishedApp, 'id' | 'driveId' | 'ownerId' | 'tier'>): void {
+  loggers.ai.error(
+    'Published app parked: it spent its daily awake budget',
+    new Error(DAILY_CAP_PARK_REASON),
+    { publishedAppId: row.id, driveId: row.driveId, ownerId: row.ownerId, tier: row.tier },
+  );
+}
 
 export type StopPublishedAppResult =
   | { outcome: 'stopped'; status: 'stopped' | 'parked'; billedSeconds: number }
+  /**
+   * The awake meter's advisory lock was held by somebody else, so NOTHING was read,
+   * stopped or billed. Self-correcting by construction: the machine is still running
+   * and still recorded as running, so the next reaper tick stops it. Distinct from
+   * every `refused` reason because it says nothing about the app — only about timing.
+   */
+  | { outcome: 'lock_busy' }
   /** Fly refused the stop. The window stays OPEN and keeps billing — the machine may well still be running. */
   | { outcome: 'stop_failed'; error: string }
-  | { outcome: 'refused'; reason: 'disabled' | 'not_found' | 'not_running' | 'illegal_transition' };
+  | {
+      outcome: 'refused';
+      reason:
+        | 'disabled'
+        | 'not_found'
+        | 'not_running'
+        /**
+         * The app was served again between the reaper's scan and this stop — see
+         * {@link StopPublishedAppOptions.idleCutoff}. Nothing was stopped.
+         */
+        | 'became_active'
+        | 'illegal_transition';
+    };
+
+export interface StopPublishedAppOptions {
+  /**
+   * Refuse the stop if the row has been active SINCE this instant — the idle
+   * reaper's re-check, made against the row as it is under the lock rather than
+   * against the snapshot its scan took.
+   *
+   * The scan and the stop are minutes apart on a large fleet, and the router stamps
+   * `lastHitAt` in between: without this, a machine that took a visitor thirty
+   * seconds ago is stopped on the strength of a snapshot that predates them. The
+   * re-read closes all of that gap except the milliseconds between this read and
+   * the Fly call, and the cost of losing that residue is one cold start, not a
+   * mis-billing — the wake seam bills whatever comes next.
+   *
+   * Omitted by every other caller: an operator stop and an insolvency park are
+   * decisions about the app, not about how busy it is.
+   */
+  idleCutoff?: Date;
+}
 
 /**
  * Stop a published app: stop the machine, mirror the boundary, settle the tail of
@@ -216,9 +426,29 @@ export async function stopPublishedApp(
   publishedAppId: string,
   reason: StopReason,
   deps: AppLifecycleMeteringDeps = defaultAppLifecycleMeteringDeps,
+  options: StopPublishedAppOptions = {},
 ): Promise<StopPublishedAppResult> {
   if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
 
+  // The WHOLE sequence is serialized, not just the settle: the double-charge this
+  // lock prevents is created by the READ (a stop and a heartbeat pricing the same
+  // window from two snapshots), so a lock taken after the read would protect
+  // nothing. The cost is that a stop's Fly call happens inside the meter's lock and
+  // can delay a heartbeat tick by the length of one `POST /stop`; the heartbeat is
+  // a ten-minute cadence and skips cleanly when the lock is held, so a delayed tick
+  // bills the same seconds one tick later. A double charge cannot be undone.
+  const run = await deps.serializeSettle(() => stopPublishedAppSerialized(publishedAppId, reason, deps, options));
+  if (!run.locked) return { outcome: 'lock_busy' };
+  return run.result;
+}
+
+/** The body of {@link stopPublishedApp}, run with the awake meter's lock already held. */
+async function stopPublishedAppSerialized(
+  publishedAppId: string,
+  reason: StopReason,
+  deps: AppLifecycleMeteringDeps,
+  options: StopPublishedAppOptions,
+): Promise<StopPublishedAppResult> {
   const [row] = await db
     .select()
     .from(publishedApps)
@@ -227,7 +457,17 @@ export async function stopPublishedApp(
   if (!row) return { outcome: 'refused', reason: 'not_found' };
   if (row.status !== 'running') return { outcome: 'refused', reason: 'not_running' };
 
-  const nextStatus: 'stopped' | 'parked' = reason === 'insolvent' ? 'parked' : 'stopped';
+  // The idle re-check, against the row AS IT IS NOW rather than the caller's
+  // snapshot. Deliberately here — after the read, before Fly — so a request that
+  // landed while the reaper was working its way down the fleet keeps its machine.
+  if (options.idleCutoff) {
+    const lastActivity = latestActivityAt(row.lastHitAt, row.lastWakeAt);
+    if (lastActivity && lastActivity.getTime() > options.idleCutoff.getTime()) {
+      return { outcome: 'refused', reason: 'became_active' };
+    }
+  }
+
+  const nextStatus: 'stopped' | 'parked' = reason === 'insolvent' || reason === 'daily_cap' ? 'parked' : 'stopped';
   // Asked BEFORE the Fly call, against the same pure planner the write uses. A
   // dedicated app cannot be parked (`parked_is_metered_only`), and discovering
   // that after stopping its machine would leave a stopped machine on a `running`
@@ -260,7 +500,8 @@ export async function stopPublishedApp(
     await mirrorRecentFlyEvents(ref, deps);
   }
 
-  const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps);
+  const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps, reason);
+  if (reason === 'daily_cap') reportDailyCapPark(row);
   return { outcome: 'stopped', status: nextStatus, billedSeconds: settled.billedSeconds };
 }
 
@@ -323,6 +564,7 @@ async function settleAndClose(
   nextStatus: 'stopped' | 'parked',
   stampedStopAt: Date,
   deps: AppLifecycleMeteringDeps,
+  reason?: StopReason,
 ): Promise<SettleAndCloseResult> {
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: billedThrough });
   let billedSeconds = 0;
@@ -383,7 +625,7 @@ async function settleAndClose(
         );
       }
       if (!settled) {
-        await closeStatusOnly(row, nextStatus, stampedStopAt);
+        await closeStatusOnly(row, nextStatus, stampedStopAt, reason);
         return { billedSeconds: 0, failed: true };
       }
       billedSeconds = plan.activeSeconds;
@@ -410,6 +652,22 @@ async function settleAndClose(
       lastStopAt: stampedStopAt,
       awakeBilledThrough: null,
       awakeHoldId: null,
+      // The day's counter advances in the SAME statement that closes the window,
+      // for the same reason the watermark does: seconds that were charged but not
+      // counted are seconds the daily cap cannot see, and the cap's whole job is to
+      // bound what a single app can spend in a day.
+      //
+      // Keyed off the CLOCK, not off `billedThrough`. They are the same instant on
+      // the ordinary stop, but not on the two paths that matter: a repair closes at
+      // a mirrored boundary that can sit in a previous UTC day, and a clamped span
+      // bills a day's worth of seconds ending wherever the watermark was. Keying
+      // off the boundary there would stamp a stale day, whose next comparison
+      // reads as "nothing spent today" — the cap failing OPEN on exactly the
+      // broken-lifecycle rows it exists to catch. Charging those seconds to the day
+      // we discovered them is the conservative direction, and it is the same day
+      // the cap projection in the heartbeat uses.
+      ...dailyAwakeCounterPatch(billedSeconds, deps.now()),
+      ...parkErrorPatch(reason),
     })
     .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, 'running')));
   return { billedSeconds, failed: false };
@@ -486,6 +744,38 @@ async function settleAbandonedTail(
 }
 
 /**
+ * The SET fragment that adds `addSeconds` to the app's UTC-day awake counter,
+ * resetting it when the stored day is not `at`'s day.
+ *
+ * The reset lives in the STATEMENT rather than in a preceding read, so a counter
+ * can never be advanced against a day another writer has already rolled over. Adds
+ * nothing at all for a zero settle: touching `awakeSecondsDay` for a settle that
+ * billed no seconds would move a row's day forward on a tick that charged nothing.
+ */
+function dailyAwakeCounterPatch(addSeconds: number, at: Date) {
+  // `at` is the tick's clock — see the call site for why it is never the billed
+  // boundary.
+  if (!Number.isFinite(addSeconds) || addSeconds <= 0) return {};
+  const day = utcDayOf(at);
+  return {
+    awakeSecondsDay: day,
+    awakeSecondsToday: sql`CASE WHEN ${publishedApps.awakeSecondsDay} = ${day} THEN ${publishedApps.awakeSecondsToday} + ${addSeconds} ELSE ${addSeconds} END`,
+  };
+}
+
+/**
+ * The SET fragment that records WHY an app was parked, for the one stop reason a
+ * user can act on.
+ *
+ * Only the daily cap writes here. An idle stop is routine and an insolvency park
+ * already has the credit balance as its explanation, whereas "your app used its
+ * whole daily budget" is invisible from every other column on the row.
+ */
+function parkErrorPatch(reason: StopReason | undefined) {
+  return reason === 'daily_cap' ? { lastError: `parked: ${DAILY_CAP_PARK_REASON}` } : {};
+}
+
+/**
  * Close the STATUS without closing the billing window — the failed-settle path.
  * `awakeBilledThrough` deliberately survives so the unbilled span is not forgiven
  * at the moment of failure, while the row stops claiming to be running.
@@ -500,10 +790,11 @@ async function closeStatusOnly(
   row: PublishedApp,
   nextStatus: 'stopped' | 'parked',
   stampedStopAt: Date,
+  reason?: StopReason,
 ): Promise<void> {
   await db
     .update(publishedApps)
-    .set({ status: nextStatus, lastStopAt: stampedStopAt })
+    .set({ status: nextStatus, lastStopAt: stampedStopAt, ...parkErrorPatch(reason) })
     .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, 'running')));
 }
 

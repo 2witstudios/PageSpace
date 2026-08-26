@@ -70,13 +70,19 @@ export interface RoutableApp {
 /**
  * What the edge should do with this request.
  *
+ * `daily_cap` is a parked reason the pure decision never produces: it comes from
+ * the WAKE, which is the only thing that can discover that an app has spent its
+ * daily awake budget. It is kept distinct from `out_of_credits` because the two ask
+ * different things of the owner — one is "top up", the other is "your app has
+ * outgrown the metered tier, and it comes back on its own tomorrow".
+ *
  * `parked` is deliberately its own outcome rather than a flavour of
  * `unavailable`: it is the ENFORCEMENT state, it is the one outcome that must
  * never start a machine, and it is the number worth watching in metrics.
  */
 export type AppRouteDecision =
   | { kind: 'replay'; flyAppName: string; state: string; timeoutMs: number }
-  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' }
+  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap' }
   | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled' }
   | { kind: 'not_found'; reason: 'unknown_host' | 'apex' | 'custom_host' | 'no_such_app' };
 
