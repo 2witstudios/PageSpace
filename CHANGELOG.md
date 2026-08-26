@@ -7,10 +7,12 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Android phones can be sent a notification** — the server has always accepted and stored Android
-  push tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub.
-  It now delivers through Firebase Cloud Messaging, so a mention or a share reaches an Android
-  device the same way it reaches an iPhone. A background sync is sent as a data-only message, which
+- **The server can send an Android notification** — it has always accepted and stored Android push
+  tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
+  now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
+  still only registers for push on iOS (`usePushNotifications`, "Only supported on iOS for now") —
+  when that lands, a mention or a share will reach an Android device the same way it reaches an
+  iPhone, with no further server work. A background sync is sent as a data-only message, which
   is what stops Android from putting a notification in the tray for something the app was only meant
   to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
   token was replaced — is deactivated on the spot rather than retried forever, matching how expired
