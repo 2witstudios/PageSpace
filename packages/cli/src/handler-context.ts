@@ -1,5 +1,6 @@
 import type { PageSpaceClient } from '@pagespace/sdk';
 import type { CredentialKind } from './auth/credential-kind.js';
+import type { AuthSource } from './auth/resolve.js';
 import type { ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 
@@ -23,6 +24,14 @@ export interface HandlerContext {
    * refusal (see `auth/credential-kind.ts`), never enough to read a token.
    */
   readonly credentialKind: CredentialKind;
+  /**
+   * WHICH precedence source (`flag` > `env` > `stored` > `none`) resolved the
+   * credential — secret-free (just the tag, never a token or a stored key
+   * name). Lets a refusal built on `credentialKind` (e.g.
+   * `keysCommandNeedsLoginMessage`) name the actual flag/env-var/stored-key
+   * to remove instead of guessing one the caller never passed.
+   */
+  readonly credentialSourceKind: AuthSource['kind'];
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */

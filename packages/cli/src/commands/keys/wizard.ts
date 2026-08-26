@@ -666,7 +666,7 @@ export function createKeysHandler(deps: TokensCreateHandlerDeps): CommandHandler
     // scoped access key would open the wizard and then fail on the very first
     // fetch, historically claiming the key itself was invalidated (#2464).
     if (ctx.credentialKind === 'key') {
-      ctx.stderr.write(`${keysCommandNeedsLoginMessage()}\n`);
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage(undefined, ctx.credentialSourceKind)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
 

@@ -49,7 +49,7 @@ describe('keysCommandNeedsLoginMessage', () => {
   // Issue #2464: the message this replaces said the key had been invalidated,
   // which is the one thing that was not true.
   it('refuses without claiming anything about the key, names the real limitation, and gives a next step', () => {
-    const message = keysCommandNeedsLoginMessage('list');
+    const message = keysCommandNeedsLoginMessage('list', 'flag');
     expect(message).toContain('That says nothing about the key');
     expect(message).not.toMatch(/invalidated|revoked|expired/i);
     expect(message).toContain('pagespace login');
@@ -61,24 +61,46 @@ describe('keysCommandNeedsLoginMessage', () => {
   // token reaches this branch too. Asserting the key is VALID would swap one
   // unearned claim for its mirror image.
   it('never asserts that the key is valid, only that this refusal is not about it', () => {
-    expect(keysCommandNeedsLoginMessage('list')).not.toMatch(/key is (still )?(valid|fine|not invalid|working)/i);
+    expect(keysCommandNeedsLoginMessage('list', 'flag')).not.toMatch(/key is (still )?(valid|fine|not invalid|working)/i);
   });
 
   // `pagespace login` alone is not enough while the key is still in the
   // environment: an explicit --token/env credential outranks the stored login
   // (auth/resolve.ts), so the caller would log in and hit this same refusal.
   it('tells the caller to remove the overriding credential, not just to log in', () => {
-    const message = keysCommandNeedsLoginMessage('list');
-    expect(message).toMatch(/--token\/env credential removed/);
+    const message = keysCommandNeedsLoginMessage('list', 'flag');
+    expect(message).toMatch(/--token removed/);
     expect(message).toMatch(/outranks/);
   });
 
+  // Issue #2481/#2476: every source used to get the same "--token/env
+  // credential" line — a caller who only ever passed --key was told to remove
+  // a flag it never used. The message now names the source that actually
+  // resolved, per the AuthSource kind the resolve path already classified.
+  it('names --token specifically when a --token flag resolved the key', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'flag');
+    expect(message).toMatch(/--token removed/);
+    expect(message).not.toMatch(/--key/);
+  });
+
+  it('names the env var specifically when PAGESPACE_TOKEN resolved the key', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'env');
+    expect(message).toMatch(/PAGESPACE_TOKEN unset/);
+    expect(message).not.toMatch(/--token removed/);
+  });
+
+  it('names the stored key, not --token, when a --key/stored credential resolved the key', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'stored');
+    expect(message).toMatch(/--key\/PAGESPACE_KEY/);
+    expect(message).not.toMatch(/--token removed/);
+  });
+
   it('names the verb the caller actually ran', () => {
-    expect(keysCommandNeedsLoginMessage('revoke')).toContain('"pagespace keys revoke"');
+    expect(keysCommandNeedsLoginMessage('revoke', 'flag')).toContain('"pagespace keys revoke"');
   });
 
   it('reads correctly for the bare wizard, which has no verb', () => {
-    const message = keysCommandNeedsLoginMessage();
+    const message = keysCommandNeedsLoginMessage(undefined, 'flag');
     expect(message).toContain('"pagespace keys"');
     expect(message).not.toContain('keys "');
   });

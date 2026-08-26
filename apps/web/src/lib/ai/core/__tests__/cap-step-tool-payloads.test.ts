@@ -352,3 +352,54 @@ describe('capStepToolPayloads — tool results', () => {
     });
   });
 });
+
+describe('capStepToolPayloads — write-tool result stubs', () => {
+  /** A stale result from a WRITE tool (e.g. replace_lines), not a read. */
+  function writeTranscript(callCount: number, payloadChars: number): ModelMessage[] {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'edit every chunk' }];
+    for (let i = 0; i < callCount; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: `w-${i}`, toolName: 'replace_lines', input: { startLine: 1 } }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: `w-${i}`,
+          toolName: 'replace_lines',
+          output: { type: 'json', value: { blob: 'r'.repeat(payloadChars) } },
+        }],
+      });
+    }
+    return messages;
+  }
+
+  it('tells the model a stale WRITE result already succeeded, not to re-run it', () => {
+    const capped = capStepToolPayloads(writeTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result from a WRITE tool that has fallen out of the window',
+      should: 'advise a fresh read, and explicitly say not to re-run the call',
+      actual: {
+        saysAlreadySucceeded: stubbed.__payload_elided.includes('already succeeded'),
+        saysDoNotReRun: stubbed.__payload_elided.toLowerCase().includes('must not be re-run'.toLowerCase()),
+        saysCallItAgain: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      },
+      expected: { saysAlreadySucceeded: true, saysDoNotReRun: true, saysCallItAgain: false },
+    });
+  });
+
+  it('keeps the re-run advice for a stale result from a READ tool', () => {
+    const capped = capStepToolPayloads(readTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result from execute_tool (not a write tool)',
+      should: 'keep advising the model to call it again if it still needs the result',
+      actual: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      expected: true,
+    });
+  });
+});

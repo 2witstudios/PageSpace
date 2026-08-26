@@ -20,7 +20,7 @@
  * resulting label on `HandlerContext`, never the `AuthSource` itself, so a
  * command cannot reach a bearer token through it.
  */
-import type { AuthSource } from './resolve.js';
+import { KEY_ENV_VAR_NAME, TOKEN_ENV_VAR_NAME, type AuthSource } from './resolve.js';
 
 /**
  * - `key`   — a scoped access key (`mcp_*`), from `--token`/env or a stored
@@ -52,6 +52,37 @@ export function credentialKindOf(source: AuthSource): CredentialKind {
 }
 
 /**
+ * Names what to remove/unset so a re-run actually reaches the stored login,
+ * specific to WHICH precedence source resolved the key (`resolve.ts`'s
+ * `flag > env > stored` chain). Fixes issue where every case — a `--token`
+ * flag, `PAGESPACE_TOKEN`, a `--key <name>`/`PAGESPACE_KEY`-named stored
+ * credential, or the ambient default-slot stored credential — was told the
+ * same "--token/env credential" line, so a caller who had only ever passed
+ * `--key` (or nothing at all — an unnamed static credential sitting in the
+ * default slot) was pointed at a flag they never used.
+ */
+function removalHint(sourceKind: AuthSource['kind']): string {
+  switch (sourceKind) {
+    case 'flag':
+      return 'with --token removed';
+    case 'env':
+      return `with ${TOKEN_ENV_VAR_NAME} unset`;
+    case 'stored':
+      // Covers both an explicit `--key <name>`/`PAGESPACE_KEY` and the
+      // ambient default slot: either way the fix is the same — remove or
+      // replace whichever stored credential resolved, not a flag.
+      return `after clearing the stored key credential that resolved (remove --key/${KEY_ENV_VAR_NAME}, or replace ` +
+        'the stored credential itself)';
+    case 'none':
+      // Unreachable in practice: this message only fires when
+      // credentialKindOf(source) === 'key', which requires an actual
+      // resolved credential. Kept exhaustive so a future change to that
+      // gate fails a type check rather than silently mis-rendering.
+      return 'with the overriding credential removed';
+  }
+}
+
+/**
  * What `pagespace keys <verb>` says when the resolved credential is a scoped
  * key rather than a login.
  *
@@ -70,18 +101,22 @@ export function credentialKindOf(source: AuthSource): CredentialKind {
  *
  * The login line carries the precedence caveat because without it the advice
  * misfires in the exact case that motivated this message: `pagespace login`
- * stores a personal credential, but an explicit `--token`/env credential
- * outranks it (`auth/resolve.ts`), so an agent with the key still in its
- * environment would log in and hit this same refusal again.
+ * stores a personal credential, but an explicit `--token`/env credential (or
+ * a named `--key`) outranks it (`auth/resolve.ts`), so an agent with the same
+ * override still in place would log in and hit this same refusal again.
+ *
+ * `sourceKind` is `ctx.credentialSourceKind` — `AuthSource['kind']`, the same
+ * secret-free discriminant `credentialKindOf` classified to reach this
+ * message in the first place, never the credential's value.
  */
-export function keysCommandNeedsLoginMessage(verb?: string): string {
+export function keysCommandNeedsLoginMessage(verb: string | undefined, sourceKind: AuthSource['kind']): string {
   const command = verb === undefined ? 'pagespace keys' : `pagespace keys ${verb}`;
   return (
     `"${command}" needs your personal login, and this invocation resolved a scoped access key.\n` +
     'That says nothing about the key: key management is simply not something a key can do. A key reads and writes ' +
     'drive content, while listing, minting and revoking keys is reserved for the person who owns them.\n' +
     '  pagespace keys describe   — what THIS key is, and the permissions it actually resolves to\n' +
-    `  pagespace login           — then re-run "${command}" with the key's --token/env credential removed,\n` +
+    `  pagespace login           — then re-run "${command}" ${removalHint(sourceKind)},\n` +
     '                              since an explicit credential outranks your stored login.'
   );
 }

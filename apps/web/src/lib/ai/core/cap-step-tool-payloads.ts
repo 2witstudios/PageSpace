@@ -42,6 +42,7 @@
  * exactly what the agent really sent and received (asserted in the tests).
  */
 import type { ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
+import { WRITE_TOOLS } from './tool-filtering';
 
 /** Not exported by `ai`, but reachable from the part that carries it. */
 type ToolResultOutput = ToolResultPart['output'];
@@ -85,8 +86,18 @@ const elided = (what: string, originalChars: number, stillAvailable: string) =>
 const argumentsStub = (chars: number) =>
   elided('Arguments', chars, 'its result appears in the transcript.');
 
-const resultStub = (chars: number) =>
-  elided('Result', chars, 'call it again with the same arguments if you still need it.');
+/**
+ * `resultStub`'s advice differs for WRITE tools: "call it again" is correct for a
+ * read whose bytes just need re-fetching, but for a write it tells the model to
+ * re-apply a mutation that already happened — e.g. `replace_lines` re-run against
+ * line numbers the first call already shifted double-applies the edit. Reuses
+ * `WRITE_TOOLS` (the same set `tool-filtering.ts` strips in read-only mode)
+ * rather than keeping a second list that can drift from it.
+ */
+const resultStub = (chars: number, toolName: string) =>
+  WRITE_TOOLS.has(toolName)
+    ? elided('Result', chars, 'this call already succeeded and must NOT be re-run — read the page again if you need its current content.')
+    : elided('Result', chars, 'call it again with the same arguments if you still need it.');
 
 // Narrow to the SDK's own part types, not to a structural stand-in. A predicate
 // like `part is { type: string; output?: unknown }` looks equivalent but is not:
@@ -145,19 +156,23 @@ const cappedInput = (chars: number): Record<string, string> => ({
  *   mid-comparison vision agent may lose is a product decision, not a mechanical
  *   extension of this one — so it is named here rather than made silently.
  */
-function cappedOutput(output: ToolResultOutput, maxChars: number): ToolResultOutput | null {
+function cappedOutput(
+  output: ToolResultOutput,
+  maxChars: number,
+  toolName: string,
+): ToolResultOutput | null {
   switch (output.type) {
     case 'text':
     case 'error-text': {
       const chars = sizeOf(output.value);
       if (chars === null || chars <= maxChars) return null;
-      return { ...output, value: resultStub(chars) };
+      return { ...output, value: resultStub(chars, toolName) };
     }
     case 'json':
     case 'error-json': {
       const chars = sizeOf(output.value);
       if (chars === null || chars <= maxChars) return null;
-      return { ...output, value: { [ELIDED_KEY]: resultStub(chars) } };
+      return { ...output, value: { [ELIDED_KEY]: resultStub(chars, toolName) } };
     }
     default:
       return null;
@@ -242,7 +257,7 @@ export function capStepToolPayloads(
       if (isToolResultPart(part)) {
         // The size check lives inside cappedOutput, with the switch that knows
         // which shape this output's `value` actually has.
-        const capped = cappedOutput(part.output, maxChars);
+        const capped = cappedOutput(part.output, maxChars, part.toolName);
         if (capped === null) return part;
         messageChanged = true;
         didCap = true;

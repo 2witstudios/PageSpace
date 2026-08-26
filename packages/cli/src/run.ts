@@ -184,6 +184,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     env: deps.env,
     credentialStore: deps.credentialStore,
     credentialKind: credentialKindOf(source),
+    credentialSourceKind: source.kind,
     activeKeyStore,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),
