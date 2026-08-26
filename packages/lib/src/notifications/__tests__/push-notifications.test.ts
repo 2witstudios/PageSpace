@@ -1706,6 +1706,43 @@ describe('sendToFcm (Android)', () => {
     expect(setFn).not.toHaveBeenCalled();
   });
 
+  // Same reasoning as the rejection invariant above: individual config errors
+  // were each proven to fail cleanly, but "every way the config can be wrong"
+  // is the claim the .env.example comment and the changelog actually make. A
+  // misconfigured server must never put a credential on the wire and must never
+  // cost a device its registration, whichever way it is misconfigured.
+  const BROKEN_CONFIG: Array<[string, string | undefined, string]> = [
+    ['absent', undefined, 'FCM_SERVICE_ACCOUNT_JSON is required'],
+    ['not JSON', 'not-json-at-all', 'not valid JSON'],
+    ['a JSON array', '["nope"]', 'must be a JSON object'],
+    ['a JSON string', '"nope"', 'must be a JSON object'],
+    ['missing every field', '{}', 'is missing'],
+    ['a project_id that could rewrite the URL', serviceAccountJson({}, '../../evil'), 'project_id may only contain'],
+    ['a non-https token_uri', serviceAccountJson({ token_uri: 'http://oauth2.googleapis.com/token' }), 'token_uri must be an https:// URL'],
+  ];
+
+  it.each(BROKEN_CONFIG)('fails closed when the credential is %s', async (_label, raw, expected) => {
+    if (raw === undefined) {
+      delete process.env.FCM_SERVICE_ACCOUNT_JSON;
+    } else {
+      process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    }
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
+      androidToken({ failedAttempts: '4' }),
+    ] as never);
+    const { setFn } = setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain(expected);
+    // Nothing reached the network — in particular no signed assertion.
+    expect(calls).toHaveLength(0);
+    // And the device is not charged for it, now or after any number of retries.
+    expect(setFn).not.toHaveBeenCalled();
+  });
+
   it('reports a configuration error when the service account JSON is malformed', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = 'not-json-at-all';
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
