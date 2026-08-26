@@ -260,7 +260,21 @@ export async function stopPublishedApp(
     await mirrorRecentFlyEvents(ref, deps);
   }
 
-  const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps);
+  // Re-read the row rather than settling against the one captured at the top of
+  // this function: `stopMachine` above is a slow Fly call, and the awake meter's
+  // heartbeat can tick — and advance `awakeBilledThrough` — while we were waiting
+  // on it. Settling against the STALE watermark would re-bill whatever span the
+  // meter already collected in between; a fresh read settles only what the
+  // watermark still owes. Falls back to the original row if the fresh read finds
+  // nothing (the row was deleted under us), which leaves `settleAndClose`'s own
+  // guards to no-op safely.
+  const [freshRow] = await db
+    .select()
+    .from(publishedApps)
+    .where(eq(publishedApps.id, row.id))
+    .limit(1);
+
+  const settled = await settleAndClose(freshRow ?? row, stoppedAt, nextStatus, stoppedAt, deps);
   return { outcome: 'stopped', status: nextStatus, billedSeconds: settled.billedSeconds };
 }
 
@@ -416,6 +430,31 @@ async function settleAndClose(
 }
 
 /**
+ * Claim an abandoned tail exclusively: a CAS that clears `awakeBilledThrough`
+ * and `awakeHoldId` off the row, guarded on the exact watermark this caller read.
+ *
+ * A concurrent wake reads the same stale row and computes the same plan, so
+ * without this guard both would bill the same span. Only the first write to land
+ * matches the guard — `awakeBilledThrough` on the row still equals what was read
+ * — and clears it; the second finds the column already `null` and matches no
+ * row, learning it lost the race before it ever calls `trackUsage`.
+ */
+async function claimAbandonedTail(row: PublishedApp): Promise<boolean> {
+  const [claimed] = await db
+    .update(publishedApps)
+    .set({ awakeBilledThrough: null, awakeHoldId: null })
+    .where(
+      and(
+        eq(publishedApps.id, row.id),
+        eq(publishedApps.status, row.status),
+        eq(publishedApps.awakeBilledThrough, row.awakeBilledThrough as Date),
+      ),
+    )
+    .returning({ id: publishedApps.id });
+  return !!claimed;
+}
+
+/**
  * Settle a tail that a FAILED close left behind on a non-running row, at the wake
  * that is about to overwrite it.
  *
@@ -443,6 +482,17 @@ async function settleAbandonedTail(
   if (row.awakeBilledThrough === null || row.lastStopAt === null) return;
 
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: row.lastStopAt });
+
+  // Claim the tail EXCLUSIVELY, before doing anything with it: a guarded CAS that
+  // clears the watermark (and the hold riding with it) off the row. Whoever wins
+  // this write is the only caller that may bill or release this tail — a second
+  // wake racing this one, or this same wake retried after a `start_failed`, reads
+  // `awakeBilledThrough: null` and returns above before ever reaching here. That
+  // is what makes the tail settle at-most-once instead of "once per wake attempt
+  // until one finally succeeds".
+  const claimed = await claimAbandonedTail(row);
+  if (!claimed) return; // lost the race, or a previous attempt already cleared it
+
   if (plan.action !== 'settle') {
     // Nothing billable was stranded; return the reservation the failed close kept.
     if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
@@ -451,8 +501,9 @@ async function settleAbandonedTail(
 
   const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
   if (!payerId) {
-    // Unresolvable drive — never substitute a payer. The tail stays on the row and
-    // the wake below overwrites it, so this IS the loss; say so rather than warn.
+    // Unresolvable drive — never substitute a payer. The watermark is already
+    // claimed off the row above, so there is no later retry that could recover
+    // this span; say so at ERROR rather than warn.
     loggers.ai.error(
       'Published-app abandoned tail could not be billed: the owning drive did not resolve — this span is lost',
       new Error('abandoned tail payer unresolved'),

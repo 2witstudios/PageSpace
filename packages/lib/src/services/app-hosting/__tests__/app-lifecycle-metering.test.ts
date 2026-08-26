@@ -256,7 +256,8 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
 
   it('bills the stranded span at the boundary the window REALLY ended on, not up to now', async () => {
     const { deps, trackUsage } = makeDeps();
-    seed(abandoned(), [[appRow({ status: 'running' })]]);
+    // Two returning-row entries: the tail's own CAS claim, then the wake's final CAS.
+    seed(abandoned(), [[{ id: 'app-1' }], [appRow({ status: 'running' })]]);
 
     await wakePublishedApp('app-1', deps);
 
@@ -296,7 +297,7 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
         lastStopAt: new Date('2026-08-20T10:10:00.000Z'), // zero-length window
         awakeHoldId: 'hold-stranded',
       }),
-      [[appRow({ status: 'running' })]],
+      [[{ id: 'app-1' }], [appRow({ status: 'running' })]],
     );
 
     await wakePublishedApp('app-1', deps);
@@ -310,7 +311,7 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
     // point — two independent failures at two separate moments — and said so.
     const { deps, trackUsage, startMachine } = makeDeps();
     trackUsage.mockRejectedValue(new Error('ledger down'));
-    seed(abandoned(), [[appRow({ status: 'running' })]]);
+    seed(abandoned(), [[{ id: 'app-1' }], [appRow({ status: 'running' })]]);
 
     const result = await wakePublishedApp('app-1', deps);
 
@@ -326,6 +327,55 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
     await wakePublishedApp('app-1', deps);
 
     expect(trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('claims the tail EXCLUSIVELY before charging: a wake that starts, fails, and retries does NOT re-bill it', async () => {
+    // `settleAbandonedTail` runs on EVERY wake attempt against a non-running row —
+    // including a retry of a wake whose `startMachine` just failed. Without an
+    // at-most-once claim, each retry would re-settle the same stranded span,
+    // writing a new `ai_usage_logs` row every time.
+    const { deps, trackUsage, startMachine } = makeDeps();
+    startMachine.mockRejectedValueOnce(new Error('fly outage'));
+    const row = abandoned();
+    seed(row, [[{ id: 'app-1' }]]); // the tail claim succeeds; nothing else needed — start fails first
+
+    const first = await wakePublishedApp('app-1', deps);
+    expect(first.outcome).toBe('start_failed');
+    expect(trackUsage).toHaveBeenCalledTimes(1);
+
+    // Re-seed exactly as the CAS would have left the row: watermark and hold
+    // cleared by the first attempt's claim, regardless of the start failure.
+    seed(appRow({ status: 'stopped', driveId: row.driveId, awakeBilledThrough: null, lastStopAt: row.lastStopAt, awakeHoldId: null }), [
+      [appRow({ status: 'running' })],
+    ]);
+
+    const second = await wakePublishedApp('app-1', deps);
+
+    assert({
+      given: 'a wake retried after `start_failed` following a settled tail',
+      should: 'start cleanly and NOT re-bill the already-claimed tail',
+      actual: { outcome: second.outcome, trackUsageCalls: trackUsage.mock.calls.length },
+      expected: { outcome: 'woken', trackUsageCalls: 1 },
+    });
+  });
+
+  it('two wakes racing the same abandoned tail bill it EXACTLY ONCE', async () => {
+    const { deps, trackUsage } = makeDeps();
+    const row = abandoned();
+    // Wake #1 wins the claim (returns the row) and its own final CAS. Wake #2 —
+    // reading the identical stale snapshot, as a genuine race would — loses the
+    // claim (returns no row) and must never reach `trackUsage`.
+    seed(row, [
+      [{ id: 'app-1' }],
+      [appRow({ status: 'running' })],
+      [],
+      [appRow({ status: 'running' })],
+    ]);
+
+    await wakePublishedApp('app-1', deps);
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -500,6 +550,42 @@ describe('stopPublishedApp', () => {
 
     expect(trackUsage).not.toHaveBeenCalled();
     expect(releaseHold).toHaveBeenCalledWith('hold-1');
+  });
+
+  it('re-reads the watermark AFTER the (slow) Fly stop call, so a meter tick landing mid-call is not re-billed', async () => {
+    // `stopMachine` can take several seconds. If the awake meter ticks while we
+    // wait on it — settling a slice of the window and re-holding — settling
+    // against the SNAPSHOT READ BEFORE THE CALL would re-bill whatever the meter
+    // already collected. Settling against a fresh read bills only the remainder.
+    const { deps, trackUsage, stopMachine } = makeDeps();
+    const staleRow = running(); // awakeBilledThrough: WOKEN_AT (11:00), hold-1
+    const meterAdvancedAt = new Date(WOKEN_AT.getTime() + 30 * 60_000); // 11:30
+    const afterMeterTick = appRow({
+      status: 'running',
+      lastWakeAt: WOKEN_AT,
+      awakeBilledThrough: meterAdvancedAt,
+      awakeHoldId: 'hold-2', // the meter's re-hold, replacing the wake's own
+    });
+    stopMachine.mockImplementation(async () => {
+      mockDb.__state.selectRows = [afterMeterTick];
+    });
+    seed(staleRow);
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    assert({
+      given: 'a meter settle landing during the Fly stop call',
+      should: 'bill only the 30 minutes the watermark still owed, not the full hour',
+      actual: { outcome: result.outcome, billed: result.outcome === 'stopped' ? result.billedSeconds : null },
+      expected: { outcome: 'stopped', billed: 1800 },
+    });
+    expect(trackUsage).toHaveBeenCalledWith({
+      payerId: 'payer-1',
+      holdId: 'hold-2',
+      activeSeconds: 1800,
+      driveId: 'drive-1',
+      publishedAppId: 'app-1',
+    });
   });
 
   it('refuses to stop a row that is not running', async () => {

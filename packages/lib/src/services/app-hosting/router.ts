@@ -39,7 +39,9 @@ import { eq } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
+import { defaultAppBillingDeps } from './app-billing';
 import { isAppHostingEnabled } from './app-hosting-env';
+import { defaultAppLifecycleMeteringDeps, wakePublishedApp, type WakePublishedAppResult } from './app-lifecycle-metering';
 import { derivePublishedAppReplayKey } from './app-replay-key';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from './routing-env';
 import {
@@ -58,6 +60,20 @@ export interface AppRouterDeps {
   replaySecret: () => string;
   /** `published_apps` row for a subdomain, or null. */
   findAppBySubdomain: (subdomain: string) => Promise<PublishedAppRouteRow | null>;
+  /**
+   * Wake a `stopped` app through the real seam — gate, hold, start, stamp — rather
+   * than letting Fly's `autostart` silently start an unmetered machine. See the
+   * `SERVABLE_STATUSES` comment in `router-core.ts` for why `'stopped'` never
+   * reaches the pure decision directly.
+   */
+  wakePublishedApp: (publishedAppId: string) => Promise<WakePublishedAppResult>;
+  /**
+   * Who pays — resolved the SAME way the awake-seconds meter resolves it
+   * (`drives.ownerId`, via `resolveEnvPayerId`). Null means unresolvable (a stale
+   * read of a drive mid-delete); the caller refuses rather than substituting a
+   * payer or falling back to a denormalized column the meter does not charge.
+   */
+  resolvePayerId: (input: { driveId: string }) => Promise<string | null>;
   /** The payer's subscription tier — the allowance the balance is judged against. */
   resolveTier: (userId: string) => Promise<string>;
   /** Whether the payer can still spend. */
@@ -72,17 +88,15 @@ export interface PublishedAppRouteRow {
   tier: string;
   machineId: string | null;
   /**
-   * Who pays — `published_apps.ownerId`, denormalized at publish time to the
-   * drive owner (`resolveEnvPayerId` semantics).
-   *
-   * Read from the row rather than re-resolved through the env and drive on every
-   * request, and that is a correctness point as much as a performance one: the
-   * balance gate must ask about the SAME payer the awake-seconds meter charges,
-   * and the meter charges this column. Re-deriving the payer here could disagree
-   * with it mid-flight (a drive ownership transfer between the two reads) and
-   * park an app whose actual payer is solvent.
+   * The app's owning drive — NOT `published_apps.ownerId`. The balance gate must
+   * ask about the SAME payer the awake-seconds meter charges, and the meter
+   * charges `drives.ownerId` (via `resolveEnvPayerId`), never the denormalized
+   * `ownerId` column, which exists only for indexing and cascade reach and can
+   * drift from the drive's real owner (a transfer, a stale write). Gating on the
+   * wrong payer would decide admission against one person's balance while the
+   * charge lands on another's.
    */
-  ownerId: string;
+  driveId: string;
 }
 
 async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
@@ -93,7 +107,7 @@ async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRou
       status: publishedApps.status,
       tier: publishedApps.tier,
       machineId: publishedApps.machineId,
-      ownerId: publishedApps.ownerId,
+      driveId: publishedApps.driveId,
     })
     .from(publishedApps)
     .where(eq(publishedApps.subdomain, subdomain))
@@ -106,6 +120,12 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   apex: resolvePublishedAppsApex,
   replaySecret: resolveAppReplaySecret,
   findAppBySubdomain: findAppBySubdomainRow,
+  wakePublishedApp: (publishedAppId) => wakePublishedApp(publishedAppId, defaultAppLifecycleMeteringDeps),
+  // The SAME resolver `app-billing.ts`'s `defaultAppBillingDeps` hands the meter
+  // and the wake gate — not an equivalent, the identical function — so a drift
+  // between "who the router asks" and "who the meter charges" is structurally
+  // impossible rather than merely kept in sync by convention.
+  resolvePayerId: defaultAppBillingDeps.resolvePayerId,
   resolveTier: (userId) => resolveTier(userId),
   hasSpendableBalance: (userId, tier) =>
     hasSpendableBalance(userId, tier as Parameters<typeof hasSpendableBalance>[1]),
@@ -144,9 +164,41 @@ export async function resolveAppRoute(
   const app = await deps.findAppBySubdomain(host.subdomain);
   if (!app) return { kind: 'not_found', reason: 'no_such_app' };
 
+  // A STOPPED app never goes to `decideAppRoute` as-is: replaying to it would let
+  // Fly's own `autostart` start the machine with no bookkeeping behind it — no
+  // status flip, no `awakeBilledThrough` stamp, no hold — and the awake meter,
+  // which only reads `status = 'running'` rows, would never see it running at
+  // all. `wakePublishedApp` is the seam that does that bookkeeping alongside the
+  // balance gate, so it runs here, BEFORE the row is ever handed to the pure
+  // decision. A woken app is decided on as `running`; anything else answers the
+  // request directly.
+  let effectiveStatus = app.status;
+  if (app.status === 'stopped') {
+    const wakeResult = await deps.wakePublishedApp(app.id);
+    switch (wakeResult.outcome) {
+      case 'woken':
+        effectiveStatus = 'running';
+        break;
+      case 'parked':
+        return { kind: 'parked', reason: 'out_of_credits' };
+      case 'start_failed':
+        return { kind: 'unavailable', reason: 'failed' };
+      case 'refused':
+        // 'disabled' means hosting was switched off between this route's own
+        // `isEnabled()` check above and this call — answer exactly as that check
+        // would have. Every other refusal ('not_found', 'no_machine',
+        // 'not_wakeable', 'unresolved_payer') means this row cannot be woken
+        // right now, which a router that has never heard of it would call
+        // "not serving yet".
+        return wakeResult.reason === 'disabled'
+          ? { kind: 'unavailable', reason: 'hosting_disabled' }
+          : { kind: 'unavailable', reason: 'failed' };
+    }
+  }
+
   const routable: RoutableApp = {
     flyAppName: app.flyAppName,
-    status: app.status,
+    status: effectiveStatus,
     tier: app.tier,
     hasMachine: app.machineId !== null,
   };
@@ -167,8 +219,13 @@ export async function resolveAppRoute(
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const tier = await deps.resolveTier(app.ownerId);
-    const balanceOk = await deps.hasSpendableBalance(app.ownerId, tier);
+    const payerId = await deps.resolvePayerId({ driveId: app.driveId });
+    // An unresolvable drive fails CLOSED here — the router has no honest payer to
+    // ask, so it refuses exactly as the wake gate does for the same condition,
+    // rather than assuming a balance nobody can vouch for.
+    const balanceOk = payerId
+      ? await deps.hasSpendableBalance(payerId, await deps.resolveTier(payerId))
+      : false;
     if (!balanceOk) {
       return decideAppRoute({ app: routable, balanceOk: false, replayState: 'pending' });
     }

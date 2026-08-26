@@ -138,8 +138,22 @@ export function parseAppHost(rawHost: string, apex: string): AppHost {
   return { kind: 'subdomain', subdomain: label };
 }
 
-/** Statuses whose app has something live to serve. */
-const SERVABLE_STATUSES = new Set(['running', 'stopped', 'deploying']);
+/**
+ * Statuses whose app has something live to serve THROUGH THIS DECISION ALONE.
+ *
+ * `'stopped'` is deliberately absent. Fly's proxy auto-starts a stopped target on
+ * replay (`autostart: true`), but that start is invisible to the app: no status
+ * flip, no `awakeBilledThrough` stamp, no hold — the awake meter only reads
+ * `status = 'running'` rows, so a machine Fly quietly started stays unmetered
+ * until something else stops it. `wakePublishedApp` is the seam that does all of
+ * that bookkeeping alongside the balance gate; a stopped app must go through it
+ * before this function is ever asked, which is why the router (`router.ts`)
+ * intercepts `'stopped'` and calls it BEFORE building the `RoutableApp` this
+ * decides on. A `'stopped'` row reaching here regardless — a caller that skipped
+ * that step — resolves through the unrecognized-status branch below rather than
+ * being replayed to and silently going unbilled.
+ */
+const SERVABLE_STATUSES = new Set(['running', 'deploying']);
 
 export interface AppRouteInput {
   /** The row the hostname resolved to, or null when nothing did. */
