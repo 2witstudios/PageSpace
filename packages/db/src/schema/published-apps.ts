@@ -1,4 +1,4 @@
-import { pgTable, text, integer, bigint, timestamp, index, uniqueIndex, pgEnum, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, integer, bigint, doublePrecision, date, timestamp, index, uniqueIndex, pgEnum, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -196,6 +196,57 @@ export const publishedApps = pgTable('published_apps', {
   lastStopAt: timestamp('lastStopAt', { mode: 'date', withTimezone: true }),
 
   /**
+   * When the serving edge last replayed a request to this app — the IDLE REAPER's
+   * only evidence that anybody is still using it.
+   *
+   * It has to be recorded here because nothing else knows: a replayed response
+   * never passes back through us (Fly hands it straight to the client), and Fly's
+   * own machine events record starts and stops, not traffic. So the router stamps
+   * this at the one moment it is certain — when it emits `fly-replay` — and the
+   * reaper reads it. An app whose machine is serving requests it never routed
+   * through us (a direct 6PN caller) is invisible to this column by design: those
+   * requests bypass the balance gate too, and the reaper stopping such an app is
+   * the correct outcome, not a bug.
+   *
+   * THROTTLED, never per-request: the stamp's write is guarded on its own age
+   * (see `PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS`), so the hot path pays an
+   * indexed no-op statement rather than a row write on every asset of every page.
+   * The consequence is that this column trails real traffic by up to that
+   * interval, which is why the reaper's idle threshold is measured in minutes.
+   *
+   * NULL means "never routed to since this column existed" — the reaper falls back
+   * to `lastWakeAt`, so an app woken and never hit is still reapable.
+   */
+  lastHitAt: timestamp('lastHitAt', { mode: 'date', withTimezone: true }),
+
+  /**
+   * The UTC day `awakeSecondsToday` counts, as a date — the counter's own reset
+   * signal, carried in the row rather than inferred from `updatedAt`.
+   *
+   * A DATE and not a timestamp: the cap is a per-UTC-day budget, the same shape as
+   * the payer-level `dailyExposureCapForTier` this is the per-app analog of, and a
+   * date makes "is this counter still about today" a value comparison rather than
+   * a range calculation in three places.
+   */
+  awakeSecondsDay: date('awakeSecondsDay', { mode: 'string' }),
+
+  /**
+   * Awake seconds billed for this app on `awakeSecondsDay` — the RUNAWAY BOUND on
+   * a single app, and the counter the daily cap is judged against.
+   *
+   * A persisted counter rather than a query over `ai_usage_logs`, because it is
+   * read on the wake path (once per cold request) and advanced by every settle:
+   * the counter rides in the SAME statement as the watermark it belongs to, so a
+   * settle can never bill seconds that the cap does not see. Deriving it instead
+   * would mean a per-payer aggregate on the hottest path in the system, and would
+   * still be wrong for exactly the seconds in flight.
+   *
+   * Fractional (a settle bills fractional seconds), never negative, and reset by
+   * whichever settle first lands on a new UTC day — no cron sweeps it.
+   */
+  awakeSecondsToday: doublePrecision('awakeSecondsToday').default(0).notNull(),
+
+  /**
    * The awake window BILLED THROUGH — the metering watermark, and the only column
    * the awake-seconds drain reads to decide what it owes.
    *
@@ -290,6 +341,10 @@ export const publishedApps = pgTable('published_apps', {
   ownerIdx: index('published_apps_owner_idx').on(table.ownerId),
   // The claim query's access path: "oldest rows in these statuses, skip-locked".
   statusIdx: index('published_apps_status_idx').on(table.status, table.updatedAt),
+  // The idle reaper's access path: "running rows, least recently hit first". The
+  // reaper scans only `running` rows and orders by recency, so the status column
+  // leads and the recency column follows — the same shape as the claim index above.
+  idleIdx: index('published_apps_idle_idx').on(table.status, table.lastHitAt),
 
   // Enforce the coherence a bad write could otherwise manufacture — each of these
   // states would be read by the router or the metering cron as real, servable truth.
@@ -344,6 +399,20 @@ export const publishedApps = pgTable('published_apps', {
   imageSizeMeasuredCoherent: check(
     'published_apps_image_size_measured_coherent',
     sql`(${table.imageSizeBytes} IS NULL) = (${table.imageSizeMeasuredAt} IS NULL)`,
+  ),
+  // A negative awake counter is not a small number, it is a corrupt one — and it
+  // would hide a runaway app from the daily cap that exists to stop it.
+  awakeSecondsTodayNonNeg: check(
+    'published_apps_awake_seconds_today_nonneg',
+    sql`${table.awakeSecondsToday} >= 0`,
+  ),
+  // Seconds counted against no day cannot be reset and cannot be judged: the cap
+  // would compare today's budget against an accumulation of unknown age. One-way
+  // on purpose — a day with a zero count is the ordinary state of a row whose
+  // first settle of the day has not landed yet.
+  awakeCounterNeedsDay: check(
+    'published_apps_awake_counter_needs_day',
+    sql`${table.awakeSecondsDay} IS NOT NULL OR ${table.awakeSecondsToday} = 0`,
   ),
   // An open awake window with no wake boundary is a window with no origin: the
   // weekly reconcile compares our billed span against `fly_instance_up` from

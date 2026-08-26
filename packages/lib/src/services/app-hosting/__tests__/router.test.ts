@@ -70,6 +70,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     findAppBySubdomain: async () => row(),
     resolveTier: async () => 'pro',
     hasSpendableBalance: async () => true,
+    stampHit: async () => {},
     ...overrides,
   };
 }
@@ -299,5 +300,57 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
     vi.mocked(db.select).mockReturnValue({ from: () => ({ where: () => ({ limit }) }) } as never);
 
     expect(await defaultAppRouterDeps.findAppBySubdomain('nope')).toBeNull();
+  });
+});
+
+
+describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
+  it('given a REPLAYED request, should stamp recency for the app it served', async () => {
+    // Nothing else knows this happened: a replayed response goes straight from the
+    // target app to the client and never passes back through us, and Fly's machine
+    // events record starts and stops, not traffic. Without this stamp the reaper
+    // has no evidence of demand and stops apps that are being used.
+    const stampHit = vi.fn(async () => {});
+
+    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+
+    expect(decision.kind).toBe('replay');
+    expect(stampHit).toHaveBeenCalledWith('app_1');
+  });
+
+  it('given a PARKED app, should stamp NOTHING — a refusal is not demand', async () => {
+    // The regression this guards: stamping on refusal keeps a parked app looking
+    // busy to the reaper forever, fed by exactly the crawler traffic that never
+    // stops hitting a dead subdomain.
+    const stampHit = vi.fn(async () => {});
+
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ stampHit, hasSpendableBalance: async () => false }),
+    );
+
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('given an unknown host, should stamp nothing', async () => {
+    const stampHit = vi.fn(async () => {});
+
+    await resolveAppRoute('nobody.pagespace.app', deps({ stampHit, findAppBySubdomain: async () => null }));
+
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('given the stamp FAILS, should still serve the app', async () => {
+    // A bookkeeping write must never take a working app off the internet. The cost
+    // of losing one stamp is that the app looks idle up to one throttle interval
+    // early, and the next served request corrects it.
+    const stampHit = vi.fn(async () => {
+      throw new Error('write failed');
+    });
+
+    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+
+    expect(decision.kind).toBe('replay');
   });
 });

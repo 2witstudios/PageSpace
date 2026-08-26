@@ -21,6 +21,9 @@ function runningApp(over: Partial<PublishedApp> = {}): PublishedApp {
     lastStopAt: null,
     awakeBilledThrough: ago(600_000),
     awakeHoldId: 'hold-1',
+    awakeSecondsDay: null,
+    awakeSecondsToday: 0,
+    lastHitAt: null,
     ...over,
   } as unknown as PublishedApp;
 }
@@ -37,7 +40,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
   const writeSettle = vi.fn(async () => 'advanced' as const);
   const stampWindowStart = vi.fn(async () => 'stamped' as const);
   const closeAtBoundary = vi.fn(async () => ({ billedSeconds: 600, failed: false }));
-  const parkInsolvent = vi.fn(async () => {});
+  const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap') => {});
   const findStopBoundary = vi.fn(async () => null);
 
   const deps: AwakeMeterDeps = {
@@ -48,11 +51,12 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
     writeSettle,
     stampWindowStart,
     closeAtBoundary,
-    parkInsolvent,
+    park,
+    dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
     ...over,
   };
-  return { deps, trackUsage, gate, releaseHold, writeSettle, stampWindowStart, closeAtBoundary, parkInsolvent, findStopBoundary };
+  return { deps, trackUsage, gate, releaseHold, writeSettle, stampWindowStart, closeAtBoundary, park, findStopBoundary };
 }
 
 /** Narrow the run to its metered shape — `disabled` carries no counters. */
@@ -103,6 +107,7 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     expect(writeSettle).toHaveBeenCalledWith({
       publishedAppId: 'app-1',
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
   });
@@ -170,13 +175,13 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     // `stopPublishedApp` re-read it and settle the same span a SECOND time, so
     // every insolvency park double-charged nearly a whole heartbeat interval.
     const order: string[] = [];
-    const { deps, gate, parkInsolvent, writeSettle } = makeDeps();
+    const { deps, gate, park, writeSettle } = makeDeps();
     gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
     writeSettle.mockImplementation(async () => {
       order.push('advance');
       return 'advanced' as const;
     });
-    parkInsolvent.mockImplementation(async () => {
+    park.mockImplementation(async () => {
       order.push('park');
     });
 
@@ -193,19 +198,20 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
     expect(writeSettle).toHaveBeenCalledWith({
       publishedAppId: 'app-1',
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: null,
     });
   });
 
   it('given the re-gate THROWS, should keep the app up and still close the window with no hold', async () => {
     // A transient billing outage must not kill a live app.
-    const { deps, gate, writeSettle, parkInsolvent } = makeDeps();
+    const { deps, gate, writeSettle, park } = makeDeps();
     gate.mockRejectedValue(new Error('gate down'));
 
     const run = await meter(deps);
 
-    expect(parkInsolvent).not.toHaveBeenCalled();
-    expect(writeSettle).toHaveBeenCalledWith({ publishedAppId: 'app-1', billedThrough: NOW, holdId: null });
+    expect(park).not.toHaveBeenCalled();
+    expect(writeSettle).toHaveBeenCalledWith({ publishedAppId: 'app-1', billedThrough: NOW, billedSeconds: 600, holdId: null });
     expect(run.settled).toBe(1);
   });
 
@@ -304,7 +310,7 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
   });
 
   it('gates before stamping, and parks an insolvent payer instead of opening a window', async () => {
-    const { deps, gate, stampWindowStart, parkInsolvent } = makeDeps({
+    const { deps, gate, stampWindowStart, park } = makeDeps({
       listRunningApps: async () => [runningApp({ awakeBilledThrough: null })],
     });
     gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
@@ -312,7 +318,7 @@ describe('meterAwakePublishedApps — a running row with no window', () => {
     const run = await meter(deps);
 
     expect(run.parked).toBe(1);
-    expect(parkInsolvent).toHaveBeenCalledWith('app-1');
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
     expect(stampWindowStart).not.toHaveBeenCalled();
   });
 
@@ -458,5 +464,103 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
     await meter(deps);
 
     expect(now).toHaveBeenCalledTimes(1);
+  });
+});
+
+
+describe('meterAwakePublishedApps — the per-app daily awake cap', () => {
+  it('given this settle carries the app PAST its daily budget, should advance the watermark THEN park it', async () => {
+    // The span is already charged when the cap is judged, and `stopPublishedApp`
+    // re-reads the row and settles from whatever watermark it finds — so parking on
+    // the stale one would bill this same span a second time on every cap park.
+    const order: string[] = [];
+    const { deps, park, writeSettle } = makeDeps({
+      dailyAwakeCapSeconds: () => 900,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 })],
+    });
+    writeSettle.mockImplementation(async () => {
+      order.push('advance');
+      return 'advanced' as const;
+    });
+    park.mockImplementation(async () => {
+      order.push('park');
+    });
+
+    const run = await meter(deps);
+
+    assert({
+      given: '600s already spent today and a 600s settle against a 900s budget',
+      should: 'record the charge, then park under the cap’s own counter',
+      actual: { cappedParked: run.cappedParked, parked: run.parked, order },
+      expected: { cappedParked: 1, parked: 0, order: ['advance', 'park'] },
+    });
+    expect(park).toHaveBeenCalledWith('app-1', 'daily_cap');
+  });
+
+  it('given the settle leaves the app UNDER its budget, should keep it running', async () => {
+    const { deps, park } = makeDeps({
+      dailyAwakeCapSeconds: () => 43_200,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 })],
+    });
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    assert({
+      given: '1200s of a 43200s budget spent',
+      should: 'settle and leave the app alone',
+      actual: { settled: run.settled, cappedParked: run.cappedParked },
+      expected: { settled: 1, cappedParked: 0 },
+    });
+  });
+
+  it('given YESTERDAY’s counter is over the budget, should NOT park — a stale counter is not today’s spend', async () => {
+    // The regression: reading a stale counter as today's parks every busy app the
+    // morning after it was busy, permanently.
+    const { deps, park } = makeDeps({
+      dailyAwakeCapSeconds: () => 900,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-19', awakeSecondsToday: 86_400 })],
+    });
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    expect(run.cappedParked).toBe(0);
+  });
+
+  it('NEVER caps a dedicated app, however long it has been awake', async () => {
+    // The flat-rate tier is sold as always-on, and `parked` is metered-only at the
+    // database — parking one is an outage of something somebody pays to keep up.
+    const { deps, park } = makeDeps({
+      dailyAwakeCapSeconds: () => 60,
+      listRunningApps: async () => [
+        runningApp({ tier: 'dedicated', awakeSecondsDay: '2026-08-20', awakeSecondsToday: 86_400 }),
+      ],
+    });
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    expect(run.settled).toBe(1);
+  });
+
+  it('given the cap disabled, should never park however many seconds are counted', async () => {
+    const { deps, park } = makeDeps({
+      dailyAwakeCapSeconds: () => 0,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 999_999 })],
+    });
+
+    await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+  });
+
+  it('passes the settled seconds to the watermark write, so the counter and the charge agree', async () => {
+    // Seconds charged but not counted are seconds the cap cannot see.
+    const { deps, writeSettle } = makeDeps();
+
+    await meter(deps);
+
+    expect(writeSettle).toHaveBeenCalledWith(expect.objectContaining({ billedSeconds: 600 }));
   });
 });

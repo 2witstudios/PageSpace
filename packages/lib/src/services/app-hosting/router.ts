@@ -35,11 +35,12 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq } from '@pagespace/db/operators';
+import { and, eq, isNull, or, sql } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
-import { isAppHostingEnabled } from './app-hosting-env';
+import { loggers } from '../../logging/logger-config';
+import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import { derivePublishedAppReplayKey } from './app-replay-key';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from './routing-env';
 import {
@@ -62,6 +63,11 @@ export interface AppRouterDeps {
   resolveTier: (userId: string) => Promise<string>;
   /** Whether the payer can still spend. */
   hasSpendableBalance: (userId: string, tier: string) => Promise<boolean>;
+  /**
+   * Record that this app was just served — the idle reaper's only evidence of
+   * demand. Throttled inside; see {@link stampAppHit}.
+   */
+  stampHit: (publishedAppId: string) => Promise<void>;
 }
 
 /** The columns the routing decision reads. Narrower than the row on purpose. */
@@ -109,7 +115,42 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   resolveTier: (userId) => resolveTier(userId),
   hasSpendableBalance: (userId, tier) =>
     hasSpendableBalance(userId, tier as Parameters<typeof hasSpendableBalance>[1]),
+  stampHit: stampAppHit,
 };
+
+/**
+ * Stamp `lastHitAt`, at most once per app per throttle interval.
+ *
+ * THE THROTTLE IS THE POINT, not an optimization. This runs once per ASSET of every
+ * published page, so an unconditional write would turn a single page load into
+ * dozens of updates to one row — every one of them contending with the awake
+ * meter's own writes to that row, on the hottest path in the system. The age
+ * predicate makes all but one of them a statement that matches nothing.
+ *
+ * `now()` is used rather than a JS clock deliberately: every reader of this column
+ * (the reaper's cutoff, this predicate) then compares instants from the same
+ * source, and the column is `timestamptz`, so there is no wall-clock/UTC hazard to
+ * work around.
+ *
+ * The interval is read per call so an operator can retune it without a deploy; at
+ * 0 every replayed request stamps.
+ */
+async function stampAppHit(publishedAppId: string): Promise<void> {
+  const intervalSeconds = resolveHitStampIntervalSeconds();
+  const stale = sql`${publishedApps.lastHitAt} < now() - make_interval(secs => ${intervalSeconds})`;
+  await db
+    .update(publishedApps)
+    .set({ lastHitAt: sql`now()` })
+    .where(
+      and(
+        eq(publishedApps.id, publishedAppId),
+        // A never-stamped row always writes: NULL fails every comparison, so the
+        // age predicate alone would leave `lastHitAt` NULL forever on exactly the
+        // apps that have never been reaped and most need the stamp.
+        intervalSeconds > 0 ? or(isNull(publishedApps.lastHitAt), stale) : undefined,
+      ),
+    );
+}
 
 /**
  * Resolve one request hostname to a routing decision.
@@ -189,5 +230,25 @@ export async function resolveAppRoute(
     return { kind: 'unavailable', reason: 'failed' };
   }
 
-  return decideAppRoute({ app: routable, balanceOk: true, replayState });
+  const decision = decideAppRoute({ app: routable, balanceOk: true, replayState });
+
+  // Recorded ONLY for a request that is actually being served. A refusal is not
+  // demand: stamping one would keep a parked app's machine — and every crawler that
+  // keeps hitting it — looking busy to the reaper forever.
+  if (decision.kind === 'replay') {
+    try {
+      await deps.stampHit(app.id);
+    } catch (error) {
+      // A recency stamp is not worth a failed page. The cost of losing one is that
+      // the app looks idle up to one throttle interval earlier than it is, and the
+      // next served request corrects it — whereas a 503 here would take a working
+      // app off the internet because a bookkeeping write failed.
+      loggers.api.warn('Published-app router could not stamp last-hit recency', {
+        publishedAppId: app.id,
+        error: error instanceof Error ? error.message : 'unknown error',
+      });
+    }
+  }
+
+  return decision;
 }

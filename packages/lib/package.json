@@ -638,6 +638,11 @@
       "import": "./dist/services/app-hosting/awake-reconcile.js",
       "require": "./dist/services/app-hosting/awake-reconcile.js"
     },
+    "./services/app-hosting/idle-reaper": {
+      "types": "./dist/services/app-hosting/idle-reaper.d.ts",
+      "import": "./dist/services/app-hosting/idle-reaper.js",
+      "require": "./dist/services/app-hosting/idle-reaper.js"
+    },
     "./services/fly/prometheus-client": {
       "types": "./dist/services/fly/prometheus-client.d.ts",
       "import": "./dist/services/fly/prometheus-client.js",
@@ -2262,6 +2267,9 @@
       ],
       "services/fly/flaps-client": [
         "./dist/services/fly/flaps-client.d.ts"
+      ],
+      "services/app-hosting/idle-reaper": [
+        "./dist/services/app-hosting/idle-reaper.d.ts"
       ],
       "services/app-hosting/build-core": [
         "./dist/services/app-hosting/build-core.d.ts"

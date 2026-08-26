@@ -87,6 +87,8 @@ async function readApp() {
       awakeBilledThrough: publishedApps.awakeBilledThrough,
       awakeHoldId: publishedApps.awakeHoldId,
       lastWakeAt: publishedApps.lastWakeAt,
+      awakeSecondsDay: publishedApps.awakeSecondsDay,
+      awakeSecondsToday: publishedApps.awakeSecondsToday,
     })
     .from(publishedApps)
     .where(eq(publishedApps.id, appId));
@@ -326,6 +328,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -349,6 +352,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -372,6 +376,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
       await defaultAwakeMeterDeps.writeSettle({
         publishedAppId: appId,
         billedThrough: NOW,
+        billedSeconds: 600,
         holdId: 'hold-next',
       }),
     ).toBe('superseded');
@@ -387,6 +392,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -396,6 +402,109 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
       should: 'leave the window closed and install no hold',
       actual: { outcome, billedThrough: row?.awakeBilledThrough, holdId: row?.awakeHoldId },
       expected: { outcome: 'superseded', billedThrough: null, holdId: null },
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the per-app daily awake counter', () => {
+  it('adds the settled seconds to TODAY’s counter, in the same statement as the watermark', async () => {
+    // Seconds that were charged but not counted are seconds the daily cap cannot
+    // see, and bounding one app's daily spend is the cap's whole job.
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 600,
+      holdId: 'hold-next',
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a settle of ten minutes',
+      should: 'record the day and the seconds',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: '2026-08-20', seconds: 600 },
+    });
+  });
+
+  it('ACCUMULATES within a day, and RESETS on the first settle of a new one', async () => {
+    // The reset lives in the statement rather than in a preceding read, so a
+    // counter can never be advanced against a day another writer already rolled.
+    await seedApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 });
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 300,
+      holdId: null,
+    });
+    const sameDay = await readApp();
+
+    const nextDay = new Date('2026-08-21T00:05:00.000Z');
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: nextDay,
+      billedSeconds: 120,
+      holdId: null,
+    });
+    const rolled = await readApp();
+
+    assert({
+      given: 'a second settle the same day, then one after midnight UTC',
+      should: 'add within the day and start over on the new one',
+      actual: {
+        same: { day: sameDay?.awakeSecondsDay, seconds: sameDay?.awakeSecondsToday },
+        rolled: { day: rolled?.awakeSecondsDay, seconds: rolled?.awakeSecondsToday },
+      },
+      expected: {
+        same: { day: '2026-08-20', seconds: 900 },
+        rolled: { day: '2026-08-21', seconds: 120 },
+      },
+    });
+  });
+
+  it('given a SUPERSEDED settle, should leave the counter alone — those seconds belong to another window', async () => {
+    // The counter rides the same guard as the watermark and the hold. Adding to a
+    // row a wake has already carried past this tick would charge the new window's
+    // budget for the old window's time.
+    const wakeInstant = new Date(NOW.getTime() + 300_000);
+    await seedApp({
+      awakeBilledThrough: wakeInstant,
+      lastWakeAt: wakeInstant,
+      awakeSecondsDay: '2026-08-20',
+      awakeSecondsToday: 600,
+    });
+
+    const outcome = await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 999,
+      holdId: null,
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a wake that opened a newer window mid-tick',
+      should: 'refuse the advance and add nothing to the day',
+      actual: { outcome, seconds: row?.awakeSecondsToday },
+      expected: { outcome: 'superseded', seconds: 600 },
+    });
+  });
+
+  it('given a settle that billed NOTHING, should not roll the row onto a day it spent no seconds in', async () => {
+    await seedApp({ awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 0,
+      holdId: null,
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a zero-second settle on a row with no day',
+      should: 'leave both counter columns untouched',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: null, seconds: 0 },
     });
   });
 });
@@ -463,6 +572,27 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing CHECK constraints', () =
     // checked against anything.
     await expect(
       db.update(publishedApps).set({ awakeBilledThrough: NOW, lastWakeAt: null }).where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a NEGATIVE daily awake counter', async () => {
+    // `published_apps_awake_seconds_today_nonneg`: a negative counter is not a
+    // small number, it is a corrupt one — and it hides a runaway app from exactly
+    // the cap that exists to stop it.
+    await expect(
+      db.update(publishedApps).set({ awakeSecondsToday: -1 }).where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses seconds counted against NO day', async () => {
+    // `published_apps_awake_counter_needs_day`: seconds with no day cannot be
+    // reset and cannot be judged — the cap would compare today's budget against an
+    // accumulation of unknown age.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ awakeSecondsDay: null, awakeSecondsToday: 60 })
+        .where(eq(publishedApps.id, appId)),
     ).rejects.toThrow();
   });
 
