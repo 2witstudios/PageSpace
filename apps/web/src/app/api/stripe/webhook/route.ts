@@ -155,7 +155,17 @@ export async function POST(request: NextRequest) {
           // takes the path below.
           const subscription = event.data.object as Stripe.Subscription;
           if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
-            await handleDedicatedSubscriptionEvent(subscription, event.id);
+            // RETRYABLE, through the same marker-deleting wrapper the funding
+            // paths use. Without it a throwing hosting event is still marked
+            // processed, so Stripe's redelivery classifies as a duplicate and is
+            // acked — and an app that had just been set `dedicated` would stay
+            // that way forever with no paying subscription behind it and nothing
+            // left to repair it. The handler is idempotent (an upsert plus a tier
+            // write guarded on the tier it planned against), so reprocessing is
+            // safe.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id),
+            );
             break;
           }
           await handleSubscriptionChange(subscription);
@@ -169,7 +179,13 @@ export async function POST(request: NextRequest) {
           // `free` because a hosting subscription ended.
           const subscription = event.data.object as Stripe.Subscription;
           if (routeSubscription(subscription, event.id) === 'published_app_dedicated') {
-            await handleDedicatedSubscriptionEvent(subscription, event.id);
+            // Retryable for the same reason as the created/updated fork above, and
+            // more urgently: this is the event that takes an app OFF the dedicated
+            // tier, so losing it to a duplicate-ack leaves an always-on machine
+            // running for a customer who has stopped paying.
+            await withFundingRetry(event.id, () =>
+              handleDedicatedSubscriptionEvent(subscription, event.id),
+            );
             break;
           }
           await handleSubscriptionDeleted(subscription);

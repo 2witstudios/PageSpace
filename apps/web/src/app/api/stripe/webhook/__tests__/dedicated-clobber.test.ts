@@ -37,10 +37,12 @@ vi.mock('@/lib/stripe', () => ({
  * these tests need to observe: the clobber IS an update to `users`.
  */
 const mockDb = vi.hoisted(() => {
-  const state: { updateSets: Array<Record<string, unknown>>; userRows: unknown[] } = {
-    updateSets: [],
-    userRows: [],
-  };
+  const state: {
+    updateSets: Array<Record<string, unknown>>;
+    userRows: unknown[];
+    /** Deletes of the `stripe_events` idempotency marker — the retry signal. */
+    deletes: number;
+  } = { updateSets: [], userRows: [], deletes: 0 };
   const recordUpdate = () => ({
     set: (payload: Record<string, unknown>) => {
       state.updateSets.push(payload);
@@ -58,7 +60,11 @@ const mockDb = vi.hoisted(() => {
       }),
     }),
     update: recordUpdate,
-    delete: () => ({ where: async () => undefined }),
+    delete: () => ({
+      where: async () => {
+        state.deletes += 1;
+      },
+    }),
     transaction: async (cb: (tx: unknown) => Promise<void>) => {
       await cb({
         insert: () => ({ values: () => ({ onConflictDoUpdate: async () => undefined }) }),
@@ -93,16 +99,36 @@ vi.mock('@/lib/billing/send-payment-receipt-email', () => ({
 }));
 vi.mock('@/lib/subscription/credit-balance', () => ({ emitCreditsUpdated: vi.fn() }));
 
+const mockCaptureMessage = vi.hoisted(() => vi.fn());
+vi.mock('@sentry/nextjs', () => ({
+  captureMessage: mockCaptureMessage,
+  captureException: vi.fn(),
+}));
+
 /**
  * The hosting service is mocked because it opens a database of its own. What it
  * DOES with a dedicated event is tested in packages/lib; what matters here is
  * only that the event reached it instead of the account handler.
  */
-const { mockRecordSubscription, mockSyncTier, mockFindByStripeId } = vi.hoisted(() => ({
-  mockRecordSubscription: vi.fn(async () => null),
-  mockSyncTier: vi.fn(async () => ({ outcome: 'entitled' as const, publishedAppId: 'app_1', tierChanged: true })),
-  mockFindByStripeId: vi.fn(async () => null),
-}));
+const { mockRecordSubscription, mockSyncTier, mockFindByStripeId } = vi.hoisted(() => {
+  /**
+   * The sync's real return is a union of outcomes, so the double is typed as the
+   * union rather than inferred from its default. Left to inference, the default
+   * `entitled` narrows the mock and a test that needs a DIFFERENT outcome — the
+   * revenue-leak signal below — fails to typecheck.
+   */
+  type SyncOutcome =
+    | { outcome: 'entitled' | 'downgraded'; publishedAppId: string; tierChanged: boolean }
+    | { outcome: 'unknown_subscription' }
+    | { outcome: 'tier_change_refused'; publishedAppId: string; reason: string };
+  return {
+    mockRecordSubscription: vi.fn(async () => null),
+    mockSyncTier: vi.fn(
+      async (): Promise<SyncOutcome> => ({ outcome: 'entitled', publishedAppId: 'app_1', tierChanged: true }),
+    ),
+    mockFindByStripeId: vi.fn(async () => null),
+  };
+});
 vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
   recordDedicatedSubscription: mockRecordSubscription,
   syncAppTierToSubscription: mockSyncTier,
@@ -178,6 +204,7 @@ const tierWrites = () => mockDb.__state.updateSets.filter((s) => 'subscriptionTi
 beforeEach(() => {
   vi.clearAllMocks();
   mockDb.__state.updateSets.length = 0;
+  mockDb.__state.deletes = 0;
   // A PAYING customer. This is the person the clobber would demote.
   mockDb.__state.userRows = [{ id: 'user_pro_1', subscriptionTier: 'pro', email: 'pro@example.com', name: 'Pro' }];
   process.env.STRIPE_WEBHOOK_SECRET = 'whsec_test';
@@ -258,5 +285,88 @@ describe('the existing account-plan path is unchanged', () => {
     const response = await post('invoice.paid', invoice(undefined));
     expect(response.status).toBe(200);
     expect(mockApplyStripeFunding).toHaveBeenCalled();
+  });
+});
+
+describe('a dedicated hosting event that throws', () => {
+  const hostingMetadata = {
+    kind: DEDICATED_SUBSCRIPTION_KIND,
+    publishedAppId: 'app_1',
+    userId: 'user_pro_1',
+    guestPreset: 'shared-cpu-1x-512',
+  };
+
+  it('clears the idempotency marker and asks Stripe to redeliver', async () => {
+    // Without this, a throwing hosting event is still marked processed, Stripe's
+    // redelivery classifies as a duplicate and is acked, and an app that had just
+    // been set `dedicated` stays that way forever with no paying subscription
+    // behind it and nothing left to repair it.
+    mockSyncTier.mockRejectedValueOnce(new Error('database unavailable'));
+
+    const response = await post('customer.subscription.updated', subscription(hostingMetadata));
+
+    expect(response.status, 'a 500 is what makes Stripe redeliver').toBe(500);
+    expect(
+      mockDb.__state.deletes,
+      'the claimed event id must be released so the redelivery is not duplicate-acked',
+    ).toBeGreaterThan(0);
+  });
+
+  it('processes the event normally on the redelivery', async () => {
+    mockSyncTier.mockRejectedValueOnce(new Error('database unavailable'));
+    await post('customer.subscription.updated', subscription(hostingMetadata));
+
+    mockDb.__state.deletes = 0;
+    const retry = await post('customer.subscription.updated', subscription(hostingMetadata));
+
+    expect(retry.status).toBe(200);
+    expect(mockSyncTier).toHaveBeenCalledTimes(2);
+    expect(mockDb.__state.deletes, 'a successful reprocess releases nothing').toBe(0);
+  });
+
+  it('still leaves the account tier untouched on the failing attempt', async () => {
+    // The retry wrapper must not become a route back into the account handler.
+    mockSyncTier.mockRejectedValueOnce(new Error('database unavailable'));
+    await post('customer.subscription.updated', subscription(hostingMetadata));
+    expect(tierWrites()).toEqual([]);
+  });
+});
+
+describe('an app that cannot follow its subscription', () => {
+  const hostingMetadata = {
+    kind: DEDICATED_SUBSCRIPTION_KIND,
+    publishedAppId: 'app_1',
+    userId: 'user_pro_1',
+    guestPreset: 'shared-cpu-4x-4096',
+  };
+
+  it('raises an operator signal, because an unbilled always-on app is a revenue leak', async () => {
+    // The case: the subscription stopped paying, so the app should go back to
+    // metered — but it runs a guest the metered tier may not run, so the downgrade
+    // is refused rather than forced (forcing it would destroy and recreate the
+    // machine, taking a live app down as a side effect of a billing event). What
+    // is left is an always-on machine nobody is paying for, until a human acts.
+    mockSyncTier.mockResolvedValueOnce({
+      outcome: 'tier_change_refused',
+      publishedAppId: 'app_1',
+      reason: 'guest_preset_not_allowed',
+    });
+
+    const response = await post('customer.subscription.deleted', subscription(hostingMetadata));
+
+    expect(response.status).toBe(200);
+    expect(mockCaptureMessage, 'a log line is not an operator signal').toHaveBeenCalledTimes(1);
+    const [, options] = mockCaptureMessage.mock.calls[0];
+    expect(options.level).toBe('warning');
+    // Fingerprinted on the CAUSE so a persistent situation stays one issue rather
+    // than opening a fresh one on every Stripe redelivery.
+    expect(options.fingerprint).toEqual(['dedicated-hosting-tier-change-refused']);
+    expect(options.extra.publishedAppId).toBe('app_1');
+    expect(options.extra.reason).toBe('guest_preset_not_allowed');
+  });
+
+  it('stays quiet when the tier followed normally', async () => {
+    await post('customer.subscription.updated', subscription(hostingMetadata));
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
   });
 });

@@ -34,6 +34,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
   DEDICATED_SUBSCRIPTION_KIND,
   SUBSCRIPTION_KIND_METADATA_KEY,
+  isDedicatedEntitled,
   isGuestPresetAllowedForTier,
 } from '@pagespace/lib/services/app-hosting/dedicated-tier';
 import {
@@ -81,12 +82,26 @@ export async function startDedicatedSubscription(
     return { ok: false, reason: 'guest_preset_not_allowed' };
   }
 
-  // One dedicated subscription per app — the mirror's UNIQUE on `publishedAppId`
-  // says so, and discovering that as a constraint violation AFTER creating a
-  // second recurring charge in Stripe would leave the customer paying twice for
-  // one app with only one of the two visible to us.
+  // One LIVE dedicated subscription per app — and "live" is the whole point of
+  // this check, not "a row exists".
+  //
+  // The mirror keeps a row after a subscription ends, deliberately: the row is
+  // what explains WHY an app went back to metered. So refusing on mere existence
+  // would mean one abandoned checkout (`incomplete_expired`) or one ordinary
+  // cancellation permanently brick the SKU for that app — the customer could
+  // never buy always-on again, and the cancel escape hatch would not help them
+  // either, since cancelling an already-terminal Stripe subscription errors.
+  //
+  // What must be refused is a SECOND concurrent charge: a subscription that is
+  // paying (`active` / `trialing` / `past_due`), or one whose checkout is still
+  // open (`incomplete` — the customer has a payment sheet in front of them right
+  // now, and issuing a second subscription would let them pay twice for one app).
+  // Anything terminal is a closed chapter, and re-buying overwrites the mirror row
+  // through the upsert's `publishedAppId` conflict target.
   const existing = await findDedicatedSubscriptionForApp(input.publishedAppId);
-  if (existing) return { ok: false, reason: 'already_subscribed' };
+  if (existing && (isDedicatedEntitled(existing.status) || existing.status === 'incomplete')) {
+    return { ok: false, reason: 'already_subscribed' };
+  }
 
   const price = await checkDedicatedPrice(input.guestPreset);
   if (!price.ok) {

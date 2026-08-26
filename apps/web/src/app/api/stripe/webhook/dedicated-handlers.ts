@@ -24,6 +24,7 @@
  * down — still propagates, and the webhook's own retry machinery handles it.
  */
 
+import * as Sentry from '@sentry/nextjs';
 import type { Stripe } from '@/lib/stripe';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import {
@@ -82,4 +83,36 @@ export async function handleDedicatedSubscriptionEvent(
     outcome: outcome.outcome,
     publishedAppId: resolvedAppId,
   });
+
+  if (outcome.outcome === 'tier_change_refused') {
+    // A PURE REVENUE LEAK, and it needs an operator rather than a log line.
+    //
+    // The case that produces it: a subscription stops paying, so the app should go
+    // back to metered — but it is running a guest size the metered tier may not
+    // run (`published_apps_metered_guest_preset`, because the awake meter prices
+    // one fixed shape). The downgrade is refused rather than forced, deliberately:
+    // resizing means destroying and recreating the machine, and a webhook must not
+    // take a live app down as a side effect of a billing event. The consequence is
+    // an always-on machine nobody is paying for, and it persists until a human
+    // resizes or stops it — so a human has to be told.
+    //
+    // Warning, not error, and fingerprinted on the CAUSE: nothing is broken, and a
+    // persistent situation should stay one issue rather than opening a fresh one on
+    // every redelivery.
+    Sentry.captureMessage(
+      `Dedicated hosting: app ${outcome.publishedAppId} could not follow its subscription (${outcome.reason}) — it may be always-on and unbilled`,
+      {
+        level: 'warning',
+        fingerprint: ['dedicated-hosting-tier-change-refused'],
+        tags: { check: 'published_app_dedicated_tier_sync' },
+        extra: {
+          eventId,
+          publishedAppId: outcome.publishedAppId,
+          stripeSubscriptionId: subscription.id,
+          subscriptionStatus: subscription.status,
+          reason: outcome.reason,
+        },
+      },
+    );
+  }
 }
