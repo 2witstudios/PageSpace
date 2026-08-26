@@ -224,6 +224,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
+  `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
+  `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the
+  difference between a cell reference and a letters-and-digits run sitting inside a string literal.
+  It now leaves anything inside quotes untouched, both on paste and when a conditional-format
+  formula rule is evaluated per cell. Separately, a sheet with a very large or pathological set of
+  conditional-format rules could make typing, saving, or rendering the sheet hang — evaluation work
+  is now capped in total across every rule and range combined, on top of the existing per-range
+  limit, and rule count itself is capped where a sheet is written. Saving a sheet also no longer
+  evaluates conditional formats at all, since the save format never reads that result — cutting
+  needless work on every keystroke.
+
 - **A charge that fails to record is retried instead of silently dropped** — usage metering used to
   report success whether or not it had actually written anything. If the database write for a usage
   record failed, the failure was logged and then swallowed: the meter above it saw a normal result,

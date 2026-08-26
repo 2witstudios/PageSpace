@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_CONDITIONAL_RANGE_CELLS,
+  MAX_CONDITIONAL_RANGES_PER_RULE,
+  MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED,
+  MAX_CONDITIONAL_RULES,
+  MAX_CONDITIONAL_TOTAL_CELLS,
   addressesOfRange,
   parseConditionalRule,
   parseConditionalRules,
@@ -411,6 +415,109 @@ describe('data bars', () => {
     const result = evaluateConditionalFormats([bar], contextOf({ A1: 1, A2: 'text' }));
     expect(result.bars.A2).toBeUndefined();
   });
+
+  it('honors an explicit positive `number` min anchor rather than forcing the baseline to zero', () => {
+    // All-positive data with a configured min of 50: the baseline should sit
+    // at 50, not silently clamp to 0 and compress every bar toward the low end.
+    const explicitMin: ConditionalRule = {
+      id: 'b2',
+      kind: 'dataBar',
+      ranges: ['A1:A3'],
+      color: '#3b82f6',
+      min: { type: 'number', value: 50 },
+      max: { type: 'number', value: 100 },
+    };
+    const result = evaluateConditionalFormats(
+      [explicitMin],
+      contextOf({ A1: 50, A2: 75, A3: 100 })
+    );
+    expect(result.bars.A1.fraction).toBe(0);
+    expect(result.bars.A2.fraction).toBeCloseTo(0.5);
+    expect(result.bars.A3.fraction).toBe(1);
+  });
+
+  it('still clamps the default auto min anchor to zero for all-positive data', () => {
+    const result = evaluateConditionalFormats([bar], contextOf({ A1: 50, A2: 75, A3: 100 }));
+    // Auto anchor (no explicit `min`) measures from 0, not from the smallest
+    // value (50) — otherwise A1 would render as an empty bar.
+    expect(result.bars.A1.fraction).toBeCloseTo(0.5);
+  });
+});
+
+describe('aggregate cell budget across all rules combined', () => {
+  it('bounds total conditional evaluation work at MAX_CONDITIONAL_TOTAL_CELLS, even split across rules and ranges each individually under MAX_CONDITIONAL_RANGE_CELLS', () => {
+    // Four ranges of exactly MAX_CONDITIONAL_RANGE_CELLS each, in one rule,
+    // exhaust the whole aggregate budget on their own.
+    const bigRule: ConditionalRule = {
+      id: 'big',
+      kind: 'cell',
+      ranges: ['A1:A500000', 'B1:B500000', 'C1:C500000', 'D1:D500000'],
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    };
+    const extraRule: ConditionalRule = {
+      id: 'extra',
+      kind: 'cell',
+      ranges: ['E1'],
+      condition: { operator: 'isNotEmpty' },
+      format: { italic: true },
+    };
+    expect(
+      bigRule.ranges.reduce((sum, r) => sum + addressesOfRange(r).length, 0)
+    ).toBe(MAX_CONDITIONAL_TOTAL_CELLS);
+
+    const context: ConditionalContext = {
+      valueAt: () => 'x',
+      isError: () => false,
+      evaluateFormula: () => '',
+    };
+    const result = evaluateConditionalFormats([bigRule, extraRule], context);
+
+    expect(result.formats.A1).toEqual({ bold: true });
+    expect(result.formats.D500000).toEqual({ bold: true });
+    // The aggregate budget was fully spent by `bigRule`, so `extraRule` —
+    // despite covering just one cell, well under any per-range cap —
+    // contributes nothing.
+    expect(result.formats.E1).toBeUndefined();
+  }, 20000);
+
+  it('bounds a single rule holding many individually-valid ranges, without expanding them all before applying the budget', () => {
+    // `rule.ranges` is API-writable jsonb with no cap on entry count: one
+    // rule can hold far more ranges than four. Ten ranges of
+    // MAX_CONDITIONAL_RANGE_CELLS each (5,000,000 combined) sum to well past
+    // the 2,000,000 aggregate budget — flat-mapping every range before
+    // slicing to the budget would transiently allocate all 5,000,000
+    // addresses (and previously crashed outright: spreading that many
+    // elements onto `Array.prototype.push` blows the engine's call-stack
+    // argument limit). `expandRangesWithinBudget` must stop consuming
+    // ranges as soon as the budget is spent instead.
+    const manyRangesRule: ConditionalRule = {
+      id: 'many',
+      kind: 'cell',
+      ranges: Array.from({ length: 10 }, (_, i) => {
+        const col = String.fromCharCode(65 + i); // A..J
+        return `${col}1:${col}500000`;
+      }),
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    };
+
+    const context: ConditionalContext = {
+      valueAt: () => 'x',
+      isError: () => false,
+      evaluateFormula: () => '',
+    };
+
+    expect(() => evaluateConditionalFormats([manyRangesRule], context)).not.toThrow();
+    const result = evaluateConditionalFormats([manyRangesRule], context);
+
+    // First four ranges (A..D) exhaust the budget exactly, as in the test
+    // above; nothing from range five (E) onward is painted.
+    expect(result.formats.A1).toEqual({ bold: true });
+    expect(result.formats.D500000).toEqual({ bold: true });
+    expect(result.formats.E1).toBeUndefined();
+    expect(result.formats.J1).toBeUndefined();
+  }, 20000);
 });
 
 describe('mixColors', () => {
@@ -527,6 +634,140 @@ describe('parseConditionalRules', () => {
     expect(parseConditionalRules([{ junk: true }])).toBeUndefined();
     expect(parseConditionalRules(undefined)).toBeUndefined();
     expect(parseConditionalRules('nope')).toBeUndefined();
+  });
+
+  it('caps the rule count at MAX_CONDITIONAL_RULES, an API write cannot exceed the parse boundary', () => {
+    const many = Array.from({ length: MAX_CONDITIONAL_RULES + 50 }, (_, i) => rule(`r${i}`));
+    const parsed = parseConditionalRules(many);
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+  });
+
+  it('stops parsing once MAX_CONDITIONAL_RULES valid rules are collected, rather than parsing every entry first', () => {
+    // A `.map(parse).filter(valid).slice(cap)` pipeline parses every entry
+    // before the cap ever applies — unbounded CPU on an unbounded array. A
+    // Proxy counts index reads during `parseConditionalRules`' own iteration
+    // (untouched by this array's `.length` or the `Array.from` that built
+    // it) to prove the fix actually stops early rather than merely trimming
+    // the output.
+    const raw = Array.from({ length: MAX_CONDITIONAL_RULES * 10 }, (_, i) => rule(`r${i}`));
+    let indexReads = 0;
+    const tracked = new Proxy(raw, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) indexReads += 1;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const parsed = parseConditionalRules(tracked);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(indexReads).toBeLessThan(MAX_CONDITIONAL_RULES * 2);
+  });
+
+  it('bounds the numerically-keyed map path too, before the sort that reconstructs order', () => {
+    // The array path is bounded by collecting incrementally, but the
+    // TOML-bag map path (`{"0": rule, "1": rule, ...}`) has to sort every
+    // candidate key before it can even start parsing, so "stop once enough
+    // valid ones are found" isn't available for this branch specifically.
+    // Key enumeration itself is bounded with a `for...in` loop that breaks
+    // once `MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED` keys are collected —
+    // unlike `Object.keys`, which always materializes every own key into an
+    // array before anything else can run. A `Proxy` can't observe that part
+    // (its `ownKeys` trap must hand back the complete key list atomically
+    // either way), but it can observe the step after: property-value reads
+    // on the stored object, which is what would otherwise touch every one
+    // of a huge object's rule payloads rather than just the ones that make
+    // the cut.
+    const raw: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 3; i++) {
+      raw[String(i)] = rule(`r${i}`);
+    }
+    let valueReads = 0;
+    const tracked = new Proxy(raw, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) valueReads += 1;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const parsed = parseConditionalRules(tracked);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+    // Bounded by MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED, not by the object's
+    // real size (3x larger here).
+    expect(valueReads).toBeLessThan(MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 2);
+  });
+
+  it('collects keys via bounded iteration rather than materializing the full key list first', () => {
+    // A plain object, not a Proxy: exercises the real `for...in` early break
+    // this fix relies on, rather than downstream effects of it. Correctness
+    // check — the ordering/cap guarantees hold the same way for a genuinely
+    // large object as they do for the smaller ones above.
+    const raw: Record<string, unknown> = {};
+    const total = MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 5;
+    for (let i = 0; i < total; i++) {
+      raw[String(i)] = rule(`r${i}`);
+    }
+
+    const parsed = parseConditionalRules(raw);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+  });
+
+  it('ignores an inherited enumerable property, matching Object.keys semantics', () => {
+    // `for...in` walks the prototype chain; `Object.keys` does not. The
+    // `hasOwnProperty` filter is what keeps the two equivalent here.
+    const proto = { '99': rule('inherited') };
+    const own = Object.create(proto);
+    own['0'] = rule('own');
+
+    const parsed = parseConditionalRules(own);
+
+    expect(parsed?.map((r) => r.id)).toEqual(['own']);
+  });
+});
+
+describe('conditional rule ranges: per-rule entry cap', () => {
+  it('caps the number of range entries one rule holds at MAX_CONDITIONAL_RANGES_PER_RULE', () => {
+    // `addressesOfRange` returns [] for an invalid or oversized range, so a
+    // `ranges` array padded with an unbounded number of such entries would
+    // otherwise cost unbounded CPU (one parse/decode per entry) without the
+    // per-cell budget ever tripping, since nothing is ever consumed from it.
+    const many = Array.from({ length: MAX_CONDITIONAL_RANGES_PER_RULE + 500 }, (_, i) => `A${i + 1}`);
+    const parsed = parseConditionalRule({
+      id: 'r',
+      kind: 'cell',
+      ranges: many,
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    });
+    expect(parsed?.ranges).toHaveLength(MAX_CONDITIONAL_RANGES_PER_RULE);
+    expect(parsed?.ranges[0]).toBe('A1');
+    expect(parsed?.ranges[MAX_CONDITIONAL_RANGES_PER_RULE - 1]).toBe(`A${MAX_CONDITIONAL_RANGES_PER_RULE}`);
+  });
+});
+
+describe('addressesOfRange: maxCount', () => {
+  it('stops enumerating at maxCount rather than building the full range and trimming it after', () => {
+    // A range within MAX_CONDITIONAL_RANGE_CELLS on its own, asked for far
+    // fewer addresses than it actually has.
+    expect(addressesOfRange('A1:A100', 3)).toEqual(['A1', 'A2', 'A3']);
+  });
+
+  it('still rejects a range over MAX_CONDITIONAL_RANGE_CELLS wholesale, regardless of maxCount', () => {
+    // maxCount only ever narrows; it must never let an otherwise-oversized
+    // range through just because the caller asked for a small maxCount.
+    expect(addressesOfRange('A1:ZZ500001', 1)).toEqual([]);
+  });
+
+  it('defaults to MAX_CONDITIONAL_RANGE_CELLS, unchanged from before this parameter existed', () => {
+    expect(addressesOfRange('A1:SF1000')).toHaveLength(MAX_CONDITIONAL_RANGE_CELLS);
   });
 });
 
