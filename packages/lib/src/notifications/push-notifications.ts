@@ -431,7 +431,7 @@ function parseFcmServiceAccount(raw: string): FcmServiceAccount {
   // of dots is special — so `a..b` stays allowed.
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(projectId)) {
     throw new Error(
-      'FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON project_id may only contain letters, digits, dots, underscores and hyphens'
+      'FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON project_id must start with a letter or digit, and may otherwise contain only letters, digits, dots, underscores and hyphens'
     );
   }
 
