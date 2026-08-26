@@ -227,3 +227,145 @@ export function evaluateAwakeDrift({ localSeconds, prometheusSeconds }: AwakeDri
   const direction = !exceeded ? 'none' : deltaSeconds > 0 ? 'over_billed' : 'under_billed';
   return { deltaSeconds, relative, exceeded, direction };
 }
+
+/**
+ * Advisory-lock key serializing EVERY caller that prices an awake window — the
+ * heartbeat meter and the lifecycle stop alike.
+ *
+ * It lives here, in the pure core, rather than in either of the two modules that
+ * take it, because both do and neither owns the other: `awake-meter` imports the
+ * stop seam, so a constant exported from the meter would make the lifecycle module
+ * import back into it. A lock key that two modules must agree on is exactly the
+ * kind of shared fact this file exists to hold.
+ *
+ * WHY THE STOP NEEDS IT AT ALL: `trackUsage` and the watermark advance are two
+ * separate un-transactioned writes, so a stop that reads a row mid-tick prices the
+ * same span the heartbeat is already pricing, and both settle. The compare-and-set
+ * on the watermark stops the two from corrupting each other's STATE; only the lock
+ * stops them from both charging. (Flagged on PR #2493; the weekly reconcile's
+ * `over_billed` signal was the interim backstop and should now be unreachable for
+ * this cause.)
+ */
+export const METER_AWAKE_LOCK_KEY = 'meter-published-apps-awake';
+
+/**
+ * The UTC calendar day an instant falls in, as `YYYY-MM-DD` — the key the per-app
+ * daily awake counter resets on.
+ *
+ * UTC and only UTC, never the container's local zone: the counter is compared
+ * against a value written by whichever container settled last, and two containers
+ * in different zones would disagree about when the day rolls over — resetting the
+ * cap twice a day, or never. The same rule the rest of the repo's `now()` writes
+ * follow.
+ */
+export function utcDayOf(now: Date): string {
+  return now.toISOString().slice(0, 10);
+}
+
+/** One row's daily awake budget, as the cap decision sees it. */
+export interface DailyAwakeCapInput {
+  /** `published_apps.tier`. Only 'metered' is capped — see the decision below. */
+  tier: string;
+  /** `published_apps.awakeSecondsDay` — the day the counter covers, or null. */
+  counterDay: string | null;
+  /** `published_apps.awakeSecondsToday`. */
+  secondsToday: number;
+  /** The UTC day being judged, from {@link utcDayOf}. */
+  today: string;
+  /** The budget, in seconds. 0 (or anything not positive) disables the cap. */
+  capSeconds: number;
+}
+
+/**
+ * Whether this app has spent its day's awake budget (pure).
+ *
+ * A STALE COUNTER IS ZERO, not a carried-over total: a row whose `awakeSecondsDay`
+ * is yesterday has spent nothing today, and reading its number as today's would
+ * park an app on the strength of yesterday's traffic. The reset is expressed here,
+ * in the decision, as well as in the SQL that writes the counter — the two agree,
+ * and this is the one that is exhaustively testable.
+ *
+ * DEDICATED APPS ARE NEVER CAPPED. The flat-rate tier is sold as always-on, its
+ * awake seconds are not billed per second, and `parked` is metered-only at the
+ * database (`published_apps_parked_is_metered_only`) — so capping a dedicated app
+ * would be a refusal the status machine could not carry out even if the product
+ * wanted it.
+ */
+export function planDailyAwakeCap(input: DailyAwakeCapInput): { exceeded: boolean; secondsToday: number } {
+  const secondsToday = input.counterDay === input.today && Number.isFinite(input.secondsToday)
+    ? Math.max(0, input.secondsToday)
+    : 0;
+  if (input.tier !== 'metered') return { exceeded: false, secondsToday };
+  if (!Number.isFinite(input.capSeconds) || input.capSeconds <= 0) return { exceeded: false, secondsToday };
+  return { exceeded: secondsToday >= input.capSeconds, secondsToday };
+}
+
+/** One row's recency, as the idle reaper sees it. */
+export interface IdleStopInput {
+  /** `published_apps.lastHitAt` — the router's throttled recency stamp. */
+  lastHitAt: Date | null;
+  /** `published_apps.lastWakeAt` — the wake boundary, the floor under recency. */
+  lastWakeAt: Date | null;
+  now: Date;
+  /** The idle threshold in seconds. 0 (or anything not positive) disables reaping. */
+  idleSeconds: number;
+}
+
+/**
+ * Why an app was left running. Each is a genuinely different fact about the fleet,
+ * which is why the reaper counts them separately rather than reporting one
+ * "skipped" number: `disabled` means the knob is off, `active` is the ordinary
+ * healthy answer, and `no_activity_signal` is an anomaly worth watching.
+ */
+export type IdleStopKeep = 'disabled' | 'active' | 'no_activity_signal';
+
+export type IdleStopPlan =
+  | { action: 'stop'; idleSeconds: number }
+  | { action: 'keep'; reason: IdleStopKeep };
+
+/**
+ * The later of the two recency stamps, or null when neither is usable — the one
+ * definition of "when was this app last active", shared by the reaper's planner and
+ * by the stop's own re-check so the two can never disagree.
+ *
+ * An unusable Date (an `Invalid Date` from a malformed row) is ignored rather than
+ * propagated: it must not read as recency, and it must not read as the epoch either.
+ */
+// (declared above planIdleStop so the planner can use it)
+
+/**
+ * Decide whether one running app is idle enough to stop (pure).
+ *
+ * RECENCY IS THE LATER OF THE TWO STAMPS. `lastHitAt` alone would reap an app the
+ * moment it was woken but before its first request was routed — the wake itself is
+ * evidence of demand, and on the cold path it PRECEDES the hit it was caused by.
+ * `lastWakeAt` alone would reap a busy app 15 minutes after it woke, however much
+ * traffic it was serving.
+ *
+ * NEITHER STAMP AT ALL is not treated as "infinitely idle". A `running` row with
+ * no boundary is a row we do not understand, and the honest response to not
+ * understanding a live machine is to leave it alone and count it: the heartbeat
+ * meter stamps such a row on its next tick (it opens a window and back-fills
+ * `lastWakeAt`), which makes this state self-clearing within one meter cadence.
+ * Reaping on no evidence would mean stopping a machine that might be serving
+ * traffic, on the strength of a column we never wrote.
+ */
+export function latestActivityAt(lastHitAt: Date | null, lastWakeAt: Date | null): Date | null {
+  const stamps = [lastHitAt, lastWakeAt].filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()));
+  if (stamps.length === 0) return null;
+  return new Date(Math.max(...stamps.map((d) => d.getTime())));
+}
+
+export function planIdleStop({ lastHitAt, lastWakeAt, now, idleSeconds }: IdleStopInput): IdleStopPlan {
+  if (!Number.isFinite(idleSeconds) || idleSeconds <= 0) return { action: 'keep', reason: 'disabled' };
+  const lastActivity = latestActivityAt(lastHitAt, lastWakeAt);
+  if (lastActivity === null) return { action: 'keep', reason: 'no_activity_signal' };
+  const lastActivityMs = lastActivity.getTime();
+  const idleMs = now.getTime() - lastActivityMs;
+  // A stamp in the FUTURE (clock skew between containers) reads as negative idle
+  // time and keeps the app — the same direction `planAwakeSettle` takes for a
+  // watermark ahead of now. Erring toward "leave it running" costs awake-seconds;
+  // erring the other way stops a live app on a bad clock.
+  if (idleMs <= idleSeconds * 1000) return { action: 'keep', reason: 'active' };
+  return { action: 'stop', idleSeconds: msToSeconds(idleMs) };
+}

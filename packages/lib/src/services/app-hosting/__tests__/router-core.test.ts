@@ -48,14 +48,10 @@ describe('decideAppRoute — the balance gate is the wake gate', () => {
   });
 
   assert({
-    given: 'a STOPPED app, decided in isolation (no wake seam involved)',
-    should:
-      'answer unavailable, never replay — a stopped row must go through wakePublishedApp first, ' +
-      'which is why router.ts intercepts it before this function is ever asked; see the ' +
-      "SERVABLE_STATUSES comment for why replaying Fly's silent autostart would leave the " +
-      'machine unmetered',
-    actual: route(app({ status: 'stopped' }), true),
-    expected: { kind: 'unavailable', reason: 'deploying' },
+    given: 'a STOPPED metered app whose payer is out of credits',
+    should: 'still refuse — a stopped machine is exactly the one a replay would wake',
+    actual: route(app({ status: 'stopped' }), false),
+    expected: { kind: 'parked', reason: 'out_of_credits' },
   });
 
   assert({

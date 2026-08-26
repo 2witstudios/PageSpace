@@ -56,6 +56,14 @@ const subprocessors: SubprocessorRow[] = [
     dpaStatus: "TODO",
   },
   {
+    vendor: "Google LLC (Firebase Cloud Messaging)",
+    purpose: "Push notifications to the Android app",
+    dataCategories: "Device registration token, notification payload",
+    location: "United States",
+    transferMechanism: "Standard Contractual Clauses (SCCs)",
+    dpaStatus: "TODO",
+  },
+  {
     vendor: "Let's Encrypt (ISRG)",
     purpose: "TLS certificate issuance for custom domains",
     dataCategories: "Domain name and certificate validation records — no end-user personal data",

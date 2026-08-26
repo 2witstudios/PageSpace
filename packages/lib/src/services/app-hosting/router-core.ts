@@ -70,13 +70,19 @@ export interface RoutableApp {
 /**
  * What the edge should do with this request.
  *
+ * `daily_cap` is a parked reason the pure decision never produces: it comes from
+ * the WAKE, which is the only thing that can discover that an app has spent its
+ * daily awake budget. It is kept distinct from `out_of_credits` because the two ask
+ * different things of the owner — one is "top up", the other is "your app has
+ * outgrown the metered tier, and it comes back on its own tomorrow".
+ *
  * `parked` is deliberately its own outcome rather than a flavour of
  * `unavailable`: it is the ENFORCEMENT state, it is the one outcome that must
  * never start a machine, and it is the number worth watching in metrics.
  */
 export type AppRouteDecision =
   | { kind: 'replay'; flyAppName: string; state: string; timeoutMs: number }
-  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' }
+  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap' }
   | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled' }
   | { kind: 'not_found'; reason: 'unknown_host' | 'apex' | 'custom_host' | 'no_such_app' };
 
@@ -138,22 +144,8 @@ export function parseAppHost(rawHost: string, apex: string): AppHost {
   return { kind: 'subdomain', subdomain: label };
 }
 
-/**
- * Statuses whose app has something live to serve THROUGH THIS DECISION ALONE.
- *
- * `'stopped'` is deliberately absent. Fly's proxy auto-starts a stopped target on
- * replay (`autostart: true`), but that start is invisible to the app: no status
- * flip, no `awakeBilledThrough` stamp, no hold — the awake meter only reads
- * `status = 'running'` rows, so a machine Fly quietly started stays unmetered
- * until something else stops it. `wakePublishedApp` is the seam that does all of
- * that bookkeeping alongside the balance gate; a stopped app must go through it
- * before this function is ever asked, which is why the router (`router.ts`)
- * intercepts `'stopped'` and calls it BEFORE building the `RoutableApp` this
- * decides on. A `'stopped'` row reaching here regardless — a caller that skipped
- * that step — resolves through the unrecognized-status branch below rather than
- * being replayed to and silently going unbilled.
- */
-const SERVABLE_STATUSES = new Set(['running', 'deploying']);
+/** Statuses whose app has something live to serve. */
+const SERVABLE_STATUSES = new Set(['running', 'stopped', 'deploying']);
 
 export interface AppRouteInput {
   /** The row the hostname resolved to, or null when nothing did. */
