@@ -37,7 +37,7 @@ function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
   // test can hand it a refusal (which carries `reason` and no `holdId`).
   const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-next' }));
   const releaseHold = vi.fn(async () => {});
-  const writeSettle = vi.fn(async () => 'advanced' as const);
+  const writeSettle = vi.fn<AwakeMeterDeps['writeSettle']>(async () => 'advanced');
   const stampWindowStart = vi.fn(async () => 'stamped' as const);
   const closeAtBoundary = vi.fn(async () => ({ billedSeconds: 600, failed: false }));
   const park = vi.fn(async (_id: string, _reason: 'insolvent' | 'daily_cap') => {});
@@ -562,5 +562,59 @@ describe('meterAwakePublishedApps — the per-app daily awake cap', () => {
     await meter(deps);
 
     expect(writeSettle).toHaveBeenCalledWith(expect.objectContaining({ billedSeconds: 600 }));
+  });
+});
+
+
+describe('meterAwakePublishedApps — a park never follows a watermark advance that FAILED', () => {
+  it('given the watermark write THREW, should not park an insolvent app — the park would re-bill the span', async () => {
+    // `stopPublishedApp` re-reads the row and settles from whatever watermark it
+    // finds. After a failed advance that watermark is the one we just charged
+    // against, so the park bills the same span a second time — a real double
+    // charge, landing exactly in the `settledButUnadvanced` case that is already
+    // known to be going wrong.
+    const { deps, gate, park, writeSettle } = makeDeps();
+    gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    writeSettle.mockRejectedValue(new Error('watermark write failed'));
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    assert({
+      given: 'an insolvent payer whose watermark write threw',
+      should: 'count the unadvanced settle and leave the app up for the next tick',
+      actual: { parked: run.parked, settledButUnadvanced: run.settledButUnadvanced },
+      expected: { parked: 0, settledButUnadvanced: 1 },
+    });
+  });
+
+  it('given the watermark write THREW, should not park a capped app either', async () => {
+    const { deps, park, writeSettle } = makeDeps({
+      dailyAwakeCapSeconds: () => 900,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 })],
+    });
+    writeSettle.mockRejectedValue(new Error('watermark write failed'));
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    expect({ cappedParked: run.cappedParked, settledButUnadvanced: run.settledButUnadvanced }).toEqual({
+      cappedParked: 0,
+      settledButUnadvanced: 1,
+    });
+  });
+
+  it('given the watermark was SUPERSEDED, should still park — that row is already past our span', async () => {
+    // A wake carried the row past this tick, so its watermark is AHEAD of ours and
+    // the stop's own settle has nothing of ours left to re-bill. Refusing to park
+    // here would leave an insolvent payer's machine awake on a technicality.
+    const { deps, gate, park, writeSettle } = makeDeps();
+    gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    writeSettle.mockResolvedValue('superseded');
+
+    const run = await meter(deps);
+
+    expect(park).toHaveBeenCalledWith('app-1', 'insolvent');
+    expect(run.parked).toBe(1);
   });
 });

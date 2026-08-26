@@ -818,3 +818,64 @@ describe('the wake gate’s in-flight bound', () => {
     });
   });
 });
+
+
+describe('stopPublishedApp — the idle re-check under the lock', () => {
+  it('given the app was SERVED after the reaper’s scan, should refuse and stop nothing', async () => {
+    // The scan and the stop can be minutes apart on a large fleet, and the router
+    // stamps `lastHitAt` in between. Without the re-check, a machine that took a
+    // visitor thirty seconds ago is stopped on the strength of a snapshot that
+    // predates them.
+    const { deps, stopMachine, trackUsage } = makeDeps();
+    const cutoff = new Date(NOW.getTime() - 900_000);
+    seed(running({ lastHitAt: new Date(NOW.getTime() - 30_000) }));
+
+    const result = await stopPublishedApp('app-1', 'idle', deps, { idleCutoff: cutoff });
+
+    assert({
+      given: 'a hit stamped after the cutoff this stop was asked about',
+      should: 'refuse as became_active without calling Fly or billing anything',
+      actual: {
+        result,
+        flyCalls: stopMachine.mock.calls.length,
+        settles: trackUsage.mock.calls.length,
+      },
+      expected: { result: { outcome: 'refused', reason: 'became_active' }, flyCalls: 0, settles: 0 },
+    });
+  });
+
+  it('given the row is still quiet, should stop it', async () => {
+    const { deps, stopMachine } = makeDeps();
+    seed(running({ lastHitAt: new Date(NOW.getTime() - 1_800_000) }));
+
+    const result = await stopPublishedApp('app-1', 'idle', deps, {
+      idleCutoff: new Date(NOW.getTime() - 900_000),
+    });
+
+    expect(result.outcome).toBe('stopped');
+    expect(stopMachine).toHaveBeenCalled();
+  });
+
+  it('re-checks the LATER of the two stamps, so a fresh WAKE also saves the machine', async () => {
+    // A wake that landed after the scan means the app is being served right now —
+    // the wake precedes the request that caused it.
+    const { deps } = makeDeps();
+    seed(running({ lastHitAt: null, lastWakeAt: new Date(NOW.getTime() - 10_000) }));
+
+    expect(await stopPublishedApp('app-1', 'idle', deps, { idleCutoff: new Date(NOW.getTime() - 900_000) })).toEqual({
+      outcome: 'refused',
+      reason: 'became_active',
+    });
+  });
+
+  it('given NO cutoff (an operator stop, an insolvency park), should never consult recency', async () => {
+    // Those are decisions about the app, not about how busy it is.
+    const { deps, stopMachine } = makeDeps();
+    seed(running({ lastHitAt: NOW }));
+
+    const result = await stopPublishedApp('app-1', 'operator', deps);
+
+    expect(result.outcome).toBe('stopped');
+    expect(stopMachine).toHaveBeenCalled();
+  });
+});

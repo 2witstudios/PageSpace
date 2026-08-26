@@ -111,7 +111,10 @@ describe('reapIdlePublishedApps — stopping', () => {
 
     const run = await reap(deps);
 
-    expect(stop).toHaveBeenCalledWith('app-1');
+    // The cutoff is handed down so the stop re-judges the row under the lock against
+    // the same instant this tick is about — not against a fresh clock that would
+    // drift further with every app the scan works through.
+    expect(stop).toHaveBeenCalledWith('app-1', new Date(NOW.getTime() - 900_000));
     assert({
       given: 'one app idle past the threshold',
       should: 'stop it and report what the stop settled',
@@ -174,6 +177,10 @@ describe('reapIdlePublishedApps — what each stop outcome means', () => {
     [{ outcome: 'lock_busy' }, 'lockBusy'],
     [{ outcome: 'refused', reason: 'not_running' }, 'refused'],
     [{ outcome: 'stop_failed', error: 'fly said no' }, 'stopFailed'],
+    // A request landed while this tick was working. Counted as ACTIVE rather than
+    // refused: the app is doing exactly what it should, and the numbers should say
+    // so.
+    [{ outcome: 'refused', reason: 'became_active' }, 'active'],
   ];
 
   for (const [result, counter] of outcomes) {

@@ -82,8 +82,14 @@ export interface IdleReaperDeps {
    * tight side is "a machine nobody stops".
    */
   listIdleCandidates: (input: { idleSeconds: number; now: Date }) => Promise<ReapableApp[]>;
-  /** The stop seam — the ONLY place an awake window is closed. */
-  stop: (publishedAppId: string) => Promise<StopPublishedAppResult>;
+  /**
+   * The stop seam — the ONLY place an awake window is closed.
+   *
+   * `idleCutoff` is handed down so the stop re-checks recency against the row as it
+   * is under the lock: the scan and the stop can be minutes apart on a large fleet,
+   * and the router stamps `lastHitAt` in between.
+   */
+  stop: (publishedAppId: string, idleCutoff: Date) => Promise<StopPublishedAppResult>;
   /**
    * Apps PARKED by the daily cap — the rows the unpark sweep considers.
    *
@@ -150,7 +156,7 @@ export const defaultIdleReaperDeps: IdleReaperDeps = {
       );
   },
 
-  stop: (publishedAppId) => stopPublishedApp(publishedAppId, 'idle'),
+  stop: (publishedAppId, idleCutoff) => stopPublishedApp(publishedAppId, 'idle', undefined, { idleCutoff }),
 
   /**
    * Every app parked BY THE DAILY CAP — matched on the `lastError` the park wrote,
@@ -440,7 +446,10 @@ async function reapOneApp(
     return;
   }
 
-  const stopped = await deps.stop(row.id);
+  // The SAME cutoff the prefilter used, so the stop re-judges this row against the
+  // instant this tick is about, not against a fresh clock that would drift a little
+  // further with every app it works through.
+  const stopped = await deps.stop(row.id, new Date(now.getTime() - idleSeconds * 1000));
   switch (stopped.outcome) {
     case 'stopped':
       result.stopped += 1;
@@ -463,6 +472,13 @@ async function reapOneApp(
       );
       return;
     case 'refused':
+      if (stopped.reason === 'became_active') {
+        // A request was routed while this tick was working. Counted as active, not
+        // refused: the app is doing exactly what it should, and the numbers should
+        // say so.
+        result.active += 1;
+        return;
+      }
       // The app stopped, parked or lost its machine between the prefilter and the
       // stop. Ordinary, and self-correcting: it is no longer costing awake-seconds.
       result.refused += 1;

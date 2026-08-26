@@ -53,6 +53,7 @@ import {
 } from './app-machine-events';
 import {
   METER_AWAKE_LOCK_KEY,
+  latestActivityAt,
   planAwakeSettle,
   planDailyAwakeCap,
   utcDayOf,
@@ -372,7 +373,38 @@ export type StopPublishedAppResult =
   | { outcome: 'lock_busy' }
   /** Fly refused the stop. The window stays OPEN and keeps billing — the machine may well still be running. */
   | { outcome: 'stop_failed'; error: string }
-  | { outcome: 'refused'; reason: 'disabled' | 'not_found' | 'not_running' | 'illegal_transition' };
+  | {
+      outcome: 'refused';
+      reason:
+        | 'disabled'
+        | 'not_found'
+        | 'not_running'
+        /**
+         * The app was served again between the reaper's scan and this stop — see
+         * {@link StopPublishedAppOptions.idleCutoff}. Nothing was stopped.
+         */
+        | 'became_active'
+        | 'illegal_transition';
+    };
+
+export interface StopPublishedAppOptions {
+  /**
+   * Refuse the stop if the row has been active SINCE this instant — the idle
+   * reaper's re-check, made against the row as it is under the lock rather than
+   * against the snapshot its scan took.
+   *
+   * The scan and the stop are minutes apart on a large fleet, and the router stamps
+   * `lastHitAt` in between: without this, a machine that took a visitor thirty
+   * seconds ago is stopped on the strength of a snapshot that predates them. The
+   * re-read closes all of that gap except the milliseconds between this read and
+   * the Fly call, and the cost of losing that residue is one cold start, not a
+   * mis-billing — the wake seam bills whatever comes next.
+   *
+   * Omitted by every other caller: an operator stop and an insolvency park are
+   * decisions about the app, not about how busy it is.
+   */
+  idleCutoff?: Date;
+}
 
 /**
  * Stop a published app: stop the machine, mirror the boundary, settle the tail of
@@ -394,6 +426,7 @@ export async function stopPublishedApp(
   publishedAppId: string,
   reason: StopReason,
   deps: AppLifecycleMeteringDeps = defaultAppLifecycleMeteringDeps,
+  options: StopPublishedAppOptions = {},
 ): Promise<StopPublishedAppResult> {
   if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
 
@@ -404,7 +437,7 @@ export async function stopPublishedApp(
   // can delay a heartbeat tick by the length of one `POST /stop`; the heartbeat is
   // a ten-minute cadence and skips cleanly when the lock is held, so a delayed tick
   // bills the same seconds one tick later. A double charge cannot be undone.
-  const run = await deps.serializeSettle(() => stopPublishedAppSerialized(publishedAppId, reason, deps));
+  const run = await deps.serializeSettle(() => stopPublishedAppSerialized(publishedAppId, reason, deps, options));
   if (!run.locked) return { outcome: 'lock_busy' };
   return run.result;
 }
@@ -414,6 +447,7 @@ async function stopPublishedAppSerialized(
   publishedAppId: string,
   reason: StopReason,
   deps: AppLifecycleMeteringDeps,
+  options: StopPublishedAppOptions,
 ): Promise<StopPublishedAppResult> {
   const [row] = await db
     .select()
@@ -422,6 +456,16 @@ async function stopPublishedAppSerialized(
     .limit(1);
   if (!row) return { outcome: 'refused', reason: 'not_found' };
   if (row.status !== 'running') return { outcome: 'refused', reason: 'not_running' };
+
+  // The idle re-check, against the row AS IT IS NOW rather than the caller's
+  // snapshot. Deliberately here — after the read, before Fly — so a request that
+  // landed while the reaper was working its way down the fleet keeps its machine.
+  if (options.idleCutoff) {
+    const lastActivity = latestActivityAt(row.lastHitAt, row.lastWakeAt);
+    if (lastActivity && lastActivity.getTime() > options.idleCutoff.getTime()) {
+      return { outcome: 'refused', reason: 'became_active' };
+    }
+  }
 
   const nextStatus: 'stopped' | 'parked' = reason === 'insolvent' || reason === 'daily_cap' ? 'parked' : 'stopped';
   // Asked BEFORE the Fly call, against the same pure planner the write uses. A

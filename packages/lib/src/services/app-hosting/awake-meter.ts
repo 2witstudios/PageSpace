@@ -497,7 +497,11 @@ async function meterOneApp(
     // insolvency park does: the span above is already CHARGED, and the park re-reads
     // the row and settles from whatever watermark it finds. Parking on the stale one
     // would bill this span twice on every single cap park.
-    await advanceSettledWatermark(row, plan.billedThrough, plan.activeSeconds, null, deps, result);
+    const advanced = await advanceSettledWatermark(row, plan.billedThrough, plan.activeSeconds, null, deps, result);
+    // Not parked when the advance THREW: the park would re-read the unchanged
+    // watermark and bill this span again. Counted under `settledButUnadvanced`
+    // already; the next tick finds the app still awake and still over its budget.
+    if (!mayParkAfter(advanced)) return;
     await deps.park(row.id, 'daily_cap');
     result.cappedParked += 1;
     return;
@@ -521,7 +525,10 @@ async function meterOneApp(
       // every single insolvency park. Advancing first leaves the park's own final
       // settle with nothing to bill (it plans a `skip`) and lets it do what it is
       // actually for: stopping the machine and closing the window.
-      await advanceSettledWatermark(row, plan.billedThrough, plan.activeSeconds, null, deps, result);
+      const advanced = await advanceSettledWatermark(row, plan.billedThrough, plan.activeSeconds, null, deps, result);
+      // Same rule as the cap park above, and for the same reason: parking on a
+      // watermark that never moved double-charges the span already billed.
+      if (!mayParkAfter(advanced)) return;
       await deps.park(row.id, 'insolvent');
       result.parked += 1;
       return;
@@ -557,7 +564,7 @@ async function advanceSettledWatermark(
   holdId: string | null,
   deps: AwakeMeterDeps,
   result: MeterAwakeResult,
-): Promise<void> {
+): Promise<AwakeWatermarkOutcome | 'failed'> {
   try {
     const outcome = await deps.writeSettle({ publishedAppId: row.id, billedThrough, billedSeconds, holdId });
     if (outcome !== 'advanced') {
@@ -568,6 +575,7 @@ async function advanceSettledWatermark(
       // reservation we just placed, so return it here.
       if (holdId) await deps.billing.releaseHold(holdId);
     }
+    return outcome;
   } catch (error) {
     // The charge already committed. Only the watermark write failed, so this span
     // WILL be billed again next tick — a real double-bill risk, counted under its
@@ -578,7 +586,29 @@ async function advanceSettledWatermark(
       error instanceof Error ? error : new Error(String(error)),
       { publishedAppId: row.id, driveId: row.driveId },
     );
+    return 'failed';
   }
+}
+
+/**
+ * Whether a park may follow this watermark write.
+ *
+ * A park hands the row straight to `stopPublishedApp`, which RE-READS it and settles
+ * from whatever watermark it finds. So a park after a write that never landed bills
+ * the span we just charged a SECOND time — the double charge lands exactly in the
+ * `settledButUnadvanced` case, which is the one already known to be going wrong.
+ *
+ * `superseded` is safe and must not block the park: the row's watermark is ahead of
+ * ours (a wake carried it past this tick), so the stop's own settle has nothing of
+ * ours left to re-bill — and refusing to park there would leave an insolvent payer's
+ * machine awake on a technicality.
+ *
+ * Only the THROW blocks it. The app stays up for one more cadence and the next tick
+ * re-gates it; a machine left awake for ten minutes is recoverable, a duplicate
+ * charge is not.
+ */
+function mayParkAfter(outcome: AwakeWatermarkOutcome | 'failed'): boolean {
+  return outcome !== 'failed';
 }
 
 export type MeterAwakeRunResult = { outcome: 'lock_busy' } | MeterAwakeRun;

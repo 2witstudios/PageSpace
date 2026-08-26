@@ -324,6 +324,16 @@ export type IdleStopPlan =
   | { action: 'keep'; reason: IdleStopKeep };
 
 /**
+ * The later of the two recency stamps, or null when neither is usable — the one
+ * definition of "when was this app last active", shared by the reaper's planner and
+ * by the stop's own re-check so the two can never disagree.
+ *
+ * An unusable Date (an `Invalid Date` from a malformed row) is ignored rather than
+ * propagated: it must not read as recency, and it must not read as the epoch either.
+ */
+// (declared above planIdleStop so the planner can use it)
+
+/**
  * Decide whether one running app is idle enough to stop (pure).
  *
  * RECENCY IS THE LATER OF THE TWO STAMPS. `lastHitAt` alone would reap an app the
@@ -340,11 +350,17 @@ export type IdleStopPlan =
  * Reaping on no evidence would mean stopping a machine that might be serving
  * traffic, on the strength of a column we never wrote.
  */
+export function latestActivityAt(lastHitAt: Date | null, lastWakeAt: Date | null): Date | null {
+  const stamps = [lastHitAt, lastWakeAt].filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()));
+  if (stamps.length === 0) return null;
+  return new Date(Math.max(...stamps.map((d) => d.getTime())));
+}
+
 export function planIdleStop({ lastHitAt, lastWakeAt, now, idleSeconds }: IdleStopInput): IdleStopPlan {
   if (!Number.isFinite(idleSeconds) || idleSeconds <= 0) return { action: 'keep', reason: 'disabled' };
-  const stamps = [lastHitAt, lastWakeAt].filter((d): d is Date => d instanceof Date && !Number.isNaN(d.getTime()));
-  if (stamps.length === 0) return { action: 'keep', reason: 'no_activity_signal' };
-  const lastActivityMs = Math.max(...stamps.map((d) => d.getTime()));
+  const lastActivity = latestActivityAt(lastHitAt, lastWakeAt);
+  if (lastActivity === null) return { action: 'keep', reason: 'no_activity_signal' };
+  const lastActivityMs = lastActivity.getTime();
   const idleMs = now.getTime() - lastActivityMs;
   // A stamp in the FUTURE (clock skew between containers) reads as negative idle
   // time and keeps the app — the same direction `planAwakeSettle` takes for a
