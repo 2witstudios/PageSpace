@@ -4,7 +4,9 @@
  * Comprehensive test coverage for platform detection utilities:
  * - isCapacitorApp detection
  * - getPlatform function
- * - Platform-specific checks (isIOS)
+ * - Platform-specific checks (isIOS, isAndroid, isNativeApp)
+ * - Capability detection (hasNativeCapability, getNativeCapabilities)
+ * - Native auth provider support (Apple is iOS-only)
  * - Platform info injection
  * - SSR safety
  */
@@ -289,6 +291,366 @@ describe('capacitor-bridge', () => {
       ]);
 
       expect(results).toEqual([true, 'ios', true]);
+    });
+  });
+
+  describe('isAndroid', () => {
+    it('returns true for Android platform', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isAndroid()).toBe(true);
+    });
+
+    it('returns false for iOS platform', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isAndroid()).toBe(false);
+    });
+
+    it('returns false for web platform', () => {
+      removeCapacitorMock();
+
+      expect(capacitorBridge.isAndroid()).toBe(false);
+    });
+
+    it('returns false when window is undefined', async () => {
+      const windowBackup = globalThis.window;
+      // @ts-expect-error - intentionally testing undefined window
+      delete globalThis.window;
+
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isAndroid()).toBe(false);
+
+      globalThis.window = windowBackup;
+    });
+  });
+
+  describe('isNativeApp', () => {
+    it('returns true for iOS platform', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativeApp()).toBe(true);
+    });
+
+    it('returns true for Android platform', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativeApp()).toBe(true);
+    });
+
+    it('returns false in a browser tab', () => {
+      removeCapacitorMock();
+
+      expect(capacitorBridge.isNativeApp()).toBe(false);
+    });
+
+    it('returns false when Capacitor is present but not native', async () => {
+      setupCapacitorMock(false, 'web');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativeApp()).toBe(false);
+    });
+
+    it('returns false during SSR when window is undefined', async () => {
+      const windowBackup = globalThis.window;
+      // @ts-expect-error - intentionally testing undefined window
+      delete globalThis.window;
+
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isNativeApp()).toBe(false);
+
+      globalThis.window = windowBackup;
+    });
+  });
+
+  describe('hasNativeCapability', () => {
+    // The capability truth table this module encodes. Each row is asserted
+    // exhaustively so a wrong flag anywhere fails a named test.
+    const TRUTH_TABLE = {
+      ios: { secureStore: true, nativeAuth: true, push: true, badge: true },
+      android: { secureStore: true, nativeAuth: true, push: true, badge: false },
+      web: { secureStore: false, nativeAuth: false, push: false, badge: false },
+    } as const;
+
+    const CAPABILITIES = [
+      'secureStore',
+      'nativeAuth',
+      'push',
+      'badge',
+    ] as const;
+
+    describe('on iOS', () => {
+      for (const capability of CAPABILITIES) {
+        const expected = TRUTH_TABLE.ios[capability];
+        it(`reports ${capability} as ${expected}`, async () => {
+          setupCapacitorMock(true, 'ios');
+          vi.resetModules();
+          capacitorBridge = await import('../capacitor-bridge');
+
+          expect(capacitorBridge.hasNativeCapability(capability)).toBe(expected);
+        });
+      }
+    });
+
+    describe('on Android', () => {
+      for (const capability of CAPABILITIES) {
+        const expected = TRUTH_TABLE.android[capability];
+        it(`reports ${capability} as ${expected}`, async () => {
+          setupCapacitorMock(true, 'android');
+          vi.resetModules();
+          capacitorBridge = await import('../capacitor-bridge');
+
+          expect(capacitorBridge.hasNativeCapability(capability)).toBe(expected);
+        });
+      }
+    });
+
+    describe('in a browser tab', () => {
+      for (const capability of CAPABILITIES) {
+        it(`reports ${capability} as unsupported`, () => {
+          removeCapacitorMock();
+
+          expect(capacitorBridge.hasNativeCapability(capability)).toBe(false);
+        });
+      }
+    });
+
+    describe('SSR safety', () => {
+      it('reports every capability unsupported without throwing when window is undefined', async () => {
+        const windowBackup = globalThis.window;
+        // @ts-expect-error - intentionally testing undefined window
+        delete globalThis.window;
+
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
+
+        for (const capability of CAPABILITIES) {
+          expect(() =>
+            capacitorBridge.hasNativeCapability(capability)
+          ).not.toThrow();
+          expect(capacitorBridge.hasNativeCapability(capability)).toBe(false);
+        }
+
+        globalThis.window = windowBackup;
+      });
+    });
+
+    it('reports unsupported for an unrecognised native platform', async () => {
+      // A Capacitor shell reporting a platform we have no row for must not
+      // throw or claim capabilities it cannot deliver.
+      setupCapacitorMock(true, 'windows');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      for (const capability of CAPABILITIES) {
+        expect(() =>
+          capacitorBridge.hasNativeCapability(capability)
+        ).not.toThrow();
+        expect(capacitorBridge.hasNativeCapability(capability)).toBe(false);
+      }
+    });
+  });
+
+  describe('getNativeCapabilities', () => {
+    it('returns the full iOS capability set', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.getNativeCapabilities()).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: true,
+      });
+    });
+
+    it('returns the full Android capability set with badge unsupported', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.getNativeCapabilities()).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: false,
+      });
+    });
+
+    it('returns everything unsupported on web', () => {
+      removeCapacitorMock();
+
+      expect(capacitorBridge.getNativeCapabilities()).toEqual({
+        secureStore: false,
+        nativeAuth: false,
+        push: false,
+        badge: false,
+      });
+    });
+
+    it('returns a frozen table entry callers cannot corrupt', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      const capabilities = capacitorBridge.getNativeCapabilities();
+      expect(Object.isFrozen(capabilities)).toBe(true);
+
+      // Silently ignored in sloppy mode; the point is the table is unchanged.
+      try {
+        (capabilities as { badge: boolean }).badge = true;
+      } catch {
+        // strict-mode TypeError is equally acceptable
+      }
+
+      expect(capacitorBridge.getNativeCapabilities().badge).toBe(false);
+    });
+  });
+
+  describe('supportsNativeAuthProvider', () => {
+    it('supports Google natively on iOS', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(true);
+    });
+
+    it('supports Apple natively on iOS', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.supportsNativeAuthProvider('apple')).toBe(true);
+    });
+
+    it('supports Google natively on Android', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(true);
+    });
+
+    it('does NOT support Apple natively on Android (web flow only)', async () => {
+      // There is no native Android SDK for Sign in with Apple. Modelling
+      // nativeAuth as one boolean would get this wrong.
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.hasNativeCapability('nativeAuth')).toBe(true);
+      expect(capacitorBridge.supportsNativeAuthProvider('apple')).toBe(false);
+    });
+
+    it('supports no provider in a browser tab', () => {
+      removeCapacitorMock();
+
+      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
+      expect(capacitorBridge.supportsNativeAuthProvider('apple')).toBe(false);
+    });
+
+    it('supports no provider during SSR without throwing', async () => {
+      const windowBackup = globalThis.window;
+      // @ts-expect-error - intentionally testing undefined window
+      delete globalThis.window;
+
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(() =>
+        capacitorBridge.supportsNativeAuthProvider('google')
+      ).not.toThrow();
+      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
+
+      globalThis.window = windowBackup;
+    });
+
+    it('supports no provider on an unrecognised native platform', async () => {
+      setupCapacitorMock(true, 'windows');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(() =>
+        capacitorBridge.supportsNativeAuthProvider('google')
+      ).not.toThrow();
+      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
+    });
+  });
+
+  describe('getNativeAuthProviders', () => {
+    it('lists Google and Apple on iOS', async () => {
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect([...capacitorBridge.getNativeAuthProviders()].sort()).toEqual([
+        'apple',
+        'google',
+      ]);
+    });
+
+    it('lists only Google on Android', async () => {
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual(['google']);
+    });
+
+    it('lists nothing on web', () => {
+      removeCapacitorMock();
+
+      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual([]);
+    });
+
+    it('lists nothing during SSR without throwing', async () => {
+      const windowBackup = globalThis.window;
+      // @ts-expect-error - intentionally testing undefined window
+      delete globalThis.window;
+
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(() => capacitorBridge.getNativeAuthProviders()).not.toThrow();
+      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual([]);
+
+      globalThis.window = windowBackup;
+    });
+  });
+
+  describe('capability consumers', () => {
+    it('needs no call-site change when a platform gains a capability', async () => {
+      // Consumers ask hasNativeCapability('badge'); they never name a platform.
+      // Adding badge support to Android is a one-line table edit, and this
+      // simulated consumer picks it up unchanged.
+      const consumer = (
+        bridge: typeof import('../capacitor-bridge')
+      ): string => (bridge.hasNativeCapability('badge') ? 'sync' : 'skip');
+
+      setupCapacitorMock(true, 'android');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+      expect(consumer(capacitorBridge)).toBe('skip');
+
+      setupCapacitorMock(true, 'ios');
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+      expect(consumer(capacitorBridge)).toBe('sync');
     });
   });
 
