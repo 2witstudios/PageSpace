@@ -241,10 +241,79 @@ describe('useCapacitor', () => {
           expect(result.current.isReady).toBe(true);
         });
 
+        // Still a native shell — that is about Capacitor, not about which
+        // platform row we recognize.
         expect(result.current.isNative).toBe(true);
-        expect(result.current.platform).toBe('unknown');
+        // `platform` is typed `Platform`, so an unrecognized value normalizes to
+        // 'web' rather than leaking a string outside that union.
+        expect(result.current.platform).toBe('web');
         expect(result.current.isIOS).toBe(false);
         expect(result.current.isAndroid).toBe(false);
+        // No capability row for it, so nothing is claimed as supported.
+        expect(result.current.capabilities).toEqual({
+          secureStore: false,
+          nativeAuth: false,
+          push: false,
+          badge: false,
+        });
+      });
+    });
+  });
+
+  describe('capabilities', () => {
+    it('exposes the iOS capability set', async () => {
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'ios'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.capabilities).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: true,
+      });
+    });
+
+    it('exposes the Android capability set, badge still unsupported', async () => {
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'android'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.isAndroid).toBe(true);
+      expect(result.current.capabilities).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: false,
+      });
+    });
+
+    it('reports everything unsupported in a browser tab', async () => {
+      delete (window as Window & { Capacitor?: MockCapacitor }).Capacitor;
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.isNative).toBe(false);
+      expect(result.current.capabilities).toEqual({
+        secureStore: false,
+        nativeAuth: false,
+        push: false,
+        badge: false,
       });
     });
   });

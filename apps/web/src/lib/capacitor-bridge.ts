@@ -69,10 +69,10 @@ const PLATFORM_CAPABILITIES: Record<
 
 /** Which auth providers each platform can drive through a native SDK. */
 const NATIVE_AUTH_PROVIDERS: Record<Platform, readonly NativeAuthProvider[]> = {
-  ios: ['google', 'apple'],
+  ios: Object.freeze<NativeAuthProvider[]>(['google', 'apple']),
   // No native Android SDK for Sign in with Apple — that flow stays on the web.
-  android: ['google'],
-  web: [],
+  android: Object.freeze<NativeAuthProvider[]>(['google']),
+  web: Object.freeze<NativeAuthProvider[]>([]),
 };
 
 interface CapacitorGlobal {
@@ -122,12 +122,21 @@ export function isAndroid(): boolean {
 }
 
 /**
- * Check if running inside any native Capacitor shell (iOS or Android).
+ * Check if running inside any native Capacitor shell.
  *
  * Prefer this over `isIOS()` for anything that is not genuinely iOS-specific.
+ *
+ * This deliberately reflects the *shell*, not the capability-table key, so it
+ * stays true on a native platform we have no capability row for (see
+ * `getPlatform()`). "I am in a native app" and "we know what this platform can
+ * do" are different questions: the first gates native-vs-browser behaviour, the
+ * second is `hasNativeCapability()`. An unrecognized native platform is
+ * therefore native with every capability unsupported — which is the safe
+ * combination, and the reason capability checks must never be spelled as
+ * `isNativeApp() && ...`.
  */
 export function isNativeApp(): boolean {
-  return getPlatform() !== 'web';
+  return isCapacitorApp();
 }
 
 /**
@@ -135,6 +144,14 @@ export function isNativeApp(): boolean {
  *
  * Safe during SSR: `getPlatform()` returns 'web' when `window` is undefined,
  * so every capability reports unsupported rather than throwing.
+ *
+ * This is the non-React entry point, for modules like `auth-fetch` and
+ * `platform-storage` that cannot call `useCapacitor()`. Components should
+ * prefer `useCapacitor().capabilities`.
+ *
+ * @public Published API of the capability bridge. The call sites that consume
+ * it (secure storage, push registration, badge sync) land in later leaves of
+ * the Android parity epic, so knip cannot see a consumer yet.
  */
 export function hasNativeCapability(capability: NativeCapability): boolean {
   return PLATFORM_CAPABILITIES[getPlatform()][capability];
@@ -157,6 +174,10 @@ export function getNativeCapabilities(): Readonly<
  *
  * Note this is finer-grained than `hasNativeCapability('nativeAuth')`: Android
  * has nativeAuth but cannot drive Apple.
+ *
+ * @public Published API of the capability bridge. Its consumer is the native
+ * auth module generalization leaf of the Android parity epic, so knip cannot
+ * see a consumer yet.
  */
 export function supportsNativeAuthProvider(
   provider: NativeAuthProvider
@@ -164,12 +185,6 @@ export function supportsNativeAuthProvider(
   return NATIVE_AUTH_PROVIDERS[getPlatform()].includes(provider);
 }
 
-/**
- * Get every auth provider the current platform can drive natively.
- */
-export function getNativeAuthProviders(): readonly NativeAuthProvider[] {
-  return NATIVE_AUTH_PROVIDERS[getPlatform()];
-}
 
 /**
  * Inject platform information into the window object.

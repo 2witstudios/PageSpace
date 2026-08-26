@@ -36,6 +36,24 @@ function removeCapacitorMock(): void {
   delete (window as Window & { Capacitor?: MockCapacitor }).Capacitor;
 }
 
+/**
+ * Run `fn` with `globalThis.window` removed, then restore it in a `finally`.
+ *
+ * The restore has to be unconditional: if an assertion or a dynamic import
+ * throws while window is missing, an inline restore never runs and every later
+ * test in the file inherits a leaked SSR global.
+ */
+async function withoutWindow(fn: () => Promise<void> | void): Promise<void> {
+  const windowBackup = globalThis.window;
+  // @ts-expect-error - intentionally testing undefined window
+  delete globalThis.window;
+  try {
+    await fn();
+  } finally {
+    globalThis.window = windowBackup;
+  }
+}
+
 describe('capacitor-bridge', () => {
   let capacitorBridge: typeof import('../capacitor-bridge');
 
@@ -102,16 +120,14 @@ describe('capacitor-bridge', () => {
 
     describe('SSR safety', () => {
       it('returns false when window is undefined', async () => {
-        const windowBackup = globalThis.window;
-        // @ts-expect-error - intentionally testing undefined window
-        delete globalThis.window;
+        await withoutWindow(async () => {
 
-        vi.resetModules();
-        capacitorBridge = await import('../capacitor-bridge');
+          vi.resetModules();
+          capacitorBridge = await import('../capacitor-bridge');
 
-        expect(capacitorBridge.isCapacitorApp()).toBe(false);
+          expect(capacitorBridge.isCapacitorApp()).toBe(false);
 
-        globalThis.window = windowBackup;
+        });
       });
     });
   });
@@ -162,16 +178,14 @@ describe('capacitor-bridge', () => {
 
     describe('SSR safety', () => {
       it('returns web when window is undefined', async () => {
-        const windowBackup = globalThis.window;
-        // @ts-expect-error - intentionally testing undefined window
-        delete globalThis.window;
+        await withoutWindow(async () => {
 
-        vi.resetModules();
-        capacitorBridge = await import('../capacitor-bridge');
+          vi.resetModules();
+          capacitorBridge = await import('../capacitor-bridge');
 
-        expect(capacitorBridge.getPlatform()).toBe('web');
+          expect(capacitorBridge.getPlatform()).toBe('web');
 
-        globalThis.window = windowBackup;
+        });
       });
     });
   });
@@ -226,16 +240,14 @@ describe('capacitor-bridge', () => {
     });
 
     it('does not throw when window is undefined', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
+      await withoutWindow(async () => {
 
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
 
-      expect(() => capacitorBridge.injectPlatformInfo()).not.toThrow();
+        expect(() => capacitorBridge.injectPlatformInfo()).not.toThrow();
 
-      globalThis.window = windowBackup;
+      });
     });
   });
 
@@ -318,16 +330,14 @@ describe('capacitor-bridge', () => {
     });
 
     it('returns false when window is undefined', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
+      await withoutWindow(async () => {
 
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
 
-      expect(capacitorBridge.isAndroid()).toBe(false);
+        expect(capacitorBridge.isAndroid()).toBe(false);
 
-      globalThis.window = windowBackup;
+      });
     });
   });
 
@@ -363,16 +373,26 @@ describe('capacitor-bridge', () => {
     });
 
     it('returns false during SSR when window is undefined', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
+      await withoutWindow(async () => {
 
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
+
+        expect(capacitorBridge.isNativeApp()).toBe(false);
+
+      });
+    });
+
+    it('stays true on a native platform we have no capability row for', async () => {
+      // isNativeApp reflects the shell, not the capability-table key. A future
+      // Capacitor target is still a native app; it just has no capabilities.
+      setupCapacitorMock(true, 'windows');
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
 
-      expect(capacitorBridge.isNativeApp()).toBe(false);
-
-      globalThis.window = windowBackup;
+      expect(capacitorBridge.isNativeApp()).toBe(true);
+      expect(capacitorBridge.getPlatform()).toBe('web');
+      expect(capacitorBridge.hasNativeCapability('push')).toBe(false);
     });
   });
 
@@ -430,21 +450,19 @@ describe('capacitor-bridge', () => {
 
     describe('SSR safety', () => {
       it('reports every capability unsupported without throwing when window is undefined', async () => {
-        const windowBackup = globalThis.window;
-        // @ts-expect-error - intentionally testing undefined window
-        delete globalThis.window;
+        await withoutWindow(async () => {
 
-        vi.resetModules();
-        capacitorBridge = await import('../capacitor-bridge');
+          vi.resetModules();
+          capacitorBridge = await import('../capacitor-bridge');
 
-        for (const capability of CAPABILITIES) {
-          expect(() =>
-            capacitorBridge.hasNativeCapability(capability)
-          ).not.toThrow();
-          expect(capacitorBridge.hasNativeCapability(capability)).toBe(false);
-        }
+          for (const capability of CAPABILITIES) {
+            expect(() =>
+              capacitorBridge.hasNativeCapability(capability)
+            ).not.toThrow();
+            expect(capacitorBridge.hasNativeCapability(capability)).toBe(false);
+          }
 
-        globalThis.window = windowBackup;
+        });
       });
     });
 
@@ -565,19 +583,17 @@ describe('capacitor-bridge', () => {
     });
 
     it('supports no provider during SSR without throwing', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
+      await withoutWindow(async () => {
 
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
 
-      expect(() =>
-        capacitorBridge.supportsNativeAuthProvider('google')
-      ).not.toThrow();
-      expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
+        expect(() =>
+          capacitorBridge.supportsNativeAuthProvider('google')
+        ).not.toThrow();
+        expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
 
-      globalThis.window = windowBackup;
+      });
     });
 
     it('supports no provider on an unrecognised native platform', async () => {
@@ -589,47 +605,6 @@ describe('capacitor-bridge', () => {
         capacitorBridge.supportsNativeAuthProvider('google')
       ).not.toThrow();
       expect(capacitorBridge.supportsNativeAuthProvider('google')).toBe(false);
-    });
-  });
-
-  describe('getNativeAuthProviders', () => {
-    it('lists Google and Apple on iOS', async () => {
-      setupCapacitorMock(true, 'ios');
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect([...capacitorBridge.getNativeAuthProviders()].sort()).toEqual([
-        'apple',
-        'google',
-      ]);
-    });
-
-    it('lists only Google on Android', async () => {
-      setupCapacitorMock(true, 'android');
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual(['google']);
-    });
-
-    it('lists nothing on web', () => {
-      removeCapacitorMock();
-
-      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual([]);
-    });
-
-    it('lists nothing during SSR without throwing', async () => {
-      const windowBackup = globalThis.window;
-      // @ts-expect-error - intentionally testing undefined window
-      delete globalThis.window;
-
-      vi.resetModules();
-      capacitorBridge = await import('../capacitor-bridge');
-
-      expect(() => capacitorBridge.getNativeAuthProviders()).not.toThrow();
-      expect([...capacitorBridge.getNativeAuthProviders()]).toEqual([]);
-
-      globalThis.window = windowBackup;
     });
   });
 
