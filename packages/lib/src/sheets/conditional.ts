@@ -149,8 +149,35 @@ export const MAX_CONDITIONAL_RANGE_CELLS = 500_000;
  * through untouched and made every render/save re-walk all of them. Enforced
  * at the parse boundary (`parseConditionalRules`), where every stored value
  * — API write or load — passes through.
+ *
+ * That "API write or load" is deliberate, not incidental: bounding
+ * evaluation work requires the cap to apply everywhere a stored value is
+ * parsed, not only on fresh writes. The cost is the same one
+ * `MAX_CONDITIONAL_RANGE_CELLS` already accepts for an individually
+ * oversized range — a sheet that already has more rules than the cap (not
+ * achievable through this codebase today, since conditional formatting
+ * shipped with no rule-count limit at all until this constant existed) would
+ * have the excess silently dropped on load, and a subsequent save persists
+ * that truncation. Generous enough (200) that reaching it is not a realistic
+ * accident.
  */
 export const MAX_CONDITIONAL_RULES = 200;
+
+/**
+ * The most range entries one rule's `ranges` array may hold.
+ *
+ * `expandRangesWithinBudget` stops as soon as the cell budget is spent — but
+ * an invalid or individually-oversized range (e.g. `A1:A500001`, one past
+ * `MAX_CONDITIONAL_RANGE_CELLS`) contributes zero cells via `addressesOfRange`,
+ * so the budget never decreases for it. A `ranges` array padded with an
+ * unbounded number of such entries would still cost real, unbounded CPU —
+ * one `addressesOfRange` call (parse, decode, bounds-check) per entry — with
+ * the per-cell budget never tripping. Capped at the same parse boundary as
+ * `MAX_CONDITIONAL_RULES`, in `readRanges`, so this can never reach the
+ * evaluator at all. Generous against real use: a rule needing more than a
+ * thousand disjoint ranges is not a realistic layout.
+ */
+export const MAX_CONDITIONAL_RANGES_PER_RULE = 1_000;
 
 /**
  * The most cells conditional-format evaluation may cover in total, across
@@ -167,25 +194,26 @@ export const MAX_CONDITIONAL_TOTAL_CELLS = 2_000_000;
 
 /**
  * Expand a list of ranges to addresses, one range at a time, never
- * materializing more than `remainingBudget` combined — even transiently.
+ * materializing more than `remainingBudget` combined.
  *
  * `rule.ranges` is API-writable jsonb with no cap on entry count: a rule can
  * hold an unbounded number of ranges that are each individually valid and
  * under `MAX_CONDITIONAL_RANGE_CELLS` on their own. Expanding all of them
  * with `flatMap` before applying an aggregate budget via `.slice()` would
  * still allocate unbounded memory — the slice only trims the *result*, after
- * the allocation that was supposed to be prevented already happened. Walking
- * ranges one at a time and stopping as soon as the budget is spent bounds
- * peak memory to one range's worth (≤ `MAX_CONDITIONAL_RANGE_CELLS`) beyond
- * the budget, not the sum of every range in the list.
+ * the allocation that was supposed to be prevented already happened.
+ * Walking ranges one at a time, and asking `addressesOfRange` to stop at the
+ * remaining budget rather than enumerating a whole range and slicing it down
+ * afterward, keeps the true peak at `remainingBudget` — not `remainingBudget`
+ * plus whatever one oversized range would have enumerated before trimming.
  */
 export function expandRangesWithinBudget(
   ranges: readonly string[],
   remainingBudget: number
 ): { addresses: string[]; consumed: number } {
-  // `.concat()`, not `.push(...take)`: spreading a few-hundred-thousand-
-  // element array as call arguments blows the engine's argument-count limit
-  // ("Maximum call stack size exceeded") well before it reaches
+  // `.concat()`, not `.push(...rangeAddresses)`: spreading a few-hundred-
+  // thousand-element array as call arguments blows the engine's argument-
+  // count limit ("Maximum call stack size exceeded") well before it reaches
   // `MAX_CONDITIONAL_RANGE_CELLS`.
   let addresses: string[] = [];
   let consumed = 0;
@@ -193,20 +221,28 @@ export function expandRangesWithinBudget(
   for (const range of ranges) {
     if (consumed >= remainingBudget) break;
 
-    const rangeAddresses = addressesOfRange(range);
+    const rangeAddresses = addressesOfRange(range, remainingBudget - consumed);
     if (rangeAddresses.length === 0) continue;
 
-    const available = remainingBudget - consumed;
-    const take = rangeAddresses.length > available ? rangeAddresses.slice(0, available) : rangeAddresses;
-    addresses = addresses.concat(take);
-    consumed += take.length;
+    addresses = addresses.concat(rangeAddresses);
+    consumed += rangeAddresses.length;
   }
 
   return { addresses, consumed };
 }
 
-/** Every address of an `A1:B2` range, or of a bare `A1`. Invalid ranges yield none. */
-export function addressesOfRange(range: string): string[] {
+/**
+ * Every address of an `A1:B2` range, or of a bare `A1`. Invalid ranges yield
+ * none.
+ *
+ * `maxCount` stops enumeration early — after that many addresses, not after
+ * building the whole range and trimming it — so a caller with a small
+ * remaining budget can ask for a small array outright instead of paying for
+ * a large one it will immediately discard most of. It only ever narrows: a
+ * range over `MAX_CONDITIONAL_RANGE_CELLS` is still rejected wholesale
+ * regardless of `maxCount`, unchanged from before this parameter existed.
+ */
+export function addressesOfRange(range: string, maxCount: number = MAX_CONDITIONAL_RANGE_CELLS): string[] {
   const normalized = range.trim().toUpperCase();
   const [rawStart, rawEnd, ...extra] = normalized.split(':');
   if (!rawStart || extra.length > 0) return [];
@@ -242,8 +278,9 @@ export function addressesOfRange(range: string): string[] {
   }
 
   const addresses: string[] = [];
-  for (let row = rowStart; row <= rowEnd; row++) {
+  outer: for (let row = rowStart; row <= rowEnd; row++) {
     for (let column = columnStart; column <= columnEnd; column++) {
+      if (addresses.length >= maxCount) break outer;
       addresses.push(encodeCellAddress(row, column));
     }
   }
@@ -497,7 +534,7 @@ export function evaluateConditionalFormats(
         const anchor = rangeAnchor(range);
         if (!anchor) continue;
 
-        const rangeAddresses = addressesOfRange(range).slice(0, remainingCellBudget);
+        const rangeAddresses = addressesOfRange(range, remainingCellBudget);
         remainingCellBudget -= rangeAddresses.length;
 
         for (const address of rangeAddresses) {
@@ -623,7 +660,11 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 const readRanges = (value: unknown): string[] | null => {
   if (!Array.isArray(value)) return null;
-  const ranges = value.filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
+  // Sliced before filtering, not after: the point is to bound how many
+  // entries get inspected at all, not just how many end up valid.
+  const ranges = value
+    .slice(0, MAX_CONDITIONAL_RANGES_PER_RULE)
+    .filter((entry): entry is string => typeof entry === 'string' && entry.trim() !== '');
   return ranges.length > 0 ? ranges : null;
 };
 
@@ -738,15 +779,17 @@ export function parseConditionalRules(value: unknown): ConditionalRule[] | undef
     return undefined;
   }
 
-  const rules = entries
-    .map((entry) => parseConditionalRule(entry))
-    .filter((rule): rule is ConditionalRule => rule !== null);
+  // Collected incrementally and capped here — the API write door every
+  // stored rule set passes through — rather than parsing every entry before
+  // slicing: `entries` can be unbounded (API-writable jsonb), and parsing
+  // one is real work. Stops as soon as `MAX_CONDITIONAL_RULES` valid rules
+  // are collected instead of parsing the rest for nothing.
+  const rules: ConditionalRule[] = [];
+  for (const entry of entries) {
+    if (rules.length >= MAX_CONDITIONAL_RULES) break;
+    const rule = parseConditionalRule(entry);
+    if (rule) rules.push(rule);
+  }
 
-  // Capped here — the API write door every stored rule set passes through —
-  // rather than at evaluation time, so an oversized write never round-trips
-  // back out any larger than what will actually be evaluated. See
-  // `MAX_CONDITIONAL_RULES`.
-  const capped = rules.slice(0, MAX_CONDITIONAL_RULES);
-
-  return capped.length > 0 ? capped : undefined;
+  return rules.length > 0 ? rules : undefined;
 }

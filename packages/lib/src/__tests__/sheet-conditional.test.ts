@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   MAX_CONDITIONAL_RANGE_CELLS,
+  MAX_CONDITIONAL_RANGES_PER_RULE,
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
   addressesOfRange,
@@ -640,6 +641,66 @@ describe('parseConditionalRules', () => {
     expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
     expect(parsed?.[0].id).toBe('r0');
     expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+  });
+
+  it('stops parsing once MAX_CONDITIONAL_RULES valid rules are collected, rather than parsing every entry first', () => {
+    // A `.map(parse).filter(valid).slice(cap)` pipeline parses every entry
+    // before the cap ever applies — unbounded CPU on an unbounded array. A
+    // Proxy counts index reads during `parseConditionalRules`' own iteration
+    // (untouched by this array's `.length` or the `Array.from` that built
+    // it) to prove the fix actually stops early rather than merely trimming
+    // the output.
+    const raw = Array.from({ length: MAX_CONDITIONAL_RULES * 10 }, (_, i) => rule(`r${i}`));
+    let indexReads = 0;
+    const tracked = new Proxy(raw, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) indexReads += 1;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const parsed = parseConditionalRules(tracked);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(indexReads).toBeLessThan(MAX_CONDITIONAL_RULES * 2);
+  });
+});
+
+describe('conditional rule ranges: per-rule entry cap', () => {
+  it('caps the number of range entries one rule holds at MAX_CONDITIONAL_RANGES_PER_RULE', () => {
+    // `addressesOfRange` returns [] for an invalid or oversized range, so a
+    // `ranges` array padded with an unbounded number of such entries would
+    // otherwise cost unbounded CPU (one parse/decode per entry) without the
+    // per-cell budget ever tripping, since nothing is ever consumed from it.
+    const many = Array.from({ length: MAX_CONDITIONAL_RANGES_PER_RULE + 500 }, (_, i) => `A${i + 1}`);
+    const parsed = parseConditionalRule({
+      id: 'r',
+      kind: 'cell',
+      ranges: many,
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    });
+    expect(parsed?.ranges).toHaveLength(MAX_CONDITIONAL_RANGES_PER_RULE);
+    expect(parsed?.ranges[0]).toBe('A1');
+    expect(parsed?.ranges[MAX_CONDITIONAL_RANGES_PER_RULE - 1]).toBe(`A${MAX_CONDITIONAL_RANGES_PER_RULE}`);
+  });
+});
+
+describe('addressesOfRange: maxCount', () => {
+  it('stops enumerating at maxCount rather than building the full range and trimming it after', () => {
+    // A range within MAX_CONDITIONAL_RANGE_CELLS on its own, asked for far
+    // fewer addresses than it actually has.
+    expect(addressesOfRange('A1:A100', 3)).toEqual(['A1', 'A2', 'A3']);
+  });
+
+  it('still rejects a range over MAX_CONDITIONAL_RANGE_CELLS wholesale, regardless of maxCount', () => {
+    // maxCount only ever narrows; it must never let an otherwise-oversized
+    // range through just because the caller asked for a small maxCount.
+    expect(addressesOfRange('A1:ZZ500001', 1)).toEqual([]);
+  });
+
+  it('defaults to MAX_CONDITIONAL_RANGE_CELLS, unchanged from before this parameter existed', () => {
+    expect(addressesOfRange('A1:SF1000')).toHaveLength(MAX_CONDITIONAL_RANGE_CELLS);
   });
 });
 
