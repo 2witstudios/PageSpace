@@ -224,6 +224,16 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **An agent locked down by `update_agent_config` can be unlocked again, and `pagespace keys` tells
+  you the real fix** — restricting an agent's tools to an empty list had no way back through the
+  tool itself: the field that means "no restrictions" is `null`, and the schema only accepted an
+  array or nothing at all, so the agent stayed locked down until someone reached the settings UI.
+  Passing `enabledTools: null` now explicitly clears the restriction. Separately, `pagespace keys
+  list`/`revoke`/`use` and the key wizard refuse when run with a scoped access key instead of your
+  personal login — that message used to always say to remove "the key's `--token`/env credential,"
+  even when the key had actually come from `--key <name>` or a stored credential with no `--token`
+  in sight, pointing you at a flag you never passed. It now names the credential that actually
+  resolved.
 - **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
   `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
   `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the

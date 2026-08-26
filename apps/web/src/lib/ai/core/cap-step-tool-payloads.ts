@@ -42,6 +42,7 @@
  * exactly what the agent really sent and received (asserted in the tests).
  */
 import type { ModelMessage, ToolCallPart, ToolResultPart } from 'ai';
+import { WRITE_TOOLS } from './tool-filtering';
 
 /** Not exported by `ai`, but reachable from the part that carries it. */
 type ToolResultOutput = ToolResultPart['output'];
@@ -85,8 +86,30 @@ const elided = (what: string, originalChars: number, stillAvailable: string) =>
 const argumentsStub = (chars: number) =>
   elided('Arguments', chars, 'its result appears in the transcript.');
 
-const resultStub = (chars: number) =>
-  elided('Result', chars, 'call it again with the same arguments if you still need it.');
+/**
+ * `resultStub`'s advice differs for WRITE tools: "call it again" is correct for a
+ * read whose bytes just need re-fetching, but for a write it tells the model to
+ * re-apply a mutation that already happened — e.g. `replace_lines` re-run against
+ * line numbers the first call already shifted double-applies the edit. Reuses
+ * `WRITE_TOOLS` (the same set `tool-filtering.ts` strips in read-only mode)
+ * rather than keeping a second list that can drift from it.
+ *
+ * `isError` further splits the WRITE branch: an `error-text`/`error-json`
+ * output means the call FAILED, so "already succeeded" would tell the model a
+ * failed mutation landed — the opposite of the earlier double-apply bug, and
+ * just as wrong. A failed write gets neutral wording instead: the outcome is
+ * unknown from here, so re-check current state rather than assume either
+ * success or safety-to-retry. Read-tool errors are unaffected — "call it
+ * again" was never wrong for those; retrying a failed read is exactly right.
+ */
+const resultStub = (chars: number, toolName: string, isError: boolean) => {
+  if (!WRITE_TOOLS.has(toolName)) {
+    return elided('Result', chars, 'call it again with the same arguments if you still need it.');
+  }
+  return isError
+    ? elided('Result', chars, 'the outcome (possibly a failure) was elided — check current state before deciding whether to retry; do not assume it succeeded.')
+    : elided('Result', chars, 'this call already succeeded and must NOT be re-run — read the page again if you need its current content.');
+};
 
 // Narrow to the SDK's own part types, not to a structural stand-in. A predicate
 // like `part is { type: string; output?: unknown }` looks equivalent but is not:
@@ -98,6 +121,37 @@ const hasType = (part: unknown, type: string): boolean =>
 const isToolCallPart = (part: unknown): part is ToolCallPart => hasType(part, 'tool-call');
 
 const isToolResultPart = (part: unknown): part is ToolResultPart => hasType(part, 'tool-result');
+
+/**
+ * The dispatcher tool name search-exposure mode routes non-core tools through.
+ * A call/result pair with this `toolName` carries the REAL tool name nested in
+ * the call's `input.tool_name`, not in `toolName` itself — see
+ * `execute-tool.ts`. Reused here, not duplicated: a second string literal is
+ * exactly the kind of drift the source-scan guard test exists to catch.
+ */
+const DISPATCHER_TOOL_NAME = 'execute_tool';
+
+/**
+ * The tool name a result should be judged by for the write-vs-read stub
+ * choice — resolving THROUGH `execute_tool` to the nested `tool_name` the
+ * model actually invoked, because `WRITE_TOOLS.has('execute_tool')` is always
+ * false regardless of what ran. Without this, a write dispatched in
+ * search-exposure mode (`toolExposureMode: 'search'`) is judged as a read: a
+ * stale `replace_lines` result routed through the dispatcher would get "call
+ * it again" advice that double-applies the edit — the exact bug this file's
+ * write-aware stub exists to prevent, just one call-shape away.
+ *
+ * Reads the nested name off the PAIRED tool-CALL (matched by `toolCallId`),
+ * never off the result: a result carries no `tool_name` field of its own.
+ */
+function effectiveToolName(part: ToolResultPart, callInputByCallId: Map<string, unknown>): string {
+  if (part.toolName !== DISPATCHER_TOOL_NAME) return part.toolName;
+  const input = callInputByCallId.get(part.toolCallId);
+  const nested = input !== null && typeof input === 'object'
+    ? (input as { tool_name?: unknown }).tool_name
+    : undefined;
+  return typeof nested === 'string' ? nested : part.toolName;
+}
 
 /** Serialized size of a value, or null when it has none to measure. */
 function sizeOf(value: unknown): number | null {
@@ -145,19 +199,23 @@ const cappedInput = (chars: number): Record<string, string> => ({
  *   mid-comparison vision agent may lose is a product decision, not a mechanical
  *   extension of this one — so it is named here rather than made silently.
  */
-function cappedOutput(output: ToolResultOutput, maxChars: number): ToolResultOutput | null {
+function cappedOutput(
+  output: ToolResultOutput,
+  maxChars: number,
+  toolName: string,
+): ToolResultOutput | null {
   switch (output.type) {
     case 'text':
     case 'error-text': {
       const chars = sizeOf(output.value);
       if (chars === null || chars <= maxChars) return null;
-      return { ...output, value: resultStub(chars) };
+      return { ...output, value: resultStub(chars, toolName, output.type === 'error-text') };
     }
     case 'json':
     case 'error-json': {
       const chars = sizeOf(output.value);
       if (chars === null || chars <= maxChars) return null;
-      return { ...output, value: { [ELIDED_KEY]: resultStub(chars) } };
+      return { ...output, value: { [ELIDED_KEY]: resultStub(chars, toolName, output.type === 'error-json') } };
     }
     default:
       return null;
@@ -208,6 +266,17 @@ export function capStepToolPayloads(
   const callPositions = positionsOf(messages, isToolCallPart);
   const newestCallMessage = callPositions.at(-1) && messageOf(callPositions.at(-1)!);
 
+  // toolCallId -> that call's input, so a result routed through the
+  // `execute_tool` dispatcher can be judged by the tool it actually ran
+  // (`effectiveToolName`) instead of by the dispatcher's own name.
+  const callInputByCallId = new Map<string, unknown>();
+  for (const message of messages) {
+    if (!Array.isArray(message.content)) continue;
+    for (const part of message.content) {
+      if (isToolCallPart(part)) callInputByCallId.set(part.toolCallId, part.input);
+    }
+  }
+
   // Results are exempted by MESSAGE too, for the same reason as calls: a step
   // that read four files in parallel delivers four result parts in one tool
   // message, and keeping the last three PARTS would stub one of them — breaking
@@ -242,7 +311,7 @@ export function capStepToolPayloads(
       if (isToolResultPart(part)) {
         // The size check lives inside cappedOutput, with the switch that knows
         // which shape this output's `value` actually has.
-        const capped = cappedOutput(part.output, maxChars);
+        const capped = cappedOutput(part.output, maxChars, effectiveToolName(part, callInputByCallId));
         if (capped === null) return part;
         messageChanged = true;
         didCap = true;

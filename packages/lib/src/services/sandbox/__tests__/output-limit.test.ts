@@ -155,6 +155,25 @@ describe('selectLineWindow — byte budget', () => {
     expect(result.text).toContain(LINE_ELISION_MARKER);
   });
 
+  it('given a line over maxLineBytes, the clipped line PLUS the elision marker should still fit maxLineBytes', () => {
+    // The marker is ~22 bytes. Truncating the line content to maxLineBytes and
+    // then appending the marker made the clipped line maxLineBytes + 22 long —
+    // the marker has to come out of the same budget it is warning about.
+    const result = selectLineWindow({ text: 'x'.repeat(500) + '\nb\n', limit: 10, maxLineBytes: 100 });
+    const clippedLine = result.text.split('\n')[0];
+    expect(Buffer.byteLength(clippedLine, 'utf8')).toBeLessThanOrEqual(100);
+  });
+
+  it('given a full-file read whose content sits exactly at maxBytes, should never exceed it by restoring the trailing newline', () => {
+    // A file ending in '\n' restores that terminator on a full read. Adding it
+    // AFTER the loop's own budget accounting can push the result one byte past
+    // the documented cap — the restoration has to pass the same check.
+    const content = 'a'.repeat(10);
+    const text = content + '\n'; // 11 bytes total, including the terminator
+    const result = selectLineWindow({ text, limit: 10, maxBytes: 10 });
+    expect(Buffer.byteLength(result.text, 'utf8')).toBeLessThanOrEqual(10);
+  });
+
   it('given one enormous line, should keep the lines after it reachable', () => {
     // Without a per-line cap this line consumes the budget, and because paging
     // is by line there is then no offset that reaches line 2 at all.

@@ -1156,6 +1156,43 @@ describe('readSandboxFile', () => {
     expect(result.notice).toContain('too long to show in full');
   });
 
+  it('given a full-file read whose content exactly fills the byte cap, should still report truncated and explain why', async () => {
+    // Every line is short enough, and there are few enough of them, that
+    // per-line clipping and the line-count window are both out of the
+    // picture — reachesEnd is true and windowed is false. The ONLY thing
+    // trimmed is the restored trailing newline, which selectLineWindow drops
+    // rather than exceed maxBytes by one byte. Before this fix, `truncated`
+    // was computed as `windowed || lineElided` alone, so this case silently
+    // reported `truncated: false` with no notice.
+    const width = 200; // bytes per line, well under MAX_LINE_BYTES
+    const lines: string[] = [];
+    let used = 0;
+    while (true) {
+      const cost = width + (lines.length > 0 ? 1 : 0);
+      if (used + cost > SANDBOX_MAX_OUTPUT_BYTES - width) break; // leave room to compute an exact final line
+      lines.push('x'.repeat(width));
+      used += cost;
+    }
+    // One final short line sized to make the total land EXACTLY at the cap.
+    const finalLen = SANDBOX_MAX_OUTPUT_BYTES - used - 1;
+    lines.push('x'.repeat(finalLen));
+    used += finalLen + 1;
+    expect(used).toBe(SANDBOX_MAX_OUTPUT_BYTES);
+
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(lines.join('\n') + '\n') }),
+    });
+    const result = await readSandboxFile({ path: 'exact-cap.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.lastLine).toBe(lines.length);
+    expect(result.totalLines).toBe(lines.length);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('output size limit trimmed the very end');
+  });
+
   it('given a window cut short by the byte budget, should point the next read at the line content actually ended on', async () => {
     // The bug this pins: the budget used to be applied to the joined window
     // AFTER selection, so content stopped near line 1,300 while lastLine still

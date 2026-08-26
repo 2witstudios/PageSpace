@@ -1098,10 +1098,19 @@ export function buildReadTruncationNotice({
     );
   }
 
-  // Every line present and the window started at the top: the only thing that
-  // made this partial is per-line clipping.
+  // Every line present and the window started at the top. What made this
+  // partial is either per-line clipping, or — new case — the size limit
+  // trimming the very tail of the file (e.g. dropping the restored trailing
+  // newline so the response does not exceed the budget by one byte). Neither
+  // implies the other, so both get their own clause rather than the
+  // lineElided wording covering a cap it did not cause.
   if (firstLine === 1) {
-    return `[${shown} — every line of the file is here, but at least one was too long to show in full.${elisionNote}${editWarning}]`;
+    const capNote = bytesCapped
+      ? ' The output size limit trimmed the very end of the file (e.g. its trailing newline) to stay within budget.'
+      : '';
+    return lineElided
+      ? `[${shown} — every line of the file is here, but at least one was too long to show in full.${capNote}${elisionNote}${editWarning}]`
+      : `[${shown} — every line of the file is here.${capNote}${editWarning}]`;
   }
 
   // Reached the last line, but started past line 1: the tail is complete, the
@@ -1195,7 +1204,14 @@ export async function readSandboxFile({
       maxLineBytes: MAX_LINE_BYTES,
     });
     const text = window.text;
-    const truncated = window.windowed || window.lineElided;
+    // `bytesCapped` alone (windowed/lineElided both false) is a real, if rare,
+    // case: a full-file read whose content exactly fills maxBytes drops the
+    // restored trailing newline to stay inside the cap (`selectLineWindow`),
+    // which returns `reachesEnd: true` — so `windowed` reads false even though
+    // one byte of the file was left out. Missing it here meant the response
+    // reported `truncated: false` and skipped the notice for a read that was,
+    // in fact, incomplete.
+    const truncated = window.windowed || window.lineElided || window.bytesCapped;
     await safeAudit(deps, ctx, {
       code: `readFile ${path}`,
       exitCode: 0,
