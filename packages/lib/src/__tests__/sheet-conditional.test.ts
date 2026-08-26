@@ -478,6 +478,44 @@ describe('aggregate cell budget across all rules combined', () => {
     // contributes nothing.
     expect(result.formats.E1).toBeUndefined();
   }, 20000);
+
+  it('bounds a single rule holding many individually-valid ranges, without expanding them all before applying the budget', () => {
+    // `rule.ranges` is API-writable jsonb with no cap on entry count: one
+    // rule can hold far more ranges than four. Ten ranges of
+    // MAX_CONDITIONAL_RANGE_CELLS each (5,000,000 combined) sum to well past
+    // the 2,000,000 aggregate budget — flat-mapping every range before
+    // slicing to the budget would transiently allocate all 5,000,000
+    // addresses (and previously crashed outright: spreading that many
+    // elements onto `Array.prototype.push` blows the engine's call-stack
+    // argument limit). `expandRangesWithinBudget` must stop consuming
+    // ranges as soon as the budget is spent instead.
+    const manyRangesRule: ConditionalRule = {
+      id: 'many',
+      kind: 'cell',
+      ranges: Array.from({ length: 10 }, (_, i) => {
+        const col = String.fromCharCode(65 + i); // A..J
+        return `${col}1:${col}500000`;
+      }),
+      condition: { operator: 'isNotEmpty' },
+      format: { bold: true },
+    };
+
+    const context: ConditionalContext = {
+      valueAt: () => 'x',
+      isError: () => false,
+      evaluateFormula: () => '',
+    };
+
+    expect(() => evaluateConditionalFormats([manyRangesRule], context)).not.toThrow();
+    const result = evaluateConditionalFormats([manyRangesRule], context);
+
+    // First four ranges (A..D) exhaust the budget exactly, as in the test
+    // above; nothing from range five (E) onward is painted.
+    expect(result.formats.A1).toEqual({ bold: true });
+    expect(result.formats.D500000).toEqual({ bold: true });
+    expect(result.formats.E1).toBeUndefined();
+    expect(result.formats.J1).toBeUndefined();
+  }, 20000);
 });
 
 describe('mixColors', () => {

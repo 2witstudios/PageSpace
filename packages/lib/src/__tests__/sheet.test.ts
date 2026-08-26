@@ -376,6 +376,27 @@ describe('adjustFormulaReferences', () => {
   it('does not shift a ref inside a second string literal after a real ref', () => {
     expect(adjustFormulaReferences('=IF(A1="b2","c3","d4")', 1, 0)).toBe('=IF(A2="b2","c3","d4")');
   });
+
+  it('shifts a real reference following a page-reference label containing an unmatched quote', () => {
+    // A page-reference label can hold any character, including a bare `"` —
+    // the tokenizer (`parser.ts`) scans `@[...]` verbatim up to the closing
+    // `]` with no quote-awareness at all. Misreading that quote as the start
+    // of a string literal used to swallow the rest of the formula, including
+    // the real trailing reference — leaving `A1` unshifted instead of `A2`.
+    expect(adjustFormulaReferences('=@[Budget "Q1]:A1', 1, 0)).toBe('=@[Budget "Q1]:A2');
+  });
+
+  it('leaves a page-reference label with a balanced pair of quotes untouched and still shifts the trailing ref', () => {
+    expect(adjustFormulaReferences('=@[Budget "Q1"]:A1', 1, 0)).toBe('=@[Budget "Q1"]:A2');
+  });
+
+  it('shifts a real reference following a page reference with an identifier suffix', () => {
+    expect(adjustFormulaReferences('=@[Budget](pg_1:page):A1', 1, 0)).toBe('=@[Budget](pg_1:page):A2');
+  });
+
+  it('does not let a string literal after a page reference bleed into the reference scan', () => {
+    expect(adjustFormulaReferences('=@[Budget]:A1&"x2"', 1, 0)).toBe('=@[Budget]:A2&"x2"');
+  });
 });
 
 describe('sheet sanitisation', () => {

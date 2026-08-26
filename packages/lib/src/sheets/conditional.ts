@@ -165,6 +165,46 @@ export const MAX_CONDITIONAL_RULES = 200;
  */
 export const MAX_CONDITIONAL_TOTAL_CELLS = 2_000_000;
 
+/**
+ * Expand a list of ranges to addresses, one range at a time, never
+ * materializing more than `remainingBudget` combined — even transiently.
+ *
+ * `rule.ranges` is API-writable jsonb with no cap on entry count: a rule can
+ * hold an unbounded number of ranges that are each individually valid and
+ * under `MAX_CONDITIONAL_RANGE_CELLS` on their own. Expanding all of them
+ * with `flatMap` before applying an aggregate budget via `.slice()` would
+ * still allocate unbounded memory — the slice only trims the *result*, after
+ * the allocation that was supposed to be prevented already happened. Walking
+ * ranges one at a time and stopping as soon as the budget is spent bounds
+ * peak memory to one range's worth (≤ `MAX_CONDITIONAL_RANGE_CELLS`) beyond
+ * the budget, not the sum of every range in the list.
+ */
+export function expandRangesWithinBudget(
+  ranges: readonly string[],
+  remainingBudget: number
+): { addresses: string[]; consumed: number } {
+  // `.concat()`, not `.push(...take)`: spreading a few-hundred-thousand-
+  // element array as call arguments blows the engine's argument-count limit
+  // ("Maximum call stack size exceeded") well before it reaches
+  // `MAX_CONDITIONAL_RANGE_CELLS`.
+  let addresses: string[] = [];
+  let consumed = 0;
+
+  for (const range of ranges) {
+    if (consumed >= remainingBudget) break;
+
+    const rangeAddresses = addressesOfRange(range);
+    if (rangeAddresses.length === 0) continue;
+
+    const available = remainingBudget - consumed;
+    const take = rangeAddresses.length > available ? rangeAddresses.slice(0, available) : rangeAddresses;
+    addresses = addresses.concat(take);
+    consumed += take.length;
+  }
+
+  return { addresses, consumed };
+}
+
 /** Every address of an `A1:B2` range, or of a bare `A1`. Invalid ranges yield none. */
 export function addressesOfRange(range: string): string[] {
   const normalized = range.trim().toUpperCase();
@@ -446,14 +486,55 @@ export function evaluateConditionalFormats(
   for (const rule of rules) {
     if (remainingCellBudget <= 0) break;
 
-    const addresses = rule.ranges
-      .flatMap((range) => addressesOfRange(range))
-      .slice(0, remainingCellBudget);
+    // `formula` needs each range's own anchor for relative-reference shifting,
+    // so it walks `rule.ranges` itself below rather than through the shared
+    // expansion — which also means it never allocates the address list this
+    // computes, since it wouldn't use it.
+    if (rule.kind === 'formula') {
+      for (const range of rule.ranges) {
+        if (remainingCellBudget <= 0) break;
+
+        const anchor = rangeAnchor(range);
+        if (!anchor) continue;
+
+        const rangeAddresses = addressesOfRange(range).slice(0, remainingCellBudget);
+        remainingCellBudget -= rangeAddresses.length;
+
+        for (const address of rangeAddresses) {
+          const { row, column } = decodeCellAddress(address);
+          // Relative references shift from the range's top-left, so one rule
+          // written against the first cell reads correctly for all of them.
+          const shifted = adjustFormulaReferences(
+            rule.formula,
+            row - anchor.row,
+            column - anchor.column
+          );
+          let result: SheetPrimitive;
+          try {
+            result = context.evaluateFormula(shifted);
+          } catch {
+            // A rule that cannot be evaluated must not take the sheet down
+            // with it; it simply does not match.
+            continue;
+          }
+          if (isTruthy(result)) contribute(address, rule.format);
+        }
+      }
+      continue;
+    }
+
+    // Ranges are expanded one at a time, stopping as soon as the budget is
+    // spent — see `expandRangesWithinBudget`. A rule may hold an unbounded
+    // number of ranges (jsonb, no cap on array length), each individually
+    // valid and under `MAX_CONDITIONAL_RANGE_CELLS` on its own; flat-mapping
+    // all of them before slicing to the budget would still allocate
+    // unbounded memory before the cap ever took effect.
+    const { addresses, consumed } = expandRangesWithinBudget(rule.ranges, remainingCellBudget);
+    remainingCellBudget -= consumed;
     if (addresses.length === 0) continue;
 
     switch (rule.kind) {
       case 'cell': {
-        remainingCellBudget -= addresses.length;
         for (const address of addresses) {
           if (matchesCondition(context.valueAt(address), context.isError(address), rule.condition)) {
             contribute(address, rule.format);
@@ -462,41 +543,7 @@ export function evaluateConditionalFormats(
         break;
       }
 
-      case 'formula': {
-        for (const range of rule.ranges) {
-          if (remainingCellBudget <= 0) break;
-
-          const anchor = rangeAnchor(range);
-          if (!anchor) continue;
-
-          const rangeAddresses = addressesOfRange(range).slice(0, remainingCellBudget);
-          remainingCellBudget -= rangeAddresses.length;
-
-          for (const address of rangeAddresses) {
-            const { row, column } = decodeCellAddress(address);
-            // Relative references shift from the range's top-left, so one rule
-            // written against the first cell reads correctly for all of them.
-            const shifted = adjustFormulaReferences(
-              rule.formula,
-              row - anchor.row,
-              column - anchor.column
-            );
-            let result: SheetPrimitive;
-            try {
-              result = context.evaluateFormula(shifted);
-            } catch {
-              // A rule that cannot be evaluated must not take the sheet down
-              // with it; it simply does not match.
-              continue;
-            }
-            if (isTruthy(result)) contribute(address, rule.format);
-          }
-        }
-        break;
-      }
-
       case 'colorScale': {
-        remainingCellBudget -= addresses.length;
         const sorted = numbersIn(addresses, context).sort((a, b) => a - b);
         if (sorted.length === 0) break;
 
@@ -529,7 +576,6 @@ export function evaluateConditionalFormats(
       }
 
       case 'dataBar': {
-        remainingCellBudget -= addresses.length;
         const sorted = numbersIn(addresses, context).sort((a, b) => a - b);
         if (sorted.length === 0) break;
 
