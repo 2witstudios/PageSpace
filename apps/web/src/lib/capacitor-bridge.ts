@@ -68,6 +68,16 @@ const PLATFORM_CAPABILITIES: Record<
   }),
 };
 
+/**
+ * The capability set of a platform with no native support.
+ *
+ * This is what the server renders, so a client that starts from it and only
+ * moves to the real set inside an effect cannot produce a hydration mismatch.
+ * Reach for this as an initial/SSR state rather than calling
+ * `getNativeCapabilities()` during the first render.
+ */
+export const NO_NATIVE_CAPABILITIES = PLATFORM_CAPABILITIES.web;
+
 /** Which auth providers each platform can drive through a native SDK. */
 const NATIVE_AUTH_PROVIDERS: Record<Platform, readonly NativeAuthProvider[]> = {
   ios: Object.freeze<NativeAuthProvider[]>(['google', 'apple']),
@@ -95,10 +105,10 @@ const KNOWN_PLATFORMS: readonly Platform[] = ['ios', 'android', 'web'];
 /**
  * Get the current platform.
  *
- * This is the module's only reader of `window.Capacitor` — every other helper
- * derives from it. Anything the shell reports that we don't have a row for
- * (a future Capacitor target) normalizes to 'web', so the declared return type
- * stays honest and capability lookups can never miss.
+ * Anything the shell reports that we have no row for (a future Capacitor
+ * target) normalizes to 'web', so the declared return type stays honest and
+ * capability lookups can never miss the table. Use `isNativeApp()` when you
+ * need "is this a native shell?" — that question survives normalization.
  */
 export function getPlatform(): Platform {
   if (!isCapacitorApp()) return 'web';
@@ -158,16 +168,6 @@ export function hasNativeCapability(capability: NativeCapability): boolean {
 }
 
 /**
- * The capability set of a platform with no native support.
- *
- * This is what the server renders, so a client that starts from it and only
- * moves to the real set inside an effect cannot produce a hydration mismatch.
- * Reach for this as an initial/SSR state rather than calling
- * `getNativeCapabilities()` during the first render.
- */
-export const NO_NATIVE_CAPABILITIES = PLATFORM_CAPABILITIES.web;
-
-/**
  * Get the full capability set for the current platform.
  *
  * Useful for hooks that expose capabilities as a single object. The returned
@@ -194,7 +194,6 @@ export function supportsNativeAuthProvider(
 ): boolean {
   return NATIVE_AUTH_PROVIDERS[getPlatform()].includes(provider);
 }
-
 
 /**
  * Inject platform information into the window object.
