@@ -373,6 +373,14 @@ interface FcmServiceAccount {
   tokenUri: string;
 }
 
+// Everything below parses untrusted JSON — a secret typed by a human, and error
+// bodies from Google — so narrow rather than cast.
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
 function parseFcmServiceAccount(raw: string): FcmServiceAccount {
   let parsed: unknown;
   try {
@@ -381,11 +389,11 @@ function parseFcmServiceAccount(raw: string): FcmServiceAccount {
     throw new Error('FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON is not valid JSON');
   }
 
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+  const account = asRecord(parsed);
+  if (!account) {
     throw new Error('FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON must be a JSON object');
   }
 
-  const account = parsed as Record<string, unknown>;
   const str = (key: string): string =>
     typeof account[key] === 'string' ? (account[key] as string) : '';
 
@@ -421,6 +429,13 @@ let fcmAccessToken: string | null = null;
 let fcmAccessTokenExpiry: number = 0;
 let fcmAccessTokenSource: string | null = null;
 
+// A mint that is already in the air. Sends fan out concurrently — broadcastTos-
+// PrivacyUpdate creates a notification for every user through Promise.all — and
+// on a cold cache each one would otherwise observe "no token" and open its own
+// OAuth request, one per Android recipient. Waiters share a single mint instead.
+let fcmMintInFlight: Promise<string> | null = null;
+let fcmMintInFlightSource: string | null = null;
+
 async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: string }> {
   const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
   if (!raw) {
@@ -428,12 +443,35 @@ async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: st
   }
 
   const account = parseFcmServiceAccount(raw);
-  const now = Math.floor(Date.now() / 1000);
 
   // Google access tokens live for 1 hour; refresh at 50 min, as APNs does.
-  if (fcmAccessToken && fcmAccessTokenSource === raw && fcmAccessTokenExpiry > now + 600) {
+  if (
+    fcmAccessToken &&
+    fcmAccessTokenSource === raw &&
+    fcmAccessTokenExpiry > Math.floor(Date.now() / 1000) + 600
+  ) {
     return { accessToken: fcmAccessToken, projectId: account.projectId };
   }
+
+  // Join the in-flight mint only when it is for this same credential — a waiter
+  // for a rotated secret must never be handed the previous account's token.
+  if (!fcmMintInFlight || fcmMintInFlightSource !== raw) {
+    const guarded: Promise<string> = mintFcmAccessToken(account, raw).finally(() => {
+      // Only clear the slot if it is still ours; a newer mint may have replaced it.
+      if (fcmMintInFlight === guarded) {
+        fcmMintInFlight = null;
+        fcmMintInFlightSource = null;
+      }
+    });
+    fcmMintInFlight = guarded;
+    fcmMintInFlightSource = raw;
+  }
+
+  return { accessToken: await fcmMintInFlight, projectId: account.projectId };
+}
+
+async function mintFcmAccessToken(account: FcmServiceAccount, raw: string): Promise<string> {
+  const now = Math.floor(Date.now() / 1000);
 
   const header = { alg: 'RS256', typ: 'JWT' };
   const claims = {
@@ -492,7 +530,7 @@ async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: st
   fcmAccessTokenExpiry = now + expiresIn;
   fcmAccessTokenSource = raw;
 
-  return { accessToken: fcmAccessToken, projectId: account.projectId };
+  return fcmAccessToken;
 }
 
 // FCM data payloads are string→string only; anything else is rejected by the API.
@@ -505,36 +543,59 @@ function toFcmDataRecord(data: Record<string, unknown> | undefined): Record<stri
   return record;
 }
 
-// FCM reports the actionable reason in `error.details[].errorCode`; `error.status`
-// is the coarser gRPC status. Prefer the former, fall back to the latter.
-function extractFcmError(body: string): { code: string; message: string } {
-  try {
-    const parsed = JSON.parse(body) as {
-      error?: {
-        status?: unknown;
-        message?: unknown;
-        details?: Array<Record<string, unknown>>;
-      };
-    };
-    const error = parsed.error;
-    const detail = error?.details?.find((d) => typeof d.errorCode === 'string');
-    const code =
-      (typeof detail?.errorCode === 'string' ? detail.errorCode : undefined) ??
-      (typeof error?.status === 'string' ? error.status : undefined) ??
-      'UNKNOWN';
-    const message = typeof error?.message === 'string' ? error.message : 'Unknown error';
-    return { code, message };
-  } catch {
-    return { code: 'UNKNOWN', message: 'Unknown error' };
-  }
+interface FcmError {
+  code: string;
+  message: string;
+  // True only when `code` came out of an FcmError detail. That detail is the one
+  // part of the response that is about *this registration token*; `error.status`
+  // is a transport-level gRPC status describing the request as a whole.
+  fromFcmDetail: boolean;
 }
+
+// FCM reports the actionable reason in an `FcmError` entry of `error.details`.
+// `error.status` is the coarser gRPC status: the same INVALID_ARGUMENT that a
+// bad token produces is also what a malformed *message* produces, and NOT_FOUND
+// is also what a wrong project id produces. So the two are kept distinguishable
+// rather than collapsed — only the detail may cost a device its registration.
+function extractFcmError(body: string): FcmError {
+  const unknown: FcmError = { code: 'UNKNOWN', message: 'Unknown error', fromFcmDetail: false };
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    return unknown;
+  }
+
+  const error = asRecord(asRecord(parsed)?.error);
+  if (!error) return unknown;
+
+  const message = typeof error.message === 'string' ? error.message : 'Unknown error';
+
+  const details = Array.isArray(error.details) ? error.details : [];
+  for (const entry of details) {
+    const detail = asRecord(entry);
+    const type = detail && typeof detail['@type'] === 'string' ? detail['@type'] : null;
+    const errorCode = detail && typeof detail.errorCode === 'string' ? detail.errorCode : null;
+    if (type?.endsWith(FCM_ERROR_DETAIL_TYPE_SUFFIX) && errorCode) {
+      return { code: errorCode, message, fromFcmDetail: true };
+    }
+  }
+
+  const status = typeof error.status === 'string' ? error.status : 'UNKNOWN';
+  return { code: status, message, fromFcmDetail: false };
+}
+
+// `type.googleapis.com/google.firebase.fcm.v1.FcmError` in practice; matched by
+// suffix so a version bump in the type URL does not silently stop matching.
+const FCM_ERROR_DETAIL_TYPE_SUFFIX = '.FcmError';
 
 // Codes that mean "this token will never work again" — the dispatch loop
 // deactivates the row, mirroring the APNs BadDeviceToken/Unregistered handling.
-// INVALID_ARGUMENT is included per the FCM guidance that it signals a malformed
-// registration token; note it is also what a malformed *message* returns, so a
-// payload regression would deactivate tokens — keep the message builder honest.
-const FCM_INVALID_TOKEN_CODES = ['UNREGISTERED', 'INVALID_ARGUMENT', 'NOT_FOUND'];
+// Only ever consulted for a code that came from an FcmError detail: a top-level
+// INVALID_ARGUMENT means the message we built was malformed, and deactivating
+// every Android token on a payload regression would be a self-inflicted outage.
+const FCM_INVALID_TOKEN_CODES = ['UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH'];
 
 async function sendToFcm(
   deviceToken: string,
@@ -613,7 +674,7 @@ async function sendToFcm(
       return { success: true, tokenId };
     }
 
-    const { code, message: reason } = extractFcmError(body);
+    const { code, message: reason, fromFcmDetail } = extractFcmError(body);
 
     // A 401 means the cached access token was revoked or rotated out from under
     // us; drop it so the next send mints a fresh one instead of looping on 401.
@@ -626,6 +687,7 @@ async function sendToFcm(
     console.error('[FCM] reject', {
       status: response.status,
       code,
+      fromFcmDetail,
       reason,
       projectId,
       tokenId,
@@ -635,7 +697,7 @@ async function sendToFcm(
       success: false,
       tokenId,
       error: `${code}: ${reason}`,
-      shouldRemoveToken: FCM_INVALID_TOKEN_CODES.includes(code),
+      shouldRemoveToken: fromFcmDetail && FCM_INVALID_TOKEN_CODES.includes(code),
     };
   } catch (error) {
     console.error('[FCM] send error', {

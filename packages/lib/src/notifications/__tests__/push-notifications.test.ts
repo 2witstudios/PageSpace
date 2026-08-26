@@ -861,6 +861,7 @@ function serviceAccountJson(overrides: Record<string, unknown> = {}, projectId?:
   return JSON.stringify(account);
 }
 
+const FCM_ERROR_TYPE = 'type.googleapis.com/google.firebase.fcm.v1.FcmError';
 const OAUTH_OK = JSON.stringify({ access_token: 'ya29.fake-access-token', expires_in: 3600 });
 const FCM_SEND_OK = JSON.stringify({ name: 'projects/p/messages/0:1234' });
 
@@ -1067,9 +1068,7 @@ describe('sendToFcm (Android)', () => {
               code: 404,
               message: 'Requested entity was not found.',
               status: 'NOT_FOUND',
-              details: [
-                { '@type': 'type.googleapis.com/google.firebase.fcm.v1.FcmError', errorCode: 'UNREGISTERED' },
-              ],
+              details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'UNREGISTERED' }],
             },
           })
         ),
@@ -1083,21 +1082,19 @@ describe('sendToFcm (Android)', () => {
     expect(setFn).toHaveBeenCalledWith({ isActive: false });
   });
 
-  it('deactivates the token when FCM reports INVALID_ARGUMENT', async () => {
+  it('deactivates the token when an FcmError detail reports INVALID_ARGUMENT', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
     const { setFn } = setupUpdateChain();
     installFetchStub({
       send: () =>
-        fakeResponse(
-          400,
-          JSON.stringify({
-            error: {
-              message: 'The registration token is not a valid FCM registration token',
-              status: 'INVALID_ARGUMENT',
-            },
-          })
-        ),
+        fakeResponse(400, JSON.stringify({
+          error: {
+            message: 'The registration token is not a valid FCM registration token',
+            status: 'INVALID_ARGUMENT',
+            details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'INVALID_ARGUMENT' }],
+          },
+        })),
     });
 
     const result = await sendPushNotification('user-1', payload);
@@ -1105,6 +1102,97 @@ describe('sendToFcm (Android)', () => {
     expect(result.failed).toBe(1);
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
     expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('deactivates the token when an FcmError detail reports SENDER_ID_MISMATCH', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(403, JSON.stringify({
+          error: {
+            message: 'SenderId mismatch',
+            status: 'PERMISSION_DENIED',
+            details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'SENDER_ID_MISMATCH' }],
+          },
+        })),
+    });
+
+    await sendPushNotification('user-1', payload);
+
+    expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
+  // The dangerous case: a malformed *message* is also a 400 INVALID_ARGUMENT, but
+  // with no FcmError detail. Deactivating on that would take out every Android
+  // token on the platform the moment the payload builder regressed.
+  it('keeps the token when INVALID_ARGUMENT arrives without an FcmError detail', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(400, JSON.stringify({
+          error: {
+            message: 'Invalid JSON payload received. Unknown name "nope".',
+            status: 'INVALID_ARGUMENT',
+            details: [{
+              '@type': 'type.googleapis.com/google.rpc.BadRequest',
+              fieldViolations: [{ field: 'message.nope', description: 'Cannot find field.' }],
+            }],
+          },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '1', isActive: true })
+    );
+  });
+
+  // Likewise a wrong project id is a bare NOT_FOUND, and says nothing about the token.
+  it('keeps the token when NOT_FOUND arrives without an FcmError detail', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(404, JSON.stringify({
+          error: { message: 'Requested entity was not found.', status: 'NOT_FOUND' },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('NOT_FOUND');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('ignores an errorCode carried by a detail that is not an FcmError', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(400, JSON.stringify({
+          error: {
+            message: 'nope',
+            status: 'INVALID_ARGUMENT',
+            details: [{ '@type': 'type.googleapis.com/google.rpc.Help', errorCode: 'UNREGISTERED' }],
+          },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    // Falls back to the coarse status, and does not cost the device its registration.
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
   });
 
   it('keeps the token when FCM rejects with a retryable code', async () => {
@@ -1252,6 +1340,106 @@ describe('sendToFcm (Android)', () => {
 
     expect(first.failed).toBe(1);
     expect(second.sent).toBe(1);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+  });
+
+  it('mints once for sends that race on a cold cache', async () => {
+    // The real fan-out: broadcastTosPrivacyUpdate creates a notification for every
+    // user through Promise.all, so N Android recipients hit a cold cache together.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'single-flight-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+
+    let releaseOauth: (() => void) | undefined;
+    const oauthGate = new Promise<void>((resolve) => { releaseOauth = resolve; });
+    const calls = installFetchStub({
+      oauth: () => fakeResponse(200, OAUTH_OK),
+    });
+    // Hold the OAuth leg open so all three sends are provably in flight together.
+    const stub = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const passthrough = stub.getMockImplementation()!;
+    stub.mockImplementation(async (url: string | URL, init: RequestInit = {}) => {
+      if (String(url).includes('oauth2.googleapis.com')) await oauthGate;
+      return passthrough(url, init);
+    });
+
+    const inFlight = Promise.all([
+      sendPushNotification('user-1', payload),
+      sendPushNotification('user-2', payload),
+      sendPushNotification('user-3', payload),
+    ]);
+    await Promise.resolve();
+    releaseOauth!();
+    const results = await inFlight;
+
+    expect(results.every((r) => r.sent === 1)).toBe(true);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(1);
+    expect(calls.filter((c) => c.url.includes('fcm.googleapis.com'))).toHaveLength(3);
+  });
+
+  it('does not hand a racing waiter a token minted for a different credential', async () => {
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    // The credential has to rotate while the first mint is genuinely in the air —
+    // both sends read process.env only after their first await, so flipping it
+    // before either resumes would just show both of them the second credential.
+    let releaseFirstMint: (() => void) | undefined;
+    const firstMintGate = new Promise<void>((resolve) => { releaseFirstMint = resolve; });
+    let oauthSeen = 0;
+    const stub = globalThis.fetch as unknown as ReturnType<typeof vi.fn>;
+    const passthrough = stub.getMockImplementation()!;
+    stub.mockImplementation(async (url: string | URL, init: RequestInit = {}) => {
+      if (String(url).includes('oauth2.googleapis.com')) {
+        oauthSeen += 1;
+        if (oauthSeen === 1) await firstMintGate;
+      }
+      return passthrough(url, init);
+    });
+
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'race-rotate-a');
+    const first = sendPushNotification('user-1', payload);
+    await vi.waitFor(() => expect(oauthSeen).toBe(1));
+
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'race-rotate-b');
+    const second = sendPushNotification('user-2', payload);
+    // The second send must open its own mint rather than join the pending one.
+    await vi.waitFor(() => expect(oauthSeen).toBe(2));
+
+    releaseFirstMint!();
+    await Promise.all([first, second]);
+
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+    const sendUrls = calls.filter((c) => c.url.includes('fcm.googleapis.com')).map((c) => c.url);
+    expect(sendUrls.some((u) => u.includes('/projects/race-rotate-a/'))).toBe(true);
+    expect(sendUrls.some((u) => u.includes('/projects/race-rotate-b/'))).toBe(true);
+  });
+
+  it('lets a later send retry after an in-flight mint fails', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'inflight-fail-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    let attempt = 0;
+    const calls = installFetchStub({
+      oauth: () => {
+        attempt += 1;
+        return attempt === 1 ? fakeResponse(500, 'upstream boom') : fakeResponse(200, OAUTH_OK);
+      },
+    });
+
+    // Both race on the same failing mint, then a third send must not be stuck
+    // waiting on the dead in-flight promise.
+    const [a, b] = await Promise.all([
+      sendPushNotification('user-1', payload),
+      sendPushNotification('user-2', payload),
+    ]);
+    expect(a.failed).toBe(1);
+    expect(b.failed).toBe(1);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(1);
+
+    const c = await sendPushNotification('user-3', payload);
+    expect(c.sent).toBe(1);
     expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
   });
 
