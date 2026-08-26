@@ -1143,6 +1143,10 @@ describe('sendToFcm (Android)', () => {
     await sendPushNotification('user-1', { silent: true, badge: 3, data: { pageId: 'p1' } });
 
     const message = sentMessage(calls);
+    // The silent branch is a separate return, so it needs its own assertion that
+    // the message is actually addressed to the device — a silent push with no
+    // token reaches nobody, and badge sync is silent-only.
+    expect(message.token).toBe('fcm-token-abc123');
     expect('notification' in message).toBe(false);
     const android = message.android as Record<string, unknown>;
     expect('notification' in android).toBe(false);
