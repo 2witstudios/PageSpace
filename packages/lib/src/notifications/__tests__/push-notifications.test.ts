@@ -1965,6 +1965,38 @@ describe('sendToFcm (Android)', () => {
     expect(setFn).toHaveBeenCalledWith(expect.objectContaining({ failedAttempts: '0' }));
   });
 
+  // The retry has to be classified from the RETRY's body, not the 401 that
+  // triggered it. Both existing retry tests repeat the same response, so a
+  // stale body would look identical to a fresh one — and a token that turns out
+  // to be dead on the second attempt would never be cleaned up.
+  it('classifies the retry from its own response, not the 401 that caused it', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'retry-reclassify-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    let attempt = 0;
+    installFetchStub({
+      send: () => {
+        attempt += 1;
+        return attempt === 1
+          ? fakeResponse(401, JSON.stringify({ error: { status: 'UNAUTHENTICATED', message: 'stale token' } }))
+          : fakeResponse(404, JSON.stringify({
+              error: {
+                message: 'Requested entity was not found.',
+                status: 'NOT_FOUND',
+                details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'UNREGISTERED' }],
+              },
+            }));
+      },
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('UNREGISTERED');
+    expect(result.errors[0]).not.toContain('UNAUTHENTICATED');
+    expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
   it('gives up after one retry when the fresh token is rejected too', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'always-401-project');
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
