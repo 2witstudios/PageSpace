@@ -905,9 +905,11 @@ interface FetchCall {
   init: RequestInit;
 }
 
+// Both handlers may be async: several tests gate a response on a promise to
+// force an ordering that would otherwise never occur (a late 401, a slow mint).
 function installFetchStub(handlers: {
-  oauth?: (call: FetchCall) => FakeResponse;
-  send?: (message: Record<string, unknown>, call: FetchCall) => FakeResponse;
+  oauth?: (call: FetchCall) => FakeResponse | Promise<FakeResponse>;
+  send?: (message: Record<string, unknown>, call: FetchCall) => FakeResponse | Promise<FakeResponse>;
 } = {}) {
   const calls: FetchCall[] = [];
   const stub = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
