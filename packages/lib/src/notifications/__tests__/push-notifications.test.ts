@@ -912,7 +912,9 @@ function primeSign() {
   const rsaSign = {
     update: vi.fn().mockReturnThis(),
     end: vi.fn().mockReturnThis(),
-    sign: vi.fn().mockReturnValue(Buffer.from('fake-rsa-signature')),
+    // Bytes chosen so the plain base64 is `+/++7/8=` — it contains +, / and
+    // padding, so the base64url substitutions are actually observable.
+    sign: vi.fn().mockReturnValue(Buffer.from([0xfb, 0xff, 0xbe, 0xef, 0xff])),
   };
   const derSignature = Buffer.alloc(72, 0);
   derSignature[0] = 0x30; derSignature[1] = 70;
@@ -996,6 +998,49 @@ describe('sendToFcm (Android)', () => {
     expect(message.token).toBe('fcm-token-abc123');
     expect(message.notification).toEqual({ title: 'Hello', body: 'World' });
     expect((message.android as Record<string, unknown>).priority).toBe('high');
+  });
+
+  // Everything Google validates about the assertion before it will mint a token.
+  // The transport stub accepts any bytes, so without this the request could be
+  // malformed in six different ways and every test would still pass while every
+  // Android push failed in production with an opaque invalid_grant.
+  it('builds an assertion Google will actually accept', async () => {
+    const raw = serviceAccountJson({}, 'assertion-shape-project');
+    process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const { rsaSign } = primeSign();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', payload);
+
+    const oauth = calls.find((c) => c.url.includes('oauth2.googleapis.com'))!;
+    // The token endpoint is form-urlencoded; JSON is rejected.
+    expect((oauth.init.headers as Record<string, string>)['content-type'])
+      .toBe('application/x-www-form-urlencoded');
+
+    const assertion = new URLSearchParams(String(oauth.init.body)).get('assertion') ?? '';
+    const [headerB64, claimsB64, signatureB64] = assertion.split('.');
+
+    expect(JSON.parse(Buffer.from(headerB64, 'base64url').toString())).toEqual({
+      alg: 'RS256',
+      typ: 'JWT',
+    });
+
+    const claims = JSON.parse(Buffer.from(claimsB64, 'base64url').toString()) as Record<string, unknown>;
+    expect(claims.iss).toBe(`push@assertion-shape-project.iam.gserviceaccount.com`);
+    expect(claims.scope).toBe('https://www.googleapis.com/auth/firebase.messaging');
+    expect(claims.aud).toBe('https://oauth2.googleapis.com/token');
+    // Both are required by RFC 7523, and Google caps the lifetime at one hour.
+    expect(typeof claims.iat).toBe('number');
+    expect(claims.exp).toBe((claims.iat as number) + 3600);
+
+    // The signature has to be over exactly the header.claims that were sent —
+    // signing over anything else produces a token Google cannot verify.
+    expect(rsaSign.update).toHaveBeenCalledWith(`${headerB64}.${claimsB64}`);
+    expect(signatureB64.length).toBeGreaterThan(0);
+    // base64url alphabet only: no +, /, or = padding.
+    expect(signatureB64).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
   it('unescapes a literal backslash-n private key before signing', async () => {
