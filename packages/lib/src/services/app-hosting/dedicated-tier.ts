@@ -63,17 +63,19 @@ export function isCreditMetered(tier: PublishedAppTier): boolean {
  * stop a machine somebody is paying a flat monthly price to keep up, and nothing
  * downstream will refuse it.
  *
- * Exported ahead of its caller on purpose: the reaper is built on a sibling
- * branch, and keying the exemption on the TIER — rather than on a column the
- * reaper owns — is what lets the two land in either order without touching each
- * other's files. Both branches implement the same rule independently while they
- * are separate (the reaper's row source filters `tier = 'metered'` in SQL), and
- * whichever of the two merges SECOND rewires that predicate to this function, so
- * the rule ends up stated once. Until then this export is deliberately
- * caller-less in its own branch.
+ * THREE THINGS ASK THIS QUESTION and they must never drift apart: the idle
+ * reaper's candidate query, the per-app daily awake cap, and anything that comes
+ * next. Two of them are JavaScript and call this function; the third is SQL and
+ * cannot, so it is built from {@link IDLE_REAPER_EXEMPT_TIERS} — the same array
+ * this function tests against. That is the point of the array existing separately
+ * from the function: a predicate and a `WHERE` clause that disagree would still
+ * compile, still pass every test that only exercises one of them, and quietly stop
+ * a machine somebody is paying a flat monthly price to keep up.
  */
+export const IDLE_REAPER_EXEMPT_TIERS: readonly PublishedAppTier[] = ['dedicated'];
+
 export function isIdleReaperExempt(tier: PublishedAppTier): boolean {
-  return tier === 'dedicated';
+  return IDLE_REAPER_EXEMPT_TIERS.includes(tier);
 }
 
 /**

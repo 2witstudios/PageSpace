@@ -38,6 +38,7 @@ import { publishedApps, publishedAppMachineEvents } from '@pagespace/db/schema/p
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { assert } from '../../sandbox/__tests__/riteway';
 import { defaultAwakeMeterDeps } from '../awake-meter';
+import { defaultIdleReaperDeps } from '../idle-reaper';
 import {
   closeAppWindowAtBoundary,
   defaultAppLifecycleMeteringDeps,
@@ -862,6 +863,36 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the awake meter\u2019s row source', 
     assert({
       given: 'a running dedicated app',
       should: 'be invisible to the awake-seconds meter',
+      actual: listed.some((row) => row.id === appId),
+      expected: false,
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the idle reaper\u2019s candidate source', () => {
+  it('offers a running METERED app to the reaper', async () => {
+    // The row is seeded with stamps an hour old, so it is idle by any threshold
+    // this test would pass.
+    const listed = await defaultIdleReaperDeps.listIdleCandidates({ idleSeconds: 60, now: new Date() });
+    assert({
+      given: 'an idle metered app',
+      should: 'be reapable',
+      actual: listed.some((row) => row.id === appId),
+      expected: true,
+    });
+  });
+
+  it('NEVER offers a dedicated app, however idle it looks', async () => {
+    // THE ALWAYS-ON GUARANTEE. Nothing downstream will catch this if it breaks:
+    // `running -> stopped` is a legal transition for BOTH tiers (only
+    // `running -> parked` is metered-only), and it has to be, because an operator
+    // stop and a redeploy both need that edge. This predicate is the only thing
+    // keeping a machine up that somebody pays a flat monthly price for.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultIdleReaperDeps.listIdleCandidates({ idleSeconds: 60, now: new Date() });
+    assert({
+      given: 'a dedicated app with no traffic for an hour',
+      should: 'be invisible to the idle reaper',
       actual: listed.some((row) => row.id === appId),
       expected: false,
     });
