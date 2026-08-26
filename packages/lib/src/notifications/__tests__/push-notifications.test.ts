@@ -1290,6 +1290,48 @@ describe('sendToFcm (Android)', () => {
     expect(result.errors[0]).not.toContain('client_email');
   });
 
+  it('rejects a project_id that could rewrite the send URL', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, '../../evil');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('project_id may only contain');
+    // Nothing was put on the wire, and no device lost its registration.
+    expect(calls).toHaveLength(0);
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('accepts an ordinary hyphenated Firebase project id', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'pagespace-prod-1234');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.sent).toBe(1);
+    expect(sentMessage(calls)).toBeTruthy();
+    expect(calls.some((c) => c.url.includes('/projects/pagespace-prod-1234/'))).toBe(true);
+  });
+
+  it('refuses to send the signed assertion to a non-https token_uri', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({
+      token_uri: 'http://oauth2.googleapis.com/token',
+    });
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('token_uri must be an https:// URL');
+    expect(calls).toHaveLength(0);
+  });
+
   it('reuses a recently minted access token instead of re-minting per send', async () => {
     const raw = serviceAccountJson({}, 'shared-cache-project');
     process.env.FCM_SERVICE_ACCOUNT_JSON = raw;

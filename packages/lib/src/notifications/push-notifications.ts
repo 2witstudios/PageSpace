@@ -412,13 +412,34 @@ function parseFcmServiceAccount(raw: string): FcmServiceAccount {
     );
   }
 
+  // The project id is interpolated into the messages:send path, so a stray `/`
+  // or `..` from a mistyped secret would silently aim the send at a different
+  // endpoint. Firebase ids are lowercase alphanumerics and hyphens; the check is
+  // kept a shade wider than that so a legitimate id is never rejected, while
+  // everything that could change the meaning of the URL still is.
+  if (!/^[A-Za-z0-9._-]+$/.test(projectId)) {
+    throw new Error(
+      'FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON project_id may only contain letters, digits, dots, underscores and hyphens'
+    );
+  }
+
+  // token_uri is fetched with the signed assertion in the body. It comes out of
+  // the credential itself so it is not an attacker-controlled boundary, but a
+  // mistyped http:// would put that assertion on the wire in cleartext.
+  const tokenUri = str('token_uri') || FCM_DEFAULT_TOKEN_URI;
+  if (!tokenUri.startsWith('https://')) {
+    throw new Error(
+      'FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON token_uri must be an https:// URL'
+    );
+  }
+
   return {
     projectId,
     clientEmail,
     // Secret stores (Fly, .env) commonly deliver the PEM with literal backslash-n
     // rather than real newlines; crypto rejects that outright.
     privateKey: privateKey.includes('\\n') ? privateKey.replace(/\\n/g, '\n') : privateKey,
-    tokenUri: str('token_uri') || FCM_DEFAULT_TOKEN_URI,
+    tokenUri,
   };
 }
 
