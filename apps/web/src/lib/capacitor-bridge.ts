@@ -158,6 +158,16 @@ export function hasNativeCapability(capability: NativeCapability): boolean {
 }
 
 /**
+ * The capability set of a platform with no native support.
+ *
+ * This is what the server renders, so a client that starts from it and only
+ * moves to the real set inside an effect cannot produce a hydration mismatch.
+ * Reach for this as an initial/SSR state rather than calling
+ * `getNativeCapabilities()` during the first render.
+ */
+export const NO_NATIVE_CAPABILITIES = PLATFORM_CAPABILITIES.web;
+
+/**
  * Get the full capability set for the current platform.
  *
  * Useful for hooks that expose capabilities as a single object. The returned

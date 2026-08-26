@@ -7,6 +7,7 @@ import {
   isAndroid,
   isIOS,
   isNativeApp,
+  NO_NATIVE_CAPABILITIES,
   type NativeCapability,
   type Platform,
 } from '@/lib/capacitor-bridge';
@@ -59,15 +60,18 @@ interface CapacitorState {
  * ```
  */
 export function useCapacitor(): CapacitorState {
-  const [state, setState] = useState<CapacitorState>(() => ({
+  // The initial state must match what the server rendered: no native platform
+  // and no capabilities. Reading the real platform here instead would make the
+  // first client render disagree with the server's HTML on any native build.
+  const [state, setState] = useState<CapacitorState>({
     isNative: false,
     platform: 'web',
     isIOS: false,
     isAndroid: false,
     isIPad: false,
-    capabilities: getNativeCapabilities(),
+    capabilities: NO_NATIVE_CAPABILITIES,
     isReady: false,
-  }));
+  });
 
   useEffect(() => {
     const platform = getPlatform();

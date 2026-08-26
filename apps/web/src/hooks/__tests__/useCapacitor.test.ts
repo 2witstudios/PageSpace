@@ -300,6 +300,31 @@ describe('useCapacitor', () => {
       });
     });
 
+    it('renders unsupported first on iOS, so hydration cannot mismatch', async () => {
+      // The server has no window.Capacitor, so it always renders the
+      // unsupported set. If the hook's initial state read the real platform,
+      // the first client render would disagree with the server's HTML.
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'ios'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const seen: Array<{ badge: boolean; isReady: boolean }> = [];
+      const { result } = renderHook(() => {
+        const state = useCapacitorModule.useCapacitor();
+        seen.push({ badge: state.capabilities.badge, isReady: state.isReady });
+        return state;
+      });
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      // First render (pre-effect) must look exactly like the server's.
+      expect(seen[0]).toEqual({ badge: false, isReady: false });
+      // and only then move to the real capability set.
+      expect(result.current.capabilities.badge).toBe(true);
+    });
+
     it('reports everything unsupported in a browser tab', async () => {
       delete (window as Window & { Capacitor?: MockCapacitor }).Capacitor;
       vi.resetModules();
