@@ -28,6 +28,7 @@ import {
 } from '@pagespace/db/schema/published-app-subscriptions';
 import { loggers } from '../../logging/logger-config';
 import { isBillingEnabled } from '../../deployment-mode';
+import { stopPublishedApp } from './app-lifecycle-metering';
 import { releaseHold as releaseCreditHold } from '../../billing/credit-consume';
 import { isAppHostingEnabled, resolveFlyMachinesToken } from './app-hosting-env';
 import {
@@ -38,6 +39,7 @@ import {
 import {
   applyMinMachinesRunning,
   isDedicatedEntitled,
+  DEFAULT_GUEST_PRESET,
   isCreditMetered,
   minMachinesRunningFor,
   planSubscriptionMirrorWrite,
@@ -83,6 +85,11 @@ export interface DedicatedTierDeps {
    * {@link setPublishedAppTier}.
    */
   releaseHold: (holdId: string) => Promise<void>;
+  /**
+   * Stop an app's machine. Used only by {@link enforceUnpaidDedicated}, which has
+   * to end an always-on machine BEFORE it may resize the app — see there.
+   */
+  stopApp: (publishedAppId: string) => Promise<void>;
 }
 
 function defaultTransport(): FlapsTransport {
@@ -95,7 +102,28 @@ export const defaultDedicatedTierDeps: DedicatedTierDeps = {
     await updateMachineConfig(defaultTransport(), flyAppName, machineId, mergeFn);
   },
   releaseHold: (holdId) => releaseCreditHold(holdId),
+  async stopApp(publishedAppId) {
+    // `operator`, not `insolvent`: `insolvent` lands in `parked`, and `parked` is
+    // metered-only at the database — the app is still `dedicated` at this point,
+    // so that transition would be refused and the machine would stay up.
+    await stopPublishedApp(publishedAppId, 'operator');
+  },
 };
+
+export interface SetTierOptions {
+  /**
+   * Move the app back to the default guest in the SAME statement as the tier.
+   *
+   * Enforcement only. A resize destroys and recreates the machine on the next
+   * deploy (a guest change is a machine CREATE — the rootfs assembles there), so
+   * doing it as a side effect of an ordinary billing event would take a live app
+   * down over a card decline. {@link enforceUnpaidDedicated} is the one caller,
+   * and it stops the app FIRST so there is nothing live to interrupt.
+   */
+  resetGuestPreset?: boolean;
+  /** Replace `lastError` with a plain-language reason the publish surface can show. */
+  lastError?: string | null;
+}
 
 export type SetTierResult =
   | {
@@ -143,6 +171,7 @@ export async function setPublishedAppTier(
   publishedAppId: string,
   to: PublishedAppTier,
   deps: DedicatedTierDeps = defaultDedicatedTierDeps,
+  options: SetTierOptions = {},
 ): Promise<SetTierResult> {
   if (!deps.isEnabled()) return { ok: false, reason: 'disabled' };
 
@@ -155,11 +184,18 @@ export async function setPublishedAppTier(
       .for('update');
     if (!row) return { ok: false as const, reason: 'not_found' as const };
 
+    // The guest the app will be running AFTER this write. Normally its current
+    // one; on the enforcement path the default, because the two columns have to
+    // move together — `published_apps_metered_guest_preset` makes a metered row on
+    // a larger guest unrepresentable, so "set the tier, then resize" is two
+    // statements of which the first cannot commit.
+    const nextGuestPreset = options.resetGuestPreset ? DEFAULT_GUEST_PRESET : row.guestPreset;
+
     const plan = planTierChange({
       from: row.tier,
       to,
       status: row.status,
-      guestPreset: row.guestPreset,
+      guestPreset: nextGuestPreset,
     });
     if (!plan.allowed) return { ok: false as const, reason: plan.reason };
 
@@ -191,6 +227,8 @@ export async function setPublishedAppTier(
         // credits.
         ...(plan.unpark ? { lastError: null } : {}),
         ...(closesWindow ? { awakeBilledThrough: null, awakeHoldId: null } : {}),
+        ...(nextGuestPreset === row.guestPreset ? {} : { guestPreset: nextGuestPreset }),
+        ...(options.lastError === undefined ? {} : { lastError: options.lastError }),
       })
       // Guarded on the tier we planned against, not on the id alone: two tier
       // changes racing (a webhook cancelling while a user upgrades) must produce
@@ -488,6 +526,7 @@ export type DedicatedSubscriptionSyncOutcome =
  */
 export async function syncAppTierToSubscription(
   mirror: Pick<PublishedAppSubscription, 'publishedAppId' | 'status'> | null,
+  deps: DedicatedTierDeps = defaultDedicatedTierDeps,
 ): Promise<DedicatedSubscriptionSyncOutcome> {
   if (!mirror) {
     // Not an error, and deliberately not a throw. Stripe redelivers events, and a
@@ -499,7 +538,7 @@ export async function syncAppTierToSubscription(
 
   const entitled = isDedicatedEntitled(mirror.status);
   const target: PublishedAppTier = entitled ? 'dedicated' : 'metered';
-  const result = await setPublishedAppTier(mirror.publishedAppId, target);
+  const result = await setPublishedAppTier(mirror.publishedAppId, target, deps);
 
   if (!result.ok) {
     // `same_tier` is the ordinary case — most subscription events do not change
@@ -510,6 +549,16 @@ export async function syncAppTierToSubscription(
         ? { outcome: 'entitled', publishedAppId: mirror.publishedAppId, tierChanged: false }
         : { outcome: 'downgraded', publishedAppId: mirror.publishedAppId, tierChanged: false };
     }
+    // A DOWNGRADE THAT CANNOT HAPPEN IS NOT A DOWNGRADE. If the app is running a
+    // guest the metered tier may not run, the plain tier change is refused — and
+    // leaving it there would mean an app that nobody is paying for keeps its
+    // always-on configuration, stays out of BOTH meters, and does so forever,
+    // because no further Stripe event is coming for a dead subscription. Enforce
+    // it instead.
+    if (!entitled && result.reason === 'guest_preset_not_allowed') {
+      return enforceUnpaidDedicated(mirror.publishedAppId, deps);
+    }
+
     loggers.ai.warn('Published app tier could not follow its dedicated subscription', {
       publishedAppId: mirror.publishedAppId,
       status: mirror.status,
@@ -589,4 +638,87 @@ export async function surveyDedicatedDunning(
     // from.
     staleAppIds: stale.slice(0, 20).map((row) => row.publishedAppId),
   };
+}
+
+/**
+ * The `lastError` an enforced downgrade writes — the ONE user-facing explanation
+ * of why an app came off the dedicated tier and shrank.
+ *
+ * Carried on the row rather than raised as a notification for the same reason the
+ * daily-cap park is: `published_apps.lastError` is the column the publish surface
+ * already reads as "why is my app not serving", and adding a notification type is
+ * user-visible UI work inside a branch whose safety property is that it ships dark.
+ */
+export const UNPAID_DOWNGRADE_REASON =
+  'dedicated hosting ended: the app was stopped and returned to the standard machine size';
+
+/**
+ * Take an app off the dedicated tier when its subscription has stopped paying and
+ * the ordinary downgrade cannot be expressed.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * THE SITUATION. A dedicated app may run a guest the metered tier is forbidden
+ * (the awake meter prices one fixed shape, so a metered row on a larger guest is
+ * under-billed silently — `published_apps_metered_guest_preset` makes it
+ * unrepresentable). When such an app's subscription ends, `setPublishedAppTier`
+ * correctly refuses. Stopping there is the trap: the row stays `dedicated`, so it
+ * keeps `min_machines_running: 1`, stays out of the awake meter AND the rootfs
+ * storage drain, and does it INDEFINITELY — the subscription is dead, so no
+ * further event will ever arrive to reconsider. An unpaid machine, running
+ * forever, invisible to both meters.
+ *
+ * THE ORDER IS THE WHOLE DESIGN, and each step is where it is because of what the
+ * previous one makes safe:
+ *
+ *   1. STOP the machine. This is what actually ends the cost, and it is first so
+ *      that everything after it happens to an app that is already down. `operator`
+ *      rather than `insolvent`, because `insolvent` lands in `parked` and `parked`
+ *      is metered-only — the app is still `dedicated` here, so that transition
+ *      would be refused and the machine would stay up.
+ *   2. TIER AND GUEST TOGETHER. Both columns move in one statement, because
+ *      neither shape is legal alone. The resize is the only part a customer did
+ *      not ask for, and it is defensible precisely because step 1 already stopped
+ *      the app: no live machine is interrupted, and the smaller guest is what the
+ *      next wake creates rather than something that happens to a serving app.
+ *      Nothing is lost with it — a published app's machine has no volume; its
+ *      filesystem comes from the image.
+ *   3. PUSH `min_machines_running: 0`. Without this the row says metered while the
+ *      LIVE machine config still says keep-one-up, and Fly's proxy would restart
+ *      the machine we just stopped. The row alone does not reach Fly.
+ *
+ * A failure at step 1 ABORTS: resizing an app we could not stop would leave a
+ * running machine whose row promises a guest it is not on, and would still be
+ * always-on. Better to leave the state consistent, report it, and let the next
+ * event or an operator retry.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export async function enforceUnpaidDedicated(
+  publishedAppId: string,
+  deps: DedicatedTierDeps = defaultDedicatedTierDeps,
+): Promise<DedicatedSubscriptionSyncOutcome> {
+  try {
+    await deps.stopApp(publishedAppId);
+  } catch (error) {
+    loggers.ai.error(
+      'Unpaid dedicated app could not be stopped; leaving it on the dedicated tier rather than resizing a running machine',
+      error instanceof Error ? error : new Error(String(error)),
+      { publishedAppId },
+    );
+    return { outcome: 'tier_change_refused', publishedAppId, reason: 'stop_failed' };
+  }
+
+  const result = await setPublishedAppTier(publishedAppId, 'metered', deps, {
+    resetGuestPreset: true,
+    lastError: UNPAID_DOWNGRADE_REASON,
+  });
+  if (!result.ok) {
+    loggers.ai.error(
+      'Unpaid dedicated app was stopped but could not be returned to the metered tier',
+      new Error(result.reason),
+      { publishedAppId, reason: result.reason },
+    );
+    return { outcome: 'tier_change_refused', publishedAppId, reason: result.reason };
+  }
+
+  return { outcome: 'downgraded', publishedAppId, tierChanged: true };
 }

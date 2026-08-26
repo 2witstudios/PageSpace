@@ -117,6 +117,27 @@ export async function startDedicatedSubscription(
 
   const customerId = await getOrCreateStripeCustomer(input.user);
 
+  // AN IDEMPOTENCY KEY, because the read above cannot serialize anything.
+  //
+  // Two POSTs for the same app can both pass the live-subscription check — they
+  // read before either writes — and then both call `subscriptions.create`. Stripe
+  // would mint TWO recurring subscriptions; the mirror's UNIQUE on
+  // `publishedAppId` keeps only one pointer, so the other charges the customer
+  // every month with nothing in our database naming it. A preflight read cannot
+  // close that: the window is between the read and Stripe, and no amount of
+  // checking first removes it.
+  //
+  // The key is derived from what the racing requests AGREE on — the app and the
+  // subscription they each saw as the previous one — so two overlapping purchases
+  // compute the same key and Stripe returns one subscription to both. It is not
+  // constant per app, which matters in the other direction: a legitimate re-buy
+  // after a cancellation follows a DIFFERENT previous id, so it gets its own key
+  // and is not silently answered with the dead subscription. (Stripe expires keys
+  // after 24 hours, so an app whose first purchase never existed re-uses
+  // `none` — correct, because that is genuinely the same logical request until one
+  // of them succeeds.)
+  const idempotencyKey = `pgs-dedicated:${input.publishedAppId}:${existing?.stripeSubscriptionId ?? 'none'}`;
+
   const subscription = await stripe.subscriptions.create({
     customer: customerId,
     items: [{ price: price.priceId }],
@@ -133,7 +154,7 @@ export async function startDedicatedSubscription(
       guestPreset: input.guestPreset,
       userId: input.user.id,
     },
-  });
+  }, { idempotencyKey });
 
   const period = subscriptionPeriod(subscription);
   // Written BEFORE the customer pays, and that ordering is the same one

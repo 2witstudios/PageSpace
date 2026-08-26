@@ -206,3 +206,34 @@ describe('a successful purchase', () => {
     expect(mockRecord).toHaveBeenCalledWith(expect.objectContaining({ status: 'incomplete' }));
   });
 });
+
+describe('two overlapping purchases for the same app', () => {
+  it('sends Stripe an idempotency key, so the race cannot mint two subscriptions', async () => {
+    // The live-subscription read cannot serialize anything: two POSTs read before
+    // either writes, both pass, and both call `subscriptions.create`. Stripe would
+    // mint TWO recurring charges and the mirror's UNIQUE keeps one pointer —
+    // leaving the other billing the customer monthly with nothing naming it.
+    mockFindForApp.mockResolvedValue(null);
+    await buy();
+    const [, options] = mockSubscriptionsCreate.mock.calls[0];
+    expect(options?.idempotencyKey).toBe('pgs-dedicated:app_1:none');
+  });
+
+  it('gives two racing requests the SAME key', async () => {
+    // They agree on what they read, so they agree on the key, so Stripe answers
+    // both with one subscription.
+    mockFindForApp.mockResolvedValue(null);
+    await Promise.all([buy(), buy()]);
+    const keys = mockSubscriptionsCreate.mock.calls.map((c) => c[1]?.idempotencyKey);
+    expect(new Set(keys).size, 'racing requests must not compute different keys').toBe(1);
+  });
+
+  it('gives a genuine RE-BUY a different key', async () => {
+    // Otherwise Stripe would answer a real new purchase with the dead
+    // subscription it already created under that key.
+    mockFindForApp.mockResolvedValue(mirror('canceled'));
+    await buy();
+    const [, options] = mockSubscriptionsCreate.mock.calls[0];
+    expect(options?.idempotencyKey).toBe('pgs-dedicated:app_1:sub_old');
+  });
+});

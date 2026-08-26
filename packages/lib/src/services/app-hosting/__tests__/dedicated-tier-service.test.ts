@@ -87,11 +87,14 @@ vi.mock('../../../deployment-mode', async (importOriginal) => ({
 // own `releaseHold`, so the module is stubbed to keep this suite runnable against
 // source with no built @pagespace/db.
 vi.mock('../../../billing/credit-consume', () => ({ releaseHold: vi.fn(async () => undefined) }));
+vi.mock('../app-lifecycle-metering', () => ({ stopPublishedApp: vi.fn(async () => undefined) }));
 vi.mock('../../../logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } },
 }));
 
 import {
+  UNPAID_DOWNGRADE_REASON,
+  enforceUnpaidDedicated,
   DEDICATED_DUNNING_VISIBILITY_DAYS,
   isDedicatedTierPurchasable,
   recordDedicatedSubscription,
@@ -117,6 +120,7 @@ function deps(overrides: Partial<DedicatedTierDeps> = {}): DedicatedTierDeps {
     isEnabled: () => true,
     updateMachineConfig: vi.fn(async () => undefined),
     releaseHold: vi.fn(async () => undefined),
+    stopApp: vi.fn(async () => undefined),
     ...overrides,
   };
 }
@@ -575,5 +579,130 @@ describe('recordDedicatedSubscription', () => {
       actual: [result.row, mockDb.__state.inserted.length],
       expected: [null, 0],
     });
+  });
+});
+
+describe('enforceUnpaidDedicated', () => {
+  /** A dedicated app on a guest the metered tier may not run. */
+  const BIG = { ...APP, tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096', status: 'running' };
+
+  it('STOPS the machine before touching anything else', async () => {
+    // This is what actually ends the cost, and it is first so that the resize
+    // below happens to an app that is already down rather than to a live one.
+    const stopApp = vi.fn(async () => undefined);
+    mockDb.__state.rows = [BIG];
+    mockDb.__state.returning = [[{ ...BIG, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
+
+    await enforceUnpaidDedicated('app_1', deps({ stopApp }));
+
+    expect(stopApp).toHaveBeenCalledWith('app_1');
+  });
+
+  it('moves the tier and the guest in ONE statement', async () => {
+    // Neither shape is legal alone: `published_apps_metered_guest_preset` makes a
+    // metered row on a larger guest unrepresentable, so "set the tier, then
+    // resize" is two statements of which the first cannot commit.
+    mockDb.__state.rows = [BIG];
+    mockDb.__state.returning = [[{ ...BIG, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
+
+    const outcome = await enforceUnpaidDedicated('app_1', deps());
+
+    assert({
+      given: 'an unpaid dedicated app on a big guest',
+      should: 'return to the metered tier at the default guest, with a reason the owner can read',
+      actual: mockDb.__state.updateSets[0],
+      expected: {
+        tier: 'metered',
+        status: 'running',
+        guestPreset: 'shared-cpu-1x-512',
+        lastError: UNPAID_DOWNGRADE_REASON,
+      },
+    });
+    assert({
+      given: 'the enforcement',
+      should: 'report a real downgrade',
+      actual: outcome,
+      expected: { outcome: 'downgraded', publishedAppId: 'app_1', tierChanged: true },
+    });
+  });
+
+  it('pushes min_machines_running back to 0, or Fly restarts what we stopped', async () => {
+    // The row alone does not reach Fly: a live machine config still saying
+    // keep-one-up would have the proxy restart the machine we just stopped.
+    mockDb.__state.rows = [BIG];
+    mockDb.__state.returning = [[{ ...BIG, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
+    let pushed: number | undefined;
+    const updateMachineConfig = vi.fn(async (_a: string, _m: string, merge: (c: never) => unknown) => {
+      const merged = merge({ services: [{ internal_port: 8080, min_machines_running: 1 }] } as never) as {
+        services: Array<Record<string, number>>;
+      };
+      pushed = merged.services[0].min_machines_running;
+    });
+
+    await enforceUnpaidDedicated('app_1', deps({ updateMachineConfig }));
+
+    assert({
+      given: 'an app taken off the dedicated tier',
+      should: 'stop being kept up by Fly',
+      actual: pushed,
+      expected: 0,
+    });
+  });
+
+  it('ABORTS if the machine could not be stopped', async () => {
+    // Resizing an app we could not stop would leave a running machine whose row
+    // promises a guest it is not on — and it would still be always-on.
+    mockDb.__state.rows = [BIG];
+    const outcome = await enforceUnpaidDedicated(
+      'app_1',
+      deps({ stopApp: vi.fn(async () => { throw new Error('flaps 503'); }) }),
+    );
+    assert({
+      given: 'a stop that failed',
+      should: 'report rather than resize a running machine',
+      actual: outcome,
+      expected: { outcome: 'tier_change_refused', publishedAppId: 'app_1', reason: 'stop_failed' },
+    });
+    assert({
+      given: 'an aborted enforcement',
+      should: 'leave the row exactly as it was',
+      actual: mockDb.__state.updateSets,
+      expected: [],
+    });
+  });
+});
+
+describe('syncAppTierToSubscription on a subscription that stopped paying', () => {
+  it('ENFORCES the downgrade when the plain one cannot be expressed', async () => {
+    // Codex P1: leaving this as a logged refusal means an app nobody pays for
+    // keeps its always-on config and stays out of BOTH meters forever, because no
+    // further event is coming for a dead subscription.
+    const stopApp = vi.fn(async () => undefined);
+    mockDb.__state.rows = [{ ...APP, tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096', status: 'running' }];
+    mockDb.__state.returning = [[{ ...APP, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
+
+    const outcome = await syncAppTierToSubscription(
+      { publishedAppId: 'app_1', status: 'canceled' },
+      deps({ stopApp }),
+    );
+
+    expect(stopApp, 'the unpaid machine must actually be stopped').toHaveBeenCalledWith('app_1');
+    assert({
+      given: 'a canceled subscription on an un-downgradable guest',
+      should: 'end as a real downgrade rather than a refusal',
+      actual: outcome,
+      expected: { outcome: 'downgraded', publishedAppId: 'app_1', tierChanged: true },
+    });
+  });
+
+  it('does NOT force a resize on an app that is still paying', async () => {
+    // The resize is enforcement. An entitled subscription whose tier change is
+    // refused for any other reason must never lose its guest as a side effect.
+    const stopApp = vi.fn(async () => undefined);
+    mockDb.__state.rows = [{ ...APP, tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096', status: 'running' }];
+
+    await syncAppTierToSubscription({ publishedAppId: 'app_1', status: 'active' }, deps({ stopApp }));
+
+    expect(stopApp, 'a paying app must never be stopped by a sync').not.toHaveBeenCalled();
   });
 });
