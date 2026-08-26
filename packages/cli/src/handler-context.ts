@@ -32,6 +32,17 @@ export interface HandlerContext {
    * to remove instead of guessing one the caller never passed.
    */
   readonly credentialSourceKind: AuthSource['kind'];
+  /**
+   * The literal env var that actually supplied the credential — including a
+   * legacy alias (`PAGESPACE_AUTH_TOKEN`, `PAGESPACE_PROFILE`) when THAT is
+   * what was set, not the modern name it was folded into. Null when the
+   * credential did not come from an env var at all (a `--token`/`--key` flag,
+   * the stored default slot, or nothing resolved). Telling a caller to unset
+   * `PAGESPACE_TOKEN` when the legacy `PAGESPACE_AUTH_TOKEN` is what is
+   * actually set leaves it in place — the caller re-runs, resolves the same
+   * credential, and hits the same refusal again.
+   */
+  readonly credentialSourceEnvVarName: string | null;
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */

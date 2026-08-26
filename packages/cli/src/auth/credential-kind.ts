@@ -60,19 +60,31 @@ export function credentialKindOf(source: AuthSource): CredentialKind {
  * same "--token/env credential" line, so a caller who had only ever passed
  * `--key` (or nothing at all — an unnamed static credential sitting in the
  * default slot) was pointed at a flag they never used.
+ *
+ * `envVarName` further narrows the `env`/`stored` cases: `PAGESPACE_TOKEN` and
+ * `PAGESPACE_KEY` each have a deprecated legacy alias
+ * (`PAGESPACE_AUTH_TOKEN`, `PAGESPACE_PROFILE` — `legacy-token-env.ts`) that
+ * still wins precedence when set. Telling a caller to unset the MODERN name
+ * while the LEGACY one is what actually resolved leaves the override in
+ * place: they re-run, resolve the same credential, and hit this refusal
+ * again. Non-null only when the credential came through a legacy alias; null
+ * means either the modern name resolved it (the generic wording already
+ * names that correctly) or it did not come from an env var at all.
  */
-function removalHint(sourceKind: AuthSource['kind']): string {
+function removalHint(sourceKind: AuthSource['kind'], envVarName: string | null): string {
   switch (sourceKind) {
     case 'flag':
       return 'with --token removed';
     case 'env':
-      return `with ${TOKEN_ENV_VAR_NAME} unset`;
+      return `with ${envVarName ?? TOKEN_ENV_VAR_NAME} unset`;
     case 'stored':
-      // Covers both an explicit `--key <name>`/`PAGESPACE_KEY` and the
-      // ambient default slot: either way the fix is the same — remove or
-      // replace whichever stored credential resolved, not a flag.
-      return `after clearing the stored key credential that resolved (remove --key/${KEY_ENV_VAR_NAME}, or replace ` +
-        'the stored credential itself)';
+      // Covers both an explicit `--key <name>`/`PAGESPACE_KEY`(/its legacy
+      // alias) and the ambient default slot: either way the fix is the same —
+      // remove or replace whichever stored credential resolved, not a flag.
+      return envVarName
+        ? `after unsetting ${envVarName} (or replacing the stored credential itself)`
+        : `after clearing the stored key credential that resolved (remove --key/${KEY_ENV_VAR_NAME}, or replace ` +
+          'the stored credential itself)';
     case 'none':
       // Unreachable in practice: this message only fires when
       // credentialKindOf(source) === 'key', which requires an actual
@@ -107,16 +119,22 @@ function removalHint(sourceKind: AuthSource['kind']): string {
  *
  * `sourceKind` is `ctx.credentialSourceKind` — `AuthSource['kind']`, the same
  * secret-free discriminant `credentialKindOf` classified to reach this
- * message in the first place, never the credential's value.
+ * message in the first place, never the credential's value. `envVarName` is
+ * `ctx.credentialSourceEnvVarName` — non-null only when a LEGACY env alias is
+ * what actually resolved the credential (see `removalHint`).
  */
-export function keysCommandNeedsLoginMessage(verb: string | undefined, sourceKind: AuthSource['kind']): string {
+export function keysCommandNeedsLoginMessage(
+  verb: string | undefined,
+  sourceKind: AuthSource['kind'],
+  envVarName: string | null = null,
+): string {
   const command = verb === undefined ? 'pagespace keys' : `pagespace keys ${verb}`;
   return (
     `"${command}" needs your personal login, and this invocation resolved a scoped access key.\n` +
     'That says nothing about the key: key management is simply not something a key can do. A key reads and writes ' +
     'drive content, while listing, minting and revoking keys is reserved for the person who owns them.\n' +
     '  pagespace keys describe   — what THIS key is, and the permissions it actually resolves to\n' +
-    `  pagespace login           — then re-run "${command}" ${removalHint(sourceKind)},\n` +
+    `  pagespace login           — then re-run "${command}" ${removalHint(sourceKind, envVarName)},\n` +
     '                              since an explicit credential outranks your stored login.'
   );
 }

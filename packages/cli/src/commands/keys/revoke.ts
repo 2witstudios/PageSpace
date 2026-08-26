@@ -26,7 +26,7 @@ export const tokensRevoke: CommandHandler = async (ctx, intent) => {
   // revocation this credential can never perform wastes the confirmation, and
   // the server's refusal used to arrive as "your key was invalidated" (#2464).
   if (ctx.credentialKind === 'key') {
-    ctx.stderr.write(`${keysCommandNeedsLoginMessage('revoke', ctx.credentialSourceKind)}\n`);
+    ctx.stderr.write(`${keysCommandNeedsLoginMessage('revoke', ctx.credentialSourceKind, ctx.credentialSourceEnvVarName)}\n`);
     return EXIT_RUNTIME_ERROR;
   }
 

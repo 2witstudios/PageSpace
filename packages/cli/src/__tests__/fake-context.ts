@@ -62,6 +62,8 @@ export function createFakeContext(overrides: Partial<HandlerContext> = {}): Hand
     // 'stored' pairs with the 'login' default above — a stored, non-static
     // credential is exactly what `credentialKind: 'login'` describes.
     credentialSourceKind: 'stored',
+    // Null by default: no legacy env alias in play unless a test says so.
+    credentialSourceEnvVarName: null,
     activeKeyStore: createFakeActiveKeyStore(),
     isTTY: false,
     prompt: async () => '',

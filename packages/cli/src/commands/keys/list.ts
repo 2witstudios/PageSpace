@@ -27,7 +27,7 @@ import { describeEmptyDriveScopes, formatDriveScopeGrant } from './logic.js';
 
 export const tokensList: CommandHandler = async (ctx, intent) => {
   if (ctx.credentialKind === 'key') {
-    ctx.stderr.write(`${keysCommandNeedsLoginMessage('list', ctx.credentialSourceKind)}\n`);
+    ctx.stderr.write(`${keysCommandNeedsLoginMessage('list', ctx.credentialSourceKind, ctx.credentialSourceEnvVarName)}\n`);
     return EXIT_RUNTIME_ERROR;
   }
 

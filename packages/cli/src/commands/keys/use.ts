@@ -229,7 +229,7 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
     // scoped access key is not. Refused here so a live key is never reported as
     // invalidated (issue #2464).
     if (ctx.credentialKind === 'key') {
-      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use', ctx.credentialSourceKind)}\n`);
+      ctx.stderr.write(`${keysCommandNeedsLoginMessage('use', ctx.credentialSourceKind, ctx.credentialSourceEnvVarName)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
 

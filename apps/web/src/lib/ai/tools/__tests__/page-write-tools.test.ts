@@ -325,7 +325,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'uploaded.pdf', pageId: 'page-1', startLine: 1, content: 'new' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
@@ -359,7 +359,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'My Sheet', pageId: 'page-1', startLine: 1, content: 'new' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable error response
       if (!('error' in result)) throw new Error('Expected error result');
@@ -400,7 +400,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'Test Doc', pageId: 'page-1', startLine: 2, content: 'New Line 2' },
         context
-      );
+      ) as Record<string, unknown>;
 
       // Assert: observable outcomes
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
@@ -590,7 +590,7 @@ describe('page-write-tools', () => {
       const result = await pageWriteTools.replace_lines.execute!(
         { title: 'index.html', pageId: 'page-1', startLine: 1, content: '<div>new</div>' },
         context
-      );
+      ) as Record<string, unknown>;
 
       if ('error' in result) throw new Error(`Expected success but got error: ${result.error}`);
       const success = result as { success: boolean };

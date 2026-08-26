@@ -9,7 +9,7 @@ import { parseArgv } from './argv/parse.js';
 import { buildAuthProvider, enforceAuth } from './auth/auth-context.js';
 import { credentialKindOf } from './auth/credential-kind.js';
 import { createDiscoverMetadata } from './auth/discover.js';
-import { resolveEnvKeyName, resolveEnvToken } from './auth/legacy-token-env.js';
+import { resolveEnvKeyName, resolveEnvToken, LEGACY_TOKEN_ENV_VAR, LEGACY_KEY_ENV_VAR } from './auth/legacy-token-env.js';
 import { createRefreshAccessToken } from './auth/silent-refresh.js';
 import { mcpNoExplicitCredentialMessage, noExplicitCredentialMessage } from './auth/resolve.js';
 import { resolveCredentialSource } from './auth/resolve-credential-source.js';
@@ -170,6 +170,18 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     allowActiveKey: activeKeyEligible,
   });
 
+  // The literal env var that actually supplied `source`, legacy alias
+  // included — secret-free (just which NAME resolved, never the value). Used
+  // only to make a refusal message name the right variable to unset; `source`
+  // itself carries no memory of which of the two names (modern vs. legacy)
+  // produced its token/key name.
+  const credentialSourceEnvVarName: string | null =
+    source.kind === 'env'
+      ? (envToken.deprecationNotice !== null ? LEGACY_TOKEN_ENV_VAR : null)
+      : source.kind === 'stored' && activeKeyName === null && !parsed.flags.key?.trim() && envKey.name !== undefined
+        ? (envKey.deprecationNotice !== null ? LEGACY_KEY_ENV_VAR : null)
+        : null;
+
   const auth = buildAuthProvider(source, {
     discoverMetadata: createDiscoverMetadata(),
     createRefreshAccessToken,
@@ -185,6 +197,7 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     credentialStore: deps.credentialStore,
     credentialKind: credentialKindOf(source),
     credentialSourceKind: source.kind,
+    credentialSourceEnvVarName,
     activeKeyStore,
     isTTY: deps.isTTY ?? false,
     prompt: deps.prompt ?? (async () => ''),

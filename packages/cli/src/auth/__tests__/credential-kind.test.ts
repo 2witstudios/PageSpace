@@ -95,6 +95,27 @@ describe('keysCommandNeedsLoginMessage', () => {
     expect(message).not.toMatch(/--token removed/);
   });
 
+  // Issue #2481/#2476 follow-up: PAGESPACE_TOKEN has a deprecated legacy alias,
+  // PAGESPACE_AUTH_TOKEN, that still wins precedence when set. Naming the
+  // MODERN var while the LEGACY one is what resolved leaves it in place — the
+  // caller re-runs, resolves the same credential, and hits this refusal again.
+  it('names the legacy env alias when THAT is what actually resolved the key, not PAGESPACE_TOKEN', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'env', 'PAGESPACE_AUTH_TOKEN');
+    expect(message).toMatch(/PAGESPACE_AUTH_TOKEN unset/);
+    expect(message).not.toMatch(/PAGESPACE_TOKEN unset/);
+  });
+
+  it('names the legacy PAGESPACE_PROFILE alias when it named the stored key, not the generic --key line', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'stored', 'PAGESPACE_PROFILE');
+    expect(message).toMatch(/unsetting PAGESPACE_PROFILE/);
+    expect(message).not.toMatch(/--key\/PAGESPACE_KEY/);
+  });
+
+  it('falls back to the modern PAGESPACE_TOKEN wording when no legacy alias is in play', () => {
+    const message = keysCommandNeedsLoginMessage('list', 'env', null);
+    expect(message).toMatch(/PAGESPACE_TOKEN unset/);
+  });
+
   it('names the verb the caller actually ran', () => {
     expect(keysCommandNeedsLoginMessage('revoke', 'flag')).toContain('"pagespace keys revoke"');
   });

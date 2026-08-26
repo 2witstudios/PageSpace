@@ -403,6 +403,20 @@ describe('run', () => {
     expect(stderrText).toMatch(/PAGESPACE_TOKEN/);
     expect(stderrText).not.toContain('ps_legacy_secret_value');
   });
+
+  // Issue #2481/#2476 end-to-end: a scoped key supplied ONLY via the legacy
+  // PAGESPACE_AUTH_TOKEN env var must be told to unset THAT var, not the
+  // modern PAGESPACE_TOKEN (which is already unset) — otherwise re-running
+  // resolves the same credential and repeats the refusal forever.
+  it('"keys list" under a scoped key from the legacy PAGESPACE_AUTH_TOKEN env var names that var, not PAGESPACE_TOKEN, in its refusal', async () => {
+    const deps = makeDeps(['keys', 'list'], { PAGESPACE_AUTH_TOKEN: 'mcp_legacy_scoped_key' });
+    await run(deps);
+    const stderrText = deps.stderr.lines.join('');
+    expect(stderrText).toMatch(/needs your personal login/);
+    expect(stderrText).toMatch(/PAGESPACE_AUTH_TOKEN unset/);
+    expect(stderrText).not.toMatch(/PAGESPACE_TOKEN unset/);
+    expect(stderrText).not.toContain('mcp_legacy_scoped_key');
+  });
 });
 
 describe('the active key (`pagespace keys use`) as the lowest-priority credential source', () => {
