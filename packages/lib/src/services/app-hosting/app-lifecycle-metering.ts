@@ -140,6 +140,13 @@ export async function wakePublishedApp(
     return { outcome: 'parked', reason: gate.reason ?? 'insufficient_credits' };
   }
 
+  // A previous stop whose final settle did not land left its window on the row.
+  // The UPDATE below resets `awakeBilledThrough` to `wokenAt`, so this is the last
+  // moment that span can be billed — settle it at the boundary it really ended on.
+  // Runs after the gate so a wake that is about to be refused does not bill, and
+  // before the start so it cannot be confused with this wake's own window.
+  await settleAbandonedTail(row, deps);
+
   try {
     await deps.startMachine(row.flyAppName, row.machineId);
   } catch (error) {
@@ -409,9 +416,85 @@ async function settleAndClose(
 }
 
 /**
+ * Settle a tail that a FAILED close left behind on a non-running row, at the wake
+ * that is about to overwrite it.
+ *
+ * `closeStatusOnly` preserves `awakeBilledThrough` when a final settle does not
+ * land — but nothing consumed it: the awake meter reads `status = 'running'` rows
+ * only, so a stopped row is never revisited, and the wake below resets the
+ * watermark to `wokenAt`. The preserved span was therefore silently discarded at
+ * the next wake, which is the moment this runs instead.
+ *
+ * The billed span is [`awakeBilledThrough`, `lastStopAt`] — the window as it really
+ * ended. Emphatically NOT up to `now`: the machine was down in between, and billing
+ * that gap would charge the payer for a stopped app.
+ *
+ * Never blocks the wake. If this settle also fails to persist, the span is finally
+ * lost and said so at ERROR — two independent failures at two separate moments,
+ * against losing it on the first. A `parked` app that is never woken again keeps
+ * its tail on the row unbilled; recovering that needs a sweep over non-running
+ * rows, which is follow-up work rather than a wake's job.
+ */
+async function settleAbandonedTail(
+  row: PublishedApp,
+  deps: AppLifecycleMeteringDeps,
+): Promise<void> {
+  if (row.status === 'running') return; // a live window, not an abandoned tail
+  if (row.awakeBilledThrough === null || row.lastStopAt === null) return;
+
+  const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: row.lastStopAt });
+  if (plan.action !== 'settle') {
+    // Nothing billable was stranded; return the reservation the failed close kept.
+    if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
+    return;
+  }
+
+  const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
+  if (!payerId) {
+    // Unresolvable drive — never substitute a payer. The tail stays on the row and
+    // the wake below overwrites it, so this IS the loss; say so rather than warn.
+    loggers.ai.error(
+      'Published-app abandoned tail could not be billed: the owning drive did not resolve — this span is lost',
+      new Error('abandoned tail payer unresolved'),
+      { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+    );
+    return;
+  }
+
+  try {
+    const settle = await deps.billing.trackUsage({
+      payerId,
+      holdId: row.awakeHoldId ?? undefined,
+      activeSeconds: plan.activeSeconds,
+      driveId: row.driveId,
+      publishedAppId: row.id,
+    });
+    if (!settle.persisted) {
+      loggers.ai.error(
+        'Published-app abandoned tail did not persist on the retry either — this span is lost',
+        new Error('abandoned tail settle was not persisted'),
+        { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+      );
+    }
+  } catch (error) {
+    loggers.ai.error(
+      'Published-app abandoned tail settle threw on the retry — this span is lost',
+      error instanceof Error ? error : new Error(String(error)),
+      { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+    );
+  }
+}
+
+/**
  * Close the STATUS without closing the billing window — the failed-settle path.
- * `awakeBilledThrough` deliberately survives, so the unbilled span is retried
- * instead of being forgiven, while the row stops claiming to be running.
+ * `awakeBilledThrough` deliberately survives so the unbilled span is not forgiven
+ * at the moment of failure, while the row stops claiming to be running.
+ *
+ * It is NOT retried by the awake meter: that meter reads `status = 'running'` rows
+ * only, so this row is now invisible to it. The preserved span is settled by
+ * `settleAbandonedTail` at the next wake — the next moment anything touches the row
+ * — before the wake resets the watermark. A row that is never woken again keeps its
+ * tail unbilled; a sweep over non-running rows would close that, and is follow-up.
  */
 async function closeStatusOnly(
   row: PublishedApp,

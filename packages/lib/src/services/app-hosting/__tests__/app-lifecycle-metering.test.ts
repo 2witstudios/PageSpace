@@ -238,6 +238,97 @@ describe('wakePublishedApp', () => {
   });
 });
 
+describe('wakePublishedApp — the abandoned tail a failed close left behind', () => {
+  // `closeStatusOnly` preserves `awakeBilledThrough` when a final settle does not
+  // land, but the awake meter reads `status = 'running'` rows ONLY, so nothing
+  // revisits a stopped row — and the wake's own UPDATE resets that watermark to
+  // `wokenAt`. Without this step the preserved span is silently discarded at the
+  // next wake, which makes the failed-settle path's "the window stays open"
+  // promise false exactly where it matters most.
+
+  const abandoned = () =>
+    appRow({
+      status: 'stopped',
+      awakeBilledThrough: new Date('2026-08-20T10:00:00.000Z'),
+      lastStopAt: new Date('2026-08-20T10:10:00.000Z'),
+      awakeHoldId: 'hold-stranded',
+    });
+
+  it('bills the stranded span at the boundary the window REALLY ended on, not up to now', async () => {
+    const { deps, trackUsage } = makeDeps();
+    seed(abandoned(), [[appRow({ status: 'running' })]]);
+
+    await wakePublishedApp('app-1', deps);
+
+    // 10:00 -> 10:10 is 600s. Billing to `now` (12:00) would charge 7200s — two
+    // hours of a machine that was STOPPED.
+    expect(trackUsage).toHaveBeenCalledWith({
+      payerId: 'payer-1',
+      holdId: 'hold-stranded',
+      activeSeconds: 600,
+      driveId: 'drive-1',
+      publishedAppId: 'app-1',
+    });
+  });
+
+  it('does NOT bill a tail on a live (running) row — that is an open window, not an abandoned one', async () => {
+    const { deps, trackUsage } = makeDeps();
+    seed(
+      appRow({
+        status: 'running',
+        awakeBilledThrough: new Date('2026-08-20T10:00:00.000Z'),
+        lastStopAt: new Date('2026-08-20T10:10:00.000Z'),
+      }),
+      [[appRow({ status: 'running' })]],
+    );
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+
+  it('returns the stranded reservation when the tail prices to nothing', async () => {
+    const { deps, trackUsage, releaseHold } = makeDeps();
+    seed(
+      appRow({
+        status: 'stopped',
+        awakeBilledThrough: new Date('2026-08-20T10:10:00.000Z'),
+        lastStopAt: new Date('2026-08-20T10:10:00.000Z'), // zero-length window
+        awakeHoldId: 'hold-stranded',
+      }),
+      [[appRow({ status: 'running' })]],
+    );
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+    expect(releaseHold).toHaveBeenCalledWith('hold-stranded');
+  });
+
+  it('NEVER blocks the wake, even when the tail settle fails outright', async () => {
+    // A billing failure must not leave an app unservable. The span is lost at this
+    // point — two independent failures at two separate moments — and said so.
+    const { deps, trackUsage, startMachine } = makeDeps();
+    trackUsage.mockRejectedValue(new Error('ledger down'));
+    seed(abandoned(), [[appRow({ status: 'running' })]]);
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    expect(startMachine).toHaveBeenCalled();
+    expect(result.outcome).toBe('woken');
+  });
+
+  it('does not bill anyone when the gate REFUSES — a parked wake moves no money', async () => {
+    const { deps, gate, trackUsage } = makeDeps();
+    gate.mockResolvedValue({ allowed: false, reason: 'insufficient_credits' });
+    seed(abandoned());
+
+    await wakePublishedApp('app-1', deps);
+
+    expect(trackUsage).not.toHaveBeenCalled();
+  });
+});
+
 describe('stopPublishedApp', () => {
   const running = () =>
     appRow({ status: 'running', lastWakeAt: WOKEN_AT, awakeBilledThrough: WOKEN_AT, awakeHoldId: 'hold-1' });
