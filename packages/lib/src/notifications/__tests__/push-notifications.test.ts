@@ -1720,6 +1720,12 @@ describe('sendToFcm (Android)', () => {
     ['a JSON string', '"nope"', 'must be a JSON object'],
     ['missing every field', '{}', 'is missing'],
     ['a project_id that could rewrite the URL', serviceAccountJson({}, '../../evil'), 'project_id may only contain'],
+    // `.` and `..` are made only of permitted characters, and are exactly the
+    // dot segments URL parsing collapses — the endpoint becomes
+    // /v1/projects/messages:send and /v1/messages:send respectively.
+    ['a project_id of a single dot', serviceAccountJson({}, '.'), 'project_id may only contain'],
+    ['a project_id of two dots', serviceAccountJson({}, '..'), 'project_id may only contain'],
+    ['a project_id starting with a dot', serviceAccountJson({}, '.hidden'), 'project_id may only contain'],
     ['a non-https token_uri', serviceAccountJson({ token_uri: 'http://oauth2.googleapis.com/token' }), 'token_uri must be an https:// URL'],
   ];
 
@@ -1797,6 +1803,18 @@ describe('sendToFcm (Android)', () => {
     // Nothing was put on the wire, and no device lost its registration.
     expect(calls).toHaveLength(0);
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('still accepts an id with an interior dot, which is not a path segment', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'a..b');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.sent).toBe(1);
+    expect(calls.some((c) => c.url.includes('/projects/a..b/messages:send'))).toBe(true);
   });
 
   it('accepts an ordinary hyphenated Firebase project id', async () => {

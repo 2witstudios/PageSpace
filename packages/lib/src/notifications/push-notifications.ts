@@ -421,7 +421,15 @@ function parseFcmServiceAccount(raw: string): FcmServiceAccount {
   // endpoint. Firebase ids are lowercase alphanumerics and hyphens; the check is
   // kept a shade wider than that so a legitimate id is never rejected, while
   // everything that could change the meaning of the URL still is.
-  if (!/^[A-Za-z0-9._-]+$/.test(projectId)) {
+  //
+  // It has to start with an alphanumeric, not merely consist of the permitted
+  // characters. `.` and `..` are made only of permitted characters and are also
+  // exactly the two dot segments URL parsing collapses: as project ids they turn
+  // the endpoint into `/v1/projects/messages:send` and `/v1/messages:send`
+  // respectively, so the send would be posted somewhere else entirely instead of
+  // failing here as promised. An interior dot is harmless — only a whole segment
+  // of dots is special — so `a..b` stays allowed.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(projectId)) {
     throw new Error(
       'FCM configuration invalid: FCM_SERVICE_ACCOUNT_JSON project_id may only contain letters, digits, dots, underscores and hyphens'
     );
