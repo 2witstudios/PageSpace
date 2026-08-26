@@ -587,7 +587,10 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
       billing: {
         resolvePayerId: async () => ownerId,
         gate: async () => ({ allowed: true, holdId: 'hold-x' }),
-        trackUsage: async () => {},
+        // Reports a PERSISTED settle: the seam only closes a window — and only
+        // counts the day's seconds — for a charge that actually landed, so a stub
+        // that resolved with nothing would exercise the lost-charge path instead.
+        trackUsage: async () => ({ persisted: true, creditsSettled: true }),
         releaseHold: async () => {},
       },
       startMachine: async () => {},
@@ -660,6 +663,39 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settl
       should: 'charge the seconds to the day the tick discovered them',
       actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
       expected: { day: '2026-08-20', seconds: 3600 },
+    });
+  });
+
+  it('given a settle that did NOT persist, should count NO seconds against the day', async () => {
+    // The charge was never written, so the cap must not see it — and the window
+    // stays open for the next tick to retry, which is safe precisely because
+    // nothing was written.
+    await seedApp({ awakeBilledThrough: ago(600_000), awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    const result = await stopPublishedApp(
+      appId,
+      'idle',
+      stopDeps({
+        billing: {
+          resolvePayerId: async () => ownerId,
+          gate: async () => ({ allowed: true, holdId: 'hold-x' }),
+          trackUsage: async () => ({ persisted: false, creditsSettled: false }),
+          releaseHold: async () => {},
+        },
+      }),
+    );
+
+    const row = await readApp();
+    assert({
+      given: 'a final settle that resolved without persisting a usage row',
+      should: 'bill nothing, count nothing, and leave the window open',
+      actual: {
+        billed: result.outcome === 'stopped' ? result.billedSeconds : null,
+        day: row?.awakeSecondsDay,
+        seconds: row?.awakeSecondsToday,
+        windowStillOpen: row?.awakeBilledThrough !== null,
+      },
+      expected: { billed: 0, day: null, seconds: 0, windowStillOpen: true },
     });
   });
 

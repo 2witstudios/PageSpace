@@ -566,6 +566,32 @@ describe('meterAwakePublishedApps — the per-app daily awake cap', () => {
 });
 
 
+describe('meterAwakePublishedApps — a settle that did NOT persist stops everything downstream', () => {
+  it('given a settle that would carry the app past its cap but did NOT persist, should not evaluate the cap, advance the watermark, or park', async () => {
+    // The charge was never written, so there are no seconds to count against the
+    // budget and nothing to record. Parking here would take an app off the internet
+    // for spend that does not exist, and advancing the watermark would forgive a
+    // span nobody ever billed — the two mistakes point in opposite directions and
+    // this one guard stops both.
+    const { deps, park, writeSettle } = makeDeps({
+      dailyAwakeCapSeconds: () => 900,
+      listRunningApps: async () => [runningApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 })],
+    });
+    deps.billing.trackUsage = async () => ({ persisted: false, creditsSettled: false });
+
+    const run = await meter(deps);
+
+    expect(park).not.toHaveBeenCalled();
+    expect(writeSettle).not.toHaveBeenCalled();
+    assert({
+      given: 'a lost charge on an app that was about to exceed its daily budget',
+      should: 'count the failure and leave the row exactly as it was',
+      actual: { failed: run.failed, cappedParked: run.cappedParked, settled: run.settled },
+      expected: { failed: 1, cappedParked: 0, settled: 0 },
+    });
+  });
+});
+
 describe('meterAwakePublishedApps — a park never follows a watermark advance that FAILED', () => {
   it('given the watermark write THREW, should not park an insolvent app — the park would re-bill the span', async () => {
     // `stopPublishedApp` re-reads the row and settles from whatever watermark it
