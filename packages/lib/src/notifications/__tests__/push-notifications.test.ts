@@ -1291,7 +1291,15 @@ describe('sendToFcm (Android)', () => {
         })),
     });
 
-    await sendPushNotification('user-1', payload);
+    const result = await sendPushNotification('user-1', payload);
+
+    // The positive half matters as much as the negative one: without it this
+    // would also pass if the send never reached FCM at all, because the
+    // serverFault path leaves the row untouched too.
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '1', isActive: true })
+    );
 
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
   });
@@ -1314,7 +1322,15 @@ describe('sendToFcm (Android)', () => {
         })),
     });
 
-    await sendPushNotification('user-1', payload);
+    const result = await sendPushNotification('user-1', payload);
+
+    // The positive half matters as much as the negative one: without it this
+    // would also pass if the send never reached FCM at all, because the
+    // serverFault path leaves the row untouched too.
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '1', isActive: true })
+    );
 
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
   });
