@@ -6,8 +6,8 @@
  * could be lost without the pure test noticing:
  *
  *   • the kill switch short-circuits BEFORE any database read;
- *   • the balance is asked about the row's OWN payer (`ownerId`), the same
- *     column the awake-seconds meter charges;
+ *   • the balance is asked about the app's DRIVE-OWNER payer, resolved the SAME
+ *     way the awake-seconds meter resolves it — never `published_apps.ownerId`;
  *   • the ledger is not consulted at all for a dedicated app;
  *   • a router that cannot derive a replay key refuses rather than emitting a
  *     replay with a blank state;
@@ -23,7 +23,7 @@ vi.mock('@pagespace/db/schema/published-apps', () => ({
     status: 'status',
     tier: 'tier',
     machineId: 'machineId',
-    ownerId: 'ownerId',
+    driveId: 'driveId',
     subdomain: 'subdomain',
   },
 }));
@@ -34,6 +34,11 @@ vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ e
 // covered in `billing/__tests__/credit-gate.test.ts`.
 vi.mock('../../../billing/credit-gate', () => ({ hasSpendableBalance: vi.fn() }));
 vi.mock('../../../billing/credit-balance', () => ({ resolveTier: vi.fn() }));
+// Same reasoning: `app-billing`'s default payer resolver drags in the whole
+// credit/monitoring stack to build. Asserted BEHAVIOURALLY (does the router's
+// default binding delegate to it with the right args), which needs a mock, not
+// the real module.
+vi.mock('../app-billing', () => ({ defaultAppBillingDeps: { resolvePayerId: vi.fn() } }));
 
 import {
   defaultAppRouterDeps,
@@ -45,6 +50,7 @@ import { db } from '@pagespace/db/db';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { hasSpendableBalance } from '../../../billing/credit-gate';
 import { resolveTier } from '../../../billing/credit-balance';
+import { defaultAppBillingDeps } from '../app-billing';
 import { isAppHostingEnabled } from '../app-hosting-env';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from '../routing-env';
 
@@ -57,7 +63,7 @@ function row(overrides: Partial<PublishedAppRouteRow> = {}): PublishedAppRouteRo
     status: 'running',
     tier: 'metered',
     machineId: 'm-1',
-    ownerId: 'user_payer',
+    driveId: 'drive_payer',
     ...overrides,
   };
 }
@@ -68,6 +74,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     apex: () => 'pagespace.app',
     replaySecret: () => SECRET,
     findAppBySubdomain: async () => row(),
+    resolvePayerId: async ({ driveId }) => (driveId === 'drive_payer' ? 'user_payer' : null),
     resolveTier: async () => 'pro',
     hasSpendableBalance: async () => true,
     stampHit: async () => {},
@@ -118,20 +125,37 @@ describe('resolveAppRoute — hostname resolution', () => {
   });
 });
 
-describe('resolveAppRoute — the balance is asked about the row own payer', () => {
-  it("given a metered app, should ask about the row's ownerId, not any other user", async () => {
+describe('resolveAppRoute — the balance is asked about the SAME payer the meter charges', () => {
+  it("given a metered app, should resolve the payer from the row's driveId, not published_apps.ownerId", async () => {
+    const resolvePayerId = vi.fn(async ({ driveId }: { driveId: string }) =>
+      driveId === 'drive_xyz' ? 'user_drive_owner' : null,
+    );
     const hasSpendableBalance = vi.fn(async () => true);
     const resolveTier = vi.fn(async () => 'pro');
     await resolveAppRoute(
       'acme.pagespace.app',
       deps({
-        findAppBySubdomain: async () => row({ ownerId: 'user_drive_owner' }),
+        findAppBySubdomain: async () => row({ driveId: 'drive_xyz' }),
+        resolvePayerId,
         resolveTier,
         hasSpendableBalance,
       }),
     );
+    expect(resolvePayerId).toHaveBeenCalledWith({ driveId: 'drive_xyz' });
     expect(resolveTier).toHaveBeenCalledWith('user_drive_owner');
     expect(hasSpendableBalance).toHaveBeenCalledWith('user_drive_owner', 'pro');
+  });
+
+  it('given an unresolvable drive, should refuse (fail closed) rather than serve on an unverified balance', async () => {
+    const resolveTier = vi.fn(async () => 'pro');
+    const hasSpendableBalance = vi.fn(async () => true);
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
+    );
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(resolveTier).not.toHaveBeenCalled();
+    expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 
   it('given an insolvent payer, should park rather than replay', async () => {
@@ -277,6 +301,14 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
 
     expect(resolveTier).toHaveBeenCalledWith('user_payer');
     expect(tier).toBe('pro');
+  });
+
+  // The identical function `app-billing.ts` hands the meter and the wake gate —
+  // not an equivalent bound the same way, the same reference — so "the router
+  // asks the wrong payer" is structurally impossible rather than a convention
+  // that can drift.
+  it('resolves the payer through the IDENTICAL function the meter and wake gate use', () => {
+    expect(defaultAppRouterDeps.resolvePayerId).toBe(defaultAppBillingDeps.resolvePayerId);
   });
 
   // The row reader is module-private, so it is pinned by what it queries: the

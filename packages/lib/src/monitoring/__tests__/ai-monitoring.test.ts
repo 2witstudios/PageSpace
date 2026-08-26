@@ -720,6 +720,38 @@ describe('trackAIUsage', () => {
     );
   });
 
+  it('should release the hold when writeAiUsage THROWS, not just when it resolves null', async () => {
+    // The gate's reservation would otherwise sit against the payer's spendable
+    // balance for its whole TTL — a throw here never confirmed a charge, so
+    // there is nothing this release could double-free.
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      holdId: 'hold-thrown',
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-thrown');
+  });
+
+  it('should release the hold when the usage CALCULATION itself throws, before writeAiUsage is even reached', async () => {
+    // A getter that throws on `model` forces the OUTER catch — `calculateCost`
+    // reads it before `writeAiUsage` is ever called, so this exercises the
+    // catch that never even attempted a write.
+    const data: Record<string, unknown> = { userId: 'user-1', provider: 'openai', holdId: 'hold-calc-thrown' };
+    Object.defineProperty(data, 'model', {
+      get() {
+        throw new Error('boom');
+      },
+    });
+
+    const outcome = await trackAIUsage(data as never);
+
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-calc-thrown');
+  });
+
   it('given AI request completes, should NOT write prompt or completion content to ai_usage_logs (#957 — GDPR data minimization)', async () => {
     await trackAIUsage({
       userId: 'user-1',

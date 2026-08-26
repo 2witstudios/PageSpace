@@ -40,6 +40,7 @@ import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
 import { loggers } from '../../logging/logger-config';
+import { defaultAppBillingDeps } from './app-billing';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
 import {
   DAILY_CAP_PARK_REASON,
@@ -64,6 +65,13 @@ export interface AppRouterDeps {
   replaySecret: () => string;
   /** `published_apps` row for a subdomain, or null. */
   findAppBySubdomain: (subdomain: string) => Promise<PublishedAppRouteRow | null>;
+  /**
+   * Who pays — resolved the SAME way the awake-seconds meter resolves it
+   * (`drives.ownerId`, via `resolveEnvPayerId`). Null means unresolvable (a stale
+   * read of a drive mid-delete); the caller refuses rather than substituting a
+   * payer or falling back to a denormalized column the meter does not charge.
+   */
+  resolvePayerId: (input: { driveId: string }) => Promise<string | null>;
   /** The payer's subscription tier — the allowance the balance is judged against. */
   resolveTier: (userId: string) => Promise<string>;
   /** Whether the payer can still spend. */
@@ -89,17 +97,15 @@ export interface PublishedAppRouteRow {
   tier: string;
   machineId: string | null;
   /**
-   * Who pays — `published_apps.ownerId`, denormalized at publish time to the
-   * drive owner (`resolveEnvPayerId` semantics).
-   *
-   * Read from the row rather than re-resolved through the env and drive on every
-   * request, and that is a correctness point as much as a performance one: the
-   * balance gate must ask about the SAME payer the awake-seconds meter charges,
-   * and the meter charges this column. Re-deriving the payer here could disagree
-   * with it mid-flight (a drive ownership transfer between the two reads) and
-   * park an app whose actual payer is solvent.
+   * The app's owning drive — NOT `published_apps.ownerId`. The balance gate must
+   * ask about the SAME payer the awake-seconds meter charges, and the meter
+   * charges `drives.ownerId` (via `resolveEnvPayerId`), never the denormalized
+   * `ownerId` column, which exists only for indexing and cascade reach and can
+   * drift from the drive's real owner (a transfer, a stale write). Gating on the
+   * wrong payer would decide admission against one person's balance while the
+   * charge lands on another's.
    */
-  ownerId: string;
+  driveId: string;
 }
 
 async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
@@ -110,7 +116,7 @@ async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRou
       status: publishedApps.status,
       tier: publishedApps.tier,
       machineId: publishedApps.machineId,
-      ownerId: publishedApps.ownerId,
+      driveId: publishedApps.driveId,
     })
     .from(publishedApps)
     .where(eq(publishedApps.subdomain, subdomain))
@@ -123,6 +129,11 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   apex: resolvePublishedAppsApex,
   replaySecret: resolveAppReplaySecret,
   findAppBySubdomain: findAppBySubdomainRow,
+  // The SAME resolver `app-billing.ts`'s `defaultAppBillingDeps` hands the meter
+  // and the wake gate — not an equivalent, the identical function — so a drift
+  // between "who the router asks" and "who the meter charges" is structurally
+  // impossible rather than merely kept in sync by convention.
+  resolvePayerId: defaultAppBillingDeps.resolvePayerId,
   resolveTier: (userId) => resolveTier(userId),
   hasSpendableBalance: (userId, tier) =>
     hasSpendableBalance(userId, tier as Parameters<typeof hasSpendableBalance>[1]),
@@ -275,8 +286,13 @@ export async function resolveAppRoute(
   // than a hope. `decideAppRoute` still re-checks the tier itself, so the skip
   // here can never quietly become the policy.
   if (app.tier === 'metered') {
-    const tier = await deps.resolveTier(app.ownerId);
-    const balanceOk = await deps.hasSpendableBalance(app.ownerId, tier);
+    const payerId = await deps.resolvePayerId({ driveId: app.driveId });
+    // An unresolvable drive fails CLOSED here — the router has no honest payer to
+    // ask, so it refuses exactly as the wake gate does for the same condition,
+    // rather than assuming a balance nobody can vouch for.
+    const balanceOk = payerId
+      ? await deps.hasSpendableBalance(payerId, await deps.resolveTier(payerId))
+      : false;
     if (!balanceOk) {
       return decideAppRoute({ app: routable, balanceOk: false, replayState: 'pending' });
     }

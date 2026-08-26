@@ -530,6 +530,11 @@ async function stopPublishedAppSerialized(
     await mirrorRecentFlyEvents(ref, deps);
   }
 
+  // NOT re-read here: the whole of `stopPublishedAppSerialized` runs under the
+  // awake meter's advisory lock (`stopPublishedApp` above), so no meter tick or
+  // concurrent stop can touch `row.awakeBilledThrough` between the read at the top
+  // of this function and the settle below — the lock is what makes the snapshot
+  // safe to settle against, not a fresh read racing to catch up with it.
   const settled = await settleAndClose(row, stoppedAt, nextStatus, stoppedAt, deps, reason);
   if (reason === 'daily_cap') reportDailyCapPark(row);
   return { outcome: 'stopped', status: nextStatus, billedSeconds: settled.billedSeconds };
@@ -704,6 +709,31 @@ async function settleAndClose(
 }
 
 /**
+ * Claim an abandoned tail exclusively: a CAS that clears `awakeBilledThrough`
+ * and `awakeHoldId` off the row, guarded on the exact watermark this caller read.
+ *
+ * A concurrent wake reads the same stale row and computes the same plan, so
+ * without this guard both would bill the same span. Only the first write to land
+ * matches the guard — `awakeBilledThrough` on the row still equals what was read
+ * — and clears it; the second finds the column already `null` and matches no
+ * row, learning it lost the race before it ever calls `trackUsage`.
+ */
+async function claimAbandonedTail(row: PublishedApp): Promise<boolean> {
+  const [claimed] = await db
+    .update(publishedApps)
+    .set({ awakeBilledThrough: null, awakeHoldId: null })
+    .where(
+      and(
+        eq(publishedApps.id, row.id),
+        eq(publishedApps.status, row.status),
+        eq(publishedApps.awakeBilledThrough, row.awakeBilledThrough as Date),
+      ),
+    )
+    .returning({ id: publishedApps.id });
+  return !!claimed;
+}
+
+/**
  * Settle a tail that a FAILED close left behind on a non-running row, at the wake
  * that is about to overwrite it.
  *
@@ -731,6 +761,17 @@ async function settleAbandonedTail(
   if (row.awakeBilledThrough === null || row.lastStopAt === null) return;
 
   const plan = planAwakeSettle({ billedThrough: row.awakeBilledThrough, now: row.lastStopAt });
+
+  // Claim the tail EXCLUSIVELY, before doing anything with it: a guarded CAS that
+  // clears the watermark (and the hold riding with it) off the row. Whoever wins
+  // this write is the only caller that may bill or release this tail — a second
+  // wake racing this one, or this same wake retried after a `start_failed`, reads
+  // `awakeBilledThrough: null` and returns above before ever reaching here. That
+  // is what makes the tail settle at-most-once instead of "once per wake attempt
+  // until one finally succeeds".
+  const claimed = await claimAbandonedTail(row);
+  if (!claimed) return; // lost the race, or a previous attempt already cleared it
+
   if (plan.action !== 'settle') {
     // Nothing billable was stranded; return the reservation the failed close kept.
     if (row.awakeHoldId) await deps.billing.releaseHold(row.awakeHoldId);
@@ -739,8 +780,9 @@ async function settleAbandonedTail(
 
   const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
   if (!payerId) {
-    // Unresolvable drive — never substitute a payer. The tail stays on the row and
-    // the wake below overwrites it, so this IS the loss; say so rather than warn.
+    // Unresolvable drive — never substitute a payer. The watermark is already
+    // claimed off the row above, so there is no later retry that could recover
+    // this span; say so at ERROR rather than warn.
     loggers.ai.error(
       'Published-app abandoned tail could not be billed: the owning drive did not resolve — this span is lost',
       new Error('abandoned tail payer unresolved'),

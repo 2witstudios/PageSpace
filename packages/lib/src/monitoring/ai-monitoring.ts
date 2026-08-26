@@ -1169,12 +1169,21 @@ export async function trackAIUsage(data: AIUsageData): Promise<UsageTrackingOutc
         source: data.source,
         holdId: data.holdId,
       });
+      // The reservation would otherwise sit against the payer's spendable balance
+      // until its TTL. Nothing above committed a charge against it on this path —
+      // the throw means `writeAiUsage`/`consumeCredits` never confirmed one — so
+      // there is nothing this release could double-free.
+      if (data.holdId) await releaseHold(data.holdId);
       return USAGE_TRACKING_LOST;
     }
   } catch (error) {
-    loggers.ai.debug('AI usage calculation failed', { 
-      error: (error as Error).message 
+    loggers.ai.debug('AI usage calculation failed', {
+      error: (error as Error).message
     });
+    // Same reasoning as the inner catch above: a stranded hold outlives its TTL
+    // suppressing the payer's balance for nothing, and nothing on this path could
+    // have confirmed a charge against it.
+    if (data.holdId) await releaseHold(data.holdId);
     return USAGE_TRACKING_LOST;
   }
 }
