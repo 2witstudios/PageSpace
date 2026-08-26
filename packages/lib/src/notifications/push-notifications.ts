@@ -477,6 +477,18 @@ function clearFcmAccessToken(): void {
   fcmAccessTokenSource = null;
 }
 
+// Evict only if the cache still holds the token that was actually rejected —
+// the same "is it still ours" guard the APNs session pool and the in-flight
+// mint slot already use. Under fan-out many requests are in the air carrying
+// one token, so the first 401 handled mints a replacement while later 401s
+// from requests made with the OLD token are still arriving. An unconditional
+// clear would throw that replacement away and start another mint per late
+// response, which is precisely the per-recipient mint burst the single-flight
+// exists to prevent.
+function clearFcmAccessTokenIfCurrent(rejected: string): void {
+  if (fcmAccessToken === rejected) clearFcmAccessToken();
+}
+
 async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: string }> {
   const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
   if (!raw) {
@@ -777,7 +789,7 @@ async function sendToFcm(
     // every send holding the stale credential in that window is lost, not just
     // the one that discovered it. The retry is not itself retried.
     if (response.status === 401) {
-      clearFcmAccessToken();
+      clearFcmAccessTokenIfCurrent(accessToken);
       console.warn('[FCM] access token rejected, re-minting and retrying once', { tokenId });
 
       const refreshed = await getFcmAccessToken();

@@ -2136,6 +2136,69 @@ describe('sendToFcm (Android)', () => {
     expect(setFn).toHaveBeenCalledWith({ isActive: false });
   });
 
+  // Codex's fan-out race. Several sends are in the air carrying one cached
+  // token when it is revoked. The first 401 handled mints a replacement; the
+  // late 401s are from requests made with the OLD token and must not discard
+  // it. An unconditional eviction restarts the mint once per late response,
+  // recreating the per-recipient burst the single-flight was built to stop.
+  //
+  // The ordering has to be forced. Left to resolve naturally every 401 lands
+  // before the first re-mint finishes, the in-flight slot absorbs them all, and
+  // the bug is invisible — which is exactly how the first version of this test
+  // passed against the broken code. The late responses are therefore held until
+  // the replacement token is provably in the cache.
+  it('does not re-mint once per late 401 when a shared token is revoked', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'late-401-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+
+    let minted = 0;
+    let revoked: string | null = null;
+    let revokedHits = 0;
+    let releaseLate!: () => void;
+    const lateResponses = new Promise<void>((resolve) => { releaseLate = resolve; });
+
+    const calls = installFetchStub({
+      oauth: () => {
+        minted += 1;
+        return fakeResponse(200, JSON.stringify({ access_token: `ya29.t${minted}`, expires_in: 3600 }));
+      },
+      send: async (_message, call) => {
+        const bearer = (call.init.headers as Record<string, string>).authorization;
+        if (bearer === revoked) {
+          revokedHits += 1;
+          // Everything after the first rejection is a "late" response: hold it
+          // until a replacement token has demonstrably been cached.
+          if (revokedHits > 1) await lateResponses;
+          return fakeResponse(401, JSON.stringify({ error: { status: 'UNAUTHENTICATED', message: 'revoked' } }));
+        }
+        // A send on a token other than the revoked one proves the replacement
+        // is in the cache, so the held responses can be let go.
+        if (revoked !== null) releaseLate();
+        return fakeResponse(200, FCM_SEND_OK);
+      },
+    });
+
+    // Warm the cache so the wave below starts out sharing one token.
+    await sendPushNotification('user-0', payload);
+    expect(minted).toBe(1);
+    revoked = 'Bearer ya29.t1';
+
+    const results = await Promise.all([
+      sendPushNotification('user-1', payload),
+      sendPushNotification('user-2', payload),
+      sendPushNotification('user-3', payload),
+    ]);
+
+    expect(results.every((r) => r.sent === 1)).toBe(true);
+    // One replacement for the whole wave. Unconditional eviction makes this 4:
+    // each late 401 throws away the token the previous one just minted.
+    expect(minted).toBe(2);
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+    // One warm-up send, three first attempts, three retries.
+    expect(calls.filter((c) => c.url.includes('fcm.googleapis.com'))).toHaveLength(7);
+  });
+
   it('gives up after one retry when the fresh token is rejected too', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'always-401-project');
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
