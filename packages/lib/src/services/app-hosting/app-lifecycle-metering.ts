@@ -262,6 +262,57 @@ export async function wakePublishedApp(
 }
 
 /**
+ * Advisory-lock key serializing the WAKES of one app — per app, never global.
+ *
+ * A cold published app is not visited once: a browser asks for the document and
+ * then twenty assets, and with no replay cache on the metered tier every one of
+ * those reaches the router within milliseconds. Unserialized, each would gate,
+ * place a hold and call Fly's start endpoint — twenty starts for one machine
+ * against a per-object rate limit of ~1/s (burst 3), so most would come back 429,
+ * and the page's assets would be served the unavailable page while the machine the
+ * first request started was coming up.
+ *
+ * With it, exactly one request wakes and the rest are told a wake is in flight and
+ * replay anyway — Fly's proxy then holds their request for the machine that is
+ * already starting, which is the behaviour they wanted.
+ */
+function wakeLockKeyFor(publishedAppId: string): string {
+  return `wake-published-app:${publishedAppId}`;
+}
+
+export type WakePublishedAppRunResult =
+  | WakePublishedAppResult
+  /**
+   * Another request is waking this app right now. NOTHING was gated, held or
+   * started here. The caller should serve as though the wake succeeded — the app
+   * IS being started, by the request that holds the lock.
+   */
+  | { outcome: 'wake_in_progress' };
+
+/**
+ * Wake an app, serialized per app: one winner starts the machine, everybody else
+ * is told a wake is in flight.
+ *
+ * A TRY-lock, never a waiting one: a request that blocks on a lock is a request
+ * that is slower than the cold start it is waiting for.
+ */
+export async function wakePublishedAppSerialized(
+  publishedAppId: string,
+  deps: AppLifecycleMeteringDeps = defaultAppLifecycleMeteringDeps,
+  pgPool: AdvisoryLockPool = getAdvisoryLockPool(),
+): Promise<WakePublishedAppRunResult> {
+  // The kill switch is checked BEFORE the pool is touched: a dark deployment must
+  // not open a connection just to decline.
+  if (!deps.isEnabled()) return { outcome: 'refused', reason: 'disabled' };
+  const locked = await withAdvisoryLock(pgPool, wakeLockKeyFor(publishedAppId), () =>
+    wakePublishedApp(publishedAppId, deps),
+  );
+  if (locked.outcome === 'lock_busy') return { outcome: 'wake_in_progress' };
+  if (locked.outcome === 'connection_error') throw locked.error;
+  return locked.result;
+}
+
+/**
  * Why a stop happened. `insolvent` and `daily_cap` PARK the app instead of merely
  * stopping it — the two enforcement refusals — while `idle` and `operator` leave it
  * `stopped`, i.e. free to wake on the next request.
@@ -561,7 +612,17 @@ async function settleAndClose(
       // for the same reason the watermark does: seconds that were charged but not
       // counted are seconds the daily cap cannot see, and the cap's whole job is to
       // bound what a single app can spend in a day.
-      ...dailyAwakeCounterPatch(billedSeconds, billedThrough),
+      //
+      // Keyed off the CLOCK, not off `billedThrough`. They are the same instant on
+      // the ordinary stop, but not on the two paths that matter: a repair closes at
+      // a mirrored boundary that can sit in a previous UTC day, and a clamped span
+      // bills a day's worth of seconds ending wherever the watermark was. Keying
+      // off the boundary there would stamp a stale day, whose next comparison
+      // reads as "nothing spent today" — the cap failing OPEN on exactly the
+      // broken-lifecycle rows it exists to catch. Charging those seconds to the day
+      // we discovered them is the conservative direction, and it is the same day
+      // the cap projection in the heartbeat uses.
+      ...dailyAwakeCounterPatch(billedSeconds, deps.now()),
       ...parkErrorPatch(reason),
     })
     .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, 'running')));
@@ -648,6 +709,8 @@ async function settleAbandonedTail(
  * billed no seconds would move a row's day forward on a tick that charged nothing.
  */
 function dailyAwakeCounterPatch(addSeconds: number, at: Date) {
+  // `at` is the tick's clock — see the call site for why it is never the billed
+  // boundary.
   if (!Number.isFinite(addSeconds) || addSeconds <= 0) return {};
   const day = utcDayOf(at);
   return {

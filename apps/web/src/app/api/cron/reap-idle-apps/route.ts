@@ -32,13 +32,21 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * (nothing was reaped), and `stopFailed` (Fly refused a stop, so a machine we
  * decided to switch off is probably still running and still costing its payer
  * money, with its awake window deliberately left open). `lockBusy`, `refused` and
- * `active` are self-correcting per-row facts — the app is still `running`, so the
- * next tick finds it again — and are counted and audited rather than alerted on.
+ * `active` and `stillCapped` are self-correcting per-row facts — the app is still
+ * `running` (or still over its budget), so the next tick finds it again — and are
+ * counted and audited rather than alerted on.
  *
  * As with the awake meter, the Sentry capture is what actually reaches a human: the
  * docker cron invokes this through `curl -sS` without `-f`, so an HTTP 500 exits 0
  * and its body lands in a log. The status code stays the honest answer for a caller
  * that checks one.
+ *
+ * IT ALSO OPENS THE DAILY CAP'S DOOR BACK OUT. The per-app awake counter resets at
+ * midnight UTC; the `parked` status does not, and nothing else in the system ever
+ * writes `parked -> stopped` for that reason. So each tick also releases the apps
+ * whose budget has rolled over — without it, one busy day would take an app off the
+ * internet permanently. A release that FAILS is loud for the opposite reason a
+ * failed stop is: the app stays offline.
  *
  * CONCURRENCY: `reapIdlePublishedAppsSerialized` holds a Postgres advisory try-lock
  * for the whole run, so a second container, a manual trigger or an API invocation
@@ -61,15 +69,26 @@ export async function GET(request: Request) {
       return NextResponse.json({ success: true, outcome: 'lock_busy', timestamp: new Date().toISOString() });
     }
 
-    if (run.outcome === 'disabled' || run.outcome === 'reaping_disabled') {
-      // Neither is a failure. `disabled` is the default everywhere until hosting is
-      // switched on; `reaping_disabled` is an operator holding the fleet awake on
-      // purpose. Both green, so the cron stays quiet.
-      return NextResponse.json({ success: true, outcome: run.outcome, timestamp: new Date().toISOString() });
+    if (run.outcome === 'disabled') {
+      // Not a failure and not an anomaly: APP_HOSTING_ENABLED is off, which is the
+      // default everywhere. Reported green so the cron stays quiet until the feature
+      // is switched on.
+      return NextResponse.json({ success: true, outcome: 'disabled', timestamp: new Date().toISOString() });
+    }
+
+    if (run.outcome === 'reaping_disabled') {
+      // An operator holding the fleet awake on purpose — green. The UNPARK sweep
+      // still ran (switching off idle stopping says nothing about whether an app
+      // parked by yesterday's budget should stay parked forever), so its counters
+      // come back with it.
+      console.log(
+        `[Cron] Published-app idle reaper: reaping disabled — unparked ${run.unparked}, stillCapped ${run.stillCapped}, unparkFailed ${run.unparkFailed}`,
+      );
+      return NextResponse.json({ success: true, ...run, timestamp: new Date().toISOString() });
     }
 
     console.log(
-      `[Cron] Published-app idle reaper: processed ${run.processed}, stopped ${run.stopped}, active ${run.active}, noActivitySignal ${run.noActivitySignal}, lockBusy ${run.lockBusy}, refused ${run.refused}, stopFailed ${run.stopFailed}, failed ${run.failed}, settledSeconds ${run.settledSeconds.toFixed(1)} (idle threshold ${run.idleSeconds}s)`,
+      `[Cron] Published-app idle reaper: processed ${run.processed}, stopped ${run.stopped}, active ${run.active}, noActivitySignal ${run.noActivitySignal}, lockBusy ${run.lockBusy}, refused ${run.refused}, stopFailed ${run.stopFailed}, failed ${run.failed}, unparked ${run.unparked}, stillCapped ${run.stillCapped}, unparkFailed ${run.unparkFailed}, settledSeconds ${run.settledSeconds.toFixed(1)} (idle threshold ${run.idleSeconds}s)`,
     );
 
     audit({
@@ -90,6 +109,12 @@ export async function GET(request: Request) {
         refused: run.refused,
         stopFailed: run.stopFailed,
         failed: run.failed,
+        // The daily cap's door back out: apps released because their counter rolled
+        // over to a new UTC day. Without this the cap is a one-way door — the
+        // counter resets at midnight and the status does not.
+        unparked: run.unparked,
+        stillCapped: run.stillCapped,
+        unparkFailed: run.unparkFailed,
         idleSeconds: run.idleSeconds,
         sourceFailed: run.sourceFailed,
       },
@@ -99,23 +124,35 @@ export async function GET(request: Request) {
       ? 'could not read its row source — no idle app was stopped this tick'
       : run.stopFailed > 0
         ? `could not stop ${run.stopFailed} idle app(s) — those machines may still be running and billing`
-        : null;
+        : run.unparkFailed > 0
+          ? // The other direction, and worth waking somebody for the opposite
+            // reason: an app whose daily-cap park could not be released stays OFF
+            // THE INTERNET, and nothing but this sweep ever reopens that door.
+            `could not release ${run.unparkFailed} app(s) from a daily-cap park — those apps stay offline until a later tick succeeds`
+          : null;
 
     if (alertReason) {
       Sentry.captureException(new Error(`Published-app idle reaper ${alertReason}`), {
         level: 'error',
         // Fingerprinted on the CAUSE, never the message: the message carries
         // changing counts and would open a fresh issue per tick.
-        fingerprint: [run.sourceFailed ? 'idle-reaper-source-unreadable' : 'idle-reaper-stop-failed'],
+        fingerprint: [
+          run.sourceFailed
+            ? 'idle-reaper-source-unreadable'
+            : run.stopFailed > 0
+              ? 'idle-reaper-stop-failed'
+              : 'idle-reaper-unpark-failed',
+        ],
         tags: {
           check: 'published_app_idle_reaper',
-          reason: run.sourceFailed ? 'source_unreadable' : 'stop_failed',
+          reason: run.sourceFailed ? 'source_unreadable' : run.stopFailed > 0 ? 'stop_failed' : 'unpark_failed',
         },
         extra: {
           processed: run.processed,
           stopped: run.stopped,
           stopFailed: run.stopFailed,
           failed: run.failed,
+          unparkFailed: run.unparkFailed,
           idleSeconds: run.idleSeconds,
         },
       });

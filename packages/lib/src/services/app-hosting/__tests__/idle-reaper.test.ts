@@ -3,6 +3,7 @@ import { assert } from '../../sandbox/__tests__/riteway';
 import {
   reapIdlePublishedApps,
   reapIdlePublishedAppsSerialized,
+  type CapParkedApp,
   type IdleReaperDeps,
   type ReapableApp,
 } from '../idle-reaper';
@@ -22,6 +23,21 @@ function idleApp(over: Partial<ReapableApp> = {}): ReapableApp {
   } as ReapableApp;
 }
 
+/** A row parked by the daily cap, its counter still on today by default. */
+function capParkedApp(over: Partial<CapParkedApp> = {}): CapParkedApp {
+  return {
+    id: 'app-parked',
+    driveId: 'drive-1',
+    tier: 'metered',
+    status: 'parked',
+    imageDigest: 'sha256:abc',
+    machineId: 'machine-1',
+    awakeSecondsDay: '2026-08-20',
+    awakeSecondsToday: 43_200,
+    ...over,
+  } as CapParkedApp;
+}
+
 function makeDeps(over: Partial<IdleReaperDeps> = {}) {
   const stop = vi.fn<IdleReaperDeps['stop']>(async () => ({
     outcome: 'stopped',
@@ -29,18 +45,23 @@ function makeDeps(over: Partial<IdleReaperDeps> = {}) {
     billedSeconds: 600,
   }));
   const listIdleCandidates = vi.fn<IdleReaperDeps['listIdleCandidates']>(async () => [idleApp()]);
+  const listCapParkedApps = vi.fn<IdleReaperDeps['listCapParkedApps']>(async () => []);
+  const unpark = vi.fn<IdleReaperDeps['unpark']>(async () => true);
   const deps: IdleReaperDeps = {
     isEnabled: () => true,
     listIdleCandidates,
     stop,
+    listCapParkedApps,
+    unpark,
+    dailyAwakeCapSeconds: () => 43_200,
     idleStopSeconds: () => 900,
     now: () => NOW,
     ...over,
   };
-  return { deps, stop, listIdleCandidates };
+  return { deps, stop, listIdleCandidates, listCapParkedApps, unpark };
 }
 
-/** Narrow the run to its reaped shape — the two skip outcomes carry no counters. */
+/** Narrow the run to its reaped shape — `disabled` carries no counters. */
 async function reap(deps: IdleReaperDeps) {
   const run = await reapIdlePublishedApps(deps);
   if (run.outcome !== 'reaped') throw new Error(`expected a reaped run, got ${run.outcome}`);
@@ -270,5 +291,114 @@ describe('reapIdlePublishedAppsSerialized', () => {
     };
 
     await expect(reapIdlePublishedAppsSerialized(deps, brokenPool)).rejects.toThrow('pool exhausted');
+  });
+});
+
+
+describe('the daily-cap unpark sweep — the door back out', () => {
+  it('given a counter that has ROLLED OVER, should release the app to `stopped`', async () => {
+    // WITHOUT THIS THE CAP IS A ONE-WAY DOOR: the counter resets at midnight UTC and
+    // the status does not, so one busy day would take an app off the internet
+    // permanently. Released to `stopped`, never straight to `running` — resuming
+    // still has to go through the wake path, which is where the credit gate binds.
+    const { deps, unpark } = makeDeps({
+      listCapParkedApps: async () => [capParkedApp({ awakeSecondsDay: '2026-08-19', awakeSecondsToday: 86_400 })],
+    });
+
+    const run = await reap(deps);
+
+    expect(unpark).toHaveBeenCalledWith('app-parked');
+    assert({
+      given: 'an app parked yesterday whose counter is stale',
+      should: 'release exactly one app',
+      actual: { unparked: run.unparked, stillCapped: run.stillCapped },
+      expected: { unparked: 1, stillCapped: 0 },
+    });
+  });
+
+  it('given today’s budget still spent, should leave the app parked', async () => {
+    const { deps, unpark } = makeDeps({
+      listCapParkedApps: async () => [capParkedApp()],
+    });
+
+    const run = await reap(deps);
+
+    expect(unpark).not.toHaveBeenCalled();
+    assert({
+      given: 'an app that spent its whole budget today',
+      should: 'count it as still capped',
+      actual: { unparked: run.unparked, stillCapped: run.stillCapped },
+      expected: { unparked: 0, stillCapped: 1 },
+    });
+  });
+
+  it('releases everything when the cap is switched OFF, without a second rule for it', async () => {
+    // Turning the knob to 0 must not leave yesterday's parked apps stranded — the
+    // same planner decides "no longer capped" however it stopped being true.
+    const { deps, unpark } = makeDeps({
+      dailyAwakeCapSeconds: () => 0,
+      listCapParkedApps: async () => [capParkedApp()],
+    });
+
+    expect((await reap(deps)).unparked).toBe(1);
+    expect(unpark).toHaveBeenCalledWith('app-parked');
+  });
+
+  it('given an unpark write that matched NOTHING, should not count a release', async () => {
+    // The row moved under us — destroyed, or parked again for a different reason.
+    // Not an error: it is no longer ours to release.
+    const { deps } = makeDeps({
+      listCapParkedApps: async () => [capParkedApp({ awakeSecondsDay: '2026-08-19' })],
+      unpark: async () => false,
+    });
+
+    const run = await reap(deps);
+
+    assert({
+      given: 'a guarded unpark that matched no row',
+      should: 'count neither a release nor a failure',
+      actual: { unparked: run.unparked, unparkFailed: run.unparkFailed },
+      expected: { unparked: 0, unparkFailed: 0 },
+    });
+  });
+
+  it('given the cap-parked row source fails, should count it apart and still report the reaping half', async () => {
+    const { deps } = makeDeps({
+      listCapParkedApps: async () => {
+        throw new Error('database down');
+      },
+    });
+
+    const run = await reap(deps);
+
+    assert({
+      given: 'an unreadable cap-parked list beside a healthy reap',
+      should: 'count the unpark failure without touching the reaping counters',
+      actual: { unparkFailed: run.unparkFailed, stopped: run.stopped, sourceFailed: run.sourceFailed },
+      expected: { unparkFailed: 1, stopped: 1, sourceFailed: false },
+    });
+  });
+
+  it('sweeps even when idle REAPING is switched off — the two knobs are independent', async () => {
+    // Turning off idle stopping says nothing about whether an app parked by
+    // yesterday's budget should stay parked forever. Only one of the two knobs
+    // holds a door shut.
+    const { deps, unpark } = makeDeps({
+      idleStopSeconds: () => 0,
+      listCapParkedApps: async () => [capParkedApp({ awakeSecondsDay: '2026-08-19' })],
+    });
+
+    const run = await reapIdlePublishedApps(deps);
+
+    expect(unpark).toHaveBeenCalledWith('app-parked');
+    expect(run.outcome === 'reaping_disabled' ? run.unparked : null).toBe(1);
+  });
+
+  it('given the kill switch is off, should sweep NOTHING', async () => {
+    const { deps, listCapParkedApps } = makeDeps({ isEnabled: () => false });
+
+    await reapIdlePublishedApps(deps);
+
+    expect(listCapParkedApps).not.toHaveBeenCalled();
   });
 });

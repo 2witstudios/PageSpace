@@ -68,6 +68,9 @@ function reapedRun(over: Record<string, unknown> = {}) {
     refused: 0,
     stopFailed: 0,
     failed: 0,
+    unparked: 1,
+    stillCapped: 0,
+    unparkFailed: 0,
     idleSeconds: 900,
     sourceFailed: false,
     ...over,
@@ -103,18 +106,42 @@ describe('/api/cron/reap-idle-apps', () => {
     );
   });
 
-  it.each(['disabled', 'reaping_disabled'] as const)(
-    'given %s, should answer a GREEN 200 — a dark or switched-off feature must never redden a live cron',
-    async (outcome) => {
-      mockReap.mockResolvedValue({ outcome });
+  it('given the feature is DARK, should answer a green 200 — a dark feature must never redden a live cron', async () => {
+    mockReap.mockResolvedValue({ outcome: 'disabled' });
 
-      const response = await GET(makeRequest());
+    const response = await GET(makeRequest());
 
-      expect(response.status).toBe(200);
-      expect(await response.json()).toMatchObject({ success: true, outcome });
-      expect(mockCapture).not.toHaveBeenCalled();
-    },
-  );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, outcome: 'disabled' });
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('given reaping is switched off, should answer a green 200 AND still report the unpark sweep', async () => {
+    // Switching off idle stopping says nothing about whether an app parked by
+    // yesterday's budget should stay parked forever, so the sweep runs either way
+    // and its counters have to reach the operator.
+    mockReap.mockResolvedValue(reapedRun({ outcome: 'reaping_disabled', idleSeconds: 0, unparked: 2 }));
+
+    const response = await GET(makeRequest());
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ success: true, outcome: 'reaping_disabled', unparked: 2 });
+    expect(mockCapture).not.toHaveBeenCalled();
+  });
+
+  it('given an app could not be RELEASED from its daily-cap park, should alert — it stays offline', async () => {
+    // The opposite direction to a failed stop, and worth waking somebody for the
+    // opposite reason: nothing but this sweep ever reopens that door.
+    mockReap.mockResolvedValue(reapedRun({ unparked: 0, unparkFailed: 1 }));
+
+    const response = await GET(makeRequest());
+
+    expect(response.status).toBe(500);
+    expect(mockCapture).toHaveBeenCalledWith(
+      expect.any(Error),
+      expect.objectContaining({ fingerprint: ['idle-reaper-unpark-failed'] }),
+    );
+  });
 
   it('given the advisory lock is held, should answer a green 200 and alert nobody', async () => {
     mockReap.mockResolvedValue({ outcome: 'lock_busy' });
@@ -153,7 +180,7 @@ describe('/api/cron/reap-idle-apps', () => {
   });
 
   it('does NOT alert on lockBusy, refused or active rows — every one of them self-corrects next tick', async () => {
-    mockReap.mockResolvedValue(reapedRun({ stopped: 0, lockBusy: 2, refused: 1, active: 3 }));
+    mockReap.mockResolvedValue(reapedRun({ stopped: 0, lockBusy: 2, refused: 1, active: 3, stillCapped: 4 }));
 
     const response = await GET(makeRequest());
 

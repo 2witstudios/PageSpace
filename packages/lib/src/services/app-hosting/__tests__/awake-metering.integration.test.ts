@@ -38,6 +38,13 @@ import { publishedApps, publishedAppMachineEvents } from '@pagespace/db/schema/p
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { assert } from '../../sandbox/__tests__/riteway';
 import { defaultAwakeMeterDeps } from '../awake-meter';
+import {
+  closeAppWindowAtBoundary,
+  defaultAppLifecycleMeteringDeps,
+  passThroughSettleLock,
+  stopPublishedApp,
+  type AppLifecycleMeteringDeps,
+} from '../app-lifecycle-metering';
 import { awakeSecondsFromEvents } from '../app-metering-core';
 import {
   mirrorFlyMachineEvents,
@@ -560,6 +567,126 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stampWindowStart — opens a window 
         outcome: 'superseded',
         billedThrough: wakeInstant.toISOString(),
         holdId: 'hold-from-wake',
+      },
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settle against the real table', () => {
+  /**
+   * The stop seam with its world replaced and its DATABASE REAL: Fly is a no-op, the
+   * ledger is a stub, the meter lock is already held (so no pool is taken), and the
+   * clock is fixed. What is being proved is the statement it writes — the same
+   * `dailyAwakeCounterPatch` the heartbeat's counter is judged against, which a
+   * mocked-db unit test can only assert the SHAPE of.
+   */
+  function stopDeps(over: Partial<AppLifecycleMeteringDeps> = {}): AppLifecycleMeteringDeps {
+    return {
+      ...defaultAppLifecycleMeteringDeps,
+      isEnabled: () => true,
+      billing: {
+        resolvePayerId: async () => ownerId,
+        gate: async () => ({ allowed: true, holdId: 'hold-x' }),
+        trackUsage: async () => {},
+        releaseHold: async () => {},
+      },
+      startMachine: async () => {},
+      stopMachine: async () => {},
+      listMachineEvents: async () => [],
+      serializeSettle: passThroughSettleLock,
+      dailyAwakeCapSeconds: () => 0,
+      now: () => NOW,
+      ...over,
+    };
+  }
+
+  it('closes the window AND counts the settled seconds on the app’s day', async () => {
+    await seedApp({ awakeBilledThrough: ago(600_000), awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    const result = await stopPublishedApp(appId, 'idle', stopDeps());
+
+    const row = await readApp();
+    assert({
+      given: 'a ten-minute window closed by an idle stop',
+      should: 'bill it, close the window and record the day’s seconds',
+      actual: {
+        billed: result.outcome === 'stopped' ? result.billedSeconds : null,
+        billedThrough: row?.awakeBilledThrough,
+        day: row?.awakeSecondsDay,
+        seconds: row?.awakeSecondsToday,
+      },
+      expected: { billed: 600, billedThrough: null, day: '2026-08-20', seconds: 600 },
+    });
+  });
+
+  it('ADDS to a counter the heartbeat already started today', async () => {
+    // The stop and the heartbeat write the same counter through two different
+    // statements; a stop that overwrote rather than added would forgive every second
+    // the heartbeat had already counted, and the cap would never fire on a
+    // long-running app.
+    await seedApp({
+      awakeBilledThrough: ago(600_000),
+      awakeSecondsDay: '2026-08-20',
+      awakeSecondsToday: 42_000,
+    });
+
+    await stopPublishedApp(appId, 'idle', stopDeps());
+
+    expect((await readApp())?.awakeSecondsToday).toBe(42_600);
+  });
+
+  it('keys the counter on the TICK’s day, not on a repair boundary in a previous one', async () => {
+    // The repair path closes at a MIRRORED boundary, which can sit in an earlier UTC
+    // day. Keying the counter off that boundary would stamp a stale day, whose next
+    // comparison reads as "nothing spent today" — the cap failing OPEN on exactly the
+    // broken-lifecycle rows it exists to catch.
+    const yesterday = new Date('2026-08-19T23:00:00.000Z');
+    await seedApp({
+      awakeBilledThrough: new Date('2026-08-19T22:00:00.000Z'),
+      lastWakeAt: new Date('2026-08-19T21:00:00.000Z'),
+      awakeSecondsDay: null,
+      awakeSecondsToday: 0,
+    });
+
+    await closeAppWindowAtBoundary(
+      (await db.select().from(publishedApps).where(eq(publishedApps.id, appId)))[0],
+      yesterday,
+      stopDeps(),
+    );
+
+    const row = await readApp();
+    assert({
+      given: 'a window repaired at a boundary in the previous UTC day',
+      should: 'charge the seconds to the day the tick discovered them',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: '2026-08-20', seconds: 3600 },
+    });
+  });
+
+  it('a `daily_cap` stop parks the row and records the reason the unpark sweep matches on', async () => {
+    // The sweep that releases these apps keys on this exact `lastError` string —
+    // an insolvency park and a cap park are the same `status`, and releasing the
+    // wrong one hands a payer with no credits a running machine.
+    await seedApp({ awakeBilledThrough: ago(600_000) });
+
+    const result = await stopPublishedApp(appId, 'daily_cap', stopDeps());
+
+    const [row] = await db
+      .select({ status: publishedApps.status, lastError: publishedApps.lastError })
+      .from(publishedApps)
+      .where(eq(publishedApps.id, appId));
+    assert({
+      given: 'a stop for exceeding the daily budget',
+      should: 'park the row with the reason on it',
+      actual: {
+        status: result.outcome === 'stopped' ? result.status : null,
+        rowStatus: row?.status,
+        lastError: row?.lastError,
+      },
+      expected: {
+        status: 'parked',
+        rowStatus: 'parked',
+        lastError: 'parked: daily_awake_cap_exceeded',
       },
     });
   });

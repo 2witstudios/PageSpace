@@ -45,14 +45,28 @@ import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import { isAppHostingEnabled, resolveIdleStopSeconds } from './app-hosting-env';
-import { planIdleStop, type IdleStopKeep } from './app-metering-core';
 import {
+  planDailyAwakeCap,
+  planIdleStop,
+  utcDayOf,
+  type IdleStopKeep,
+} from './app-metering-core';
+import { resolveDailyAwakeSecondsCap } from './app-hosting-env';
+import {
+  DAILY_CAP_PARK_REASON,
   stopPublishedApp,
   type StopPublishedAppResult,
 } from './app-lifecycle-metering';
+import { planTransition } from './provisioner-core';
 
 /** The columns the idle decision reads. Narrower than the row on purpose. */
 export type ReapableApp = Pick<PublishedApp, 'id' | 'driveId' | 'tier' | 'lastHitAt' | 'lastWakeAt'>;
+
+/** The columns the daily-cap UNPARK decision reads. */
+export type CapParkedApp = Pick<
+  PublishedApp,
+  'id' | 'driveId' | 'tier' | 'status' | 'imageDigest' | 'machineId' | 'awakeSecondsDay' | 'awakeSecondsToday'
+>;
 
 export interface IdleReaperDeps {
   isEnabled: () => boolean;
@@ -70,6 +84,21 @@ export interface IdleReaperDeps {
   listIdleCandidates: (input: { idleSeconds: number; now: Date }) => Promise<ReapableApp[]>;
   /** The stop seam — the ONLY place an awake window is closed. */
   stop: (publishedAppId: string) => Promise<StopPublishedAppResult>;
+  /**
+   * Apps PARKED by the daily cap — the rows the unpark sweep considers.
+   *
+   * Keyed on the reason the park itself wrote, so an app parked for having no
+   * credits is never released by a counter rolling over: the two enforcement states
+   * look identical in `status` and are cleared by completely different events.
+   */
+  listCapParkedApps: () => Promise<CapParkedApp[]>;
+  /**
+   * Release one app from a daily-cap park: `parked -> stopped`, guarded on it still
+   * being parked. Answers whether the write landed.
+   */
+  unpark: (publishedAppId: string) => Promise<boolean>;
+  /** The per-app daily awake budget in seconds, read at call time. 0 disables it. */
+  dailyAwakeCapSeconds: () => number;
   /** The idle threshold in seconds, read at call time. 0 disables reaping. */
   idleStopSeconds: () => number;
   now: () => Date;
@@ -123,6 +152,61 @@ export const defaultIdleReaperDeps: IdleReaperDeps = {
 
   stop: (publishedAppId) => stopPublishedApp(publishedAppId, 'idle'),
 
+  /**
+   * Every app parked BY THE DAILY CAP — matched on the `lastError` the park wrote,
+   * not on `status` alone.
+   *
+   * An insolvency park and a cap park are the same `status`, and releasing the wrong
+   * one would hand a payer with no credits a running machine. The reason string is
+   * the only thing that tells them apart on the row.
+   */
+  async listCapParkedApps() {
+    return db
+      .select({
+        id: publishedApps.id,
+        driveId: publishedApps.driveId,
+        tier: publishedApps.tier,
+        status: publishedApps.status,
+        imageDigest: publishedApps.imageDigest,
+        machineId: publishedApps.machineId,
+        awakeSecondsDay: publishedApps.awakeSecondsDay,
+        awakeSecondsToday: publishedApps.awakeSecondsToday,
+      })
+      .from(publishedApps)
+      .where(
+        and(
+          eq(publishedApps.status, 'parked'),
+          eq(publishedApps.lastError, `parked: ${DAILY_CAP_PARK_REASON}`),
+        ),
+      );
+  },
+
+  /**
+   * `parked -> stopped`, and NEVER straight to `running`: resuming still has to go
+   * through the wake path, which is where the credit gate binds. The status machine
+   * says the same thing, and the guard on `status = 'parked'` is what keeps a
+   * concurrent insolvency park from being overwritten by this sweep.
+   *
+   * `lastError` is cleared with it — the row's explanation for a state it is no
+   * longer in is worse than none, and the publish surface reads that column.
+   */
+  async unpark(publishedAppId) {
+    const [row] = await db
+      .update(publishedApps)
+      .set({ status: 'stopped', lastError: null })
+      .where(
+        and(
+          eq(publishedApps.id, publishedAppId),
+          eq(publishedApps.status, 'parked'),
+          eq(publishedApps.lastError, `parked: ${DAILY_CAP_PARK_REASON}`),
+        ),
+      )
+      .returning({ id: publishedApps.id });
+    return row !== undefined;
+  },
+
+  dailyAwakeCapSeconds: resolveDailyAwakeSecondsCap,
+
   idleStopSeconds: resolveIdleStopSeconds,
 
   now: () => new Date(),
@@ -150,6 +234,12 @@ export interface ReapIdleResult {
   stopFailed: number;
   /** Rows where something threw. Isolated; nothing is left half-done because the stop seam owns its own ordering. */
   failed: number;
+  /** Apps released from a daily-cap park because their counter has rolled over to a new UTC day. */
+  unparked: number;
+  /** Cap-parked apps whose budget is still spent today. Left parked; tomorrow's sweep releases them. */
+  stillCapped: number;
+  /** The cap-parked row source failed, or an unpark did. Counted apart from the reaping half — one failing does not stop the other. */
+  unparkFailed: number;
   /** The threshold this tick used, echoed for the operator reading a log line. */
   idleSeconds: number;
   /** The row source itself failed; nothing was reaped and the fleet stays awake until the next tick. */
@@ -166,13 +256,20 @@ const EMPTY_RESULT: Omit<ReapIdleResult, 'idleSeconds'> = {
   refused: 0,
   stopFailed: 0,
   failed: 0,
+  unparked: 0,
+  stillCapped: 0,
+  unparkFailed: 0,
   sourceFailed: false,
 };
 
 export type ReapIdleRun =
   | { outcome: 'disabled' }
-  /** Idle reaping is switched off by configuration (`PUBLISHED_APP_IDLE_STOP_SECONDS=0`) — reported, never silently treated as a clean tick. */
-  | { outcome: 'reaping_disabled' }
+  /**
+   * Idle reaping is switched off by configuration (`PUBLISHED_APP_IDLE_STOP_SECONDS=0`)
+   * — reported, never silently treated as a clean tick. The UNPARK sweep still ran,
+   * and its counters ride along.
+   */
+  | ({ outcome: 'reaping_disabled' } & ReapIdleResult)
   | ({ outcome: 'reaped' } & ReapIdleResult);
 
 /**
@@ -191,7 +288,16 @@ export async function reapIdlePublishedApps(
   const idleSeconds = deps.idleStopSeconds();
   // Asked before the row source, not after: a disabled reaper must read nothing
   // rather than read the fleet and then decline to act on it.
-  if (!Number.isFinite(idleSeconds) || idleSeconds <= 0) return { outcome: 'reaping_disabled' };
+  //
+  // The UNPARK sweep still runs, and that is not an inconsistency: switching off
+  // idle stopping says nothing about whether an app parked by yesterday's budget
+  // should stay parked forever. The two knobs are independent, and only one of them
+  // holds a door shut.
+  if (!Number.isFinite(idleSeconds) || idleSeconds <= 0) {
+    const result: ReapIdleResult = { ...EMPTY_RESULT, idleSeconds: 0 };
+    await unparkExpiredCaps(deps.now(), deps, result);
+    return { outcome: 'reaping_disabled', ...result };
+  }
 
   const result: ReapIdleResult = { ...EMPTY_RESULT, idleSeconds };
   // ONE clock for the whole tick, captured before any await — the prefilter's
@@ -223,7 +329,92 @@ export async function reapIdlePublishedApps(
       );
     }
   }
+
+  await unparkExpiredCaps(now, deps, result);
   return { outcome: 'reaped', ...result };
+}
+
+/**
+ * Release every app whose daily-cap park has expired — the door back out.
+ *
+ * WITHOUT THIS THE CAP IS A ONE-WAY DOOR. The counter resets at midnight UTC; the
+ * STATUS does not. Nothing else in the system ever writes `parked -> stopped` for
+ * this reason, so a single busy day would take an app off the internet permanently,
+ * with no user-reachable recovery — a runaway bound that becomes a deletion.
+ *
+ * Deliberately on the reaper's tick rather than a cron of its own: it is the same
+ * five-minute cadence, the same advisory lock, and the same subject (which machines
+ * should be up). Riding along also means the sweep cannot be enabled without the
+ * thing that does the parking.
+ *
+ * It runs even when the reaping half found nothing, and its failures are counted
+ * separately — an unreadable candidate list must not leave apps parked for a day
+ * longer than their budget said.
+ */
+async function unparkExpiredCaps(
+  now: Date,
+  deps: IdleReaperDeps,
+  result: ReapIdleResult,
+): Promise<void> {
+  const capSeconds = deps.dailyAwakeCapSeconds();
+  let parked: CapParkedApp[];
+  try {
+    parked = await deps.listCapParkedApps();
+  } catch (error) {
+    result.unparkFailed += 1;
+    loggers.ai.error(
+      'Published-app idle reaper could not list cap-parked apps — they stay parked until the next tick',
+      error instanceof Error ? error : new Error(String(error)),
+    );
+    return;
+  }
+
+  const today = utcDayOf(now);
+  for (const row of parked) {
+    try {
+      const budget = planDailyAwakeCap({
+        tier: row.tier,
+        counterDay: row.awakeSecondsDay,
+        secondsToday: row.awakeSecondsToday,
+        today,
+        capSeconds,
+      });
+      // Judged through the SAME pure planner the park used, so "the day rolled
+      // over" and "the cap was raised" and "the cap was switched off" all release
+      // an app without three different rules deciding it.
+      if (budget.exceeded) {
+        result.stillCapped += 1;
+        continue;
+      }
+      // Asked before the write, against the same planner the provisioner uses:
+      // `parked -> stopped` is legal, and asking here means a row the status
+      // machine would refuse never reaches the database as a constraint violation.
+      const plan = planTransition(row.status, 'stopped', {
+        imageDigest: row.imageDigest,
+        machineId: row.machineId,
+        tier: row.tier,
+      });
+      if (!plan.allowed) {
+        result.unparkFailed += 1;
+        loggers.ai.warn('Published app could not be released from its daily-cap park', {
+          publishedAppId: row.id,
+          from: row.status,
+          refusal: plan.reason,
+        });
+        continue;
+      }
+      if (await deps.unpark(row.id)) result.unparked += 1;
+      // A write that matched nothing means the row moved under us (a destroy, or a
+      // fresh park). Not an error: it is no longer ours to release.
+    } catch (error) {
+      result.unparkFailed += 1;
+      loggers.ai.error(
+        'Published-app daily-cap unpark failed for one app — it stays parked and is retried next tick',
+        error instanceof Error ? error : new Error(String(error)),
+        { publishedAppId: row.id, driveId: row.driveId },
+      );
+    }
+  }
 }
 
 const KEEP_COUNTER: Record<IdleStopKeep, keyof Pick<ReapIdleResult, 'active' | 'noActivitySignal'> | null> = {

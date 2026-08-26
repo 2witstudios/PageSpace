@@ -41,6 +41,11 @@ import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
 import { loggers } from '../../logging/logger-config';
 import { isAppHostingEnabled, resolveHitStampIntervalSeconds } from './app-hosting-env';
+import {
+  DAILY_CAP_PARK_REASON,
+  wakePublishedAppSerialized,
+  type WakePublishedAppRunResult,
+} from './app-lifecycle-metering';
 import { derivePublishedAppReplayKey } from './app-replay-key';
 import { resolveAppReplaySecret, resolvePublishedAppsApex } from './routing-env';
 import {
@@ -68,6 +73,12 @@ export interface AppRouterDeps {
    * demand. Throttled inside; see {@link stampAppHit}.
    */
   stampHit: (publishedAppId: string) => Promise<void>;
+  /**
+   * Start a STOPPED app's machine through the metering seam, opening an awake
+   * window — see {@link resolveAppRoute} for why the edge, and only the edge, can
+   * do this.
+   */
+  wake: (publishedAppId: string) => Promise<WakePublishedAppRunResult>;
 }
 
 /** The columns the routing decision reads. Narrower than the row on purpose. */
@@ -116,6 +127,7 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   hasSpendableBalance: (userId, tier) =>
     hasSpendableBalance(userId, tier as Parameters<typeof hasSpendableBalance>[1]),
   stampHit: stampAppHit,
+  wake: (publishedAppId) => wakePublishedAppSerialized(publishedAppId),
 };
 
 /**
@@ -150,6 +162,61 @@ async function stampAppHit(publishedAppId: string): Promise<void> {
         intervalSeconds > 0 ? or(isNull(publishedApps.lastHitAt), stale) : undefined,
       ),
     );
+}
+
+/**
+ * What the edge should answer when a wake did not straightforwardly succeed, or
+ * `null` to carry on and replay.
+ *
+ * TWO outcomes carry on. `woken` is the ordinary one. `wake_in_progress` is the
+ * cold-start burst: a page's other twenty requests arrive while the first is still
+ * starting the machine, and the honest answer for them is the same as for the
+ * winner — the app is starting, replay and let Fly's proxy hold the request for it.
+ * `not_wakeable` is the same fact seen a moment later (the winner's status write
+ * already landed, so the row is `running` and this wake has nothing to do), and it
+ * is the DOMINANT path on a cold app, which is why it may not be treated as a
+ * failure.
+ *
+ * Everything else refuses. Each is a state where replaying would hand Fly a request
+ * for a machine we have decided not to pay for — the unmetered start this whole
+ * wiring exists to close.
+ */
+function refusalForWake(wake: WakePublishedAppRunResult): AppRouteDecision | null {
+  switch (wake.outcome) {
+    case 'woken':
+    case 'wake_in_progress':
+      return null;
+    case 'parked':
+      // The gate refused, and the app is now genuinely parked. `daily_cap` is told
+      // apart from an empty balance because the two ask different things of the
+      // owner (top up, versus wait for tomorrow).
+      return {
+        kind: 'parked',
+        reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : 'out_of_credits',
+      };
+    case 'start_failed':
+      // Fly refused the start. Nothing is billed and nothing is stamped; replaying
+      // would ask the proxy to start the same machine outside the seam.
+      return { kind: 'unavailable', reason: 'failed' };
+    case 'refused':
+      switch (wake.reason) {
+        case 'not_wakeable':
+          return null;
+        case 'not_found':
+          // The row was deleted between our read and the wake.
+          return { kind: 'not_found', reason: 'no_such_app' };
+        case 'no_machine':
+          // Mid blue/green swap: there is nothing to start yet, and the next
+          // deploy finishes in seconds.
+          return { kind: 'unavailable', reason: 'deploying' };
+        case 'disabled':
+          return { kind: 'unavailable', reason: 'hosting_disabled' };
+        case 'unresolved_payer':
+          // No honest payer, so no start. Refusing costs one visitor a page;
+          // serving would bill a machine to somebody who may not own the drive.
+          return { kind: 'unavailable', reason: 'failed' };
+      }
+  }
 }
 
 /**
@@ -231,6 +298,27 @@ export async function resolveAppRoute(
   }
 
   const decision = decideAppRoute({ app: routable, balanceOk: true, replayState });
+
+  // A STOPPED app is servable, and serving it means STARTING ITS MACHINE. Fly's
+  // proxy does that by itself the moment a replay reaches it — which is exactly the
+  // problem: a machine started that way opens an awake window nobody recorded, on a
+  // row that still says `stopped`, so the heartbeat never bills it (it lists
+  // `running` rows) and the reaper never stops it (so does it). The app would run
+  // free, forever, from its first visit after any idle stop.
+  //
+  // So the wake goes through the metering seam HERE, at the only place that knows a
+  // stopped app is about to be served. That is also where the credit gate was
+  // always meant to consume its hold: `wakePublishedApp` gates the payer, places
+  // the reservation, starts the machine and moves the row to `running` with its
+  // boundary stamped.
+  //
+  // A wake that does NOT succeed must not fall through to a replay, because a
+  // replay is exactly the unmetered start this exists to prevent.
+  if (app.status === 'stopped' && decision.kind === 'replay') {
+    const wake = await deps.wake(app.id);
+    const refusal = refusalForWake(wake);
+    if (refusal) return refusal;
+  }
 
   // Recorded ONLY for a request that is actually being served. A refusal is not
   // demand: stamping one would keep a parked app's machine — and every crawler that
