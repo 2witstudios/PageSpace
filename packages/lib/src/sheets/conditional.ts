@@ -180,6 +180,26 @@ export const MAX_CONDITIONAL_RULES = 200;
 export const MAX_CONDITIONAL_RANGES_PER_RULE = 1_000;
 
 /**
+ * The most keys of the numerically-keyed rule-storage map that
+ * `parseConditionalRules` will look at, before it even knows which ones are
+ * valid.
+ *
+ * The TOML bag stores rules as `{ "0": rule, "1": rule, ... }` rather than
+ * an array, and `Object.keys` on it is unbounded the same way an array of
+ * rules is — but unlike the array path (bounded by collecting incrementally
+ * and stopping at `MAX_CONDITIONAL_RULES`), reconstructing rule order here
+ * needs a `.sort()` over every candidate key *before* any of them can be
+ * parsed or discarded, so there is no "stop once enough valid ones are
+ * found" option for this step specifically. Bounding the raw key list first
+ * keeps that sort (and the map/filter around it) cheap regardless of how
+ * large the stored object is. Ten times `MAX_CONDITIONAL_RULES`: enough
+ * headroom that a realistic document — where every key is the canonical,
+ * already-ascending form `sheetDataToSheetDoc` writes — never loses a rule
+ * to this bound before the per-rule cap would have dropped it anyway.
+ */
+export const MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED = MAX_CONDITIONAL_RULES * 10;
+
+/**
  * The most cells conditional-format evaluation may cover in total, across
  * every rule and every range of a sheet combined.
  *
@@ -771,6 +791,7 @@ export function parseConditionalRules(value: unknown): ConditionalRule[] | undef
     entries = value;
   } else if (isObject(value)) {
     entries = Object.keys(value)
+      .slice(0, MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED)
       .map((key) => ({ key, index: Number(key) }))
       .filter(({ index }) => Number.isFinite(index))
       .sort((a, b) => a.index - b.index)

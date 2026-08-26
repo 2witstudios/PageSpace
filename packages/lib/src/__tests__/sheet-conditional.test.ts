@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   MAX_CONDITIONAL_RANGE_CELLS,
   MAX_CONDITIONAL_RANGES_PER_RULE,
+  MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED,
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
   addressesOfRange,
@@ -663,6 +664,39 @@ describe('parseConditionalRules', () => {
 
     expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
     expect(indexReads).toBeLessThan(MAX_CONDITIONAL_RULES * 2);
+  });
+
+  it('bounds the numerically-keyed map path too, before the sort that reconstructs order', () => {
+    // The array path is bounded by collecting incrementally, but the
+    // TOML-bag map path (`{"0": rule, "1": rule, ...}`) has to sort every
+    // candidate key before it can even start parsing, so "stop once enough
+    // valid ones are found" isn't available for this branch specifically —
+    // `Object.keys` must always fully enumerate. What CAN be (and is)
+    // bounded is everything after that: a Proxy counts property-value reads
+    // on the stored object (the step that would otherwise touch all of a
+    // huge object's rule payloads, not just the ones that make the cut) to
+    // prove the fix actually stops those at the bound rather than merely
+    // trimming the final output.
+    const raw: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 3; i++) {
+      raw[String(i)] = rule(`r${i}`);
+    }
+    let valueReads = 0;
+    const tracked = new Proxy(raw, {
+      get(target, prop, receiver) {
+        if (typeof prop === 'string' && /^\d+$/.test(prop)) valueReads += 1;
+        return Reflect.get(target, prop, receiver);
+      },
+    });
+
+    const parsed = parseConditionalRules(tracked);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+    // Bounded by MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED, not by the object's
+    // real size (3x larger here).
+    expect(valueReads).toBeLessThan(MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 2);
   });
 });
 
