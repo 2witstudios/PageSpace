@@ -437,16 +437,12 @@ describe('sendPushNotification', () => {
   });
 
   it('deactivates token after 5 consecutive failures', async () => {
-    // Driven by a real per-token FCM rejection (503 UNAVAILABLE): retryable, so
-    // it takes a strike rather than deactivating outright. An unset credential
-    // would NOT serve here — that is a server fault and deliberately exempt.
-    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'strike-count-project');
-    primeSign();
-    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'android', failedAttempts: '4' })] as never);
+    // `web` is the only platform left whose failure is charged to the device.
+    // Android deliberately never strikes: FCM reports a dead token outright, so
+    // every other rejection there is classed a server fault. See the
+    // serverFault reasoning in sendToFcm.
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'web', failedAttempts: '4' })] as never);
     const { setFn } = setupUpdateChain();
-    installFetchStub({
-      send: () => fakeResponse(503, JSON.stringify({ error: { status: 'UNAVAILABLE', message: 'busy' } })),
-    });
 
     await sendPushNotification('user-1', payload);
 
@@ -457,13 +453,8 @@ describe('sendPushNotification', () => {
   });
 
   it('keeps token active with fewer than 5 failures', async () => {
-    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'strike-keep-project');
-    primeSign();
-    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'android', failedAttempts: '2' })] as never);
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'web', failedAttempts: '2' })] as never);
     const { setFn } = setupUpdateChain();
-    installFetchStub({
-      send: () => fakeResponse(503, JSON.stringify({ error: { status: 'UNAVAILABLE', message: 'busy' } })),
-    });
 
     await sendPushNotification('user-1', payload);
 
@@ -1407,9 +1398,9 @@ describe('sendToFcm (Android)', () => {
 
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
   });
 
   // Symmetric to the @type guard on the FcmError branch: fieldViolations only
@@ -1445,9 +1436,9 @@ describe('sendToFcm (Android)', () => {
     // Falls back to the coarse status, and costs the device nothing.
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
   });
 
   it('ignores fieldViolations that arrive on a detail other than BadRequest', async () => {
@@ -1474,9 +1465,9 @@ describe('sendToFcm (Android)', () => {
     // would also pass if the send never reached FCM at all, because the
     // serverFault path leaves the row untouched too.
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
 
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
   });
@@ -1505,9 +1496,9 @@ describe('sendToFcm (Android)', () => {
     // would also pass if the send never reached FCM at all, because the
     // serverFault path leaves the row untouched too.
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
 
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
   });
@@ -1538,9 +1529,9 @@ describe('sendToFcm (Android)', () => {
     expect(result.failed).toBe(1);
     expect(result.errors[0]).toContain('INVALID_ARGUMENT');
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
   });
 
   // Likewise a wrong project id is a bare NOT_FOUND, and says nothing about the token.
@@ -1600,9 +1591,9 @@ describe('sendToFcm (Android)', () => {
     expect(result.failed).toBe(1);
     expect(result.errors[0]).toContain('UNAVAILABLE');
     expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
-    expect(setFn).toHaveBeenCalledWith(
-      expect.objectContaining({ failedAttempts: '1', isActive: true })
-    );
+    // Not a verdict about this device, so the row is left entirely untouched —
+    // no strike to accumulate toward a deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
   });
 
   it('falls back to UNKNOWN when the FCM error body is not JSON', async () => {

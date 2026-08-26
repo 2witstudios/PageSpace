@@ -792,10 +792,28 @@ async function sendToFcm(
 
     const { code, message: reason, tokenIsDead } = extractFcmError(body);
 
+    // The device is accountable only when FCM rendered a verdict about the
+    // token itself. Every other rejection is about us: a revoked or rotated
+    // credential (401), a wrong-project credential (403 SENDER_ID_MISMATCH), a
+    // message we built badly (400), a quota we blew (429), an FCM outage (5xx).
+    // None of those say anything about the phone, and five in a row would
+    // otherwise write isActive:false across every Android registration in the
+    // database — the exact fleet-wide outage the token-scoped verdict above
+    // exists to prevent, arrived at five notifications later instead of one.
+    //
+    // Deliberately not a list of statuses. Any list is a list of the failures
+    // someone thought of, and the cost of missing one is the whole install
+    // base; 404-wrong-project, 429 and 400-malformed-message would all have
+    // been missed by the obvious enumeration. Nothing is lost by declining to
+    // infer death from repeated failure, because FCM reports a genuinely dead
+    // token authoritatively and immediately.
+    const serverFault = !tokenIsDead;
+
     console.error('[FCM] reject', {
       status: response.status,
       code,
       tokenIsDead,
+      serverFault,
       reason,
       projectId,
       tokenId,
@@ -806,6 +824,7 @@ async function sendToFcm(
       tokenId,
       error: `${code}: ${reason}`,
       shouldRemoveToken: tokenIsDead,
+      serverFault,
     };
   } catch (error) {
     console.error('[FCM] send error', {
