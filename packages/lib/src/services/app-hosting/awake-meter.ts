@@ -24,6 +24,14 @@
  * source's own failure is reported as a value. One app's bad state must not stop
  * the fleet from billing.
  *
+ * METERED APPS ONLY. The dedicated tier buys a flat monthly price, so there is
+ * no per-second charge for this meter to make and no balance for its re-gate to
+ * consult; the filter lives in `listRunningApps` and the reasoning is there.
+ * (The weekly `fly_instance_up` reconcile still covers BOTH tiers, because it
+ * compares our mirrored boundaries against Fly's — not our billing watermark
+ * against anything — so it stays a meaningful check on a machine we are not
+ * charging for.)
+ *
  * Dark behind `APP_HOSTING_ENABLED`: a disabled deployment reports `disabled` and
  * reads nothing.
  */
@@ -67,7 +75,19 @@ export type AwakeWatermarkOutcome = 'advanced' | 'superseded';
 export interface AwakeMeterDeps {
   isEnabled: () => boolean;
   billing: AppBillingDeps;
-  /** Every app believed AWAKE. `running` is that belief; the repair step is what checks it. */
+  /**
+   * Every METERED app believed AWAKE. `running` is that belief; the repair step
+   * is what checks it.
+   *
+   * Metered only, and the filter belongs in the row SOURCE rather than in a skip
+   * inside the loop: a dedicated app is paid for by a flat monthly subscription,
+   * so there is nothing here to bill it for, no hold to re-place, and no
+   * insolvency it could be parked for (`parked_is_metered_only` makes that row
+   * unrepresentable, so the park would be refused and retried every single tick
+   * forever). Filtering at the source also keeps `processed` an honest count of
+   * what this meter is responsible for instead of a number padded with rows it
+   * always skips.
+   */
   listRunningApps: () => Promise<PublishedApp[]>;
   /** The mirror's latest stop boundary strictly after `since` — the repair signal. */
   findStopBoundary: (machineId: string, since: Date, now: Date) => Promise<Date | null>;
@@ -111,7 +131,10 @@ export const defaultAwakeMeterDeps: AwakeMeterDeps = {
   billing: defaultAppBillingDeps,
 
   async listRunningApps() {
-    return db.select().from(publishedApps).where(eq(publishedApps.status, 'running'));
+    return db
+      .select()
+      .from(publishedApps)
+      .where(and(eq(publishedApps.status, 'running'), eq(publishedApps.tier, 'metered')));
   },
 
   findStopBoundary: (machineId, since, now) => findStopBoundarySince(machineId, since, now),

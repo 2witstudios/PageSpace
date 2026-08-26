@@ -32,6 +32,10 @@
  * per tick. That is deliberate: capping cumulatively would mean silently deciding
  * not to bill a genuinely long-running app, which is the product working as sold.
  */
+
+import type { PublishedAppTier } from '@pagespace/db/schema/published-apps';
+import { isIdleReaperExempt } from './dedicated-tier';
+
 export const MAX_AWAKE_SETTLE_SPAN_MS = 24 * 60 * 60 * 1000;
 
 /** Seconds, from a millisecond span. Negative and non-finite spans price to 0, never to a negative charge. */
@@ -264,8 +268,16 @@ export function utcDayOf(now: Date): string {
 
 /** One row's daily awake budget, as the cap decision sees it. */
 export interface DailyAwakeCapInput {
-  /** `published_apps.tier`. Only 'metered' is capped — see the decision below. */
-  tier: string;
+  /**
+   * `published_apps.tier`. Only 'metered' is capped — see the decision below.
+   *
+   * Typed as the enum rather than `string` so the exemption can be asked through
+   * the shared `isIdleReaperExempt` predicate. A widened `string` here would have
+   * forced that predicate to widen too, and it is the same question the idle
+   * reaper asks about whether an app may be switched off — a place where "any
+   * string" is exactly the wrong domain.
+   */
+  tier: PublishedAppTier;
   /** `published_apps.awakeSecondsDay` — the day the counter covers, or null. */
   counterDay: string | null;
   /** `published_apps.awakeSecondsToday`. */
@@ -295,7 +307,11 @@ export function planDailyAwakeCap(input: DailyAwakeCapInput): { exceeded: boolea
   const secondsToday = input.counterDay === input.today && Number.isFinite(input.secondsToday)
     ? Math.max(0, input.secondsToday)
     : 0;
-  if (input.tier !== 'metered') return { exceeded: false, secondsToday };
+  // Asked through the shared predicate rather than an inline `!== 'metered'`, so
+  // "which tier is exempt from being switched off" is stated once for the reaper,
+  // the cap and anything that comes next — three comparisons that must never drift
+  // apart, and that all still compile if one of them silently does.
+  if (isIdleReaperExempt(input.tier)) return { exceeded: false, secondsToday };
   if (!Number.isFinite(input.capSeconds) || input.capSeconds <= 0) return { exceeded: false, secondsToday };
   return { exceeded: secondsToday >= input.capSeconds, secondsToday };
 }
