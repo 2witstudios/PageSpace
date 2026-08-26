@@ -5,10 +5,14 @@
  * and the native Capacitor layer. It handles platform detection and
  * provides a safe way to call native functions.
  *
- * This module is the only place in the app that reads `window.Capacitor`.
- * Everything platform-shaped — the hooks, the capability table, the auth
- * helpers — derives from `isCapacitorApp()` and `getPlatform()` here, so there
- * is no second detection path that can drift.
+ * This module owns platform detection: every hook, capability lookup and auth
+ * helper derives from `isCapacitorApp()` and `getPlatform()` here rather than
+ * reading `window.Capacitor` itself, so there is no second path that can drift.
+ *
+ * One deliberate exception remains: `POINTER_CAPABILITY_SCRIPT` in
+ * `pointer-capability.ts` is a hand-minified copy that runs before any bundle
+ * loads, so it cannot import from here. A parity test in that file's test suite
+ * keeps the two in agreement.
  */
 
 export type Platform = 'ios' | 'android' | 'web';
@@ -132,6 +136,22 @@ export function isAndroid(): boolean {
 }
 
 /**
+ * Check if running on an iPad.
+ *
+ * iPad is iOS Capacitor plus a tablet-sized screen: every iPad has
+ * min(width, height) >= 768px and every iPhone is well under it.
+ *
+ * Lives here rather than in a hook because `useDeviceTier` needs the same
+ * answer synchronously; two copies of the threshold would drift the moment one
+ * is tuned. SSR-safe — `isIOS()` is false on the server, so `window.screen` is
+ * never touched there.
+ */
+export function isIPad(): boolean {
+  if (!isIOS()) return false;
+  return Math.min(window.screen.width, window.screen.height) >= 768;
+}
+
+/**
  * Check if running inside any native Capacitor shell.
  *
  * Prefer this over `isIOS()` for anything that is not genuinely iOS-specific.
@@ -140,10 +160,10 @@ export function isAndroid(): boolean {
  * stays true on a native platform we have no capability row for (see
  * `getPlatform()`). "I am in a native app" and "we know what this platform can
  * do" are different questions: the first gates native-vs-browser behaviour, the
- * second is `hasNativeCapability()`. An unrecognized native platform is
- * therefore native with every capability unsupported — which is the safe
- * combination, and the reason capability checks must never be spelled as
- * `isNativeApp() && ...`.
+ * second is `hasNativeCapability()`, which already answers false for a platform
+ * with no row. So use it to gate native-vs-browser behaviour, and never as the
+ * native half of a hand-rolled capability test — `isNativeApp() && someIosOnly`
+ * is how a native platform gets handed a feature it cannot deliver.
  */
 export function isNativeApp(): boolean {
   return isCapacitorApp();

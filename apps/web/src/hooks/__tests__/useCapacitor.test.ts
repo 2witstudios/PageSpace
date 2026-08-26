@@ -343,8 +343,8 @@ describe('useCapacitor', () => {
     });
   });
 
-  // Note: isCapacitorApp() and getPlatform() utility functions are re-exported
-  // from capacitor-bridge.ts and thoroughly tested in capacitor-bridge.test.ts.
+  // Note: isCapacitorApp(), getPlatform() and isIPad() live in
+  // capacitor-bridge.ts and are thoroughly tested in capacitor-bridge.test.ts.
   // This file focuses on the React hook behavior only.
 
   describe('usage patterns', () => {

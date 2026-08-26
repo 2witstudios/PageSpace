@@ -2,26 +2,20 @@
 
 import { useSyncExternalStore } from "react";
 import { useBreakpoint } from "./useBreakpoint";
+import { isIPad } from "@/lib/capacitor-bridge";
 
 export type DeviceTier = "mobile" | "tablet" | "desktop";
 
-interface CapacitorGlobal {
-  isNativePlatform?: () => boolean;
-  getPlatform?: () => string;
-}
-
 /**
- * Synchronous tablet detection via Capacitor.
- * iPad is identified as iOS Capacitor with min screen dimension >= 768px.
+ * Synchronous tablet detection.
+ *
+ * Delegates to the capability bridge so the iPad threshold has one definition —
+ * this used to re-implement the detection and the 768px heuristic, which meant
+ * tuning one copy silently disagreed with `useCapacitor().isIPad`.
  * Device type is static for a session, so no subscription/reactivity needed.
  */
 function getIsTablet(): boolean {
-  if (typeof window === "undefined") return false;
-  const capacitor = (window as Window & { Capacitor?: CapacitorGlobal })
-    .Capacitor;
-  if (!capacitor?.isNativePlatform?.()) return false;
-  if (capacitor.getPlatform?.() !== "ios") return false;
-  return Math.min(window.screen.width, window.screen.height) >= 768;
+  return isIPad();
 }
 
 const noopSubscribe = () => () => {};

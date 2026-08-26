@@ -43,6 +43,12 @@ function removeCapacitorMock(): void {
  * throws while window is missing, an inline restore never runs and every later
  * test in the file inherits a leaked SSR global.
  */
+/** Set the reported screen size; jsdom's default (1024x768) already reads as a tablet. */
+function setScreenSize(width: number, height: number): void {
+  Object.defineProperty(window.screen, 'width', { value: width, configurable: true });
+  Object.defineProperty(window.screen, 'height', { value: height, configurable: true });
+}
+
 async function withoutWindow(fn: () => Promise<void> | void): Promise<void> {
   const windowBackup = globalThis.window;
   // @ts-expect-error - intentionally testing undefined window
@@ -336,6 +342,74 @@ describe('capacitor-bridge', () => {
         capacitorBridge = await import('../capacitor-bridge');
 
         expect(capacitorBridge.isAndroid()).toBe(false);
+
+      });
+    });
+  });
+
+  describe('isIPad', () => {
+    it('is true for iOS with a tablet-sized screen', async () => {
+      setupCapacitorMock(true, 'ios');
+      setScreenSize(834, 1194); // iPad Air
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(true);
+    });
+
+    it('is true at exactly the 768px threshold', async () => {
+      setupCapacitorMock(true, 'ios');
+      setScreenSize(768, 1024); // original iPad
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(true);
+    });
+
+    it('is false for iOS on a phone-sized screen', async () => {
+      setupCapacitorMock(true, 'ios');
+      setScreenSize(390, 844); // iPhone 14
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(false);
+    });
+
+    it('is false one pixel below the threshold', async () => {
+      setupCapacitorMock(true, 'ios');
+      setScreenSize(767, 1024);
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(false);
+    });
+
+    it('is false for an Android tablet — the heuristic is iOS-only', async () => {
+      setupCapacitorMock(true, 'android');
+      setScreenSize(800, 1280);
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(false);
+    });
+
+    it('is false in a browser tab, however large the screen', async () => {
+      removeCapacitorMock();
+      setScreenSize(1440, 2560);
+      vi.resetModules();
+      capacitorBridge = await import('../capacitor-bridge');
+
+      expect(capacitorBridge.isIPad()).toBe(false);
+    });
+
+    it('does not touch window.screen during SSR', async () => {
+      await withoutWindow(async () => {
+
+        vi.resetModules();
+        capacitorBridge = await import('../capacitor-bridge');
+
+        expect(() => capacitorBridge.isIPad()).not.toThrow();
+        expect(capacitorBridge.isIPad()).toBe(false);
 
       });
     });

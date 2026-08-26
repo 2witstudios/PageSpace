@@ -6,23 +6,12 @@ import {
   getPlatform,
   isAndroid,
   isIOS,
+  isIPad,
   isNativeApp,
   NO_NATIVE_CAPABILITIES,
   type NativeCapability,
   type Platform,
 } from '@/lib/capacitor-bridge';
-
-/**
- * Platform detection re-exported from the bridge.
- *
- * This module used to carry its own copy of `isCapacitorApp`/`getPlatform`,
- * reading `window.Capacitor` a second time. That is exactly the drift the
- * capability bridge exists to remove, so these are now thin re-exports and
- * `@/lib/capacitor-bridge` is the single detection path.
- *
- * @deprecated Import from `@/lib/capacitor-bridge` directly in new code.
- */
-export { isCapacitorApp, getPlatform } from '@/lib/capacitor-bridge';
 
 interface CapacitorState {
   /** Whether running in a native Capacitor app */
@@ -74,19 +63,12 @@ export function useCapacitor(): CapacitorState {
   });
 
   useEffect(() => {
-    const platform = getPlatform();
-    const isIOSPlatform = isIOS();
-    // Detect iPad: iOS Capacitor + tablet-sized screen (min dimension >= 768px).
-    // All iPads have min(width, height) >= 768px; all iPhones are well under.
-    const isIPadDevice =
-      isIOSPlatform && Math.min(window.screen.width, window.screen.height) >= 768;
-
     setState({
       isNative: isNativeApp(),
-      platform,
-      isIOS: isIOSPlatform,
+      platform: getPlatform(),
+      isIOS: isIOS(),
       isAndroid: isAndroid(),
-      isIPad: isIPadDevice,
+      isIPad: isIPad(),
       capabilities: getNativeCapabilities(),
       isReady: true,
     });
