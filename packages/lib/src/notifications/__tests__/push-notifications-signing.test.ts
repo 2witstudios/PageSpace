@@ -41,11 +41,14 @@ const { privateKey, publicKey } = realCrypto.generateKeyPairSync('rsa', {
   privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
 });
 
-function serviceAccount(pem: string) {
+// The access-token cache is keyed on the exact credential string, so tests that
+// must each mint their own token need distinct project ids — otherwise the
+// first one warms the cache and the next never reaches the token endpoint.
+function serviceAccount(pem: string, projectId = 'real-crypto-project') {
   return JSON.stringify({
     type: 'service_account',
-    project_id: 'real-crypto-project',
-    client_email: 'push@real-crypto-project.iam.gserviceaccount.com',
+    project_id: projectId,
+    client_email: `push@${projectId}.iam.gserviceaccount.com`,
     private_key: pem,
     token_uri: 'https://oauth2.googleapis.com/token',
   });
@@ -61,12 +64,12 @@ describe('FCM assertion signing (real crypto, no mock)', () => {
     const whereFn = vi.fn().mockResolvedValue(undefined);
     vi.mocked(db.update).mockReturnValue({ set: vi.fn().mockReturnValue({ where: whereFn }) } as never);
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
-      { id: 't1', userId: 'u1', token: 'fcm-token', platform: 'android', isActive: true, failedAttempts: '0' },
+      { id: 't1', userId: 'u1', token: 'fcm-token-DEVICESECRET', platform: 'android', isActive: true, failedAttempts: '0' },
     ] as never);
     globalThis.fetch = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
       if (String(url).includes('oauth2.googleapis.com')) {
         captured = new URLSearchParams(String(init.body)).get('assertion');
-        return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'a', expires_in: 3600 }) };
+        return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'ya29.OUTERSECRET', expires_in: 3600 }) };
       }
       return { ok: true, status: 200, text: async () => '{}' };
     }) as unknown as typeof fetch;
@@ -98,6 +101,67 @@ describe('FCM assertion signing (real crypto, no mock)', () => {
     expect(JSON.parse(Buffer.from(headerB64, 'base64url').toString()))
       .toEqual({ alg: 'RS256', typ: 'JWT' });
   }
+
+  // The PR description claims no log call carries credential material. That was
+  // established by reading the code, which is exactly the kind of claim that
+  // stops being true without anyone noticing. Assert it against a real PEM, a
+  // real assertion and a real access token, across every path that logs.
+  it('never writes credential material to the console, on any path', async () => {
+    const raw = serviceAccount(privateKey, 'log-hygiene-project');
+    const captured: string[] = [];
+    const sink = (...args: unknown[]) => {
+      captured.push(args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '));
+    };
+    const spies = [
+      vi.spyOn(console, 'log').mockImplementation(sink),
+      vi.spyOn(console, 'warn').mockImplementation(sink),
+      vi.spyOn(console, 'error').mockImplementation(sink),
+    ];
+
+    try {
+      // A success, an FCM rejection, a 401 that re-mints and retries, an OAuth
+      // refusal, and a transport throw — every branch that reaches a logger.
+      process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
+      await sendPushNotification('u1', { title: 'T', body: 'B' });
+
+      let n = 0;
+      globalThis.fetch = vi.fn(async (url: string | URL, init: RequestInit = {}) => {
+        if (String(url).includes('oauth2.googleapis.com')) {
+          captured.push('');
+          return { ok: true, status: 200, text: async () => JSON.stringify({ access_token: 'ya29.SUPERSECRET', expires_in: 3600 }) };
+        }
+        n += 1;
+        if (n === 1) return { ok: false, status: 401, text: async () => '{"error":{"status":"UNAUTHENTICATED"}}' };
+        if (n === 2) return { ok: false, status: 503, text: async () => '{"error":{"status":"UNAVAILABLE"}}' };
+        throw new Error('socket closed');
+      }) as unknown as typeof fetch;
+      await sendPushNotification('u1', { title: 'T', body: 'B' });
+      await sendPushNotification('u1', { silent: true });
+
+      process.env.FCM_SERVICE_ACCOUNT_JSON = '{"project_id":"p"}';
+      await sendPushNotification('u1', { title: 'T', body: 'B' });
+
+      const all = captured.join('\n');
+      expect(all.length).toBeGreaterThan(0);
+
+      // The private key, in either newline form.
+      expect(all).not.toContain('PRIVATE KEY');
+      expect(all).not.toContain(privateKey.split('\n')[1]);
+      // The whole service account blob.
+      expect(all).not.toContain(raw);
+      // The minted bearer token.
+      expect(all).not.toContain('SUPERSECRET');
+      // And the signed assertion, which is a bearer credential in its own right.
+      expect(all).not.toMatch(/eyJhbGciOiJSUzI1NiI/);
+      // The access token actually in use on each path, not just the one minted
+      // last — a generic placeholder here would hide a leak of the other.
+      expect(all).not.toContain('OUTERSECRET');
+      // The registration token is bearer-ish too: only its prefix may appear.
+      expect(all).not.toContain('DEVICESECRET');
+    } finally {
+      spies.forEach((sp) => sp.mockRestore());
+    }
+  });
 
   it('produces a signature that verifies against the matching public key', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccount(privateKey);
