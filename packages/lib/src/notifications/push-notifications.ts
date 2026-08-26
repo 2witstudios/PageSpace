@@ -636,8 +636,9 @@ function extractFcmError(body: string): FcmError {
     return unknown;
   }
 
-  const error = asRecord(asRecord(parsed)?.error);
-  if (!error) return unknown;
+  // An absent or non-object `error` needs no early return: every read below
+  // already falls back, and an empty object produces exactly `unknown`.
+  const error = asRecord(asRecord(parsed)?.error) ?? {};
 
   const message = typeof error.message === 'string' ? error.message : 'Unknown error';
 

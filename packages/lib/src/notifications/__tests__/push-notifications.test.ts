@@ -1501,6 +1501,141 @@ describe('sendToFcm (Android)', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('falls back to the Google token endpoint when the account omits token_uri', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({ token_uri: undefined });
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.sent).toBe(1);
+    expect(calls[0].url).toBe('https://oauth2.googleapis.com/token');
+  });
+
+  it('treats an access token with no expires_in as lasting the standard hour', async () => {
+    // Observable through the cache: the default has to be long enough that the
+    // second send reuses the token rather than minting again.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'no-expiry-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub({
+      oauth: () => fakeResponse(200, JSON.stringify({ access_token: 'ya29.no-expiry' })),
+    });
+
+    await sendPushNotification('user-1', payload);
+    await sendPushNotification('user-1', payload);
+
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(1);
+  });
+
+  it('leaves a private key that already has real newlines untouched', async () => {
+    const realNewlineKey = '-----BEGIN PRIVATE KEY-----\nREALKEY\n-----END PRIVATE KEY-----\n';
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({ private_key: realNewlineKey });
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const { rsaSign } = primeSign();
+    installFetchStub();
+
+    await sendPushNotification('user-1', payload);
+
+    expect(rsaSign.sign.mock.calls[0][0]).toBe(realNewlineKey);
+  });
+
+  it('names client_email when it is the only field missing', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({ client_email: undefined });
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('client_email');
+    expect(result.errors[0]).not.toContain('project_id');
+  });
+
+  // A hostile or malformed error body must not be able to crash the parser or,
+  // worse, talk it into a spurious deactivation. Every field here is the wrong
+  // type: message, status, one detail that is not an object, one whose @type is
+  // not a string, and one whose fieldViolations is not an array.
+  it('survives an error body whose every field is the wrong type', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(400, JSON.stringify({
+          error: {
+            message: 12345,
+            status: { not: 'a string' },
+            details: [
+              'not an object',
+              { '@type': 42, errorCode: 'UNREGISTERED' },
+              { '@type': 'type.googleapis.com/google.rpc.BadRequest', fieldViolations: 'not an array' },
+            ],
+          },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toBe('UNKNOWN: Unknown error');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('falls back to UNKNOWN when the body is JSON but carries no error object', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({ send: () => fakeResponse(500, JSON.stringify({ nope: true })) });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toContain('UNKNOWN');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+  });
+
+  it('sends empty strings when a visible push carries no title or body', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', {});
+
+    // FCM rejects a notification block with absent title/body, so they are
+    // always present even when the caller supplied neither.
+    expect(sentMessage(calls).notification).toEqual({ title: '', body: '' });
+  });
+
+  it('carries title and body in data when a silent push has them', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', { silent: true, title: 'T', body: 'B' });
+
+    const message = sentMessage(calls);
+    expect('notification' in message).toBe(false);
+    expect(message.data).toMatchObject({ silent: 'true', title: 'T', body: 'B' });
+  });
+
+  it('reports a non-Error thrown by the transport', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'non-error-throw-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub();
+    globalThis.fetch = vi.fn(async () => { throw 'a bare string'; }) as unknown as typeof fetch;
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.errors[0]).toBe('Unknown error');
+    // Still a server fault: no strike, no deactivation.
+    expect(setFn).not.toHaveBeenCalled();
+  });
+
   it('reuses a recently minted access token instead of re-minting per send', async () => {
     const raw = serviceAccountJson({}, 'shared-cache-project');
     process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
