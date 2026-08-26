@@ -343,10 +343,17 @@ async function sendToApns(
       error: error instanceof Error ? (error.stack ?? error.message) : error,
       ...(code ? { code } : {}),
     });
+    // Nothing here is the device's fault: a missing or malformed APNs
+    // credential, a signing failure, a dead HTTP/2 session. APNs never rendered
+    // a verdict on this token, so the dispatch loop must not put a strike
+    // against it — five of those would write isActive:false across every iOS
+    // registration while APNS_TEAM_ID is simply unset, and fixing the secret
+    // would not bring them back. Mirrors the FCM path.
     return {
       success: false,
       tokenId,
       error: error instanceof Error ? error.message : 'Unknown error',
+      serverFault: true,
     };
   }
 }

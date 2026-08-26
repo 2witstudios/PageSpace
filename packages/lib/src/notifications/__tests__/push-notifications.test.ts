@@ -414,7 +414,29 @@ describe('sendPushNotification', () => {
     expect(result.errors[0]).toContain('Unknown platform: blackberry');
   });
 
-  it('increments failedAttempts on iOS failure', async () => {
+  // The iOS half of the serverFault rule. A missing APNS_TEAM_ID throws before
+  // APNs is ever asked about the token, so it says nothing about the device —
+  // and unlike Android, iOS push is live with real registrations, so striking
+  // here would deactivate the whole install base after five notifications.
+  it('does not count a missing APNs credential against the device', async () => {
+    delete process.env.APNS_TEAM_ID;
+    delete process.env.APNS_KEY_ID;
+    delete process.env.APNS_PRIVATE_KEY;
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
+      tokenRecord({ platform: 'ios', failedAttempts: '4' }),
+    ] as never);
+    const { setFn } = setupUpdateChain();
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(result.errors[0]).toContain('APNs configuration missing');
+    // The row is left entirely alone: no strike to accumulate toward a
+    // deactivation five notifications later.
+    expect(setFn).not.toHaveBeenCalled();
+  });
+
+  it('does not charge the device for an APNs signing failure', async () => {
     process.env.APNS_TEAM_ID = 'team-id';
     process.env.APNS_KEY_ID = 'key-id';
     process.env.APNS_PRIVATE_KEY = '-----BEGIN PRIVATE KEY-----\nMIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg...\n-----END PRIVATE KEY-----';
@@ -433,7 +455,9 @@ describe('sendPushNotification', () => {
 
     const result = await sendPushNotification('user-1', payload);
     expect(result.failed).toBe(1);
-    expect(db.update).toHaveBeenCalled();
+    // A signing failure is our key being broken, not the device's registration
+    // being bad, so the row is left alone rather than charged a strike.
+    expect(db.update).not.toHaveBeenCalled();
   });
 
   it('deactivates token after 5 consecutive failures', async () => {
@@ -560,12 +584,11 @@ describe('sendPushNotification', () => {
 
     expect(result.failed).toBe(1);
     expect(result.errors).toContain('fetch failed');
-    // Transport errors must NOT deactivate the token (it may be fine); the
-    // failedAttempts counter increments instead of a direct isActive:false.
-    expect(setFn).toHaveBeenCalledWith(expect.objectContaining({
-      failedAttempts: '1',
-      isActive: true,
-    }));
+    // Transport errors must not cost the token anything. Not deactivating it on
+    // the spot is only half of that: a strike per stalled send deactivates it on
+    // the fifth, which is the same outcome reached slowly. APNs never rendered a
+    // verdict here, so the row is untouched.
+    expect(setFn).not.toHaveBeenCalled();
     // The poisoned session must be closed (not just uncached) so its HTTP/2
     // socket is released and doesn't leak on repeated stalls.
     expect(h2.sessionCloseCount).toBeGreaterThan(0);
