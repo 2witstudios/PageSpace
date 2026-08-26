@@ -37,18 +37,31 @@ function removeCapacitorMock(): void {
 }
 
 /**
+ * Set the reported screen size.
+ *
+ * jsdom's default (1024x768) already reads as a tablet, so any isIPad test must
+ * state the size it means rather than inherit it. `restoreScreenSize` in
+ * afterEach puts the default back so a later test cannot depend on where it
+ * happens to sit in the file.
+ */
+function setScreenSize(width: number, height: number): void {
+  Object.defineProperty(window.screen, 'width', { value: width, configurable: true });
+  Object.defineProperty(window.screen, 'height', { value: height, configurable: true });
+}
+
+const DEFAULT_SCREEN = { width: window.screen.width, height: window.screen.height };
+
+function restoreScreenSize(): void {
+  setScreenSize(DEFAULT_SCREEN.width, DEFAULT_SCREEN.height);
+}
+
+/**
  * Run `fn` with `globalThis.window` removed, then restore it in a `finally`.
  *
  * The restore has to be unconditional: if an assertion or a dynamic import
  * throws while window is missing, an inline restore never runs and every later
  * test in the file inherits a leaked SSR global.
  */
-/** Set the reported screen size; jsdom's default (1024x768) already reads as a tablet. */
-function setScreenSize(width: number, height: number): void {
-  Object.defineProperty(window.screen, 'width', { value: width, configurable: true });
-  Object.defineProperty(window.screen, 'height', { value: height, configurable: true });
-}
-
 async function withoutWindow(fn: () => Promise<void> | void): Promise<void> {
   const windowBackup = globalThis.window;
   // @ts-expect-error - intentionally testing undefined window
@@ -77,6 +90,7 @@ describe('capacitor-bridge', () => {
   afterEach(() => {
     vi.restoreAllMocks();
     removeCapacitorMock();
+    restoreScreenSize();
   });
 
   describe('isCapacitorApp', () => {
