@@ -618,6 +618,58 @@ function extractFcmError(body: string): FcmError {
 // every Android token on a payload regression would be a self-inflicted outage.
 const FCM_INVALID_TOKEN_CODES = ['UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH'];
 
+// The `message` of an FCM HTTP v1 send. Pure, so the two shapes it can produce —
+// a visible alert and a data-only background push — are testable without a
+// transport, and so sendToFcm below is only auth, transport and classification.
+function buildFcmMessage(
+  deviceToken: string,
+  payload: PushNotificationPayload
+): Record<string, unknown> {
+  const isSilent = payload.silent === true;
+
+  // Caller data first, then the first-class payload fields — createNotification
+  // spreads arbitrary `metadata` into `data`, and a key that happens to be
+  // named `badge` or `silent` must not be able to redefine what we send.
+  const data = toFcmDataRecord(payload.data);
+  if (payload.badge !== undefined) data.badge = String(payload.badge);
+  if (payload.threadId) data.threadId = payload.threadId;
+  if (payload.category) data.category = payload.category;
+
+  // A silent push must be data-only: including a `notification` block makes
+  // Android render a tray notification itself, no matter what the app does.
+  // Title/body ride along as data so the client can decide for itself.
+  if (isSilent) {
+    data.silent = 'true';
+    if (payload.title !== undefined) data.title = payload.title;
+    if (payload.body !== undefined) data.body = payload.body;
+
+    return {
+      token: deviceToken,
+      data,
+      // Match APNs, which sends background pushes at priority 5 rather than 10.
+      android: { priority: 'normal' },
+    };
+  }
+
+  return {
+    token: deviceToken,
+    data,
+    notification: {
+      title: payload.title ?? '',
+      body: payload.body ?? '',
+    },
+    android: {
+      priority: 'high',
+      notification: {
+        sound: payload.sound || 'default',
+        ...(payload.badge !== undefined && { notification_count: payload.badge }),
+        ...(payload.threadId ? { tag: payload.threadId } : {}),
+        ...(payload.category ? { click_action: payload.category } : {}),
+      },
+    },
+  };
+}
+
 async function sendToFcm(
   deviceToken: string,
   payload: PushNotificationPayload,
@@ -627,49 +679,7 @@ async function sendToFcm(
 
   try {
     const { accessToken, projectId } = await getFcmAccessToken();
-
-    // Caller data first, then the first-class payload fields — createNotification
-    // spreads arbitrary `metadata` into `data`, and a key that happens to be
-    // named `badge` or `silent` must not be able to redefine what we send.
-    const data = toFcmDataRecord(payload.data);
-    if (payload.badge !== undefined) data.badge = String(payload.badge);
-    if (payload.threadId) data.threadId = payload.threadId;
-    if (payload.category) data.category = payload.category;
-
-    // A silent push must be data-only: including a `notification` block makes
-    // Android render a tray notification itself, no matter what the app does.
-    // Title/body ride along as data so the client can decide for itself.
-    if (isSilent) {
-      data.silent = 'true';
-      if (payload.title !== undefined) data.title = payload.title;
-      if (payload.body !== undefined) data.body = payload.body;
-    }
-
-    const message: Record<string, unknown> = {
-      token: deviceToken,
-      data,
-      android: {
-        // Match APNs: alerts go at high priority, background pushes at normal.
-        priority: isSilent ? 'normal' : 'high',
-        ...(isSilent
-          ? {}
-          : {
-              notification: {
-                sound: payload.sound || 'default',
-                ...(payload.badge !== undefined && { notification_count: payload.badge }),
-                ...(payload.threadId ? { tag: payload.threadId } : {}),
-                ...(payload.category ? { click_action: payload.category } : {}),
-              },
-            }),
-      },
-    };
-
-    if (!isSilent) {
-      message.notification = {
-        title: payload.title ?? '',
-        body: payload.body ?? '',
-      };
-    }
+    const message = buildFcmMessage(deviceToken, payload);
 
     console.log('[FCM] send', {
       projectId,
