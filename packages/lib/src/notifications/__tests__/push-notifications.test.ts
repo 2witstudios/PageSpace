@@ -131,6 +131,7 @@ import {
   getUserPushTokens,
 } from '../push-notifications';
 import { db } from '@pagespace/db/db';
+import { eq } from '@pagespace/db/operators';
 import * as crypto from 'crypto';
 
 // ---------------------------------------------------------------------------
@@ -144,6 +145,31 @@ function setupUpdateChain() {
   return { setFn, whereFn };
 }
 
+
+// setupUpdateChain only records what was `set`. This variant also records the
+// `where` that followed each `set`, and makes the mocked `eq` report its own
+// arguments, so a test can assert which row an update actually targeted.
+function setupCapturingUpdateChain() {
+  const updates: Array<{ set: unknown; where: unknown }> = [];
+  const setFn = vi.fn();
+  vi.mocked(eq).mockImplementation(
+    (column: unknown, value: unknown) => ({ column, value }) as never
+  );
+  vi.mocked(db.update).mockImplementation((() => ({
+    set: (arg: unknown) => {
+      setFn(arg);
+      const entry: { set: unknown; where: unknown } = { set: arg, where: undefined };
+      updates.push(entry);
+      return {
+        where: (w: unknown) => {
+          entry.where = w;
+          return Promise.resolve(undefined);
+        },
+      };
+    },
+  })) as unknown as typeof db.update);
+  return { setFn, updates };
+}
 
 function setupInsertChain() {
   const valuesFn = vi.fn().mockResolvedValue(undefined);
@@ -1223,6 +1249,67 @@ describe('sendToFcm (Android)', () => {
   // token-scoped — but it is a project-level fact. A staging service account
   // pasted into prod makes every send 403 with it, and acting on it would
   // unregister every Android device in the database on the first dispatch.
+  // Per-device independence. A user with a phone and a tablet who uninstalls the
+  // tablet must not lose the phone: one dead token in a dispatch may not abort
+  // the loop, and may not take a healthy sibling down with it.
+  it('deactivates only the dead token when a user has two Android devices', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'two-devices-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
+      androidToken({ id: 'android-dead', token: 'fcm-dead' }),
+      androidToken({ id: 'android-live', token: 'fcm-live' }),
+    ] as never);
+    const { setFn, updates } = setupCapturingUpdateChain();
+    const calls = installFetchStub({
+      send: (message) =>
+        message.token === 'fcm-dead'
+          ? fakeResponse(404, JSON.stringify({
+              error: {
+                message: 'Requested entity was not found.',
+                status: 'NOT_FOUND',
+                details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'UNREGISTERED' }],
+              },
+            }))
+          : fakeResponse(200, FCM_SEND_OK),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.sent).toBe(1);
+    expect(result.failed).toBe(1);
+
+    // Both devices were attempted — the dead one did not abort the dispatch.
+    const sendUrls = calls.filter((c) => c.url.includes('fcm.googleapis.com'));
+    expect(sendUrls).toHaveLength(2);
+    expect(sendUrls.map((c) => (JSON.parse(String(c.init.body)) as { message: { token: string } }).message.token))
+      .toEqual(['fcm-dead', 'fcm-live']);
+
+    // Exactly one row deactivated, and the surviving device got the success
+    // reset rather than a strike.
+    const deactivations = setFn.mock.calls.filter(
+      ([arg]) => JSON.stringify(arg) === JSON.stringify({ isActive: false })
+    );
+    expect(deactivations).toHaveLength(1);
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '0', lastFailedAt: null })
+    );
+
+    // WHICH row was deactivated, not merely that one was. The shared `eq` mock
+    // collapses every filter to the same value, so without pairing each `set`
+    // with the `where` that followed it, aiming the update at the wrong row —
+    // or at every row — would look identical to correct behaviour.
+    const deactivated = updates.find(
+      (u) => JSON.stringify(u.set) === JSON.stringify({ isActive: false })
+    );
+    expect(deactivated?.where).toEqual({ column: 'id', value: 'android-dead' });
+    const reset = updates.find(
+      (u) => (u.set as { failedAttempts?: string }).failedAttempts === '0'
+    );
+    expect(reset?.where).toEqual({ column: 'id', value: 'android-live' });
+
+    // And one mint served both sends.
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(1);
+  });
+
   it('keeps the token when SENDER_ID_MISMATCH names a project-level mismatch', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
