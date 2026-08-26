@@ -1712,6 +1712,42 @@ describe('sendToFcm (Android)', () => {
     expect(calls[0].url).toBe('https://oauth2.googleapis.com/token');
   });
 
+  // The default and the fixture were both 3600, so nothing distinguished
+  // "honours expires_in" from "always assumes an hour". A short-lived token has
+  // to miss the 10-minute freshness margin and force a fresh mint.
+  it('honours a short expires_in instead of assuming an hour', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'short-expiry-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub({
+      oauth: () => fakeResponse(200, JSON.stringify({ access_token: 'ya29.short', expires_in: 60 })),
+    });
+
+    await sendPushNotification('user-1', payload);
+    await sendPushNotification('user-1', payload);
+
+    // 60s is inside the refresh margin, so the second send must not reuse it.
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(2);
+  });
+
+  it("carries FCM's own reason through to the error", async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(429, JSON.stringify({
+          error: { message: 'Quota exceeded for quota metric', status: 'RESOURCE_EXHAUSTED' },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    // The code alone is not enough to debug from; the human-readable half has
+    // to survive too.
+    expect(result.errors[0]).toBe('RESOURCE_EXHAUSTED: Quota exceeded for quota metric');
+  });
+
   it('treats an access token with no expires_in as lasting the standard hour', async () => {
     // Observable through the cache: the default has to be long enough that the
     // second send reuses the token rather than minting again.
