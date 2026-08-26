@@ -332,9 +332,15 @@ async function settleAndClose(
       // is a deps-level or transport failure. A settle that RESOLVES WITHOUT
       // PERSISTING is the shape `AIMonitoring.trackUsage` used to hide behind
       // `Promise<void>`: it now reports `persisted: false`, and it means no
-      // `ai_usage_logs` row exists — so not even the credit backfill cron, which
-      // reads that table, can recover the charge. Retrying the window is the only
-      // thing that can, and retrying is safe precisely because nothing was written.
+      // `ai_usage_logs` row is CONFIRMED to exist — so not even the credit backfill
+      // cron, which reads that table, can be relied on to recover the charge.
+      // Retrying the window is the only thing that can.
+      //
+      // "Not confirmed", not "not written": a connection dropped at the commit
+      // boundary reports a failed write over a row that committed, and the retry
+      // then bills the span twice. Bounded at ONE duplicate span, and strictly
+      // better than losing the window on every genuine failure; the deterministic
+      // per-window idempotency key that would close it is a filed follow-up.
       //
       // Deliberately NOT keyed on `creditsSettled`: a persisted row whose ledger
       // claim was deferred is already owned by the backfill cron, and reopening the

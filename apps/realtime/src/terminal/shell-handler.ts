@@ -631,6 +631,11 @@ async function settleAccruedWindow(
       // will ever retry THIS window. One compensating best-effort attempt —
       // the same fire-and-forget guarantee the end-settle itself has. If it
       // also fails, the hold expires via TTL and the window is lost.
+      //
+      // This is the LAST attempt anything will make on this window, so its
+      // outcome is read and logged rather than dropped: a compensating settle
+      // that resolves without persisting is the exact moment the window becomes
+      // unrecoverable, and it must not be the one silent site in the file.
       void billing
         .trackUsage({
           payerId,
@@ -638,6 +643,15 @@ async function settleAccruedWindow(
           activeSeconds,
           driveId: session.driveId,
           workspaceId: session.workspaceId,
+        })
+        .then((compensating) => {
+          if (!compensating.persisted) {
+            loggers.realtime.error(
+              'Shell compensating settle did not persist a usage row — this window is unbilled and unrecoverable',
+              new Error('shell compensating settle was not persisted'),
+              { sessionKey, activeSeconds },
+            );
+          }
         })
         .catch(() => {});
     }

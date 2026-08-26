@@ -937,8 +937,16 @@ export function discardUsageOutcome(tracking: Promise<UsageTrackingOutcome>): vo
   );
 }
 
-/** Nothing was written and nothing was billed — every failure path's outcome. */
-const USAGE_TRACKING_LOST: UsageTrackingOutcome = { persisted: false, creditsSettled: false };
+/**
+ * Nothing was confirmed written and nothing was billed — every failure path's
+ * outcome. FROZEN because this one object is handed to every caller on every
+ * failure: an unfrozen shared literal is one careless `outcome.persisted = true`
+ * away from making a meter believe every later failure succeeded.
+ */
+const USAGE_TRACKING_LOST: UsageTrackingOutcome = Object.freeze({
+  persisted: false,
+  creditsSettled: false,
+});
 
 /**
  * Track AI usage with automatic cost calculation.

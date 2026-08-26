@@ -1,4 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+/**
+ * The realtime logger, mocked so the two UNRECOVERABLE-charge paths can be
+ * asserted rather than merely executed: a settle that resolves without persisting
+ * has no window left to reopen (teardown, and the crash-compensating attempt), so
+ * the ERROR it emits IS the whole observable behaviour.
+ */
+const mockRealtimeLogger = vi.hoisted(() => ({
+  debug: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
+  error: vi.fn(),
+}));
+vi.mock('@pagespace/lib/logging/logger-config', () => ({ loggers: { realtime: mockRealtimeLogger } }));
+
 import { buildShellHandlers, MAX_INPUT_BYTES, SETTLE_HEARTBEAT_MS, resolveShellCommand, planConnect, ensureShellSession, connectFailureMessage, armIdleReap, planColdTailPersist, latestActivityAt } from '../shell-handler';
 import { createTerminalSessionMap, DETACHED_IDLE_MS } from '../terminal-session-map';
 import type { ShellCheckAuthFn, OpenShellFn, SocketLike } from '../shell-handler';
@@ -1947,6 +1962,52 @@ describe('buildShellHandlers', () => {
         expect(compensating[compensating.length - 1].activeSeconds).toBeCloseTo(SETTLE_HEARTBEAT_MS / 1000, 0);
         // Total billed across all successful-looking calls still sums to the window (tail ≈ 0).
         expect(calls.reduce((s, c) => s + c.activeSeconds, 0)).toBeCloseTo((2 * SETTLE_HEARTBEAT_MS) / 1000, 0);
+      });
+
+      it('given the COMPENSATING settle also resolves without persisting, says plainly that the window is unrecoverable', async () => {
+        // The compensating attempt is the LAST thing that will ever touch this
+        // window — the session is already gone, so there is no next heartbeat and
+        // no watermark to hold. Its outcome is therefore read and logged rather
+        // than dropped: this is the exact moment the charge becomes unrecoverable.
+        let rejectSettle: (e: Error) => void = () => {};
+        const billing = makeBilling({
+          trackUsage: vi.fn()
+            .mockImplementationOnce(() => new Promise((_, rej) => { rejectSettle = rej; }))
+            .mockResolvedValue({ persisted: false, creditsSettled: false }),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        await vi.advanceTimersByTimeAsync(SETTLE_HEARTBEAT_MS);
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0);
+        rejectSettle(new Error('db blip'));
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages = mockRealtimeLogger.error.mock.calls.map((c) => String(c[0]));
+        expect(messages).toContain(
+          'Shell compensating settle did not persist a usage row — this window is unbilled and unrecoverable',
+        );
+      });
+
+      it('given the TEARDOWN settle resolves without persisting, says plainly that the window is unrecoverable', async () => {
+        // Teardown has no next tick to retry on, so — as above — the log is the
+        // whole observable behaviour, and it must not be the one silent path.
+        const billing = makeBilling({
+          trackUsage: vi.fn().mockResolvedValue({ persisted: false, creditsSettled: false }),
+        });
+        const { onConnect } = buildShellHandlers({ sessionMap, openShell, checkAuth, socket, persistSpriteExecId, billing });
+        await onConnect(validPayload);
+
+        const onExitArg = openShell.mock.calls[0][0].onExit as (exitCode: number) => void;
+        onExitArg(0); // teardown settles the tail
+        await vi.advanceTimersByTimeAsync(0);
+
+        const messages = mockRealtimeLogger.error.mock.calls.map((c) => String(c[0]));
+        expect(messages).toContain(
+          'Shell session final settle did not persist a usage row — this window is unbilled and unrecoverable',
+        );
+        expect(sessionMap.getByKey('shell:shl-1')).toBeUndefined(); // teardown still completed
       });
 
       it('given a gate infra error at a heartbeat, keeps the session alive (fail-open) rather than killing a live PTY', async () => {

@@ -993,12 +993,20 @@ export async function reconcileSandboxStorage(
       continue;
     }
     if (!settle.persisted) {
-      // The charge resolved but wrote NO usage row, so there is nothing for the
-      // credit backfill cron to recover from — the spend is lost unless this window
-      // is billed again. Leave the watermark exactly where it was: the next run
-      // re-bills the whole span, and it cannot double-charge because nothing was
-      // written. Counted as `failed` — the same outcome as a throw, which is what
-      // this branch would have been if the seam could throw.
+      // The charge resolved but reported NO persisted usage row, so there is
+      // nothing for the credit backfill cron to recover from — the spend is lost
+      // unless this window is billed again. Leave the watermark exactly where it
+      // was: the next run re-bills the whole span. Counted as `failed` — the same
+      // outcome as a throw, which is what this branch would have been if the seam
+      // could throw.
+      //
+      // "Nothing was CONFIRMED written", not "nothing was written", and the
+      // difference is the honest bound on this retry. A connection dropped at the
+      // commit boundary reports a failed write over a row that committed, and the
+      // retry then bills the span twice. That is bounded at ONE duplicate span and
+      // is strictly better than the alternative it replaces (losing the charge on
+      // every genuine failure); closing it properly needs a deterministic
+      // idempotency key per meter window, which is filed as a follow-up.
       //
       // Deliberately NOT gated on `creditsSettled`: a persisted row whose ledger
       // claim was deferred is already owned by the backfill cron, and holding the

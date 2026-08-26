@@ -1457,8 +1457,11 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
 
     await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
 
-    // The usage row exists, so the backfill cron owns both the charge and the
-    // hold's disposal — releasing it here would under-reserve that pending debit.
+    // The usage row exists, so the backfill cron owns the CHARGE and will settle it
+    // from that row; releasing the hold here would under-reserve that pending debit.
+    // The hold itself is disposed of by whichever lands first — the cron's settle
+    // transaction, or its own TTL expiry (the cron sweeps expired holds; it does not
+    // dispose of live ones).
     expect(releaseHoldCalls).toEqual([]);
   });
 

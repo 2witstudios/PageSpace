@@ -371,11 +371,17 @@ async function meterOneApp(
     publishedAppId: row.id,
   });
   if (!settle.persisted) {
-    // The settle resolved but wrote NO usage row, so nothing — not the ledger, not
-    // the backfill cron, which reads `ai_usage_logs` — will ever bill this span.
-    // Leave the watermark alone: the window stays open and the next tick re-bills
-    // the whole span. Safe to retry because nothing was written, and the only
-    // alternative is losing the charge outright. The re-gate below is skipped with
+    // The settle resolved but reported NO persisted usage row, so nothing — not the
+    // ledger, not the backfill cron, which reads `ai_usage_logs` — will ever bill
+    // this span. Leave the watermark alone: the window stays open and the next tick
+    // re-bills the whole span, and the only alternative is losing the charge
+    // outright.
+    //
+    // "Nothing was CONFIRMED written", not "nothing was written": a connection
+    // dropped at the commit boundary reports a failed write over a row that
+    // committed, and the retry then bills the span twice. Bounded at ONE duplicate
+    // span; the deterministic per-window idempotency key that would close it is a
+    // filed follow-up. The re-gate below is skipped with
     // it — the seam already returned this wake's reservation on its way out, so the
     // next tick settles the retried span unreserved and re-gates after it. That is
     // one tick of unreserved spend, bounded by the settle cadence, and strictly
