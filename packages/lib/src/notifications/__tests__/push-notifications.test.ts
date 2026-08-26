@@ -1069,6 +1069,57 @@ describe('sendToFcm (Android)', () => {
     expect(signatureB64).toMatch(/^[A-Za-z0-9_-]+$/);
   });
 
+  // A hung request must not wedge the dispatch loop: the sends are sequential,
+  // so one stalled socket blocks every remaining device and every later user.
+  it('bounds both legs with a request timeout', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', payload);
+
+    const oauth = calls.find((c) => c.url.includes('oauth2.googleapis.com'))!;
+    const send = calls.find((c) => c.url.includes('fcm.googleapis.com'))!;
+    expect(oauth.init.signal).toBeInstanceOf(AbortSignal);
+    expect(send.init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it('bounds how much of a failed OAuth body reaches the error', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'huge-body-project');
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub({ oauth: () => fakeResponse(500, 'x'.repeat(5000)) });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    // Otherwise an HTML error page becomes an unbounded string, once per token.
+    expect(result.errors[0].length).toBeLessThan(300);
+    expect(result.errors[0]).toContain('FCM OAuth token request failed (500)');
+  });
+
+  // FCM registration tokens are bearer-ish: anyone holding one plus the sender
+  // credentials can push to that device. They do not belong in logs in full.
+  it('logs only a prefix of the device token, never the whole thing', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    installFetchStub();
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    try {
+      await sendPushNotification('user-1', payload);
+
+      const sendLog = logSpy.mock.calls.find(([tag]) => tag === '[FCM] send');
+      expect(sendLog).toBeTruthy();
+      const fields = sendLog![1] as { tokenPrefix: string };
+      expect(fields.tokenPrefix).toBe('fcm-toke');
+      expect(JSON.stringify(logSpy.mock.calls)).not.toContain('fcm-token-abc123');
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it('unescapes a literal backslash-n private key before signing', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
