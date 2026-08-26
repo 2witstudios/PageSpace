@@ -2000,6 +2000,52 @@ describe('sendToFcm (Android)', () => {
   // minted from a different credential than the project it is addressed to.
   // Serving project A's bearer to project B is the failure the two source pins
   // exist to prevent, and it would look like a plain 401 in production.
+  // The sibling of the late-401 race. The cache WRITE in mintFcmAccessToken is
+  // also unguarded, so a slow mint can land after a newer one and overwrite it.
+  // That is survivable only because the source pin means a token is never
+  // served to a credential it was not minted for — the stale entry causes an
+  // extra re-mint, never a mispairing. Asserted rather than reasoned about,
+  // since reasoning is what missed the 401 case.
+  it('survives a slow mint landing after a newer one', async () => {
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+
+    let seenSlow = false;
+    let releaseSlow!: () => void;
+    const slowMint = new Promise<void>((resolve) => { releaseSlow = resolve; });
+
+    const calls = installFetchStub({
+      oauth: async (call) => {
+        const assertion = new URLSearchParams(String(call.init.body)).get('assertion') ?? '';
+        const claims = JSON.parse(Buffer.from(assertion.split('.')[1], 'base64url').toString()) as { iss: string };
+        const pid = claims.iss.replace(/^push@/, '').replace(/\.iam\.gserviceaccount\.com$/, '');
+        if (pid === 'stale-a') { seenSlow = true; await slowMint; }
+        return fakeResponse(200, JSON.stringify({ access_token: `ya29.for-${pid}`, expires_in: 3600 }));
+      },
+    });
+
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'stale-a');
+    const slow = sendPushNotification('user-1', payload);
+    await vi.waitFor(() => expect(seenSlow).toBe(true));
+
+    // Second credential mints and completes while the first is still in the air.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'stale-b');
+    const fast = await sendPushNotification('user-2', payload);
+    expect(fast.sent).toBe(1);
+
+    // Now let the older mint land on top of the newer cache entry.
+    releaseSlow();
+    expect((await slow).sent).toBe(1);
+
+    // Neither send was handed the other's token, whatever order the writes
+    // happened in. A stale overwrite costs a re-mint later, not a mispairing.
+    for (const send of calls.filter((c) => c.url.includes('fcm.googleapis.com'))) {
+      const pid = send.url.match(/\/projects\/([^/]+)\/messages:send$/)?.[1];
+      expect((send.init.headers as Record<string, string>).authorization).toBe(`Bearer ya29.for-${pid}`);
+    }
+    expect(new Set(calls.filter((c) => c.url.includes('fcm.googleapis.com')).map((c) => c.url)).size).toBe(2);
+  });
+
   it('never pairs a project with a token minted from another credential', async () => {
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
     setupUpdateChain();
