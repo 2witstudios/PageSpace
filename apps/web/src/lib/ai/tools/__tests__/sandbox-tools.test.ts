@@ -332,6 +332,18 @@ describe('createSandboxTools', () => {
       expect(schema.safeParse({ path: 'a.txt' }).success).toBe(true);
     });
 
+    it('readFile inputSchema: accepts offset 0 and negative — selectLineWindow clamps them to 1', () => {
+      // The runner clamps a 0-or-negative offset to line 1 (selectLineWindow),
+      // so a schema that refuses those values gives a model a zod error instead
+      // of the documented clamp behaviour.
+      const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
+      const schema = schemaOf(tools, 'readFile');
+      expect(schema.safeParse({ path: 'a.txt', offset: 0 }).success).toBe(true);
+      expect(schema.safeParse({ path: 'a.txt', offset: -5 }).success).toBe(true);
+      expect(schema.safeParse({ path: 'a.txt', offset: 3 }).success).toBe(true);
+      expect(schema.safeParse({ path: 'a.txt', offset: 1.5 }).success).toBe(false);
+    });
+
     it('editFile inputSchema: given an unrecognized field, should reject instead of silently dropping it', () => {
       const tools = createSandboxTools({ runDeps: fakeRunDeps(), resolveContext: okResolve, gate: okGate });
       const schema = schemaOf(tools, 'editFile');

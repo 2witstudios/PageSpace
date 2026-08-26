@@ -367,11 +367,30 @@ export const publishedApps = pgTable('published_apps', {
     'published_apps_parked_is_metered_only',
     sql`${table.status} <> 'parked' OR ${table.tier} = 'metered'`,
   ),
-  // v1 ships exactly one guest size; this is where that decision is enforced rather
-  // than merely documented.
+  // The sellable guest sizes. Mirrors `PUBLISHED_APP_GUEST_PRESETS` in
+  // `services/app-hosting/dedicated-tier.ts`, which is the catalogue this list is
+  // generated from by hand; widening it is an additive migration and the pair is
+  // pinned by a test that writes a rejected preset to a real Postgres.
   guestPresetAllowed: check(
     'published_apps_guest_preset_allowed',
-    sql`${table.guestPreset} IN ('shared-cpu-1x-512')`,
+    sql`${table.guestPreset} IN ('shared-cpu-1x-512', 'shared-cpu-1x-1024', 'shared-cpu-2x-2048', 'shared-cpu-4x-4096')`,
+  ),
+  // A METERED app may only run the v1 small guest, and this is an economics
+  // constraint rather than a preference. The awake-seconds meter prices every
+  // second at ONE fixed shape (`PUBLISHED_APP_GUEST_SHAPE`, which is this preset),
+  // because a published app's guest was a constant when that meter was written. A
+  // metered row on a larger preset would therefore be under-billed by exactly the
+  // difference between the two shapes — silently, with no error and no drift
+  // signal, for as long as the app ran. Bigger sizes are unlocked by moving to the
+  // DEDICATED tier, whose flat price is derived from the size it is selling.
+  //
+  // Stated as an implication on `metered` rather than as a per-tier allow-list so
+  // that adding a preset to the list above does not silently become a metered
+  // size: a new preset is dedicated-only here by construction, and making one
+  // metered-legal is a deliberate second edit that has to face this comment.
+  meteredGuestPreset: check(
+    'published_apps_metered_guest_preset',
+    sql`${table.tier} <> 'metered' OR ${table.guestPreset} = 'shared-cpu-1x-512'`,
   ),
   // A negative image size is not a small number, it is a corrupt one — and it
   // would land in the economics dashboard's SUM as a silent credit against every

@@ -39,12 +39,13 @@
  * reads nothing at all.
  */
 
-import { and, eq, isNull, lt, or, sql } from '@pagespace/db/operators';
+import { and, eq, isNull, lt, notInArray, or, sql } from '@pagespace/db/operators';
 import { db, getAdvisoryLockPool } from '@pagespace/db/db';
 import { withAdvisoryLock, type AdvisoryLockPool } from '@pagespace/db/advisory-lock';
 import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { loggers } from '../../logging/logger-config';
 import { isAppHostingEnabled, resolveIdleStopSeconds } from './app-hosting-env';
+import { IDLE_REAPER_EXEMPT_TIERS } from './dedicated-tier';
 import {
   planDailyAwakeCap,
   planIdleStop,
@@ -144,7 +145,15 @@ export const defaultIdleReaperDeps: IdleReaperDeps = {
       .where(
         and(
           eq(publishedApps.status, 'running'),
-          eq(publishedApps.tier, 'metered'),
+          // The tier exemption, built from the SAME array `isIdleReaperExempt`
+          // tests against rather than spelled `= 'metered'` here. A dedicated app
+          // is paid for by a flat monthly price precisely to stay up, so reaping
+          // one is stopping the thing the customer bought — and the database will
+          // not catch the mistake: `running -> stopped` is legal for BOTH tiers
+          // (only `running -> parked` is metered-only), and it has to be, because
+          // an operator stop and a redeploy both need that edge. This predicate is
+          // the only thing standing there.
+          notInArray(publishedApps.tier, [...IDLE_REAPER_EXEMPT_TIERS]),
           // BOTH stamps must be older than the cutoff (a NULL stamp counting as
           // "not recent"), which is the SQL spelling of `planIdleStop`'s "recency
           // is the LATER of the two". A row with neither stamp satisfies this and

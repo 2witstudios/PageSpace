@@ -2,6 +2,10 @@ import {
   defaultAwakeMeterDeps,
   meterAwakePublishedAppsSerialized,
 } from '@pagespace/lib/services/app-hosting/awake-meter';
+import {
+  DEDICATED_DUNNING_VISIBILITY_DAYS,
+  surveyDedicatedDunning,
+} from '@pagespace/lib/services/app-hosting/dedicated-tier-service';
 import * as Sentry from '@sentry/nextjs';
 import { audit } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -32,6 +36,16 @@ import { validateSignedCronRequest } from '@/lib/auth/cron-auth';
  * self-correcting: the window stays open and the next tick bills it in full, so
  * they are counted and audited rather than alerted on.
  *
+ * IT ALSO COUNTS THE OTHER TIER'S ONE INVISIBLE COST. A dedicated app keeps
+ * serving while its subscription is `past_due`, because taking a customer's
+ * production app offline over a card that will retry successfully is an outage
+ * they did not cause. That trade is bounded by Stripe's dunning ending the
+ * subscription — a STRIPE ACCOUNT SETTING, not code — so an account configured to
+ * leave failures `past_due` forever would serve an always-on machine free forever
+ * with nothing in this repo able to notice. `surveyDedicatedDunning` is what
+ * notices. It never fails the tick: it is a visibility signal about a decision we
+ * made deliberately, not money going wrong, so it warns and counts.
+ *
  * As with the storage reconcile, the Sentry capture is what actually reaches a
  * human — the docker cron invokes this through `curl -sS` without `-f`, so an
  * HTTP 500 exits 0 and its body just lands in a log. The status code stays the
@@ -53,6 +67,41 @@ export async function GET(request: Request) {
 
   try {
     const run = await meterAwakePublishedAppsSerialized(defaultAwakeMeterDeps);
+
+    // Independent of the meter's outcome, and deliberately never allowed to break
+    // it: this reports on the DEDICATED tier, which the meter above does not touch
+    // at all. A failure to count is not a reason to fail a tick that billed
+    // correctly.
+    const dunning = await surveyDedicatedDunning().catch((error) => {
+      loggers.system.error('[Cron] Dedicated-tier dunning survey failed', error as Error);
+      return null;
+    });
+
+    if (dunning && dunning.pastDueStale > 0) {
+      console.log(
+        `[Cron] Dedicated hosting: ${dunning.pastDueStale} of ${dunning.pastDue} past_due app(s) overdue more than ${DEDICATED_DUNNING_VISIBILITY_DAYS} days — apps: ${dunning.staleAppIds.join(', ')}`,
+      );
+      Sentry.captureMessage(
+        `Dedicated hosting: ${dunning.pastDueStale} always-on app(s) served on an unpaid subscription for more than ${DEDICATED_DUNNING_VISIBILITY_DAYS} days`,
+        {
+          // WARNING, not error. Nothing is broken and nothing is being lost to a
+          // bug — this is the cost of a deliberate product choice becoming
+          // unbounded, which is an operator decision (chase the customer, or fix
+          // the Stripe dunning settings), not an incident.
+          level: 'warning',
+          // Fingerprinted on the cause so a persistent situation stays ONE issue
+          // rather than opening a fresh one on every tick as the count moves.
+          fingerprint: ['dedicated-hosting-dunning-stale'],
+          tags: { check: 'published_app_dedicated_dunning' },
+          extra: {
+            pastDue: dunning.pastDue,
+            pastDueStale: dunning.pastDueStale,
+            staleAppIds: dunning.staleAppIds,
+            thresholdDays: DEDICATED_DUNNING_VISIBILITY_DAYS,
+          },
+        },
+      );
+    }
 
     if (run.outcome === 'lock_busy') {
       console.log('[Cron] Published-app awake meter: skipped — advisory lock held by another run');
@@ -101,6 +150,10 @@ export async function GET(request: Request) {
         settledButUnadvanced: run.settledButUnadvanced,
         totalAwakeSeconds: run.totalAwakeSeconds,
         sourceFailed: run.sourceFailed,
+        // The dedicated tier's own figures. Zero on every deployment that has not
+        // sold one, which is all of them while the feature is dark.
+        dedicatedPastDue: dunning?.pastDue ?? 0,
+        dedicatedPastDueStale: dunning?.pastDueStale ?? 0,
       },
     });
 
@@ -152,7 +205,13 @@ export async function GET(request: Request) {
       );
     }
 
-    return NextResponse.json({ success: true, ...run, timestamp: new Date().toISOString() });
+    return NextResponse.json({
+      success: true,
+      ...run,
+      dedicatedPastDue: dunning?.pastDue ?? 0,
+      dedicatedPastDueStale: dunning?.pastDueStale ?? 0,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
     loggers.system.error('[Cron] Error metering published-app awake seconds', error as Error);
     return NextResponse.json(

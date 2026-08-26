@@ -180,32 +180,12 @@ describe('wakePublishedApp', () => {
     expect(startMachine).not.toHaveBeenCalled();
   });
 
-  it('given a DEDICATED app, should start the machine WITHOUT resolving a payer or asking the gate', async () => {
-    // `published-apps.ts`: tier is the ONLY difference between the products, and
-    // dedicated is "same pipeline, minus the gate". A stopped dedicated app (an
-    // operator stop, or any future stop path — the idle reaper itself already
-    // exempts it) must not be locked out over a shared credit balance it was
-    // never asked to fund.
-    const { deps, gate, startMachine } = makeDeps();
-    deps.billing.resolvePayerId = async () => {
-      throw new Error('must not be called for a dedicated app');
-    };
-    const row = appRow({ tier: 'dedicated' });
-    seed(row, [[{ ...row, status: 'running' }]]);
-
-    const result = await wakePublishedApp('app-1', deps);
-
-    expect(result.outcome).toBe('woken');
-    expect(gate).not.toHaveBeenCalled();
-    expect(startMachine).toHaveBeenCalled();
-    assert({
-      given: 'a successful dedicated-app wake',
-      should: 'carry no hold at all — there was never a reservation to place',
-      actual: mockDb.__state.updateSets[0]?.awakeHoldId,
-      expected: null,
-    });
-  });
-
+  // The full dedicated-tier wake contract (no gate, no payer resolution, no
+  // billing watermark) is covered below in "does NOT gate a dedicated wake",
+  // "opens NO billing window for a dedicated wake", and "does not even resolve
+  // a payer for a dedicated wake". This one covers the case those don't: a
+  // start failure has nothing to release, because a dedicated wake never
+  // placed a hold in the first place.
   it('given a DEDICATED app whose machine fails to start, should release NOTHING — there was no hold to release', async () => {
     const { deps, releaseHold, startMachine } = makeDeps();
     startMachine.mockRejectedValue(new Error('capacity'));
@@ -241,6 +221,60 @@ describe('wakePublishedApp', () => {
       'start',
       NOW,
     );
+  });
+
+  it('does NOT gate a dedicated wake — the flat monthly price is what pays for it', async () => {
+    // Running the gate on a dedicated app is worse than pointless: an exhausted
+    // payer would be refused a wake and then sent to `parkPublishedApp`, which the
+    // status machine correctly refuses (`parked_is_metered_only`) — leaving an app
+    // that is neither woken nor parked, that the customer is paying for.
+    const { deps, gate, startMachine } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    expect(result.outcome).toBe('woken');
+    expect(gate, 'a dedicated wake must not consult the credit gate').not.toHaveBeenCalled();
+    expect(startMachine).toHaveBeenCalled();
+  });
+
+  it('opens NO billing window for a dedicated wake, only a boundary', async () => {
+    // NULL means "no awake window is open", which for a dedicated app is the
+    // literal truth: nothing accrues, nothing settles, nothing closes it. Stamping
+    // it anyway would leave every dedicated row carrying what looks like an
+    // unbilled liability and is not one.
+    const { deps } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    await wakePublishedApp('app-1', deps);
+
+    assert({
+      given: 'a dedicated wake',
+      should: 'stamp the reconcile boundary but no watermark and no hold',
+      actual: mockDb.__state.updateSets[0],
+      expected: {
+        status: 'running',
+        lastWakeAt: NOW,
+        awakeBilledThrough: null,
+        awakeHoldId: null,
+      },
+    });
+  });
+
+  it('does not even resolve a payer for a dedicated wake', async () => {
+    // The payer lookup exists to answer "who is charged", and nobody is charged
+    // per-second here — so an app whose drive is mid-delete still wakes.
+    const resolvePayerId = vi.fn(async () => null);
+    const { deps } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    const result = await wakePublishedApp('app-1', { ...deps, billing: { ...deps.billing, resolvePayerId } });
+
+    expect(resolvePayerId).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('woken');
   });
 
   it('given Fly refuses the start, should release the hold and stamp NOTHING', async () => {

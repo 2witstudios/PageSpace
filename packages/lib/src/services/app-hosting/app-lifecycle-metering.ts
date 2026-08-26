@@ -59,6 +59,7 @@ import {
   utcDayOf,
 } from './app-metering-core';
 import { planTransition } from './provisioner-core';
+import { isCreditMetered } from './dedicated-tier';
 
 export interface AppLifecycleMeteringDeps {
   isEnabled: () => boolean;
@@ -202,17 +203,21 @@ export async function wakePublishedApp(
     return { outcome: 'parked', reason: DAILY_CAP_PARK_REASON };
   }
 
-  // The credit gate is a METERED-ONLY enforcement, exactly like the daily cap
-  // above and the idle reaper: `published-apps.ts` defines `tier` as the ONLY
-  // difference between the two products, and a dedicated app is sold flat-rate,
-  // "minus the gate". A dedicated app therefore never resolves a payer or asks
-  // the gate here — `holdId` stays undefined, and nothing downstream ever
-  // releases or carries one for it. Gating it anyway would let a flat-fee
-  // customer's app go dark over a shared credit balance they were never asked to
-  // fund, the moment a `stopped` row (idle-reap exempts dedicated, but an
-  // operator stop or a future path does not) is next requested.
+  // THE GATE IS METERED-TIER ONLY, and skipping it for `dedicated` is the whole
+  // of that SKU's wake path rather than an optimization.
+  //
+  // A dedicated app is paid for by a flat monthly subscription, so a credit
+  // balance has nothing to say about whether it may run. Running the gate anyway
+  // would be worse than pointless: an exhausted payer's dedicated app would be
+  // refused a wake and then sent to `parkPublishedApp`, which the status machine
+  // correctly REFUSES (`parked_is_metered_only`) — leaving an app that is neither
+  // woken nor parked, that logs a warning on every request, and that the customer
+  // is paying for. It would also place a credit hold nothing settles.
+  //
+  // The payer is still resolved for a metered app, and only for one: the lookup
+  // exists to answer "who is charged", and nobody is charged per-second here.
   let holdId: string | undefined;
-  if (row.tier === 'metered') {
+  if (isCreditMetered(row.tier)) {
     const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
     // No fallback, by design: an app is drive-owned, and `published_apps.ownerId`
     // is a denormalized cascade handle, not an answer to "who pays". Billing a
@@ -240,7 +245,8 @@ export async function wakePublishedApp(
   } catch (error) {
     // Nothing started, so nothing may be billed. Release the reservation rather
     // than leaving it to expire — a stranded hold suppresses the payer's own
-    // spendable balance for the whole hold TTL.
+    // spendable balance for the whole hold TTL. A dedicated wake placed no hold,
+    // so there is nothing to return.
     if (holdId) await deps.billing.releaseHold(holdId);
     return { outcome: 'start_failed', error: error instanceof Error ? error.message : String(error) };
   }
@@ -259,8 +265,19 @@ export async function wakePublishedApp(
     .update(publishedApps)
     .set({
       status: 'running',
+      // The BOUNDARY stamp, written for both tiers: it is what the weekly
+      // `fly_instance_up` reconcile compares against, and a dedicated app's awake
+      // time is just as worth reconciling as a metered one's — we simply do not
+      // charge for it.
       lastWakeAt: wokenAt,
-      awakeBilledThrough: wokenAt,
+      // The BILLING watermark, and only a metered app has one. NULL means "no
+      // awake window is open", which for a dedicated app is the literal truth:
+      // nothing accrues, nothing settles, nothing closes it. Stamping it anyway
+      // would leave every dedicated row carrying an open window that no meter
+      // will ever read — a number that looks like an unbilled liability and is
+      // not one, on the row an operator reads first when hosting revenue looks
+      // wrong.
+      awakeBilledThrough: isCreditMetered(row.tier) ? wokenAt : null,
       awakeHoldId: holdId ?? null,
     })
     .where(and(eq(publishedApps.id, row.id), eq(publishedApps.status, row.status)))
