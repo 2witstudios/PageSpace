@@ -1237,6 +1237,63 @@ describe('sendToFcm (Android)', () => {
     expect(data.notificationId).toBe('n1');
   });
 
+  // The previous round's mistake was proving a scenario rather than the
+  // mechanism: SENDER_ID_MISMATCH was shown not to deactivate on the spot, and
+  // nobody asked what the fifth one did. This asserts the invariant across the
+  // whole space of rejections instead of one at a time — no FCM rejection that
+  // is not a verdict about the token may ever put a strike on the row, because
+  // five strikes is a deactivation by another route.
+  const NOT_ABOUT_THE_DEVICE: Array<[string, number, string]> = [
+    ['malformed message (BadRequest, other field)', 400, JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'bad', details: [{ '@type': BAD_REQUEST_TYPE, fieldViolations: [{ field: 'message.data' }] }] } })],
+    ['message-level FcmError INVALID_ARGUMENT', 400, JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'too big', details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'INVALID_ARGUMENT' }] } })],
+    ['revoked credential', 401, JSON.stringify({ error: { status: 'UNAUTHENTICATED', message: 'bad creds' } })],
+    ['wrong-project sender id', 403, JSON.stringify({ error: { status: 'PERMISSION_DENIED', message: 'mismatch', details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'SENDER_ID_MISMATCH' }] } })],
+    ['wrong project id', 404, JSON.stringify({ error: { status: 'NOT_FOUND', message: 'not found' } })],
+    ['quota', 429, JSON.stringify({ error: { status: 'RESOURCE_EXHAUSTED', message: 'quota' } })],
+    ['fcm internal error', 500, JSON.stringify({ error: { status: 'INTERNAL', message: 'boom' } })],
+    ['fcm unavailable', 503, JSON.stringify({ error: { status: 'UNAVAILABLE', message: 'busy' } })],
+    ['non-JSON body', 502, '<html>bad gateway</html>'],
+    ['empty body', 500, ''],
+  ];
+
+  it.each(NOT_ABOUT_THE_DEVICE)(
+    'never strikes the token for %s',
+    async (_label, status, body) => {
+      process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+      vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([
+        androidToken({ failedAttempts: '4' }),
+      ] as never);
+      const { setFn } = setupUpdateChain();
+      installFetchStub({ send: () => fakeResponse(status, body) });
+
+      const result = await sendPushNotification('user-1', payload);
+
+      expect(result.failed).toBe(1);
+      // The row is not touched at all: no strike to accumulate, and no
+      // deactivation now or on any later notification.
+      expect(setFn).not.toHaveBeenCalled();
+    }
+  );
+
+  // The other half of the invariant: the two verdicts that ARE about the token
+  // still deactivate immediately, so nothing is lost by refusing to count.
+  const ABOUT_THE_DEVICE: Array<[string, number, string]> = [
+    ['UNREGISTERED detail', 404, JSON.stringify({ error: { status: 'NOT_FOUND', message: 'gone', details: [{ '@type': FCM_ERROR_TYPE, errorCode: 'UNREGISTERED' }] } })],
+    ['BadRequest naming message.token', 400, JSON.stringify({ error: { status: 'INVALID_ARGUMENT', message: 'bad token', details: [{ '@type': BAD_REQUEST_TYPE, fieldViolations: [{ field: 'message.token' }] }] } })],
+  ];
+
+  it.each(ABOUT_THE_DEVICE)('deactivates on the spot for %s', async (_label, status, body) => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({ send: () => fakeResponse(status, body) });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    expect(result.failed).toBe(1);
+    expect(setFn).toHaveBeenCalledWith({ isActive: false });
+  });
+
   it('deactivates the token when FCM reports UNREGISTERED', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
