@@ -1995,6 +1995,60 @@ describe('sendToFcm (Android)', () => {
     expect(setFn).not.toHaveBeenCalled();
   });
 
+  // The rotation tests each prove one interleaving. The property underneath them
+  // is stronger and worth asserting directly: a send must never carry a token
+  // minted from a different credential than the project it is addressed to.
+  // Serving project A's bearer to project B is the failure the two source pins
+  // exist to prevent, and it would look like a plain 401 in production.
+  it('never pairs a project with a token minted from another credential', async () => {
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+
+    // The token endpoint mints a token that names the credential it came from,
+    // so any mismatch downstream is visible rather than inferred.
+    const calls = installFetchStub({
+      oauth: (call) => {
+        const assertion = new URLSearchParams(String(call.init.body)).get('assertion') ?? '';
+        const claims = JSON.parse(Buffer.from(assertion.split('.')[1], 'base64url').toString()) as { iss: string };
+        const pid = claims.iss.replace(/^push@/, '').replace(/\.iam\.gserviceaccount\.com$/, '');
+        return fakeResponse(200, JSON.stringify({ access_token: `ya29.for-${pid}`, expires_in: 3600 }));
+      },
+    });
+
+    // Rotate repeatedly, revisit an earlier credential to exercise the cache,
+    // and overlap two sends so an in-flight mint is joined rather than started.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'pair-a');
+    await sendPushNotification('user-1', payload);
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'pair-b');
+    await Promise.all([
+      sendPushNotification('user-2', payload),
+      sendPushNotification('user-3', payload),
+    ]);
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'pair-a');
+    await sendPushNotification('user-4', payload);
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'pair-c');
+    await sendPushNotification('user-5', payload);
+    // A second send on the unchanged credential, so the cache-HIT return is
+    // exercised too. Every rotation above forces a re-mint, which means without
+    // this the cache-hit path never runs and a wrong projectId there is
+    // invisible.
+    await sendPushNotification('user-6', payload);
+
+    const sends = calls.filter((c) => c.url.includes('fcm.googleapis.com'));
+    expect(sends).toHaveLength(6);
+    // Five mints for five distinct credential activations, and the sixth send
+    // served from cache.
+    expect(calls.filter((c) => c.url.includes('oauth2.googleapis.com'))).toHaveLength(4);
+    for (const send of sends) {
+      const pid = send.url.match(/\/projects\/([^/]+)\/messages:send$/)?.[1];
+      expect(pid).toBeTruthy();
+      expect((send.init.headers as Record<string, string>).authorization).toBe(`Bearer ya29.for-${pid}`);
+    }
+    // And the sends really did span several projects, so the loop above is not
+    // vacuously checking one pairing five times.
+    expect(new Set(sends.map((c) => c.url)).size).toBe(3);
+  });
+
   it('reuses a recently minted access token instead of re-minting per send', async () => {
     const raw = serviceAccountJson({}, 'shared-cache-project');
     process.env.FCM_SERVICE_ACCOUNT_JSON = raw;
