@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useCallback } from 'react';
-import { isCapacitorApp } from './useCapacitor';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
 
 export interface UseAppStateRecoveryOptions {
   /**
