@@ -26,6 +26,15 @@
  * row source's own failure is a value, exactly as in the awake meter. One app whose
  * stop fails must not leave the rest of the fleet awake.
  *
+ * ONE AT A TIME, AND NO BATCH LIMIT. The stops are sequential because each takes
+ * the awake meter's advisory lock; running them in parallel would have most of them
+ * queue for that lock anyway, and would fire a burst of Fly stop calls against
+ * per-object rate limits. There is deliberately no top-N: a cap would silently
+ * leave the rest of the fleet awake and billing while the counters reported a clean
+ * tick, which is the failure mode this whole cron exists to prevent. A scan that
+ * outlives its cadence is self-correcting instead — the next tick answers
+ * `lock_busy` and skips.
+ *
  * Dark behind `APP_HOSTING_ENABLED`: a disabled deployment reports `disabled` and
  * reads nothing at all.
  */

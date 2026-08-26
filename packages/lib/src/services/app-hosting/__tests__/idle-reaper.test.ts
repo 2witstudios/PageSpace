@@ -214,7 +214,7 @@ describe('reapIdlePublishedAppsSerialized', () => {
   /** A pool double whose try-lock answers `acquired`. */
   function pool(acquired: boolean) {
     const release = vi.fn();
-    const query = vi.fn(async (text: string) => {
+    const query = vi.fn(async (text: string, _params?: unknown[]) => {
       if (text.includes('pg_try_advisory_lock')) return { rows: [{ acquired }] };
       return { rows: [] };
     });
@@ -248,7 +248,9 @@ describe('reapIdlePublishedAppsSerialized', () => {
 
     await reapIdlePublishedAppsSerialized(deps, free);
 
-    const lockKeys = query.mock.calls.filter((c) => String(c[0]).includes('advisory')).map((c) => (c[1] as string[])[0]);
+    const lockKeys = query.mock.calls
+      .filter((c) => String(c[0]).includes('advisory'))
+      .map((c) => (c[1] as string[] | undefined)?.[0]);
     assert({
       given: 'a serialized reaper run',
       should: 'lock and unlock its own reaper key',

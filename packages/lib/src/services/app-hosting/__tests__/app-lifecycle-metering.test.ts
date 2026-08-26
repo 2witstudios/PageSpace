@@ -646,7 +646,7 @@ describe('stopPublishedApp — the awake meter’s advisory lock', () => {
     // The binding requirement from PR #2493: a stop-settle and a heartbeat-settle
     // must serialize. A key of this module's own would satisfy the type and defeat
     // the entire point.
-    const query = vi.fn(async (text: string) =>
+    const query = vi.fn(async (text: string, _params?: unknown[]) =>
       text.includes('pg_try_advisory_lock') ? { rows: [{ acquired: true }] } : { rows: [] },
     );
     const release = vi.fn();
@@ -656,7 +656,7 @@ describe('stopPublishedApp — the awake meter’s advisory lock', () => {
       given: 'a real advisory-lock pool',
       should: 'lock the meter’s key and run the body',
       actual: {
-        key: (query.mock.calls[0]?.[1] as string[])?.[0],
+        key: (query.mock.calls[0]?.[1] as string[] | undefined)?.[0],
         result: run.locked ? run.result : null,
       },
       expected: { key: METER_AWAKE_LOCK_KEY, result: 'done' },
