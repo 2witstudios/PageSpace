@@ -5,9 +5,10 @@
  * and the native Capacitor layer. It handles platform detection and
  * provides a safe way to call native functions.
  *
- * Platform detection has exactly one entry point — `getPlatform()`. Everything
- * else (including the capability table) is derived from it, so there is no
- * second path to `window.Capacitor` that can drift.
+ * This module is the only place in the app that reads `window.Capacitor`.
+ * Everything platform-shaped — the hooks, the capability table, the auth
+ * helpers — derives from `isCapacitorApp()` and `getPlatform()` here, so there
+ * is no second detection path that can drift.
  */
 
 export type Platform = 'ios' | 'android' | 'web';
@@ -100,10 +101,9 @@ const KNOWN_PLATFORMS: readonly Platform[] = ['ios', 'android', 'web'];
  * stays honest and capability lookups can never miss.
  */
 export function getPlatform(): Platform {
-  if (typeof window === 'undefined') return 'web';
+  if (!isCapacitorApp()) return 'web';
   const capacitor = (window as Window & { Capacitor?: CapacitorGlobal }).Capacitor;
-  if (!capacitor?.isNativePlatform?.()) return 'web';
-  const platform = capacitor.getPlatform?.();
+  const platform = capacitor?.getPlatform?.();
   return KNOWN_PLATFORMS.find((known) => known === platform) ?? 'web';
 }
 
