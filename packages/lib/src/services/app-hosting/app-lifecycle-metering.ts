@@ -288,7 +288,10 @@ async function parkPublishedApp(row: PublishedApp, reason: string): Promise<void
 
 export interface SettleAndCloseResult {
   billedSeconds: number;
-  /** The settle threw. The window is left OPEN so the next tick retries it rather than losing it. */
+  /**
+   * The settle did not land — it threw, or it resolved without persisting a usage
+   * row. The window is left OPEN so the next tick retries it rather than losing it.
+   */
   failed: boolean;
 }
 
@@ -303,6 +306,9 @@ export interface SettleAndCloseResult {
  * The hold is disposed of exactly once, whichever way the window ends: settled
  * against by `trackUsage` when there are seconds to bill, released otherwise. A
  * hold left behind would suppress the payer's spendable balance for its whole TTL.
+ * (`trackUsage` returns the reservation itself on a settle that does not persist,
+ * so the retried window is settled unreserved on the next tick — one tick of
+ * unreserved spend, against losing the window outright.)
  */
 async function settleAndClose(
   row: PublishedApp,
@@ -316,35 +322,58 @@ async function settleAndClose(
   if (plan.action === 'settle') {
     const payerId = await deps.billing.resolvePayerId({ driveId: row.driveId });
     if (payerId) {
+      // The window is NOT closed on a failed settle: leaving it open means the next
+      // heartbeat retries the whole span, where closing it would silently lose the
+      // app's last awake window. The status still moves either way — the machine
+      // really did stop, and leaving a `running` row over it would be worse than a
+      // window that gets retried.
+      //
+      // TWO failure shapes reach that path, and only one of them used to. A THROW
+      // is a deps-level or transport failure. A settle that RESOLVES WITHOUT
+      // PERSISTING is the shape `AIMonitoring.trackUsage` used to hide behind
+      // `Promise<void>`: it now reports `persisted: false`, and it means no
+      // `ai_usage_logs` row exists — so not even the credit backfill cron, which
+      // reads that table, can recover the charge. Retrying the window is the only
+      // thing that can, and retrying is safe precisely because nothing was written.
+      //
+      // Deliberately NOT keyed on `creditsSettled`: a persisted row whose ledger
+      // claim was deferred is already owned by the backfill cron, and reopening the
+      // window for it would bill the payer twice for the same span.
+      let settled = false;
       try {
-        await deps.billing.trackUsage({
+        const settle = await deps.billing.trackUsage({
           payerId,
           holdId: row.awakeHoldId ?? undefined,
           activeSeconds: plan.activeSeconds,
           driveId: row.driveId,
           publishedAppId: row.id,
         });
-        billedSeconds = plan.activeSeconds;
+        settled = settle.persisted;
+        if (settled && !settle.creditsSettled) {
+          loggers.ai.warn(
+            'Published-app final settle persisted but its ledger settle was deferred to the backfill cron',
+            { publishedAppId: row.id, driveId: row.driveId },
+          );
+        }
+        if (!settled) {
+          loggers.ai.error(
+            'Published-app final settle did not persist a usage row — the awake window stays open for the next tick to retry',
+            new Error('final settle was not persisted'),
+            { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
+          );
+        }
       } catch (error) {
-        // The window is NOT closed on a failed settle: leaving it open means the
-        // next heartbeat retries the whole span, where closing it would silently
-        // lose the app's last awake window. The status still moves below — the
-        // machine really did stop, and leaving a `running` row over it would be
-        // worse than a window that gets retried.
-        //
-        // Reached only when the settle actually THROWS. The default binding runs
-        // through `AIMonitoring.trackUsage`, which swallows its own persistence
-        // failures and resolves — see the caveat on `AppBillingDeps.trackUsage`.
-        // So this covers a deps-level or transport failure, not a lost ledger
-        // write, and it is not the whole guarantee the shape suggests.
         loggers.ai.error(
           'Published-app final settle failed — the awake window stays open for the next tick to retry',
           error instanceof Error ? error : new Error(String(error)),
           { publishedAppId: row.id, driveId: row.driveId, activeSeconds: plan.activeSeconds },
         );
+      }
+      if (!settled) {
         await closeStatusOnly(row, nextStatus, stampedStopAt);
         return { billedSeconds: 0, failed: true };
       }
+      billedSeconds = plan.activeSeconds;
     } else {
       // Unresolvable drive: skip the charge rather than misattribute it, exactly
       // as the storage reconcile does. The hold is still released below — it

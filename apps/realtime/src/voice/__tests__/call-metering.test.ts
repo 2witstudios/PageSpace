@@ -81,7 +81,9 @@ function harness(over: Partial<CallMeterOptions> = {}) {
     reason: 'ok' as const,
     holdId: `hold-${++holdCounter}`,
   }));
-  const track = vi.fn(async () => {});
+  // `trackUsage` reports whether the usage row landed; a stub resolving with
+  // nothing would claim a LOST window, which the meter now treats as a failed settle.
+  const track = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const release = vi.fn(async () => {});
   const limits: { reason: MeterStopReason; message: string }[] = [];
   let clock = 1_000;

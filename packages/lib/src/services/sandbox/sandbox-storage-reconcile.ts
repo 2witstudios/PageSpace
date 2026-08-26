@@ -147,6 +147,7 @@ import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pri
 import { resolveEnvPayerId } from '../../billing/sandbox-payer';
 import { storageBillingTarget, type StorageSubject } from './sandbox-storage-attribution';
 import { loggers } from '../../logging/logger-config';
+import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** A billing month, for prorating the monthly storage rate over an elapsed span. Not tied to any subscription's actual renewal cycle — storage accrual is metered independently of it. */
@@ -395,7 +396,7 @@ export interface ReconcileSandboxStorageDeps {
     subjectId: string;
     costDollars: number;
     gbMonths: number;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /**
    * Persists the new watermark for an `agent_workspaces` Sprite, on the ROW
    * ITSELF — the per-row watermark the design calls for, no separate tracking
@@ -421,31 +422,30 @@ export interface ReconcileSandboxStorageDeps {
 export interface ReconcileSandboxStorageResult {
   processed: number;
   /**
-   * Rows where `chargeStorage` RESOLVED — regardless of whether the watermark
-   * then advanced. Always reflected in `totalCostDollars`.
+   * Rows whose charge was DURABLY WRITTEN — the `ai_usage_logs` row exists, so the
+   * charge is either already settled or owned by the backfill cron. Regardless of
+   * whether the watermark then advanced. Always reflected in `totalCostDollars`.
    *
-   * "Resolved", not "the money moved", and the distinction is not pedantry: the
-   * production binding hands the charge to `AIMonitoring.trackUsage`, which
-   * returns `Promise<void>` and swallows its own failures into a
-   * `'AI usage tracking failed — spend may be UNBILLED'` log rather than
-   * rejecting. So with those deps this counter — and `totalCostDollars` — count
-   * charges SUBMITTED, and `failed` can only ever catch the steps BEFORE the
-   * charge. That log is the authoritative signal for a charge that did not land;
-   * tracked as a platform gap in issue #2444.
+   * This used to count charges SUBMITTED rather than landed, because
+   * `AIMonitoring.trackUsage` returned `Promise<void>` and swallowed its own
+   * failures. It now reports a {@link UsageTrackingOutcome}, so a charge that did
+   * not persist is counted under `failed` and its window is left open — this
+   * counter means what its name says again.
    */
   charged: number;
   /** Rows with a positive accrual whose owner could not be resolved — left unbilled (watermark untouched) for a future run to retry. */
   skipped: number;
   /**
-   * Rows where NOTHING was billed because something threw before or during the
-   * charge — the payer lookup, the accrual computation, `chargeStorage` itself,
-   * or (on a row whose window prices to $0) its watermark advance, which sits in
-   * the same guarded block. Isolated per row so one bad row doesn't abort the batch.
+   * Rows where NOTHING was billed — because something threw before or during the
+   * charge (the payer lookup, the accrual computation, `chargeStorage` itself, or,
+   * on a row whose window prices to $0, its watermark advance, which sits in the
+   * same guarded block) OR because the charge resolved WITHOUT persisting a usage
+   * row. Isolated per row so one bad row doesn't abort the batch.
    *
-   * With the PRODUCTION binding the `chargeStorage` case is unreachable: that dep
-   * cannot reject (see `charged`). So in production this counts pre-charge
-   * failures only, and a test injecting a throwing `chargeStorage` is what
-   * exercises the rest.
+   * The non-persisted case is the one that used to be invisible: `chargeStorage`
+   * cannot reject with the production binding, so before `trackUsage` reported an
+   * outcome a lost charge was counted as `charged` and its watermark advanced over
+   * it. Both shapes now land here, and both leave the window open for the next run.
    *
    * Distinct from {@link ReconcileSandboxStorageResult.chargedButUnadvanced},
    * which means the opposite: money DID move and only the watermark write
@@ -583,10 +583,11 @@ export interface ReconcileSandboxStorageResult {
    */
   failedSources: StorageSubjectKind[];
   /**
-   * Total charged this run — accumulated the moment `chargeStorage` resolves,
-   * never gated on the watermark advance that follows it. See `charged` for why
-   * this is "charged", not "collected": with the production binding a charge that
-   * silently failed still lands here.
+   * Total charged this run — accumulated the moment `chargeStorage` reports a
+   * PERSISTED charge, never gated on the watermark advance that follows it. See
+   * `charged` for why this is "charged", not "collected": a persisted charge whose
+   * ledger settle was deferred to the backfill cron still lands here, because the
+   * cron will collect it.
    */
   totalCostDollars: number;
 }
@@ -966,11 +967,12 @@ export async function reconcileSandboxStorage(
 
     // The charge itself — isolated from the watermark advance below so the
     // two outcomes ("nothing was billed" vs "billed, but the watermark write
-    // failed") are never conflated. `charged`/`totalCostDollars` move the
-    // moment this resolves; whether that means money REACHED the ledger depends
-    // on the binding, and the production one cannot say (see `charged`'s doc).
+    // failed") are never conflated. `charged`/`totalCostDollars` move only on a
+    // charge that PERSISTED: a resolved call is not a settled one, and treating it
+    // as one is what used to close a window over spend that never reached a row.
+    let settle: UsageTrackingOutcome;
     try {
-      await deps.chargeStorage({
+      settle = await deps.chargeStorage({
         payerId: resolved.ownerId,
         driveId: attributionDriveId,
         subjectKind: subject.kind,
@@ -990,8 +992,36 @@ export async function reconcileSandboxStorage(
       );
       continue;
     }
+    if (!settle.persisted) {
+      // The charge resolved but wrote NO usage row, so there is nothing for the
+      // credit backfill cron to recover from — the spend is lost unless this window
+      // is billed again. Leave the watermark exactly where it was: the next run
+      // re-bills the whole span, and it cannot double-charge because nothing was
+      // written. Counted as `failed` — the same outcome as a throw, which is what
+      // this branch would have been if the seam could throw.
+      //
+      // Deliberately NOT gated on `creditsSettled`: a persisted row whose ledger
+      // claim was deferred is already owned by the backfill cron, and holding the
+      // window open for it would bill the payer twice for the same span.
+      billingByKind[subject.kind].failed += 1;
+      loggers.ai.error(
+        'Sandbox storage reconcile: chargeStorage did not persist a usage row — the window is left open for the next run',
+        new Error('storage charge was not persisted'),
+        { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+      );
+      continue;
+    }
     totalCostDollars += resolved.costDollars;
     billingByKind[subject.kind].charged += 1;
+    if (!settle.creditsSettled) {
+      // Late, not lost: the usage row exists, so `credit-backfill.ts` settles this
+      // charge on its next sweep. Reported at WARN so a persistent count is visible
+      // without being read as revenue loss.
+      loggers.ai.warn(
+        'Sandbox storage reconcile: charge persisted but its ledger settle was deferred to the backfill cron',
+        { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+      );
+    }
 
     try {
       // The window is only actually closed once the charge landed AND the

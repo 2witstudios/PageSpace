@@ -365,6 +365,12 @@ function endShellSession(
   }
   if (deps.billing && session.payerId && session.connectedAt !== undefined) {
     const activeSeconds = Math.max(0, (Date.now() - session.connectedAt) / 1000);
+    // Fire-and-forget by necessity: teardown has no next tick to retry on, so this
+    // is the last chance to bill the tail and there is nothing to keep open. The
+    // outcome is still READ rather than dropped — a settle that resolved without
+    // persisting is spend nothing downstream can recover (the backfill cron reads
+    // `ai_usage_logs`), and that deserves to be said in the log at the one moment
+    // anyone could act on it.
     void deps.billing
       .trackUsage({
         payerId: session.payerId,
@@ -372,6 +378,15 @@ function endShellSession(
         activeSeconds,
         driveId: session.driveId,
         workspaceId: session.workspaceId,
+      })
+      .then((settle) => {
+        if (!settle.persisted) {
+          loggers.realtime.error(
+            'Shell session final settle did not persist a usage row — this window is unbilled and unrecoverable',
+            new Error('shell final settle was not persisted'),
+            { sessionKey, activeSeconds },
+          );
+        }
       })
       .catch((error) => {
         loggers.realtime.error('Shell session billing settle failed', error instanceof Error ? error : new Error(String(error)), {
@@ -576,13 +591,31 @@ async function settleAccruedWindow(
   session.holdId = undefined;
   const activeSeconds = Math.max(0, (session.connectedAt - windowStart) / 1000);
   try {
-    await billing.trackUsage({
+    const settle = await billing.trackUsage({
       payerId,
       holdId,
       activeSeconds,
       driveId: session.driveId,
       workspaceId: session.workspaceId,
     });
+    // A settle that RESOLVED WITHOUT PERSISTING is the failure this function's
+    // rollback was written for but could never see: no `ai_usage_logs` row exists,
+    // so nothing — not the ledger, not the backfill cron, which reads that table —
+    // will ever bill this window. Take the same path as a throw, so the rebase is
+    // rolled back and the window is retried at the next heartbeat.
+    //
+    // NOT keyed on `creditsSettled`: a persisted row whose ledger claim was
+    // deferred is already owned by the backfill cron, and retrying the window for
+    // it would bill the payer twice for the same seconds.
+    if (!settle.persisted) {
+      throw new Error('shell heartbeat settle was not persisted');
+    }
+    if (!settle.creditsSettled) {
+      loggers.realtime.warn(
+        'Shell heartbeat settle persisted but its ledger settle was deferred to the backfill cron',
+        { sessionKey },
+      );
+    }
   } catch (error) {
     loggers.realtime.error('Shell heartbeat settle failed', error instanceof Error ? error : new Error(String(error)), {
       sessionKey,

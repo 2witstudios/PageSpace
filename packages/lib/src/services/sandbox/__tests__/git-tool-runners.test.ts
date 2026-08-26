@@ -478,6 +478,7 @@ function makeBilling(over: Partial<NonNullable<SandboxRunDeps['billing']>> = {})
     },
     trackUsage: async (input) => {
       trackUsageCalls.push(input);
+      return { persisted: true, creditsSettled: true };
     },
     releaseHold: async (holdId) => {
       releaseHoldCalls.push(holdId);

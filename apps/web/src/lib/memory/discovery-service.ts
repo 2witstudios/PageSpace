@@ -18,7 +18,7 @@ import { conversations, messages } from '@pagespace/db/schema/conversations';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 import { z } from 'zod';
 
 export type MemoryField = 'bio' | 'writingStyle' | 'rules';
@@ -336,7 +336,7 @@ async function runDiscoveryPass(
       maxRetries: 2,
     });
 
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -348,7 +348,7 @@ async function runDiscoveryPass(
         : undefined,
       success: true,
       metadata: { feature: 'memory_discovery', pass: passName },
-    });
+    }));
 
     // Resolve each cited index to the real message timestamp. The transcript is
     // chronological, so index 0 is the OLDEST message in the window, and an

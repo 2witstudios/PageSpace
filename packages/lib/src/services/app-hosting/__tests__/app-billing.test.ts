@@ -132,6 +132,18 @@ describe('defaultAppBillingDeps.trackUsage', () => {
       publishedAppId: 'app-1',
     });
 
+  it('RETURNS the credit seam’s persistence outcome verbatim — the callers gate their awake window on it', async () => {
+    // The whole point of the seam: a resolved settle is not a settled one. If this
+    // binding dropped the outcome (an `async` wrapper that awaits and returns
+    // nothing, which is what it used to be), every hosting caller would be back to
+    // closing windows over lost charges with no way to tell.
+    mockTrackUsage.mockResolvedValueOnce({ persisted: false, creditsSettled: false });
+    expect(await settle()).toEqual({ persisted: false, creditsSettled: false });
+
+    mockTrackUsage.mockResolvedValueOnce({ persisted: true, creditsSettled: true });
+    expect(await settle()).toEqual({ persisted: true, creditsSettled: true });
+  });
+
   it('attributes the charge to the payer, the drive, and the published app', async () => {
     await settle();
 

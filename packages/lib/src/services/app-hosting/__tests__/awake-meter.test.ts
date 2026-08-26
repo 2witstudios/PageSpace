@@ -26,7 +26,10 @@ function runningApp(over: Partial<PublishedApp> = {}): PublishedApp {
 }
 
 function makeDeps(over: Partial<AwakeMeterDeps> = {}) {
-  const trackUsage = vi.fn<AppBillingDeps['trackUsage']>(async () => {});
+  const trackUsage = vi.fn<AppBillingDeps['trackUsage']>(async () => ({
+    persisted: true,
+    creditsSettled: true,
+  }));
   // Typed to the seam rather than inferred from this one happy-path literal, so a
   // test can hand it a refusal (which carries `reason` and no `holdId`).
   const gate = vi.fn<AppBillingDeps['gate']>(async () => ({ allowed: true, holdId: 'hold-next' }));
@@ -101,6 +104,54 @@ describe('meterAwakePublishedApps — the ordinary settle', () => {
       publishedAppId: 'app-1',
       billedThrough: NOW,
       holdId: 'hold-next',
+    });
+  });
+
+  // ── The persistence CONTRACT (issue: trackUsage must report its outcome) ────
+  // `billing.trackUsage` reaches `AIMonitoring.trackUsage`, which never throws.
+  // Before it reported an outcome, a settle whose `ai_usage_logs` write failed
+  // RESOLVED — so this meter counted it `settled`, advanced the watermark, and
+  // closed the window over spend nothing would ever bill. Flip `persisted` and the
+  // watermark must HOLD; restore it and it must advance.
+
+  it('given a settle that resolves WITHOUT persisting, HOLDS the watermark so the next tick re-bills the span', async () => {
+    const { deps, writeSettle, gate } = makeDeps();
+    deps.billing.trackUsage = async () => ({ persisted: false, creditsSettled: false });
+
+    const run = await meter(deps);
+
+    assert({
+      given: 'an awake settle that resolved but wrote no usage row',
+      should: 'count it failed, bill no seconds, and move no watermark',
+      actual: {
+        settled: run.settled,
+        failed: run.failed,
+        seconds: run.totalAwakeSeconds,
+        advances: writeSettle.mock.calls.length,
+      },
+      expected: { settled: 0, failed: 1, seconds: 0, advances: 0 },
+    });
+    // Not `settledButUnadvanced`: that name means money moved and only the
+    // watermark write failed — the opposite situation, and the opposite remedy.
+    expect(run.settledButUnadvanced).toBe(0);
+    // The re-gate is skipped with the advance: this tick made no window to reserve.
+    expect(gate).not.toHaveBeenCalled();
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, still ADVANCES the watermark (the backfill cron owns that charge)', async () => {
+    // Holding the window open here would re-bill a span the credit backfill cron is
+    // already collecting from the usage row — a double-charge caused by trying to
+    // prevent a lost one.
+    const { deps, writeSettle } = makeDeps();
+    deps.billing.trackUsage = async () => ({ persisted: true, creditsSettled: false });
+
+    const run = await meter(deps);
+
+    assert({
+      given: 'a persisted settle whose ledger claim was deferred to the backfill cron',
+      should: 'settle and close the window exactly as a fully settled charge would',
+      actual: { settled: run.settled, failed: run.failed, advances: writeSettle.mock.calls.length },
+      expected: { settled: 1, failed: 0, advances: 1 },
     });
   });
 
@@ -302,6 +353,7 @@ describe('meterAwakePublishedApps — attribution and isolation', () => {
   it('ISOLATES one bad row — the rest of the fleet is still billed', async () => {
     const trackUsage = vi.fn(async (input: { publishedAppId: string }) => {
       if (input.publishedAppId === 'app-bad') throw new Error('boom');
+      return { persisted: true, creditsSettled: true };
     });
     const { deps } = makeDeps({
       listRunningApps: async () => [

@@ -68,8 +68,10 @@ export const defaultSandboxBillingDeps: SandboxBillingDeps = {
     return { allowed: result.allowed, holdId: result.holdId, reason: result.allowed ? undefined : result.reason };
   },
 
-  async trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, workspaceId }) {
-    await AIMonitoring.trackUsage({
+  trackUsage({ payerId, holdId, activeSeconds, pageId, driveId, workspaceId }) {
+    // Returned, not awaited-and-discarded: the seam's whole point is that the
+    // caller learns whether the charge is durable (see `UsageTrackingOutcome`).
+    return AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
       model: 'terminal-machine',

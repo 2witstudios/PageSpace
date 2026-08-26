@@ -88,7 +88,7 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   stopMachine: ReturnType<typeof vi.fn>;
 } {
   const gate = vi.fn(async () => ({ allowed: true, holdId: 'hold-1' }));
-  const trackUsage = vi.fn(async () => {});
+  const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const releaseHold = vi.fn(async () => {});
   const startMachine = vi.fn(async () => {});
   const stopMachine = vi.fn(async () => {});
@@ -342,6 +342,50 @@ describe('stopPublishedApp', () => {
         clearedWatermark: 'awakeBilledThrough' in written,
       },
       expected: { status: 'stopped', clearedWatermark: false },
+    });
+  });
+
+  // ── The persistence CONTRACT (issue: trackUsage must report its outcome) ────
+  // The default binding runs through `AIMonitoring.trackUsage`, which never throws.
+  // Before it reported an outcome, a settle whose `ai_usage_logs` write failed
+  // RESOLVED — so the test above covered only a deps-level throw and the app's last
+  // awake window was silently closed over lost spend on the real path.
+
+  it('given a settle that resolves WITHOUT persisting, should close the STATUS but keep the window open for a retry', async () => {
+    const { deps, trackUsage } = makeDeps();
+    trackUsage.mockResolvedValue({ persisted: false, creditsSettled: false });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(result).toMatchObject({ outcome: 'stopped', billedSeconds: 0 });
+    const written = mockDb.__state.updateSets[0];
+    assert({
+      given: 'a settle that resolved but wrote no usage row',
+      should: 'move the status without clearing the billing watermark',
+      actual: { status: written.status, clearedWatermark: 'awakeBilledThrough' in written },
+      expected: { status: 'stopped', clearedWatermark: false },
+    });
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, should still CLOSE the window (the backfill cron owns that charge)', async () => {
+    // Reopening the window here would re-bill a span the credit backfill cron is
+    // already collecting from the usage row.
+    const { deps, trackUsage } = makeDeps();
+    trackUsage.mockResolvedValue({ persisted: true, creditsSettled: false });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    const written = mockDb.__state.updateSets[0];
+    assert({
+      given: 'a persisted settle whose ledger claim was deferred to the backfill cron',
+      should: 'bill the span and close the window exactly as a fully settled charge would',
+      actual: {
+        billedSeconds: result.outcome === 'stopped' ? result.billedSeconds : -1,
+        clearedWatermark: 'awakeBilledThrough' in written,
+      },
+      expected: { billedSeconds: 3600, clearedWatermark: true },
     });
   });
 
