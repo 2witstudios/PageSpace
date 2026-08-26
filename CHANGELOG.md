@@ -15,11 +15,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
   token was replaced — is deactivated on the spot rather than retried forever, matching how expired
   Apple tokens are already handled. That only happens when Firebase says something is wrong with
-  *that token*: a rejection aimed at the request as a whole, such as a wrong project or a message
-  the server built badly, is retried rather than being allowed to unregister working phones. If the
-  Firebase credential is missing or malformed the Android send fails with a message that says
-  exactly which field is wrong, and every other device on the account still receives the
-  notification.
+  *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
+  the request as a whole is retried instead: a message the server built badly, or a credential
+  pointing at the wrong Firebase project, would otherwise unregister every Android phone at once
+  and leave them dark until each app was next opened. If the Firebase credential is missing or
+  malformed the Android send fails with a message that says exactly which field is wrong, every
+  other device on the account still receives the notification, and no phone is penalised for a
+  problem on the server's side.
 
 - **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
   the machine is using: which drives it reaches, the role it holds in each, and what that role

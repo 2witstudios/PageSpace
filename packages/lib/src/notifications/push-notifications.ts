@@ -23,6 +23,10 @@ interface SendPushResult {
   tokenId: string;
   error?: string;
   shouldRemoveToken?: boolean;
+  // The send failed before the push service ever rendered a verdict on this
+  // token — a missing credential, a refused OAuth mint, a dead socket. The
+  // dispatch loop must not count that against the device.
+  serverFault?: boolean;
 }
 
 // Both the APNs JWT (ES256) and the FCM OAuth2 assertion (RS256) are JWTs, so
@@ -564,26 +568,52 @@ function toFcmDataRecord(data: Record<string, unknown> | undefined): Record<stri
   return record;
 }
 
-// `type.googleapis.com/google.firebase.fcm.v1.FcmError` in practice; matched by
-// suffix so a version bump in the type URL does not silently stop matching.
+// Matched by suffix so a version bump in the type URL does not stop matching.
+// In practice `type.googleapis.com/google.firebase.fcm.v1.FcmError` and
+// `type.googleapis.com/google.rpc.BadRequest`.
 const FCM_ERROR_DETAIL_TYPE_SUFFIX = '.FcmError';
+const BAD_REQUEST_DETAIL_TYPE_SUFFIX = '.BadRequest';
+// The field a BadRequest names when it is the registration token it rejected.
+const FCM_TOKEN_FIELD = 'message.token';
+// The one FcmError code that unambiguously means this token is dead.
+const FCM_UNREGISTERED = 'UNREGISTERED';
 
 interface FcmError {
   code: string;
   message: string;
-  // True only when `code` came out of an FcmError detail. That detail is the one
-  // part of the response that is about *this registration token*; `error.status`
-  // is a transport-level gRPC status describing the request as a whole.
-  fromFcmDetail: boolean;
+  // True only when FCM's answer was about *this registration token*, as opposed
+  // to about the request, the message, the project or the deployment. Only this
+  // may cost a device its registration.
+  tokenIsDead: boolean;
 }
 
-// FCM reports the actionable reason in an `FcmError` entry of `error.details`.
-// `error.status` is the coarser gRPC status: the same INVALID_ARGUMENT that a
-// bad token produces is also what a malformed *message* produces, and NOT_FOUND
-// is also what a wrong project id produces. So the two are kept distinguishable
-// rather than collapsed — only the detail may cost a device its registration.
+// FCM answers two different questions in one error body, and telling them apart
+// is the whole job here. Exactly two things mean this specific token is dead:
+//
+//   - an FcmError detail of UNREGISTERED — the app was uninstalled or the token
+//     was replaced. This is the one code firebase-admin's own cleanup guidance
+//     acts on, and it is unambiguous.
+//   - a BadRequest fieldViolation naming `message.token` — FCM parsed the
+//     request and rejected that field specifically, i.e. the token is malformed.
+//     This, not a bare INVALID_ARGUMENT, is how a garbage token actually
+//     reports; gating on the FcmError detail alone would never deactivate one.
+//
+// Everything else is about us, not the device, and is deliberately excluded:
+//
+//   - SENDER_ID_MISMATCH arrives *inside* an FcmError detail, so it looks
+//     token-scoped, but it is a project-level fact. Point the server at another
+//     Firebase project's service account — a staging credential pasted into
+//     prod — and every send 403s with it. Acting on it would set isActive:false
+//     on every Android registration in the database on the first dispatch after
+//     that deploy, and correcting the secret would not bring them back: each
+//     device stays dark until the app relaunches and re-registers.
+//   - a bare INVALID_ARGUMENT is what a malformed *message* returns, and
+//     `createNotification` spreads arbitrary `metadata` into `data` against a
+//     4 KB cap, so one oversized notification could otherwise unregister every
+//     recipient of that notification type.
+//   - NOT_FOUND without a detail is a wrong project id, same argument.
 function extractFcmError(body: string): FcmError {
-  const unknown: FcmError = { code: 'UNKNOWN', message: 'Unknown error', fromFcmDetail: false };
+  const unknown: FcmError = { code: 'UNKNOWN', message: 'Unknown error', tokenIsDead: false };
 
   let parsed: unknown;
   try {
@@ -597,26 +627,34 @@ function extractFcmError(body: string): FcmError {
 
   const message = typeof error.message === 'string' ? error.message : 'Unknown error';
 
-  const details = Array.isArray(error.details) ? error.details : [];
-  for (const entry of details) {
+  let fcmErrorCode: string | null = null;
+  let tokenFieldRejected = false;
+
+  for (const entry of Array.isArray(error.details) ? error.details : []) {
     const detail = asRecord(entry);
-    const type = detail && typeof detail['@type'] === 'string' ? detail['@type'] : null;
-    const errorCode = detail && typeof detail.errorCode === 'string' ? detail.errorCode : null;
-    if (type?.endsWith(FCM_ERROR_DETAIL_TYPE_SUFFIX) && errorCode) {
-      return { code: errorCode, message, fromFcmDetail: true };
+    if (!detail) continue;
+    const type = typeof detail['@type'] === 'string' ? detail['@type'] : '';
+
+    if (type.endsWith(FCM_ERROR_DETAIL_TYPE_SUFFIX) && typeof detail.errorCode === 'string') {
+      fcmErrorCode ??= detail.errorCode;
+    }
+
+    if (type.endsWith(BAD_REQUEST_DETAIL_TYPE_SUFFIX)) {
+      const violations = Array.isArray(detail.fieldViolations) ? detail.fieldViolations : [];
+      if (violations.some((v) => asRecord(v)?.field === FCM_TOKEN_FIELD)) {
+        tokenFieldRejected = true;
+      }
     }
   }
 
   const status = typeof error.status === 'string' ? error.status : 'UNKNOWN';
-  return { code: status, message, fromFcmDetail: false };
+  return {
+    code: fcmErrorCode ?? status,
+    message,
+    tokenIsDead: fcmErrorCode === FCM_UNREGISTERED || tokenFieldRejected,
+  };
 }
 
-// Codes that mean "this token will never work again" — the dispatch loop
-// deactivates the row, mirroring the APNs BadDeviceToken/Unregistered handling.
-// Only ever consulted for a code that came from an FcmError detail: a top-level
-// INVALID_ARGUMENT means the message we built was malformed, and deactivating
-// every Android token on a payload regression would be a self-inflicted outage.
-const FCM_INVALID_TOKEN_CODES = ['UNREGISTERED', 'INVALID_ARGUMENT', 'SENDER_ID_MISMATCH'];
 
 // The `message` of an FCM HTTP v1 send. Pure, so the two shapes it can produce —
 // a visible alert and a data-only background push — are testable without a
@@ -661,13 +699,40 @@ function buildFcmMessage(
     android: {
       priority: 'high',
       notification: {
-        sound: payload.sound || 'default',
+        // `sound` names a res/raw resource on Android, not an iOS bundle
+        // filename, so forwarding a custom iOS sound would resolve to nothing
+        // and silently mute the notification. Only the literal 'default'
+        // crosses over; anything else is left to the notification channel,
+        // which at worst plays its own sound rather than none.
+        ...(payload.sound === undefined || payload.sound === 'default'
+          ? { sound: 'default' }
+          : {}),
         ...(payload.badge !== undefined && { notification_count: payload.badge }),
         ...(payload.threadId ? { tag: payload.threadId } : {}),
-        ...(payload.category ? { click_action: payload.category } : {}),
+        // Deliberately no `click_action`. payload.category is an iOS category
+        // identifier; on Android click_action must match an activity
+        // intent-filter, and the manifest declares only MAIN/LAUNCHER — so
+        // setting it would make tapping the notification do nothing at all
+        // rather than open the app. The category still rides in `data`.
       },
     },
   };
+}
+
+function postFcmMessage(
+  projectId: string,
+  accessToken: string,
+  message: Record<string, unknown>
+): Promise<Response> {
+  return fetch(`https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`, {
+    method: 'POST',
+    headers: {
+      authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: JSON.stringify({ message }),
+    signal: AbortSignal.timeout(10000),
+  });
 }
 
 async function sendToFcm(
@@ -688,40 +753,36 @@ async function sendToFcm(
       isSilent,
     });
 
-    const response = await fetch(
-      `https://fcm.googleapis.com/v1/projects/${projectId}/messages:send`,
-      {
-        method: 'POST',
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          'content-type': 'application/json',
-        },
-        body: JSON.stringify({ message }),
-        signal: AbortSignal.timeout(10000),
-      }
-    );
+    let response = await postFcmMessage(projectId, accessToken, message);
+    let body = await response.text();
 
-    const body = await response.text();
+    // A 401 means the cached access token was revoked or rotated out from under
+    // us. Drop it and retry once with a fresh mint: the token is cached for up
+    // to 50 minutes and fan-out sends run concurrently, so without the retry
+    // every send holding the stale credential in that window is lost, not just
+    // the one that discovered it. The retry is not itself retried.
+    if (response.status === 401) {
+      fcmAccessToken = null;
+      fcmAccessTokenExpiry = 0;
+      fcmAccessTokenSource = null;
+      console.warn('[FCM] access token rejected, re-minting and retrying once', { tokenId });
+
+      const refreshed = await getFcmAccessToken();
+      response = await postFcmMessage(refreshed.projectId, refreshed.accessToken, message);
+      body = await response.text();
+    }
 
     if (response.ok) {
       console.log('[FCM] accepted', { tokenId });
       return { success: true, tokenId };
     }
 
-    const { code, message: reason, fromFcmDetail } = extractFcmError(body);
-
-    // A 401 means the cached access token was revoked or rotated out from under
-    // us; drop it so the next send mints a fresh one instead of looping on 401.
-    if (response.status === 401) {
-      fcmAccessToken = null;
-      fcmAccessTokenExpiry = 0;
-      fcmAccessTokenSource = null;
-    }
+    const { code, message: reason, tokenIsDead } = extractFcmError(body);
 
     console.error('[FCM] reject', {
       status: response.status,
       code,
-      fromFcmDetail,
+      tokenIsDead,
       reason,
       projectId,
       tokenId,
@@ -731,7 +792,7 @@ async function sendToFcm(
       success: false,
       tokenId,
       error: `${code}: ${reason}`,
-      shouldRemoveToken: fromFcmDetail && FCM_INVALID_TOKEN_CODES.includes(code),
+      shouldRemoveToken: tokenIsDead,
     };
   } catch (error) {
     console.error('[FCM] send error', {
@@ -739,10 +800,14 @@ async function sendToFcm(
       isSilent,
       error: error instanceof Error ? (error.stack ?? error.message) : error,
     });
+    // Nothing here is the device's fault: a missing or malformed credential, a
+    // refused OAuth mint, a dead socket. FCM never rendered a verdict on this
+    // token, so the loop must not put a strike against it.
     return {
       success: false,
       tokenId,
       error: error instanceof Error ? error.message : 'Unknown error',
+      serverFault: true,
     };
   }
 }
@@ -893,6 +958,17 @@ export async function sendPushNotification(
         .update(pushNotificationTokens)
         .set({ isActive: false })
         .where(eq(pushNotificationTokens.id, tokenRecord.id));
+    } else if (result.serverFault) {
+      // The send never reached a verdict about this device — an unset
+      // FCM_SERVICE_ACCOUNT_JSON, a refused mint, an outage. Counting these
+      // would deactivate every Android token after five notifications while the
+      // secret is simply missing, which is the state .env.example documents as
+      // the safe default, and fixing the secret would not bring them back.
+      console.warn('[push] server-side failure, not counted against the token', {
+        tokenId: tokenRecord.id,
+        platform: tokenRecord.platform,
+        error: result.error,
+      });
     } else if (!result.success) {
       // Track failed attempts
       const failedAttempts = parseInt(tokenRecord.failedAttempts || '0', 10) + 1;
