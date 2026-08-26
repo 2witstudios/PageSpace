@@ -259,6 +259,18 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the env (exported under its own categories) and in `pages`; this row is
     // infrastructure the drive owns and pays for.
     'published_apps',
+    // The Stripe mirror for one published app's DEDICATED (flat monthly) tier —
+    // the same answer as `subscriptions` below, for the same reason. It records a
+    // recurring charge for a DRIVE's infrastructure: which app is always-on, at
+    // which guest size, on which Stripe price, and whether that subscription is
+    // paying. `userId` is the payer denormalized from the drive owner, so the row
+    // says who is billed for the drive's machine rather than anything the subject
+    // authored or that describes them. The subject's own billing relationship is
+    // already the account-plan `subscriptions` row and the credit ledger, all
+    // excluded on this same rationale; the Stripe-side record of the charge is the
+    // subject's to obtain from Stripe, and is not duplicated into a PageSpace
+    // export by a table whose subject is an app.
+    'published_app_subscriptions',
     'custom_domains',
     'global_assistant_config',
     'form_targets',
