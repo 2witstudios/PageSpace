@@ -461,6 +461,22 @@ let fcmAccessTokenSource: string | null = null;
 let fcmMintInFlight: Promise<string> | null = null;
 let fcmMintInFlightSource: string | null = null;
 
+// The three cache fields are one value and must move together: a token, when it
+// dies, and which credential produced it. They are written by a successful mint
+// and cleared by a rejected one, from two different functions, so the two
+// transitions are named rather than open-coded at each site.
+function cacheFcmAccessToken(token: string, expiresAt: number, source: string): void {
+  fcmAccessToken = token;
+  fcmAccessTokenExpiry = expiresAt;
+  fcmAccessTokenSource = source;
+}
+
+function clearFcmAccessToken(): void {
+  fcmAccessToken = null;
+  fcmAccessTokenExpiry = 0;
+  fcmAccessTokenSource = null;
+}
+
 async function getFcmAccessToken(): Promise<{ accessToken: string; projectId: string }> {
   const raw = process.env.FCM_SERVICE_ACCOUNT_JSON;
   if (!raw) {
@@ -551,11 +567,9 @@ async function mintFcmAccessToken(account: FcmServiceAccount, raw: string): Prom
 
   const expiresIn = typeof grant.expires_in === 'number' ? grant.expires_in : 3600;
 
-  fcmAccessToken = grant.access_token;
-  fcmAccessTokenExpiry = now + expiresIn;
-  fcmAccessTokenSource = raw;
+  cacheFcmAccessToken(grant.access_token, now + expiresIn, raw);
 
-  return fcmAccessToken;
+  return grant.access_token;
 }
 
 // FCM data payloads are string→string only; anything else is rejected by the API.
@@ -762,9 +776,7 @@ async function sendToFcm(
     // every send holding the stale credential in that window is lost, not just
     // the one that discovered it. The retry is not itself retried.
     if (response.status === 401) {
-      fcmAccessToken = null;
-      fcmAccessTokenExpiry = 0;
-      fcmAccessTokenSource = null;
+      clearFcmAccessToken();
       console.warn('[FCM] access token rejected, re-minting and retrying once', { tokenId });
 
       const refreshed = await getFcmAccessToken();
