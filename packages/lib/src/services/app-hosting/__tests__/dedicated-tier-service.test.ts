@@ -87,12 +87,16 @@ vi.mock('../../../deployment-mode', async (importOriginal) => ({
 // own `releaseHold`, so the module is stubbed to keep this suite runnable against
 // source with no built @pagespace/db.
 vi.mock('../../../billing/credit-consume', () => ({ releaseHold: vi.fn(async () => undefined) }));
-vi.mock('../app-lifecycle-metering', () => ({ stopPublishedApp: vi.fn(async () => undefined) }));
+const mockStopPublishedApp = vi.hoisted(() =>
+  vi.fn(async (): Promise<Record<string, unknown>> => ({ outcome: 'stopped' })),
+);
+vi.mock('../app-lifecycle-metering', () => ({ stopPublishedApp: mockStopPublishedApp }));
 vi.mock('../../../logging/logger-config', () => ({
   loggers: { ai: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } },
 }));
 
 import {
+  defaultDedicatedTierDeps,
   UNPAID_DOWNGRADE_REASON,
   enforceUnpaidDedicated,
   DEDICATED_DUNNING_VISIBILITY_DAYS,
@@ -120,7 +124,7 @@ function deps(overrides: Partial<DedicatedTierDeps> = {}): DedicatedTierDeps {
     isEnabled: () => true,
     updateMachineConfig: vi.fn(async () => undefined),
     releaseHold: vi.fn(async () => undefined),
-    stopApp: vi.fn(async () => undefined),
+    stopApp: vi.fn(async () => ({ stopped: true })),
     ...overrides,
   };
 }
@@ -589,7 +593,7 @@ describe('enforceUnpaidDedicated', () => {
   it('STOPS the machine before touching anything else', async () => {
     // This is what actually ends the cost, and it is first so that the resize
     // below happens to an app that is already down rather than to a live one.
-    const stopApp = vi.fn(async () => undefined);
+    const stopApp = vi.fn(async () => ({ stopped: true }));
     mockDb.__state.rows = [BIG];
     mockDb.__state.returning = [[{ ...BIG, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
 
@@ -649,13 +653,54 @@ describe('enforceUnpaidDedicated', () => {
     });
   });
 
-  it('ABORTS if the machine could not be stopped', async () => {
+  it('ABORTS when the stop was REFUSED rather than thrown', async () => {
+    // `stopPublishedApp` reports every refusal as a VALUE — `stop_failed` when Fly
+    // refused, `lock_busy` when the awake meter's advisory lock meant nothing was
+    // read or stopped at all. A guard that only caught exceptions would catch
+    // nothing and resize a machine that is still running.
+    for (const error of ['flaps 503', 'lock_busy']) {
+      mockDb.__state.updateSets.length = 0;
+      mockDb.__state.rows = [BIG];
+      const outcome = await enforceUnpaidDedicated(
+        'app_1',
+        deps({ stopApp: vi.fn(async () => ({ stopped: false, error })) }),
+      );
+      expect(outcome, `a ${error} stop must abort`).toEqual({
+        outcome: 'tier_change_refused',
+        publishedAppId: 'app_1',
+        reason: 'stop_failed',
+      });
+      expect(mockDb.__state.updateSets, 'nothing may be written').toEqual([]);
+    }
+  });
+
+  it('treats an ALREADY-STOPPED app as stopped and proceeds', async () => {
+    // There is no machine left to end, and refusing here would block the resize on
+    // the one case where the resize is safest.
+    mockDb.__state.rows = [{ ...BIG, status: 'stopped' }];
+    mockDb.__state.returning = [[{ ...BIG, status: 'stopped', tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
+    const outcome = await enforceUnpaidDedicated(
+      'app_1',
+      deps({ stopApp: vi.fn(async () => ({ stopped: true })) }),
+    );
+    assert({
+      given: 'an app that was already down',
+      should: 'still be returned to the metered tier',
+      actual: outcome.outcome,
+      expected: 'downgraded',
+    });
+  });
+
+  it('ABORTS if the stop threw', async () => {
     // Resizing an app we could not stop would leave a running machine whose row
     // promises a guest it is not on — and it would still be always-on.
     mockDb.__state.rows = [BIG];
     const outcome = await enforceUnpaidDedicated(
       'app_1',
-      deps({ stopApp: vi.fn(async () => { throw new Error('flaps 503'); }) }),
+      // A REPORTED refusal, not a throw — `stopPublishedApp` never throws, so a
+      // guard that only caught exceptions would sail straight past a machine that
+      // is still running.
+      deps({ stopApp: vi.fn(async () => ({ stopped: false, error: 'flaps 503' })) }),
     );
     assert({
       given: 'a stop that failed',
@@ -677,7 +722,7 @@ describe('syncAppTierToSubscription on a subscription that stopped paying', () =
     // Codex P1: leaving this as a logged refusal means an app nobody pays for
     // keeps its always-on config and stays out of BOTH meters forever, because no
     // further event is coming for a dead subscription.
-    const stopApp = vi.fn(async () => undefined);
+    const stopApp = vi.fn(async () => ({ stopped: true }));
     mockDb.__state.rows = [{ ...APP, tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096', status: 'running' }];
     mockDb.__state.returning = [[{ ...APP, tier: 'metered', guestPreset: 'shared-cpu-1x-512' }]];
 
@@ -698,11 +743,72 @@ describe('syncAppTierToSubscription on a subscription that stopped paying', () =
   it('does NOT force a resize on an app that is still paying', async () => {
     // The resize is enforcement. An entitled subscription whose tier change is
     // refused for any other reason must never lose its guest as a side effect.
-    const stopApp = vi.fn(async () => undefined);
+    const stopApp = vi.fn(async () => ({ stopped: true }));
     mockDb.__state.rows = [{ ...APP, tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096', status: 'running' }];
 
     await syncAppTierToSubscription({ publishedAppId: 'app_1', status: 'active' }, deps({ stopApp }));
 
     expect(stopApp, 'a paying app must never be stopped by a sync').not.toHaveBeenCalled();
+  });
+});
+
+describe('the default stopApp binding', () => {
+  /**
+   * The MAPPING is the part that can silently break, and every other test in this
+   * file injects its own `stopApp` — so without these the translation from
+   * `stopPublishedApp`'s outcomes to "is the machine actually down" is unproven,
+   * and a mapping that answered `stopped: true` to everything would pass the whole
+   * suite while resizing running machines.
+   */
+  it('reports a real stop as stopped', async () => {
+    mockStopPublishedApp.mockResolvedValueOnce({ outcome: 'stopped', status: 'stopped', billedSeconds: 0 });
+    assert({
+      given: 'a machine Fly actually stopped',
+      should: 'report it down',
+      actual: await defaultDedicatedTierDeps.stopApp('app_1'),
+      expected: { stopped: true },
+    });
+  });
+
+  it('counts an already-stopped app as stopped', async () => {
+    mockStopPublishedApp.mockResolvedValueOnce({ outcome: 'refused', reason: 'not_running' });
+    assert({
+      given: 'an app that was already down',
+      should: 'report it down — there is no machine left to end',
+      actual: await defaultDedicatedTierDeps.stopApp('app_1'),
+      expected: { stopped: true },
+    });
+  });
+
+  it('reports a Fly refusal as NOT stopped, carrying the reason', async () => {
+    mockStopPublishedApp.mockResolvedValueOnce({ outcome: 'stop_failed', error: 'flaps 503' });
+    assert({
+      given: 'a stop Fly refused',
+      should: 'report the machine may still be running',
+      actual: await defaultDedicatedTierDeps.stopApp('app_1'),
+      expected: { stopped: false, error: 'flaps 503' },
+    });
+  });
+
+  it('reports a busy advisory lock as NOT stopped', async () => {
+    // `lock_busy` means NOTHING was read, stopped or billed — the machine is
+    // certainly still running.
+    mockStopPublishedApp.mockResolvedValueOnce({ outcome: 'lock_busy' });
+    assert({
+      given: 'a run that could not take the meter lock',
+      should: 'report the machine still running',
+      actual: await defaultDedicatedTierDeps.stopApp('app_1'),
+      expected: { stopped: false, error: 'lock_busy' },
+    });
+  });
+
+  it('reports any other refusal as NOT stopped', async () => {
+    mockStopPublishedApp.mockResolvedValueOnce({ outcome: 'refused', reason: 'not_found' });
+    assert({
+      given: 'a refusal that is not "already down"',
+      should: 'not claim the machine is down',
+      actual: await defaultDedicatedTierDeps.stopApp('app_1'),
+      expected: { stopped: false, error: 'refused' },
+    });
   });
 });

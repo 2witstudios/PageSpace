@@ -86,10 +86,16 @@ export interface DedicatedTierDeps {
    */
   releaseHold: (holdId: string) => Promise<void>;
   /**
-   * Stop an app's machine. Used only by {@link enforceUnpaidDedicated}, which has
-   * to end an always-on machine BEFORE it may resize the app — see there.
+   * Stop an app's machine, reporting whether the machine is actually DOWN.
+   *
+   * A boolean rather than a throw, because `stopPublishedApp` never throws: it
+   * reports every refusal as a value (`stop_failed`, `lock_busy`, `not_running`).
+   * A caller that wrapped it in try/catch would therefore catch nothing and sail
+   * past a machine that is still running — which is exactly the failure this
+   * whole path exists to prevent, so the contract states the answer instead of
+   * hiding it in an exception that never arrives.
    */
-  stopApp: (publishedAppId: string) => Promise<void>;
+  stopApp: (publishedAppId: string) => Promise<{ stopped: boolean; error?: string }>;
 }
 
 function defaultTransport(): FlapsTransport {
@@ -106,7 +112,19 @@ export const defaultDedicatedTierDeps: DedicatedTierDeps = {
     // `operator`, not `insolvent`: `insolvent` lands in `parked`, and `parked` is
     // metered-only at the database — the app is still `dedicated` at this point,
     // so that transition would be refused and the machine would stay up.
-    await stopPublishedApp(publishedAppId, 'operator');
+    const result = await stopPublishedApp(publishedAppId, 'operator');
+    if (result.outcome === 'stopped') return { stopped: true };
+    // ALREADY DOWN counts as stopped. There is no machine left to end, and
+    // treating it as a failure would block the resize on the one case where the
+    // resize is safest.
+    if (result.outcome === 'refused' && result.reason === 'not_running') return { stopped: true };
+    // Everything else leaves a machine that may still be RUNNING: Fly refused the
+    // stop, or the awake meter's advisory lock was held so nothing was read or
+    // stopped at all.
+    return {
+      stopped: false,
+      error: result.outcome === 'stop_failed' ? result.error : result.outcome,
+    };
   },
 };
 
@@ -696,13 +714,20 @@ export async function enforceUnpaidDedicated(
   publishedAppId: string,
   deps: DedicatedTierDeps = defaultDedicatedTierDeps,
 ): Promise<DedicatedSubscriptionSyncOutcome> {
+  let stop: { stopped: boolean; error?: string };
   try {
-    await deps.stopApp(publishedAppId);
+    stop = await deps.stopApp(publishedAppId);
   } catch (error) {
+    // The default binding reports failures as values, but a deps implementation
+    // (or the transport under it) can still throw, and a throw here must not
+    // escape into the webhook as a 500 for an app we have merely failed to tidy.
+    stop = { stopped: false, error: error instanceof Error ? error.message : String(error) };
+  }
+  if (!stop.stopped) {
     loggers.ai.error(
       'Unpaid dedicated app could not be stopped; leaving it on the dedicated tier rather than resizing a running machine',
-      error instanceof Error ? error : new Error(String(error)),
-      { publishedAppId },
+      new Error(stop.error ?? 'stop refused'),
+      { publishedAppId, error: stop.error },
     );
     return { outcome: 'tier_change_refused', publishedAppId, reason: 'stop_failed' };
   }
