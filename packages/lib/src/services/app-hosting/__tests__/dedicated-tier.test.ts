@@ -16,7 +16,9 @@ import {
   isDedicatedEntitled,
   isGuestPresetAllowedForTier,
   isIdleReaperExempt,
+  isTerminalSubscriptionStatus,
   minMachinesRunningFor,
+  planSubscriptionMirrorWrite,
   planTierChange,
 } from '../dedicated-tier';
 
@@ -464,6 +466,174 @@ describe('applyMinMachinesRunning', () => {
       should: 'not be counted as applied',
       actual: merged.applied,
       expected: 1,
+    });
+  });
+});
+
+describe('planSubscriptionMirrorWrite', () => {
+  const at = (iso: string) => new Date(iso);
+  const row = (over: Partial<{ stripeSubscriptionId: string; status: string; stripeEventCreated: Date | null }> = {}) => ({
+    stripeSubscriptionId: 'sub_1',
+    status: 'active',
+    stripeEventCreated: at('2026-08-25T12:00:00Z'),
+    ...over,
+  });
+
+  it('applies the first write, when there is nothing to order against', () => {
+    assert({
+      given: 'no existing mirror row',
+      should: 'apply',
+      actual: planSubscriptionMirrorWrite({
+        existing: null,
+        incomingSubscriptionId: 'sub_1',
+        incomingEventCreated: at('2026-08-25T12:00:00Z'),
+      }),
+      expected: { apply: true },
+    });
+  });
+
+  describe('terminal statuses are absorbing — the half that needs no clock', () => {
+    it('refuses a late event for a subscription that has already ended', () => {
+      // Stripe does not order deliveries: an `updated` carrying `active` can arrive
+      // AFTER the `deleted` that ended the subscription. Applied, it re-entitles
+      // the app FOREVER — nothing further will arrive to correct it, because the
+      // subscription is already dead.
+      for (const status of ['canceled', 'unpaid', 'incomplete_expired']) {
+        assert({
+          given: `a late event against a ${status} row`,
+          should: 'be refused as absorbed',
+          actual: planSubscriptionMirrorWrite({
+            existing: row({ status }),
+            incomingSubscriptionId: 'sub_1',
+            // NEWER than the stored stamp, so only the terminal rule can refuse it.
+            incomingEventCreated: at('2026-08-25T13:00:00Z'),
+          }),
+          expected: { apply: false, reason: 'terminal_absorbed' },
+        });
+      }
+    });
+
+    it('refuses even a same-second event, which the stamp cannot', () => {
+      // `event.created` has ONE-SECOND resolution, so a `deleted` and an `updated`
+      // emitted a few hundred milliseconds apart compare as EQUAL and the stamp
+      // guard admits the later-arriving one either way. This is why both halves
+      // ship: the terminal rule does not compare times at all.
+      const sameSecond = at('2026-08-25T12:00:00Z');
+      assert({
+        given: 'an event in the same second as the cancellation',
+        should: 'still be refused',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'canceled', stripeEventCreated: sameSecond }),
+          incomingSubscriptionId: 'sub_1',
+          incomingEventCreated: sameSecond,
+        }),
+        expected: { apply: false, reason: 'terminal_absorbed' },
+      });
+    });
+
+    it('lets a NEW subscription re-entitle the app', () => {
+      // A different subscription id is an actual new purchase — the only
+      // re-entitlement path, and the same model the purchase gate uses.
+      assert({
+        given: 'a different subscription id against a canceled row',
+        should: 'apply, because re-buying is how an app becomes dedicated again',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'canceled' }),
+          incomingSubscriptionId: 'sub_2',
+          incomingEventCreated: at('2026-08-25T13:00:00Z'),
+        }),
+        expected: { apply: true },
+      });
+    });
+
+    it('does not absorb a row that is merely not paying', () => {
+      // `past_due` is mid-dunning and can still recover; absorbing it would freeze
+      // an app that is about to be paid for.
+      assert({
+        given: 'a past_due row',
+        should: 'accept a newer event',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'past_due' }),
+          incomingSubscriptionId: 'sub_1',
+          incomingEventCreated: at('2026-08-25T13:00:00Z'),
+        }),
+        expected: { apply: true },
+      });
+    });
+  });
+
+  describe('the monotonic stamp — the half that orders everything else', () => {
+    it('refuses an event older than the one already applied', () => {
+      // A stale `past_due` overwriting a fresh `active` is not covered by the
+      // terminal rule at all.
+      assert({
+        given: 'an event from before the stored one',
+        should: 'be refused as stale',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'active' }),
+          incomingSubscriptionId: 'sub_1',
+          incomingEventCreated: at('2026-08-25T11:00:00Z'),
+        }),
+        expected: { apply: false, reason: 'stale_event' },
+      });
+    });
+
+    it('applies an event at or after the stored stamp', () => {
+      for (const iso of ['2026-08-25T12:00:00Z', '2026-08-25T12:00:01Z']) {
+        assert({
+          given: `an event stamped ${iso}`,
+          should: 'apply',
+          actual: planSubscriptionMirrorWrite({
+            existing: row({ status: 'active' }),
+            incomingSubscriptionId: 'sub_1',
+            incomingEventCreated: at(iso),
+          }),
+          expected: { apply: true },
+        });
+      }
+    });
+
+    it('treats a missing stamp on either side as unknown order and applies', () => {
+      // The purchase path writes the first row with no event behind it. Refusing
+      // every subsequent event against an unstamped row would freeze the mirror at
+      // its creation state; the terminal rule is what keeps that direction safe.
+      assert({
+        given: 'a stored row with no stamp',
+        should: 'apply',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'incomplete', stripeEventCreated: null }),
+          incomingSubscriptionId: 'sub_1',
+          incomingEventCreated: at('2026-08-25T11:00:00Z'),
+        }),
+        expected: { apply: true },
+      });
+      assert({
+        given: 'an incoming event with no stamp',
+        should: 'apply',
+        actual: planSubscriptionMirrorWrite({
+          existing: row({ status: 'active' }),
+          incomingSubscriptionId: 'sub_1',
+          incomingEventCreated: null,
+        }),
+        expected: { apply: true },
+      });
+    });
+  });
+});
+
+describe('isTerminalSubscriptionStatus', () => {
+  it('names the statuses Stripe never returns from', () => {
+    assert({
+      given: 'the terminal statuses',
+      should: 'be absorbing',
+      actual: ['canceled', 'unpaid', 'incomplete_expired'].map(isTerminalSubscriptionStatus),
+      expected: [true, true, true],
+    });
+    assert({
+      given: 'statuses a subscription can still leave',
+      should: 'not be absorbing',
+      actual: ['active', 'trialing', 'past_due', 'incomplete'].map(isTerminalSubscriptionStatus),
+      expected: [false, false, false, false],
     });
   });
 });

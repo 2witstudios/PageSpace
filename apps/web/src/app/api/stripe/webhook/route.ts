@@ -164,7 +164,7 @@ export async function POST(request: NextRequest) {
             // write guarded on the tier it planned against), so reprocessing is
             // safe.
             await withFundingRetry(event.id, () =>
-              handleDedicatedSubscriptionEvent(subscription, event.id),
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
             );
             break;
           }
@@ -184,7 +184,7 @@ export async function POST(request: NextRequest) {
             // tier, so losing it to a duplicate-ack leaves an always-on machine
             // running for a customer who has stopped paying.
             await withFundingRetry(event.id, () =>
-              handleDedicatedSubscriptionEvent(subscription, event.id),
+              handleDedicatedSubscriptionEvent(subscription, event.id, event.created),
             );
             break;
           }

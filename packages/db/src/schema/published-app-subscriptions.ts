@@ -88,6 +88,25 @@ export const publishedAppSubscriptions = pgTable('published_app_subscriptions', 
   /** Stripe's status verbatim: active, trialing, past_due, canceled, unpaid, incomplete… */
   status: text('status').notNull(),
 
+  /**
+   * `event.created` of the Stripe event this row was last written from. NULL for
+   * a row written outside an event — the purchase path, which creates the
+   * subscription and mirrors it before any webhook has arrived.
+   *
+   * ORDERING, not auditing. Stripe does NOT order webhook deliveries: a
+   * `customer.subscription.updated` carrying `active` can arrive after the
+   * `deleted` that ended the subscription, and written blindly it re-entitles the
+   * app permanently — nothing further will arrive to correct it, because the
+   * subscription is already dead. This column is what lets a write be refused for
+   * being older than the one already applied.
+   *
+   * It is only HALF the guard, deliberately: `event.created` has one-second
+   * resolution, so two events in the same second are indistinguishable to it. The
+   * other half — terminal statuses being absorbing — carries the weight and needs
+   * no clock. See `planSubscriptionMirrorWrite`.
+   */
+  stripeEventCreated: timestamp('stripeEventCreated', { mode: 'date', withTimezone: true }),
+
   currentPeriodStart: timestamp('currentPeriodStart', { mode: 'date', withTimezone: true }).notNull(),
   currentPeriodEnd: timestamp('currentPeriodEnd', { mode: 'date', withTimezone: true }).notNull(),
   cancelAtPeriodEnd: boolean('cancelAtPeriodEnd').default(false).notNull(),

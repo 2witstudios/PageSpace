@@ -29,7 +29,10 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const { mockFindForApp, mockRecord, mockPurchasable } = vi.hoisted(() => ({
   mockFindForApp: vi.fn(),
-  mockRecord: vi.fn(async () => null),
+  mockRecord: vi.fn(async (facts: { publishedAppId: string; status: string }) => ({
+    outcome: 'applied' as const,
+    row: { publishedAppId: facts.publishedAppId, status: facts.status },
+  })),
   mockPurchasable: vi.fn(() => true),
 }));
 vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({

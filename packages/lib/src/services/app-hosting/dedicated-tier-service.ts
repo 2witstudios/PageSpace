@@ -40,6 +40,7 @@ import {
   isDedicatedEntitled,
   isCreditMetered,
   minMachinesRunningFor,
+  planSubscriptionMirrorWrite,
   planTierChange,
   type TierChangeRefusal,
 } from './dedicated-tier';
@@ -310,6 +311,27 @@ export interface DedicatedSubscriptionFacts {
   currentPeriodStart: Date;
   currentPeriodEnd: Date;
   cancelAtPeriodEnd: boolean;
+  /**
+   * `event.created` of the Stripe event these facts came from, or null when they
+   * came from an API response rather than a webhook (the purchase path). Used
+   * only to ORDER writes — see {@link planSubscriptionMirrorWrite}.
+   */
+  stripeEventCreated?: Date | null;
+}
+
+/**
+ * What the mirror write did, and the row that is now authoritative.
+ *
+ * `row` is returned on EVERY outcome, including the refusals, and that is the
+ * point rather than a convenience: a caller that has just been told its event was
+ * stale still needs to know what the mirror actually says, because the tier must
+ * follow the STORED status rather than the status of an event we just declined to
+ * believe. Returning only on success would leave the caller re-entitling an app
+ * from the very event the guard rejected.
+ */
+export interface MirrorWriteResult {
+  outcome: 'applied' | 'stale_event' | 'terminal_absorbed';
+  row: PublishedAppSubscription | null;
 }
 
 /**
@@ -328,27 +350,74 @@ export interface DedicatedSubscriptionFacts {
  */
 export async function recordDedicatedSubscription(
   facts: DedicatedSubscriptionFacts,
-): Promise<PublishedAppSubscription | null> {
-  if (!isAppHostingEnabled()) return null;
-  const [row] = await db
-    .insert(publishedAppSubscriptions)
-    .values(facts)
-    .onConflictDoUpdate({
-      target: publishedAppSubscriptions.publishedAppId,
-      set: {
-        userId: facts.userId,
+): Promise<MirrorWriteResult> {
+  if (!isAppHostingEnabled()) return { outcome: 'applied', row: null };
+
+  const incomingEventCreated = facts.stripeEventCreated ?? null;
+
+  return db.transaction(async (tx) => {
+    // Locked for the read so the decision is made against state that cannot change
+    // underneath it. Two Stripe deliveries racing the same subscription is exactly
+    // the situation this guard exists for, so reading without the lock would leave
+    // the ordering decision itself subject to the reordering it is meant to refuse.
+    const [existing] = await tx
+      .select()
+      .from(publishedAppSubscriptions)
+      .where(eq(publishedAppSubscriptions.publishedAppId, facts.publishedAppId))
+      .limit(1)
+      .for('update');
+
+    const plan = planSubscriptionMirrorWrite({
+      existing: existing
+        ? {
+            stripeSubscriptionId: existing.stripeSubscriptionId,
+            status: existing.status,
+            stripeEventCreated: existing.stripeEventCreated,
+          }
+        : null,
+      incomingSubscriptionId: facts.stripeSubscriptionId,
+      incomingEventCreated,
+    });
+
+    if (!plan.apply) {
+      loggers.ai.warn('Dedicated subscription mirror refused an out-of-order Stripe event', {
+        publishedAppId: facts.publishedAppId,
         stripeSubscriptionId: facts.stripeSubscriptionId,
-        stripePriceId: facts.stripePriceId,
-        guestPreset: facts.guestPreset,
-        status: facts.status,
-        currentPeriodStart: facts.currentPeriodStart,
-        currentPeriodEnd: facts.currentPeriodEnd,
-        cancelAtPeriodEnd: facts.cancelAtPeriodEnd,
-        updatedAt: new Date(),
-      },
-    })
-    .returning();
-  return row ?? null;
+        incomingStatus: facts.status,
+        storedStatus: existing?.status,
+        reason: plan.reason,
+      });
+      return { outcome: plan.reason, row: existing ?? null };
+    }
+
+    const values = {
+      publishedAppId: facts.publishedAppId,
+      userId: facts.userId,
+      stripeSubscriptionId: facts.stripeSubscriptionId,
+      stripePriceId: facts.stripePriceId,
+      guestPreset: facts.guestPreset,
+      status: facts.status,
+      currentPeriodStart: facts.currentPeriodStart,
+      currentPeriodEnd: facts.currentPeriodEnd,
+      cancelAtPeriodEnd: facts.cancelAtPeriodEnd,
+      stripeEventCreated: incomingEventCreated,
+    };
+
+    const [row] = await tx
+      .insert(publishedAppSubscriptions)
+      .values(values)
+      .onConflictDoUpdate({
+        // An app has at most ONE dedicated subscription, so a second subscription
+        // id for the same app means the first was replaced (a cancel-and-rebuy) and
+        // the row should follow the app. Conflicting on the subscription id instead
+        // would leave the stale row in place and make "is this app paid for"
+        // ambiguous.
+        target: publishedAppSubscriptions.publishedAppId,
+        set: { ...values, updatedAt: new Date() },
+      })
+      .returning();
+    return { outcome: 'applied' as const, row: row ?? null };
+  });
 }
 
 /**
@@ -392,11 +461,20 @@ export type DedicatedSubscriptionSyncOutcome =
  * Make an app's tier follow its subscription's status — the webhook's whole job
  * once it has the facts.
  *
+ * TAKES THE MIRROR ROW, NEVER AN EVENT'S STATUS, and that is a correctness
+ * property rather than an interface preference. `recordDedicatedSubscription` can
+ * REFUSE an out-of-order event (a late `active` after a cancellation, a stale
+ * update), and the mirror then holds the status we still believe. Syncing from the
+ * event's own status instead would re-entitle an app from the very message the
+ * ordering guard had just rejected — the guard would refuse the write and the tier
+ * would move anyway, which is worse than having no guard, because it looks
+ * defended. Passing the row makes that mistake unexpressible.
+ *
  * ENTITLEMENT IS A STATUS QUESTION, not an existence one: a `canceled` or `unpaid`
  * subscription still leaves a mirror row, and the row is what lets us say WHY an
  * app went back to metered. So the tier is derived from
- * {@link isDedicatedEntitled} on every event rather than from whether a row is
- * present.
+ * {@link isDedicatedEntitled} on the stored status rather than from whether a row
+ * is present.
  *
  * A DOWNGRADE CAN LEGITIMATELY FAIL, and this reports rather than forces it. An
  * app on a bigger guest cannot be metered (`published_apps_metered_guest_preset`
@@ -409,19 +487,17 @@ export type DedicatedSubscriptionSyncOutcome =
  * a webhook quietly taking a live app down.
  */
 export async function syncAppTierToSubscription(
-  stripeSubscriptionId: string,
-  status: string,
+  mirror: Pick<PublishedAppSubscription, 'publishedAppId' | 'status'> | null,
 ): Promise<DedicatedSubscriptionSyncOutcome> {
-  const mirror = await findDedicatedSubscriptionByStripeId(stripeSubscriptionId);
   if (!mirror) {
-    // Not an error, and deliberately not a throw. Stripe redelivers events, and
-    // `customer.subscription.created` can arrive before the row that records what
-    // it was bought for. The caller acks; the next event (or the create path
-    // itself) writes the row.
+    // Not an error, and deliberately not a throw. Stripe redelivers events, and a
+    // subscription this deployment has no app for (one created against another
+    // environment's database — the common test-mode case) would otherwise be
+    // retried forever against a row that is never going to appear.
     return { outcome: 'unknown_subscription' };
   }
 
-  const entitled = isDedicatedEntitled(status);
+  const entitled = isDedicatedEntitled(mirror.status);
   const target: PublishedAppTier = entitled ? 'dedicated' : 'metered';
   const result = await setPublishedAppTier(mirror.publishedAppId, target);
 
@@ -436,8 +512,7 @@ export async function syncAppTierToSubscription(
     }
     loggers.ai.warn('Published app tier could not follow its dedicated subscription', {
       publishedAppId: mirror.publishedAppId,
-      stripeSubscriptionId,
-      status,
+      status: mirror.status,
       target,
       reason: result.reason,
     });

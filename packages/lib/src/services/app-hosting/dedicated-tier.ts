@@ -388,3 +388,114 @@ export function applyMinMachinesRunning(
   });
   return { config: { ...current, services: next }, applied };
 }
+
+// ── Mirror-write ordering ────────────────────────────────────────────────────
+
+/**
+ * Statuses from which a Stripe subscription never returns.
+ *
+ * Stripe will not move a `canceled`, `unpaid` or `incomplete_expired`
+ * subscription back to `active` — that path does not exist in its state machine.
+ * Anything claiming otherwise is a message arriving out of order, which is why
+ * this set is treated as ABSORBING below rather than merely non-entitling.
+ */
+export const TERMINAL_SUBSCRIPTION_STATUSES: readonly string[] = [
+  'canceled',
+  'unpaid',
+  'incomplete_expired',
+];
+
+export function isTerminalSubscriptionStatus(status: string): boolean {
+  return TERMINAL_SUBSCRIPTION_STATUSES.includes(status);
+}
+
+/** The mirror row as the ordering decision sees it. */
+export interface MirrorRowState {
+  stripeSubscriptionId: string;
+  status: string;
+  /**
+   * `event.created` of the Stripe event this row was last written from, or null
+   * for a row written outside an event (the purchase path).
+   */
+  stripeEventCreated: Date | null;
+}
+
+export type MirrorWriteRefusal =
+  /**
+   * The row is terminal and the event names the SAME subscription. Stripe cannot
+   * revive a dead subscription, so this is a message from before it died.
+   */
+  | 'terminal_absorbed'
+  /** An event older than the one this row was last written from. */
+  | 'stale_event';
+
+export type MirrorWritePlan = { apply: true } | { apply: false; reason: MirrorWriteRefusal };
+
+/**
+ * Decide whether a Stripe event may be written into the mirror.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * WHY THIS EXISTS. **Stripe does not order webhook deliveries.** A
+ * `customer.subscription.updated` carrying `active` can arrive AFTER the
+ * `customer.subscription.deleted` that ended the subscription — a redelivery, a
+ * retry after a timeout, or simply two events racing. Written blindly, that late
+ * `active` re-entitles the app, and it re-entitles it FOREVER: nothing else will
+ * ever arrive to correct it, because the subscription is already dead and Stripe
+ * has no more events to send. The result is an always-on machine nobody is paying
+ * for, and nothing in the system knows.
+ *
+ * TWO GUARDS, and they are here together because neither closes the case alone.
+ *
+ *  - **Terminal statuses are ABSORBING** — the load-bearing half. Once a row is
+ *    `canceled` / `unpaid` / `incomplete_expired`, the only thing that may
+ *    re-entitle that app is a DIFFERENT `stripeSubscriptionId`, i.e. an actual
+ *    new purchase. This needs no clock at all, which is exactly why it is the
+ *    half that carries the weight, and it matches the purchase model: re-buying
+ *    after a cancellation always mints a new subscription.
+ *  - **Monotonic event stamps** — the general half. `event.created` orders
+ *    everything the terminal rule says nothing about: a stale `past_due`
+ *    overwriting a fresh `active`, an out-of-order pair of ordinary updates.
+ *
+ * The stamp cannot replace the terminal rule, and that is the point of shipping
+ * both: **`event.created` has ONE-SECOND resolution.** Two events in the same
+ * second are indistinguishable to it, so a `deleted` and an `updated` emitted a
+ * few hundred milliseconds apart compare as equal and the stamp guard admits the
+ * later-arriving one either way. The terminal rule has no such blind spot,
+ * because it does not compare times at all.
+ *
+ * A NULL stamp on either side means "unknown order", and the write is ALLOWED —
+ * the purchase path writes the first row without an event, and refusing every
+ * subsequent event against an unstamped row would freeze the mirror at its
+ * creation state. The terminal rule still applies in that case, which is what
+ * keeps the permissive direction safe.
+ * ─────────────────────────────────────────────────────────────────────────────
+ */
+export function planSubscriptionMirrorWrite({
+  existing,
+  incomingSubscriptionId,
+  incomingEventCreated,
+}: {
+  /** The row already in the mirror, or null when this is the first write. */
+  existing: MirrorRowState | null;
+  incomingSubscriptionId: string;
+  incomingEventCreated: Date | null;
+}): MirrorWritePlan {
+  if (existing === null) return { apply: true };
+
+  if (
+    isTerminalSubscriptionStatus(existing.status) &&
+    existing.stripeSubscriptionId === incomingSubscriptionId
+  ) {
+    return { apply: false, reason: 'terminal_absorbed' };
+  }
+
+  if (
+    existing.stripeEventCreated !== null &&
+    incomingEventCreated !== null &&
+    incomingEventCreated.getTime() < existing.stripeEventCreated.getTime()
+  ) {
+    return { apply: false, reason: 'stale_event' };
+  }
+
+  return { apply: true };
+}

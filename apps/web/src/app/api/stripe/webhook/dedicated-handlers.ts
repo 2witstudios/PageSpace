@@ -37,6 +37,8 @@ import { subscriptionPeriod } from '@/lib/app-hosting/stripe-subscription-period
 export async function handleDedicatedSubscriptionEvent(
   subscription: Stripe.Subscription,
   eventId: string,
+  /** `event.created`, in seconds — the ordering stamp the mirror guards on. */
+  eventCreated: number,
 ): Promise<void> {
   const publishedAppId = subscription.metadata?.publishedAppId;
   const userId = subscription.metadata?.userId;
@@ -63,7 +65,7 @@ export async function handleDedicatedSubscriptionEvent(
   }
 
   const period = subscriptionPeriod(subscription);
-  await recordDedicatedSubscription({
+  const mirror = await recordDedicatedSubscription({
     publishedAppId: resolvedAppId,
     userId: resolvedUserId,
     stripeSubscriptionId: subscription.id,
@@ -73,13 +75,25 @@ export async function handleDedicatedSubscriptionEvent(
     currentPeriodStart: period.start,
     currentPeriodEnd: period.end,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    // Stripe does not order webhook deliveries, so the event's OWN timestamp is
+    // what lets the mirror refuse a message from before the one it already
+    // applied. `event.created` is in seconds.
+    stripeEventCreated: new Date(eventCreated * 1000),
   });
 
-  const outcome = await syncAppTierToSubscription(subscription.id, subscription.status);
+  // THE TIER FOLLOWS THE MIRROR, NOT THIS EVENT. The write above can refuse an
+  // out-of-order event — a late `active` after a cancellation — and in that case
+  // `mirror.row` still holds the status we believe. Syncing from
+  // `subscription.status` here would re-entitle the app from the very message the
+  // guard just rejected: the write would be refused and the tier would move
+  // anyway, which is worse than no guard because it looks defended.
+  const outcome = await syncAppTierToSubscription(mirror.row);
   loggers.api.info('Dedicated hosting subscription synced', {
     eventId,
     stripeSubscriptionId: subscription.id,
-    status: subscription.status,
+    eventStatus: subscription.status,
+    mirrorOutcome: mirror.outcome,
+    mirrorStatus: mirror.row?.status,
     outcome: outcome.outcome,
     publishedAppId: resolvedAppId,
   });

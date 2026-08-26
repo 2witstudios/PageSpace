@@ -153,6 +153,11 @@ export async function startDedicatedSubscription(
     currentPeriodStart: period.start,
     currentPeriodEnd: period.end,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    // No stamp: this write comes from an API RESPONSE, not a webhook, so there is
+    // no `event.created` to order it by. A null stamp reads as "unknown order" and
+    // does not block the first real event from landing — the terminal-status rule
+    // is what protects this row until an event stamps it.
+    stripeEventCreated: null,
   });
 
   const invoice = subscription.latest_invoice as
@@ -216,6 +221,7 @@ export async function cancelDedicatedSubscription(
     currentPeriodStart: period.start,
     currentPeriodEnd: period.end,
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
+    stripeEventCreated: null,
   });
 
   return { ok: true, cancelAtPeriodEnd: subscription.cancel_at_period_end, currentPeriodEnd: period.end };

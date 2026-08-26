@@ -122,7 +122,13 @@ const { mockRecordSubscription, mockSyncTier, mockFindByStripeId } = vi.hoisted(
     | { outcome: 'unknown_subscription' }
     | { outcome: 'tier_change_refused'; publishedAppId: string; reason: string };
   return {
-    mockRecordSubscription: vi.fn(async () => null),
+    // The mirror write now returns the AUTHORITATIVE row alongside its outcome —
+    // the tier follows that row, never the event's own status, so an out-of-order
+    // event the mirror refused cannot move the tier anyway.
+    mockRecordSubscription: vi.fn(async (facts: { publishedAppId: string; status: string }) => ({
+      outcome: 'applied' as const,
+      row: { publishedAppId: facts.publishedAppId, status: facts.status },
+    })),
     mockSyncTier: vi.fn(
       async (): Promise<SyncOutcome> => ({ outcome: 'entitled', publishedAppId: 'app_1', tierChanged: true }),
     ),
@@ -238,7 +244,9 @@ describe('a dedicated hosting subscription', () => {
 
   it('is handed to the hosting handler instead', async () => {
     await post('customer.subscription.updated', subscription(hostingMetadata));
-    expect(mockSyncTier).toHaveBeenCalledWith('sub_hosting_1', 'active');
+    expect(mockSyncTier).toHaveBeenCalledWith(
+      expect.objectContaining({ publishedAppId: 'app_1', status: 'active' }),
+    );
   });
 });
 
