@@ -347,12 +347,16 @@ describe('getUserPushTokens', () => {
 // sendPushNotification
 // ---------------------------------------------------------------------------
 describe('sendPushNotification', () => {
+  const describeOriginalFetch = globalThis.fetch;
+
   beforeEach(() => {
     vi.clearAllMocks();
     resetH2();
   });
 
   afterEach(() => {
+    globalThis.fetch = describeOriginalFetch;
+    delete process.env.FCM_SERVICE_ACCOUNT_JSON;
     delete process.env.APNS_TEAM_ID;
     delete process.env.APNS_KEY_ID;
     delete process.env.APNS_PRIVATE_KEY;
@@ -407,11 +411,16 @@ describe('sendPushNotification', () => {
   });
 
   it('deactivates token after 5 consecutive failures', async () => {
-    // `web` is used here only as a platform whose stub returns a plain per-token
-    // failure. `android` no longer serves: an unset credential is now reported
-    // as a server fault, which deliberately does not count against the device.
-    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'web', failedAttempts: '4' })] as never);
+    // Driven by a real per-token FCM rejection (503 UNAVAILABLE): retryable, so
+    // it takes a strike rather than deactivating outright. An unset credential
+    // would NOT serve here — that is a server fault and deliberately exempt.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'strike-count-project');
+    primeSign();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'android', failedAttempts: '4' })] as never);
     const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () => fakeResponse(503, JSON.stringify({ error: { status: 'UNAVAILABLE', message: 'busy' } })),
+    });
 
     await sendPushNotification('user-1', payload);
 
@@ -422,8 +431,13 @@ describe('sendPushNotification', () => {
   });
 
   it('keeps token active with fewer than 5 failures', async () => {
-    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'web', failedAttempts: '2' })] as never);
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson({}, 'strike-keep-project');
+    primeSign();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([tokenRecord({ platform: 'android', failedAttempts: '2' })] as never);
     const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () => fakeResponse(503, JSON.stringify({ error: { status: 'UNAVAILABLE', message: 'busy' } })),
+    });
 
     await sendPushNotification('user-1', payload);
 
