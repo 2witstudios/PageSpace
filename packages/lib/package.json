@@ -603,6 +603,16 @@
       "import": "./dist/services/app-hosting/provisioner-core.js",
       "require": "./dist/services/app-hosting/provisioner-core.js"
     },
+    "./services/app-hosting/dedicated-tier": {
+      "types": "./dist/services/app-hosting/dedicated-tier.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier.js",
+      "require": "./dist/services/app-hosting/dedicated-tier.js"
+    },
+    "./services/app-hosting/dedicated-tier-service": {
+      "types": "./dist/services/app-hosting/dedicated-tier-service.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier-service.js",
+      "require": "./dist/services/app-hosting/dedicated-tier-service.js"
+    },
     "./services/app-hosting/provisioner": {
       "types": "./dist/services/app-hosting/provisioner.d.ts",
       "import": "./dist/services/app-hosting/provisioner.js",

@@ -45,6 +45,7 @@ import {
   stopPublishedApp,
   type AppLifecycleMeteringDeps,
 } from '../app-lifecycle-metering';
+import { defaultReconcileSandboxStorageDeps } from '../../sandbox/sandbox-storage-billing';
 import { awakeSecondsFromEvents } from '../app-metering-core';
 import {
   mirrorFlyMachineEvents,
@@ -781,4 +782,115 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing CHECK constraints', () =
     // Seeded moments ago, and certainly not before this suite started running.
     expect(row!.storageLastBilledAt.getTime()).toBeGreaterThan(Date.now() - 5 * 60_000);
   });
+
+  it('refuses a metered app on a guest the awake meter cannot price', async () => {
+    // `published_apps_metered_guest_preset`: the awake meter prices every second
+    // at ONE fixed shape, so a metered row on a larger preset would be
+    // under-billed by exactly the difference — silently, with no error and no
+    // drift signal, for as long as the app ran.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ guestPreset: 'shared-cpu-4x-4096' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('allows a larger guest once the app is dedicated', async () => {
+    // Sizes are unlocked by moving to a tier whose flat price already accounts for
+    // the size. Both columns move in ONE statement because neither shape is legal
+    // on its own: metered+large is refused above, and dedicated+small is fine but
+    // is not the row we are asserting.
+    await db
+      .update(publishedApps)
+      .set({ tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096' })
+      .where(eq(publishedApps.id, appId));
+    const [row] = await db
+      .select({ tier: publishedApps.tier, guestPreset: publishedApps.guestPreset })
+      .from(publishedApps)
+      .where(eq(publishedApps.id, appId));
+    assert({
+      given: 'a dedicated app',
+      should: 'be allowed to run a larger guest',
+      actual: row,
+      expected: { tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096' },
+    });
+  });
+
+  it('refuses a guest preset that is not in the catalogue at all', async () => {
+    // `published_apps_guest_preset_allowed`. A preset in the constraint is a
+    // promise to support hardware we have run; anything else is a machine size
+    // nobody priced.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ tier: 'dedicated', guestPreset: 'shared-cpu-8x-8192' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses to park a dedicated app', async () => {
+    // `published_apps_parked_is_metered_only`. Parking IS credit-exhaustion
+    // enforcement, and an app with no credit gate cannot have been refused by one.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ tier: 'dedicated', status: 'parked' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
 });
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the awake meter\u2019s row source', () => {
+  it('lists a running METERED app', async () => {
+    const listed = await defaultAwakeMeterDeps.listRunningApps();
+    assert({
+      given: 'a running metered app',
+      should: 'be metered this tick',
+      actual: listed.some((row) => row.id === appId),
+      expected: true,
+    });
+  });
+
+  it('does NOT list a running dedicated app', async () => {
+    // THE DOUBLE-CHARGE GUARD. A dedicated app pays a flat monthly price; if the
+    // awake meter also drained credits per second, the customer would pay twice
+    // for the same machine. The filter is in the row source, so this is the only
+    // place it can be proved.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultAwakeMeterDeps.listRunningApps();
+    assert({
+      given: 'a running dedicated app',
+      should: 'be invisible to the awake-seconds meter',
+      actual: listed.some((row) => row.id === appId),
+      expected: false,
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the storage meter\u2019s published-app row source', () => {
+  it('bills a metered app\u2019s rootfs', async () => {
+    const listed = await defaultReconcileSandboxStorageDeps.listPublishedAppRootfs();
+    assert({
+      given: 'a metered app',
+      should: 'have its rootfs drained from credits like any other machine storage',
+      actual: listed.some((row) => row.publishedAppId === appId),
+      expected: true,
+    });
+  });
+
+  it('does NOT bill a dedicated app\u2019s rootfs', async () => {
+    // The other half of the double-charge guard. The flat monthly price already
+    // covers this machine — it is derived from CPU and memory at 1.5x the Sprites
+    // rate table, orders of magnitude above the $0.15/GB-month the image costs.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultReconcileSandboxStorageDeps.listPublishedAppRootfs();
+    assert({
+      given: 'a dedicated app',
+      should: 'be invisible to the rootfs storage drain',
+      actual: listed.some((row) => row.publishedAppId === appId),
+      expected: false,
+    });
+  });
+});
+
