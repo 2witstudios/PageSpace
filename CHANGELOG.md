@@ -7,6 +7,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The server can send an Android notification** — it has always accepted and stored Android push
+  tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
+  now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
+  still only registers for push on iOS (`usePushNotifications`, "Only supported on iOS for now") —
+  when that lands, a mention or a share will reach an Android device the same way it reaches an
+  iPhone, with no further server work. A background sync is sent as a data-only message, which
+  is what stops Android from putting a notification in the tray for something the app was only meant
+  to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
+  token was replaced — is deactivated on the spot rather than retried forever, matching how expired
+  Apple tokens are already handled. That only happens when Firebase says something is wrong with
+  *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
+  the request as a whole is retried instead — and is never counted against the phone either, no
+  matter how many times it happens: a message the server built badly, or a credential pointing at
+  the wrong Firebase project, would otherwise unregister every Android phone at once and leave
+  them dark until each app was next opened. If the Firebase credential is missing or
+  malformed the Android send fails with a message that says exactly which field is wrong, every
+  other device on the account still receives the notification, and no phone is penalised for a
+  problem on the server's side.
+
 - **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
   the machine is using: which drives it reaches, the role it holds in each, and what that role
   actually resolves to — can it read, write, share, delete. That answer comes from the same
@@ -215,6 +234,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   even when the key had actually come from `--key <name>` or a stored credential with no `--token`
   in sight, pointing you at a flag you never passed. It now names the credential that actually
   resolved.
+- **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
+  `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
+  `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the
+  difference between a cell reference and a letters-and-digits run sitting inside a string literal.
+  It now leaves anything inside quotes untouched, both on paste and when a conditional-format
+  formula rule is evaluated per cell. Separately, a sheet with a very large or pathological set of
+  conditional-format rules could make typing, saving, or rendering the sheet hang — evaluation work
+  is now capped in total across every rule and range combined, on top of the existing per-range
+  limit, and rule count itself is capped where a sheet is written. Saving a sheet also no longer
+  evaluates conditional formats at all, since the save format never reads that result — cutting
+  needless work on every keystroke.
 
 - **A charge that fails to record is retried instead of silently dropped** — usage metering used to
   report success whether or not it had actually written anything. If the database write for a usage

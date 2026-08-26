@@ -574,6 +574,23 @@ describe('env-validation', () => {
       expect(() => validateEnv()).not.toThrow();
     });
 
+    it('given a MALFORMED runtime knob, should still boot — the resolvers fall back, app-wide validation does not', () => {
+      // Declared as plain strings rather than coerced numbers on purpose. These
+      // three knobs bound machine lifetime and per-app daily spend, and their
+      // resolvers take the documented default for anything that is not a
+      // non-negative integer — a typo must not switch off the reaper (leaving the
+      // fleet awake) or the cap, and it must not take the whole process down
+      // either, on a feature that is dark by default.
+      bootable();
+      process.env.APP_HOSTING_ENABLED = 'true';
+      process.env.PUBLISHED_APPS_APEX = 'pagespace.app';
+      process.env.PUBLISHED_APP_IDLE_STOP_SECONDS = '15m';
+      process.env.PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS = 'sixty';
+      process.env.PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP = '-1';
+
+      expect(() => validateEnv()).not.toThrow();
+    });
+
     // The gate is on ENABLING hosting, not on the variable: while hosting is
     // dark the apex is unused, and requiring it would fail every deployment
     // that has never heard of app hosting.

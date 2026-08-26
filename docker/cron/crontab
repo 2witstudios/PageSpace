@@ -157,6 +157,22 @@
 # Dark until APP_HOSTING_ENABLED=true, when it reports `disabled` and reads nothing.
 */10 * * * * flock -n /run/meter-published-apps.lock cron-curl GET __WEB_URL__/api/cron/meter-published-apps >> /var/log/cron/meter-published-apps.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/meter-published-apps.log
 
+# Published-app idle reaper - Every 5 minutes
+# Stops published apps that have gone quiet. Their machines run with autostop off
+# (so every billing boundary is an API call we made, at an instant we know exactly),
+# which means NOTHING stops an app unless this does — without this tick, every app
+# anybody has ever visited bills awake-seconds forever. Idle is measured from the
+# router's throttled lastHitAt stamp, floored by lastWakeAt, against
+# PUBLISHED_APP_IDLE_STOP_SECONDS (default 900 = 15 min); 5 minutes is a third of
+# that, so an app is stopped within a third of a threshold of going quiet.
+# The stop IS the settle boundary: the reaper prices nothing, it hands each idle app
+# to stopPublishedApp, which stops the machine, mirrors the boundary and settles —
+# under the awake meter's own advisory lock, so a stop-settle can never double-price
+# the window a heartbeat is pricing. The route holds a separate advisory lock across
+# all callers for the fleet scan itself; flock -n is this container's defense in depth.
+# Dark until APP_HOSTING_ENABLED=true, when it reports `disabled` and reads nothing.
+*/5 * * * * flock -n /run/reap-idle-apps.lock cron-curl GET __WEB_URL__/api/cron/reap-idle-apps >> /var/log/cron/reap-idle-apps.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reap-idle-apps.log
+
 # Published-app awake-seconds reconcile - Weekly on Mondays at 3:30am UTC
 # Compares the awake-seconds implied by our own mirrored start/stop boundaries
 # against Fly's managed Prometheus (fly_instance_up), which retains ~15 days. That

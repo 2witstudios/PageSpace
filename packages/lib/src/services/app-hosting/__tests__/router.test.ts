@@ -70,6 +70,8 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     findAppBySubdomain: async () => row(),
     resolveTier: async () => 'pro',
     hasSpendableBalance: async () => true,
+    stampHit: async () => {},
+    wake: async () => ({ outcome: 'woken', app: {} as never }),
     ...overrides,
   };
 }
@@ -299,5 +301,184 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
     vi.mocked(db.select).mockReturnValue({ from: () => ({ where: () => ({ limit }) }) } as never);
 
     expect(await defaultAppRouterDeps.findAppBySubdomain('nope')).toBeNull();
+  });
+});
+
+
+describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
+  it('given a REPLAYED request, should stamp recency for the app it served', async () => {
+    // Nothing else knows this happened: a replayed response goes straight from the
+    // target app to the client and never passes back through us, and Fly's machine
+    // events record starts and stops, not traffic. Without this stamp the reaper
+    // has no evidence of demand and stops apps that are being used.
+    const stampHit = vi.fn(async () => {});
+
+    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+
+    expect(decision.kind).toBe('replay');
+    expect(stampHit).toHaveBeenCalledWith('app_1');
+  });
+
+  it('given a PARKED app, should stamp NOTHING — a refusal is not demand', async () => {
+    // The regression this guards: stamping on refusal keeps a parked app looking
+    // busy to the reaper forever, fed by exactly the crawler traffic that never
+    // stops hitting a dead subdomain.
+    const stampHit = vi.fn(async () => {});
+
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ stampHit, hasSpendableBalance: async () => false }),
+    );
+
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('given an unknown host, should stamp nothing', async () => {
+    const stampHit = vi.fn(async () => {});
+
+    await resolveAppRoute('nobody.pagespace.app', deps({ stampHit, findAppBySubdomain: async () => null }));
+
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('given the stamp FAILS, should still serve the app', async () => {
+    // A bookkeeping write must never take a working app off the internet. The cost
+    // of losing one stamp is that the app looks idle up to one throttle interval
+    // early, and the next served request corrects it.
+    const stampHit = vi.fn(async () => {
+      throw new Error('write failed');
+    });
+
+    const decision = await resolveAppRoute('acme.pagespace.app', deps({ stampHit }));
+
+    expect(decision.kind).toBe('replay');
+  });
+});
+
+
+describe('resolveAppRoute — a STOPPED app is woken through the metering seam', () => {
+  const stopped = (over: Record<string, unknown> = {}) => row({ status: 'stopped', ...over });
+
+  it('given a stopped app, should WAKE it before replaying — a replay alone starts the machine unmetered', async () => {
+    // THE LANDMINE THIS CLOSES: Fly's proxy auto-starts a stopped target the moment
+    // a replay reaches it. A machine started that way opens an awake window nobody
+    // recorded, on a row that still says `stopped` — so the heartbeat never bills it
+    // (it lists `running` rows) and the reaper never stops it (so does it). The app
+    // would run free from its first visit after any idle stop.
+    const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
+
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ findAppBySubdomain: async () => stopped(), wake }),
+    );
+
+    expect(wake).toHaveBeenCalledWith('app_1');
+    expect(decision.kind).toBe('replay');
+  });
+
+  it('given an already RUNNING app, should not wake anything — the hot path stays three reads', async () => {
+    const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
+
+    const decision = await resolveAppRoute('acme.pagespace.app', deps({ wake }));
+
+    expect(decision.kind).toBe('replay');
+    expect(wake).not.toHaveBeenCalled();
+  });
+
+  it('given Fly REFUSED the start, should answer unavailable rather than replay', async () => {
+    // Replaying here would ask Fly's proxy to start the very machine we just
+    // declined to bill for — the unmetered start, by another route.
+    const stampHit = vi.fn(async () => {});
+
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'start_failed', error: 'fly said no' }),
+        stampHit,
+      }),
+    );
+
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(stampHit).not.toHaveBeenCalled();
+  });
+
+  it('given the wake GATE parked the app, should serve the parked page, told apart by reason', async () => {
+    const outOfCredits = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'parked', reason: 'insufficient_credits' }),
+      }),
+    );
+    const dailyCap = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'parked', reason: 'daily_awake_cap_exceeded' }),
+      }),
+    );
+
+    expect({ outOfCredits, dailyCap }).toEqual({
+      outOfCredits: { kind: 'parked', reason: 'out_of_credits' },
+      // A different thing to be told: nobody needs to top anything up, and the app
+      // returns by itself when the counter rolls over.
+      dailyCap: { kind: 'parked', reason: 'daily_cap' },
+    });
+  });
+
+  it.each([
+    ['wake_in_progress', { outcome: 'wake_in_progress' as const }],
+    ['not_wakeable', { outcome: 'refused' as const, reason: 'not_wakeable' as const }],
+  ])('given %s — the cold-start burst — should REPLAY, because the machine is already starting', async (_name, wake) => {
+    // A page asks for a document and then twenty assets, all within milliseconds and
+    // all through this route. One request wins the wake; refusing the other twenty
+    // would serve the unavailable page for every asset of a page that is coming up
+    // perfectly well.
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ findAppBySubdomain: async () => stopped(), wake: async () => wake }),
+    );
+
+    expect(decision.kind).toBe('replay');
+  });
+
+  it('given the row vanished under the wake, should answer no_such_app', async () => {
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'refused', reason: 'not_found' }),
+      }),
+    );
+
+    expect(decision).toEqual({ kind: 'not_found', reason: 'no_such_app' });
+  });
+
+  it('given an unresolvable payer, should refuse rather than start a machine nobody pays for', async () => {
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({
+        findAppBySubdomain: async () => stopped(),
+        wake: async () => ({ outcome: 'refused', reason: 'unresolved_payer' }),
+      }),
+    );
+
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+  });
+
+  it('given an insolvent payer, should never reach the wake at all', async () => {
+    // The router's own balance read refuses first, so a bankrupt app costs one
+    // indexed read and never a Fly call.
+    const wake = vi.fn(async () => ({ outcome: 'woken' as const, app: {} as never }));
+
+    const decision = await resolveAppRoute(
+      'acme.pagespace.app',
+      deps({ findAppBySubdomain: async () => stopped(), hasSpendableBalance: async () => false, wake }),
+    );
+
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(wake).not.toHaveBeenCalled();
   });
 });

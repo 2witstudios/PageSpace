@@ -149,13 +149,22 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   },
 
   /**
-   * The PUBLISHED-APP row source — every app's rootfs, whatever its status.
+   * The PUBLISHED-APP row source — every METERED app's rootfs, whatever its status.
    *
    * No liveness predicate, unlike the two Sprite sources: their filter exists
    * because a torn-down Sprite holds no filesystem, whereas a published app holds
    * its image from the moment a build pins one until the row is destroyed.
    * `destroying` rows are the one exclusion — their Fly app is being killed, and
    * billing a resource we are actively removing bills for our own teardown latency.
+   *
+   * DEDICATED APPS ARE EXCLUDED, for the same reason the awake meter excludes them:
+   * that tier buys a FLAT MONTHLY PRICE, and draining credits for its rootfs
+   * alongside it would charge the customer twice for one machine. The flat price
+   * absorbs the rootfs cost comfortably — it is derived from CPU and memory at
+   * 1.5x the Sprites rate table, which for an always-on guest is orders of
+   * magnitude above the $0.15/GB-month the image actually costs. Filtering here
+   * rather than skipping inside the loop keeps the meter's counts an honest tally
+   * of what it is responsible for.
    *
    * `imageSizeMeasuredAt` is NOT NULL exactly when `imageSizeBytes` is (a CHECK
    * constraint), so the never-measured branch here means precisely "no build has
@@ -172,7 +181,7 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
         measuredAt: publishedApps.imageSizeMeasuredAt,
       })
       .from(publishedApps)
-      .where(ne(publishedApps.status, 'destroying'));
+      .where(and(ne(publishedApps.status, 'destroying'), eq(publishedApps.tier, 'metered')));
   },
 
   lookupDriveOwnerId,

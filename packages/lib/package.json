@@ -603,6 +603,16 @@
       "import": "./dist/services/app-hosting/provisioner-core.js",
       "require": "./dist/services/app-hosting/provisioner-core.js"
     },
+    "./services/app-hosting/dedicated-tier": {
+      "types": "./dist/services/app-hosting/dedicated-tier.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier.js",
+      "require": "./dist/services/app-hosting/dedicated-tier.js"
+    },
+    "./services/app-hosting/dedicated-tier-service": {
+      "types": "./dist/services/app-hosting/dedicated-tier-service.d.ts",
+      "import": "./dist/services/app-hosting/dedicated-tier-service.js",
+      "require": "./dist/services/app-hosting/dedicated-tier-service.js"
+    },
     "./services/app-hosting/provisioner": {
       "types": "./dist/services/app-hosting/provisioner.d.ts",
       "import": "./dist/services/app-hosting/provisioner.js",
@@ -637,6 +647,11 @@
       "types": "./dist/services/app-hosting/awake-reconcile.d.ts",
       "import": "./dist/services/app-hosting/awake-reconcile.js",
       "require": "./dist/services/app-hosting/awake-reconcile.js"
+    },
+    "./services/app-hosting/idle-reaper": {
+      "types": "./dist/services/app-hosting/idle-reaper.d.ts",
+      "import": "./dist/services/app-hosting/idle-reaper.js",
+      "require": "./dist/services/app-hosting/idle-reaper.js"
     },
     "./services/fly/prometheus-client": {
       "types": "./dist/services/fly/prometheus-client.d.ts",
@@ -2262,6 +2277,9 @@
       ],
       "services/fly/flaps-client": [
         "./dist/services/fly/flaps-client.d.ts"
+      ],
+      "services/app-hosting/idle-reaper": [
+        "./dist/services/app-hosting/idle-reaper.d.ts"
       ],
       "services/app-hosting/build-core": [
         "./dist/services/app-hosting/build-core.d.ts"

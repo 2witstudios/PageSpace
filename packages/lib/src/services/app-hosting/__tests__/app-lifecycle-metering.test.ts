@@ -55,8 +55,14 @@ import {
   wakePublishedApp,
   stopPublishedApp,
   closeAppWindowAtBoundary,
+  passThroughSettleLock,
+  serializeUnderMeterLock,
+  DAILY_CAP_PARK_REASON,
+  defaultAppLifecycleMeteringDeps,
   type AppLifecycleMeteringDeps,
 } from '../app-lifecycle-metering';
+import { METER_AWAKE_LOCK_KEY } from '../app-metering-core';
+import { resolveDailyAwakeSecondsCap } from '../app-hosting-env';
 import type { PublishedApp } from '@pagespace/db/schema/published-apps';
 
 const NOW = new Date('2026-08-20T12:00:00.000Z');
@@ -86,12 +92,16 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
   releaseHold: ReturnType<typeof vi.fn>;
   startMachine: ReturnType<typeof vi.fn>;
   stopMachine: ReturnType<typeof vi.fn>;
+  serializeSettle: ReturnType<typeof vi.fn>;
 } {
   const gate = vi.fn(async () => ({ allowed: true, holdId: 'hold-1' }));
   const trackUsage = vi.fn(async () => ({ persisted: true, creditsSettled: true }));
   const releaseHold = vi.fn(async () => {});
   const startMachine = vi.fn(async () => {});
   const stopMachine = vi.fn(async () => {});
+  // Acquires by default. A test that wants the meter to be mid-tick overrides it
+  // with `{ locked: false }`.
+  const serializeSettle = vi.fn(async (fn: () => Promise<unknown>) => ({ locked: true as const, result: await fn() }));
   const deps: AppLifecycleMeteringDeps = {
     isEnabled: () => true,
     billing: {
@@ -103,10 +113,12 @@ function makeDeps(over: Partial<AppLifecycleMeteringDeps> = {}): {
     startMachine,
     stopMachine,
     listMachineEvents: async () => [],
+    serializeSettle: serializeSettle as unknown as AppLifecycleMeteringDeps['serializeSettle'],
+    dailyAwakeCapSeconds: () => 0,
     now: () => NOW,
     ...over,
   };
-  return { deps, gate, trackUsage, releaseHold, startMachine, stopMachine };
+  return { deps, gate, trackUsage, releaseHold, startMachine, stopMachine, serializeSettle };
 }
 
 function seed(row: PublishedApp | null, returning: unknown[][] = []) {
@@ -194,6 +206,60 @@ describe('wakePublishedApp', () => {
     );
   });
 
+  it('does NOT gate a dedicated wake — the flat monthly price is what pays for it', async () => {
+    // Running the gate on a dedicated app is worse than pointless: an exhausted
+    // payer would be refused a wake and then sent to `parkPublishedApp`, which the
+    // status machine correctly refuses (`parked_is_metered_only`) — leaving an app
+    // that is neither woken nor parked, that the customer is paying for.
+    const { deps, gate, startMachine } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    expect(result.outcome).toBe('woken');
+    expect(gate, 'a dedicated wake must not consult the credit gate').not.toHaveBeenCalled();
+    expect(startMachine).toHaveBeenCalled();
+  });
+
+  it('opens NO billing window for a dedicated wake, only a boundary', async () => {
+    // NULL means "no awake window is open", which for a dedicated app is the
+    // literal truth: nothing accrues, nothing settles, nothing closes it. Stamping
+    // it anyway would leave every dedicated row carrying what looks like an
+    // unbilled liability and is not one.
+    const { deps } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    await wakePublishedApp('app-1', deps);
+
+    assert({
+      given: 'a dedicated wake',
+      should: 'stamp the reconcile boundary but no watermark and no hold',
+      actual: mockDb.__state.updateSets[0],
+      expected: {
+        status: 'running',
+        lastWakeAt: NOW,
+        awakeBilledThrough: null,
+        awakeHoldId: null,
+      },
+    });
+  });
+
+  it('does not even resolve a payer for a dedicated wake', async () => {
+    // The payer lookup exists to answer "who is charged", and nobody is charged
+    // per-second here — so an app whose drive is mid-delete still wakes.
+    const resolvePayerId = vi.fn(async () => null);
+    const { deps } = makeDeps();
+    const row = appRow({ tier: 'dedicated' });
+    seed(row, [[{ ...row, status: 'running' }]]);
+
+    const result = await wakePublishedApp('app-1', { ...deps, billing: { ...deps.billing, resolvePayerId } });
+
+    expect(resolvePayerId).not.toHaveBeenCalled();
+    expect(result.outcome).toBe('woken');
+  });
+
   it('given Fly refuses the start, should release the hold and stamp NOTHING', async () => {
     // Nothing started, so nothing may be billed — and a stranded hold would
     // suppress the payer's own spendable balance for its whole TTL.
@@ -237,6 +303,10 @@ describe('wakePublishedApp', () => {
     expect(await wakePublishedApp('app-1', deps)).toEqual({ outcome: 'refused', reason: 'not_found' });
   });
 });
+
+/** A row mid-awake-window: woken an hour before NOW, watermark at the wake. */
+const running = (over: Partial<PublishedApp> = {}) =>
+  appRow({ status: 'running', lastWakeAt: WOKEN_AT, awakeBilledThrough: WOKEN_AT, awakeHoldId: 'hold-1', ...over });
 
 describe('wakePublishedApp — the abandoned tail a failed close left behind', () => {
   // `closeStatusOnly` preserves `awakeBilledThrough` when a final settle does not
@@ -330,8 +400,6 @@ describe('wakePublishedApp — the abandoned tail a failed close left behind', (
 });
 
 describe('stopPublishedApp', () => {
-  const running = () =>
-    appRow({ status: 'running', lastWakeAt: WOKEN_AT, awakeBilledThrough: WOKEN_AT, awakeHoldId: 'hold-1' });
 
   it('settles the tail of the window against the wake’s hold and closes it', async () => {
     const { deps, trackUsage } = makeDeps();
@@ -352,15 +420,29 @@ describe('stopPublishedApp', () => {
       driveId: 'drive-1',
       publishedAppId: 'app-1',
     });
+    const set = mockDb.__state.updateSets[0] as Record<string, unknown>;
     assert({
       given: 'a settled stop',
-      should: 'close the window and stamp the stop boundary',
-      actual: mockDb.__state.updateSets[0],
+      should: 'close the window, stamp the stop boundary and count the day’s seconds',
+      actual: {
+        status: set.status,
+        lastStopAt: set.lastStopAt,
+        awakeBilledThrough: set.awakeBilledThrough,
+        awakeHoldId: set.awakeHoldId,
+        awakeSecondsDay: set.awakeSecondsDay,
+        // The increment itself is a SQL CASE (the day's reset happens in the
+        // statement, never from a read-then-write) — asserting it is present is
+        // what this level can honestly claim; the arithmetic is covered by
+        // `planDailyAwakeCap` and by the integration test.
+        countsSeconds: set.awakeSecondsToday !== undefined,
+      },
       expected: {
         status: 'stopped',
         lastStopAt: NOW,
         awakeBilledThrough: null,
         awakeHoldId: null,
+        awakeSecondsDay: '2026-08-20',
+        countsSeconds: true,
       },
     });
   });
@@ -540,5 +622,314 @@ describe('closeAppWindowAtBoundary', () => {
       lastStopAt: boundary,
       awakeBilledThrough: null,
     });
+  });
+});
+
+
+describe('stopPublishedApp — the awake meter’s advisory lock', () => {
+  it('runs the WHOLE stop under the meter’s lock: the read, the Fly call and the settle', async () => {
+    // The double-charge this prevents is created by the READ — a stop and a
+    // heartbeat pricing the same window from two snapshots — so a lock taken after
+    // the row is read would protect nothing. Asserted by ordering rather than by
+    // presence: the lock must already be held when the first thing happens.
+    const order: string[] = [];
+    const { deps, stopMachine, trackUsage } = makeDeps();
+    stopMachine.mockImplementation(async () => {
+      order.push('fly-stop');
+    });
+    trackUsage.mockImplementation(async () => {
+      order.push('settle');
+    });
+    const serializeSettle: AppLifecycleMeteringDeps['serializeSettle'] = async (fn) => {
+      order.push('lock');
+      const result = await fn();
+      order.push('unlock');
+      return { locked: true, result };
+    };
+    seed(running());
+
+    await stopPublishedApp('app-1', 'idle', { ...deps, serializeSettle });
+
+    assert({
+      given: 'an idle stop',
+      should: 'hold the meter lock across the Fly stop AND the settle',
+      actual: order,
+      expected: ['lock', 'fly-stop', 'settle', 'unlock'],
+    });
+  });
+
+  it('given the lock is held by a heartbeat tick, should answer lock_busy having read NOTHING', async () => {
+    // Nothing was read, stopped or billed, and the row is still `running` — so the
+    // next reaper tick finds it again. That self-correction is why this is a clean
+    // outcome rather than an error.
+    const { deps, stopMachine, trackUsage } = makeDeps({
+      serializeSettle: async () => ({ locked: false }),
+    });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    assert({
+      given: 'the awake meter mid-tick',
+      should: 'refuse as lock_busy without stopping a machine or billing anything',
+      actual: {
+        outcome: result.outcome,
+        flyCalls: stopMachine.mock.calls.length,
+        settles: trackUsage.mock.calls.length,
+        writes: mockDb.__state.updateSets.length,
+      },
+      expected: { outcome: 'lock_busy', flyCalls: 0, settles: 0, writes: 0 },
+    });
+  });
+
+  it('checks the kill switch BEFORE taking the lock — a dark deployment must not touch the pool', async () => {
+    const serializeSettle = vi.fn();
+    const { deps } = makeDeps({
+      isEnabled: () => false,
+      serializeSettle: serializeSettle as unknown as AppLifecycleMeteringDeps['serializeSettle'],
+    });
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    expect(serializeSettle).not.toHaveBeenCalled();
+    expect(result).toEqual({ outcome: 'refused', reason: 'disabled' });
+  });
+
+  it('serializeUnderMeterLock takes the awake meter’s OWN key, not one of its own', async () => {
+    // The binding requirement from PR #2493: a stop-settle and a heartbeat-settle
+    // must serialize. A key of this module's own would satisfy the type and defeat
+    // the entire point.
+    const query = vi.fn(async (text: string, _params?: unknown[]) =>
+      text.includes('pg_try_advisory_lock') ? { rows: [{ acquired: true }] } : { rows: [] },
+    );
+    const release = vi.fn();
+    const run = await serializeUnderMeterLock({ connect: async () => ({ query, release }) })(async () => 'done');
+
+    assert({
+      given: 'a real advisory-lock pool',
+      should: 'lock the meter’s key and run the body',
+      actual: {
+        key: (query.mock.calls[0]?.[1] as string[] | undefined)?.[0],
+        result: run.locked ? run.result : null,
+      },
+      expected: { key: METER_AWAKE_LOCK_KEY, result: 'done' },
+    });
+  });
+
+  it('passThroughSettleLock runs the body immediately — for the caller already inside the lock', async () => {
+    // The heartbeat's park runs inside the meter's locked region. A second
+    // acquisition would not deadlock (the try-lock does not block); it would answer
+    // lock_busy and SKIP the park while the tick reported success.
+    const body = vi.fn(async () => 'ran');
+
+    assert({
+      given: 'a caller that already holds the lock',
+      should: 'run the body without taking anything',
+      actual: await passThroughSettleLock(body),
+      expected: { locked: true, result: 'ran' },
+    });
+  });
+
+  it('the default deps bind the cap resolver and a real serializer', () => {
+    // Every other test in this file injects its own deps, so the object that
+    // actually runs in production is asserted by nothing otherwise.
+    expect(defaultAppLifecycleMeteringDeps.dailyAwakeCapSeconds).toBe(resolveDailyAwakeSecondsCap);
+    expect(typeof defaultAppLifecycleMeteringDeps.serializeSettle).toBe('function');
+  });
+});
+
+describe('the daily awake cap', () => {
+  it('given an app that has spent its budget today, should REFUSE THE WAKE and park it — before Fly is called', async () => {
+    // The same enforcement shape as the credit gate: park, do not start. There is
+    // nothing to claw back from a machine that was never woken.
+    const { deps, startMachine, gate } = makeDeps({ dailyAwakeCapSeconds: () => 43_200 });
+    seed(appRow({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 43_200 }));
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    assert({
+      given: 'a metered app already at its daily budget',
+      should: 'park it without starting a machine or reserving credit',
+      actual: {
+        result,
+        started: startMachine.mock.calls.length,
+        gated: gate.mock.calls.length,
+        status: (mockDb.__state.updateSets[0] as Record<string, unknown>)?.status,
+      },
+      expected: {
+        result: { outcome: 'parked', reason: DAILY_CAP_PARK_REASON },
+        started: 0,
+        gated: 0,
+        status: 'parked',
+      },
+    });
+  });
+
+  it('given YESTERDAY’s counter at the budget, should still wake — a stale counter is not today’s spend', async () => {
+    // The regression: reading a stale counter as today's parks every busy app once
+    // a day, permanently, the morning after it was busy.
+    const { deps, startMachine } = makeDeps({ dailyAwakeCapSeconds: () => 43_200 });
+    seed(appRow({ awakeSecondsDay: '2026-08-19', awakeSecondsToday: 86_400 }), [[appRow({ status: 'running' })]]);
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    expect(startMachine).toHaveBeenCalledWith('pgs-app-1', 'machine-1');
+    expect(result.outcome).toBe('woken');
+  });
+
+  it('given the cap disabled, should never consult the counter at all', async () => {
+    const { deps, startMachine } = makeDeps({ dailyAwakeCapSeconds: () => 0 });
+    seed(appRow({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 999_999 }), [[appRow({ status: 'running' })]]);
+
+    expect((await wakePublishedApp('app-1', deps)).outcome).toBe('woken');
+    expect(startMachine).toHaveBeenCalled();
+  });
+
+  it('a `daily_cap` stop PARKS the app and records why on the row', async () => {
+    // `lastError` is the owner-facing half of the notification: the publish surface
+    // already reads it to answer "why is my app not serving". There is no
+    // NotificationType for this state and adding one is UI work for a later PR.
+    const { deps } = makeDeps();
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'daily_cap', deps);
+
+    assert({
+      given: 'a stop for exceeding the daily budget',
+      should: 'land in parked, carrying the reason',
+      actual: {
+        status: result.outcome === 'stopped' ? result.status : null,
+        set: {
+          status: (mockDb.__state.updateSets[0] as Record<string, unknown>).status,
+          lastError: (mockDb.__state.updateSets[0] as Record<string, unknown>).lastError,
+        },
+      },
+      expected: {
+        status: 'parked',
+        set: { status: 'parked', lastError: `parked: ${DAILY_CAP_PARK_REASON}` },
+      },
+    });
+  });
+
+  it('an `idle` stop leaves the app STOPPED with no error — idle is not enforcement', async () => {
+    // The difference is load-bearing downstream: a stopped app wakes on the next
+    // request and a parked one does not.
+    const { deps } = makeDeps();
+    seed(running());
+
+    const result = await stopPublishedApp('app-1', 'idle', deps);
+
+    assert({
+      given: 'an idle stop',
+      should: 'stop the app without parking it or writing an error',
+      actual: {
+        status: result.outcome === 'stopped' ? result.status : null,
+        lastError: (mockDb.__state.updateSets[0] as Record<string, unknown>).lastError,
+      },
+      expected: { status: 'stopped', lastError: undefined },
+    });
+  });
+
+  it('a zero-second settle does NOT touch the day counter', async () => {
+    // Advancing `awakeSecondsDay` on a settle that billed nothing would roll a row
+    // onto a day it spent no seconds in — and the CHECK forbids a counter with no
+    // day, so the pair has to move together or not at all.
+    const { deps } = makeDeps();
+    // A window opened at NOW: no elapsed time, so `planAwakeSettle` skips.
+    seed(running({ awakeBilledThrough: NOW }));
+
+    await stopPublishedApp('app-1', 'idle', deps);
+
+    const set = mockDb.__state.updateSets[0] as Record<string, unknown>;
+    assert({
+      given: 'a stop with nothing to bill',
+      should: 'close the window without writing a day or a count',
+      actual: { day: set.awakeSecondsDay, seconds: set.awakeSecondsToday, status: set.status },
+      expected: { day: undefined, seconds: undefined, status: 'stopped' },
+    });
+  });
+});
+
+describe('the wake gate’s in-flight bound', () => {
+  it('given the gate refuses on CONCURRENCY, should park and never start a machine', async () => {
+    // `defaultAppBillingDeps.gate` passes `maxInFlight: PUBLISHED_APP_MAX_INFLIGHT`
+    // to `canConsumeAI` (asserted in app-billing.test.ts); this is the other half —
+    // the wake honours that refusal exactly as it honours an empty balance, so a
+    // wake storm against one payer cannot fan out into an unbounded number of
+    // concurrently-reserved machines.
+    const { deps, startMachine } = makeDeps();
+    deps.billing.gate = async () => ({ allowed: false, reason: 'max_in_flight' });
+    seed(appRow());
+
+    const result = await wakePublishedApp('app-1', deps);
+
+    assert({
+      given: 'a payer already at the in-flight reservation cap',
+      should: 'park the app with the gate’s own reason and start nothing',
+      actual: { result, started: startMachine.mock.calls.length },
+      expected: { result: { outcome: 'parked', reason: 'max_in_flight' }, started: 0 },
+    });
+  });
+});
+
+
+describe('stopPublishedApp — the idle re-check under the lock', () => {
+  it('given the app was SERVED after the reaper’s scan, should refuse and stop nothing', async () => {
+    // The scan and the stop can be minutes apart on a large fleet, and the router
+    // stamps `lastHitAt` in between. Without the re-check, a machine that took a
+    // visitor thirty seconds ago is stopped on the strength of a snapshot that
+    // predates them.
+    const { deps, stopMachine, trackUsage } = makeDeps();
+    const cutoff = new Date(NOW.getTime() - 900_000);
+    seed(running({ lastHitAt: new Date(NOW.getTime() - 30_000) }));
+
+    const result = await stopPublishedApp('app-1', 'idle', deps, { idleCutoff: cutoff });
+
+    assert({
+      given: 'a hit stamped after the cutoff this stop was asked about',
+      should: 'refuse as became_active without calling Fly or billing anything',
+      actual: {
+        result,
+        flyCalls: stopMachine.mock.calls.length,
+        settles: trackUsage.mock.calls.length,
+      },
+      expected: { result: { outcome: 'refused', reason: 'became_active' }, flyCalls: 0, settles: 0 },
+    });
+  });
+
+  it('given the row is still quiet, should stop it', async () => {
+    const { deps, stopMachine } = makeDeps();
+    seed(running({ lastHitAt: new Date(NOW.getTime() - 1_800_000) }));
+
+    const result = await stopPublishedApp('app-1', 'idle', deps, {
+      idleCutoff: new Date(NOW.getTime() - 900_000),
+    });
+
+    expect(result.outcome).toBe('stopped');
+    expect(stopMachine).toHaveBeenCalled();
+  });
+
+  it('re-checks the LATER of the two stamps, so a fresh WAKE also saves the machine', async () => {
+    // A wake that landed after the scan means the app is being served right now —
+    // the wake precedes the request that caused it.
+    const { deps } = makeDeps();
+    seed(running({ lastHitAt: null, lastWakeAt: new Date(NOW.getTime() - 10_000) }));
+
+    expect(await stopPublishedApp('app-1', 'idle', deps, { idleCutoff: new Date(NOW.getTime() - 900_000) })).toEqual({
+      outcome: 'refused',
+      reason: 'became_active',
+    });
+  });
+
+  it('given NO cutoff (an operator stop, an insolvency park), should never consult recency', async () => {
+    // Those are decisions about the app, not about how busy it is.
+    const { deps, stopMachine } = makeDeps();
+    seed(running({ lastHitAt: NOW }));
+
+    const result = await stopPublishedApp('app-1', 'operator', deps);
+
+    expect(result.outcome).toBe('stopped');
+    expect(stopMachine).toHaveBeenCalled();
   });
 });

@@ -27,6 +27,7 @@
  */
 
 import {
+  MACHINE_MARKUP_BPS,
   MACHINE_RATES,
   MACHINE_ASSUMED_CPUS,
   MACHINE_ASSUMED_MEMORY_GB,
@@ -95,4 +96,57 @@ export function calculateMachineCostDollars(quantity: MachineUsageQuantity): num
 export function calculateMachineStorageCostDollars(gbMonths: number): number {
   if (typeof gbMonths !== 'number' || !Number.isFinite(gbMonths) || gbMonths <= 0) return 0;
   return Number((gbMonths * MACHINE_STORAGE_USD_PER_GB_MONTH).toFixed(6));
+}
+
+/**
+ * Hours in a billing month, for turning a per-hour substrate rate into a flat
+ * monthly figure. 730 = 8760/12, the conventional average — NOT the length of
+ * any particular month.
+ *
+ * Deliberately not env-overridable: it is a unit conversion, not a price. Every
+ * knob that should move a price ({@link MACHINE_RATES}, {@link MACHINE_MARKUP_BPS})
+ * already is one, and a second, subtler lever on the same number would let a
+ * markup floor be evaded without touching the constant that names it.
+ */
+export const HOURS_PER_BILLING_MONTH = 730;
+
+/**
+ * The FLOOR price, in whole cents per month, for an always-on machine of this
+ * shape — the dedicated (flat monthly SKU) tier's cost basis.
+ *
+ * WHAT THIS IS FOR, because it is not a list price. The dedicated tier sells a
+ * machine that is awake all 730 hours, so its substrate cost is knowable in
+ * advance rather than metered — and the founder-set rule that Machine billing
+ * never falls below 1.5x real substrate cost ({@link MACHINE_MARKUP_BPS}, floored
+ * by `MACHINE_MARKUP_FLOOR_BPS}) has to bind on that SKU too. A flat price is set
+ * in Stripe by a human, so the only way for that floor to bind is for the code to
+ * REFUSE a price below it. This function is that threshold; the list price is
+ * whatever the operator configured in Stripe, and the guard only stops us selling
+ * an always-on machine for less than it costs us x1.5.
+ *
+ * Rounded UP to the cent: rounding a floor down would let a price a fraction of a
+ * cent under it pass a check whose entire purpose is that nothing passes under it.
+ *
+ * READ THE NUMBER IT PRODUCES BEFORE TRUSTING IT AS ECONOMICS. `MACHINE_RATES` is
+ * the published SPRITES rate for bursty sandbox runtime (active CPU-hour $0.07 +
+ * mem GB-hour $0.04375). Applied across a whole month it prices `shared-cpu-1x-512`
+ * at ~$100/month against a real Fly cost of roughly $3/month for the same guest.
+ * Reusing it here is the founder-economics interim decision (one rate table for
+ * every machine, no second pricing surface to keep in sync) and it is deliberately
+ * conservative in the safe direction — a floor set too high refuses a sale, a floor
+ * set too low sells at a loss. When hosting gets its own rate table, this function
+ * is the one place that changes.
+ *
+ * Returns 0 for a malformed shape rather than throwing or inventing a number: a
+ * zero floor makes the caller's guard pass, which is correct, because a shape we
+ * cannot price is one this function has no opinion about — the CALLER refuses an
+ * unknown preset (see `guestForPreset`), and a floor is not the place to relitigate
+ * that.
+ */
+export function calculateDedicatedMonthlyFloorCents(shape: MachineShape): number {
+  const { cpus, memoryGB } = shape;
+  if (!Number.isFinite(cpus) || !Number.isFinite(memoryGB) || cpus < 0 || memoryGB < 0) return 0;
+  const usdPerHour = cpus * MACHINE_RATES.usdPerCpuHour + memoryGB * MACHINE_RATES.usdPerMemGbHour;
+  const substrateCents = usdPerHour * HOURS_PER_BILLING_MONTH * 100;
+  return Math.ceil((substrateCents * MACHINE_MARKUP_BPS) / 10000);
 }

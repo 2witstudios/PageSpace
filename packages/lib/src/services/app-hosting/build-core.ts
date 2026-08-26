@@ -15,6 +15,8 @@
  */
 
 import type { MachineConfig, MachineGuest } from '../fly/flaps-client';
+import type { PublishedAppTier } from '@pagespace/db/schema/published-apps';
+import { findGuestPreset, minMachinesRunningFor } from './dedicated-tier';
 import type { PublishedAppStatus } from '@pagespace/db/schema/published-apps';
 
 /**
@@ -101,14 +103,24 @@ export function machineNameForDigest(digest: string): string {
 }
 
 /**
- * The guest sizing for a preset. Returns null for an unknown preset rather than
- * throwing or defaulting — defaulting would silently create a machine of a size
- * the unit-economics guardrail never approved, and the `published_apps`
- * `guestPreset` CHECK exists precisely so that set stays deliberate.
+ * The guest sizing for a preset, read from the one catalogue
+ * ({@link PUBLISHED_APP_GUEST_PRESETS}) that also drives pricing and the
+ * `published_apps_guest_preset_allowed` CHECK.
+ *
+ * Returns null for an unknown preset rather than throwing or defaulting —
+ * defaulting would silently create a machine of a size the unit-economics
+ * guardrail never approved, and would do it with a name that says otherwise.
+ *
+ * `memory_mb` is derived from the catalogue's GB figure and rounded, because the
+ * catalogue is denominated in GB (that is what the rate table prices) while Fly's
+ * API takes megabytes. Every catalogue entry is a whole number of MB today; the
+ * rounding is there so that a future half-measure lands on an integer Fly will
+ * accept instead of being rejected as a malformed guest.
  */
 export function guestForPreset(preset: string): MachineGuest | null {
-  if (preset === 'shared-cpu-1x-512') return { cpu_kind: 'shared', cpus: 1, memory_mb: 512 };
-  return null;
+  const entry = findGuestPreset(preset);
+  if (entry === null) return null;
+  return { cpu_kind: 'shared', cpus: entry.cpus, memory_mb: Math.round(entry.memoryGB * 1024) };
 }
 
 export interface BuildMachineConfigInput {
@@ -116,6 +128,15 @@ export interface BuildMachineConfigInput {
   digest: string;
   guestPreset: string;
   publishedAppId: string;
+  /**
+   * The app's billing tier — the ONLY thing that differs between the two
+   * products' machine configs, and it differs in exactly one field
+   * ({@link minMachinesRunningFor}). Required rather than defaulted: a config
+   * built without knowing the tier would build the METERED shape, which for a
+   * dedicated app means a machine that scales to zero while the customer pays a
+   * flat monthly price to keep it up — a silent failure of the whole SKU.
+   */
+  tier: PublishedAppTier;
   /** Extra environment for the app process. `PORT` is set by us and cannot be overridden. */
   env?: Record<string, string>;
 }
@@ -136,6 +157,13 @@ export interface BuildMachineConfigInput {
  * scaled-to-zero app at all), but only our own idle reaper stops it, so the
  * stop timestamp we bill against is an API call we made rather than a behaviour we
  * inferred.
+ *
+ * `min_machines_running` is the ONLY field the tier changes. For a metered app it
+ * is 0 — scale-to-zero is the product, and an app that never sleeps never stops
+ * costing credits. For a dedicated app it is 1: Fly's proxy keeps one machine up,
+ * which is what "always on" is bought for. `autostart` stays true on both, because
+ * it is also what lets the proxy recover a dedicated machine that Fly stopped for
+ * its own reasons (a host migration, an OOM) without waiting for our next tick.
  */
 export function buildMachineConfig(input: BuildMachineConfigInput): MachineConfig | null {
   const guest = guestForPreset(input.guestPreset);
@@ -161,7 +189,7 @@ export function buildMachineConfig(input: BuildMachineConfigInput): MachineConfi
         ],
         autostart: true,
         autostop: 'off',
-        min_machines_running: 0,
+        min_machines_running: minMachinesRunningFor(input.tier),
       },
     ],
     metadata: {
