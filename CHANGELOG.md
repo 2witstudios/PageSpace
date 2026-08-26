@@ -16,9 +16,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   token was replaced — is deactivated on the spot rather than retried forever, matching how expired
   Apple tokens are already handled. That only happens when Firebase says something is wrong with
   *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
-  the request as a whole is retried instead: a message the server built badly, or a credential
-  pointing at the wrong Firebase project, would otherwise unregister every Android phone at once
-  and leave them dark until each app was next opened. If the Firebase credential is missing or
+  the request as a whole is retried instead — and is never counted against the phone either, no
+  matter how many times it happens: a message the server built badly, or a credential pointing at
+  the wrong Firebase project, would otherwise unregister every Android phone at once and leave
+  them dark until each app was next opened. If the Firebase credential is missing or
   malformed the Android send fails with a message that says exactly which field is wrong, every
   other device on the account still receives the notification, and no phone is penalised for a
   problem on the server's side.
