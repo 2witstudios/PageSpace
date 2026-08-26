@@ -790,8 +790,22 @@ export function parseConditionalRules(value: unknown): ConditionalRule[] | undef
   if (Array.isArray(value)) {
     entries = value;
   } else if (isObject(value)) {
-    entries = Object.keys(value)
-      .slice(0, MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED)
+    // `for...in` with an early break, not `Object.keys(value).slice(...)`:
+    // `Object.keys` has no way to stop partway through — it always
+    // enumerates and allocates an array for every own key first, so a
+    // `.slice()` afterward bounds everything downstream of it but not the
+    // enumeration itself. `for...in` visits keys one at a time and can stop
+    // as soon as the bound is reached. It also walks inherited enumerable
+    // properties, unlike `Object.keys`, so `hasOwnProperty` filters those
+    // out to keep the same own-keys-only semantics.
+    const keys: string[] = [];
+    for (const key in value) {
+      if (!Object.prototype.hasOwnProperty.call(value, key)) continue;
+      keys.push(key);
+      if (keys.length >= MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED) break;
+    }
+
+    entries = keys
       .map((key) => ({ key, index: Number(key) }))
       .filter(({ index }) => Number.isFinite(index))
       .sort((a, b) => a.index - b.index)

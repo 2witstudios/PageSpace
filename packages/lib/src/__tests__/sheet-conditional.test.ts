@@ -670,13 +670,16 @@ describe('parseConditionalRules', () => {
     // The array path is bounded by collecting incrementally, but the
     // TOML-bag map path (`{"0": rule, "1": rule, ...}`) has to sort every
     // candidate key before it can even start parsing, so "stop once enough
-    // valid ones are found" isn't available for this branch specifically —
-    // `Object.keys` must always fully enumerate. What CAN be (and is)
-    // bounded is everything after that: a Proxy counts property-value reads
-    // on the stored object (the step that would otherwise touch all of a
-    // huge object's rule payloads, not just the ones that make the cut) to
-    // prove the fix actually stops those at the bound rather than merely
-    // trimming the final output.
+    // valid ones are found" isn't available for this branch specifically.
+    // Key enumeration itself is bounded with a `for...in` loop that breaks
+    // once `MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED` keys are collected —
+    // unlike `Object.keys`, which always materializes every own key into an
+    // array before anything else can run. A `Proxy` can't observe that part
+    // (its `ownKeys` trap must hand back the complete key list atomically
+    // either way), but it can observe the step after: property-value reads
+    // on the stored object, which is what would otherwise touch every one
+    // of a huge object's rule payloads rather than just the ones that make
+    // the cut.
     const raw: Record<string, unknown> = {};
     for (let i = 0; i < MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 3; i++) {
       raw[String(i)] = rule(`r${i}`);
@@ -697,6 +700,36 @@ describe('parseConditionalRules', () => {
     // Bounded by MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED, not by the object's
     // real size (3x larger here).
     expect(valueReads).toBeLessThan(MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 2);
+  });
+
+  it('collects keys via bounded iteration rather than materializing the full key list first', () => {
+    // A plain object, not a Proxy: exercises the real `for...in` early break
+    // this fix relies on, rather than downstream effects of it. Correctness
+    // check — the ordering/cap guarantees hold the same way for a genuinely
+    // large object as they do for the smaller ones above.
+    const raw: Record<string, unknown> = {};
+    const total = MAX_CONDITIONAL_RULE_MAP_KEYS_SCANNED * 5;
+    for (let i = 0; i < total; i++) {
+      raw[String(i)] = rule(`r${i}`);
+    }
+
+    const parsed = parseConditionalRules(raw);
+
+    expect(parsed).toHaveLength(MAX_CONDITIONAL_RULES);
+    expect(parsed?.[0].id).toBe('r0');
+    expect(parsed?.[parsed.length - 1].id).toBe(`r${MAX_CONDITIONAL_RULES - 1}`);
+  });
+
+  it('ignores an inherited enumerable property, matching Object.keys semantics', () => {
+    // `for...in` walks the prototype chain; `Object.keys` does not. The
+    // `hasOwnProperty` filter is what keeps the two equivalent here.
+    const proto = { '99': rule('inherited') };
+    const own = Object.create(proto);
+    own['0'] = rule('own');
+
+    const parsed = parseConditionalRules(own);
+
+    expect(parsed?.map((r) => r.id)).toEqual(['own']);
   });
 });
 
