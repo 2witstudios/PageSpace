@@ -543,6 +543,10 @@ function toFcmDataRecord(data: Record<string, unknown> | undefined): Record<stri
   return record;
 }
 
+// `type.googleapis.com/google.firebase.fcm.v1.FcmError` in practice; matched by
+// suffix so a version bump in the type URL does not silently stop matching.
+const FCM_ERROR_DETAIL_TYPE_SUFFIX = '.FcmError';
+
 interface FcmError {
   code: string;
   message: string;
@@ -585,10 +589,6 @@ function extractFcmError(body: string): FcmError {
   const status = typeof error.status === 'string' ? error.status : 'UNKNOWN';
   return { code: status, message, fromFcmDetail: false };
 }
-
-// `type.googleapis.com/google.firebase.fcm.v1.FcmError` in practice; matched by
-// suffix so a version bump in the type URL does not silently stop matching.
-const FCM_ERROR_DETAIL_TYPE_SUFFIX = '.FcmError';
 
 // Codes that mean "this token will never work again" — the dispatch loop
 // deactivates the row, mirroring the APNs BadDeviceToken/Unregistered handling.
