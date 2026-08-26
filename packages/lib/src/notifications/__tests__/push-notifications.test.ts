@@ -1411,6 +1411,41 @@ describe('sendToFcm (Android)', () => {
   // Symmetric to the @type guard on the FcmError branch: fieldViolations only
   // carry a token verdict when they arrive on a BadRequest detail. A different
   // detail type carrying the same shape must not be able to impersonate one.
+  // The detail-type guards match on a SUFFIX, not a substring. A type that
+  // merely contains the marker somewhere in the middle is a different message
+  // type and must not be read as a verdict about the token — otherwise the
+  // impersonation guard is only as strong as a substring search.
+  it('requires the detail type to END with the marker, not merely contain it', async () => {
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    const { setFn } = setupUpdateChain();
+    installFetchStub({
+      send: () =>
+        fakeResponse(400, JSON.stringify({
+          error: {
+            message: 'nope',
+            status: 'INVALID_ARGUMENT',
+            details: [
+              { '@type': 'type.googleapis.com/x.FcmError.Wrapper', errorCode: 'UNREGISTERED' },
+              {
+                '@type': 'type.googleapis.com/x.BadRequest.Envelope',
+                fieldViolations: [{ field: 'message.token', description: 'not really' }],
+              },
+            ],
+          },
+        })),
+    });
+
+    const result = await sendPushNotification('user-1', payload);
+
+    // Falls back to the coarse status, and costs the device nothing.
+    expect(result.errors[0]).toContain('INVALID_ARGUMENT');
+    expect(setFn).not.toHaveBeenCalledWith({ isActive: false });
+    expect(setFn).toHaveBeenCalledWith(
+      expect.objectContaining({ failedAttempts: '1', isActive: true })
+    );
+  });
+
   it('ignores fieldViolations that arrive on a detail other than BadRequest', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
