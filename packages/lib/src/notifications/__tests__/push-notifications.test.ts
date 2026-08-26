@@ -1055,6 +1055,25 @@ describe('sendToFcm (Android)', () => {
     expect('dropped' in data).toBe(false);
   });
 
+  it('does not let caller metadata redefine a reserved data key', async () => {
+    // createNotification spreads arbitrary `metadata` into `data`.
+    process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
+    vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);
+    setupUpdateChain();
+    const calls = installFetchStub();
+
+    await sendPushNotification('user-1', {
+      silent: true,
+      badge: 2,
+      data: { silent: 'false', badge: '999', notificationId: 'n1' },
+    });
+
+    const data = sentMessage(calls).data as Record<string, string>;
+    expect(data.silent).toBe('true');
+    expect(data.badge).toBe('2');
+    expect(data.notificationId).toBe('n1');
+  });
+
   it('deactivates the token when FCM reports UNREGISTERED', async () => {
     process.env.FCM_SERVICE_ACCOUNT_JSON = serviceAccountJson();
     vi.mocked(db.query.pushNotificationTokens.findMany).mockResolvedValue([androidToken()] as never);

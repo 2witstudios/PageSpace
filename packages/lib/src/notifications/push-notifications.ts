@@ -628,6 +628,9 @@ async function sendToFcm(
   try {
     const { accessToken, projectId } = await getFcmAccessToken();
 
+    // Caller data first, then the first-class payload fields — createNotification
+    // spreads arbitrary `metadata` into `data`, and a key that happens to be
+    // named `badge` or `silent` must not be able to redefine what we send.
     const data = toFcmDataRecord(payload.data);
     if (payload.badge !== undefined) data.badge = String(payload.badge);
     if (payload.threadId) data.threadId = payload.threadId;
