@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectSepa
 import { Switch } from '@/components/ui/switch';
 import { Loader2, Bot, FolderTree, Shield, Copy, Check, Code2, Wrench, TerminalSquare, Cable, ChevronLeft } from 'lucide-react';
 import { toast } from 'sonner';
+import { useSWRConfig } from 'swr';
 import { useForm, useFormState, Controller } from 'react-hook-form';
 import { patch, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import Link from 'next/link';
@@ -200,9 +201,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const { membership, membershipUserRole, driveRoles, updateRole, isSaving: membershipSaving } =
     useAgentMembership(driveId, pageId);
 
-  // Same shared SWR key the spawn palette and sidebar use — an env created
-  // from either surface shows up here without a second fetch.
-  const { envs: driveEnvOptions, isLoading: driveEnvOptionsLoading } = useDriveEnvs(driveId);
+  const { mutate: globalMutate } = useSWRConfig();
 
   const handleMembershipRoleChange = useCallback(async (value: string) => {
     try {
@@ -235,6 +234,23 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       defaultEnvId: config?.defaultEnvId ?? null,
     }
   });
+
+  // Read early (ahead of the sandbox tool-picker's own use of it further
+  // down) so the env fetch just below can gate on the CURRENT switch value —
+  // an agent whose Sandbox is off has no use for an environment list, and a
+  // watch-driven toggle updates this on the same render the switch flips.
+  const sandboxEnabled = watch('sandboxEnabled', false);
+  // Same shared SWR key the spawn palette and sidebar use — an env created
+  // from either surface shows up here without a second fetch. Gated on
+  // `sandboxEnabled` (same as `AgentsSidebar`'s `DriveGroupRows` gates on
+  // `showEnvironments`) so opening Settings for a sandbox-less agent does not
+  // fire a request whose result the disabled picker below never shows
+  // (review — general-purpose self-review, PR #2513).
+  const {
+    envs: driveEnvOptions,
+    isLoading: driveEnvOptionsLoading,
+    error: driveEnvOptionsError,
+  } = useDriveEnvs(driveId, { enabled: sandboxEnabled });
 
   // Read early (moved up from its original spot near the useEditingStore
   // registration below) so the reset effect right below can gate on it.
@@ -470,6 +486,21 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       // overlapping sibling save has also had a chance to land (review
       // finding — chatgpt-codex-connector on PR #2299, round 23).
       onConfigRevalidate();
+      // The spawn palette's "Default" pre-highlight reads `defaultEnvId` off
+      // a SEPARATE cache (`usePageAgents`'s multi-drive listing, keyed on its
+      // own `/api/ai/page-agents/multi-drive` URL) with a 60s refresh
+      // interval and no link to this component's `useAgentConfig` cache —
+      // without this, a save here could sit stale in the palette for up to a
+      // minute despite Settings reporting success immediately (review —
+      // general-purpose self-review, PR #2513). Match-by-prefix rather than
+      // one exact key: the listing's URL carries query params
+      // (`groupByDrive`, `includeSystemPrompt`) this component has no reason
+      // to know the exact combination of.
+      if (dirtyFields.defaultEnvId) {
+        void globalMutate(
+          (key) => typeof key === 'string' && key.startsWith('/api/ai/page-agents/multi-drive'),
+        );
+      }
       // Called directly here rather than relying solely on the
       // onDirtyChange mirror effect below: that effect only re-fires once
       // formIsDirty/providerOrModelTouched actually change value across a
@@ -489,7 +520,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       setIsSaving(false);
       onSavingChange?.(false);
     }
-  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onDirtyChange, onSaved, dirtyFields]);
+  }, [pageId, config, onConfigUpdate, onConfigRevalidate, selectedProvider, selectedModel, onSavingChange, onDirtyChange, onSaved, dirtyFields, globalMutate]);
 
   const handleProviderSelectChange = useCallback(
     (provider: string) => {
@@ -554,8 +585,9 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   // The sandbox switch gates the sandbox tool families out of the Default
   // Tools list (the old machineAccess/MACHINE_TOOL_NAMES behaviour). The
   // request-time filter in tool-filtering.ts is the real gate; this keeps the
-  // picker from offering tools the agent will never receive.
-  const sandboxEnabled = watch('sandboxEnabled', false);
+  // picker from offering tools the agent will never receive. (`sandboxEnabled`
+  // itself is declared once, near `useForm` above, so the env-fetch gate and
+  // this tool-list gate share one live value.)
 
   const visibleTools = useMemo(
     () =>
@@ -1010,7 +1042,12 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
                           {env.name}
                         </SelectItem>
                       ))}
-                      {!driveEnvOptionsLoading && driveEnvOptions.length === 0 && (
+                      {!driveEnvOptionsLoading && driveEnvOptionsError != null && (
+                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                          Could not load this drive&apos;s environments.
+                        </div>
+                      )}
+                      {!driveEnvOptionsLoading && driveEnvOptionsError == null && driveEnvOptions.length === 0 && (
                         <div className="px-2 py-1.5 text-xs text-muted-foreground">
                           No environments in this drive yet — create one from the Agents sidebar.
                         </div>

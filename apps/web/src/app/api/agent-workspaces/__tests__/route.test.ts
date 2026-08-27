@@ -559,6 +559,13 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1' }));
   });
 
+  it("falls back to the claimed conversation's agent's own defaultEnvId, same as a direct mint (review — chatgpt-codex-connector)", async () => {
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-default' }));
+  });
+
   it('refuses a body driveId that disagrees with the claimed page conversation\'s own agent drive', async () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1', driveId: 'drive-other' });
     expect(response.status).toBe(400);

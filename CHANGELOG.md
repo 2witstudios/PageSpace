@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
+  an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
+  switch. Pick one of the drive's persistent Environments (the same ones the Agents screen's spawn
+  palette already offers) and every new session started for that agent pre-selects it — visibly, with
+  a "Default" badge — instead of the ordinary ephemeral sandbox. It is a default, not a lock: "New
+  sandbox" and every other environment stay one arrow-key away, and any caller (the palette, a
+  claimed conversation, a programmatic spawn) that names an environment explicitly is always honored
+  over the agent's own preference. The default only ever applies while the agent's Sandbox switch is
+  on — turning it off leaves a previously chosen environment stored but inert, so nothing gets
+  spawned into a persistent, shared environment behind a switch that reads as off. Moving the agent's
+  page to a different drive clears the default automatically, since an Environment belongs to the
+  drive it was created in.
+
 - **The server can send an Android notification** — it has always accepted and stored Android push
   tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
   now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app

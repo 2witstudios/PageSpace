@@ -3,7 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
-import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
@@ -266,21 +266,19 @@ export async function PATCH(
       if (defaultEnvId === null) {
         updateData.defaultEnvId = null;
       } else {
-        const [env] = await db
-          .select({ id: driveEnvs.id, driveId: driveEnvs.driveId })
-          .from(driveEnvs)
-          .where(eq(driveEnvs.id, defaultEnvId))
-          .limit(1);
+        // `resolveEnvInDrive` collapses "no such env" and "exists but belongs
+        // to a different drive" into a single null — deliberately, per its
+        // own doc comment, so this route cannot become the oracle a caller
+        // uses to enumerate env ids across drives it can't see (review —
+        // general-purpose self-review, PR #2513: the earlier hand-rolled
+        // version split these into 404 vs 400, reopening exactly the leak
+        // `resolveEnvInDrive` and the spawn route's collapsed `env_not_found`
+        // both exist to close).
+        const env = await resolveEnvInDrive(defaultEnvId, page.driveId);
         if (!env) {
           return NextResponse.json(
             { error: 'Environment not found' },
             { status: 404 }
-          );
-        }
-        if (env.driveId !== page.driveId) {
-          return NextResponse.json(
-            { error: 'That environment belongs to a different drive than this agent' },
-            { status: 400 }
           );
         }
         updateData.defaultEnvId = defaultEnvId;

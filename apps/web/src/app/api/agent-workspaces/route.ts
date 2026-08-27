@@ -25,7 +25,7 @@
 
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError, canPrincipalViewPage } from '@/lib/auth';
-import { conversationRepository } from '@/lib/repositories/conversation-repository';
+import { conversationRepository, type AiAgent } from '@/lib/repositories/conversation-repository';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createId } from '@paralleldrive/cuid2';
@@ -225,6 +225,41 @@ export async function GET(request: Request) {
  * row-to-be — drive membership + code-execution for a drive session, owner +
  * code-execution for a global one.
  */
+
+/**
+ * Resolve the effective `envId` for a spawn/claim targeting a page agent —
+ * shared by the direct-mint branch and the `firstThing: 'claim'` branch below,
+ * which each independently look up the same kind of agent via
+ * `conversationRepository.getAiAgent`.
+ *
+ * Falls back to the agent's own `defaultEnvId` when the caller truly said
+ * nothing (the field is OMITTED, not sent as explicit `null` — see the
+ * comment on `envIdWasProvided` above) — "didn't specify" means "use my
+ * default," not "force ephemeral." An explicit `envId` in the request
+ * (including explicit `null`, the palette's own ephemeral override) always
+ * wins; this only fires when the caller sent nothing, so every caller that
+ * resolves an agent through this route (palette, claim, any future MCP/API
+ * tool) gets the agent's Settings-screen default without having to know it
+ * exists.
+ *
+ * Also gated on the agent's OWN `sandboxEnabled`, live — not just at the
+ * moment the default was assigned (review — chatgpt-codex-connector, PR
+ * #2513): a stored `defaultEnvId` is deliberately inert data while Sandbox is
+ * off (see the settings-route comment on the same field), and a spawn-time
+ * fallback that ignored the current switch would silently place a session in
+ * that persistent environment the instant the field exists, regardless of
+ * whether the owner ever re-enabled Sandbox.
+ */
+function applyAgentDefaultEnv(
+  envId: string | null,
+  envIdWasProvided: boolean,
+  agent: Pick<AiAgent, 'sandboxEnabled' | 'defaultEnvId'>,
+): string | null {
+  if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
+    return agent.defaultEnvId;
+  }
+  return envId;
+}
 export async function POST(request: Request) {
   const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
   if (isAuthError(auth)) return auth.error;
@@ -369,6 +404,12 @@ export async function POST(request: Request) {
       const denied = await denyIfCannotViewAgent(request, auth, row.contextId);
       if (denied) return denied;
       agentTitle = agent.title;
+      // Same default-env resolution as the direct-mint branch below — a
+      // claimed page conversation's agent is exactly as entitled to its
+      // configured default as a freshly minted one (review — chatgpt-codex-
+      // connector, PR #2513: this branch resolves the same kind of agent but
+      // previously never applied the fallback at all).
+      envId = applyAgentDefaultEnv(envId, envIdWasProvided, agent);
     } else if (row.type === 'global') {
       claimIsGlobal = true;
       // driveId stays whatever the caller (the surface's own drive context)
@@ -401,25 +442,7 @@ export async function POST(request: Request) {
     const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
     if (denied) return denied;
     agentTitle = agent.title;
-    // Fall back to the agent's own default env when the caller truly said
-    // nothing (the field is OMITTED, not sent as explicit `null` — see the
-    // comment on `envIdWasProvided` above) — "didn't specify" means "use my
-    // default," not "force ephemeral." An explicit `envId` in the request
-    // (including explicit `null`, the palette's own ephemeral override)
-    // always wins; this only fires when the caller sent nothing, so every
-    // caller of this route (palette, any future MCP/API tool) gets the
-    // agent's Settings-screen default without having to know it exists.
-    //
-    // Also gated on the agent's OWN `sandboxEnabled`, live — not just at the
-    // moment the default was assigned (review — chatgpt-codex-connector, PR
-    // #2513): a stored `defaultEnvId` is deliberately inert data while
-    // Sandbox is off (see the settings-route comment on the same field), and
-    // a spawn-time fallback that ignored the current switch would silently
-    // place a session in that persistent environment the instant the field
-    // exists, regardless of whether the owner ever re-enabled Sandbox.
-    if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
-      envId = agent.defaultEnvId;
-    }
+    envId = applyAgentDefaultEnv(envId, envIdWasProvided, agent);
   }
 
   // Advisory fast-path only (review #2261/2): count-then-branch here is
