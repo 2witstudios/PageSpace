@@ -721,6 +721,17 @@ export default function AgentPanes({
    * Synchronous now, and nothing awaits it — so no rebind branch, no catch, no
    * toast on the success path.
    */
+  // Shared by every producer of the "closed, nothing replaced it" event —
+  // a manual pane close and a History delete of the page's own hosted
+  // conversation both report it identically, so the shape can't drift
+  // between them the way two independently-typed literals could.
+  const notifyConversationClosedWithNoReplacement = useCallback(
+    (conversationId: string) => {
+      onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+    },
+    [onConversationClosed],
+  );
+
   const closeChatPane = useCallback(
     (nodeId: string, conversationId: string) => {
       // `closePane` drops the node, and the node IS the membership — so the
@@ -729,9 +740,9 @@ export default function AgentPanes({
       // second listing it kept in step; there is one source now, and this line
       // wrote to it.
       closePane(sessionId, nodeId);
-      onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+      notifyConversationClosedWithNoReplacement(conversationId);
     },
-    [sessionId, closePane, onConversationClosed],
+    [sessionId, closePane, notifyConversationClosedWithNoReplacement],
   );
 
   const handleClosePane = useCallback(
@@ -1308,7 +1319,7 @@ export default function AgentPanes({
       // would silently skip the one notification this whole method exists to
       // send in exactly that race (caught in review).
       if (deletedConversationId === hostConversationId) {
-        onConversationClosed?.({ conversationId: deletedConversationId, next: null, nextAgentPageId: null });
+        notifyConversationClosedWithNoReplacement(deletedConversationId);
       }
       // Read fresh at call time: this always runs after the DELETE's own round
       // trip, during which the user could have already repurposed a node.
@@ -1320,7 +1331,7 @@ export default function AgentPanes({
         }
       }
     },
-    [sessionId, unbindPane, mutate, hostConversationId, onConversationClosed],
+    [sessionId, unbindPane, mutate, hostConversationId, notifyConversationClosedWithNoReplacement],
   );
 
   /**
