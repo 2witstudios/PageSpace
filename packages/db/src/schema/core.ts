@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, jsonb, real, boolean, pgEnum, index, uniqueIn
 import { sql } from 'drizzle-orm';
 import { relations } from 'drizzle-orm';
 import { users } from './auth';
+import { driveEnvs } from './drive-envs';
 import { createId } from '@paralleldrive/cuid2';
 // 'MACHINE' is a DEAD value, kept only because Postgres cannot DROP VALUE from
 // an enum type — the Machines/Development surface that used it was torn down
@@ -60,6 +61,7 @@ export const pages = pgTable('pages', {
   pageTreeScope: text('pageTreeScope', { enum: ['children', 'drive'] }).default('children'), // Scope of page tree to include
   toolExposureMode: text('toolExposureMode', { enum: ['upfront', 'search'] }).default('upfront').notNull(), // How tools are exposed to AI_CHAT agents: all schemas upfront, or core tools + tool_search/execute_tool
   sandboxEnabled: boolean('sandboxEnabled').default(false).notNull(), // AI_CHAT agents: whether the sandbox tool families (bash/files, git+gh, sessions/shells) are offered to this agent. Provisioning stays lazy and automatic on first use — this is the settings switch, not a provision button. Successor to the old pages.terminalAccess (dropped in 0234, phase 8's teardown of the Machines model — never pages.machineAccess, which never existed in this package).
+  defaultEnvId: text('defaultEnvId').references((): AnyPgColumn => driveEnvs.id, { onDelete: 'set null' }), // AI_CHAT agents: the drive Environment (drive_envs) pre-selected when spawning a new session for this agent. A DEFAULT, not a binding — spawn time (useSpawnSession / POST /api/agent-workspaces) still allows overriding to ephemeral or another env. NULL = no default (ephemeral). Not coupled at the DB level to sandboxEnabled — inert data when the switch is off, enforced only in the settings UI. `onDelete: 'set null'` so deleting the env falls the agent back to ephemeral rather than touching the page row.
   userScopedAccess: boolean('userScopedAccess').default(false).notNull(), // AI_CHAT agents only, owner-toggled: when true, actor-permission helpers fall back to the invoking user's own access instead of this agent's drive memberships
   siteMode: boolean('siteMode').default(false).notNull(), // CANVAS pages only, author-toggled: when true the page renders under buildSiteCsp() instead of buildBaselineCsp() — script-src/connect-src open to any https host so the page can load CDN libraries and call APIs like an ordinary website. Defaults false so no page already published silently widens its policy; flipping it is the author's explicit opt-in.
   description: text('description'), // Freeform description surfaced on a page's Settings tab

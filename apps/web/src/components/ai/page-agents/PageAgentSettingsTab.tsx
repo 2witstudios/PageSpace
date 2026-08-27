@@ -18,6 +18,7 @@ import { AgentDrivesCard } from './AgentDrivesCard';
 import { SANDBOX_TOOL_NAMES } from '@/lib/ai/core/tool-filtering';
 import { useEditingStore } from '@/stores/useEditingStore';
 import { useAgentMembership } from '@/lib/ai/shared/hooks/useAgentMembership';
+import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { AgentIntegrationsPanel } from './AgentIntegrationsPanel';
 import {
   AgentSettingsMenu,
@@ -39,6 +40,7 @@ interface AgentConfig {
   pageTreeScope?: 'children' | 'drive';
   toolExposureMode?: 'upfront' | 'search';
   sandboxEnabled?: boolean;
+  defaultEnvId?: string | null;
 }
 
 interface PageAgentSettingsTabProps {
@@ -121,6 +123,7 @@ interface FormData {
   pageTreeScope: 'children' | 'drive';
   toolExposureMode: 'upfront' | 'search';
   sandboxEnabled: boolean;
+  defaultEnvId: string | null;
 }
 
 const SETTINGS_ITEMS: AgentSettingsMenuItem[] = [
@@ -197,6 +200,10 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
   const { membership, membershipUserRole, driveRoles, updateRole, isSaving: membershipSaving } =
     useAgentMembership(driveId, pageId);
 
+  // Same shared SWR key the spawn palette and sidebar use — an env created
+  // from either surface shows up here without a second fetch.
+  const { envs: driveEnvOptions, isLoading: driveEnvOptionsLoading } = useDriveEnvs(driveId);
+
   const handleMembershipRoleChange = useCallback(async (value: string) => {
     try {
       await updateRole(value);
@@ -225,6 +232,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       pageTreeScope: config?.pageTreeScope ?? 'children',
       toolExposureMode: config?.toolExposureMode ?? 'upfront',
       sandboxEnabled: config?.sandboxEnabled ?? false,
+      defaultEnvId: config?.defaultEnvId ?? null,
     }
   });
 
@@ -287,6 +295,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       pageTreeScope: config.pageTreeScope ?? 'children',
       toolExposureMode: config.toolExposureMode ?? 'upfront',
       sandboxEnabled: config.sandboxEnabled ?? false,
+      defaultEnvId: config.defaultEnvId ?? null,
     });
   }, [config, reset, selectedProvider, selectedModel, formIsDirty]);
 
@@ -409,6 +418,7 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
       if (dirtyFields.pageTreeScope) dirtyPatch.pageTreeScope = data.pageTreeScope;
       if (dirtyFields.toolExposureMode) dirtyPatch.toolExposureMode = data.toolExposureMode;
       if (dirtyFields.sandboxEnabled) dirtyPatch.sandboxEnabled = data.sandboxEnabled;
+      if (dirtyFields.defaultEnvId) dirtyPatch.defaultEnvId = data.defaultEnvId;
       const requestData = {
         ...dirtyPatch,
         ...(providerOrModelTouched && { aiProvider: resolvedProvider, aiModel: resolvedModel }),
@@ -971,6 +981,46 @@ const PageAgentSettingsTab = forwardRef<PageAgentSettingsTabRef, PageAgentSettin
               />
             </div>
           </CardHeader>
+          <CardContent className="pt-0">
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <p className="text-sm font-medium">Environment</p>
+                <p className="text-sm text-muted-foreground">
+                  {sandboxEnabled
+                    ? 'Pre-select a drive environment for new sessions with this agent. Still overridable at spawn time.'
+                    : 'Enable Sandbox above to assign an environment.'}
+                </p>
+              </div>
+              <Controller
+                name="defaultEnvId"
+                control={control}
+                render={({ field }) => (
+                  <Select
+                    value={field.value ?? 'none'}
+                    onValueChange={(value) => field.onChange(value === 'none' ? null : value)}
+                    disabled={!sandboxEnabled || driveEnvOptionsLoading}
+                  >
+                    <SelectTrigger className="w-48 h-8 text-sm">
+                      <SelectValue placeholder="None" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">None</SelectItem>
+                      {driveEnvOptions.map((env) => (
+                        <SelectItem key={env.id} value={env.id}>
+                          {env.name}
+                        </SelectItem>
+                      ))}
+                      {!driveEnvOptionsLoading && driveEnvOptions.length === 0 && (
+                        <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                          No environments in this drive yet — create one from the Agents sidebar.
+                        </div>
+                      )}
+                    </SelectContent>
+                  </Select>
+                )}
+              />
+            </div>
+          </CardContent>
         </Card>
 
         {/* Tool Permissions */}

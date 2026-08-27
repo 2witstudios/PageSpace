@@ -891,6 +891,26 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-1' }));
   });
 
+  it("falls back to the agent's own defaultEnvId when the caller sends no envId", async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-default' }));
+  });
+
+  it('prefers an explicit envId over the agent\'s defaultEnvId — "didn\'t specify" is the only trigger', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default' });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', envId: 'env-explicit' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-explicit' }));
+  });
+
   it('404s when the env does not exist, or belongs to another drive — one answer for both', async () => {
     // The service collapses the two deliberately, so a caller who cannot see a
     // drive cannot enumerate its environments through spawn errors either.

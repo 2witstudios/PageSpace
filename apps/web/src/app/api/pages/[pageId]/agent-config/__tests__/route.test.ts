@@ -97,6 +97,9 @@ vi.mock('@pagespace/db/schema/core', () => ({
   pages: { id: 'id' },
   drives: { id: 'id', drivePrompt: 'drivePrompt' },
 }));
+vi.mock('@pagespace/db/schema/drive-envs', () => ({
+  driveEnvs: { id: 'id', driveId: 'driveId' },
+}));
 
 vi.mock('@pagespace/lib/permissions/permissions', () => ({
     canUserEditPage: (...args: unknown[]) => mockCanUserEditPage(...args),
@@ -211,6 +214,33 @@ function setupPatchSelectChain(pageResult: unknown[], updatedPageResult: unknown
   }));
 }
 
+/**
+ * Sets up the select chain for PATCH requests that also assign a
+ * `defaultEnvId`: page query (call 1, no limit) → env lookup (call 2, limit)
+ * → refetch after update (call 3, limit).
+ */
+function setupPatchSelectChainWithEnv(
+  pageResult: unknown[],
+  envResult: unknown[],
+  updatedPageResult: unknown[],
+) {
+  let callCount = 0;
+  mockDbSelect.mockImplementation(() => ({
+    from: () => ({
+      where: () => {
+        callCount++;
+        if (callCount === 1) {
+          return Promise.resolve(pageResult);
+        }
+        if (callCount === 2) {
+          return { limit: () => Promise.resolve(envResult) };
+        }
+        return { limit: () => Promise.resolve(updatedPageResult) };
+      },
+    }),
+  }));
+}
+
 // ── Tests ──────────────────────────────────────────────────────────────────
 
 describe('GET /api/pages/[pageId]/agent-config', () => {
@@ -292,6 +322,7 @@ describe('GET /api/pages/[pageId]/agent-config', () => {
       expect(body.includePageTree).toBe(false);
       expect(body.pageTreeScope).toBe('children');
       expect(body.toolExposureMode).toBe('search');
+      expect(body.defaultEnvId).toBeNull();
     });
 
     it('returns available tools list', async () => {
@@ -857,6 +888,111 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
       expect(mockApplyPageMutation).toHaveBeenCalledWith(
         expect.objectContaining({ updates: expect.objectContaining({ sandboxEnabled: true }) })
       );
+    });
+  });
+
+  describe('defaultEnvId', () => {
+    it('rejects a non-string, non-null value', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 42 }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('rejects an empty string rather than treating it as "None"', async () => {
+      setupPatchSelectChain([mockPage], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: '' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(400);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('returns 404 when the env does not exist', async () => {
+      setupPatchSelectChainWithEnv([mockPage], [], [mockPage]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_missing' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(404);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('rejects an env belonging to a different drive', async () => {
+      setupPatchSelectChainWithEnv(
+        [mockPage],
+        [{ id: 'env_1', driveId: 'a_different_drive' }],
+        [mockPage],
+      );
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_1' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(response.status).toBe(400);
+      expect(body.error).toMatch(/different drive/i);
+      expect(mockApplyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('accepts a same-drive env id', async () => {
+      setupPatchSelectChainWithEnv(
+        [mockPage],
+        [{ id: 'env_1', driveId: mockDriveId }],
+        [{ ...mockPage, defaultEnvId: 'env_1' }],
+      );
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: 'env_1' }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: 'env_1' }) })
+      );
+    });
+
+    it('accepts null to clear a previously assigned env', async () => {
+      setupPatchSelectChain([{ ...mockPage, defaultEnvId: 'env_1' }], [{ ...mockPage, defaultEnvId: null }]);
+
+      const response = await PATCH(
+        createPatchRequest({ defaultEnvId: null }),
+        mockParams
+      );
+
+      expect(response.status).toBe(200);
+      expect(mockApplyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: null }) })
+      );
+    });
+
+    it('echoes sandboxEnabled and defaultEnvId back in the response', async () => {
+      setupPatchSelectChainWithEnv(
+        [mockPage],
+        [{ id: 'env_1', driveId: mockDriveId }],
+        [{ ...mockPage, sandboxEnabled: true, defaultEnvId: 'env_1' }],
+      );
+
+      const response = await PATCH(
+        createPatchRequest({ sandboxEnabled: true, defaultEnvId: 'env_1' }),
+        mockParams
+      );
+      const body = await response.json();
+
+      expect(body.sandboxEnabled).toBe(true);
+      expect(body.defaultEnvId).toBe('env_1');
     });
   });
 

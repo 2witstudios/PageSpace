@@ -3,6 +3,7 @@ import { authenticateRequestWithOptions, isAuthError, checkMCPPageScope, canPrin
 import { db } from '@pagespace/db/db'
 import { eq } from '@pagespace/db/operators'
 import { pages, drives } from '@pagespace/db/schema/core';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { filterToolsForMcpScope } from '@/lib/ai/core/tool-filtering';
 import { validateAgentModelSelection } from '@/lib/ai/core/ai-providers-config';
@@ -91,6 +92,7 @@ export async function GET(
       pageTreeScope: page.pageTreeScope ?? 'children',
       toolExposureMode: page.toolExposureMode ?? 'upfront',
       sandboxEnabled: page.sandboxEnabled ?? false,
+      defaultEnvId: page.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error fetching page agent configuration:', error as Error);
@@ -127,6 +129,7 @@ export async function PATCH(
       pageTreeScope,
       toolExposureMode,
       sandboxEnabled,
+      defaultEnvId,
       expectedRevision,
     } = body;
 
@@ -244,6 +247,46 @@ export async function PATCH(
       updateData.sandboxEnabled = sandboxEnabled;
     }
 
+    if (defaultEnvId !== undefined) {
+      // Reject, not coerce — mirrors sandboxEnabled's rule above. `""` is
+      // invalid input, not "None": the settings picker's "None" option sends
+      // `null` explicitly.
+      if (defaultEnvId !== null && typeof defaultEnvId !== 'string') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === '') {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a non-empty string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === null) {
+        updateData.defaultEnvId = null;
+      } else {
+        const [env] = await db
+          .select({ id: driveEnvs.id, driveId: driveEnvs.driveId })
+          .from(driveEnvs)
+          .where(eq(driveEnvs.id, defaultEnvId))
+          .limit(1);
+        if (!env) {
+          return NextResponse.json(
+            { error: 'Environment not found' },
+            { status: 404 }
+          );
+        }
+        if (env.driveId !== page.driveId) {
+          return NextResponse.json(
+            { error: 'That environment belongs to a different drive than this agent' },
+            { status: 400 }
+          );
+        }
+        updateData.defaultEnvId = defaultEnvId;
+      }
+    }
+
     // Only update if there are changes
     let responsePage = page;
     if (Object.keys(updateData).length > 0) {
@@ -314,6 +357,9 @@ export async function PATCH(
       visibleToGlobalAssistant: responsePage.visibleToGlobalAssistant ?? true,
       includePageTree: responsePage.includePageTree ?? false,
       pageTreeScope: responsePage.pageTreeScope ?? 'children',
+      toolExposureMode: responsePage.toolExposureMode ?? 'upfront',
+      sandboxEnabled: responsePage.sandboxEnabled ?? false,
+      defaultEnvId: responsePage.defaultEnvId ?? null,
     });
   } catch (error) {
     loggers.api.error('Error updating page agent configuration:', error as Error);

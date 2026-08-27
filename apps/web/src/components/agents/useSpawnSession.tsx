@@ -587,6 +587,18 @@ function SpawnSessionPalette({
                 : 'name';
   const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
 
+  // The picked agent's own default env (a PREFERENCE from its Settings
+  // screen, set there via PageAgentSettingsTab), when it still exists in this
+  // drive's listing. This only ever PRE-HIGHLIGHTS the 'env' step below — it
+  // never sets `pick.envId` itself, so "New sandbox" and every other
+  // environment stay one arrow-key away, fully overridable. A stale default
+  // (the env was deleted after being assigned) simply fails to match here and
+  // the list renders in its ordinary order — no error state needed.
+  const defaultEnv = pick?.agentPageId
+    ? (envs.find((env) => env.id === agents.find((agent) => agent.id === pick.agentPageId)?.defaultEnvId) ?? null)
+    : null;
+  const otherEnvs = defaultEnv ? envs.filter((env) => env.id !== defaultEnv.id) : envs;
+
   return (
     <CommandDialog
       open={open}
@@ -723,7 +735,19 @@ function SpawnSessionPalette({
                 <span className="truncate">New sandbox</span>
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
               </CommandItem>
-              {envs.map((env) => (
+              {defaultEnv && (
+                <CommandItem
+                  key={defaultEnv.id}
+                  value={`${defaultEnv.id}-in ${defaultEnv.name}`}
+                  disabled={spawning}
+                  onSelect={() => onPickEnv(defaultEnv.id)}
+                >
+                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="truncate">in {defaultEnv.name}</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Default</span>
+                </CommandItem>
+              )}
+              {otherEnvs.map((env) => (
                 <CommandItem
                   key={env.id}
                   value={`${env.id}-in ${env.name}`}

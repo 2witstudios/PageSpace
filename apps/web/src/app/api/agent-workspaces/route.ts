@@ -252,7 +252,7 @@ export async function POST(request: Request) {
   // It is NOT validated in this route: whether the env exists and belongs to
   // `driveId` is `spawnAgentSession`'s check, made there so every future caller
   // inherits it rather than each one re-deriving it.
-  const envId = typeof body.envId === 'string' && body.envId.length > 0 ? body.envId : null;
+  let envId = typeof body.envId === 'string' && body.envId.length > 0 ? body.envId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
   const wantsClaim = body.firstThing === 'claim';
@@ -393,6 +393,15 @@ export async function POST(request: Request) {
     const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
     if (denied) return denied;
     agentTitle = agent.title;
+    // Fall back to the agent's own default env when the caller didn't say —
+    // "didn't specify" means "use my default," not "force ephemeral." An
+    // explicit `envId` in the request always wins; this only fires when the
+    // caller sent nothing, so every caller of this route (palette, any
+    // future MCP/API tool) gets the agent's Settings-screen default without
+    // having to know it exists.
+    if (envId === null && agent.defaultEnvId) {
+      envId = agent.defaultEnvId;
+    }
   }
 
   // Advisory fast-path only (review #2261/2): count-then-branch here is
