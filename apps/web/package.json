@@ -10,6 +10,7 @@
     "typecheck": "tsc --noEmit",
     "prepare": "next-ws patch --yes",
     "census": "bun --tsconfig-override scripts/tsconfig.census.json scripts/collab-content-census.ts",
+    "backfill:content-mode": "bun scripts/backfill-mislabelled-content-mode.ts",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage"
   },
