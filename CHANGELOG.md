@@ -224,6 +224,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
+  "host" pane (the one showing the same conversation the page's own header already tracks) used to
+  collapse to a bare name label with no way to reach History or Settings from that pane, unlike
+  every other pane in the grid. It now carries the same tab strip. Deleting the page's own hosted
+  conversation from that newly-reachable History tab now correctly hands the page a replacement
+  conversation instead of leaving it silently pointed at one that no longer exists — including when
+  a session end happens to land at the same moment.
 - **An agent locked down by `update_agent_config` can be unlocked again, and `pagespace keys` tells
   you the real fix** — restricting an agent's tools to an empty list had no way back through the
   tool itself: the field that means "no restrictions" is `null`, and the schema only accepted an

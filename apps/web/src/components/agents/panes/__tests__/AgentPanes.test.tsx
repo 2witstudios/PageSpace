@@ -1566,6 +1566,62 @@ describe('AgentPanes — a History delete', () => {
     expect(onConversationClosed).not.toHaveBeenCalled();
   });
 
+  it('still notifies the host recovery path even if the workspace was forgotten while the DELETE was in flight (session-end race)', async () => {
+    // The notification does not depend on the workspace still being in the
+    // store — a concurrent session-end (the sidebar's own independent
+    // end-session path) can forget it before this DELETE's own round trip
+    // resolves. Simulated by holding the DELETE pending, forgetting the
+    // workspace while it's in flight, then letting it resolve.
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    let resolveDelete!: (value: { ok: boolean; json: () => Promise<unknown> }) => void;
+    const base = mockFetchWithAuth.getMockImplementation()!;
+    mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {
+      if (url === '/api/ai/page-agents/agent-1/conversations' && init?.method !== 'DELETE') {
+        return jsonOk({
+          conversations: [
+            {
+              id: 'conv-1',
+              title: 'First chat',
+              preview: '',
+              createdAt: new Date('2026-01-01').toISOString(),
+              updatedAt: new Date('2026-01-01').toISOString(),
+              messageCount: 1,
+              sessionId: 'ses-1',
+              isOwner: true,
+              lastMessage: { role: 'user', timestamp: new Date('2026-01-01').toISOString() },
+            },
+          ],
+        });
+      }
+      if (init?.method === 'DELETE') return new Promise((resolve) => (resolveDelete = resolve));
+      return base(url, init);
+    });
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    renderPanes({ hostConversationId: 'conv-1', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    // The DELETE is pending — a concurrent session-end (unrelated to this
+    // delete) forgets the workspace before the delete's own round trip
+    // resolves.
+    useAgentWorkspaceStore.getState().forgetWorkspace(WS);
+    expect(useAgentWorkspaceStore.getState().workspaces[WS]).toBeUndefined();
+
+    resolveDelete({ ok: true, json: async () => ({}) });
+
+    await waitFor(() =>
+      expect(onConversationClosed).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        next: null,
+        nextAgentPageId: null,
+      }),
+    );
+  });
+
   it('does NOT touch any pane when the delete is refused', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {

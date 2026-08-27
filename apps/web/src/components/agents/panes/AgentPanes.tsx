@@ -1299,6 +1299,17 @@ export default function AgentPanes({
       // Instant-freshness nudge, unconditional — the canonical row is gone from
       // the listing regardless of whether any node here is showing it.
       void mutate(isAgentWorkspacesKey);
+      // Ahead of the `live` check below, and deliberately not inside it: this
+      // notifies the HOSTING PAGE, not this grid — it doesn't depend on the
+      // workspace still being in the store. A concurrent session-end (the
+      // sidebar's own end-session path, independent of this grid's own
+      // `confirmEndSession`) can forget the workspace before this callback's
+      // own DELETE round trip resolves; gating this behind `if (!live) return`
+      // would silently skip the one notification this whole method exists to
+      // send in exactly that race (caught in review).
+      if (deletedConversationId === hostConversationId) {
+        onConversationClosed?.({ conversationId: deletedConversationId, next: null, nextAgentPageId: null });
+      }
       // Read fresh at call time: this always runs after the DELETE's own round
       // trip, during which the user could have already repurposed a node.
       const live = useAgentWorkspaceStore.getState().workspaces[sessionId];
@@ -1307,9 +1318,6 @@ export default function AgentPanes({
         if (node.target?.kind === 'chat' && node.target.id === deletedConversationId) {
           unbindPane(sessionId, node.id);
         }
-      }
-      if (deletedConversationId === hostConversationId) {
-        onConversationClosed?.({ conversationId: deletedConversationId, next: null, nextAgentPageId: null });
       }
     },
     [sessionId, unbindPane, mutate, hostConversationId, onConversationClosed],
