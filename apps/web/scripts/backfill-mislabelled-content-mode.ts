@@ -34,21 +34,32 @@
  * NEVER PRINTS DOCUMENT CONTENT. Page ids and counts only, matching the
  * census's own rule — this runs against production user data.
  *
- * Reversible: only `contentMode` changes, `content`/`revision`/`updatedAt`
- * are untouched (updatedAt is pinned to its prior value so this correction
- * does not read as a user edit in the UI or GDPR export). Every corrected
- * page id is written to `--out <path>` as a JSON array, and `--revert <path>`
- * reads that file back and flips exactly those ids to 'html' again (guarded:
- * only pages still `contentMode='markdown'` are touched, so a page a user
- * has since re-saved through the real markdown migration is left alone).
+ * Reversible: `content` is never touched. `contentMode` flips, `updatedAt` is
+ * pinned to its prior value (so this reads as a label correction, not a user
+ * edit, in the UI or GDPR export), and `revision` is bumped by 1 — a page
+ * open in an editor session before the backfill ran still holds the OLD
+ * `expectedRevision`, so its next ordinary save now gets the existing 409
+ * "modified elsewhere" path instead of silently landing HTML content under
+ * the now-corrected `contentMode='markdown'` label (see PR #2511 review).
+ *
+ * Every corrected page is written to `--out <path>` as a JSON array of
+ * `{ id, revisionAfterApply }`, **incrementally after each batch commits**
+ * (not only once at the end) — a process killed partway through a
+ * multi-thousand-row run still leaves a manifest covering everything already
+ * committed. `--revert <path>` reads that file back and flips exactly those
+ * pages to `'html'` again, requiring BOTH `contentMode='markdown'` AND the
+ * exact `revisionAfterApply` this run recorded: `applyPageMutation` bumps
+ * `revision` on every ordinary save, so a page a user has genuinely edited
+ * since (through the real markdown migration or otherwise) no longer matches
+ * and is reported as skipped rather than having that edit discarded.
  *
  * Dry-run is the default and only reports counts + ids; `--apply` requires
  * `--out <path>` so the correction is never un-reversible for want of a log.
  *
  * Usage:
- *   bun scripts/backfill-mislabelled-content-mode.ts                         # dry run (default, safe)
- *   bun scripts/backfill-mislabelled-content-mode.ts --apply --out ids.json  # live write
- *   bun scripts/backfill-mislabelled-content-mode.ts --revert ids.json       # undo a prior --apply
+ *   bun scripts/backfill-mislabelled-content-mode.ts                            # dry run (default, safe)
+ *   bun scripts/backfill-mislabelled-content-mode.ts --apply --out backfill.json # live write
+ *   bun scripts/backfill-mislabelled-content-mode.ts --revert backfill.json      # undo a prior --apply
  *
  * Lives under apps/web/scripts/ (not repo-root scripts/) for the same reason
  * collab-content-census.ts does: the classifier needs apps/web's happy-dom
@@ -72,7 +83,21 @@ import {
   parseBackfillArgs,
   planAndApplyBackfill,
   revertBackfill,
+  type CorrectedPage,
 } from '../src/lib/editor/content-mode-backfill';
+
+function isCorrectedPageArray(value: unknown): value is CorrectedPage[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (entry) =>
+        entry !== null &&
+        typeof entry === 'object' &&
+        typeof (entry as CorrectedPage).id === 'string' &&
+        typeof (entry as CorrectedPage).revisionAfterApply === 'number',
+    )
+  );
+}
 
 async function main(): Promise<void> {
   const parsed = parseBackfillArgs(process.argv.slice(2));
@@ -87,8 +112,8 @@ async function main(): Promise<void> {
   try {
     if (args.mode === 'revert') {
       const raw: unknown = JSON.parse(await readFile(args.revertPath!, 'utf8'));
-      if (!Array.isArray(raw) || !raw.every((id) => typeof id === 'string')) {
-        throw new Error(`${args.revertPath} must contain a JSON array of page id strings`);
+      if (!isCorrectedPageArray(raw)) {
+        throw new Error(`${args.revertPath} must contain a JSON array of { id, revisionAfterApply } objects`);
       }
       const result = await revertBackfill(db, raw);
       console.log(
@@ -103,7 +128,21 @@ async function main(): Promise<void> {
 
     const apply = args.mode === 'apply';
     console.log(`${apply ? '' : '[DRY RUN] '}Scanning contentMode='html' DOCUMENT pages...`);
-    const summary = await planAndApplyBackfill(db, { apply });
+
+    // Rewritten after every batch commits (apply mode only), so the file on
+    // disk is always a true, current record of what has actually been
+    // corrected — a crash mid-run loses at most the in-flight batch, never
+    // the whole run's manifest.
+    const manifest: CorrectedPage[] = [];
+    const summary = await planAndApplyBackfill(db, {
+      apply,
+      onBatchCorrected: apply
+        ? async (batchCorrected) => {
+            manifest.push(...batchCorrected);
+            await writeFile(args.outPath!, JSON.stringify(manifest, null, 2));
+          }
+        : undefined,
+    });
 
     console.log(
       `${apply ? 'Corrected' : 'Would correct'}: ${summary.corrected.length} of ${summary.scanned} scanned. ` +
@@ -111,7 +150,7 @@ async function main(): Promise<void> {
         `Skipped (concurrent modification): ${summary.skippedConcurrentModification.length}.`,
     );
     if (summary.corrected.length > 0) {
-      console.log(`  page ids: ${summary.corrected.join(' ')}`);
+      console.log(`  page ids: ${summary.corrected.map((c) => c.id).join(' ')}`);
     }
     if (summary.skippedUnparseable.length > 0) {
       console.log(
@@ -123,8 +162,7 @@ async function main(): Promise<void> {
     }
 
     if (apply) {
-      await writeFile(args.outPath!, JSON.stringify(summary.corrected, null, 2));
-      console.log(`Wrote ${summary.corrected.length} corrected page ids to ${args.outPath} — keep this to revert.`);
+      console.log(`Wrote ${manifest.length} corrected page ids to ${args.outPath} — keep this to revert.`);
     }
   } finally {
     await getMigrationPool().end();

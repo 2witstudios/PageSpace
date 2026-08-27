@@ -9,7 +9,7 @@
  * See the script's own header for the full rationale (why relabel rather
  * than convert, why this is reversible, why dry-run is the default).
  */
-import { and, asc, eq, gt, inArray } from '@pagespace/db/operators';
+import { and, asc, eq, gt, or, sql } from '@pagespace/db/operators';
 import { pages } from '@pagespace/db/schema/core';
 import type { getMigrationDb } from '@pagespace/db/db';
 import { createDomWorkspace, classifyDocumentContent } from './document-content-format';
@@ -18,11 +18,39 @@ export type BackfillDb = ReturnType<typeof getMigrationDb>;
 
 const DEFAULT_BATCH_SIZE = 200;
 
+/**
+ * A corrected page, as recorded in the `--out` manifest. `revisionAfterApply`
+ * is what makes `--revert` safe: `applyPageMutation` bumps `revision` on
+ * every ordinary save, so a page a user edits after this backfill runs will
+ * have moved past this value by the time anyone reverts — the revert compare-
+ * and-swap requires an exact match and leaves that page alone rather than
+ * discarding the user's edit.
+ */
+export interface CorrectedPage {
+  id: string;
+  revisionAfterApply: number;
+}
+
 export interface BackfillSummary {
   scanned: number;
-  corrected: string[];
+  corrected: CorrectedPage[];
   skippedUnparseable: Array<{ id: string; reason: string }>;
   skippedConcurrentModification: string[];
+}
+
+export interface PlanAndApplyOptions {
+  apply: boolean;
+  batchSize?: number;
+  /**
+   * Invoked once per batch, after that batch's writes have committed, with
+   * exactly the pages this batch corrected. The CLI wrapper uses this to
+   * durably persist the `--out` manifest incrementally rather than only once
+   * at the very end — without it, a process killed partway through a
+   * multi-thousand-row run would leave already-corrected pages with no
+   * record to revert them by. Never called in dry-run mode (nothing was
+   * written) or for an empty batch.
+   */
+  onBatchCorrected?: (corrected: CorrectedPage[]) => Promise<void> | void;
 }
 
 /**
@@ -33,7 +61,7 @@ export interface BackfillSummary {
  */
 export async function planAndApplyBackfill(
   db: BackfillDb,
-  { apply, batchSize = DEFAULT_BATCH_SIZE }: { apply: boolean; batchSize?: number },
+  { apply, batchSize = DEFAULT_BATCH_SIZE, onBatchCorrected }: PlanAndApplyOptions,
 ): Promise<BackfillSummary> {
   const workspace = createDomWorkspace();
   const summary: BackfillSummary = {
@@ -47,7 +75,13 @@ export async function planAndApplyBackfill(
     let after: string | null = null;
     for (;;) {
       const batch = await db
-        .select({ id: pages.id, content: pages.content, contentMode: pages.contentMode, updatedAt: pages.updatedAt })
+        .select({
+          id: pages.id,
+          content: pages.content,
+          contentMode: pages.contentMode,
+          updatedAt: pages.updatedAt,
+          revision: pages.revision,
+        })
         .from(pages)
         .where(
           and(
@@ -75,30 +109,41 @@ export async function planAndApplyBackfill(
       }
 
       if (!apply) {
-        summary.corrected.push(...mislabelled.map((page) => page.id));
-      } else {
+        summary.corrected.push(...mislabelled.map((page) => ({ id: page.id, revisionAfterApply: page.revision + 1 })));
+      } else if (mislabelled.length > 0) {
         // Each page's compare-and-swap only touches its own row, so the
         // batch's writes run concurrently rather than one round trip at a
         // time — up to `batchSize` (200) in flight per batch.
+        const batchCorrected: CorrectedPage[] = [];
         await Promise.all(
           mislabelled.map(async (page) => {
             // Compare-and-swap on the exact content read: a page edited
             // between the select and this write must not be relabelled
             // against content this run never actually classified. updatedAt
             // is pinned to its prior value — this is a label correction, not
-            // a user edit.
-            const written = await db
+            // a user edit. `revision` is bumped (atomically, via the SQL
+            // expression, not the stale JS-side value) so a client session
+            // that already had this page open under the old `contentMode`
+            // gets a 409 on its next save instead of silently writing content
+            // that no longer matches the label — see PR #2511 review.
+            const [written] = await db
               .update(pages)
-              .set({ contentMode: 'markdown', updatedAt: page.updatedAt })
-              .where(and(eq(pages.id, page.id), eq(pages.content, page.content), eq(pages.contentMode, 'html')));
+              .set({ contentMode: 'markdown', updatedAt: page.updatedAt, revision: sql`${pages.revision} + 1` })
+              .where(and(eq(pages.id, page.id), eq(pages.content, page.content), eq(pages.contentMode, 'html')))
+              .returning({ id: pages.id, revision: pages.revision });
 
-            if (written.rowCount === 0) {
+            if (!written) {
               summary.skippedConcurrentModification.push(page.id);
             } else {
-              summary.corrected.push(page.id);
+              batchCorrected.push({ id: written.id, revisionAfterApply: written.revision });
             }
           }),
         );
+
+        summary.corrected.push(...batchCorrected);
+        if (batchCorrected.length > 0 && onBatchCorrected) {
+          await onBatchCorrected(batchCorrected);
+        }
       }
 
       after = batch[batch.length - 1].id;
@@ -116,27 +161,40 @@ export interface RevertSummary {
   skippedAlreadyChanged: string[];
 }
 
-/** Flips exactly the given page ids back to `contentMode='html'`, and only if still 'markdown'. */
-export async function revertBackfill(db: BackfillDb, pageIds: string[]): Promise<RevertSummary> {
-  if (pageIds.length === 0) {
+/**
+ * Flips exactly the given pages back to `contentMode='html'` — only a page
+ * still `contentMode='markdown'` **at the exact revision this backfill left
+ * it at** is touched. A page edited since (by a real user save, which always
+ * bumps `revision`) no longer matches and is reported as skipped rather than
+ * forced, so a revert can never discard a genuine edit.
+ */
+export async function revertBackfill(db: BackfillDb, corrections: CorrectedPage[]): Promise<RevertSummary> {
+  if (corrections.length === 0) {
     return { attempted: 0, reverted: [], skippedAlreadyChanged: [] };
   }
 
-  // One batched UPDATE rather than one round trip per id: `RETURNING id`
-  // reports exactly which of the given ids were still 'markdown' (and so
-  // actually flipped), so a page a user has since re-saved through the real
-  // markdown migration is reported as skipped rather than clobbered.
+  // One batched UPDATE rather than one round trip per id: the per-row OR
+  // branch pins EACH id to its own expected revision (a single inArray on ids
+  // plus a separate inArray on revisions would cross-match any id against any
+  // revision in the list, not the specific pairing this guard requires).
+  // `RETURNING id` reports exactly which pages were still at that revision
+  // and so actually flipped.
   const written = await db
     .update(pages)
-    .set({ contentMode: 'html' })
-    .where(and(inArray(pages.id, pageIds), eq(pages.contentMode, 'markdown')))
+    .set({ contentMode: 'html', revision: sql`${pages.revision} + 1` })
+    .where(
+      and(
+        eq(pages.contentMode, 'markdown'),
+        or(...corrections.map((c) => and(eq(pages.id, c.id), eq(pages.revision, c.revisionAfterApply)))),
+      ),
+    )
     .returning({ id: pages.id });
 
   const reverted = new Set(written.map((row) => row.id));
   return {
-    attempted: pageIds.length,
-    reverted: pageIds.filter((id) => reverted.has(id)),
-    skippedAlreadyChanged: pageIds.filter((id) => !reverted.has(id)),
+    attempted: corrections.length,
+    reverted: corrections.map((c) => c.id).filter((id) => reverted.has(id)),
+    skippedAlreadyChanged: corrections.map((c) => c.id).filter((id) => !reverted.has(id)),
   };
 }
 

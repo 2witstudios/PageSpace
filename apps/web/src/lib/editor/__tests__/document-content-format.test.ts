@@ -43,6 +43,14 @@ describe('classifyDocumentContent', () => {
     expect(classify('# Title\n\n<div>raw html block</div>')).toEqual({ format: 'html', confident: true });
   });
 
+  it('classifies a bare <search> element as html, with no nested known element required', () => {
+    // <search> is a real HTML5 element (WHATWG grouping content) happy-dom
+    // parses as its own tag rather than falling into the unescaped-angle-
+    // bracket bucket. A page consisting only of one is still real HTML and
+    // must not be misclassified markdown-source.
+    expect(classify('<search>find stuff</search>')).toEqual({ format: 'html', confident: true });
+  });
+
   it('reports low confidence rather than guessing when parsing throws', () => {
     const throwingWorkspace = {
       parse(): never {

@@ -65,27 +65,102 @@ boundary-heuristic failure case reproduced directly.
 included — a restored page is seeded like any other) is classified individually; a page that
 cannot be classified confidently is skipped and reported by id + error-type, never corrected.
 
-**Reversible.** Only `contentMode` changes — `content`, `revision`, `updatedAt` are untouched
-(`updatedAt` pinned to its prior value, so this reads as a label correction, not a user edit, in
-the UI or GDPR export). Every corrected page id is written to `--out <path>` as a JSON array;
-`--revert <path>` reads that file back and flips exactly those ids to `'html'` again, guarded so a
-page a user has since re-saved through the real markdown migration (i.e. no longer `'markdown'`)
-is left alone rather than forced.
+**Reversible.** `content` is never touched. `contentMode` flips, `updatedAt` is pinned to its prior
+value (so this reads as a label correction, not a user edit, in the UI or GDPR export), and
+`revision` is bumped by 1 on every write (see "Review round" below for why). Every corrected page
+is written to `--out <path>` as `{ id, revisionAfterApply }` objects, **incrementally after each
+batch commits**; `--revert <path>` reads that file back and flips exactly those pages to `'html'`
+again, requiring both `contentMode='markdown'` AND the exact recorded `revisionAfterApply` — a page
+genuinely edited since (through the real markdown migration or otherwise; every ordinary save bumps
+`revision`) no longer matches and is reported as skipped rather than having that edit discarded.
 
 **Dry-run is the default.** `--apply` refuses to run without `--out <path>`, so the correction can
 never be un-reversible for want of a log. Compare-and-swap on the exact `content`/`contentMode`
 read guards every write against a page edited between the select and the write; a concurrently
 modified row is skipped and reported, never clobbered. Per-batch writes run concurrently
-(`Promise.all`, capped at the 200-row batch size); the revert path is one batched
-`UPDATE ... WHERE id = ANY(...) RETURNING id`.
+(`Promise.all`, capped at the 200-row batch size); the revert path is one batched UPDATE whose WHERE
+clause pins each id to its own expected revision (`or(and(id=X, revision=rX), and(id=Y,
+revision=rY), ...)` — a single `inArray` on ids alongside a separate `inArray` on revisions would
+cross-match any id against any revision in the list, not the specific pairing this guard needs).
 
 **Never prints document content.** Every log line is page ids, counts, and JS error *names* only.
 
-Tests: `apps/web/src/lib/editor/__tests__/content-mode-backfill.test.ts` (17 cases) — dry-run vs.
+Tests: `apps/web/src/lib/editor/__tests__/content-mode-backfill.test.ts` (22 cases) — dry-run vs.
 apply, correctly-labelled pages left alone, empty pages left alone, low-confidence classification
 skipped and reported, concurrent-modification skip, cursor pagination termination, updatedAt
-pinning, batched revert (including a mixed reverted/already-changed result and the empty-list
-no-op), and every `parseBackfillArgs` branch.
+pinning, the revision bump using a SQL increment expression (not a stale JS-side value),
+`onBatchCorrected` firing once per batch with only that batch's corrections (and never in dry-run,
+and never for a batch that corrected nothing), batched revert (including the per-row revision
+pairing, a mixed reverted/already-changed result, and the empty-list no-op), and every
+`parseBackfillArgs` branch.
+
+## Review round (CodeRabbit + Codex, PR #2511) — findings and what changed
+
+Both automated reviewers converged independently on the same two P1/Major findings, plus one more
+each. All were verified against the actual source (not taken on faith) before acting.
+
+1. **Increment `revision` when relabelling live pages (Codex, P1).** Verified: `applyPageMutation`
+   (the normal save path) never reads or writes `contentMode`, and a raw `contentMode` flip with no
+   revision bump leaves a client session that had the page open under the old mode with a still-valid
+   `expectedRevision`. Its next ordinary save would then land content under the label that no longer
+   matches what it actually wrote — recreating, in the opposite direction, the exact mismatch this
+   migration exists to fix. **Fix:** the apply write now also sets `revision = revision + 1` (a SQL
+   expression, not a stale read value, so it's correct even under concurrent writes). This forces
+   the existing `PageRevisionMismatchError` / 409 "modified elsewhere" path on that client's next
+   save — the codebase's already-established mechanism for exactly this class of staleness.
+
+   Considered and rejected: routing through `applyPageMutation` (as the existing
+   `convert-content-mode` API route does) to also get realtime broadcast and a `page_versions`
+   snapshot. Rejected because that route's job is a genuine content *conversion* (turndown/marked)
+   for a single page a user requested — running it here would mean creating ~3,003 broadcast events
+   and version-snapshot rows for a correction that changes zero bytes of content, and worse, its
+   markdown-mode conversion path feeds content through `marked.parse()` assuming real HTML input —
+   exactly the lossy path this whole backfill exists to avoid, since our population's content is
+   already raw markdown text. The revision bump alone eliminates the actual data-corruption risk
+   (silent wrong-mode writes); it does not eliminate a stale client needing to refresh, which Codex's
+   own alternative ("or require the backfill to run while writes are quiesced") already accepts as
+   within tolerance for a one-time migration.
+
+2. **Guard `--revert` against edits made after apply (Codex P1 + CodeRabbit Major).** Verified: the
+   original revert only checked `contentMode='markdown'`, so a page a user had genuinely edited
+   after the backfill (content changed, but `contentMode` legitimately stays `'markdown'`) would
+   still match and get forced back to `'html'`, discarding the edit and recreating the exact
+   mislabelling this PR fixes. **Fix:** solved by the same revision bump above — `--revert` now
+   requires the page to still be at the exact `revisionAfterApply` this run recorded, and any
+   ordinary save since (which always bumps revision) makes that page fail the guard and be reported
+   as skipped. (CodeRabbit's suggested alternative, a separate content-digest column, would add a
+   new persisted field for a check the existing revision counter already answers precisely.)
+
+3. **Persist the revert manifest incrementally, not only once at the end (Codex P1 + CodeRabbit
+   Major).** Verified: `--out` was written exactly once, after the entire run. A process killed
+   partway through a multi-thousand-row run would leave every already-committed correction with no
+   record to revert it by. **Fix:** `planAndApplyBackfill` gained an `onBatchCorrected` callback,
+   invoked after each batch's writes commit; the CLI wrapper appends to the manifest and rewrites
+   `--out` after every batch. This bounds exposure to at most one in-flight batch (200 rows) instead
+   of the whole run. Not implemented as a true write-ahead-log/transactional-audit-record (what
+   CodeRabbit's "Heavy lift" label suggests) — that is disproportionate engineering for a one-time,
+   human-operated migration script of this size; per-batch durability resolves the actual risk named
+   (an unrecoverable partial run) without it.
+
+4. **`HTML_ELEMENT_NAMES` was missing `search` (CodeRabbit Minor).** Verified empirically (not just
+   via the review's own citation): happy-dom parses `<search>` as a real `search`-tagged element
+   (confirmed with a throwaway probe script), and `search` was absent from the set, so
+   `<search>only content</search>` misclassified as `markdown-source` and would have relabelled a
+   genuinely-HTML page. **Fix:** added `search` to the set, plus a regression test asserting a bare
+   `<search>` element (no nested known element) classifies as `html`. Mutation-checked: removing it
+   again made the new test fail as expected.
+
+5. **Nitpick — rename `priorUpdatedAt` to `PRIOR_UPDATED_AT` (CodeRabbit Trivial).** Declined, with
+   evidence: the exact precedent this test's pattern was modeled on
+   (`scripts/__tests__/backfill-legacy-ciphertext-reencrypt.test.ts:100`) uses camelCase
+   `priorUpdatedAt` for the identical fixture; this repo's own style guide
+   (`.claude/rules/javascript/javascript.mdc`) states "Avoid ALL_CAPS for constants... there's no
+   need for a hard distinction between constants and variables"; and a scan of top-level `Date`
+   fixtures across `apps/web/src/**/__tests__/*.test.ts` shows a genuine mix of both conventions in
+   active use. No change made.
+
+All four substantive findings were fixed and mutation-checked (broke the mechanism, confirmed the
+relevant new/updated test went red, restored, confirmed green). See "Mutation checks" below.
 
 ## 3. Re-running markdown construct detection at the corrected population
 
@@ -122,6 +197,20 @@ restored, confirmed green again.
   predicates → 3 tests failed (all three `revertBackfill` result-shape tests) → restored, 17 tests
   green.
 
+Review-round fixes, each mutation-checked the same way:
+
+- `document-content-format.ts`: removed `search` from `HTML_ELEMENT_NAMES` → the new `<search>`
+  regression test failed as expected → restored, 8 tests green.
+- `content-mode-backfill.ts`, revert per-row guard: dropped the revision pairing from the `or(...)`
+  branches (`or(...corrections.map(c => eq(pages.id, c.id)))`, i.e. matching on id alone) → the new
+  "builds the WHERE clause as a per-row pairing" test failed as expected → restored, 21 tests green.
+- `content-mode-backfill.ts`, `onBatchCorrected` guard: dropped the `batchCorrected.length > 0`
+  check before invoking the callback → initially passed against the existing test (which used a page
+  that was never mislabelled at all, so the guarded branch was never reached) — caught as a gap in
+  my own test, not the code; added a second case (a mislabelled page whose write loses the
+  compare-and-swap, so `batchCorrected` stays empty even though the batch had mislabelled pages) →
+  the mutation now correctly fails that test → restored, 22 tests green.
+
 ## Gates
 
 Worktree was rebuilt clean before gating (`bun install`; `@pagespace/db` and `@pagespace/lib` dist
@@ -148,6 +237,12 @@ builds; `apps/web` prod build) per repo convention.
   - `apps/web`: **1,253/1,254 files, 19,263/19,269 tests** (1 file/6 tests skipped, pre-existing,
     unrelated).
   - None of the excluded/skipped tests touch this diff's files.
+- Review-round fixes were re-gated after every change: `bun run typecheck` (root, forced past a
+  stale turbo cache) 17/17, `bun run lint` 15/15, `bun run knip:check` within baseline, and the full
+  `apps/web` test suite re-run clean (this round's changes are scoped entirely to
+  `apps/web/src/lib/editor/` and `apps/web/scripts/`, so a full `apps/web` run is the right-sized
+  re-verification rather than repeating the full isolated-Postgres monorepo run for an untouched
+  set of packages).
 
 ## What command to run against production
 
@@ -157,10 +252,12 @@ builds; `apps/web` prod build) per repo convention.
 # 1. Dry run first. Sanity-check the reported count against the census's 3,003.
 cd apps/web && bun run backfill:content-mode
 
-# 2. Apply, with the ids log kept somewhere durable.
+# 2. Apply, with the ids log kept somewhere durable. The file is written
+#    incrementally as each batch commits, not just once at the end.
 bun run backfill:content-mode -- --apply --out mislabelled-content-mode-backfill-<date>.json
 
-# Revert path, if ever needed:
+# Revert path, if ever needed — flips back only pages still at the exact
+# revision the apply run left them at (an edit since is left alone):
 bun run backfill:content-mode -- --revert mislabelled-content-mode-backfill-<date>.json
 ```
 
