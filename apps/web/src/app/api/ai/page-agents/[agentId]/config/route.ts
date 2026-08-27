@@ -11,6 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { pageAgentRepository, type AgentConfigUpdate } from '@/lib/repositories/page-agent-repository';
 import { getActorInfo } from '@pagespace/lib/monitoring/activity-logger';
 import { applyPageMutation, PageRevisionMismatchError } from '@/services/api/page-mutation-service';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 
 const REMOVED_TOOL_NAMES = new Set(['import_from_github']);
 
@@ -79,6 +80,7 @@ export async function PUT(
       visibleToGlobalAssistant,
       toolExposureMode,
       sandboxEnabled,
+      defaultEnvId,
       expectedRevision,
     } = body;
 
@@ -206,6 +208,34 @@ export async function PUT(
       updateData.sandboxEnabled = sandboxEnabled;
       updatedFields.push('sandboxEnabled');
     }
+    if (defaultEnvId !== undefined) {
+      // Same validation the web Settings PATCH route (`/api/pages/[pageId]/
+      // agent-config`) applies — reject rather than coerce, and resolve
+      // through `resolveEnvInDrive` so this door cannot be used to enumerate
+      // env ids across drives the caller cannot see (review — general-
+      // purpose self-review, PR #2513: this MCP/API-facing route supported
+      // every other agent-config field but had no way to read or write the
+      // agent's default environment at all).
+      if (defaultEnvId !== null && (typeof defaultEnvId !== 'string' || defaultEnvId === '')) {
+        return NextResponse.json(
+          { error: 'defaultEnvId must be a non-empty string or null' },
+          { status: 400 }
+        );
+      }
+      if (defaultEnvId === null) {
+        updateData.defaultEnvId = null;
+      } else {
+        const env = await resolveEnvInDrive(defaultEnvId, agent.driveId);
+        if (!env) {
+          return NextResponse.json(
+            { error: 'Environment not found' },
+            { status: 404 }
+          );
+        }
+        updateData.defaultEnvId = defaultEnvId;
+      }
+      updatedFields.push('defaultEnvId');
+    }
 
     if (updatedFields.length === 0) {
       return NextResponse.json(
@@ -298,6 +328,7 @@ export async function PUT(
         hasSystemPrompt: !!(systemPrompt || agent.systemPrompt),
         toolExposureMode: updatedAgent.toolExposureMode ?? 'upfront',
         sandboxEnabled: Boolean(updatedAgent.sandboxEnabled),
+        defaultEnvId: updatedAgent.defaultEnvId ?? null,
         ...toolSurfaceEcho(toolSurface),
       },
       ...(toolSurfaceNotes.length > 0 ? { warnings: toolSurfaceNotes } : {}),

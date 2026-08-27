@@ -155,6 +155,10 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'createdBy', 'createdAt', 'updatedAt', 'trashedAt', 'revision', 'stateHash',
       'driveId', 'parentId', 'originalParentId',
     ],
+    excluded: {
+      defaultEnvId:
+        'Names a `drive_envs` row — the same PERSISTENT per-drive machine `agent_workspaces.envId` points at (see that exclusion, above) — and the bundle does not carry that table, so a carried value would reference a row the tenant has no INSERT for. Nullable; NULL is "no default" (ephemeral spawns), which is also the state a page with a dangling default correctly lands in on a substrate that holds no boxes. Same non-permanent status as the `agent_workspaces.envId` exclusion: revisit both together once `drive_envs` ships a writer.',
+    },
   },
 
   // The drive-scoped tag VOCABULARY (reclaimed from the never-written 0000

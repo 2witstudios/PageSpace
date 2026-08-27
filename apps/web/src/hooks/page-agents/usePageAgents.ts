@@ -25,6 +25,7 @@ export interface AgentSummary {
   enabledTools?: string[];
   enabledToolsCount?: number;
   hasSystemPrompt: boolean;
+  defaultEnvId?: string | null;
 }
 
 /**

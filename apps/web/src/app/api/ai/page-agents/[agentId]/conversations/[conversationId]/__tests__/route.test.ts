@@ -113,6 +113,8 @@ const mockAgent = () => ({
   title: 'Test Agent',
   type: 'AI_CHAT',
   driveId: mockDriveId,
+  defaultEnvId: null,
+  sandboxEnabled: false,
 });
 
 const mockConversationRow = (

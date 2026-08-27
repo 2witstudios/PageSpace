@@ -559,6 +559,13 @@ describe("POST /api/agent-workspaces — firstThing: 'claim'", () => {
     expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ driveId: 'drive-1' }));
   });
 
+  it("falls back to the claimed conversation's agent's own defaultEnvId, same as a direct mint (review — chatgpt-codex-connector)", async () => {
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+    const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1' });
+    expect(response.status).toBe(201);
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-default' }));
+  });
+
   it('refuses a body driveId that disagrees with the claimed page conversation\'s own agent drive', async () => {
     const response = await spawn({ firstThing: 'claim', conversationId: 'conv-1', driveId: 'drive-other' });
     expect(response.status).toBe(400);
@@ -889,6 +896,46 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
     await spawn({ driveId: 'drive-1', envId: 'env-1' });
     expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-1' }));
+  });
+
+  it("falls back to the agent's own defaultEnvId when the caller sends no envId", async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-default' }));
+  });
+
+  it('prefers an explicit envId over the agent\'s defaultEnvId — "didn\'t specify" is the only trigger', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', envId: 'env-explicit' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: 'env-explicit' }));
+  });
+
+  it('does NOT fall back when the caller sends explicit null — "New sandbox" must stay ephemeral even for an agent with a default (review — chatgpt-codex-connector)', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1', envId: null });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: null }));
+  });
+
+  it('does NOT fall back to defaultEnvId while sandboxEnabled is off — the stored default is inert until Sandbox is re-enabled (review — chatgpt-codex-connector)', async () => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockGetAiAgent.mockResolvedValue({ id: 'agent-1', title: 'Agent', type: 'AI_CHAT', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: false });
+    mockCanPrincipalViewPage.mockResolvedValue(true);
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-new' } });
+    await spawn({ driveId: 'drive-1', agentPageId: 'agent-1' });
+    expect(mockSpawnSession).toHaveBeenCalledWith(expect.objectContaining({ envId: null }));
   });
 
   it('404s when the env does not exist, or belongs to another drive — one answer for both', async () => {

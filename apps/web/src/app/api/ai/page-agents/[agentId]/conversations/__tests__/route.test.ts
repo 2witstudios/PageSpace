@@ -117,6 +117,8 @@ const mockAgent = () => ({
   title: 'Test Agent',
   type: 'AI_CHAT',
   driveId: mockDriveId,
+  defaultEnvId: null,
+  sandboxEnabled: false,
 });
 
 const createRequest = (agentId: string, method: string, body?: Record<string, unknown>) =>
