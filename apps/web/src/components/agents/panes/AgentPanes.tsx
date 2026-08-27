@@ -1801,16 +1801,16 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          isHostIdentity ? (
-            // This pane shows the SAME conversation the hosting AI_CHAT page's
-            // own header already identifies — a second selector and tab strip
-            // would be duplicate chrome for the identical thing. Matched by
-            // CONVERSATION, not agent: a split pane pointed at the same agent but
-            // a DIFFERENT conversation keeps its full selector, since that is its
-            // only in-grid way to be managed.
-            <PaneSessionIdentity name={agent?.title ?? title} />
-          ) : (
-            <div className="flex min-w-0 flex-1 items-center gap-0.5">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">
+            {isHostIdentity ? (
+              // This pane shows the SAME conversation the hosting AI_CHAT
+              // page's own header already identifies — a second agent
+              // selector would be duplicate chrome for switching an agent
+              // this pane can't actually leave. The tab strip is NOT
+              // dropped though: Chat/History/Settings still has to be
+              // reachable from every pane's own bar, host included.
+              <PaneSessionIdentity name={agent?.title ?? title} />
+            ) : (
               <AISelector
                 selectedAgent={agentPageId === null ? null : agent}
                 onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
@@ -1820,15 +1820,15 @@ function ChatPane({
                 disabled={disabledAgentSwitch}
                 className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
               />
-              <PaneChatTabStrip
-                activeTab={activeTab}
-                onSelectTab={setActiveTab}
-                // The Assistant (agentPageId null) has no page, so no Settings.
-                showSettings={agentPageId !== null}
-                agentTitle={agent?.title ?? 'Agent'}
-              />
-            </div>
-          )
+            )}
+            <PaneChatTabStrip
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              // The Assistant (agentPageId null) has no page, so no Settings.
+              showSettings={agentPageId !== null}
+              agentTitle={agent?.title ?? 'Agent'}
+            />
+          </div>
         }
         actions={
           <>
