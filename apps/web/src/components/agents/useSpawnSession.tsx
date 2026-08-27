@@ -724,17 +724,16 @@ function SpawnSessionPalette({
           <CommandInput placeholder="Search environments…" autoFocus />
           <CommandList>
             <CommandGroup>
-              {/* The ephemeral default leads, because it is what every session
-                  was before environments existed and what most still should be. */}
-              <CommandItem
-                value="ephemeral-New sandbox"
-                disabled={spawning}
-                onSelect={() => onPickEnv(null)}
-              >
-                <Zap className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
-                <span className="truncate">New sandbox</span>
-                <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
-              </CommandItem>
+              {/* Ordering decides cmdk's INITIAL highlight, not just visual
+                  position: cmdk (uncontrolled, no `value` prop threaded down
+                  from this dialog) highlights the first rendered, non-disabled
+                  item on mount — so the configured default, when there is
+                  one, must render BEFORE "New sandbox" or the advertised
+                  preselection is cosmetic and Enter still picks ephemeral
+                  (review — chatgpt-codex-connector, PR #2513). With no
+                  default, "New sandbox" leads exactly as before: it is what
+                  every session was before environments existed and what most
+                  still should be. */}
               {defaultEnv && (
                 <CommandItem
                   key={defaultEnv.id}
@@ -747,6 +746,15 @@ function SpawnSessionPalette({
                   <span className="ml-auto shrink-0 text-xs text-muted-foreground">Default</span>
                 </CommandItem>
               )}
+              <CommandItem
+                value="ephemeral-New sandbox"
+                disabled={spawning}
+                onSelect={() => onPickEnv(null)}
+              >
+                <Zap className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <span className="truncate">New sandbox</span>
+                <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
+              </CommandItem>
               {otherEnvs.map((env) => (
                 <CommandItem
                   key={env.id}

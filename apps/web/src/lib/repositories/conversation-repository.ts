@@ -54,6 +54,7 @@ export interface AiAgent {
   type: string;
   driveId: string;
   defaultEnvId: string | null;
+  sandboxEnabled: boolean;
 }
 
 export interface ConversationStats {
@@ -437,6 +438,7 @@ export const conversationRepository = {
         type: true,
         driveId: true,
         defaultEnvId: true,
+        sandboxEnabled: true,
       },
     });
 

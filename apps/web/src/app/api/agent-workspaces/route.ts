@@ -247,11 +247,19 @@ export async function POST(request: Request) {
     typeof body.agentPageId === 'string' && body.agentPageId.length > 0 ? body.agentPageId : null;
   // The environment to run inside, when one is named. The spawn palette now
   // offers it ("in <env name>", beside the ephemeral default), so this is a
-  // live field rather than the dark one #2441 landed. Omitted and `null` still
-  // mean the same thing they always did: the ordinary ephemeral sandbox.
+  // live field rather than the dark one #2441 landed.
   // It is NOT validated in this route: whether the env exists and belongs to
   // `driveId` is `spawnAgentSession`'s check, made there so every future caller
   // inherits it rather than each one re-deriving it.
+  //
+  // OMITTED vs explicit `null` now mean different things (review — chatgpt-
+  // codex-connector, PR #2513): omitted is "caller has no opinion," which
+  // falls back below to the target agent's own `defaultEnvId` when it has
+  // one. Explicit `null` is "New sandbox," the palette's own override for an
+  // agent that already has a default — and must NOT be reinterpreted as "no
+  // opinion," or selecting the ephemeral option for such an agent would
+  // silently spawn into its persistent env instead.
+  const envIdWasProvided = Object.prototype.hasOwnProperty.call(body, 'envId');
   let envId = typeof body.envId === 'string' && body.envId.length > 0 ? body.envId : null;
   const rawName = typeof body.name === 'string' ? body.name.trim() : '';
   const wantsShellFirst = body.firstThing === 'shell';
@@ -393,13 +401,23 @@ export async function POST(request: Request) {
     const denied = await denyIfCannotViewAgent(request, auth, agentPageId);
     if (denied) return denied;
     agentTitle = agent.title;
-    // Fall back to the agent's own default env when the caller didn't say —
-    // "didn't specify" means "use my default," not "force ephemeral." An
-    // explicit `envId` in the request always wins; this only fires when the
-    // caller sent nothing, so every caller of this route (palette, any
-    // future MCP/API tool) gets the agent's Settings-screen default without
-    // having to know it exists.
-    if (envId === null && agent.defaultEnvId) {
+    // Fall back to the agent's own default env when the caller truly said
+    // nothing (the field is OMITTED, not sent as explicit `null` — see the
+    // comment on `envIdWasProvided` above) — "didn't specify" means "use my
+    // default," not "force ephemeral." An explicit `envId` in the request
+    // (including explicit `null`, the palette's own ephemeral override)
+    // always wins; this only fires when the caller sent nothing, so every
+    // caller of this route (palette, any future MCP/API tool) gets the
+    // agent's Settings-screen default without having to know it exists.
+    //
+    // Also gated on the agent's OWN `sandboxEnabled`, live — not just at the
+    // moment the default was assigned (review — chatgpt-codex-connector, PR
+    // #2513): a stored `defaultEnvId` is deliberately inert data while
+    // Sandbox is off (see the settings-route comment on the same field), and
+    // a spawn-time fallback that ignored the current switch would silently
+    // place a session in that persistent environment the instant the field
+    // exists, regardless of whether the owner ever re-enabled Sandbox.
+    if (!envIdWasProvided && envId === null && agent.sandboxEnabled && agent.defaultEnvId) {
       envId = agent.defaultEnvId;
     }
   }
