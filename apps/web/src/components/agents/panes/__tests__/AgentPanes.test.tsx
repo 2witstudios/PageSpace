@@ -1515,6 +1515,57 @@ describe('AgentPanes — a History delete', () => {
     expect(panesNow().some((node) => node.target === null)).toBe(true);
   });
 
+  /**
+   * The host pane's bar carries a History tab now (it didn't used to — see
+   * the identity-slot fix above), so deleting the page's OWN hosted
+   * conversation from inside the grid is reachable for the first time.
+   * Unbinding the node alone would leave `AgentPageView`'s `current` state
+   * pointed at a conversation that no longer exists, with nothing to notice
+   * (review finding — chatgpt-codex-connector). This reuses the SAME
+   * `onConversationClosed` event a manual pane close already reports, which
+   * `AgentPageView`'s handler already turns into a `mintReplacementForCurrent`
+   * when `next` is null — no new recovery path, just routing this delete
+   * through the existing one.
+   */
+  it("notifies the host recovery path when the DELETED conversation is the page's own hosted one", async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    renderPanes({ hostConversationId: 'conv-1', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    await waitFor(() =>
+      expect(onConversationClosed).toHaveBeenCalledWith({
+        conversationId: 'conv-1',
+        next: null,
+        nextAgentPageId: null,
+      }),
+    );
+  });
+
+  it("does NOT notify the host recovery path for a delete that ISN'T the hosted conversation", async () => {
+    mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
+    mockAgentHistory();
+    seat([rootNode, chatNode('n1', WS, 0, 'conv-1')]);
+    const onConversationClosed = vi.fn();
+    const user = userEvent.setup();
+    // Hosted conversation is a DIFFERENT one — this pane's own delete is a
+    // split pane's own history, not the page's tracked conversation.
+    renderPanes({ hostConversationId: 'conv-2', onConversationClosed });
+
+    await screen.findByTestId('pane-chat');
+    await user.click(await screen.findByRole('tab', { name: /history/i }));
+    await user.click(await screen.findByText('delete-conv-1'));
+
+    await waitFor(() => expect(nodeShowingChat('conv-1')).toBeUndefined());
+    expect(onConversationClosed).not.toHaveBeenCalled();
+  });
+
   it('does NOT touch any pane when the delete is refused', async () => {
     mockSessionConversations([{ conversationId: 'conv-1', agentPageId: 'agent-1' }]);
     mockFetchWithAuth.mockImplementation(async (url: string, init?: { method?: string }) => {

@@ -1276,6 +1276,16 @@ export default function AgentPanes({
    * a pane in the same place, showing the picker — the simplest safe recovery,
    * with the user explicitly picking what is next rather than a guessed
    * replacement.
+   *
+   * If the deleted id IS `hostConversationId`, the hosting `AgentPageView` is
+   * tracking it as its own `current` conversation — unbinding the grid node
+   * alone leaves that page-level state pointed at a conversation that no
+   * longer exists, with nothing to notice (review finding: the host pane's
+   * bar didn't used to carry a tab strip at all, so this delete path was
+   * unreachable for the host's own conversation before it gained one).
+   * `onConversationClosed` is the SAME event a manual pane close already
+   * reports, and `AgentPageView`'s handler mints a replacement for exactly
+   * this case when `next` is null — reusing it here needs no new plumbing.
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
@@ -1298,8 +1308,11 @@ export default function AgentPanes({
           unbindPane(sessionId, node.id);
         }
       }
+      if (deletedConversationId === hostConversationId) {
+        onConversationClosed?.({ conversationId: deletedConversationId, next: null, nextAgentPageId: null });
+      }
     },
-    [sessionId, unbindPane, mutate],
+    [sessionId, unbindPane, mutate, hostConversationId, onConversationClosed],
   );
 
   /**
