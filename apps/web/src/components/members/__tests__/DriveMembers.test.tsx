@@ -86,9 +86,14 @@ const okRoles = () =>
   });
 
 // fetchMembers() fires 4 parallel requests on each invocation (members, agents/members, apps/members, roles).
-// On initial mount, DriveShareLinkSection adds 1 more for /roles (keyed on driveId, not socket events).
+// On initial mount, DriveShareLinkSection adds 2 more (keyed on driveId, not socket events): its
+// `Promise.allSettled` requests /share-links and /roles. It used to add only 1 here — not because
+// it made one request, but because /share-links went out on plain `fetch` and was invisible to this
+// spy. That plain fetch carried no Bearer, so the call 401'd on the desktop shell; moving it to
+// `fetchWithAuth` is what makes it visible to this count.
 const MEMBER_FETCHES = 4;
-const FETCHES_PER_CALL = MEMBER_FETCHES + 1;
+const SHARE_LINK_SECTION_FETCHES = 2;
+const FETCHES_PER_CALL = MEMBER_FETCHES + SHARE_LINK_SECTION_FETCHES;
 
 const urlAwareMock = (
   members: ReturnType<typeof member>[],

@@ -60,7 +60,7 @@ export function useDriveShareLink(driveId: string) {
     async function loadAll() {
       try {
         const [linksResult, rolesResult] = await Promise.allSettled([
-          fetch(`/api/drives/${driveId}/share-links`, { credentials: 'include' }),
+          fetchWithAuth(`/api/drives/${driveId}/share-links`),
           fetchWithAuth(`/api/drives/${driveId}/roles`),
         ]);
 

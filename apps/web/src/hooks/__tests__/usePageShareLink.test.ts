@@ -4,13 +4,17 @@ import { renderHook, act, waitFor } from '@testing-library/react';
 vi.mock('@/lib/auth/auth-fetch', () => ({
   post: vi.fn(),
   del: vi.fn(),
+  // The GET goes through the authenticated transport too. It used to be a plain
+  // `fetch` with `credentials: 'include'`, which on the desktop shell carries no
+  // Bearer and no cookie — the middleware 401s it before the route runs.
+  fetchWithAuth: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
 
-import { post, del } from '@/lib/auth/auth-fetch';
+import { post, del, fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { usePageShareLink } from '../usePageShareLink';
 
 const PAGE_ID = 'page-abc';
@@ -18,14 +22,14 @@ const LINK_ID = 'link-456';
 const SHARE_URL = 'https://app.pagespace.ai/s/ps_share_abc';
 
 function mockFetchResolve(data: unknown) {
-  vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+  vi.mocked(fetchWithAuth).mockResolvedValueOnce({
     ok: true,
     json: async () => data,
   } as Response);
 }
 
 function mockFetchReject() {
-  vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('network error'));
+  vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network error'));
 }
 
 describe('usePageShareLink', () => {

@@ -1,5 +1,16 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 
+// Stream-join must go through `fetchWithAuth`, not global fetch. On the desktop
+// shell there is no session cookie — the Bearer is attached per API call — and
+// the middleware 401s a cookie-less API request before the route ever runs
+// (middleware.ts). Mocking the module rather than the global is what keeps that
+// seam under test: a regression to plain `fetch` makes these mocks unused and
+// the assertion below fails.
+const mockFetchWithAuth = vi.fn();
+vi.mock('@/lib/auth/auth-fetch', () => ({
+  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+}));
+
 /** A text part arrives as three frames; the fold needs the start before any delta. */
 const textFrames = (...deltas: string[]) => [
   'data: {"seq":0,"chunk":{"type":"text-start","id":"t1"}}\n\n',
@@ -33,10 +44,7 @@ describe('consumeStreamJoin', () => {
   }
 
   function stubFetch(body: ReadableStream<Uint8Array>, ok = true, status = 200) {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({ ok, status, body }),
-    );
+    mockFetchWithAuth.mockResolvedValue({ ok, status, body });
   }
 
   it('given frames and a done sentinel, should fold them and report the seq each fold reflects', async () => {
@@ -153,15 +161,19 @@ describe('consumeStreamJoin', () => {
     expect(seen).toEqual([]);
   });
 
-  it('given a cursor, should request it and send credentials', async () => {
+  it('given a cursor, should request it through the authenticated transport', async () => {
     stubFetch(encodeLines(['data: {"done":true,"aborted":false}\n\n']));
 
     const { consumeStreamJoin } = await import('../stream-join-client');
     await consumeStreamJoin('m1', new AbortController().signal, () => {}, 12);
 
-    expect(fetch).toHaveBeenCalledWith(
+    // Credentials are `fetchWithAuth`'s business now — it attaches the desktop
+    // Bearer and the web cookie. Asserting `credentials: 'include'` here would
+    // be re-asserting the transport's contract, and would have kept passing
+    // against the plain-fetch bug this file now guards.
+    expect(mockFetchWithAuth).toHaveBeenCalledWith(
       '/api/ai/chat/stream-join/m1?fromSeq=12',
-      expect.objectContaining({ credentials: 'include' }),
+      expect.anything(),
     );
   });
 
@@ -171,7 +183,7 @@ describe('consumeStreamJoin', () => {
     const { consumeStreamJoin } = await import('../stream-join-client');
     await consumeStreamJoin('m 1/x', new AbortController().signal, () => {});
 
-    expect(fetch).toHaveBeenCalledWith(
+    expect(mockFetchWithAuth).toHaveBeenCalledWith(
       '/api/ai/chat/stream-join/m%201%2Fx?fromSeq=0',
       expect.anything(),
     );
@@ -188,5 +200,25 @@ describe('consumeStreamJoin', () => {
     await consumeStreamJoin('m1', new AbortController().signal, (parts) => seen.push(parts));
 
     expect(seen.at(-1)).toEqual([textPart('split')]);
+  });
+
+  it('given the desktop shell, should join through fetchWithAuth so a Bearer is attached', async () => {
+    // The regression this guards: `consumeStreamJoin` used plain `fetch` with
+    // `credentials: 'include'`. On desktop there is no session cookie, so the
+    // middleware 401s the request before the route runs and the user watches a
+    // stream they can never join. Every other authenticated call in the app
+    // goes through `fetchWithAuth`, which attaches the Bearer and refreshes on
+    // 401; this one silently did not.
+    stubFetch(encodeLines(['data: {"done":true,"aborted":false}\n\n']));
+    const globalFetch = vi.fn();
+    vi.stubGlobal('fetch', globalFetch);
+
+    const { consumeStreamJoin } = await import('../stream-join-client');
+    await consumeStreamJoin('m1', new AbortController().signal, () => {});
+
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchWithAuth.mock.calls[0][0]).toContain('/api/ai/chat/stream-join/m1');
+    // Plain fetch must not be the transport, or desktop loses its Bearer.
+    expect(globalFetch).not.toHaveBeenCalled();
   });
 });
