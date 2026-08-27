@@ -67,13 +67,25 @@ interface PageCopy {
 function copyFor(decision: AppRouteDecision): PageCopy {
   switch (decision.kind) {
     case 'parked':
-      return {
-        title: 'App paused',
-        heading: 'This app is paused',
-        body:
-          'It ran out of credits, so it has been stopped rather than left running. ' +
-          'The owner can bring it back by topping up their PageSpace account — nothing has been lost.',
-      };
+      // The daily budget is a DIFFERENT thing to be told: nobody needs to top
+      // anything up, and the app returns by itself when the counter rolls over at
+      // midnight UTC. Saying "it ran out of credits" there would send the owner to
+      // buy something that changes nothing.
+      return decision.reason === 'daily_cap'
+        ? {
+            title: 'App paused',
+            heading: 'This app is paused for today',
+            body:
+              'It reached its daily running-time limit, so it has been stopped rather than left running. ' +
+              'It becomes available again tomorrow — nothing has been lost.',
+          }
+        : {
+            title: 'App paused',
+            heading: 'This app is paused',
+            body:
+              'It ran out of credits, so it has been stopped rather than left running. ' +
+              'The owner can bring it back by topping up their PageSpace account — nothing has been lost.',
+          };
     case 'unavailable':
       return decision.reason === 'deploying'
         ? {

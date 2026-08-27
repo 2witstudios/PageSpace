@@ -149,13 +149,22 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
   },
 
   /**
-   * The PUBLISHED-APP row source — every app's rootfs, whatever its status.
+   * The PUBLISHED-APP row source — every METERED app's rootfs, whatever its status.
    *
    * No liveness predicate, unlike the two Sprite sources: their filter exists
    * because a torn-down Sprite holds no filesystem, whereas a published app holds
    * its image from the moment a build pins one until the row is destroyed.
    * `destroying` rows are the one exclusion — their Fly app is being killed, and
    * billing a resource we are actively removing bills for our own teardown latency.
+   *
+   * DEDICATED APPS ARE EXCLUDED, for the same reason the awake meter excludes them:
+   * that tier buys a FLAT MONTHLY PRICE, and draining credits for its rootfs
+   * alongside it would charge the customer twice for one machine. The flat price
+   * absorbs the rootfs cost comfortably — it is derived from CPU and memory at
+   * 1.5x the Sprites rate table, which for an always-on guest is orders of
+   * magnitude above the $0.15/GB-month the image actually costs. Filtering here
+   * rather than skipping inside the loop keeps the meter's counts an honest tally
+   * of what it is responsible for.
    *
    * `imageSizeMeasuredAt` is NOT NULL exactly when `imageSizeBytes` is (a CHECK
    * constraint), so the never-measured branch here means precisely "no build has
@@ -172,24 +181,20 @@ export const defaultReconcileSandboxStorageDeps: ReconcileSandboxStorageDeps = {
         measuredAt: publishedApps.imageSizeMeasuredAt,
       })
       .from(publishedApps)
-      .where(ne(publishedApps.status, 'destroying'));
+      .where(and(ne(publishedApps.status, 'destroying'), eq(publishedApps.tier, 'metered')));
   },
 
   lookupDriveOwnerId,
 
   /**
-   * NOTE ON FAILURE: this cannot report one. `AIMonitoring.trackUsage` returns
-   * `Promise<void>` and swallows its own errors into a
-   * `'AI usage tracking failed — spend may be UNBILLED'` log rather than
-   * rejecting, so a credit-ledger outage looks identical to a successful charge
-   * from here — the reconcile counts it as `charged`, advances the watermark, and
-   * the window is closed for good. That swallow is deliberate upstream (a throw
-   * there would break user-facing generation), so it is not this PR's to undo;
-   * the consequence is documented on `ReconcileSandboxStorageResult.charged` and
-   * tracked in issue #2444.
+   * REPORTS ITS FAILURE. `AIMonitoring.trackUsage` still never throws (a throw
+   * there would break user-facing generation), but it now resolves with a
+   * `UsageTrackingOutcome` saying whether the `ai_usage_logs` row landed — so a
+   * credit-ledger outage no longer looks identical to a successful charge, and the
+   * reconcile can hold the watermark instead of closing the window over lost spend.
    */
-  async chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
-    await AIMonitoring.trackUsage({
+  chargeStorage({ payerId, driveId, subjectKind, subjectId, costDollars, gbMonths }) {
+    return AIMonitoring.trackUsage({
       userId: payerId,
       provider: 'sprites',
       // The billed unit, named in the meter line itself. Sessions keep the

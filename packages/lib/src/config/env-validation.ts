@@ -178,6 +178,20 @@ export const serverEnvSchema = z
     // networks, so all published apps must share one.
     PUBLISHED_APPS_NETWORK: z.string().optional(),
 
+    // The published-app runtime knobs: how long an app may go unvisited before the
+    // idle reaper stops it, how often the router refreshes its recency stamp, and
+    // the per-app daily awake budget past which an app is parked. All optional and
+    // all string-typed for the same reason APP_HOSTING_ENABLED is: a malformed value
+    // must not fail app-wide env validation for a feature that is dark by default.
+    // The resolvers in services/app-hosting/app-hosting-env.ts parse them at CALL
+    // time and fall back to their documented defaults (900s / 60s / 43200s) for
+    // anything that is not a non-negative integer — a typo must not silently switch
+    // off the reaper (leaving the fleet awake) or the cap (leaving one app's daily
+    // spend unbounded). An explicit 0 disables each one.
+    PUBLISHED_APP_IDLE_STOP_SECONDS: z.string().optional(),
+    PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS: z.string().optional(),
+    PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP: z.string().optional(),
+
     // The apex published apps are served from (`<subdomain>.<apex>`). Optional in
     // the schema, but REQUIRED by the superRefine below once APP_HOSTING_ENABLED
     // is 'true' — unset only falls back to PUBLISHED_APPS_APEX_DEFAULT while

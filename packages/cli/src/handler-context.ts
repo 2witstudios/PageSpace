@@ -1,5 +1,6 @@
 import type { PageSpaceClient } from '@pagespace/sdk';
 import type { CredentialKind } from './auth/credential-kind.js';
+import type { AuthSource } from './auth/resolve.js';
 import type { ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 
@@ -23,6 +24,25 @@ export interface HandlerContext {
    * refusal (see `auth/credential-kind.ts`), never enough to read a token.
    */
   readonly credentialKind: CredentialKind;
+  /**
+   * WHICH precedence source (`flag` > `env` > `stored` > `none`) resolved the
+   * credential — secret-free (just the tag, never a token or a stored key
+   * name). Lets a refusal built on `credentialKind` (e.g.
+   * `keysCommandNeedsLoginMessage`) name the actual flag/env-var/stored-key
+   * to remove instead of guessing one the caller never passed.
+   */
+  readonly credentialSourceKind: AuthSource['kind'];
+  /**
+   * The literal env var that actually supplied the credential — including a
+   * legacy alias (`PAGESPACE_AUTH_TOKEN`, `PAGESPACE_PROFILE`) when THAT is
+   * what was set, not the modern name it was folded into. Null when the
+   * credential did not come from an env var at all (a `--token`/`--key` flag,
+   * the stored default slot, or nothing resolved). Telling a caller to unset
+   * `PAGESPACE_TOKEN` when the legacy `PAGESPACE_AUTH_TOKEN` is what is
+   * actually set leaves it in place — the caller re-runs, resolves the same
+   * credential, and hits the same refusal again.
+   */
+  readonly credentialSourceEnvVarName: string | null;
   /** The host → active-key-name map (`pagespace keys use`) — read by `whoami`, written by `keys use`. */
   readonly activeKeyStore: ActiveKeyStore;
   /** Whether stdin is an interactive terminal — governs the fail-closed rule for destructive verbs. */

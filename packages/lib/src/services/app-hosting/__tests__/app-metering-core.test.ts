@@ -1,8 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { assert } from '../../sandbox/__tests__/riteway';
 import {
+  METER_AWAKE_LOCK_KEY,
   msToSeconds,
   planAwakeSettle,
+  planDailyAwakeCap,
+  planIdleStop,
+  utcDayOf,
   classifyFlyEventAction,
   flyEventInstant,
   awakeSecondsFromEvents,
@@ -325,5 +329,218 @@ describe('evaluateAwakeDrift', () => {
       actual: { deltaSeconds: drift.deltaSeconds, exceeded: drift.exceeded },
       expected: { deltaSeconds: 0, exceeded: false },
     });
+  });
+});
+
+
+const CAP_NOW = new Date('2026-08-20T12:00:00.000Z');
+const capAgo = (ms: number) => new Date(CAP_NOW.getTime() - ms);
+
+describe('utcDayOf', () => {
+  it('given an instant late in the UTC day, should name that UTC day and not the local one', () => {
+    // The counter this keys is compared against a value another container wrote.
+    // Two containers in different zones would roll the day over at different
+    // moments — resetting the cap twice a day, or never.
+    assert({
+      given: '23:30 UTC on the 20th',
+      should: 'answer the 20th',
+      actual: utcDayOf(new Date('2026-08-20T23:30:00.000Z')),
+      expected: '2026-08-20',
+    });
+  });
+});
+
+describe('planDailyAwakeCap', () => {
+  it('given a counter from YESTERDAY, should read today’s spend as ZERO', () => {
+    // The regression: reading a stale counter as today's parks an app on the
+    // strength of yesterday's traffic, every morning, forever.
+    assert({
+      given: 'a full day’s seconds recorded against yesterday',
+      should: 'report nothing spent today and refuse to park',
+      actual: planDailyAwakeCap({
+        tier: 'metered',
+        counterDay: '2026-08-19',
+        secondsToday: 86_400,
+        today: '2026-08-20',
+        capSeconds: 43_200,
+      }),
+      expected: { exceeded: false, secondsToday: 0 },
+    });
+  });
+
+  it('given today’s spend AT the cap, should report it exceeded', () => {
+    assert({
+      given: 'a counter exactly at the budget',
+      should: 'exceed — the budget is spent, not nearly spent',
+      actual: planDailyAwakeCap({
+        tier: 'metered',
+        counterDay: '2026-08-20',
+        secondsToday: 43_200,
+        today: '2026-08-20',
+        capSeconds: 43_200,
+      }),
+      expected: { exceeded: true, secondsToday: 43_200 },
+    });
+  });
+
+  it('NEVER caps a dedicated app, however many seconds it has spent', () => {
+    // The flat-rate tier is sold as always-on, and `parked` is metered-only at the
+    // database — capping one would be a refusal the status machine could not carry
+    // out even if the product wanted it.
+    assert({
+      given: 'a dedicated app that has been awake all day',
+      should: 'never exceed',
+      actual: planDailyAwakeCap({
+        tier: 'dedicated',
+        counterDay: '2026-08-20',
+        secondsToday: 86_400,
+        today: '2026-08-20',
+        capSeconds: 43_200,
+      }).exceeded,
+      expected: false,
+    });
+  });
+
+  it('given a cap of 0 (or a corrupt one), should disable the cap rather than park everything', () => {
+    assert({
+      given: 'the cap switched off, and a NaN cap',
+      should: 'never exceed on either',
+      actual: [0, Number.NaN, -1].map((capSeconds) =>
+        planDailyAwakeCap({
+          tier: 'metered',
+          counterDay: '2026-08-20',
+          secondsToday: 999_999,
+          today: '2026-08-20',
+          capSeconds,
+        }).exceeded,
+      ),
+      expected: [false, false, false],
+    });
+  });
+
+  it('floors a corrupt counter at 0 instead of comparing NaN', () => {
+    assert({
+      given: 'a NaN counter for today',
+      should: 'read as zero spent',
+      actual: planDailyAwakeCap({
+        tier: 'metered',
+        counterDay: '2026-08-20',
+        secondsToday: Number.NaN,
+        today: '2026-08-20',
+        capSeconds: 43_200,
+      }),
+      expected: { exceeded: false, secondsToday: 0 },
+    });
+  });
+});
+
+describe('planIdleStop', () => {
+  it('takes the LATER of the two stamps as recency — a busy app is not reaped for having woken long ago', () => {
+    // `lastWakeAt` alone would reap an app 15 minutes after it woke, however much
+    // traffic it was serving in between.
+    assert({
+      given: 'an app woken an hour ago and hit a minute ago',
+      should: 'keep it',
+      actual: planIdleStop({
+        lastHitAt: capAgo(60_000),
+        lastWakeAt: capAgo(3_600_000),
+        now: CAP_NOW,
+        idleSeconds: 900,
+      }),
+      expected: { action: 'keep', reason: 'active' },
+    });
+  });
+
+  it('given a WAKE with no hit yet, should keep the app — the wake precedes the request that caused it', () => {
+    // The regression: reaping on `lastHitAt` alone stops a machine between the
+    // moment it was started and the moment its first request is routed.
+    assert({
+      given: 'an app woken ten seconds ago and never hit',
+      should: 'keep it',
+      actual: planIdleStop({ lastHitAt: null, lastWakeAt: capAgo(10_000), now: CAP_NOW, idleSeconds: 900 }),
+      expected: { action: 'keep', reason: 'active' },
+    });
+  });
+
+  it('given no stamp at all, should KEEP the app and say so — never reap on no evidence', () => {
+    // A `running` row with no boundary is a row we do not understand. The honest
+    // answer is to leave the machine alone and count it; the heartbeat meter
+    // back-fills `lastWakeAt` on its next tick, so the state is self-clearing.
+    assert({
+      given: 'a running row with neither stamp',
+      should: 'keep it, under its own reason',
+      actual: planIdleStop({ lastHitAt: null, lastWakeAt: null, now: CAP_NOW, idleSeconds: 900 }),
+      expected: { action: 'keep', reason: 'no_activity_signal' },
+    });
+  });
+
+  it('given quiet past the threshold, should stop and report how idle it was', () => {
+    assert({
+      given: 'an app last hit 20 minutes ago against a 15-minute threshold',
+      should: 'stop it',
+      actual: planIdleStop({
+        lastHitAt: capAgo(1_200_000),
+        lastWakeAt: capAgo(3_600_000),
+        now: CAP_NOW,
+        idleSeconds: 900,
+      }),
+      expected: { action: 'stop', idleSeconds: 1200 },
+    });
+  });
+
+  it('given idle time EXACTLY at the threshold, should keep it — the app is idle enough only once past it', () => {
+    assert({
+      given: 'an app last hit exactly 15 minutes ago',
+      should: 'keep it',
+      actual: planIdleStop({ lastHitAt: capAgo(900_000), lastWakeAt: null, now: CAP_NOW, idleSeconds: 900 }),
+      expected: { action: 'keep', reason: 'active' },
+    });
+  });
+
+  it('given a stamp in the FUTURE (clock skew), should keep the app rather than stop a live one', () => {
+    assert({
+      given: 'a hit stamped a minute from now',
+      should: 'keep it',
+      actual: planIdleStop({ lastHitAt: capAgo(-60_000), lastWakeAt: null, now: CAP_NOW, idleSeconds: 900 }),
+      expected: { action: 'keep', reason: 'active' },
+    });
+  });
+
+  it('given the threshold switched off, should report `disabled` and never stop anything', () => {
+    assert({
+      given: 'a threshold of 0 against an app idle for a week',
+      should: 'keep it, as disabled',
+      actual: planIdleStop({
+        lastHitAt: capAgo(7 * 86_400_000),
+        lastWakeAt: null,
+        now: CAP_NOW,
+        idleSeconds: 0,
+      }),
+      expected: { action: 'keep', reason: 'disabled' },
+    });
+  });
+
+  it('ignores an unusable Date rather than treating it as recency', () => {
+    assert({
+      given: 'an Invalid Date hit stamp beside a real, stale wake',
+      should: 'decide on the wake alone and stop',
+      actual: planIdleStop({
+        lastHitAt: new Date('nonsense'),
+        lastWakeAt: capAgo(1_200_000),
+        now: CAP_NOW,
+        idleSeconds: 900,
+      }).action,
+      expected: 'stop',
+    });
+  });
+});
+
+describe('METER_AWAKE_LOCK_KEY', () => {
+  it('is the exact key the awake meter’s cron holds — the lifecycle stop must take the SAME lock', () => {
+    // The two modules cannot import each other (the meter imports the stop seam),
+    // so the key lives here and BOTH read it. Change it in one place only and a
+    // stop-settle silently stops serializing against the heartbeat, which is the
+    // double-charge PR #2493 flagged.
+    expect(METER_AWAKE_LOCK_KEY).toBe('meter-published-apps-awake');
   });
 });

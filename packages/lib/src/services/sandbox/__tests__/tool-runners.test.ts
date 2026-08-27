@@ -1156,6 +1156,43 @@ describe('readSandboxFile', () => {
     expect(result.notice).toContain('too long to show in full');
   });
 
+  it('given a full-file read whose content exactly fills the byte cap, should still report truncated and explain why', async () => {
+    // Every line is short enough, and there are few enough of them, that
+    // per-line clipping and the line-count window are both out of the
+    // picture — reachesEnd is true and windowed is false. The ONLY thing
+    // trimmed is the restored trailing newline, which selectLineWindow drops
+    // rather than exceed maxBytes by one byte. Before this fix, `truncated`
+    // was computed as `windowed || lineElided` alone, so this case silently
+    // reported `truncated: false` with no notice.
+    const width = 200; // bytes per line, well under MAX_LINE_BYTES
+    const lines: string[] = [];
+    let used = 0;
+    while (true) {
+      const cost = width + (lines.length > 0 ? 1 : 0);
+      if (used + cost > SANDBOX_MAX_OUTPUT_BYTES - width) break; // leave room to compute an exact final line
+      lines.push('x'.repeat(width));
+      used += cost;
+    }
+    // One final short line sized to make the total land EXACTLY at the cap.
+    const finalLen = SANDBOX_MAX_OUTPUT_BYTES - used - 1;
+    lines.push('x'.repeat(finalLen));
+    used += finalLen + 1;
+    expect(used).toBe(SANDBOX_MAX_OUTPUT_BYTES);
+
+    const { deps } = makeDeps({
+      reconnect: async () => makeSandbox({ readFileToBuffer: async () => Buffer.from(lines.join('\n') + '\n') }),
+    });
+    const result = await readSandboxFile({ path: 'exact-cap.txt', ctx: makeCtx(), deps });
+    expect(result.success).toBe(true);
+    if (!result.success) return;
+
+    expect(result.lastLine).toBe(lines.length);
+    expect(result.totalLines).toBe(lines.length);
+    expect(Buffer.byteLength(result.content, 'utf8')).toBeLessThanOrEqual(SANDBOX_MAX_OUTPUT_BYTES);
+    expect(result.truncated).toBe(true);
+    expect(result.notice).toContain('output size limit trimmed the very end');
+  });
+
   it('given a window cut short by the byte budget, should point the next read at the line content actually ended on', async () => {
     // The bug this pins: the budget used to be applied to the joined window
     // AFTER selection, so content stopped near line 1,300 while lastLine still
@@ -1295,6 +1332,7 @@ function makeBilling(over: Partial<SandboxRunDeps['billing']> = {}): {
     },
     trackUsage: async (input) => {
       trackUsageCalls.push(input);
+      return { persisted: true, creditsSettled: true };
     },
     releaseHold: async (holdId) => {
       releaseHoldCalls.push(holdId);
@@ -1399,6 +1437,68 @@ describe('runBashInSandbox — machine billing (Terminal Epic 3)', () => {
     expect(trackUsageCalls).toEqual([
       { payerId: 'owner-42', holdId: 'hold-1', activeSeconds: 5, pageId: undefined, driveId: 'd1', workspaceId: 'ws-1' },
     ]);
+    expect(releaseHoldCalls).toEqual([]);
+  });
+
+  it('given a settle that resolves WITHOUT persisting, RETURNS the hold instead of handing it off', async () => {
+    // A one-shot run has no window to reopen, so the honest response to a lost
+    // charge is to stop pretending the credit pipeline owns the reservation:
+    // `trackUsage` wrote nothing, so nothing downstream will ever settle or delete
+    // the hold, and leaving it would suppress the payer's spendable until its TTL.
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    let settleAttempts = 0;
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => {
+        settleAttempts += 1;
+        return { persisted: false, creditsSettled: false };
+      },
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The user's command still succeeds — billing never fails a run.
+    expect(result).toMatchObject({ success: true });
+    expect(settleAttempts).toBe(1);
+    expect(releaseHoldCalls).toEqual(['hold-1']);
+  });
+
+  it('given a PERSISTED settle whose ledger settle was deferred, still hands the hold off to the credit pipeline', async () => {
+    const clock = makeMutableClock(new Date('2026-06-01T12:00:00.000Z').getTime());
+    const sandbox = makeSandbox({
+      runCommand: async () => {
+        clock.advance(5000);
+        return { exitCode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+    const { billing, releaseHoldCalls } = makeBilling({
+      trackUsage: async () => ({ persisted: true, creditsSettled: false }),
+    });
+    const { deps } = makeDeps({
+      billing,
+      resolveBillingSession: makeBillingSession({ ownerId: 'owner-42', driveId: 'd1', workspaceId: 'ws-1' }),
+      reconnect: async () => sandbox,
+      now: clock.now,
+    });
+
+    await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+    // The usage row exists, so the backfill cron owns the CHARGE and will settle it
+    // from that row; releasing the hold here would under-reserve that pending debit.
+    // The hold itself is disposed of by whichever lands first — the cron's settle
+    // transaction, or its own TTL expiry (the cron sweeps expired holds; it does not
+    // dispose of live ones).
     expect(releaseHoldCalls).toEqual([]);
   });
 

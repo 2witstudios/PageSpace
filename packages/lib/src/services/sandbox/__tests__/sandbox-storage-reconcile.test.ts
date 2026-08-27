@@ -150,6 +150,9 @@ function makeDeps(over: Partial<ReconcileSandboxStorageDeps> = {}): {
     lookupDriveOwnerId: async () => 'owner-1',
     chargeStorage: async (input) => {
       chargeCalls.push(input);
+      // The real seam reports whether the usage row landed; the happy-path stub
+      // says it did, and the tests that care override this.
+      return { persisted: true, creditsSettled: true };
     },
     // `'advanced'` = the row was written with the value we asked for. The real
     // writers are monotonic and answer `'superseded'` when a provision already
@@ -324,12 +327,63 @@ describe('reconcileSandboxStorage', () => {
     expect(agentSessionAdvanceCalls.map((c) => c.workspaceId)).toEqual(['fine']);
   });
 
+  // ── The persistence CONTRACT (issue: trackUsage must report its outcome) ────
+  // `chargeStorage` reaches `AIMonitoring.trackUsage`, which never throws. Before it
+  // reported an outcome, a charge whose `ai_usage_logs` write failed RESOLVED — so
+  // this loop counted it `charged`, advanced the watermark, and closed the window
+  // over spend that nothing would ever bill. These two tests are the mutation proof:
+  // flip `persisted` and the watermark must HOLD; restore it and it must advance.
+
+  it('given a charge that resolves WITHOUT persisting, HOLDS the watermark so the next run re-bills the window', async () => {
+    const { deps, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-lost' })],
+      chargeStorage: async () => ({ persisted: false, creditsSettled: false }),
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a storage charge that resolved but wrote no usage row',
+      should: 'count it failed, bill nothing, and leave the watermark untouched',
+      actual: {
+        charged: result.charged,
+        failed: result.failed,
+        totalCostDollars: result.totalCostDollars,
+        advances: agentSessionAdvanceCalls.length,
+      },
+      expected: { charged: 0, failed: 1, totalCostDollars: 0, advances: 0 },
+    });
+    // Not `chargedButUnadvanced`: that means money moved and only the watermark
+    // write failed, which is the opposite situation and the opposite remedy.
+    expect(result.chargedButUnadvanced).toBe(0);
+  });
+
+  it('given a PERSISTED charge whose ledger settle was deferred, still ADVANCES the watermark (the backfill cron owns that charge)', async () => {
+    // The inverse guard, and it matters as much: holding the window open here would
+    // re-bill a span the credit backfill cron is already collecting from the usage
+    // row — a double-charge caused by trying to prevent a lost one.
+    const { deps, agentSessionAdvanceCalls } = makeDeps({
+      listAgentSessionSprites: async () => [agentSession({ workspaceId: 'session-deferred' })],
+      chargeStorage: async () => ({ persisted: true, creditsSettled: false }),
+    });
+
+    const result = await reconcileSandboxStorage(deps);
+
+    assert({
+      given: 'a persisted charge whose ledger settle was deferred to the backfill cron',
+      should: 'count it charged and close the window exactly as a fully settled charge would',
+      actual: { charged: result.charged, failed: result.failed, advances: agentSessionAdvanceCalls.length },
+      expected: { charged: 1, failed: 0, advances: 1 },
+    });
+  });
+
   it('given chargeStorage ITSELF throws, bills nothing for that row (no double-count) and never attempts its watermark advance', async () => {
     const { deps, chargeCalls, agentSessionAdvanceCalls } = makeDeps({
       listAgentSessionSprites: async () => [agentSession({ workspaceId: 'boom' }), agentSession({ workspaceId: 'fine' })],
       chargeStorage: async (input) => {
         if (input.subjectId === 'boom') throw new Error('credit ledger unreachable');
         chargeCalls.push(input);
+        return { persisted: true, creditsSettled: true };
       },
     });
 
@@ -589,6 +643,7 @@ describe('reconcileSandboxStorage', () => {
       chargeStorage: async (input) => {
         if (input.subjectId === 'env-boom') throw new Error('credit ledger unreachable');
         chargeCalls.push(input);
+        return { persisted: true, creditsSettled: true };
       },
     });
 

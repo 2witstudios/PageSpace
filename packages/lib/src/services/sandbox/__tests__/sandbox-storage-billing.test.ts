@@ -147,6 +147,27 @@ describe('defaultReconcileSandboxStorageDeps.lookupDriveOwnerId', () => {
 });
 
 describe('defaultReconcileSandboxStorageDeps.chargeStorage', () => {
+  it('RETURNS the credit seam’s persistence outcome verbatim — the reconcile gates its watermark on it', async () => {
+    // A resolved charge is not a landed one. If this binding dropped the outcome
+    // (an `async` wrapper that awaits and returns nothing, which is what it used to
+    // be), the reconcile would be back to advancing watermarks over lost charges.
+    const charge = () =>
+      defaultReconcileSandboxStorageDeps.chargeStorage({
+        payerId: 'owner-1',
+        driveId: 'drive-1',
+        subjectKind: 'session',
+        subjectId: 'ws-1',
+        costDollars: 0.01,
+        gbMonths: 0.5,
+      });
+
+    mockTrackUsage.mockResolvedValueOnce({ persisted: false, creditsSettled: false });
+    expect(await charge()).toEqual({ persisted: false, creditsSettled: false });
+
+    mockTrackUsage.mockResolvedValueOnce({ persisted: true, creditsSettled: true });
+    expect(await charge()).toEqual({ persisted: true, creditsSettled: true });
+  });
+
   it("bills source:'terminal' with no holdId (background reconcile charge)", async () => {
     mockTrackUsage.mockResolvedValue(undefined);
 
@@ -447,7 +468,7 @@ describe('reconcileSandboxStorageSerialized', () => {
       listDriveEnvSprites: vi.fn(async () => []),
       listPublishedAppRootfs: vi.fn(async () => []),
       lookupDriveOwnerId: vi.fn(async () => null),
-      chargeStorage: vi.fn(async () => {}),
+      chargeStorage: vi.fn(async () => ({ persisted: true, creditsSettled: true })),
       advanceAgentSessionWatermark: vi.fn(async () => 'advanced' as const),
       advanceDriveEnvWatermark: vi.fn(async () => 'advanced' as const),
       advancePublishedAppWatermark: vi.fn(async () => 'advanced' as const),

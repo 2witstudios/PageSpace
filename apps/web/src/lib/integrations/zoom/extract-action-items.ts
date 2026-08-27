@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 import type { ActionItem } from './build-document';
 
 const SYSTEM_PROMPT =
@@ -28,7 +28,7 @@ export async function extractActionItems(
       maxOutputTokens: 512,
     });
 
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: provider.provider,
       model: provider.modelName,
@@ -40,7 +40,7 @@ export async function extractActionItems(
         : undefined,
       success: true,
       metadata: { feature: 'zoom_action_items' },
-    });
+    }));
 
     const jsonText = result.text.trim().replace(/^```json\s*/i, '').replace(/\s*```$/, '');
     const parsed = JSON.parse(jsonText);

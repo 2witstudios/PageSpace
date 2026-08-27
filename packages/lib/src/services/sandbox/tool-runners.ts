@@ -46,6 +46,7 @@ import {
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
+import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
 /** Largest file body a single `writeFile` may submit, in bytes. */
 export const MAX_WRITE_BYTES = 1024 * 1024;
@@ -128,6 +129,12 @@ export interface SandboxBillingDeps {
    * agent page; `driveId` is the realtime shell bridge's session-level
    * attribution (a session is drive-scoped, not page-anchored) — a caller
    * sets whichever one its own model has, never both.
+   *
+   * REPORTS ITS OUTCOME: resolving is not the same as settling.
+   * `UsageTrackingOutcome.persisted` says whether the usage row landed, and the
+   * realtime shell's heartbeat keeps its billing window OPEN when it did not.
+   * A one-shot run (this file) has no window to keep, so it only disposes of the
+   * hold correctly and lets the seam's own ERROR log stand.
    */
   trackUsage: (input: {
     payerId: string;
@@ -139,7 +146,7 @@ export interface SandboxBillingDeps {
     driveId?: string;
     /** The `agent_workspaces.id` this run belongs to — first-class attribution, mirroring `driveId`. */
     workspaceId?: string;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /** Releases a hold without billing. Called on every exit that never reaches `trackUsage`. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -610,9 +617,8 @@ export async function withMachineBilling<S>(
   try {
     const result = await run();
     if (result.success) {
-      handedOff = true;
       const activeSeconds = Math.max(0, (deps.now().getTime() - startedAt) / 1000);
-      await billing.trackUsage({
+      const settle = await billing.trackUsage({
         payerId,
         holdId,
         activeSeconds,
@@ -622,6 +628,18 @@ export async function withMachineBilling<S>(
         driveId: billingSession.driveId ?? undefined,
         workspaceId: billingSession.workspaceId,
       });
+      // The hand-off is what the settle ACHIEVED, not what it was asked to do. A
+      // settle that persisted owns the reservation from here (the credit pipeline
+      // deletes it inside the decrement, or the backfill cron settles the row and
+      // the hold expires on its TTL). A settle that did not persist wrote nothing
+      // and owns nothing, so the `finally` below returns the reservation instead of
+      // leaving it to suppress the payer's spendable balance for its whole TTL.
+      // Idempotent either way: releasing an already-deleted hold deletes zero rows.
+      //
+      // A one-shot run has no window to reopen — there is no next tick for a
+      // finished command — so the lost charge is reported by the seam's own ERROR
+      // log and not retried here.
+      handedOff = settle.persisted;
     }
     return result;
   } finally {
@@ -1080,10 +1098,19 @@ export function buildReadTruncationNotice({
     );
   }
 
-  // Every line present and the window started at the top: the only thing that
-  // made this partial is per-line clipping.
+  // Every line present and the window started at the top. What made this
+  // partial is either per-line clipping, or — new case — the size limit
+  // trimming the very tail of the file (e.g. dropping the restored trailing
+  // newline so the response does not exceed the budget by one byte). Neither
+  // implies the other, so both get their own clause rather than the
+  // lineElided wording covering a cap it did not cause.
   if (firstLine === 1) {
-    return `[${shown} — every line of the file is here, but at least one was too long to show in full.${elisionNote}${editWarning}]`;
+    const capNote = bytesCapped
+      ? ' The output size limit trimmed the very end of the file (e.g. its trailing newline) to stay within budget.'
+      : '';
+    return lineElided
+      ? `[${shown} — every line of the file is here, but at least one was too long to show in full.${capNote}${elisionNote}${editWarning}]`
+      : `[${shown} — every line of the file is here.${capNote}${editWarning}]`;
   }
 
   // Reached the last line, but started past line 1: the tail is complete, the
@@ -1177,7 +1204,14 @@ export async function readSandboxFile({
       maxLineBytes: MAX_LINE_BYTES,
     });
     const text = window.text;
-    const truncated = window.windowed || window.lineElided;
+    // `bytesCapped` alone (windowed/lineElided both false) is a real, if rare,
+    // case: a full-file read whose content exactly fills maxBytes drops the
+    // restored trailing newline to stay inside the cap (`selectLineWindow`),
+    // which returns `reachesEnd: true` — so `windowed` reads false even though
+    // one byte of the file was left out. Missing it here meant the response
+    // reported `truncated: false` and skipped the notice for a read that was,
+    // in fact, incomplete.
+    const truncated = window.windowed || window.lineElided || window.bytesCapped;
     await safeAudit(deps, ctx, {
       code: `readFile ${path}`,
       exitCode: 0,

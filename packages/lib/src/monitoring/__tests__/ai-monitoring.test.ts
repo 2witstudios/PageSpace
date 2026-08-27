@@ -296,8 +296,12 @@ describe('getContextWindow', () => {
 describe('trackAIUsage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockWriteAiUsage.mockResolvedValue(undefined);
-    mockConsumeCredits.mockResolvedValue(undefined);
+    // The DEFAULT is a write that lands and a settle that completes. `writeAiUsage`
+    // resolves `string | null` and a null is a LOST usage row — the one
+    // unrecoverable outcome in this function — so a default of `undefined` would
+    // have every unrelated test exercising the failure path.
+    mockWriteAiUsage.mockResolvedValue('aul_default');
+    mockConsumeCredits.mockResolvedValue('settled');
     mockReleaseHold.mockResolvedValue(undefined);
   });
 
@@ -477,6 +481,97 @@ describe('trackAIUsage', () => {
     expect(mockConsumeCredits).not.toHaveBeenCalled();
   });
 
+  // ── The persistence CONTRACT ────────────────────────────────────────────────
+  // `trackAIUsage` used to resolve `void` whatever happened below it, so no caller
+  // could tell a committed charge from a lost one and every meter that advances a
+  // watermark after awaiting it could close a window over spend that never landed.
+
+  it('reports a persisted, settled charge on the happy path', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_ok');
+    mockConsumeCredits.mockResolvedValueOnce('settled');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+  });
+
+  it('reports persisted:false when the usage row was NOT written — the one unrecoverable outcome', async () => {
+    // `writeAiUsage` catches its own failure and resolves null. With no
+    // `ai_usage_logs` row the credit backfill cron's orphan sweep, which reads that
+    // table, can never find this charge: it is gone unless a meter re-bills the window.
+    mockWriteAiUsage.mockResolvedValueOnce(null);
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+      holdId: 'hold_lost',
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockAiLogger.error).toHaveBeenCalled();
+    // The reservation is returned rather than left to pin the payer's spendable
+    // balance until its TTL — nothing downstream will ever settle it.
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold_lost');
+  });
+
+  it('reports persisted:false when the usage write THROWS', async () => {
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db down'));
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+  });
+
+  it('reports persisted:true with creditsSettled:false when the ledger settle was DEFERRED', async () => {
+    // Deferred is not lost: the usage row exists, so credit-backfill.ts settles this
+    // charge on its next sweep. Meters must therefore NOT hold a watermark on this —
+    // doing so would bill the payer twice for one span.
+    mockWriteAiUsage.mockResolvedValueOnce('aul_deferred');
+    mockConsumeCredits.mockResolvedValueOnce('deferred');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'anthropic',
+      model: 'claude-3-5-sonnet-20241022',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: false });
+  });
+
+  it('reports a settled outcome for a metering-exempt provider — nothing was owed', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_exempt');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'glm',
+      model: 'glm-4.7',
+      inputTokens: 1000,
+      outputTokens: 500,
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+    expect(mockConsumeCredits).not.toHaveBeenCalled();
+  });
+
+  it('reports a settled outcome for a token-less failure — deliberately unbilled, not lost', async () => {
+    mockWriteAiUsage.mockResolvedValueOnce('aul_nobill');
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      success: false,
+      error: 'pre-generation failure',
+    });
+    expect(outcome).toEqual({ persisted: true, creditsSettled: true });
+  });
+
   it('should call writeAiUsage with computed cost and totals', async () => {
     await trackAIUsage({
       userId: 'user-1',
@@ -623,6 +718,38 @@ describe('trackAIUsage', () => {
       expect.any(Error),
       expect.objectContaining({ model: 'gpt-4o', provider: 'openai' })
     );
+  });
+
+  it('should release the hold when writeAiUsage THROWS, not just when it resolves null', async () => {
+    // The gate's reservation would otherwise sit against the payer's spendable
+    // balance for its whole TTL — a throw here never confirmed a charge, so
+    // there is nothing this release could double-free.
+    mockWriteAiUsage.mockRejectedValueOnce(new Error('db error'));
+    const outcome = await trackAIUsage({
+      userId: 'user-1',
+      provider: 'openai',
+      model: 'gpt-4o',
+      holdId: 'hold-thrown',
+    });
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-thrown');
+  });
+
+  it('should release the hold when the usage CALCULATION itself throws, before writeAiUsage is even reached', async () => {
+    // A getter that throws on `model` forces the OUTER catch — `calculateCost`
+    // reads it before `writeAiUsage` is ever called, so this exercises the
+    // catch that never even attempted a write.
+    const data: Record<string, unknown> = { userId: 'user-1', provider: 'openai', holdId: 'hold-calc-thrown' };
+    Object.defineProperty(data, 'model', {
+      get() {
+        throw new Error('boom');
+      },
+    });
+
+    const outcome = await trackAIUsage(data as never);
+
+    expect(outcome).toEqual({ persisted: false, creditsSettled: false });
+    expect(mockReleaseHold).toHaveBeenCalledWith('hold-calc-thrown');
   });
 
   it('given AI request completes, should NOT write prompt or completion content to ai_usage_logs (#957 — GDPR data minimization)', async () => {

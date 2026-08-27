@@ -38,6 +38,15 @@ import { publishedApps, publishedAppMachineEvents } from '@pagespace/db/schema/p
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { assert } from '../../sandbox/__tests__/riteway';
 import { defaultAwakeMeterDeps } from '../awake-meter';
+import { defaultIdleReaperDeps } from '../idle-reaper';
+import {
+  closeAppWindowAtBoundary,
+  defaultAppLifecycleMeteringDeps,
+  passThroughSettleLock,
+  stopPublishedApp,
+  type AppLifecycleMeteringDeps,
+} from '../app-lifecycle-metering';
+import { defaultReconcileSandboxStorageDeps } from '../../sandbox/sandbox-storage-billing';
 import { awakeSecondsFromEvents } from '../app-metering-core';
 import {
   mirrorFlyMachineEvents,
@@ -87,6 +96,8 @@ async function readApp() {
       awakeBilledThrough: publishedApps.awakeBilledThrough,
       awakeHoldId: publishedApps.awakeHoldId,
       lastWakeAt: publishedApps.lastWakeAt,
+      awakeSecondsDay: publishedApps.awakeSecondsDay,
+      awakeSecondsToday: publishedApps.awakeSecondsToday,
     })
     .from(publishedApps)
     .where(eq(publishedApps.id, appId));
@@ -326,6 +337,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -349,6 +361,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -372,6 +385,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
       await defaultAwakeMeterDeps.writeSettle({
         publishedAppId: appId,
         billedThrough: NOW,
+        billedSeconds: 600,
         holdId: 'hold-next',
       }),
     ).toBe('superseded');
@@ -387,6 +401,7 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
     const outcome = await defaultAwakeMeterDeps.writeSettle({
       publishedAppId: appId,
       billedThrough: NOW,
+      billedSeconds: 600,
       holdId: 'hold-next',
     });
 
@@ -396,6 +411,109 @@ describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the monotonic waterm
       should: 'leave the window closed and install no hold',
       actual: { outcome, billedThrough: row?.awakeBilledThrough, holdId: row?.awakeHoldId },
       expected: { outcome: 'superseded', billedThrough: null, holdId: null },
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('writeSettle — the per-app daily awake counter', () => {
+  it('adds the settled seconds to TODAY’s counter, in the same statement as the watermark', async () => {
+    // Seconds that were charged but not counted are seconds the daily cap cannot
+    // see, and bounding one app's daily spend is the cap's whole job.
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 600,
+      holdId: 'hold-next',
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a settle of ten minutes',
+      should: 'record the day and the seconds',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: '2026-08-20', seconds: 600 },
+    });
+  });
+
+  it('ACCUMULATES within a day, and RESETS on the first settle of a new one', async () => {
+    // The reset lives in the statement rather than in a preceding read, so a
+    // counter can never be advanced against a day another writer already rolled.
+    await seedApp({ awakeSecondsDay: '2026-08-20', awakeSecondsToday: 600 });
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 300,
+      holdId: null,
+    });
+    const sameDay = await readApp();
+
+    const nextDay = new Date('2026-08-21T00:05:00.000Z');
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: nextDay,
+      billedSeconds: 120,
+      holdId: null,
+    });
+    const rolled = await readApp();
+
+    assert({
+      given: 'a second settle the same day, then one after midnight UTC',
+      should: 'add within the day and start over on the new one',
+      actual: {
+        same: { day: sameDay?.awakeSecondsDay, seconds: sameDay?.awakeSecondsToday },
+        rolled: { day: rolled?.awakeSecondsDay, seconds: rolled?.awakeSecondsToday },
+      },
+      expected: {
+        same: { day: '2026-08-20', seconds: 900 },
+        rolled: { day: '2026-08-21', seconds: 120 },
+      },
+    });
+  });
+
+  it('given a SUPERSEDED settle, should leave the counter alone — those seconds belong to another window', async () => {
+    // The counter rides the same guard as the watermark and the hold. Adding to a
+    // row a wake has already carried past this tick would charge the new window's
+    // budget for the old window's time.
+    const wakeInstant = new Date(NOW.getTime() + 300_000);
+    await seedApp({
+      awakeBilledThrough: wakeInstant,
+      lastWakeAt: wakeInstant,
+      awakeSecondsDay: '2026-08-20',
+      awakeSecondsToday: 600,
+    });
+
+    const outcome = await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 999,
+      holdId: null,
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a wake that opened a newer window mid-tick',
+      should: 'refuse the advance and add nothing to the day',
+      actual: { outcome, seconds: row?.awakeSecondsToday },
+      expected: { outcome: 'superseded', seconds: 600 },
+    });
+  });
+
+  it('given a settle that billed NOTHING, should not roll the row onto a day it spent no seconds in', async () => {
+    await seedApp({ awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    await defaultAwakeMeterDeps.writeSettle({
+      publishedAppId: appId,
+      billedThrough: NOW,
+      billedSeconds: 0,
+      holdId: null,
+    });
+
+    const row = await readApp();
+    assert({
+      given: 'a zero-second settle on a row with no day',
+      should: 'leave both counter columns untouched',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: null, seconds: 0 },
     });
   });
 });
@@ -456,6 +574,162 @@ describe.skipIf(dbSkipExplicitlyAllowed())('stampWindowStart — opens a window 
   });
 });
 
+describe.skipIf(dbSkipExplicitlyAllowed())('stopPublishedApp — the final settle against the real table', () => {
+  /**
+   * The stop seam with its world replaced and its DATABASE REAL: Fly is a no-op, the
+   * ledger is a stub, the meter lock is already held (so no pool is taken), and the
+   * clock is fixed. What is being proved is the statement it writes — the same
+   * `dailyAwakeCounterPatch` the heartbeat's counter is judged against, which a
+   * mocked-db unit test can only assert the SHAPE of.
+   */
+  function stopDeps(over: Partial<AppLifecycleMeteringDeps> = {}): AppLifecycleMeteringDeps {
+    return {
+      ...defaultAppLifecycleMeteringDeps,
+      isEnabled: () => true,
+      billing: {
+        resolvePayerId: async () => ownerId,
+        gate: async () => ({ allowed: true, holdId: 'hold-x' }),
+        // Reports a PERSISTED settle: the seam only closes a window — and only
+        // counts the day's seconds — for a charge that actually landed, so a stub
+        // that resolved with nothing would exercise the lost-charge path instead.
+        trackUsage: async () => ({ persisted: true, creditsSettled: true }),
+        releaseHold: async () => {},
+      },
+      startMachine: async () => {},
+      stopMachine: async () => {},
+      listMachineEvents: async () => [],
+      serializeSettle: passThroughSettleLock,
+      dailyAwakeCapSeconds: () => 0,
+      now: () => NOW,
+      ...over,
+    };
+  }
+
+  it('closes the window AND counts the settled seconds on the app’s day', async () => {
+    await seedApp({ awakeBilledThrough: ago(600_000), awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    const result = await stopPublishedApp(appId, 'idle', stopDeps());
+
+    const row = await readApp();
+    assert({
+      given: 'a ten-minute window closed by an idle stop',
+      should: 'bill it, close the window and record the day’s seconds',
+      actual: {
+        billed: result.outcome === 'stopped' ? result.billedSeconds : null,
+        billedThrough: row?.awakeBilledThrough,
+        day: row?.awakeSecondsDay,
+        seconds: row?.awakeSecondsToday,
+      },
+      expected: { billed: 600, billedThrough: null, day: '2026-08-20', seconds: 600 },
+    });
+  });
+
+  it('ADDS to a counter the heartbeat already started today', async () => {
+    // The stop and the heartbeat write the same counter through two different
+    // statements; a stop that overwrote rather than added would forgive every second
+    // the heartbeat had already counted, and the cap would never fire on a
+    // long-running app.
+    await seedApp({
+      awakeBilledThrough: ago(600_000),
+      awakeSecondsDay: '2026-08-20',
+      awakeSecondsToday: 42_000,
+    });
+
+    await stopPublishedApp(appId, 'idle', stopDeps());
+
+    expect((await readApp())?.awakeSecondsToday).toBe(42_600);
+  });
+
+  it('keys the counter on the TICK’s day, not on a repair boundary in a previous one', async () => {
+    // The repair path closes at a MIRRORED boundary, which can sit in an earlier UTC
+    // day. Keying the counter off that boundary would stamp a stale day, whose next
+    // comparison reads as "nothing spent today" — the cap failing OPEN on exactly the
+    // broken-lifecycle rows it exists to catch.
+    const yesterday = new Date('2026-08-19T23:00:00.000Z');
+    await seedApp({
+      awakeBilledThrough: new Date('2026-08-19T22:00:00.000Z'),
+      lastWakeAt: new Date('2026-08-19T21:00:00.000Z'),
+      awakeSecondsDay: null,
+      awakeSecondsToday: 0,
+    });
+
+    await closeAppWindowAtBoundary(
+      (await db.select().from(publishedApps).where(eq(publishedApps.id, appId)))[0],
+      yesterday,
+      stopDeps(),
+    );
+
+    const row = await readApp();
+    assert({
+      given: 'a window repaired at a boundary in the previous UTC day',
+      should: 'charge the seconds to the day the tick discovered them',
+      actual: { day: row?.awakeSecondsDay, seconds: row?.awakeSecondsToday },
+      expected: { day: '2026-08-20', seconds: 3600 },
+    });
+  });
+
+  it('given a settle that did NOT persist, should count NO seconds against the day', async () => {
+    // The charge was never written, so the cap must not see it — and the window
+    // stays open for the next tick to retry, which is safe precisely because
+    // nothing was written.
+    await seedApp({ awakeBilledThrough: ago(600_000), awakeSecondsDay: null, awakeSecondsToday: 0 });
+
+    const result = await stopPublishedApp(
+      appId,
+      'idle',
+      stopDeps({
+        billing: {
+          resolvePayerId: async () => ownerId,
+          gate: async () => ({ allowed: true, holdId: 'hold-x' }),
+          trackUsage: async () => ({ persisted: false, creditsSettled: false }),
+          releaseHold: async () => {},
+        },
+      }),
+    );
+
+    const row = await readApp();
+    assert({
+      given: 'a final settle that resolved without persisting a usage row',
+      should: 'bill nothing, count nothing, and leave the window open',
+      actual: {
+        billed: result.outcome === 'stopped' ? result.billedSeconds : null,
+        day: row?.awakeSecondsDay,
+        seconds: row?.awakeSecondsToday,
+        windowStillOpen: row?.awakeBilledThrough !== null,
+      },
+      expected: { billed: 0, day: null, seconds: 0, windowStillOpen: true },
+    });
+  });
+
+  it('a `daily_cap` stop parks the row and records the reason the unpark sweep matches on', async () => {
+    // The sweep that releases these apps keys on this exact `lastError` string —
+    // an insolvency park and a cap park are the same `status`, and releasing the
+    // wrong one hands a payer with no credits a running machine.
+    await seedApp({ awakeBilledThrough: ago(600_000) });
+
+    const result = await stopPublishedApp(appId, 'daily_cap', stopDeps());
+
+    const [row] = await db
+      .select({ status: publishedApps.status, lastError: publishedApps.lastError })
+      .from(publishedApps)
+      .where(eq(publishedApps.id, appId));
+    assert({
+      given: 'a stop for exceeding the daily budget',
+      should: 'park the row with the reason on it',
+      actual: {
+        status: result.outcome === 'stopped' ? result.status : null,
+        rowStatus: row?.status,
+        lastError: row?.lastError,
+      },
+      expected: {
+        status: 'parked',
+        rowStatus: 'parked',
+        lastError: 'parked: daily_awake_cap_exceeded',
+      },
+    });
+  });
+});
+
 describe.skipIf(dbSkipExplicitlyAllowed())('the billing CHECK constraints', () => {
   it('refuses an open awake window on a row with no wake boundary', async () => {
     // `published_apps_awake_window_needs_wake`: the weekly reconcile compares our
@@ -463,6 +737,27 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing CHECK constraints', () =
     // checked against anything.
     await expect(
       db.update(publishedApps).set({ awakeBilledThrough: NOW, lastWakeAt: null }).where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses a NEGATIVE daily awake counter', async () => {
+    // `published_apps_awake_seconds_today_nonneg`: a negative counter is not a
+    // small number, it is a corrupt one — and it hides a runaway app from exactly
+    // the cap that exists to stop it.
+    await expect(
+      db.update(publishedApps).set({ awakeSecondsToday: -1 }).where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses seconds counted against NO day', async () => {
+    // `published_apps_awake_counter_needs_day`: seconds with no day cannot be
+    // reset and cannot be judged — the cap would compare today's budget against an
+    // accumulation of unknown age.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ awakeSecondsDay: null, awakeSecondsToday: 60 })
+        .where(eq(publishedApps.id, appId)),
     ).rejects.toThrow();
   });
 
@@ -488,4 +783,145 @@ describe.skipIf(dbSkipExplicitlyAllowed())('the billing CHECK constraints', () =
     // Seeded moments ago, and certainly not before this suite started running.
     expect(row!.storageLastBilledAt.getTime()).toBeGreaterThan(Date.now() - 5 * 60_000);
   });
+
+  it('refuses a metered app on a guest the awake meter cannot price', async () => {
+    // `published_apps_metered_guest_preset`: the awake meter prices every second
+    // at ONE fixed shape, so a metered row on a larger preset would be
+    // under-billed by exactly the difference — silently, with no error and no
+    // drift signal, for as long as the app ran.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ guestPreset: 'shared-cpu-4x-4096' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('allows a larger guest once the app is dedicated', async () => {
+    // Sizes are unlocked by moving to a tier whose flat price already accounts for
+    // the size. Both columns move in ONE statement because neither shape is legal
+    // on its own: metered+large is refused above, and dedicated+small is fine but
+    // is not the row we are asserting.
+    await db
+      .update(publishedApps)
+      .set({ tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096' })
+      .where(eq(publishedApps.id, appId));
+    const [row] = await db
+      .select({ tier: publishedApps.tier, guestPreset: publishedApps.guestPreset })
+      .from(publishedApps)
+      .where(eq(publishedApps.id, appId));
+    assert({
+      given: 'a dedicated app',
+      should: 'be allowed to run a larger guest',
+      actual: row,
+      expected: { tier: 'dedicated', guestPreset: 'shared-cpu-4x-4096' },
+    });
+  });
+
+  it('refuses a guest preset that is not in the catalogue at all', async () => {
+    // `published_apps_guest_preset_allowed`. A preset in the constraint is a
+    // promise to support hardware we have run; anything else is a machine size
+    // nobody priced.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ tier: 'dedicated', guestPreset: 'shared-cpu-8x-8192' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
+
+  it('refuses to park a dedicated app', async () => {
+    // `published_apps_parked_is_metered_only`. Parking IS credit-exhaustion
+    // enforcement, and an app with no credit gate cannot have been refused by one.
+    await expect(
+      db
+        .update(publishedApps)
+        .set({ tier: 'dedicated', status: 'parked' })
+        .where(eq(publishedApps.id, appId)),
+    ).rejects.toThrow();
+  });
 });
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the awake meter\u2019s row source', () => {
+  it('lists a running METERED app', async () => {
+    const listed = await defaultAwakeMeterDeps.listRunningApps();
+    assert({
+      given: 'a running metered app',
+      should: 'be metered this tick',
+      actual: listed.some((row) => row.id === appId),
+      expected: true,
+    });
+  });
+
+  it('does NOT list a running dedicated app', async () => {
+    // THE DOUBLE-CHARGE GUARD. A dedicated app pays a flat monthly price; if the
+    // awake meter also drained credits per second, the customer would pay twice
+    // for the same machine. The filter is in the row source, so this is the only
+    // place it can be proved.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultAwakeMeterDeps.listRunningApps();
+    assert({
+      given: 'a running dedicated app',
+      should: 'be invisible to the awake-seconds meter',
+      actual: listed.some((row) => row.id === appId),
+      expected: false,
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the idle reaper\u2019s candidate source', () => {
+  it('offers a running METERED app to the reaper', async () => {
+    // The row is seeded with stamps an hour old, so it is idle by any threshold
+    // this test would pass.
+    const listed = await defaultIdleReaperDeps.listIdleCandidates({ idleSeconds: 60, now: new Date() });
+    assert({
+      given: 'an idle metered app',
+      should: 'be reapable',
+      actual: listed.some((row) => row.id === appId),
+      expected: true,
+    });
+  });
+
+  it('NEVER offers a dedicated app, however idle it looks', async () => {
+    // THE ALWAYS-ON GUARANTEE. Nothing downstream will catch this if it breaks:
+    // `running -> stopped` is a legal transition for BOTH tiers (only
+    // `running -> parked` is metered-only), and it has to be, because an operator
+    // stop and a redeploy both need that edge. This predicate is the only thing
+    // keeping a machine up that somebody pays a flat monthly price for.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultIdleReaperDeps.listIdleCandidates({ idleSeconds: 60, now: new Date() });
+    assert({
+      given: 'a dedicated app with no traffic for an hour',
+      should: 'be invisible to the idle reaper',
+      actual: listed.some((row) => row.id === appId),
+      expected: false,
+    });
+  });
+});
+
+describe.skipIf(dbSkipExplicitlyAllowed())('the storage meter\u2019s published-app row source', () => {
+  it('bills a metered app\u2019s rootfs', async () => {
+    const listed = await defaultReconcileSandboxStorageDeps.listPublishedAppRootfs();
+    assert({
+      given: 'a metered app',
+      should: 'have its rootfs drained from credits like any other machine storage',
+      actual: listed.some((row) => row.publishedAppId === appId),
+      expected: true,
+    });
+  });
+
+  it('does NOT bill a dedicated app\u2019s rootfs', async () => {
+    // The other half of the double-charge guard. The flat monthly price already
+    // covers this machine — it is derived from CPU and memory at 1.5x the Sprites
+    // rate table, orders of magnitude above the $0.15/GB-month the image costs.
+    await db.update(publishedApps).set({ tier: 'dedicated' }).where(eq(publishedApps.id, appId));
+    const listed = await defaultReconcileSandboxStorageDeps.listPublishedAppRootfs();
+    assert({
+      given: 'a dedicated app',
+      should: 'be invisible to the rootfs storage drain',
+      actual: listed.some((row) => row.publishedAppId === appId),
+      expected: false,
+    });
+  });
+});
+

@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import type { ModelMessage } from 'ai';
 import { assert } from '@/lib/ai/tools/__tests__/riteway';
 import {
@@ -349,6 +349,219 @@ describe('capStepToolPayloads — tool results', () => {
       should: 'return the very same array — nothing copied, nothing rewritten',
       actual: capStepToolPayloads(original) === original,
       expected: true,
+    });
+  });
+});
+
+describe('capStepToolPayloads — write-tool result stubs', () => {
+  /** A stale result from a WRITE tool (e.g. replace_lines), not a read. */
+  function writeTranscript(callCount: number, payloadChars: number): ModelMessage[] {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'edit every chunk' }];
+    for (let i = 0; i < callCount; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: `w-${i}`, toolName: 'replace_lines', input: { startLine: 1 } }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: `w-${i}`,
+          toolName: 'replace_lines',
+          output: { type: 'json', value: { blob: 'r'.repeat(payloadChars) } },
+        }],
+      });
+    }
+    return messages;
+  }
+
+  it('tells the model a stale WRITE result already succeeded, not to re-run it', () => {
+    const capped = capStepToolPayloads(writeTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result from a WRITE tool that has fallen out of the window',
+      should: 'advise a fresh read, and explicitly say not to re-run the call',
+      actual: {
+        saysAlreadySucceeded: stubbed.__payload_elided.includes('already succeeded'),
+        saysDoNotReRun: stubbed.__payload_elided.toLowerCase().includes('must not be re-run'.toLowerCase()),
+        saysCallItAgain: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      },
+      expected: { saysAlreadySucceeded: true, saysDoNotReRun: true, saysCallItAgain: false },
+    });
+  });
+
+  it('keeps the re-run advice for a stale result from a READ tool dispatched top-level', () => {
+    // readTranscript's toolName is 'execute_tool' with a nested tool_name of
+    // 'edit_sheet_cells' — itself a WRITE tool (see the dispatcher-resolution
+    // tests below). This test is about the outer-name-only path: a result
+    // whose outer name plainly isn't a write tool keeps the read-style advice.
+    const capped = capStepToolPayloads(readTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result whose nested tool_name resolves to a write tool',
+      should: 'now say the call already succeeded — dispatcher resolution reclassified it',
+      actual: stubbed.__payload_elided.includes('already succeeded'),
+      expected: true,
+    });
+  });
+
+  /** A genuinely READ tool dispatched via execute_tool, for contrast with the write case above. */
+  function dispatchedReadTranscript(callCount: number, payloadChars: number): ModelMessage[] {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'read every chunk' }];
+    for (let i = 0; i < callCount; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{
+          type: 'tool-call',
+          toolCallId: `r-${i}`,
+          toolName: 'execute_tool',
+          input: { tool_name: 'read_page', parameters: {} },
+        }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: `r-${i}`,
+          toolName: 'execute_tool',
+          output: { type: 'json', value: { blob: 'r'.repeat(payloadChars) } },
+        }],
+      });
+    }
+    return messages;
+  }
+
+  it('keeps the re-run advice for a genuinely read tool dispatched via execute_tool', () => {
+    const capped = capStepToolPayloads(dispatchedReadTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result from read_page dispatched via execute_tool',
+      should: 'keep advising the model to call it again if it still needs the result',
+      actual: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      expected: true,
+    });
+  });
+
+  /** A WRITE tool dispatched via the execute_tool wrapper (search-exposure mode). */
+  function dispatchedWriteTranscript(callCount: number, payloadChars: number): ModelMessage[] {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'edit every chunk' }];
+    for (let i = 0; i < callCount; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{
+          type: 'tool-call',
+          toolCallId: `d-${i}`,
+          toolName: 'execute_tool',
+          input: { tool_name: 'replace_lines', parameters: { startLine: 1 } },
+        }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: `d-${i}`,
+          toolName: 'execute_tool',
+          output: { type: 'json', value: { blob: 'r'.repeat(payloadChars) } },
+        }],
+      });
+    }
+    return messages;
+  }
+
+  it('classifies a write dispatched through execute_tool as a write, not a read', () => {
+    // toolExposureMode: 'search' routes non-core writes through execute_tool, so
+    // the recorded outer toolName is 'execute_tool' — the real tool name is
+    // nested in the paired call's `input.tool_name`. Judging by the outer name
+    // alone would advise re-running a write that already happened.
+    const capped = capStepToolPayloads(dispatchedWriteTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale result from replace_lines dispatched via execute_tool',
+      should: 'still say the call already succeeded and must not be re-run',
+      actual: {
+        saysAlreadySucceeded: stubbed.__payload_elided.includes('already succeeded'),
+        saysCallItAgain: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      },
+      expected: { saysAlreadySucceeded: true, saysCallItAgain: false },
+    });
+  });
+
+  it('falls back to the dispatcher name when the paired call carries no tool_name', () => {
+    // Defensive: a malformed/missing tool_name must not crash, and must not be
+    // misread as some other write tool — the dispatcher name itself is not in
+    // WRITE_TOOLS, so this degrades to ordinary read-style advice rather than
+    // a false "already succeeded" claim.
+    const messages: ModelMessage[] = [
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'x-0', toolName: 'execute_tool', input: { parameters: {} } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'x-0', toolName: 'execute_tool', output: { type: 'json', value: { blob: 'r'.repeat(OVERSIZED) } } }] },
+      ...dispatchedWriteTranscript(KEEP_RECENT_RESULT_STEPS, 10).slice(1),
+    ];
+
+    expect(() => capStepToolPayloads(messages)).not.toThrow();
+
+    const stubbed = outputsOf(capStepToolPayloads(messages)).find(isCappedOutput) as { __payload_elided: string };
+    assert({
+      given: 'a stale execute_tool result whose paired call has no tool_name',
+      should: 'fall back to read-style advice rather than falsely claiming success',
+      actual: stubbed.__payload_elided.includes('call it again with the same arguments'),
+      expected: true,
+    });
+  });
+});
+
+describe('capStepToolPayloads — write-tool error results are not marked "succeeded"', () => {
+  function writeErrorTranscript(callCount: number, payloadChars: number): ModelMessage[] {
+    const messages: ModelMessage[] = [{ role: 'user', content: 'edit every chunk' }];
+    for (let i = 0; i < callCount; i++) {
+      messages.push({
+        role: 'assistant',
+        content: [{ type: 'tool-call', toolCallId: `e-${i}`, toolName: 'replace_lines', input: { startLine: 1 } }],
+      });
+      messages.push({
+        role: 'tool',
+        content: [{
+          type: 'tool-result',
+          toolCallId: `e-${i}`,
+          toolName: 'replace_lines',
+          output: { type: 'error-json', value: { error: 'x'.repeat(payloadChars) } },
+        }],
+      });
+    }
+    return messages;
+  }
+
+  it('never claims a failed write "already succeeded"', () => {
+    const capped = capStepToolPayloads(writeErrorTranscript(6, OVERSIZED));
+    const stubbed = outputsOf(capped).find(isCappedOutput) as { __payload_elided: string };
+
+    assert({
+      given: 'a stale error-json result from a WRITE tool that has fallen out of the window',
+      should: 'give neutral wording instead of claiming the call already succeeded',
+      actual: {
+        saysAlreadySucceeded: stubbed.__payload_elided.includes('already succeeded'),
+        saysDoNotAssumeSucceeded: stubbed.__payload_elided.includes('do not assume it succeeded'),
+      },
+      expected: { saysAlreadySucceeded: false, saysDoNotAssumeSucceeded: true },
+    });
+  });
+
+  it('preserves the error-json output type on a write-tool failure', () => {
+    const capped = capStepToolPayloads(writeErrorTranscript(6, OVERSIZED));
+    const errPart = capped
+      .filter((m) => m.role === 'tool')
+      .flatMap((m) => m.content as { output: { type: string } }[])
+      .find((p) => typeof p.output?.type === 'string');
+
+    assert({
+      given: 'a capped error-json result from a write tool',
+      should: 'keep the error-json type so the provider still sees a failure',
+      actual: errPart?.output.type,
+      expected: 'error-json',
     });
   });
 });

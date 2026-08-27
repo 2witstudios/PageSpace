@@ -36,7 +36,7 @@ import {
   PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS,
 } from '../../billing/credit-pricing';
 import { resolveEnvPayerId, lookupDriveOwnerId } from '../../billing/sandbox-payer';
-import { AIMonitoring } from '../../monitoring/ai-monitoring';
+import { AIMonitoring, type UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 import { calculateMachineCostDollars, PUBLISHED_APP_GUEST_SHAPE } from '../../monitoring/machine-pricing';
 import { toSubscriptionTier, type SubscriptionTier } from '../../billing/subscription-tiers';
 import { PUBLISHED_APP_AWAKE_MODEL } from '../../monitoring/usage-source';
@@ -59,19 +59,11 @@ export interface AppBillingDeps {
    * Settles accrued awake-seconds against the wake's hold. Called by every
    * heartbeat and once more at the stop boundary.
    *
-   * CAVEAT, and it is a real one: the default binding goes through
-   * `AIMonitoring.trackUsage`, which CATCHES its own persistence failures — a
-   * failed `writeAiUsage`, or a `consumeCredits` that rejects — logs them, and
-   * resolves normally. So a resolved call here is NOT proof that a usage row or a
-   * ledger claim exists, and the callers' "a failed settle leaves the window open
-   * for the next tick" behaviour only covers a settle that actually throws.
-   *
-   * This is a property of the shared credit pipeline rather than of hosting —
-   * every meter in the repo that calls `trackUsage` inherits it, the sandbox
-   * storage reconcile included — so it is deliberately NOT worked around here
-   * with a second, hosting-only write path. Fixing it means giving
-   * `trackUsage` a durable-persistence result, which is a change with a
-   * platform-wide blast radius and belongs in its own PR.
+   * REPORTS ITS OUTCOME rather than resolving regardless: a resolved call is not
+   * a settled one, and `UsageTrackingOutcome.persisted` is what says whether this
+   * app's usage row landed. The callers close the awake window only on a persisted
+   * settle — on a lost one the window stays open and the next tick re-bills the
+   * whole span, which is safe precisely because nothing was written.
    */
   trackUsage: (input: {
     payerId: string;
@@ -79,7 +71,7 @@ export interface AppBillingDeps {
     activeSeconds: number;
     driveId: string;
     publishedAppId: string;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /** Releases a reservation without billing — every exit that never settles. */
   releaseHold: (holdId: string) => Promise<void>;
 }
@@ -127,8 +119,9 @@ export const defaultAppBillingDeps: AppBillingDeps = {
     };
   },
 
-  async trackUsage({ payerId, holdId, activeSeconds, driveId, publishedAppId }) {
-    await AIMonitoring.trackUsage({
+  trackUsage({ payerId, holdId, activeSeconds, driveId, publishedAppId }) {
+    // Returned, not awaited-and-discarded — the outcome IS the contract here.
+    return AIMonitoring.trackUsage({
       userId: payerId,
       // The substrate, named where substrate names belong — in the usage row's
       // provider field, not in the payer resolution or the billed unit above it.
