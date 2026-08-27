@@ -1,4 +1,7 @@
 import { Window } from 'happy-dom';
+import { HTML_ELEMENT_NAMES, UNESCAPED_ANGLE_BRACKET_KEY } from '../document-content-format';
+
+export { UNESCAPED_ANGLE_BRACKET_KEY };
 
 /**
  * Every structural construct a stored HTML document contains, in a form that
@@ -28,6 +31,13 @@ export interface DocumentConstructs {
  * `generateHTML` rebuild the schema and stand up a fresh window on every call —
  * ~2.5ms per document of setup the census would pay tens of thousands of times.
  * `round-trip.test.ts` pins the two paths to the same output.
+ *
+ * This is a SEPARATE happy-dom window from `document-content-format.ts`'s:
+ * that module's own workspace type only exposes `tagName`/`querySelectorAll`
+ * (all its classifier needs), and it is meant to outlive this census — which
+ * is TEMPORARY BY DESIGN — so it does not carry the richer shape
+ * (`empty()`, `document`, `textContent`, attribute readers) only this file's
+ * round-trip diffing needs.
  */
 export interface DomWorkspace {
   /** Parses stored markup into a detached element. */
@@ -56,37 +66,6 @@ export interface DomElement {
   getAttribute(name: string): string | null;
   /** Recursive: measuring a table means asking it for its own rows. */
   querySelectorAll(selector: string): Iterable<DomElement>;
-}
-
-/**
- * Attributes whose VALUE is the construct rather than the attribute itself.
- * `data-type="taskList"` is the whole of TipTap's task-list markup — a bare
- * `attr:data-type` row would merge it with every other TipTap node that
- * round-trips fine.
- */
-const VALUE_BEARING_ATTRIBUTES = new Set(['data-type']);
-
-/**
- * Inline `style` is reported per CSS property (`style:text-align`), not as one
- * `attr:style`. `text-align` is a v1 schema candidate; `color` already has a
- * home in `textStyle`. Merging them would make the census unable to tell the
- * question apart from the answer.
- */
-function styleProperties(styleAttribute: string): string[] {
-  return styleAttribute
-    .split(';')
-    .map((declaration) => declaration.split(':')[0].trim().toLowerCase())
-    .filter((property) => property.length > 0);
-}
-
-function attributeKeys(name: string, value: string): string[] {
-  if (name === 'style') {
-    return styleProperties(value).map((property) => `style:${property}`);
-  }
-  if (VALUE_BEARING_ATTRIBUTES.has(name)) {
-    return [`attr:${name}=${value}`];
-  }
-  return [`attr:${name}`];
 }
 
 /**
@@ -126,31 +105,35 @@ export function createDomWorkspace(): DomWorkspace {
 }
 
 /**
- * Real HTML element names. Anything outside this set that the parser produced is
- * not markup the author wrote — it is an unescaped `<` in prose or a code
- * sample. Documents here are full of `ActionResult<void>`, `Set<string>` and
- * CLI placeholders like `<task-id>`, and happy-dom turns every one of them into
- * an element. Reported individually they produced ~200 phantom rows that buried
- * the real findings; the census is meant to answer "what must v1 represent",
- * and the answer is never `<actionresult<void>`.
- *
- * They are still counted, under one key, because the phenomenon is worth
- * knowing: it means stored HTML contains unescaped angle brackets.
+ * Attributes whose VALUE is the construct rather than the attribute itself.
+ * `data-type="taskList"` is the whole of TipTap's task-list markup — a bare
+ * `attr:data-type` row would merge it with every other TipTap node that
+ * round-trips fine.
  */
-const HTML_ELEMENT_NAMES = new Set<string>([
-  'a','abbr','address','area','article','aside','audio','b','base','bdi','bdo','blockquote','body',
-  'br','button','canvas','caption','cite','code','col','colgroup','data','datalist','dd','del',
-  'details','dfn','dialog','div','dl','dt','em','embed','fieldset','figcaption','figure','footer',
-  'form','h1','h2','h3','h4','h5','h6','head','header','hgroup','hr','html','i','iframe','img',
-  'input','ins','kbd','label','legend','li','link','main','map','mark','menu','meta','meter','nav',
-  'noscript','object','ol','optgroup','option','output','p','param','picture','pre','progress','q',
-  'rp','rt','ruby','s','samp','script','section','select','slot','small','source','span','strong',
-  'style','sub','summary','sup','table','tbody','td','template','textarea','tfoot','th','thead',
-  'time','title','tr','track','u','ul','var','video','wbr','svg','math',
-]);
+const VALUE_BEARING_ATTRIBUTES = new Set(['data-type']);
 
-/** Single bucket for parser artefacts of unescaped `<` in text. */
-export const UNESCAPED_ANGLE_BRACKET_KEY = 'text:unescaped-angle-bracket';
+/**
+ * Inline `style` is reported per CSS property (`style:text-align`), not as one
+ * `attr:style`. `text-align` is a v1 schema candidate; `color` already has a
+ * home in `textStyle`. Merging them would make the census unable to tell the
+ * question apart from the answer.
+ */
+function styleProperties(styleAttribute: string): string[] {
+  return styleAttribute
+    .split(';')
+    .map((declaration) => declaration.split(':')[0].trim().toLowerCase())
+    .filter((property) => property.length > 0);
+}
+
+function attributeKeys(name: string, value: string): string[] {
+  if (name === 'style') {
+    return styleProperties(value).map((property) => `style:${property}`);
+  }
+  if (VALUE_BEARING_ATTRIBUTES.has(name)) {
+    return [`attr:${name}=${value}`];
+  }
+  return [`attr:${name}`];
+}
 
 export function collectConstructs(container: DomElement): DocumentConstructs {
   const elements = new Set<string>();
