@@ -14,6 +14,18 @@ import { pages } from '@pagespace/db/schema/core';
 import type { getMigrationDb } from '@pagespace/db/db';
 import { createDomWorkspace, classifyDocumentContent } from './document-content-format';
 
+/**
+ * Run thunks one at a time. See the call site for why this is sequential:
+ * these scripts hold a one-connection pool by design, so any concurrency here
+ * deadlocks rather than speeds anything up.
+ */
+async function sequentially(tasks: Array<() => Promise<void>>): Promise<void> {
+  for (const task of tasks) {
+    await task();
+  }
+}
+
+
 export type BackfillDb = ReturnType<typeof getMigrationDb>;
 
 const DEFAULT_BATCH_SIZE = 200;
@@ -111,12 +123,24 @@ export async function planAndApplyBackfill(
       if (!apply) {
         summary.corrected.push(...mislabelled.map((page) => ({ id: page.id, revisionAfterApply: page.revision + 1 })));
       } else if (mislabelled.length > 0) {
-        // Each page's compare-and-swap only touches its own row, so the
-        // batch's writes run concurrently rather than one round trip at a
-        // time — up to `batchSize` (200) in flight per batch.
+        // Written SEQUENTIALLY, and that is not a missed optimisation.
+        //
+        // This ran as `Promise.all` over the batch — up to `batchSize` (200)
+        // writes in flight — until the first real run against production died
+        // on `timeout exceeded when trying to connect` before it corrected a
+        // single row. The scripts that call this use `getMigrationPool()`,
+        // which is deliberately `max: 1` (packages/db/src/db.ts:117) so a
+        // long-running backfill cannot starve the deployment it is running
+        // against. Two hundred concurrent writes against a one-connection pool
+        // is a self-deadlock: the first takes the connection, the other 199
+        // wait for one that cannot free until they stop waiting.
+        //
+        // Do not "restore" the concurrency without also giving these scripts a
+        // pool that can serve it — the concurrency was never the thing making
+        // this fast, and the pool bound is the thing keeping production safe.
         const batchCorrected: CorrectedPage[] = [];
-        await Promise.all(
-          mislabelled.map(async (page) => {
+        await sequentially(
+          mislabelled.map((page) => async () => {
             // Compare-and-swap on the exact content read: a page edited
             // between the select and this write must not be relabelled
             // against content this run never actually classified. updatedAt

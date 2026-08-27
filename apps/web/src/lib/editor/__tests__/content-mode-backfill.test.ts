@@ -10,6 +10,12 @@
  * (id, revisionAfterApply) pairs back — never a page edited since.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+// Without this, `assert(...)` resolves to chai's global truthy assert via
+// vitest globals — `assert({ actual: 1, expected: 999 })` PASSES, because a
+// non-empty object is truthy. Every riteway-shaped assertion in this file was
+// vacuous until this import existed, which is how a 200-way `Promise.all`
+// against a one-connection pool shipped with 22 green tests.
+import { assert } from '@/lib/ai/core/__tests__/riteway';
 
 const { gtCursors, classifyMock } = vi.hoisted(() => ({
   gtCursors: [] as unknown[],
@@ -364,5 +370,59 @@ describe('parseBackfillArgs', () => {
   it('refuses --apply and --revert together', () => {
     const result = parseBackfillArgs(['--apply', '--out', 'x.json', '--revert', 'y.json']);
     expect(result.ok).toBe(false);
+  });
+
+  it('given a batch of mislabelled pages, never has more than one write in flight', async () => {
+    // The regression this guards. These scripts run on `getMigrationPool()`,
+    // which is deliberately `max: 1` so a backfill cannot starve the
+    // deployment it runs against. The batch used to write via `Promise.all`,
+    // putting up to 200 writes in flight against that one connection — a
+    // self-deadlock that killed the first real production run with
+    // `timeout exceeded when trying to connect`, before a single row was
+    // corrected. Concurrency here is not a speed-up; it is the bug.
+    let inFlight = 0;
+    let maxInFlight = 0;
+    let revision = 100;
+    const update = vi.fn(() => ({
+      set: () => ({
+        where: (cond: { and: Array<{ eq: [unknown, unknown] }> }) => ({
+          returning: async () => {
+            inFlight += 1;
+            maxInFlight = Math.max(maxInFlight, inFlight);
+            // Yield, so a concurrent implementation genuinely overlaps here.
+            await new Promise((resolve) => setTimeout(resolve, 0));
+            inFlight -= 1;
+            revision += 1;
+            return [{ id: cond.and[0].eq[1], revision }];
+          },
+        }),
+      }),
+    }));
+
+    const select = selectReturning([
+      [
+        markdownPage('p1'),
+        markdownPage('p2'),
+        markdownPage('p3'),
+        markdownPage('p4'),
+        markdownPage('p5'),
+      ],
+      [],
+    ]);
+
+    const result = await planAndApplyBackfill(fakeDb(select, update), { apply: true });
+
+    assert({
+      given: 'a batch of five mislabelled pages on a one-connection pool',
+      should: 'never exceed one write in flight',
+      actual: maxInFlight,
+      expected: 1,
+    });
+    assert({
+      given: 'sequential writes',
+      should: 'still correct every page in the batch',
+      actual: result.corrected.length,
+      expected: 5,
+    });
   });
 });
