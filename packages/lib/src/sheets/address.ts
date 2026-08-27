@@ -172,6 +172,53 @@ export function adjustFormulaReferences(
 
   while (index < formula.length) {
     const start = index;
+
+    // Page references `@[Label](id:type)?:A1`: the label can hold any
+    // character at all, including a `"` — the tokenizer (`parser.ts`) scans
+    // it verbatim up to the closing `]` with no quote-awareness. Detected
+    // and consumed as one span before the string-literal check below, so a
+    // quote inside a label (e.g. `@[Budget "Q1]:A1`) is never misread as the
+    // start of a string literal — which would otherwise swallow everything
+    // after it, including a real reference that needs to shift.
+    if (formula.charCodeAt(index) === 64 /* @ */ && formula[index + 1] === '[') {
+      let end = index + 2;
+      while (end < formula.length && formula[end] !== ']') {
+        end += 1;
+      }
+      if (end < formula.length) {
+        end += 1; // include closing ]
+        if (formula[end] === '(') {
+          let metaEnd = end + 1;
+          while (metaEnd < formula.length && formula[metaEnd] !== ')') {
+            metaEnd += 1;
+          }
+          if (metaEnd < formula.length) {
+            end = metaEnd + 1; // include closing )
+          }
+        }
+      }
+      result += formula.slice(start, end);
+      index = end;
+      continue;
+    }
+
+    // String literals: the tokenizer (`parser.ts`) has no escape convention —
+    // a `"` always closes the string — so mirror that exactly and copy the
+    // span verbatim. Otherwise a letters+digits run inside a quoted literal
+    // (e.g. `"q1"`) gets mistaken for a cell reference and shifted/uppercased.
+    if (formula.charCodeAt(index) === 34 /* " */) {
+      let end = index + 1;
+      while (end < formula.length && formula.charCodeAt(end) !== 34) {
+        end += 1;
+      }
+      if (end < formula.length) {
+        end += 1; // include closing quote
+      }
+      result += formula.slice(start, end);
+      index = end;
+      continue;
+    }
+
     let colDollar = '';
     let rowDollar = '';
 

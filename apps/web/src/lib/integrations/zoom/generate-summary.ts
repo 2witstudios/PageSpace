@@ -1,7 +1,7 @@
 import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const SYSTEM_PROMPT =
   'Summarize this meeting transcript in 3–5 bullet points. Focus on decisions made and key outcomes. Be concise.';
@@ -24,7 +24,7 @@ export async function generateTranscriptSummary(
       maxOutputTokens: 512,
     });
 
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: provider.provider,
       model: provider.modelName,
@@ -36,7 +36,7 @@ export async function generateTranscriptSummary(
         : undefined,
       success: true,
       metadata: { feature: 'zoom_summary' },
-    });
+    }));
 
     return result.text.trim();
   } catch (err) {

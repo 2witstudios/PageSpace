@@ -308,6 +308,70 @@ export const MACHINE_ASSUMED_MEMORY_GB = envFloat('MACHINE_ASSUMED_MEMORY_GB', 0
 export const MACHINE_STORAGE_USD_PER_GB_MONTH = envFloat('MACHINE_STORAGE_USD_PER_GB_MONTH', 0.15);
 
 /**
+ * The guest shape a PUBLISHED APP's machine actually runs — and, unlike the
+ * sandbox shape above, it is a shape we KNOW rather than assume.
+ *
+ * `published_apps.guestPreset` is fixed at `shared-cpu-1x-512` by a CHECK
+ * constraint (the v1 unit-economics guardrail), so the memory figure here is the
+ * guest we asked Fly for, not a guess about somebody else's default. Pricing
+ * published apps at the sandbox shape's 0.25GB instead would under-bill every
+ * awake second by half the memory component for as long as the two happened to
+ * differ, silently and invisibly.
+ *
+ * Env-overridable in step with the preset: widening the allowed guest set is an
+ * additive migration on that CHECK, and this is the other half of the same change.
+ */
+export const PUBLISHED_APP_ASSUMED_CPUS = envFloat('PUBLISHED_APP_ASSUMED_CPUS', 1);
+export const PUBLISHED_APP_ASSUMED_MEMORY_GB = envFloat('PUBLISHED_APP_ASSUMED_MEMORY_GB', 0.5);
+
+/**
+ * Reservation placed when a published app is WOKEN, covering the span between
+ * heartbeat settles rather than the whole awake period.
+ *
+ * An awake window settles continuously — the metering cron bills the accrued
+ * seconds every tick — so, exactly like {@link REALTIME_SESSION_HOLD_ESTIMATE_CENTS},
+ * the hold only has to cover the window between settles plus the moments after the
+ * wake, not the app's entire uptime. At the fixed v1 guest that is well under a
+ * cent per ten-minute tick; 5¢ leaves generous headroom for a slower cadence
+ * without reserving a meaningful slice of a small balance.
+ *
+ * Like every hold in this file it is an ESTIMATE, not a cap: the real cost settles
+ * exactly through `consumeCredits` at the 1.5× substrate markup.
+ */
+export const PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS = envInt('PUBLISHED_APP_WAKE_HOLD_ESTIMATE_CENTS', 5);
+
+/**
+ * Max concurrently-awake published apps per payer that the wake gate will reserve
+ * for — the same bound `MACHINE_MAX_INFLIGHT` places on sandbox runs, applied to
+ * the one thing that can genuinely fan out here: a drive owner publishing many
+ * apps that all get woken at once by traffic.
+ *
+ * Unlike the sandbox gate there is no per-tier semaphore to reconcile this against
+ * (nothing limits how many apps a drive may publish), so this is the only bound on
+ * concurrent awake reservations and is applied flat across tiers.
+ */
+export const PUBLISHED_APP_MAX_INFLIGHT = envInt('PUBLISHED_APP_MAX_INFLIGHT', 50);
+
+/**
+ * The runaway ceiling the published-app wake gate always passes, in whole cents
+ * per payer per UTC day.
+ *
+ * Its whole reason for existing is the billing-DISABLED deployment. On tenant and
+ * onprem `isBillingEnabled()` is false and hosting is unlimited by design — there
+ * is no credit ledger and no balance to gate against — but "unlimited" must not
+ * mean "unbounded": a loop that wakes an app thousands of times, or a fleet left
+ * awake by a broken idle reaper, spends real substrate money on somebody's
+ * infrastructure. `canConsumeAI` honours `dailyCapCeilingCents` in EVERY
+ * deployment mode, metering the day from `ai_usage_logs` when there is no ledger,
+ * which is exactly the property this constant leans on.
+ *
+ * Set generously (default $20/payer/day) — it is a runaway backstop, not a
+ * product limit, and a legitimate always-awake app at the v1 guest costs a few
+ * cents a day. Set to 0 to disable it entirely.
+ */
+export const PUBLISHED_APP_DAILY_CAP_CEILING_CENTS = envInt('PUBLISHED_APP_DAILY_CAP_CEILING_CENTS', 2000);
+
+/**
  * How long a hold lives before the reconcile cron may sweep it. Must exceed the
  * longest possible stream plus its settle window (AI routes cap streams at 300s),
  * so a still-running call's reservation is never reclaimed out from under it.

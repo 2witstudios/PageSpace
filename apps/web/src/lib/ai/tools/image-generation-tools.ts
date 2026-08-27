@@ -212,7 +212,7 @@ restricted to app administrators.`,
         error?: string;
       }) => {
         const resolved = resolveImageCost(args.providerCostDollars);
-        await AIMonitoring.trackUsage({
+        const settle = await AIMonitoring.trackUsage({
           userId,
           provider: 'openrouter',
           model,
@@ -234,22 +234,40 @@ restricted to app administrators.`,
           },
         }).catch((metErr) => {
           // Defensive only — currently UNREACHABLE: trackAIUsage wraps its whole body in a
-          // logging try/catch and never rejects (it logs the swallowed failure at ERROR
-          // itself, which is where an unbilled generation actually surfaces). Kept so a
-          // future change that lets it throw can't silently fail the user's request.
+          // logging try/catch and never rejects. It REPORTS its failures instead (see the
+          // `persisted` check below), which is what an unbilled generation surfaces as.
+          // Kept so a future change that lets it throw can't silently fail the request.
           imageLogger.error('Failed to record image usage', metErr as Error, {
             userId: maskIdentifier(userId),
             model,
             costDollars: resolved.costDollars,
             generationIds: args.generationIds,
           });
+          return { persisted: false, creditsSettled: false };
         });
 
-        // Belt-and-braces hold cleanup. trackAIUsage SWALLOWS its own errors (every branch
-        // is wrapped in a logging try/catch), so a rejection is NOT a reliable signal that
-        // the settle landed: if `writeAiUsage` throws, the throw is caught internally and
-        // the settle/release branches below it never run, leaving the hold neither settled
-        // nor released — it would strand the user's reserved credits until TTL expiry.
+        // An image generation is a ONE-SHOT charge: there is no window, no watermark and
+        // no next tick, so a lost usage row cannot be retried — it can only be reported.
+        // Say so at the one place that knows the user-facing context (which model, whose
+        // generation) rather than leaving only the seam's own log.
+        if (!settle.persisted) {
+          imageLogger.error(
+            'Image generation usage was not persisted — this spend is unbilled and unrecoverable',
+            new Error('image settle was not persisted'),
+            {
+              userId: maskIdentifier(userId),
+              model,
+              costDollars: resolved.costDollars,
+              generationIds: args.generationIds,
+            },
+          );
+        }
+
+        // Belt-and-braces hold cleanup. `trackAIUsage` never rejects, and it now disposes
+        // of the reservation on every one of its own exits — settled against by
+        // consumeCredits, or released when the usage row could not be written. So this is
+        // no longer covering a stranded hold; it stays as a cheap idempotent backstop for a
+        // path that ends without either.
         //
         // Deleting the hold here is safe and idempotent: consumeCredits already removes it
         // inside its settle transaction (and in the zero-charge branch), so on the happy path

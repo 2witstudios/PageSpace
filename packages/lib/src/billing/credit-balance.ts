@@ -94,6 +94,80 @@ function disabledSummary(): CreditBalanceSummary {
   };
 }
 
+/** The funded-balance columns both the display read and the routing gate need. */
+interface FundedBalanceRow {
+  monthlyRemainingCents: number;
+  monthlyAllowanceCents: number;
+  topupRemainingCents: number;
+  debtCents: number | null;
+  monthlyPeriodEnd: Date | null;
+}
+
+/**
+ * The spendable figure, from a balance row alone.
+ *
+ * Extracted so the display read and the published-app routing gate cannot drift
+ * apart about what "spendable" means — they used to share it only by both
+ * calling {@link getCreditBalance}, which made the gate pay for the display's
+ * in-flight-holds aggregate on a per-request path.
+ *
+ * GROSS of in-flight holds, deliberately: `reserved` is reported separately and
+ * never netted out (see the file header). Clamped at 0 only when there is no
+ * debt — outstanding overage pulls the figure negative.
+ */
+function spendableCentsFor(
+  row: FundedBalanceRow | null,
+  tier: SubscriptionTier,
+  now: Date,
+): number {
+  // No row yet: the gate lazy-inits from the tier allowance on the first call.
+  if (!row) return Math.max(0, allowanceFor(tier));
+
+  const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
+  const expired = row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now;
+  // A free user whose window has lapsed gets the allowance the gate will apply on
+  // its next call, so they are not treated as broke for the gap between the
+  // rollover being due and something performing it.
+  const monthlyRemaining =
+    tier === 'free' && expired ? row.monthlyRemainingCents + allowance : row.monthlyRemainingCents;
+  const topupRemaining = row.topupRemainingCents;
+  const debt = row.debtCents ?? 0;
+  return debt > 0
+    ? monthlyRemaining + topupRemaining - debt
+    : Math.max(0, monthlyRemaining + topupRemaining);
+}
+
+/**
+ * Spendable cents from ONE indexed read — no in-flight-holds aggregate.
+ *
+ * For the published-app routing edge, which asks "can this payer spend?" once per
+ * HTTP REQUEST (the metered tier has no replay cache, by design). Going through
+ * {@link getCreditBalance} there meant every image and stylesheet also paid for a
+ * `SUM` over `credit_holds` whose result the caller then discarded.
+ *
+ * Same arithmetic as the display read, via {@link spendableCentsFor}. Never
+ * lazy-inits and never rolls the period: both are writes, and they belong to the
+ * gate that owns the row lock.
+ */
+export async function readSpendableCents(
+  userId: string,
+  tier: SubscriptionTier = 'free',
+): Promise<number> {
+  const [row] = await db
+    .select({
+      monthlyRemainingCents: creditBalances.monthlyRemainingCents,
+      monthlyAllowanceCents: creditBalances.monthlyAllowanceCents,
+      topupRemainingCents: creditBalances.topupRemainingCents,
+      debtCents: creditBalances.debtCents,
+      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
+    })
+    .from(creditBalances)
+    .where(eq(creditBalances.userId, userId))
+    .limit(1);
+
+  return spendableCentsFor(row ?? null, tier, new Date());
+}
+
 /**
  * Read a user's current prepaid credit balance for display. Pure read: no lazy-init,
  * no reset — those are owned by the gate. A user with no balance row yet is shown the
@@ -132,7 +206,7 @@ export async function getCreditBalance(
   // so present that as the spendable monthly balance.
   if (!row) {
     const allowance = allowanceFor(tier);
-    const spendable = Math.max(0, allowance);
+    const spendable = spendableCentsFor(null, tier, now);
     return {
       billingEnabled: true,
       monthly: { remaining: allowance, allowance, periodEnd: null },
@@ -179,10 +253,8 @@ export async function getCreditBalance(
   // when there's no debt — outstanding overage pulls spendable negative so the widget
   // shows the red. Debt accrues only after both buckets are exhausted, so the negative
   // branch is effectively −debt.
-  const spendable =
-    debt > 0
-      ? monthlyRemaining + topupRemaining - debt
-      : Math.max(0, monthlyRemaining + topupRemaining);
+  // Shared with the routing gate's lean read, so the two can never disagree.
+  const spendable = spendableCentsFor(row, tier, now);
 
   return {
     billingEnabled: true,

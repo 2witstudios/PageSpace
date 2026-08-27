@@ -193,7 +193,7 @@ export const startCallMeter = async (
       holdId = undefined;
 
       try {
-        await track({
+        const settle = await track({
           userId,
           provider: 'openai_voice',
           model,
@@ -216,6 +216,18 @@ export const startCallMeter = async (
             audioOutputTokens: usage.output_token_details?.audio_tokens ?? 0,
           },
         });
+        // A settle that RESOLVED WITHOUT PERSISTING is the failure this catch was
+        // written for but could never see: no `ai_usage_logs` row exists, so nothing
+        // downstream (the backfill cron reads that table) will ever bill this
+        // window. `pending` was already consumed above and a live call has no
+        // window to reopen, so the honest response is the same one a throw gets —
+        // return the reservation and say plainly that this window is unbilled.
+        //
+        // NOT keyed on `creditsSettled`: a persisted row whose ledger claim was
+        // deferred is already owned by the backfill cron.
+        if (!settle.persisted) {
+          throw new Error('realtime voice settle was not persisted');
+        }
       } catch (error) {
         // A failed settle must not take the call down — the user is mid-sentence.
         loggers.realtime.error(

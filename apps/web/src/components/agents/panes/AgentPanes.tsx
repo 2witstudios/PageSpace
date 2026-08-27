@@ -721,6 +721,17 @@ export default function AgentPanes({
    * Synchronous now, and nothing awaits it — so no rebind branch, no catch, no
    * toast on the success path.
    */
+  // Shared by every producer of the "closed, nothing replaced it" event —
+  // a manual pane close and a History delete of the page's own hosted
+  // conversation both report it identically, so the shape can't drift
+  // between them the way two independently-typed literals could.
+  const notifyConversationClosedWithNoReplacement = useCallback(
+    (conversationId: string) => {
+      onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+    },
+    [onConversationClosed],
+  );
+
   const closeChatPane = useCallback(
     (nodeId: string, conversationId: string) => {
       // `closePane` drops the node, and the node IS the membership — so the
@@ -729,9 +740,9 @@ export default function AgentPanes({
       // second listing it kept in step; there is one source now, and this line
       // wrote to it.
       closePane(sessionId, nodeId);
-      onConversationClosed?.({ conversationId, next: null, nextAgentPageId: null });
+      notifyConversationClosedWithNoReplacement(conversationId);
     },
-    [sessionId, closePane, onConversationClosed],
+    [sessionId, closePane, notifyConversationClosedWithNoReplacement],
   );
 
   const handleClosePane = useCallback(
@@ -1276,6 +1287,16 @@ export default function AgentPanes({
    * a pane in the same place, showing the picker — the simplest safe recovery,
    * with the user explicitly picking what is next rather than a guessed
    * replacement.
+   *
+   * If the deleted id IS `hostConversationId`, the hosting `AgentPageView` is
+   * tracking it as its own `current` conversation — unbinding the grid node
+   * alone leaves that page-level state pointed at a conversation that no
+   * longer exists, with nothing to notice (review finding: the host pane's
+   * bar didn't used to carry a tab strip at all, so this delete path was
+   * unreachable for the host's own conversation before it gained one).
+   * `onConversationClosed` is the SAME event a manual pane close already
+   * reports, and `AgentPageView`'s handler mints a replacement for exactly
+   * this case when `next` is null — reusing it here needs no new plumbing.
    */
   const handleHistoryDeleteConversation = useCallback(
     (deletedConversationId: string) => {
@@ -1289,6 +1310,17 @@ export default function AgentPanes({
       // Instant-freshness nudge, unconditional — the canonical row is gone from
       // the listing regardless of whether any node here is showing it.
       void mutate(isAgentWorkspacesKey);
+      // Ahead of the `live` check below, and deliberately not inside it: this
+      // notifies the HOSTING PAGE, not this grid — it doesn't depend on the
+      // workspace still being in the store. A concurrent session-end (the
+      // sidebar's own end-session path, independent of this grid's own
+      // `confirmEndSession`) can forget the workspace before this callback's
+      // own DELETE round trip resolves; gating this behind `if (!live) return`
+      // would silently skip the one notification this whole method exists to
+      // send in exactly that race (caught in review).
+      if (deletedConversationId === hostConversationId) {
+        notifyConversationClosedWithNoReplacement(deletedConversationId);
+      }
       // Read fresh at call time: this always runs after the DELETE's own round
       // trip, during which the user could have already repurposed a node.
       const live = useAgentWorkspaceStore.getState().workspaces[sessionId];
@@ -1299,7 +1331,7 @@ export default function AgentPanes({
         }
       }
     },
-    [sessionId, unbindPane, mutate],
+    [sessionId, unbindPane, mutate, hostConversationId, notifyConversationClosedWithNoReplacement],
   );
 
   /**
@@ -1801,16 +1833,16 @@ function ChatPane({
       <PaneBar
         isActive={isActive}
         identity={
-          isHostIdentity ? (
-            // This pane shows the SAME conversation the hosting AI_CHAT page's
-            // own header already identifies — a second selector and tab strip
-            // would be duplicate chrome for the identical thing. Matched by
-            // CONVERSATION, not agent: a split pane pointed at the same agent but
-            // a DIFFERENT conversation keeps its full selector, since that is its
-            // only in-grid way to be managed.
-            <PaneSessionIdentity name={agent?.title ?? title} />
-          ) : (
-            <div className="flex min-w-0 flex-1 items-center gap-0.5">
+          <div className="flex min-w-0 flex-1 items-center gap-0.5">
+            {isHostIdentity ? (
+              // This pane shows the SAME conversation the hosting AI_CHAT
+              // page's own header already identifies — a second agent
+              // selector would be duplicate chrome for switching an agent
+              // this pane can't actually leave. The tab strip is NOT
+              // dropped though: Chat/History/Settings still has to be
+              // reachable from every pane's own bar, host included.
+              <PaneSessionIdentity name={agent?.title ?? title} />
+            ) : (
               <AISelector
                 selectedAgent={agentPageId === null ? null : agent}
                 onSelectAgent={(next) => onSelectAgent(next?.id ?? null)}
@@ -1820,15 +1852,15 @@ function ChatPane({
                 disabled={disabledAgentSwitch}
                 className="h-6 min-w-0 flex-1 justify-start gap-1 px-1.5 py-0 text-xs font-medium"
               />
-              <PaneChatTabStrip
-                activeTab={activeTab}
-                onSelectTab={setActiveTab}
-                // The Assistant (agentPageId null) has no page, so no Settings.
-                showSettings={agentPageId !== null}
-                agentTitle={agent?.title ?? 'Agent'}
-              />
-            </div>
-          )
+            )}
+            <PaneChatTabStrip
+              activeTab={activeTab}
+              onSelectTab={setActiveTab}
+              // The Assistant (agentPageId null) has no page, so no Settings.
+              showSettings={agentPageId !== null}
+              agentTitle={agent?.title ?? 'Agent'}
+            />
+          </div>
         }
         actions={
           <>

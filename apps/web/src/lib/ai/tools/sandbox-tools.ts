@@ -69,9 +69,8 @@ export const readFileInputSchema = z
     offset: z
       .number()
       .int()
-      .min(1)
       .optional()
-      .describe('1-based first line to return. Omit to start at the beginning.'),
+      .describe('1-based first line to return. Omit to start at the beginning. Zero or negative is clamped to 1.'),
     limit: z
       .number()
       .int()

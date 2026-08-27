@@ -1,8 +1,9 @@
 /**
  * Storage reconcile (Sprites Platform Alignment 6-1) — periodically meters the
  * cost of a PERSISTENT filesystem, whether its sandbox is active or
- * hibernating. TWO row sources, ONE meter: an agent session
- * (`agent_workspaces`) and a drive ENVIRONMENT (`drive_envs`). The platform bills for the bytes actually
+ * hibernating. THREE row sources, ONE meter: an agent session
+ * (`agent_workspaces`), a drive ENVIRONMENT (`drive_envs`), and a PUBLISHED APP's
+ * rootfs (`published_apps`). The platform bills for the bytes actually
  * written (TRIM-friendly — deleting files lowers the bill), NOT the
  * provisioned volume size (docs.sprites.dev/concepts/lifecycle). So this
  * bills the last PERSISTED MEASURED footprint, never the provisioned cap — a
@@ -111,6 +112,16 @@
  * audit only), so its payer is the drive owner or nobody — see
  * `resolveEnvPayerId`, and the skip-on-unresolvable rule below.
  *
+ * **Widened once more by published apps, on exactly the same terms.** A published
+ * app's rootfs is the only cost a stopped app still incurs — its awake-seconds go
+ * to zero and its image keeps costing $0.15/GB-month — and for a fleet of
+ * mostly-idle apps that drip IS the per-app floor. It joins as a third row source
+ * for the same reason envs did: a second meter would be a second place for a
+ * double-bill to hide. Its measurement is not a filesystem `du` but the registry
+ * size recorded at BUILD time (`imageSizeBytes` + `imageSizeMeasuredAt`), and its
+ * payer is the drive owner with no fallback, identical to an env's — a published
+ * app hangs off an env, and an env is drive-owned. See `PublishedAppStorageRow`.
+ *
  * **`reconcileSandboxStorage` NEVER THROWS**, and `reconcileSandboxStorageSerialized`
  * relies on that to tell an advisory-lock connection error apart from a failure
  * of the work itself. Every per-row failure is already isolated in its own
@@ -136,6 +147,7 @@ import { calculateMachineStorageCostDollars } from '../../monitoring/machine-pri
 import { resolveEnvPayerId } from '../../billing/sandbox-payer';
 import { storageBillingTarget, type StorageSubject } from './sandbox-storage-attribution';
 import { loggers } from '../../logging/logger-config';
+import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 /** A billing month, for prorating the monthly storage rate over an elapsed span. Not tied to any subscription's actual renewal cycle — storage accrual is metered independently of it. */
@@ -196,7 +208,7 @@ export const MAX_BILLABLE_SPAN_MS = 24 * 60 * 60 * 1000;
  * only, because forgiving revenue on a LIVE meter is a product decision this PR
  * deliberately does not make.
  */
-const CLAMPED_SUBJECT_KINDS: readonly StorageSubjectKind[] = ['env'];
+const CLAMPED_SUBJECT_KINDS: readonly StorageSubjectKind[] = ['env', 'hosting'];
 
 /** Pure: bytes → DECIMAL gigabytes (÷1e9), matching how the platform expresses its allocation ("100 GB") and its per-GB-month rate — NOT binary GiB. Invalid or non-positive input floors to 0. */
 export function bytesToGB(bytes: number): number {
@@ -292,8 +304,48 @@ export interface DriveEnvStorageRow {
   lastActiveAt: Date;
 }
 
-/** WHICH kind of row a charge is for. The meter is one; the persistence units it meters are two. */
-export type StorageSubjectKind = 'session' | 'env';
+/**
+ * A PUBLISHED APP's ROOTFS — the third row source, and the only per-app cost that
+ * does not stop when the app does.
+ *
+ * A published app's machine is stopped by the idle reaper and costs zero
+ * awake-seconds while it sits there; its IMAGE still costs $0.15/GB-month for as
+ * long as the app exists. For a fleet of mostly-idle published apps that drip is
+ * the entire per-app floor, which is why it is metered at all — and why it is
+ * metered HERE, as a row source on the existing meter, rather than as a meter of
+ * its own. One cron, one advisory lock, one credit pipeline, one watermark
+ * discipline.
+ *
+ * Two differences from the two Sprite-backed sources, both structural:
+ *
+ *  - the measurement is not a `du` of a live filesystem. It is
+ *    `published_apps.imageSizeBytes`, recorded from the registry manifest at BUILD
+ *    time — which is also the only moment it is cheaply knowable, since reading it
+ *    later costs a registry round-trip per app and reading it after the image is
+ *    replaced is impossible. So this source is never "measured while awake"; it is
+ *    measured when the thing being measured is created.
+ *  - it is billed whatever the app's status. A stopped, or even a `parked`, app
+ *    holds its rootfs. Only a DESTROYED app stops costing, and that row is gone.
+ *
+ * The payer is the same as an env's, for the same reason and through the same
+ * function: a published app hangs off an environment, and an environment is
+ * drive-owned. `published_apps.ownerId` is a denormalized cascade handle and is
+ * deliberately not read here.
+ */
+export interface PublishedAppStorageRow {
+  /** The `published_apps` row's own id. Where THIS app's watermark is persisted. */
+  publishedAppId: string;
+  /** The owning drive — NOT NULL, and the ONLY route to a payer. */
+  driveId: string;
+  storageLastBilledAt: Date;
+  /** The pinned image's registry size, from `imageSizeBytes`; null until the first build lands. */
+  measuredBytes: number | null;
+  /** When that size was recorded — the build that pinned the digest. Null alongside null bytes. */
+  measuredAt: Date | null;
+}
+
+/** WHICH kind of row a charge is for. The meter is one; the persistence units it meters are three. */
+export type StorageSubjectKind = 'session' | 'env' | 'hosting';
 
 /**
  * What a watermark write actually did. Three outcomes, because collapsing the
@@ -314,10 +366,15 @@ export interface ReconcileSandboxStorageDeps {
    */
   listDriveEnvSprites: () => Promise<DriveEnvStorageRow[]>;
   /**
+   * Every published app's ROOTFS to meter — the third row source. Billed whatever
+   * the app's status: a stopped published app still holds its image.
+   */
+  listPublishedAppRootfs: () => Promise<PublishedAppStorageRow[]>;
+  /**
    * Resolves a drive's ownerId; null when it can't be resolved (e.g. a stale
-   * read of a drive mid-delete). Used for every env row, and for a session
-   * subject whose `driveId` is set — the session `driveId === null` case
-   * bypasses this entirely (see `storageBillingTarget`, whose `{ ownerId }`
+   * read of a drive mid-delete). Used for every env and published-app row, and
+   * for a session subject whose `driveId` is set — the session `driveId === null`
+   * case bypasses this entirely (see `storageBillingTarget`, whose `{ ownerId }`
    * branch is already resolved, pure data with no IO needed).
    */
   lookupDriveOwnerId: (driveId: string) => Promise<string | null>;
@@ -339,7 +396,7 @@ export interface ReconcileSandboxStorageDeps {
     subjectId: string;
     costDollars: number;
     gbMonths: number;
-  }) => Promise<void>;
+  }) => Promise<UsageTrackingOutcome>;
   /**
    * Persists the new watermark for an `agent_workspaces` Sprite, on the ROW
    * ITSELF — the per-row watermark the design calls for, no separate tracking
@@ -354,37 +411,41 @@ export interface ReconcileSandboxStorageDeps {
   advanceAgentSessionWatermark: (input: { workspaceId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
   /** The same per-row watermark write, against `drive_envs`, with the same monotonic contract. */
   advanceDriveEnvWatermark: (input: { envId: string; billedThrough: Date }) => Promise<WatermarkWriteOutcome>;
+  /** The same per-row watermark write, against `published_apps`, with the same monotonic contract. */
+  advancePublishedAppWatermark: (input: {
+    publishedAppId: string;
+    billedThrough: Date;
+  }) => Promise<WatermarkWriteOutcome>;
   now: () => Date;
 }
 
 export interface ReconcileSandboxStorageResult {
   processed: number;
   /**
-   * Rows where `chargeStorage` RESOLVED — regardless of whether the watermark
-   * then advanced. Always reflected in `totalCostDollars`.
+   * Rows whose charge was DURABLY WRITTEN — the `ai_usage_logs` row exists, so the
+   * charge is either already settled or owned by the backfill cron. Regardless of
+   * whether the watermark then advanced. Always reflected in `totalCostDollars`.
    *
-   * "Resolved", not "the money moved", and the distinction is not pedantry: the
-   * production binding hands the charge to `AIMonitoring.trackUsage`, which
-   * returns `Promise<void>` and swallows its own failures into a
-   * `'AI usage tracking failed — spend may be UNBILLED'` log rather than
-   * rejecting. So with those deps this counter — and `totalCostDollars` — count
-   * charges SUBMITTED, and `failed` can only ever catch the steps BEFORE the
-   * charge. That log is the authoritative signal for a charge that did not land;
-   * tracked as a platform gap in issue #2444.
+   * This used to count charges SUBMITTED rather than landed, because
+   * `AIMonitoring.trackUsage` returned `Promise<void>` and swallowed its own
+   * failures. It now reports a {@link UsageTrackingOutcome}, so a charge that did
+   * not persist is counted under `failed` and its window is left open — this
+   * counter means what its name says again.
    */
   charged: number;
   /** Rows with a positive accrual whose owner could not be resolved — left unbilled (watermark untouched) for a future run to retry. */
   skipped: number;
   /**
-   * Rows where NOTHING was billed because something threw before or during the
-   * charge — the payer lookup, the accrual computation, `chargeStorage` itself,
-   * or (on a row whose window prices to $0) its watermark advance, which sits in
-   * the same guarded block. Isolated per row so one bad row doesn't abort the batch.
+   * Rows where NOTHING was billed — because something threw before or during the
+   * charge (the payer lookup, the accrual computation, `chargeStorage` itself, or,
+   * on a row whose window prices to $0, its watermark advance, which sits in the
+   * same guarded block) OR because the charge resolved WITHOUT persisting a usage
+   * row. Isolated per row so one bad row doesn't abort the batch.
    *
-   * With the PRODUCTION binding the `chargeStorage` case is unreachable: that dep
-   * cannot reject (see `charged`). So in production this counts pre-charge
-   * failures only, and a test injecting a throwing `chargeStorage` is what
-   * exercises the rest.
+   * The non-persisted case is the one that used to be invisible: `chargeStorage`
+   * cannot reject with the production binding, so before `trackUsage` reported an
+   * outcome a lost charge was counted as `charged` and its watermark advanced over
+   * it. Both shapes now land here, and both leave the window open for the next run.
    *
    * Distinct from {@link ReconcileSandboxStorageResult.chargedButUnadvanced},
    * which means the opposite: money DID move and only the watermark write
@@ -522,10 +583,11 @@ export interface ReconcileSandboxStorageResult {
    */
   failedSources: StorageSubjectKind[];
   /**
-   * Total charged this run — accumulated the moment `chargeStorage` resolves,
-   * never gated on the watermark advance that follows it. See `charged` for why
-   * this is "charged", not "collected": with the production binding a charge that
-   * silently failed still lands here.
+   * Total charged this run — accumulated the moment `chargeStorage` reports a
+   * PERSISTED charge, never gated on the watermark advance that follows it. See
+   * `charged` for why this is "charged", not "collected": a persisted charge whose
+   * ledger settle was deferred to the backfill cron still lands here, because the
+   * cron will collect it.
    */
   totalCostDollars: number;
 }
@@ -607,6 +669,35 @@ function toEnvSubject(
     measuredBytes: env.measuredBytes,
     measuredAt: env.measuredAt,
     lastActiveAt: env.lastActiveAt,
+  };
+}
+
+function toHostingSubject(
+  app: PublishedAppStorageRow,
+  lookupDriveOwnerId: (driveId: string) => Promise<string | null>,
+  deps: ReconcileSandboxStorageDeps,
+): BillableStorageSubject {
+  return {
+    kind: 'hosting',
+    subjectId: app.publishedAppId,
+    // Always attributed: a published app's `driveId` is NOT NULL.
+    attributionDriveId: app.driveId,
+    // The drive owner, with no fallback — identical to an env's, because a
+    // published app hangs off an env and an env is drive-owned. The memoized
+    // closure, not a bare deps reference (see `toEnvSubject`).
+    resolvePayerId: () => resolveEnvPayerId({ driveId: app.driveId, lookupDriveOwnerId }),
+    advanceWatermark: (billedThrough) =>
+      deps.advancePublishedAppWatermark({ publishedAppId: app.publishedAppId, billedThrough }),
+    storageLastBilledAt: app.storageLastBilledAt,
+    measuredBytes: app.measuredBytes,
+    measuredAt: app.measuredAt,
+    // A rootfs has no "awake" state to refresh a measurement from — the size is
+    // recorded once, at build. The epoch reads as "not awake", which is the
+    // honest input to the staleness flag: an app that has not been rebuilt in a
+    // day genuinely is billing from an ageing (and still perfectly correct)
+    // measurement. See `measurementHealth` on why that saturation is expected
+    // rather than alarming for a build-time-measured source.
+    lastActiveAt: new Date(0),
   };
 }
 
@@ -721,20 +812,23 @@ export async function reconcileSandboxStorage(
   // from one consistent-enough snapshot), but they are read INDEPENDENTLY —
   // see `listSource` for why one source's failure must not stop the other's
   // money.
-  const [sessions, envs] = await Promise.all([
+  const [sessions, envs, hosting] = await Promise.all([
     // Called through a closure, not passed unbound: a deps implementation is
     // free to be a real object whose row source reads `this`, and an unbound
     // reference would break it in a way only production would show.
     listSource('session', () => deps.listAgentSessionSprites()),
     listSource('env', () => deps.listDriveEnvSprites()),
+    listSource('hosting', () => deps.listPublishedAppRootfs()),
   ]);
   const subjects: BillableStorageSubject[] = [
     ...sessions.rows.map((session) => toSessionSubject(session, lookupDriveOwnerIdOnce, deps)),
     ...envs.rows.map((env) => toEnvSubject(env, lookupDriveOwnerIdOnce, deps)),
+    ...hosting.rows.map((app) => toHostingSubject(app, lookupDriveOwnerIdOnce, deps)),
   ];
   const failedSources: StorageSubjectKind[] = [];
   if (sessions.failed) failedSources.push('session');
   if (envs.failed) failedSources.push('env');
+  if (hosting.failed) failedSources.push('hosting');
   const now = deps.now();
 
 
@@ -746,6 +840,7 @@ export async function reconcileSandboxStorage(
   const measurementHealth: Record<StorageSubjectKind, { live: number; neverMeasured: number; stale: number }> = {
     session: { live: 0, neverMeasured: 0, stale: 0 },
     env: { live: 0, neverMeasured: 0, stale: 0 },
+    hosting: { live: 0, neverMeasured: 0, stale: 0 },
   };
   const billingByKind: Record<
     StorageSubjectKind,
@@ -753,6 +848,7 @@ export async function reconcileSandboxStorage(
   > = {
     session: { billable: 0, charged: 0, skipped: 0, failed: 0 },
     env: { billable: 0, charged: 0, skipped: 0, failed: 0 },
+    hosting: { billable: 0, charged: 0, skipped: 0, failed: 0 },
   };
 
   // Failures on rows we never established were BILLABLE — a pricing throw, or
@@ -871,11 +967,12 @@ export async function reconcileSandboxStorage(
 
     // The charge itself — isolated from the watermark advance below so the
     // two outcomes ("nothing was billed" vs "billed, but the watermark write
-    // failed") are never conflated. `charged`/`totalCostDollars` move the
-    // moment this resolves; whether that means money REACHED the ledger depends
-    // on the binding, and the production one cannot say (see `charged`'s doc).
+    // failed") are never conflated. `charged`/`totalCostDollars` move only on a
+    // charge that PERSISTED: a resolved call is not a settled one, and treating it
+    // as one is what used to close a window over spend that never reached a row.
+    let settle: UsageTrackingOutcome;
     try {
-      await deps.chargeStorage({
+      settle = await deps.chargeStorage({
         payerId: resolved.ownerId,
         driveId: attributionDriveId,
         subjectKind: subject.kind,
@@ -895,8 +992,44 @@ export async function reconcileSandboxStorage(
       );
       continue;
     }
+    if (!settle.persisted) {
+      // The charge resolved but reported NO persisted usage row, so there is
+      // nothing for the credit backfill cron to recover from — the spend is lost
+      // unless this window is billed again. Leave the watermark exactly where it
+      // was: the next run re-bills the whole span. Counted as `failed` — the same
+      // outcome as a throw, which is what this branch would have been if the seam
+      // could throw.
+      //
+      // "Nothing was CONFIRMED written", not "nothing was written", and the
+      // difference is the honest bound on this retry. A connection dropped at the
+      // commit boundary reports a failed write over a row that committed, and the
+      // retry then bills the span twice. That is bounded at ONE duplicate span and
+      // is strictly better than the alternative it replaces (losing the charge on
+      // every genuine failure); closing it properly needs a deterministic
+      // idempotency key per meter window, which is filed as a follow-up.
+      //
+      // Deliberately NOT gated on `creditsSettled`: a persisted row whose ledger
+      // claim was deferred is already owned by the backfill cron, and holding the
+      // window open for it would bill the payer twice for the same span.
+      billingByKind[subject.kind].failed += 1;
+      loggers.ai.error(
+        'Sandbox storage reconcile: chargeStorage did not persist a usage row — the window is left open for the next run',
+        new Error('storage charge was not persisted'),
+        { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+      );
+      continue;
+    }
     totalCostDollars += resolved.costDollars;
     billingByKind[subject.kind].charged += 1;
+    if (!settle.creditsSettled) {
+      // Late, not lost: the usage row exists, so `credit-backfill.ts` settles this
+      // charge on its next sweep. Reported at WARN so a persistent count is visible
+      // without being read as revenue loss.
+      loggers.ai.warn(
+        'Sandbox storage reconcile: charge persisted but its ledger settle was deferred to the backfill cron',
+        { driveId: attributionDriveId, subjectKind: subject.kind, subjectId: subject.subjectId },
+      );
+    }
 
     try {
       // The window is only actually closed once the charge landed AND the

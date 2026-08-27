@@ -213,3 +213,61 @@ describe('sparse evaluation', () => {
     expect(sparse.byAddress.A1.dependents).toEqual(['B1', 'C1']);
   });
 });
+
+describe('sparse evaluation: conditional formats', () => {
+  const withRule = (): SheetData => {
+    const sheet = sheetWith({ A1: '1', B1: '2' }, 5, 5);
+    sheet.conditionalFormats = [
+      { id: 'r1', kind: 'dataBar', ranges: ['A1:E5'], color: '#3b82f6' },
+    ];
+    return sheet;
+  };
+
+  it('backfills blank cells a rule covers and reports bars/formats by default', () => {
+    const sparse = evaluateSheetSparse(withRule());
+    // C1 holds nothing but is inside the rule's range, so it must be
+    // materialized for the rule to have anything to evaluate against.
+    expect(sparse.byAddress.C1).toBeDefined();
+    expect(sparse.bars?.A1).toBeDefined();
+    expect(sparse.bars?.B1).toBeDefined();
+  });
+
+  it('skips conditional-format evaluation and the blank-cell backfill entirely when asked', () => {
+    // `serializeSheetContent` reads `conditionalFormats` straight off the raw
+    // `SheetData`, never off this evaluation, so this work is pure waste there
+    // — and unbounded, a hot-path freeze risk on every keystroke.
+    const sparse = evaluateSheetSparse(withRule(), { skipConditionalFormats: true });
+    expect(sparse.byAddress.C1).toBeUndefined();
+    expect(sparse.bars).toBeUndefined();
+  });
+
+  it('does not paint a rule-covered cell that falls outside the sheet rectangle, agreeing with the dense walk', () => {
+    // `evaluateSheet` only ever seeds addresses inside rowCount x columnCount,
+    // so a rule range reaching past it paints nothing there. The blank-cell
+    // backfill used to reach past the rectangle too, so the two disagreed —
+    // same sheet, different look in editor (sparse) vs. export (dense).
+    const sheet = sheetWith({ A1: '1' }, 3, 3);
+    sheet.conditionalFormats = [
+      {
+        id: 'r1',
+        kind: 'cell',
+        ranges: ['A1:E5'],
+        condition: { operator: 'isNotEmpty' },
+        format: { bold: true },
+      },
+    ];
+
+    const sparse = evaluateSheetSparse(sheet);
+    const dense = evaluateSheet(sheet);
+
+    // D4/E5 are outside the 3x3 rectangle but inside the rule's A1:E5 range.
+    expect(sparse.byAddress.D4).toBeUndefined();
+    expect(sparse.byAddress.E5).toBeUndefined();
+    expect(dense.byAddress.D4).toBeUndefined();
+    expect(dense.byAddress.E5).toBeUndefined();
+
+    // A cell inside the rectangle is still painted by both.
+    expect(sparse.byAddress.A1?.format).toEqual({ bold: true });
+    expect(dense.byAddress.A1?.format).toEqual({ bold: true });
+  });
+});

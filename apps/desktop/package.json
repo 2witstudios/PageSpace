@@ -12,7 +12,7 @@
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
-    "dev:coder": "PAGESPACE_APP_VARIANT=coder electron-vite dev",
+    "dev:coder": "PAGESPACE_APP_VARIANT=coder ELECTRON_ENTRY=out-coder/main/index.js electron-vite dev",
     "lint": "eslint src",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

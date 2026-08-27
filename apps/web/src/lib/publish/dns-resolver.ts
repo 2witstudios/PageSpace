@@ -36,6 +36,12 @@ const PUBLIC_DNS_SERVERS = ['1.1.1.1', '8.8.8.8', '9.9.9.9'];
 /** Per-lookup timeout so a dead/slow NS can't hang the verify request. */
 const DNS_TIMEOUT_MS = 5000;
 const DNS_TRIES = 2;
+/**
+ * How many of a zone's nameservers we will follow. Real delegations carry a
+ * handful; the cap exists because the RRset comes from an attacker-controlled
+ * zone and each entry costs an outbound lookup.
+ */
+const MAX_NS_HOSTS = 8;
 
 function makeResolver(servers: string[]): Resolver {
   const resolver = new Resolver({ timeout: DNS_TIMEOUT_MS, tries: DNS_TRIES });
@@ -56,6 +62,13 @@ function makeResolver(servers: string[]): Resolver {
  * would otherwise turn this verifier into an SSRF vector that fires DNS queries
  * at internal hosts. Filtered-out IPs simply drop us to the public-resolver
  * fallback.
+ *
+ * The NS RRset is attacker-controlled in COUNT as well as content, and each
+ * entry costs a concurrent `resolve4` (up to DNS_TIMEOUT_MS x DNS_TRIES). A
+ * hostile zone answering with a large RRset would turn one authenticated verify
+ * request into that many outbound queries, so only the first MAX_NS_HOSTS are
+ * followed. That loses nothing real: a delegation needs a couple of nameservers
+ * to be reachable, not all of them, and any honest zone is far under the cap.
  */
 async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resolver): Promise<string[]> {
   const domain = registrableDomain(hostname);
@@ -65,7 +78,7 @@ async function resolveAuthoritativeNsIps(hostname: string, publicResolver: Resol
   if (nsHosts.length === 0) return [];
 
   const ipLists = await Promise.all(
-    nsHosts.map((ns) => publicResolver.resolve4(ns).catch(() => [] as string[])),
+    nsHosts.slice(0, MAX_NS_HOSTS).map((ns) => publicResolver.resolve4(ns).catch(() => [] as string[])),
   );
   // De-dupe, and only ever hand globally-routable public IPs to setServers.
   return [...new Set(ipLists.flat())].filter(isPublicIp);
@@ -114,4 +127,39 @@ export async function resolveHostname(hostname: string): Promise<ResolvedRecords
   // 2. Fallback — public recursive resolver: follows referrals, honors TTLs, and
   //    still bypasses the stale local Fly resolver.
   return queryRecords(publicResolver, hostname);
+}
+
+/**
+ * Resolve a hostname's TXT records, using the same authoritative-then-recursive
+ * strategy (and the same SSRF filter on nameserver IPs) as {@link resolveHostname}.
+ *
+ * Separate from `queryRecords` rather than folded into it because the two are
+ * asked at different moments and one must not slow the other: A/AAAA/CNAME are
+ * read on every domain verify, TXT only when a certificate turns out to be
+ * blocked on an `_fly-ownership` record. Adding a fourth always-on lookup would
+ * make every verify pay for the rare case.
+ *
+ * The authoritative path matters MORE here than for A records: the whole point
+ * of reading this record is that the customer has just published it, and a
+ * caching resolver's negative answer is exactly the false "you didn't add it"
+ * that would send them round the loop again.
+ *
+ * Returns Node's `string[][]` shape verbatim — one inner array per record, TXT
+ * character-strings unjoined. Joining is the caller's job
+ * (`parseOwnershipTxtValues` in `@pagespace/lib/validators/fly-ownership`),
+ * because a >255-byte value arrives chunked and only the caller knows whether
+ * the chunks concatenate or are separate values. Never throws: NXDOMAIN,
+ * ENODATA and timeouts all surface as `[]` ("not set yet").
+ */
+export async function resolveTxtRecords(hostname: string): Promise<string[][]> {
+  const publicResolver = makeResolver(PUBLIC_DNS_SERVERS);
+
+  const nsIps = await resolveAuthoritativeNsIps(hostname, publicResolver).catch(() => [] as string[]);
+  if (nsIps.length > 0) {
+    const authoritativeResolver = makeResolver(nsIps);
+    const records = await authoritativeResolver.resolveTxt(hostname).catch(() => [] as string[][]);
+    if (records.length > 0) return records;
+  }
+
+  return publicResolver.resolveTxt(hostname).catch(() => [] as string[][]);
 }

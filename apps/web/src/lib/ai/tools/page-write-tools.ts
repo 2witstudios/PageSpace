@@ -37,6 +37,7 @@ import { describeContentModeMismatch, isRawTextPage } from '../core/page-seriali
 import { insertAtAnchor } from '@/lib/editor/text-edit';
 import { resolveOrThrowPageId } from './page-context-defaults';
 import { resolveOrThrowDriveId } from './drive-context-defaults';
+import { toModelOutputForPageWrite } from './page-write-model-output';
 
 const pageWriteLogger = loggers.ai.child({ module: 'page-write-tools' });
 
@@ -708,6 +709,7 @@ export const pageWriteTools = {
       content: z.string().describe('New content to replace the lines with'),
       expectedTotalLines: z.number().int().min(0).optional().describe('Optional safety check: the total line count you saw when you read the page. If the document is no longer that length the edit is refused instead of being applied to lines you have not seen.'),
     }),
+    toModelOutput: ({ output }) => toModelOutputForPageWrite(output),
     execute: async ({ title, pageId: pageIdArg, startLine, endLine = startLine, content, expectedTotalLines }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {
@@ -1443,6 +1445,7 @@ export const pageWriteTools = {
       content: z.string().describe('Content to insert as a new line'),
       position: z.enum(['before', 'after']).describe('Insert the new line before or after the anchor line'),
     }),
+    toModelOutput: ({ output }) => toModelOutputForPageWrite(output),
     execute: async ({ title, pageId: pageIdArg, anchor, content, position }, { experimental_context: context }) => {
       const userId = (context as ToolExecutionContext)?.userId;
       if (!userId) {

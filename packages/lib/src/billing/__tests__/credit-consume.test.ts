@@ -287,10 +287,81 @@ describe('consumeCredits', () => {
   it('does not throw and leaves the row pending when the decrement transaction fails', async () => {
     mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
     mockDb.transaction.mockRejectedValueOnce(new Error('tx boom'));
+    // Never THROWS — but it no longer resolves as though nothing happened either:
+    // `deferred` is what says the backfill cron still owes this charge.
     await expect(
       consumeCredits({ aiUsageLogId: 'aul_1', userId: 'u1', costDollars: 1 }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('deferred');
     expect(mockAiLogger.debug).toHaveBeenCalled();
+  });
+
+  // ── The reported STATUS ─────────────────────────────────────────────────────
+  // `consumeCredits` never throws, and it used to resolve `void`, so a caller could
+  // not tell a completed settle from one the cron still owes. Callers use the
+  // status to LOG and to COUNT — never to re-bill a window, because `deferred` is a
+  // charge the backfill cron is about to collect from the usage row.
+
+  it('reports settled when the decrement commits', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      const noopWhere = vi.fn().mockResolvedValue(undefined);
+      await cb({
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([{ monthlyRemainingCents: 1000, topupRemainingCents: 0, pendingMillicents: 0 }]) }) }) }),
+        update: vi.fn().mockReturnValue({ set: () => ({ where: noopWhere }) }),
+      });
+    });
+    expect(await consumeCredits({ aiUsageLogId: 'aul_ok', userId: 'u1', costDollars: 1 })).toBe('settled');
+  });
+
+  it('reports deferred when the transaction COMMITS but decremented nothing (no balance row yet)', async () => {
+    // `decrementAndSettle` returns early for a user with no balance row, deliberately
+    // leaving the ledger row 'pending' — a resolved transaction that settled nothing.
+    // This is the case a `void` return could never express.
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_1' }]));
+    mockDb.transaction.mockImplementation(async (cb: (tx: unknown) => Promise<void>) => {
+      await cb({
+        select: () => ({ from: () => ({ where: () => ({ for: () => Promise.resolve([]) }) }) }),
+        update: vi.fn(),
+      });
+    });
+    expect(await consumeCredits({ aiUsageLogId: 'aul_nobal', userId: 'u1', costDollars: 1 })).toBe('deferred');
+  });
+
+  it('reports deferred when the ledger CLAIM itself fails (no row for the pending sweep, orphan sweep owns it)', async () => {
+    mockDb.insert.mockReturnValue({
+      values: vi.fn().mockReturnValue({
+        onConflictDoNothing: vi.fn().mockReturnValue({
+          returning: vi.fn().mockRejectedValue(new Error('claim boom')),
+        }),
+      }),
+    });
+    expect(await consumeCredits({ aiUsageLogId: 'aul_claim', userId: 'u1', costDollars: 1 })).toBe('deferred');
+  });
+
+  it('reports settled for a billing-disabled deployment and for an already-claimed duplicate', async () => {
+    mockIsBillingEnabled.mockReturnValue(false);
+    expect(await consumeCredits({ aiUsageLogId: 'aul_off', userId: 'u1', costDollars: 1 })).toBe('settled');
+
+    mockIsBillingEnabled.mockReturnValue(true);
+    mockDb.insert.mockReturnValue(claimReturning([])); // conflict -> already consumed
+    expect(await consumeCredits({ aiUsageLogId: 'aul_dup2', userId: 'u1', costDollars: 1 })).toBe('settled');
+  });
+
+  it('reports unbillable for a cost that is not a finite non-negative number', async () => {
+    // Neither settled nor recoverable: there is nothing for a cron to finish, which
+    // is exactly why it is not folded into `deferred`.
+    expect(await consumeCredits({ aiUsageLogId: 'aul_bad', userId: 'u1', costDollars: Number.NaN })).toBe('unbillable');
+  });
+
+  it('reports settled for a zero-charge call and deferred when marking it skipped fails', async () => {
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero' }]));
+    const where = vi.fn().mockResolvedValue(undefined);
+    mockDb.update.mockReturnValue({ set: () => ({ where }) });
+    expect(await consumeCredits({ aiUsageLogId: 'aul_free2', userId: 'u1', costDollars: 0 })).toBe('settled');
+
+    mockDb.insert.mockReturnValue(claimReturning([{ id: 'led_zero2' }]));
+    mockDb.update.mockReturnValue({ set: () => ({ where: vi.fn().mockRejectedValue(new Error('boom')) }) });
+    expect(await consumeCredits({ aiUsageLogId: 'aul_free3', userId: 'u1', costDollars: 0 })).toBe('deferred');
   });
 
   it('releases the gate hold inside the settle transaction when a holdId is threaded through', async () => {

@@ -90,6 +90,7 @@ describe('machine config', () => {
     digest: DIGEST,
     guestPreset: 'shared-cpu-1x-512',
     publishedAppId: 'abc',
+    tier: 'metered',
     env: { FOO: 'bar', PORT: '3000' },
   });
 
@@ -115,6 +116,7 @@ describe('machine config', () => {
       digest: DIGEST,
       guestPreset: 'performance-8x',
       publishedAppId: 'abc',
+      tier: 'metered',
     }),
     expected: null,
   });
@@ -385,5 +387,86 @@ describe('reconciler policy', () => {
     should: 'fall back',
     actual: resolveBuildReconcilerPolicy({ APP_BUILD_RECONCILE_BATCH: 'lots' }).batchLimit,
     expected: DEFAULT_BUILD_RECONCILER_POLICY.batchLimit,
+  });
+});
+
+describe('machine config: the tier', () => {
+  const build = (tier: 'metered' | 'dedicated', guestPreset = 'shared-cpu-1x-512') =>
+    buildMachineConfig({
+      flyAppName: 'pgs-app-abc',
+      digest: DIGEST,
+      guestPreset,
+      publishedAppId: 'abc',
+      tier,
+    });
+
+  /** The single service the router replays into. */
+  const service = (tier: 'metered' | 'dedicated', preset?: string) =>
+    (build(tier, preset)?.services?.[0] ?? null) as Record<string, unknown> | null;
+
+  assert({
+    given: 'a metered app',
+    should: 'run no machines when idle — scale-to-zero is the metered product',
+    actual: service('metered')?.min_machines_running,
+    expected: 0,
+  });
+
+  assert({
+    given: 'a dedicated app',
+    should: 'keep one machine running — always-on is what the flat price buys',
+    actual: service('dedicated')?.min_machines_running,
+    expected: 1,
+  });
+
+  // Autostart stays on for BOTH tiers: for metered it is how a request reaches a
+  // scaled-to-zero app at all, and for dedicated it is how Fly's proxy recovers a
+  // machine Fly stopped for its own reasons (a host migration, an OOM) without
+  // waiting for our next tick.
+  assert({
+    given: 'either tier',
+    should: 'let Fly’s proxy start a stopped machine',
+    actual: [service('metered')?.autostart, service('dedicated')?.autostart],
+    expected: [true, true],
+  });
+
+  // `autostop: off` is what makes every billing boundary an API call we made.
+  assert({
+    given: 'either tier',
+    should: 'leave stopping to our own orchestrator',
+    actual: [service('metered')?.autostop, service('dedicated')?.autostop],
+    expected: ['off', 'off'],
+  });
+
+  // The tier is a billing fact. If it started moving image, env, ports or metadata
+  // as well, a tier change would quietly become a redeploy.
+  assert({
+    given: 'the same app built on each tier',
+    should: 'differ in nothing but the services array',
+    actual: { ...build('metered'), services: undefined },
+    expected: { ...build('dedicated'), services: undefined },
+  });
+});
+
+describe('the larger guest presets', () => {
+  assert({
+    given: 'the dedicated-only presets',
+    should: 'map to the shapes the flat prices were derived from',
+    actual: [
+      guestForPreset('shared-cpu-1x-1024'),
+      guestForPreset('shared-cpu-2x-2048'),
+      guestForPreset('shared-cpu-4x-4096'),
+    ],
+    expected: [
+      { cpu_kind: 'shared', cpus: 1, memory_mb: 1024 },
+      { cpu_kind: 'shared', cpus: 2, memory_mb: 2048 },
+      { cpu_kind: 'shared', cpus: 4, memory_mb: 4096 },
+    ],
+  });
+
+  assert({
+    given: 'a preset nobody priced',
+    should: 'refuse rather than widen the fleet by accident',
+    actual: guestForPreset('shared-cpu-8x-8192'),
+    expected: null,
   });
 });

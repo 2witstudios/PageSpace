@@ -4,7 +4,7 @@ import { finishTool, FINISH_TOOL_NAME } from '@/lib/ai/tools/finish-tool';
 import { mergeToolSets } from '@/lib/ai/core/tool-utils';
 import { filterToolsForMcpScope, filterToolsForImageGen, filterToolsForSandboxEnablement } from '@/lib/ai/core/tool-filtering';
 import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPPageScope, getAllowedDriveIds, isScopedMCPAuth, canPrincipalViewPage } from '@/lib/auth';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
@@ -658,7 +658,7 @@ export async function POST(request: Request) {
       // enabled); use totalUsage so every round-trip is billed, not just the
       // final step.
       const usage = result.totalUsage;
-      AIMonitoring.trackUsage({
+      discardUsageOutcome(AIMonitoring.trackUsage({
         userId,
         provider: resolvedProvider,
         model: resolvedModelName,
@@ -670,7 +670,7 @@ export async function POST(request: Request) {
         driveId: agent.driveId,
         success: true,
         holdId,
-      });
+      }));
       // trackUsage owns the hold release from here.
       holdHandedOff = true;
     } catch (aiError) {

@@ -108,6 +108,7 @@ function realDepsCapturingCharges(over: Partial<ReconcileSandboxStorageDeps> = {
         ),
       chargeStorage: async (input) => {
         charges.push(input);
+        return { persisted: true, creditsSettled: true };
       },
       now: () => NOW,
       ...over,

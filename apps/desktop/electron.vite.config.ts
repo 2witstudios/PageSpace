@@ -1,5 +1,6 @@
 import { defineConfig } from 'electron-vite';
 import { resolve } from 'path';
+import { outRootFor } from './src/shared/out-root';
 
 /**
  * One codebase, two apps. `PAGESPACE_APP_VARIANT` selects which one this build
@@ -12,7 +13,10 @@ import { resolve } from 'path';
  * electron-builder configs.
  */
 const variant = process.env.PAGESPACE_APP_VARIANT ?? 'pagespace';
-const outRoot = variant === 'pagespace' ? 'out' : `out-${variant}`;
+
+// Shared with the dev scripts and the packaging configs — see out-root.ts for
+// why all three have to agree, and build-config-drift.test.ts for the guard.
+const outRoot = outRootFor(variant);
 
 const define = { __APP_VARIANT__: JSON.stringify(variant) };
 

@@ -135,10 +135,17 @@ export function selectLineWindow({
   let bytesCapped = false;
   let lineElided = false;
 
+  // The marker itself has to come out of the SAME budget it announces the
+  // overrun against — appending it after truncating to maxLineBytes made a
+  // clipped line maxLineBytes + markerBytes long, silently overshooting the
+  // one cap this function exists to hold.
+  const markerBytes = Buffer.byteLength(LINE_ELISION_MARKER, 'utf8');
+
   for (let n = start; n <= lastByLimit; n += 1) {
     let line = all[n - 1] ?? '';
     if (Buffer.byteLength(line, 'utf8') > maxLineBytes) {
-      line = truncateToBytes({ text: line, maxBytes: maxLineBytes }).text + LINE_ELISION_MARKER;
+      const clipBudget = Math.max(0, maxLineBytes - markerBytes);
+      line = truncateToBytes({ text: line, maxBytes: clipBudget }).text + LINE_ELISION_MARKER;
       lineElided = true;
     }
     // +1 for the '\n' that will join this line to the previous one.
@@ -155,8 +162,14 @@ export function selectLineWindow({
   }
 
   const reachesEnd = lastLine >= totalLines;
+  // Restoring the terminator costs a byte too — added AFTER the loop's own
+  // budget accounting, so it has to pass the same check or a full-file read
+  // sitting exactly at maxBytes comes back one byte over the documented cap.
+  const restoreTrailingNewline = reachesEnd && endsWithNewline && usedBytes + 1 <= maxBytes;
+  if (reachesEnd && endsWithNewline && !restoreTrailingNewline) bytesCapped = true;
+
   return {
-    text: selected.join('\n') + (reachesEnd && endsWithNewline ? '\n' : ''),
+    text: selected.join('\n') + (restoreTrailingNewline ? '\n' : ''),
     firstLine: start,
     lastLine,
     totalLines,

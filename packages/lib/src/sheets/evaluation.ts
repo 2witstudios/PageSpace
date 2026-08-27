@@ -19,12 +19,13 @@ import type {
   SheetDocDependencyRecord,
 } from './types';
 import { LOCAL_PAGE_KEY } from './constants';
-import { encodeCellAddress, expandRange, numberRegex, columnLabelOf } from './address';
+import { encodeCellAddress, decodeCellAddress, expandRange, numberRegex, columnLabelOf } from './address';
 import { tokenize, FormulaParser } from './parser';
 import { evaluateFunction, flattenValue, coerceNumber, formatDisplayValue } from './functions';
 import { applyNumberFormat, resolveCellFormat } from './format';
 import {
-  addressesOfRange,
+  MAX_CONDITIONAL_TOTAL_CELLS,
+  expandRangesWithinBudget,
   evaluateConditionalFormats,
   type DataBarFill,
 } from './conditional';
@@ -512,11 +513,35 @@ function evaluateExpression(
   return flattenValue(evaluated)[0];
 }
 
-/** Every address any rule covers, so a rule over blank cells still paints. */
+/**
+ * Every address any rule covers, so a rule over blank cells still paints.
+ *
+ * Bounded by the same aggregate cap `evaluateConditionalFormats` enforces
+ * (`MAX_CONDITIONAL_TOTAL_CELLS`), expanded one range at a time via
+ * `expandRangesWithinBudget` rather than flat-mapped up front: a rule can
+ * hold an unbounded number of ranges, each individually valid and under
+ * `MAX_CONDITIONAL_RANGE_CELLS` on its own, and this result feeds the
+ * blank-cell backfill below — materializing it unbounded would defeat the
+ * budget before evaluation ever got a chance to apply it.
+ */
 export function conditionalAddresses(sheet: SheetData): string[] {
   const rules = sheet.conditionalFormats;
   if (!rules || rules.length === 0) return [];
-  return rules.flatMap((rule) => rule.ranges.flatMap((range) => addressesOfRange(range)));
+
+  // `.concat()`, not `.push(...ruleAddresses)`: spreading a large array as
+  // call arguments blows the engine's argument-count limit well before it
+  // reaches `MAX_CONDITIONAL_TOTAL_CELLS`.
+  let addresses: string[] = [];
+  let remainingBudget = MAX_CONDITIONAL_TOTAL_CELLS;
+
+  for (const rule of rules) {
+    if (remainingBudget <= 0) break;
+    const { addresses: ruleAddresses, consumed } = expandRangesWithinBudget(rule.ranges, remainingBudget);
+    addresses = addresses.concat(ruleAddresses);
+    remainingBudget -= consumed;
+  }
+
+  return addresses;
 }
 
 /**
@@ -793,14 +818,29 @@ export function evaluateSheetSparse(
     };
   }
 
+  if (options.skipConditionalFormats) {
+    return { byAddress, dependencies };
+  }
+
   // A rule can cover cells that hold nothing — "highlight the blanks", or a
   // coloured band across an empty row. Those have no entry here, and without
   // one the rule would be stored correctly and paint nothing, which is exactly
   // how a blank cell's own formatting was once invisible.
+  //
+  // Bounded to the sheet's own rectangle to agree with `evaluateSheet`: the
+  // dense walk only ever seeds addresses inside `rowCount x columnCount`, so
+  // a rule range reaching past it paints nothing there — unlike a real
+  // formula cell stored past the rectangle (which both paths intentionally
+  // keep; see `serializeSheetContent`'s comment), a blank backfilled purely
+  // to satisfy a rule has no content to preserve, so there is no reason for
+  // the two evaluators to disagree here.
+  const sparseRowCount = Math.max(1, sheet.rowCount);
+  const sparseColumnCount = Math.max(1, sheet.columnCount);
   for (const address of conditionalAddresses(sheet)) {
-    if (!byAddress[address] && isLocalAddress(address)) {
-      byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
-    }
+    if (byAddress[address] || !isLocalAddress(address)) continue;
+    const { row, column } = decodeCellAddress(address);
+    if (row < 0 || row >= sparseRowCount || column < 0 || column >= sparseColumnCount) continue;
+    byAddress[address] = evaluateCellInternal(address, pageKey, env, new Set());
   }
 
   const bars = applyConditionalFormats(sheet, byAddress, pageKey, env);

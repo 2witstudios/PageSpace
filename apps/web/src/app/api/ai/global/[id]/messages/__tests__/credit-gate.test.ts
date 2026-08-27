@@ -531,7 +531,11 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     // within a bounded number of flushes. This is what makes the guarantee testable
     // — a synchronous mock + "was it called" assertion would pass either way.
     let resolveTrack!: () => void;
-    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(new Promise<void>((res) => { resolveTrack = res; }));
+    vi.mocked(AIMonitoring.trackUsage).mockReturnValueOnce(
+      new Promise((res) => {
+        resolveTrack = () => res({ persisted: true, creditsSettled: true });
+      }),
+    );
 
     await POST(makeRequest(), makeContext());
     await captured.createUIMessageStreamOptions.execute?.({ write: vi.fn() });

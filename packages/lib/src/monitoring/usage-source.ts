@@ -73,4 +73,21 @@ export const USAGE_SOURCE_LABELS: Record<AIUsageSource, string> = {
 export const SANDBOX_STORAGE_MODELS = {
   session: 'terminal-machine-storage',
   env: 'drive-env-storage',
+  /**
+   * A PUBLISHED APP's rootfs — the third row source on the same meter. A stopped
+   * published app costs nothing per second and still costs image storage, and
+   * that drip is the whole per-app idle floor.
+   */
+  hosting: 'published-app-storage',
 } as const;
+
+/**
+ * The `model` label for a published app's AWAKE-SECONDS charge — its runtime, as
+ * distinct from the rootfs storage label above.
+ *
+ * Lives here for the same reason those do: a hosting runtime row carries
+ * `source: 'terminal'` and no `pageId`, exactly like a sandbox terminal row, so
+ * this label is the only thing that says which meter produced a charge. Written
+ * by `defaultAppBillingDeps.trackUsage` and read by the usage breakdown.
+ */
+export const PUBLISHED_APP_AWAKE_MODEL = 'published-app-awake';

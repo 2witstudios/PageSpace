@@ -15,6 +15,7 @@ import {
   createSecureResponse,
   createSecureErrorResponse,
   isHandoffBridgeRoute,
+  routeOwnsItsOwnCsp,
   isPublicPageRoute,
   isPublishedSiteHost,
   shouldDisableCOEP,
@@ -561,6 +562,23 @@ describe('Security Headers', () => {
       expect(isHandoffBridgeRoute('/api/auth/apple/native')).toBe(false);
       expect(isHandoffBridgeRoute('/api/auth/csrf')).toBe(false);
       expect(isHandoffBridgeRoute('/api/foo')).toBe(false);
+    });
+  });
+
+  describe('routeOwnsItsOwnCsp', () => {
+    it('covers the handoff bridges and the published-app router', () => {
+      expect(routeOwnsItsOwnCsp('/api/auth/google/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/auth/apple/callback')).toBe(true);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router')).toBe(true);
+    });
+
+    it('is false for everything else, including app-hosting siblings', () => {
+      // The API CSP is the safe default; only a route that actually delivers its
+      // own policy may opt out, and only by exact path.
+      expect(routeOwnsItsOwnCsp('/api/app-hosting')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/app-hosting/router/x')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/auth/csrf')).toBe(false);
+      expect(routeOwnsItsOwnCsp('/api/foo')).toBe(false);
     });
   });
 

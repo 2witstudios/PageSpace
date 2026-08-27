@@ -207,6 +207,17 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
     // confirmed kill.
     'app_hosting_reclaims',
+    // The local mirror of a published app's MACHINE lifecycle — start/stop
+    // boundaries kept because Fly retains only the last 20 events per machine.
+    // Every column is fleet telemetry: a Fly app name, a machine id, a
+    // normalized start/stop, Fly's own event id and a timestamp. Nothing is
+    // authored by or about the subject, and the row keys on a `published_apps`
+    // id, which is itself the DRIVE's infrastructure record. The money these
+    // boundaries produced is exported under the subject's billing categories
+    // (`ai_usage_logs`, the credit ledger), which is where a charge is actually
+    // evidenced — this table is how we priced the drive's machine, not a record
+    // of anything the subject did.
+    'published_app_machine_events',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',
@@ -248,6 +259,18 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // the env (exported under its own categories) and in `pages`; this row is
     // infrastructure the drive owns and pays for.
     'published_apps',
+    // The Stripe mirror for one published app's DEDICATED (flat monthly) tier —
+    // the same answer as `subscriptions` below, for the same reason. It records a
+    // recurring charge for a DRIVE's infrastructure: which app is always-on, at
+    // which guest size, on which Stripe price, and whether that subscription is
+    // paying. `userId` is the payer denormalized from the drive owner, so the row
+    // says who is billed for the drive's machine rather than anything the subject
+    // authored or that describes them. The subject's own billing relationship is
+    // already the account-plan `subscriptions` row and the credit ledger, all
+    // excluded on this same rationale; the Stripe-side record of the charge is the
+    // subject's to obtain from Stripe, and is not duplicated into a PageSpace
+    // export by a table whose subject is an app.
+    'published_app_subscriptions',
     'custom_domains',
     'global_assistant_config',
     'form_targets',

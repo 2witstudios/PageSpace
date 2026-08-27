@@ -55,3 +55,96 @@ export function resolvePublishedAppsNetwork(): string {
   const configured = process.env.PUBLISHED_APPS_NETWORK;
   return configured && configured.length > 0 ? configured : PUBLISHED_APPS_NETWORK_DEFAULT;
 }
+
+/**
+ * Parse a positive-integer env knob, falling back to `fallback` for anything that
+ * is not one.
+ *
+ * Read at CALL TIME, not at module load, for the same reason
+ * `dailyExposureCapForTier` is a function: these are operational knobs that an
+ * operator turns without a deploy, and a module-load read would freeze whatever
+ * value the first import saw — including in tests, where a per-case override is
+ * the only way to exercise a threshold without waiting for it.
+ *
+ * A malformed value takes the DEFAULT rather than throwing or disabling: these
+ * knobs bound money and machine lifetime, and a typo must not silently switch off
+ * the reaper (leaving the fleet awake) or the cap (leaving it unbounded). Zero is
+ * accepted where the constant's own docblock says zero means something.
+ */
+function envSeconds(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim().length === 0) return fallback;
+  const parsed = Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed) || parsed < 0) return fallback;
+  return parsed;
+}
+
+/** Default idle threshold before the reaper stops a published app: 15 minutes. */
+export const PUBLISHED_APP_IDLE_STOP_SECONDS_DEFAULT = 900;
+
+/**
+ * How long a published app may go without a routed request before the idle reaper
+ * stops its machine.
+ *
+ * This is the number that turns "scale to zero" from a claim into a behaviour: the
+ * machines run with `autostop: "off"` so that every billing boundary is an API
+ * call we made, which means NOTHING stops an app except this reaper. Too long and
+ * every app bills for idle time; too short and every visitor after a lull pays a
+ * cold start (sub-second — the rootfs assembles at machine CREATE, not at start —
+ * plus the replay's own `timeout=`).
+ *
+ * 15 minutes because the recency signal it is compared against is itself throttled
+ * to a minute (see {@link resolveHitStampIntervalSeconds}) and the cron
+ * fires every five: a threshold near either of those would reap apps that were
+ * being used seconds ago. Set to 0 to disable idle reaping entirely — a machine
+ * then stays awake until it is stopped by hand, by the credit gate, or by the
+ * daily cap.
+ */
+export function resolveIdleStopSeconds(): number {
+  return envSeconds('PUBLISHED_APP_IDLE_STOP_SECONDS', PUBLISHED_APP_IDLE_STOP_SECONDS_DEFAULT);
+}
+
+/** Default throttle on the router's recency stamp: one write per app per minute. */
+export const PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS_DEFAULT = 60;
+
+/**
+ * The minimum age of `published_apps.lastHitAt` before the router rewrites it.
+ *
+ * The router runs once per ASSET of every published page, so an unconditional
+ * stamp would put a row write on the hottest path in the system and turn one
+ * visitor's page load into dozens of writes to the same row — contending with the
+ * meter's own writes to it. The throttle makes all but one of those an indexed
+ * statement that matches nothing.
+ *
+ * The cost is precision: this column trails real traffic by up to this interval,
+ * which is why {@link resolveIdleStopSeconds} is an order of magnitude larger. Set
+ * to 0 to stamp on every replayed request (accurate, and much more expensive).
+ */
+export function resolveHitStampIntervalSeconds(): number {
+  return envSeconds('PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS', PUBLISHED_APP_HIT_STAMP_INTERVAL_SECONDS_DEFAULT);
+}
+
+/** Default per-app daily awake budget: 12 hours per UTC day. */
+export const PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP_DEFAULT = 43_200;
+
+/**
+ * The most awake-seconds one METERED app may bill in a single UTC day before it is
+ * stopped and PARKED — the per-app analog of `dailyExposureCapForTier`, which
+ * bounds a payer rather than an app.
+ *
+ * Both bounds are needed and neither subsumes the other: the payer cap is a
+ * ceiling on a person's whole day across every app they own, so a single runaway
+ * app can exhaust it and take every other app that payer owns down with it. This
+ * one contains the damage to the app that caused it.
+ *
+ * 12 hours by default, which — with the idle reaper working — an app can only
+ * reach by genuinely serving traffic around the clock. That is the intended
+ * signal, not an accident: a metered app awake half of every day has outgrown the
+ * metered tier, and the epic's answer for always-on is the flat-rate DEDICATED
+ * tier (no balance gate, `min_machines_running = 1`, exempt from this cap because
+ * `parked` is metered-only by CHECK). Set to 0 to disable, which leaves the payer
+ * cap and the credit balance as the only bounds.
+ */
+export function resolveDailyAwakeSecondsCap(): number {
+  return envSeconds('PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP', PUBLISHED_APP_DAILY_AWAKE_SECONDS_CAP_DEFAULT);
+}

@@ -184,7 +184,11 @@ export function serializeSheetContent(
   // edges. It additionally emits an edge to a referenced address *outside*
   // rowCount x columnCount, which the dense walk could never see —  the same
   // reason an out-of-rectangle cell now survives a save at all.
-  const evaluation = evaluateSheetSparse(sanitized);
+  // `sheetDataToSheetDoc` reads `conditionalFormats` straight off `sanitized`,
+  // never off the evaluation result, so evaluating rules (and backfilling the
+  // blank cells they cover) here is pure waste — and, unbounded, a hot-path
+  // freeze risk on every keystroke.
+  const evaluation = evaluateSheetSparse(sanitized, { skipConditionalFormats: true });
   const doc = sheetDataToSheetDoc(sanitized, evaluation, options);
   return stringifySheetDoc(doc);
 }

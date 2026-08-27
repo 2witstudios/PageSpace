@@ -258,6 +258,23 @@ describe('computePasteCells', () => {
     });
   });
 
+  it('shifts the reference but leaves quoted string literals untouched on an internal formulas paste', () => {
+    const result = computePasteCells({
+      previous: sheet({}),
+      table: table([['=IF(A2>0,"q1","")']]),
+      start: { row: 1, column: 0 },
+      pasteMode: 'formulas',
+      isInternalPaste: true,
+      copyStart: { row: 0, column: 0 },
+    });
+    assert({
+      given: 'an internal formulas paste one row down of a formula with a quoted string literal',
+      should: 'shift the reference and leave the literal untouched, including its case',
+      actual: result.cells.A2,
+      expected: '=IF(A3>0,"q1","")',
+    });
+  });
+
   it('skips formula values in values mode, leaving the target untouched', () => {
     const result = computePasteCells({
       previous: sheet({ A1: 'keep' }),

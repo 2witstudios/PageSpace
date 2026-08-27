@@ -42,7 +42,7 @@ vi.mock('@pagespace/db/db', () => ({
   },
 }));
 
-import { getCreditBalance, resolveTier } from '../credit-balance';
+import { getCreditBalance, readSpendableCents, resolveTier } from '../credit-balance';
 
 const future = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
 const past = new Date(Date.now() - 24 * 60 * 60 * 1000);
@@ -273,6 +273,60 @@ describe('getCreditBalance', () => {
       expect(b.monthly.periodEnd).not.toBeNull();
       expect(new Date(b.monthly.periodEnd!).getTime()).toBeGreaterThan(Date.now());
     });
+  });
+});
+
+describe('readSpendableCents — the routing edge lean read', () => {
+  /** A funded row with a live period. */
+  const funded = (over: Record<string, unknown> = {}) => [{
+    monthlyRemainingCents: 500,
+    monthlyAllowanceCents: 500,
+    topupRemainingCents: 0,
+    debtCents: 0,
+    monthlyPeriodEnd: future,
+    ...over,
+  }];
+
+  it('never reads credit_holds — that aggregate is the reason this function exists', async () => {
+    balanceRows = funded();
+    // A hold big enough to change the answer if it were subtracted.
+    holdRows = [{ reserved: 100_000 }];
+
+    expect(await readSpendableCents('u1', 'pro')).toBe(500);
+  });
+
+  it('agrees with the display read for a funded row', async () => {
+    balanceRows = funded();
+    const [lean, display] = [await readSpendableCents('u1', 'pro'), await getCreditBalance('u1', 'pro')];
+    expect(lean).toBe(display.spendable);
+  });
+
+  it('agrees with the display read when no row exists yet', async () => {
+    balanceRows = [];
+    const [lean, display] = [await readSpendableCents('u1', 'free'), await getCreditBalance('u1', 'free')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBeGreaterThan(0);
+  });
+
+  it('agrees with the display read for a free user whose window has lapsed', async () => {
+    // The rollover the gate applies lazily: the user must not read as broke for the
+    // gap between the reset being due and something performing it.
+    balanceRows = funded({ monthlyRemainingCents: 0, monthlyPeriodEnd: past });
+    const [lean, display] = [await readSpendableCents('u1', 'free'), await getCreditBalance('u1', 'free')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBeGreaterThan(0);
+  });
+
+  it('agrees with the display read for a user in debt, and goes negative', async () => {
+    balanceRows = funded({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 750 });
+    const [lean, display] = [await readSpendableCents('u1', 'pro'), await getCreditBalance('u1', 'pro')];
+    expect(lean).toBe(display.spendable);
+    expect(lean).toBeLessThan(0);
+  });
+
+  it('clamps at zero when there is no debt', async () => {
+    balanceRows = funded({ monthlyRemainingCents: 0, topupRemainingCents: 0, debtCents: 0, monthlyPeriodEnd: future });
+    expect(await readSpendableCents('u1', 'pro')).toBe(0);
   });
 });
 

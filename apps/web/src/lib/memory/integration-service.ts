@@ -30,7 +30,7 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 import { readMemoryPages } from '@pagespace/lib/memory/memory-pages';
 import {
   applyPageMutation,
@@ -345,7 +345,7 @@ Return JSON with the full new content for each field that should change. Use nul
       maxRetries: 2,
     });
 
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -357,7 +357,7 @@ Return JSON with the full new content for each field that should change. Use nul
         : undefined,
       success: true,
       metadata: { feature: 'memory_integration' },
-    });
+    }));
 
     const text = result.text.trim();
     const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);

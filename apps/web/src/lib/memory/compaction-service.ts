@@ -12,7 +12,7 @@ import { generateText } from 'ai';
 import { createAIProvider, isProviderError } from '@/lib/ai/core/provider-factory';
 import { BACKGROUND_HEAVY_PROVIDER, BACKGROUND_HEAVY_MODEL } from '@/lib/ai/core/ai-providers-config';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { AIMonitoring } from '@pagespace/lib/monitoring/ai-monitoring';
+import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 import { getCurrentPersonalizationPages, updatePersonalizationPage } from './integration-service';
 
 import { MAX_FIELD_LENGTH, compactionTarget, type MemoryField } from './budgets';
@@ -131,7 +131,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
       maxRetries: 2,
     });
 
-    AIMonitoring.trackUsage({
+    discardUsageOutcome(AIMonitoring.trackUsage({
       userId,
       provider: providerResult.provider,
       model: providerResult.modelName,
@@ -143,7 +143,7 @@ Compact this by deleting anything that does not change AI behaviour. Output only
         : undefined,
       success: true,
       metadata: { feature: 'memory_compaction', field },
-    });
+    }));
 
     const compactedContent = result.text.trim();
 

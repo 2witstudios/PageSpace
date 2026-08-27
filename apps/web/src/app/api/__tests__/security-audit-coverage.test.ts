@@ -47,6 +47,7 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['internal/*', 'Internal service-to-service endpoints'],
   ['cron/scheduled-backups', 'HMAC-signed internal cron job — no user session, authenticated by shared secret, executes pre-authorized backup schedules'],
   ['memory/cron', 'Internal memory cron job'],
+  ['app-hosting/router', 'Published-app serving edge, called by pagespace-proxy on EVERY request to a published app (no fly-replay-cache on the metered tier, by design) — there is no user session to attribute, the caller is authenticated by the APP_ROUTER_PROXY_SECRET shared secret like the HMAC cron routes above, and one audit row per served asset would swamp the audit log with routing decisions. The security-relevant outcomes are counted at the edge instead: a refused caller answers 404 and a credit-exhausted app answers 402, both distinguishable in proxy logs.'],
   ['desktop-bridge/status', 'Desktop app connection status check'],
   ['provisioning-status/[slug]', 'Tenant provisioning status polling'],
 

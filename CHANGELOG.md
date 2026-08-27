@@ -7,6 +7,25 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The server can send an Android notification** — it has always accepted and stored Android push
+  tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
+  now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
+  still only registers for push on iOS (`usePushNotifications`, "Only supported on iOS for now") —
+  when that lands, a mention or a share will reach an Android device the same way it reaches an
+  iPhone, with no further server work. A background sync is sent as a data-only message, which
+  is what stops Android from putting a notification in the tray for something the app was only meant
+  to quietly act on. A token Firebase reports as unregistered — the app was uninstalled, or the
+  token was replaced — is deactivated on the spot rather than retried forever, matching how expired
+  Apple tokens are already handled. That only happens when Firebase says something is wrong with
+  *that token* — the registration is gone, or the token itself is malformed. A rejection aimed at
+  the request as a whole is retried instead — and is never counted against the phone either, no
+  matter how many times it happens: a message the server built badly, or a credential pointing at
+  the wrong Firebase project, would otherwise unregister every Android phone at once and leave
+  them dark until each app was next opened. If the Firebase credential is missing or
+  malformed the Android send fails with a message that says exactly which field is wrong, every
+  other device on the account still receives the notification, and no phone is penalised for a
+  problem on the server's side.
+
 - **A key can tell you what it is allowed to do** — `pagespace keys describe` reports the credential
   the machine is using: which drives it reaches, the role it holds in each, and what that role
   actually resolves to — can it read, write, share, delete. That answer comes from the same
@@ -205,6 +224,60 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
+  "host" pane (the one showing the same conversation the page's own header already tracks) used to
+  collapse to a bare name label with no way to reach History or Settings from that pane, unlike
+  every other pane in the grid. It now carries the same tab strip. Deleting the page's own hosted
+  conversation from that newly-reachable History tab now correctly hands the page a replacement
+  conversation instead of leaving it silently pointed at one that no longer exists — including when
+  a session end happens to land at the same moment.
+- **An agent locked down by `update_agent_config` can be unlocked again, and `pagespace keys` tells
+  you the real fix** — restricting an agent's tools to an empty list had no way back through the
+  tool itself: the field that means "no restrictions" is `null`, and the schema only accepted an
+  array or nothing at all, so the agent stayed locked down until someone reached the settings UI.
+  Passing `enabledTools: null` now explicitly clears the restriction. Separately, `pagespace keys
+  list`/`revoke`/`use` and the key wizard refuse when run with a scoped access key instead of your
+  personal login — that message used to always say to remove "the key's `--token`/env credential,"
+  even when the key had actually come from `--key <name>` or a stored credential with no `--token`
+  in sight, pointing you at a flag you never passed. It now names the credential that actually
+  resolved.
+- **Pasting a formula no longer corrupts quoted text inside it** — copying a formula like
+  `=IF(A2>0,"q1","")` down a row used to also rewrite the quoted string, turning `"q1"` into
+  `"Q2"`: the reference-shifting logic behind paste and conditional-format rules didn't know the
+  difference between a cell reference and a letters-and-digits run sitting inside a string literal.
+  It now leaves anything inside quotes untouched, both on paste and when a conditional-format
+  formula rule is evaluated per cell. Separately, a sheet with a very large or pathological set of
+  conditional-format rules could make typing, saving, or rendering the sheet hang — evaluation work
+  is now capped in total across every rule and range combined, on top of the existing per-range
+  limit, and rule count itself is capped where a sheet is written. Saving a sheet also no longer
+  evaluates conditional formats at all, since the save format never reads that result — cutting
+  needless work on every keystroke.
+
+- **A charge that fails to record is retried instead of silently dropped** — usage metering used to
+  report success whether or not it had actually written anything. If the database write for a usage
+  record failed, the failure was logged and then swallowed: the meter above it saw a normal result,
+  moved its billing marker past the window it had just tried to charge for, and that spend was gone
+  for good — with no record left behind for the nightly reconciliation to find. It affected every
+  running meter: sandbox storage, terminal sessions, and published-app runtime. Metering now reports
+  whether the record was actually written, and a meter that hears "no" leaves its window open so the
+  next cycle bills the whole span again — safe precisely because nothing was written the first time.
+  The reverse case is handled just as deliberately: when the record IS written but the ledger entry
+  is deferred to the reconciliation job, the window closes normally, because reopening it would
+  charge you twice for the same span.
+
+- **A custom domain stuck on SSL now tells you which DNS record to add** — when a certificate is
+  waiting on an ownership record, domain settings name it outright: the `_fly-ownership` TXT record,
+  where it goes, and every value that satisfies it — Fly accepts an app-scoped or an org-scoped
+  value, and whichever ones it offers are the ones you are shown. Previously that domain simply sat at "provisioning"
+  indefinitely with nothing to act on, because through the certificate's status alone "the
+  certificate has not issued yet" and "you were never told to add a DNS record" look identical — and
+  only one of them ever resolves on its own. The domain also stays healthy while it waits instead of
+  being marked failed, so a site already being served keeps serving. "Check SSL" now does more than
+  re-read a cached answer: once the record is visible in DNS it asks the certificate authority to
+  look again, rather than leaving you to wait out its own polling schedule. And removing a domain
+  now detaches its certificate, which previously kept billing after the domain was gone. Deleting an
+  entire drive does not yet do this, so remove its domains individually first if you want their
+  certificates released.
 - **An older AI conversation keeps its controls** — opening an AI page on a past conversation could
   drop the whole bar above the chat: no agent name, and no "+" to start a new conversation, so the
   only way to begin one was to go to the History tab and find the button there. Which of the two the

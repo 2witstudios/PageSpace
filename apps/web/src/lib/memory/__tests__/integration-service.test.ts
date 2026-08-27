@@ -40,6 +40,14 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
 }));
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn() },
+  // These are pure-telemetry call sites: they hand the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module has to provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
 }));
 vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } },

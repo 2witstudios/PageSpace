@@ -14,6 +14,8 @@ import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { clearCustomHost, mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { regeneratePublishedSiteFiles, republishDriveCanonical, renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
+import { resolveAppRouterFlyAppName } from '@pagespace/lib/services/app-hosting/routing-env';
+import { removeCertificate } from '@/lib/fly/certs';
 import { isValidDriveNotFoundPage } from '@pagespace/lib/services/drive-service';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
@@ -238,6 +240,53 @@ export async function DELETE(
           error: err instanceof Error ? err.message : String(err),
         });
       });
+    }
+
+    // Detach the hostname from the router app at Fly. Certificates bill PER
+    // HOSTNAME ($0.10/mo past the first ten), and this row was the only record
+    // that the hostname was ever attached — so a delete that skips this leaves a
+    // charge with nothing in our database pointing at it, which is the same
+    // orphaned-billing-resource shape `app_hosting_reclaims` exists to prevent
+    // for Fly apps. Best-effort and fire-and-forget, like the storage cleanup
+    // above: `deleteCertificate` is idempotent (a hostname Fly does not have is
+    // already in the desired state), so a failed attempt is safely retried by
+    // re-adding and re-removing the domain, and a Fly outage must not block the
+    // user's removal. Platform-owned rows are skipped — their TLS comes from the
+    // app's own domain and Fly never issued a per-hostname cert for them.
+    if (!deleted.platformOwned) {
+      const routerApp = resolveAppRouterFlyAppName();
+      // SCOPE LIMIT, stated because it is easy to read this as solved: this is the
+      // ONLY caller of `removeCertificate`, and `custom_domains.drive_id` cascades
+      // off `drives`. So deleting a DRIVE — or the 30-day GDPR purge, or the
+      // account-erasure worker — destroys every domain row without ever running
+      // this, stranding a per-hostname certificate charge whose only pointer is
+      // gone. That is the same shape `app_hosting_reclaims` exists to prevent for
+      // Fly apps, and per that table's own docblock the fix is NOT to guard each
+      // delete path ("unenforceable — there is always one more path", and it
+      // cannot work for erasure) but to invert the dependency with an AFTER DELETE
+      // trigger writing to a FK-less outbox. Certificates have no such outbox yet.
+      // Explicit removal detaching the cert is strictly better than the previous
+      // behaviour of never detaching it; it is not complete coverage.
+      const warnCertRemovalFailed = (error: string) => {
+        loggers.api.warn('Failed to remove Fly certificate after domain removal', {
+          hostname: deleted.hostname,
+          routerApp,
+          error,
+        });
+      };
+      // `removeCertificate` returns a discriminated result and does not reject
+      // today. The `.catch` is here because that is an invariant of ANOTHER
+      // module, not of this call site: a fire-and-forget promise that starts
+      // rejecting surfaces as an unhandled rejection, which fails the coverage
+      // job while every test still reports passing — a failure that would not
+      // point back at this line.
+      void removeCertificate(routerApp, deleted.hostname)
+        .then((result) => {
+          if (!result.ok) warnCertRemovalFailed(result.error);
+        })
+        .catch((err: unknown) => {
+          warnCertRemovalFailed(err instanceof Error ? err.message : 'unknown error');
+        });
     }
 
     auditRequest(request, {

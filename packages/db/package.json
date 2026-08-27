@@ -302,6 +302,10 @@
     "./schema/published-apps": {
       "types": "./dist/schema/published-apps.d.ts",
       "default": "./dist/schema/published-apps.js"
+    },
+    "./schema/published-app-subscriptions": {
+      "types": "./dist/schema/published-app-subscriptions.d.ts",
+      "default": "./dist/schema/published-app-subscriptions.js"
     }
   },
   "scripts": {

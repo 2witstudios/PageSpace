@@ -76,6 +76,22 @@ describe('agent-tools', () => {
   });
 
   describe('update_agent_config', () => {
+    it('enabledTools schema accepts null (unrestricted) as well as an array and omission', () => {
+      // The bug this guards: `.optional()` alone rejects an explicit `null` before
+      // `execute` ever runs, so a model trying to restore an agent it had locked
+      // down to `[]` gets a validation error, not the fix. `.nullable()` is what
+      // makes `null` a legal argument at all.
+      const schema = agentTools.update_agent_config.inputSchema as unknown as {
+        safeParse: (input: unknown) => { success: boolean };
+      };
+      const base = { agentPath: '/d/a', agentId: 'agent-1' };
+
+      expect(schema.safeParse({ ...base, enabledTools: null }).success).toBe(true);
+      expect(schema.safeParse({ ...base, enabledTools: [] }).success).toBe(true);
+      expect(schema.safeParse({ ...base, enabledTools: ['read_page'] }).success).toBe(true);
+      expect(schema.safeParse(base).success).toBe(true);
+    });
+
     it('has correct tool definition', () => {
       expect(agentTools.update_agent_config).toBeDefined();
       expect(agentTools.update_agent_config.description).toContain('AI agent');
@@ -285,6 +301,76 @@ describe('agent-tools', () => {
 
       // Assert - verify broadcast was called
       expect(mockBroadcastPageEvent).toHaveBeenCalled();
+    });
+
+    it('locks an agent down to zero tools with an empty array', async () => {
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: null, enabledTools: ['read_page'], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, enabledTools: [], revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: [] },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: [] }) }),
+      );
+    });
+
+    it('restores an agent to unrestricted with an explicit null', async () => {
+      // A prior call locked this agent down to `[]`. Passing null is the only way
+      // back — `filterToolsForAgentAllowlist` reads `null` as unrestricted.
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: null, enabledTools: [] as string[], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, enabledTools: null, revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', enabledTools: null },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ enabledTools: null }) }),
+      );
+    });
+
+    it('omitting enabledTools leaves the current list unchanged', async () => {
+      const mockAgent = {
+        id: 'agent-1', title: 'My Agent', type: 'AI_CHAT', driveId: 'drive-1',
+        systemPrompt: 'Old prompt', enabledTools: ['read_page'], aiProvider: null, aiModel: null,
+        agentDefinition: null, visibleToGlobalAssistant: false, includeDrivePrompt: false,
+        includePageTree: false, pageTreeScope: null, sandboxEnabled: false,
+        toolExposureMode: 'upfront' as const, userScopedAccess: false, revision: 2,
+      };
+      mockAgentRepository.findById
+        .mockResolvedValueOnce(mockAgent)
+        .mockResolvedValueOnce({ ...mockAgent, systemPrompt: 'New prompt', revision: 3 });
+      mockCanUserEditPage.mockResolvedValue(true);
+
+      await agentTools.update_agent_config.execute!(
+        { agentPath: '/drive/agent', agentId: 'agent-1', systemPrompt: 'New prompt' },
+        { toolCallId: '1', messages: [], experimental_context: { userId: 'user-123' } as ToolExecutionContext },
+      );
+
+      const call = vi.mocked(applyPageMutation).mock.calls.at(-1)?.[0] as { updates: Record<string, unknown> };
+      expect(call.updates).not.toHaveProperty('enabledTools');
     });
 
     it('updates provider and model settings', async () => {

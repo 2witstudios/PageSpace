@@ -241,16 +241,110 @@ describe('useCapacitor', () => {
           expect(result.current.isReady).toBe(true);
         });
 
+        // Still a native shell — that is about Capacitor, not about which
+        // platform row we recognize.
         expect(result.current.isNative).toBe(true);
-        expect(result.current.platform).toBe('unknown');
+        // `platform` is typed `Platform`, so an unrecognized value normalizes to
+        // 'web' rather than leaking a string outside that union.
+        expect(result.current.platform).toBe('web');
         expect(result.current.isIOS).toBe(false);
         expect(result.current.isAndroid).toBe(false);
+        // No capability row for it, so nothing is claimed as supported.
+        expect(result.current.capabilities).toEqual({
+          secureStore: false,
+          nativeAuth: false,
+          push: false,
+          badge: false,
+        });
       });
     });
   });
 
-  // Note: isCapacitorApp() and getPlatform() utility functions are re-exported
-  // from capacitor-bridge.ts and thoroughly tested in capacitor-bridge.test.ts.
+  describe('capabilities', () => {
+    it('exposes the iOS capability set', async () => {
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'ios'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.capabilities).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: true,
+      });
+    });
+
+    it('exposes the Android capability set, badge still unsupported', async () => {
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'android'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.isAndroid).toBe(true);
+      expect(result.current.capabilities).toEqual({
+        secureStore: true,
+        nativeAuth: true,
+        push: true,
+        badge: false,
+      });
+    });
+
+    it('renders unsupported first on iOS, so hydration cannot mismatch', async () => {
+      // The server has no window.Capacitor, so it always renders the
+      // unsupported set. If the hook's initial state read the real platform,
+      // the first client render would disagree with the server's HTML.
+      (window as Window & { Capacitor?: MockCapacitor }).Capacitor = {
+        isNativePlatform: vi.fn(() => true),
+        getPlatform: vi.fn(() => 'ios'),
+      };
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const seen: Array<{ badge: boolean; isReady: boolean }> = [];
+      const { result } = renderHook(() => {
+        const state = useCapacitorModule.useCapacitor();
+        seen.push({ badge: state.capabilities.badge, isReady: state.isReady });
+        return state;
+      });
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      // First render (pre-effect) must look exactly like the server's.
+      expect(seen[0]).toEqual({ badge: false, isReady: false });
+      // and only then move to the real capability set.
+      expect(result.current.capabilities.badge).toBe(true);
+    });
+
+    it('reports everything unsupported in a browser tab', async () => {
+      delete (window as Window & { Capacitor?: MockCapacitor }).Capacitor;
+      vi.resetModules();
+      useCapacitorModule = await import('../useCapacitor');
+
+      const { result } = renderHook(() => useCapacitorModule.useCapacitor());
+      await waitFor(() => expect(result.current.isReady).toBe(true));
+
+      expect(result.current.isNative).toBe(false);
+      expect(result.current.capabilities).toEqual({
+        secureStore: false,
+        nativeAuth: false,
+        push: false,
+        badge: false,
+      });
+    });
+  });
+
+  // Note: isCapacitorApp(), getPlatform() and isIPad() live in
+  // capacitor-bridge.ts and are thoroughly tested in capacitor-bridge.test.ts.
   // This file focuses on the React hook behavior only.
 
   describe('usage patterns', () => {

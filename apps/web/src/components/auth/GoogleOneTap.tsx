@@ -7,6 +7,7 @@ import { detectInAppBrowser } from '@/lib/auth/browser-detection';
 import { Button } from '@/components/ui/button';
 import { useConsentStore } from '@/stores/useConsentStore';
 import { shouldLoadThirdPartyScript } from '@pagespace/lib/consent';
+import { isCapacitorApp } from '@/lib/capacitor-bridge';
 
 /**
  * Platform eligibility for One Tap (desktop/native/mobile/in-app browsers are excluded).
@@ -15,9 +16,7 @@ import { shouldLoadThirdPartyScript } from '@pagespace/lib/consent';
 function isOneTapPlatformEligible(): boolean {
   if (typeof window === 'undefined' || typeof navigator === 'undefined') return false;
   if (window.electron?.isDesktop) return false;
-  if ((window as Window & { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor?.isNativePlatform?.()) {
-    return false;
-  }
+  if (isCapacitorApp()) return false;
   const ua = navigator.userAgent;
   const isMobile = /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini|mobile|tablet/i.test(ua);
   const isWebView = /\bwv\b|WebView/i.test(ua);

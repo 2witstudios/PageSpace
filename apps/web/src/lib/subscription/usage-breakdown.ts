@@ -213,6 +213,15 @@ export function aggregateUsageBreakdown(
       eb.calls += 1;
       environmentBuckets.set(envKey, eb);
     } else if (source === 'terminal') {
+      // NOTE: published-app rows (`published-app-awake` runtime and
+      // `published-app-storage` rootfs) land HERE, in the unattributed-agent
+      // line, for exactly the reason env rows used to: `source: 'terminal'`, no
+      // `pageId`, and an id on `sessionId` that addresses a different table. It
+      // is the same deferred gap, ratified the same way — hosting has no user
+      // -visible surface yet and bills nothing today, and the honest fix is a
+      // first-class subject discriminator on the usage row rather than a second
+      // model-string special case here. A published-apps section lands with the
+      // hosting UI, alongside the environments one above.
       agentSessionMillicents += charge;
       // Rows without a resolvable page (pre-attribution history, or a session
       // with no backing page e.g. the global assistant) collapse into one

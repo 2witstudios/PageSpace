@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import {
   calculateMachineCostDollars,
   calculateMachineStorageCostDollars,
+  PUBLISHED_APP_GUEST_SHAPE,
+  SANDBOX_GUEST_SHAPE,
 } from '../machine-pricing';
 import {
   MACHINE_MARKUP_BPS,
@@ -35,6 +37,43 @@ describe('calculateMachineCostDollars', () => {
 
   it('bills hibernated (zero-duration) runs nothing', () => {
     expect(calculateMachineCostDollars({ activeSeconds: 0 })).toBe(0);
+  });
+});
+
+describe('the guest SHAPE a run is priced at', () => {
+  it('defaults to the ASSUMED sandbox shape when no shape is given', () => {
+    // Sprites sets no resource caps at creation, so its shape genuinely has to be
+    // assumed — which is why the default exists at all.
+    expect(SANDBOX_GUEST_SHAPE).toEqual({
+      cpus: MACHINE_ASSUMED_CPUS,
+      memoryGB: MACHINE_ASSUMED_MEMORY_GB,
+    });
+    expect(calculateMachineCostDollars({ activeSeconds: 3600 })).toBe(
+      calculateMachineCostDollars({ activeSeconds: 3600, shape: SANDBOX_GUEST_SHAPE }),
+    );
+  });
+
+  it('prices a PUBLISHED APP at its known guest, which is NOT the sandbox default', () => {
+    // `published_apps.guestPreset` is pinned to shared-cpu-1x-512 by a CHECK, so
+    // this shape is known rather than assumed. Pricing a published app at the
+    // sandbox default would under-bill every awake second by half the memory
+    // component — silently, and for as long as the two shapes differed.
+    expect(PUBLISHED_APP_GUEST_SHAPE.memoryGB).toBe(0.5);
+    expect(PUBLISHED_APP_GUEST_SHAPE.memoryGB).not.toBe(SANDBOX_GUEST_SHAPE.memoryGB);
+
+    // 1 cpu x $0.07/hr + 0.5 GB x $0.04375/hr for one hour.
+    const expected =
+      MACHINE_RATES.usdPerCpuHour * 1 + MACHINE_RATES.usdPerMemGbHour * 0.5;
+    expect(
+      calculateMachineCostDollars({ activeSeconds: 3600, shape: PUBLISHED_APP_GUEST_SHAPE }),
+    ).toBeCloseTo(expected, 5);
+  });
+
+  it('scales linearly with the billed seconds at either shape', () => {
+    const hour = calculateMachineCostDollars({ activeSeconds: 3600, shape: PUBLISHED_APP_GUEST_SHAPE });
+    const halfHour = calculateMachineCostDollars({ activeSeconds: 1800, shape: PUBLISHED_APP_GUEST_SHAPE });
+    // Both sides are rounded to 6dp by the pricer, so compare at 5dp.
+    expect(halfHour).toBeCloseTo(hour / 2, 5);
   });
 });
 

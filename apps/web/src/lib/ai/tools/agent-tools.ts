@@ -30,7 +30,7 @@ export const agentTools = {
       agentPath: z.string().describe('The agent path using titles like "/driveSlug/Agent Name" for semantic context'),
       agentId: z.string().describe('The unique ID of the AI agent to update'),
       systemPrompt: z.string().optional().describe('New system prompt for the agent. Leave empty to keep current prompt.'),
-      enabledTools: z.array(z.string()).optional().describe('New array of enabled tool names. OMIT this parameter to keep the current list; passing an empty array means "no PageSpace tools at all", not "no change".'),
+      enabledTools: z.array(z.string()).nullable().optional().describe('New array of enabled tool names. OMIT this parameter to keep the current list. An empty array ([]) means "no PageSpace tools at all". Pass null explicitly to CLEAR restrictions and restore unrestricted (every tool) access — there is no other way back from an empty array.'),
       aiProvider: z.string().optional().describe('New AI provider for the agent'),
       aiModel: z.string().optional().describe('New AI model for the agent'),
       agentDefinition: z.string().max(500).optional().describe('New description of what this agent does (max 500 chars).'),
@@ -125,6 +125,11 @@ export const agentTools = {
           // EVERY tool, the sandbox family included. Same field, two doors, opposite
           // meanings: the same class of divergence issue #2460 is about, pointing the
           // dangerous way. Omitting the parameter is how you keep the current list.
+          //
+          // `null` is the other direction: the only way to restore an agent this tool
+          // locked down (`[]`) back to unrestricted, since the schema has no other way
+          // to say "no array" besides omit-to-keep. Mirrors the settings UI's PATCH
+          // route, which reads anything non-array (i.e. `null`) the same way.
           updateData.enabledTools = enabledTools;
         }
         if (aiProvider !== undefined) {

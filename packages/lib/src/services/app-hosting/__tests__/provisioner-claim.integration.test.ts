@@ -251,13 +251,21 @@ describe('claimPublishedAppsForWork — the staleness filter is the query’s, n
  * not a small number, it is a silent credit against every other app's storage cost
  * — so the column is CHECK-constrained, and this is the test that the database
  * actually enforces it rather than the schema merely describing it.
+ *
+ * The size travels WITH `imageSizeMeasuredAt` (`published_apps_image_size_measured_coherent`),
+ * because the storage meter cannot use a measurement it cannot date — an undated
+ * size reads to it as "never measured" and bills the 0 floor forever while the
+ * watermark advances over real rootfs. Production never writes one without the
+ * other (`transitionPublishedApp` stamps the pair), so these tests write the pair
+ * too; the coherence constraint has its own coverage in
+ * `awake-metering.integration.test.ts`.
  */
 describe('published_apps.imageSizeBytes — the economics column', () => {
   it('given a negative size, should be rejected by Postgres', async () => {
     const appId = await seedApp('building');
     const error = await db
       .update(publishedApps)
-      .set({ imageSizeBytes: -1 })
+      .set({ imageSizeBytes: -1, imageSizeMeasuredAt: new Date() })
       .where(eq(publishedApps.id, appId))
       .then(() => null)
       .catch((err: unknown) => err);
@@ -274,7 +282,7 @@ describe('published_apps.imageSizeBytes — the economics column', () => {
     const appId = await seedApp('building');
     await db
       .update(publishedApps)
-      .set({ imageSizeBytes: 8_000_000_000 })
+      .set({ imageSizeBytes: 8_000_000_000, imageSizeMeasuredAt: new Date() })
       .where(eq(publishedApps.id, appId));
 
     const [row] = await db.select().from(publishedApps).where(eq(publishedApps.id, appId));

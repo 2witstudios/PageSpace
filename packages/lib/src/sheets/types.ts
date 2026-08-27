@@ -178,6 +178,15 @@ export interface SheetEvaluationOptions {
   resolveExternalReference?: (
     reference: SheetExternalReferenceToken
   ) => SheetExternalReferenceResolution | null | undefined;
+  /**
+   * Skip conditional-format evaluation (and the blank-cell backfill it needs)
+   * in `evaluateSheetSparse`. `sheetDataToSheetDoc` — the only consumer on the
+   * serialize path (`serializeSheetContent`) — reads `conditionalFormats`
+   * straight off the raw `SheetData`, never off the evaluation result, so
+   * that work is pure waste on every save/keystroke there. Renderers (the
+   * editor, the AI sheet-view tool) still need it and must leave this unset.
+   */
+  skipConditionalFormats?: boolean;
 }
 
 export interface SheetEvaluationCell {

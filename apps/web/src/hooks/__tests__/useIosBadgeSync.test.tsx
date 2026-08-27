@@ -25,11 +25,20 @@ let mockCapacitorState: MockCapacitorState = {
   isReady: true,
 };
 
+vi.mock('@/hooks/useCapacitor', () => ({
+  useCapacitor: () => mockCapacitorState,
+}));
+
 // isCapacitorApp() is what useAppStateRecovery uses internally to pick its Capacitor
 // vs. web resume path — forcing it false makes the test drive resume via
 // document.visibilitychange (jsdom has no real Capacitor bridge to fire appStateChange).
-vi.mock('@/hooks/useCapacitor', () => ({
-  useCapacitor: () => mockCapacitorState,
+// It lives on the bridge, so it has to be mocked there: mocking it on
+// @/hooks/useCapacitor would be dead and the suite would pass only by accident,
+// until some later test stubs window.Capacitor and silently flips the branch.
+// Spread the real module: auth-fetch (reached via useNotificationStore) also
+// imports getPlatform from here, and a bare factory would leave it undefined.
+vi.mock('@/lib/capacitor-bridge', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/capacitor-bridge')>()),
   isCapacitorApp: () => false,
 }));
 

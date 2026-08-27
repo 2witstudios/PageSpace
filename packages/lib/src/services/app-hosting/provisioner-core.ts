@@ -104,6 +104,14 @@ export type StatusInvariantViolation =
  * CHECK without adding a clause here re-opens exactly the bug this closes — a
  * transition the pure layer calls legal and the database then throws on, turning a
  * documented refusal value into an exception that aborts the caller's transaction.
+ *
+ * STATUS-COUPLED ONLY, which is why this does not mirror every CHECK on the table.
+ * `published_apps_metered_guest_preset` (a metered app may only run the v1 small
+ * guest) couples the TIER to the GUEST and says nothing about status, so a status
+ * transition can never violate it and asking about it here would mean threading a
+ * column through this function that no caller of it can change. Its mirror is
+ * `planTierChange` in `dedicated-tier.ts`, which is the function that CAN violate
+ * it — the pairing is with whatever moves the coupled columns, not with this file.
  */
 export function checkStatusInvariants(
   status: PublishedAppStatus,

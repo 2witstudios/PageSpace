@@ -84,6 +84,14 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   AIMonitoring: { trackUsage: vi.fn(), trackToolUsage: vi.fn() },
+  // A pure-telemetry call site: the route hands the tracking promise to a NAMED
+  // discard rather than leaving it to float, so the mocked module must provide it.
+  discardUsageOutcome: (tracking: Promise<unknown>) => {
+    void Promise.resolve(tracking).then(
+      () => undefined,
+      () => undefined,
+    );
+  },
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({

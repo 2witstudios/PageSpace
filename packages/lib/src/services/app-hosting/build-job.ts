@@ -206,6 +206,10 @@ export async function runAppBuildJob(
     digest: built.digest,
     guestPreset: app.guestPreset,
     publishedAppId: app.id,
+    // Read from the row, never assumed: the tier decides `min_machines_running`,
+    // and a deploy that guessed it would quietly re-create a paid always-on app as
+    // scale-to-zero on its very next build.
+    tier: app.tier,
   });
   if (config === null) {
     return await failBuild(deps, app, previousDigest, previousSize, 'deploy_failed',
