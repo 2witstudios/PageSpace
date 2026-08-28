@@ -8,7 +8,7 @@
  * extension-list functions).
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSchema, Node } from '@tiptap/core';
@@ -31,6 +31,36 @@ const RICH_EDITOR_PATH = join(
   'editors',
   'RichEditor.tsx',
 );
+const APP_SRC_DIR = join(EDITOR_DIR, '..', '..');
+
+// Any `extensions:` property assigned a literal array is a hand-rolled
+// TipTap extension list — the only sanctioned way to build one is
+// collabExtensions()/clientExtensions() (this directory), consumed as
+// `extensions: clientExtensions(...)` (a function CALL, which this pattern
+// does not match). Comments are stripped first so documentation may still
+// describe the shape without tripping the guard.
+const INLINE_EXTENSIONS_ARRAY = /extensions:\s*\[/;
+
+/**
+ * Pure scan of one file's source for a hand-rolled `extensions: [...]`
+ * array, given its already-read contents. Extracted from the directory walk
+ * below so both the "offense found" and "clean source" branches are
+ * exercised directly, matching the pattern used by
+ * `apps/realtime/src/__tests__/room-grammar-drift-guard.test.ts`.
+ */
+function findInlineExtensionsArrayOffenses(path: string, rawSource: string): string[] {
+  const source = rawSource
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+
+  const offenses: string[] = [];
+  for (const [index, line] of source.split('\n').entries()) {
+    if (INLINE_EXTENSIONS_ARRAY.test(line)) {
+      offenses.push(`${path}:${index + 1}: ${line.trim()}`);
+    }
+  }
+  return offenses;
+}
 
 describe('COLLAB_SCHEMA_VERSION v1 constants', () => {
   it('COLLAB_SCHEMA_VERSION starts at 1', () => {
@@ -149,9 +179,52 @@ describe('structural guard: RichEditor must consume clientExtensions()', () => {
     const source = readFileSync(RICH_EDITOR_PATH, 'utf8');
     expect(source).toMatch(/clientExtensions\(/);
   });
+});
 
-  it('RichEditor.tsx does not inline an extensions: [ array', () => {
-    const source = readFileSync(RICH_EDITOR_PATH, 'utf8');
-    expect(source).not.toMatch(/extensions:\s*\[/);
+describe('findInlineExtensionsArrayOffenses (pure scanner)', () => {
+  it('flags a hand-rolled inline extensions array', () => {
+    const offenses = findInlineExtensionsArrayOffenses(
+      'fixture.tsx',
+      "useEditor({ extensions: [StarterKit, Bold] });",
+    );
+    expect(offenses).toEqual(["fixture.tsx:1: useEditor({ extensions: [StarterKit, Bold] });"]);
+  });
+
+  it('ignores an extensions array shape named only in a comment', () => {
+    const offenses = findInlineExtensionsArrayOffenses(
+      'fixture.tsx',
+      "// e.g. extensions: [StarterKit]\nuseEditor({ extensions: clientExtensions(opts) });",
+    );
+    expect(offenses).toEqual([]);
+  });
+
+  it('is clean for a call site built from the shared functions', () => {
+    const offenses = findInlineExtensionsArrayOffenses(
+      'fixture.tsx',
+      "useEditor({ extensions: clientExtensions({ readOnly, isPaginated }) });",
+    );
+    expect(offenses).toEqual([]);
+  });
+});
+
+describe('structural guard: no source file bypasses clientExtensions()/collabExtensions() with a hand-rolled extensions array', () => {
+  it('no file under apps/web/src inlines an extensions: [ array', () => {
+    const offenders: string[] = [];
+    for (const entry of readdirSync(APP_SRC_DIR, { recursive: true, withFileTypes: true })) {
+      if (!entry.isFile()) continue;
+      if (!/\.(ts|tsx)$/.test(entry.name)) continue;
+      const path = join(entry.parentPath, entry.name);
+      // client-schema.ts/collab-schema.ts themselves return extension arrays
+      // (`return [...]`), never assign one to an `extensions:` property key —
+      // no exclusion needed, and leaving them scanned proves that.
+      if (path.includes(`${join('__tests__', '')}`)) continue;
+
+      offenders.push(...findInlineExtensionsArrayOffenses(path, readFileSync(path, 'utf8')));
+    }
+
+    expect(
+      offenders,
+      `TipTap extension lists must come from collabExtensions()/clientExtensions() (apps/web/src/lib/editor):\n${offenders.join('\n')}`,
+    ).toEqual([]);
   });
 });

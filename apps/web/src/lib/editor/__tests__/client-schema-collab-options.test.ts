@@ -9,14 +9,28 @@
 import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
 import { clientExtensions } from '../client-schema';
+import { STARTER_KIT_SCHEMA_OPTIONS } from '../collab-schema';
 
-function starterKitOptions(extensions: ReturnType<typeof clientExtensions>): { undoRedo?: unknown } {
+function starterKitOptions(extensions: ReturnType<typeof clientExtensions>): { undoRedo?: unknown; heading?: unknown; link?: unknown; codeBlock?: unknown } {
   const starterKit = extensions.find((ext) => ext.name === 'starterKit');
   if (!starterKit) {
     throw new Error('starterKit extension not found in clientExtensions() output');
   }
-  return starterKit.options as { undoRedo?: unknown };
+  return starterKit.options as { undoRedo?: unknown; heading?: unknown; link?: unknown; codeBlock?: unknown };
 }
+
+describe('clientExtensions(): StarterKit schema options come from the shared constant', () => {
+  // Review finding: client-schema.ts and collab-schema.ts each hardcoded an
+  // identical StarterKit.configure({ heading, link, codeBlock }) block. A
+  // Class-C-only change (e.g. link.openOnClick) doesn't move SCHEMA_HASH, so
+  // the drift guard wouldn't catch the two files silently disagreeing.
+  it('heading/link/codeBlock exactly match STARTER_KIT_SCHEMA_OPTIONS', () => {
+    const options = starterKitOptions(clientExtensions({ readOnly: false, isPaginated: false }));
+    expect(options.heading).toEqual(STARTER_KIT_SCHEMA_OPTIONS.heading);
+    expect(options.link).toEqual(STARTER_KIT_SCHEMA_OPTIONS.link);
+    expect(options.codeBlock).toBe(STARTER_KIT_SCHEMA_OPTIONS.codeBlock);
+  });
+});
 
 describe('clientExtensions(): undoRedo only disabled when collab is mounted', () => {
   it('keeps native undo/redo enabled without collab', () => {

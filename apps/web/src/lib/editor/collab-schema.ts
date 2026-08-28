@@ -78,19 +78,39 @@ import { ImageNode } from '@/lib/editor/image-node';
  * census constructs module (`census/constructs.ts`) has no superscript/
  * subscript detector, so there is no positive evidence for either.
  */
+
+/**
+ * StarterKit's schema-affecting options, shared between `collabExtensions()`
+ * (below, `undoRedo` always off) and `clientExtensions()`
+ * (`client-schema.ts`, `undoRedo` off only when `collab` is mounted).
+ * Duplicating this object in both files let it drift silently: a Class-C-only
+ * change (e.g. `link.openOnClick`) doesn't move `SCHEMA_HASH`, so nothing
+ * would fail if the two files disagreed. One definition makes that
+ * impossible instead of relying on both authors remembering to update both
+ * places.
+ */
+export const STARTER_KIT_SCHEMA_OPTIONS = {
+  heading: {
+    // Mutable, widened to `(1|2|3|4|5|6)[]`: StarterKit's HeadingOptions
+    // levels type is `Level[]` from `@tiptap/extension-heading` (not a
+    // direct dependency here), which rejects both a readonly tuple and a
+    // plain `number[]`. Duplicating the literal union rather than adding a
+    // dependency just for this one type.
+    levels: [1, 2, 3, 4, 5, 6] as (1 | 2 | 3 | 4 | 5 | 6)[],
+  },
+  link: {
+    openOnClick: true,
+    autolink: true,
+    linkOnPaste: true,
+    defaultProtocol: 'https',
+  },
+  codeBlock: false as const,
+};
+
 export function collabExtensions(): Extensions {
   return [
     StarterKit.configure({
-      heading: {
-        levels: [1, 2, 3, 4, 5, 6],
-      },
-      link: {
-        openOnClick: true,
-        autolink: true,
-        linkOnPaste: true,
-        defaultProtocol: 'https',
-      },
-      codeBlock: false,
+      ...STARTER_KIT_SCHEMA_OPTIONS,
       undoRedo: false,
     }),
     CodeBlockNode,

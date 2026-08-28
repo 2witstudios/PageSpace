@@ -17,6 +17,7 @@ import { FindExtension } from '@/lib/editor/find-plugin';
 import { BlockId } from '@/lib/editor/block-id';
 import { CommentMark, InsertionMark, DeletionMark } from '@/lib/editor/collab-marks';
 import { ImageNode } from '@/lib/editor/image-node';
+import { STARTER_KIT_SCHEMA_OPTIONS } from '@/lib/editor/collab-schema';
 
 /**
  * The client's extension set: everything in the frozen schema
@@ -64,16 +65,7 @@ export interface ClientExtensionOptions {
 export function clientExtensions({ readOnly, isPaginated, collab }: ClientExtensionOptions): Extensions {
   return [
     StarterKit.configure({
-      heading: {
-        levels: [1, 2, 3, 4, 5, 6],
-      },
-      link: {
-        openOnClick: true,
-        autolink: true,
-        linkOnPaste: true,
-        defaultProtocol: 'https',
-      },
-      codeBlock: false,
+      ...STARTER_KIT_SCHEMA_OPTIONS,
       // Native history fights Yjs's own undo stack, so it's disabled ONLY
       // when collab is mounted: Cmd-Z would otherwise revert other people's
       // edits, not just yours. Every non-collaborative RichEditor (documents
