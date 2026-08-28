@@ -179,6 +179,14 @@ interface ProjectedSpec {
    * nodes.
    */
   inclusive?: boolean;
+  /**
+   * Nodes only (`NodeSpec.isolating`) — whether editing commands treat this
+   * node's boundary as a hard wall (e.g. arrow-key/backspace behavior at a
+   * table cell edge). Compatibility-significant: clients disagreeing on this
+   * can produce different structural edits from the same command.
+   * `undefined` for marks.
+   */
+  isolating?: boolean;
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -232,6 +240,7 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
         marks: nodeSpec.marks,
         excludes: markSpec.excludes,
         inclusive: markSpec.inclusive,
+        isolating: nodeSpec.isolating,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
@@ -304,7 +313,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = '967ecfef';
+export const SCHEMA_HASH = 'e86c948b';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

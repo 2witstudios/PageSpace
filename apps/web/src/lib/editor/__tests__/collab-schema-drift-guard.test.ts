@@ -265,6 +265,28 @@ describe('projectSpec includes MarkSpec.inclusive', () => {
   });
 });
 
+describe('projectSpec includes NodeSpec.isolating', () => {
+  // isolating controls whether editing commands treat this node's boundary
+  // as a hard wall — clients disagreeing produce different structural edits
+  // from the same command. Not part of the projection before this fix.
+  function schemaWithIsolating(isolating: boolean) {
+    const TestNode = Node.create({
+      name: 'testNode',
+      group: 'block',
+      content: 'text*',
+      isolating,
+    });
+    return getSchema([StarterKit, TestNode]);
+  }
+
+  it('produces different projections for nodes with different isolating', () => {
+    const isolatingTrue = projectSchema(schemaWithIsolating(true));
+    const isolatingFalse = projectSchema(schemaWithIsolating(false));
+    expect(isolatingTrue).not.toEqual(isolatingFalse);
+    expect(hashProjection(isolatingTrue)).not.toBe(hashProjection(isolatingFalse));
+  });
+});
+
 describe('projectSchema includes Schema.spec.topNode', () => {
   // Two schemas can have identical node maps yet disagree on which node is
   // the document root — the node/mark maps alone can't catch that. TipTap's
