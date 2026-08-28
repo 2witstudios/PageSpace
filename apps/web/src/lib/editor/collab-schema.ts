@@ -248,16 +248,18 @@ interface ProjectedSpec {
  * removals, renames, and default-value changes — not behavior changes within
  * an otherwise-unchanged shape.
  *
- * Order-insensitive for NODES (sorted alphabetically before hashing), but
- * NOT for marks: `MarkType.rank` (`prosemirror-model`) is assigned by
- * registration order and drives mark-set canonicalization, so reordering
- * marks in `collabExtensions()` genuinely changes how overlapping marks
- * serialize for the same underlying set — this is Class A, and the mark
- * projection preserves registration order specifically so a hash mismatch
- * catches it. Reordering NODES (or reordering marks relative to nodes, e.g.
- * moving `Highlight` earlier in the array without moving it past another
- * mark) is still free — verified by a mutation-checked test, not asserted
- * on the design's own claim alone.
+ * Order-SENSITIVE for both nodes and marks — registration order is
+ * preserved in the projection rather than sorted away. Two corrections
+ * landed here, same shape: marks, because `MarkType.rank`
+ * (`prosemirror-model`) is assigned by registration order and drives
+ * mark-set canonicalization (overlapping marks nest differently for the
+ * same underlying set); nodes, because `resolveName()` resolves a group
+ * expression (e.g. `doc`'s `"block+"`) by iterating node types in
+ * registration order, and `ContentMatch.defaultType` — used to synthesize
+ * required content commands didn't supply — picks the first eligible type
+ * in that order. Both are Class A. See `projectSpec`'s docstring below for
+ * the full account, including why the first (alphabetical-for-nodes)
+ * design shipped believing the opposite.
  *
 
  * Deliberately NOT hashed: `AttrSpec.validate`. Unlike `excludes`/
@@ -269,22 +271,30 @@ interface ProjectedSpec {
  * Revisit if an attribute here ever needs a validator.
  */
 /**
- * `preserveOrder: true` for marks — see the docstring above: `MarkType.rank`
- * (`prosemirror-model`) is assigned by iteration order of the schema's mark
- * `OrderedMap`, and mark-set canonicalization (`Mark.addToSet`,
- * `Fragment`'s mark sort) uses that rank, so reordering marks in
- * `collabExtensions()` changes how overlapping marks nest in serialized
- * output for the SAME underlying mark set — a real compatibility
- * difference, not cosmetic. `false` for nodes: node position in a document
- * is explicit (not a canonicalized set), so node registration order has no
- * equivalent effect, and alphabetical sorting keeps the hash stable across
- * harmless node-list reordering.
+ * Registration order preserved for BOTH nodes and marks — corrected twice
+ * now, and the two corrections are the same shape. Marks: `MarkType.rank`
+ * (`prosemirror-model`) is assigned by mark `OrderedMap` iteration order,
+ * and mark-set canonicalization (`Mark.addToSet`, `Fragment`'s mark sort)
+ * uses that rank, so reordering marks changes how overlapping marks nest in
+ * serialized output for the SAME underlying set. Nodes: this file
+ * originally sorted nodes alphabetically on the theory that "node position
+ * in a document is explicit, so order can't matter" — WRONG, verified
+ * against `prosemirror-model` source: `resolveName()` resolves a group
+ * expression (e.g. `doc`'s `"block+"`) by iterating the schema's node types
+ * in registration order and collecting every member of that group, and
+ * `ContentMatch.defaultType` — which commands and `Node.createAndFill` use
+ * to synthesize required content the caller didn't supply — picks the
+ * FIRST eligible type in that same order. Reordering two block nodes with
+ * otherwise-identical specs, previously verified "free" by a test that
+ * only checked this function's own output against itself, can change which
+ * node type mixed clients auto-create for the same operation. Both
+ * corrections were caught by external review, not by the exhaustive
+ * mutation-check discipline this file otherwise follows — the tests proved
+ * the code did what it was written to do, never that what it was written
+ * to do was the right ProseMirror behavior. That gap is the actual lesson.
  */
-function projectSpec(
-  map: { toObject(): Record<string, NodeSpec | MarkSpec> },
-  preserveOrder: boolean,
-): ProjectedSpec[] {
-  const entries = Object.entries(map.toObject())
+function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): ProjectedSpec[] {
+  return Object.entries(map.toObject())
     .map(([name, spec]) => {
       const nodeSpec = spec as Partial<NodeSpec>;
       const markSpec = spec as Partial<MarkSpec>;
@@ -316,14 +326,13 @@ function projectSpec(
           })),
       };
     });
-  return preserveOrder ? entries : entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The projection `SCHEMA_HASH` is computed from — exported so tests can recompute it independently of the constant. */
 export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: ProjectedSpec[]; topNode?: string } {
   return {
-    nodes: projectSpec(schema.spec.nodes, false),
-    marks: projectSpec(schema.spec.marks, true),
+    nodes: projectSpec(schema.spec.nodes),
+    marks: projectSpec(schema.spec.marks),
     // Which node the document root must be. Two schemas with identical node
     // maps can still disagree on this — e.g. StarterKit's default `doc` vs a
     // hypothetical custom root — which the node/mark maps alone can't catch.
@@ -376,7 +385,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = 'b12f5c82';
+export const SCHEMA_HASH = '4cd78162';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

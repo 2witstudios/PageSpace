@@ -135,7 +135,7 @@ Notification mechanics: the mention author is never notified, and only **newly a
 
 ## Structure conventions for long-form writing
 
-- The page title is the document's name — don't duplicate it as a heading. Open with a short lead paragraph, then \`<h2>\` sections with \`<h3>\` subsections (three heading levels is all you get; design the outline to fit).
+- The page title is the document's name — don't duplicate it as a heading. Open with a short lead paragraph, then \`<h2>\` sections with \`<h3>\` subsections. The schema supports \`<h1>\`–\`<h6>\`, but keep to two or three levels for readability — a deeper outline is usually a sign the content should be split into more pages.
 - Give headings distinctive text: they double as stable anchors for later \`insert_content\` calls.
 - Short paragraphs; \`<ul>\`/\`<ol>\` for enumerable points; tables for comparisons; \`<hr>\` sparingly as a section divider.
 - Build long documents incrementally: \`create_page\`, write the skeleton of headings, then fill sections one at a time with \`insert_content\` anchored to each heading. Small edits produce reviewable diffs; a whole-document \`replace_lines\` of lines 1–N should be a last resort.
@@ -145,7 +145,7 @@ Notification mechanics: the mention author is never notified, and only **newly a
 
 - **Stale line numbers** — editing with numbers from before a previous edit. Re-read after every edit.
 - **Format mismatch** — markdown syntax in an html-mode DOCUMENT, or HTML in markdown/CODE pages. Check \`contentMode\` and \`type\` first.
-- **Unsupported HTML** — \`<img>\`, \`<h4>\`+, \`<div>\` wrappers: dropped by the editor schema even though the write succeeds.
+- **Unsupported HTML** — \`<img src="...">\` (no \`data-file-id\`), \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers: dropped by the editor schema even though the write succeeds.
 - **Partial-block replacement** — replacing the text line but not its enclosing tags (or vice versa), leaving unbalanced HTML.
 - **Assuming insert_content succeeded** — it returns \`inserted: false\` (not an error) when the anchor isn't found.
 - **Forgetting empty content deletes** — \`replace_lines\` with \`content: ""\` removes the lines; to blank a line instead, replace it with a single space or an empty block.

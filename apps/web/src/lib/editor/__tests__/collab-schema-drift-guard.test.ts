@@ -157,20 +157,25 @@ describe('mutation check: the parity assertion actually catches drift', () => {
 });
 
 describe('SCHEMA_HASH projection order-sensitivity', () => {
-  // Corrected finding: nodes and marks behave differently. Node position in
-  // a document is explicit, so node registration order is free to change.
-  // Mark registration order sets `MarkType.rank` (prosemirror-model), which
-  // drives mark-set canonicalization — reordering marks genuinely changes
-  // how overlapping marks serialize for the same set, so it MUST move the
-  // hash. A single "reverse the whole list" test can't tell these apart
-  // (reversing flips both at once); each gets its own case.
+  // Corrected TWICE now, same shape both times: an earlier fix here made
+  // nodes order-INSENSITIVE (alphabetically sorted) on the theory that
+  // "node position in a document is explicit, so registration order can't
+  // matter." That was wrong — verified against prosemirror-model source:
+  // `resolveName()` resolves a group expression (e.g. `doc`'s "block+") by
+  // iterating node types in registration order, and
+  // `ContentMatch.defaultType` (used to synthesize required content a
+  // command didn't supply) picks the FIRST eligible type in that order.
+  // Both nodes and marks now preserve registration order in the
+  // projection. A single "reverse the whole list" test can't distinguish
+  // "hash changed because order matters" from "hash changed because the
+  // reversal happened to change something else" — each gets its own case.
 
-  it('reordering nodes relative to each other does not change the hash', () => {
+  it('reordering nodes relative to each other changes the hash', () => {
     const NodeA = Node.create({ name: 'nodeA', group: 'block', content: 'text*' });
     const NodeB = Node.create({ name: 'nodeB', group: 'block', content: 'text*' });
     const forward = projectSchema(getSchema([StarterKit, NodeA, NodeB]));
     const reversed = projectSchema(getSchema([StarterKit, NodeB, NodeA]));
-    expect(hashProjection(reversed)).toBe(hashProjection(forward));
+    expect(hashProjection(reversed)).not.toBe(hashProjection(forward));
   });
 
   it('reordering marks relative to each other changes the hash', () => {
