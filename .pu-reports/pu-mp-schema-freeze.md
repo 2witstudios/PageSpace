@@ -312,3 +312,69 @@ All three CI checks (`Unit Tests`, `Lint & TypeScript Check`, `E2E`) green on th
 push. One E2E flake (`18-sidebar-directory-live.spec.ts`, `role "root" does not exist` /
 Postgres container setup noise, unrelated to this PR's diff — nothing here touches
 sidebar/session-listing code or DB roles) reran green; not treated as a real signal.
+
+## Orchestrator triage round (2026-08-28)
+
+A follow-up pass, driven by the orchestrator, went through all 19 remaining unresolved
+Codex threads individually. Findings:
+
+- **The `content/anchoring/` deletion instruction was wrong, not the report.** The
+  orchestrator's original instruction to delete `packages/lib/src/content/anchoring/` was
+  based on a premise ("it's unused") this report had already disproven —
+  `reanchor.ts:14-17` distinguishes tags from comments, and `census/round-trip.ts` imports
+  `projectContent` from `text-projection.ts`, a separate pure utility with its own purity
+  test. Confirmed correct as-is; not revisited.
+- **Undo P1 (`client-schema.ts`)**: was already fixed (`be5e777ad`) before this round —
+  `undoRedo: false` only applies when `collab` is mounted (client-schema.ts:75). Replied
+  with the location, resolved the thread.
+- **Markdown-image P1s (`image-node.ts:32`, `image-node.ts:90`)**: Codex correctly
+  identified the data loss, but attributed it to this PR. Verified `master`'s
+  `rich-editor-extensions.ts` mounts no `image` node at all today — a markdown
+  `![alt](url)` is dropped on parse before this diff exists. Not a regression; not fixed
+  in this PR (markdown-image ingestion — URL→`fileId` resolution or an upload pipeline —
+  is separate, larger scope). Replied with the master-state evidence on both threads;
+  left both **unresolved** since the underlying gap is real.
+  - **Tracked as a Phase K precondition, not a polish item**: the ~4,292 markdown
+    documents Phase K migrates carry standard `![alt](url)` image syntax onto a schema
+    (this PR's) whose `image` node cannot ingest it — bridging that ingestion gap is a
+    precondition of the Phase K markdown migration, not a follow-up task to do after. This
+    could not be pushed to the PageSpace Epics board from this session (no
+    `pagespace-cli` credentials available in this worktree) — **recording here as the
+    durable tracker until it is copied onto the Phase K leaf on the board**, which still
+    needs to happen.
+- **Drift-hash cluster (13 threads)**: each evaluated individually against "could this
+  omission hide a Class A change (remove/rename/narrow) or an attribute-default change?"
+  rather than widened reflexively:
+  - 12 were already fixed in earlier rounds (`excludes`, `inclusive`, `isolating`,
+    `defining`/`definingAsContext`/`definingForContent`, `code`/`whitespace`, mark and
+    node registration order, `topNode`, attribute defaults incl. required-vs-null,
+    `SCHEMA_HASH` as an independent pinned literal) — replied to each with the exact
+    line/commit where it landed, resolved all 12.
+  - **`AttrSpec.validate`**: genuinely cannot be hashed stably — it's an arbitrary
+    function; hashing via `fn.toString()` would make `SCHEMA_HASH` move on a harmless
+    reformat of identical logic, and nothing in this extension set sets one today.
+    Documented in `collab-schema.ts`'s docstring (already present) rather than widened;
+    replied pointing at it, resolved.
+  - **`NodeSpec.selectable`/`NodeSpec.draggable`**: the one real gap this round found.
+    `selectable` (PageMentionNode sets it `false`) IS compatibility-significant — the same
+    class as `isolating`/`defining`: `Selection.findFrom`/`deleteSelection` branch on it,
+    so mixed clients produce different edits from the same backspace/select-all. Added to
+    the projection (`1f239880d`), with a dedicated mutation-checked test covering the
+    unset-defaults-to-true case and the marks-stay-undefined case. `draggable` (ImageNode
+    sets it `true`) stays deliberately unhashed — it only gates the DOM `draggable`
+    attribute and browser-initiated drag; the resulting document edit is identical
+    regardless, the same class as the already-excluded `parseHTML`/`renderHTML`/`toDOM`.
+    Documented alongside the `validate` exclusion. `SCHEMA_HASH` re-pinned a tenth time:
+    `8d8f58cd` → `ded0823d`.
+  - **Three additional already-fixed threads** outside the hash cluster (task-list skill
+    guidance, remaining stale heading-level warnings, comment-mark `excludes`) were also
+    confirmed fixed and resolved with location citations, on the same "a stale thread on a
+    green PR reads as an open defect" principle applied to the undo thread.
+
+Net: 17 of 19 threads resolved this round (16 previously-fixed + 1 newly-fixed
+`selectable`), 2 left deliberately open (the markdown-image P1s — real, pre-existing,
+out of scope, tracked above). One follow-up commit (`1f239880d`). All gates re-run clean
+after: `bun run typecheck` (monorepo root, 17/17), `bun run lint` (15/15), full
+`src/lib/editor/**` suite (12 files / 218 tests), new `selectable` test mutation-checked
+(reverted the projection field, confirmed 2 tests go red with the expected failure,
+restored).
