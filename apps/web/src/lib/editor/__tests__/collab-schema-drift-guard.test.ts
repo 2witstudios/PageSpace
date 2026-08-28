@@ -313,6 +313,52 @@ describe('projectSpec includes NodeSpec.isolating', () => {
   });
 });
 
+describe('projectSpec includes NodeSpec.defining/definingAsContext/definingForContent', () => {
+  // These control whether a node's parents are preserved (vs. discarded)
+  // during replace/paste transforms — clients disagreeing produce different
+  // document structure from the same paste. Not part of the projection
+  // before this fix.
+  const baseNodes = {
+    doc: { content: 'block+' },
+    paragraph: { content: 'text*', group: 'block' },
+    text: { group: 'inline' },
+  };
+
+  it('produces different projections for nodes with different defining', () => {
+    // Via TipTap's Node.create() — `defining` IS one of its recognized
+    // config fields (unlike the two below), so this also proves the
+    // TipTap-facing path, not just the raw-schema one.
+    const TestNode = Node.create({ name: 'testNode', group: 'block', content: 'text*', defining: true });
+    const withDefining = projectSchema(getSchema([StarterKit, TestNode]));
+    const without = projectSchema(
+      getSchema([StarterKit, Node.create({ name: 'testNode', group: 'block', content: 'text*' })]),
+    );
+    expect(withDefining).not.toEqual(without);
+    expect(hashProjection(withDefining)).not.toBe(hashProjection(without));
+  });
+
+  it('produces different projections for nodes with different definingAsContext', () => {
+    // TipTap's Node.create() silently drops definingAsContext/
+    // definingForContent (not in its whitelisted NodeConfig fields) — built
+    // as a raw ProseMirror schema instead, like the topNode test above.
+    const without = projectSchema(new PMSchema({ nodes: baseNodes }));
+    const withFlag = projectSchema(
+      new PMSchema({ nodes: { ...baseNodes, paragraph: { ...baseNodes.paragraph, definingAsContext: true } } }),
+    );
+    expect(withFlag).not.toEqual(without);
+    expect(hashProjection(withFlag)).not.toBe(hashProjection(without));
+  });
+
+  it('produces different projections for nodes with different definingForContent', () => {
+    const without = projectSchema(new PMSchema({ nodes: baseNodes }));
+    const withFlag = projectSchema(
+      new PMSchema({ nodes: { ...baseNodes, paragraph: { ...baseNodes.paragraph, definingForContent: true } } }),
+    );
+    expect(withFlag).not.toEqual(without);
+    expect(hashProjection(withFlag)).not.toBe(hashProjection(without));
+  });
+});
+
 describe('projectSchema includes Schema.spec.topNode', () => {
   // Two schemas can have identical node maps yet disagree on which node is
   // the document root — the node/mark maps alone can't catch that. TipTap's

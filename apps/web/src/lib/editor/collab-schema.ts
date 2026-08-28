@@ -187,6 +187,16 @@ interface ProjectedSpec {
    * `undefined` for marks.
    */
   isolating?: boolean;
+  /**
+   * Nodes only (`NodeSpec.defining`/`definingAsContext`/`definingForContent`)
+   * — whether this node's parents are preserved (vs. discarded) during
+   * replace/paste transforms. Compatibility-significant: clients disagreeing
+   * on these can produce different document structure from the same paste.
+   * `undefined` for marks.
+   */
+  defining?: boolean;
+  definingAsContext?: boolean;
+  definingForContent?: boolean;
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -264,6 +274,9 @@ function projectSpec(
         excludes: markSpec.excludes,
         inclusive: markSpec.inclusive,
         isolating: nodeSpec.isolating,
+        defining: nodeSpec.defining,
+        definingAsContext: nodeSpec.definingAsContext,
+        definingForContent: nodeSpec.definingForContent,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
@@ -336,7 +349,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = 'c3a1244b';
+export const SCHEMA_HASH = '7598e791';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or
