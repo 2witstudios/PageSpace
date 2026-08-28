@@ -165,11 +165,11 @@ export const AI_PRICING = {
   'qwen/qwen3.6-plus': { input: 0.325, output: 1.95 },
   'qwen/qwen3.6-flash': { input: 0.1875, output: 1.125 },
   'qwen/qwen3.6-35b-a3b': { input: 0.1, output: 0.9 },
-  'qwen/qwen3.6-27b': { input: 0.32, output: 3.2 },
+  'qwen/qwen3.6-27b': { input: 0.6, output: 3.6 },
   'qwen/qwen3.5-plus-20260420': { input: 0.3, output: 1.8 },
   'qwen/qwen3.5-flash-02-23': { input: 0.065, output: 0.26 },
   'qwen/qwen3.5-397b-a17b': { input: 0.39, output: 2.34 },
-  'qwen/qwen3.5-122b-a10b': { input: 0.26, output: 2.08 },
+  'qwen/qwen3.5-122b-a10b': { input: 0.29, output: 2.4 },
   'qwen/qwen3.5-35b-a3b': { input: 0.25, output: 1.25 },
   'qwen/qwen3.5-27b': { input: 0.195, output: 1.56 },
   'qwen/qwen3-max-thinking': { input: 0.78, output: 3.9 },
@@ -192,8 +192,8 @@ export const AI_PRICING = {
 
   // OpenRouter - DeepSeek (source: openrouter.ai/api/v1/models)
   'deepseek/deepseek-v4-pro': { input: 0.87, output: 1.74 },
-  'deepseek/deepseek-v4-flash': { input: 0.0886, output: 0.1772 },
-  'deepseek/deepseek-v3.2': { input: 0.26, output: 0.38 },
+  'deepseek/deepseek-v4-flash': { input: 0.0871, output: 0.1742 },
+  'deepseek/deepseek-v3.2': { input: 0.269, output: 0.4 },
   'deepseek/deepseek-v3.1-terminus': { input: 0.27, output: 1 },
   'deepseek/deepseek-r1-0528': { input: 0.5, output: 2.15 },
 
@@ -380,7 +380,7 @@ export const AI_PRICING = {
   'deepseek/deepseek-chat-v3.1': { input: 0.55, output: 1.65 },
   'deepseek/deepseek-r1': { input: 0.7, output: 2.5 },
   'deepseek/deepseek-v3.2-exp': { input: 0.27, output: 0.41 },
-  'deepseek/deepseek-v4-flash-0731': { input: 0.06, output: 0.12 },
+  'deepseek/deepseek-v4-flash-0731': { input: 0.07, output: 0.14 },
   'deepseek/deepseek-v4-flash-vision-exp': { input: 0.22, output: 0.66 },
   'deepseek/deepseek-v4-pro-0813': { input: 0.66, output: 1.98 },
   // Google
