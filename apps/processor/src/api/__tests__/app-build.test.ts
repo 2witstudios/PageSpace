@@ -38,6 +38,11 @@ vi.mock('../app-build-size', () => ({
   getDirectorySize: async () => extractedBytes,
 }));
 
+const mockCheckRateLimit = vi.fn(async () => ({ allowed: true, attemptsRemaining: 9 }));
+vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
+  checkDistributedRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
+}));
+
 let buildRoot: string;
 
 function createApp(): express.Express {
@@ -56,6 +61,7 @@ let appBuildRouter: express.Router;
 beforeEach(async () => {
   vi.clearAllMocks();
   extractedBytes = 1024;
+  mockCheckRateLimit.mockReset().mockResolvedValue({ allowed: true, attemptsRemaining: 9 });
   buildRoot = mkdtempSync(path.join(tmpdir(), 'app-build-test-'));
   process.env.APP_BUILD_SOURCE_ROOT = buildRoot;
   vi.resetModules();
@@ -101,6 +107,74 @@ describe('POST /api/app-hosting/build — extraction ceiling', () => {
       'app-build',
       expect.objectContaining({ publishedAppId: 'abc123' }),
       { singletonKey: 'app-build:abc123' },
+    );
+  });
+});
+
+describe('POST /api/app-hosting/build — publishedAppId shape validation (path-injection defense)', () => {
+  it('rejects a path-traversal attempt in the id header before touching the filesystem', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/app-hosting/build')
+      .set('X-Published-App-Id', '../../etc/passwd')
+      .send(Buffer.from('fake-tarball-bytes'));
+
+    expect(res.status).toBe(400);
+    expect(mockQuery).not.toHaveBeenCalled();
+    expect(mockAddJob).not.toHaveBeenCalled();
+  });
+
+  it('rejects an id containing a path separator', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/app-hosting/build')
+      .set('X-Published-App-Id', 'abc/123')
+      .send(Buffer.from('fake-tarball-bytes'));
+
+    expect(res.status).toBe(400);
+    expect(mockAddJob).not.toHaveBeenCalled();
+  });
+
+  it('accepts a real cuid2-shaped id', async () => {
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/app-hosting/build')
+      .set('X-Published-App-Id', 'tz4a98xxat96iws9zmbrgj3a')
+      .send(Buffer.from('fake-tarball-bytes'));
+
+    expect(res.status).toBe(200);
+  });
+});
+
+describe('POST /api/app-hosting/build — upload rate limiting', () => {
+  it('answers 429 with Retry-After when the caller has exceeded the upload rate limit', async () => {
+    mockCheckRateLimit.mockResolvedValue({ allowed: false, retryAfter: 42, attemptsRemaining: 0 });
+
+    const app = createApp();
+    const res = await request(app)
+      .post('/api/app-hosting/build')
+      .set('X-Published-App-Id', 'abc123')
+      .send(Buffer.from('fake-tarball-bytes'));
+
+    expect(res.status).toBe(429);
+    expect(res.headers['retry-after']).toBe('42');
+    expect(mockAddJob).not.toHaveBeenCalled();
+    // Rate limiting runs before the id-shape check and the DB existence
+    // check — a caller flooding this endpoint must not get to spend a query
+    // per rejected attempt.
+    expect(mockQuery).not.toHaveBeenCalled();
+  });
+
+  it('keys the rate limit by the authenticated userId, not the claimed publishedAppId', async () => {
+    const app = createApp();
+    await request(app)
+      .post('/api/app-hosting/build')
+      .set('X-Published-App-Id', 'abc123')
+      .send(Buffer.from('fake-tarball-bytes'));
+
+    expect(mockCheckRateLimit).toHaveBeenCalledWith(
+      expect.stringContaining('user-1'),
+      expect.any(Object),
     );
   });
 });

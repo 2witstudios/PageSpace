@@ -4,10 +4,13 @@ import { createWriteStream } from 'node:fs';
 import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
+import { isCuid } from '@paralleldrive/cuid2';
 import { queueManager } from '../server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 import { getPoolForWorker } from '../db';
 import { getDirectorySize } from './app-build-size';
+import { safeBuildPath } from './app-build-paths';
 
 const execFileAsync = promisify(execFile);
 
@@ -131,21 +134,32 @@ async function streamRequestToFile(req: Request, destPath: string, maxBytes: num
   });
 }
 
+/** One publish upload per user per window — this is a multi-hundred-MB tar extraction, not a cheap read. */
+const UPLOAD_RATE_LIMIT = { maxAttempts: 10, windowMs: 5 * 60 * 1000, progressiveDelay: false };
+
 router.post('/build', async (req, res) => {
   const auth = req.auth;
   if (!auth?.userId) {
     return res.status(401).json({ error: 'Service authentication required' });
   }
 
+  const rateLimit = await checkDistributedRateLimit(`app-build:upload:${auth.userId}`, UPLOAD_RATE_LIMIT);
+  if (!rateLimit.allowed) {
+    if (rateLimit.retryAfter) res.setHeader('Retry-After', String(rateLimit.retryAfter));
+    return res.status(429).json({ error: 'Too many publish uploads — please wait before trying again' });
+  }
+
   const publishedAppId = req.header('X-Published-App-Id');
   if (typeof publishedAppId !== 'string' || !publishedAppId) {
     return res.status(400).json({ error: 'X-Published-App-Id header is required' });
   }
-  // publishedAppId is a cuid2 (validated shape only — the actual row check
-  // already happened in the web app before it minted this request's token,
-  // scoped to that app). Reject anything that could escape the build root via
-  // path segments before it ever reaches path.join.
-  if (!/^[a-z0-9]+$/i.test(publishedAppId)) {
+  // Validated against the REAL cuid2 shape (not just "looks alphanumeric") —
+  // this is the value every path below is built from, so its shape is what
+  // stands between a client-supplied header and a filesystem path. See
+  // `safeBuildPath`, used at every join site, for the second, independent
+  // layer: even a value that somehow passed this check still cannot resolve
+  // outside the build root.
+  if (!isCuid(publishedAppId)) {
     return res.status(400).json({ error: 'publishedAppId has an invalid shape' });
   }
 
@@ -164,8 +178,8 @@ router.post('/build', async (req, res) => {
 
   const sourceRef = `${publishedAppId}/${Date.now()}`;
   const resolvedRoot = path.resolve(root);
-  const destDir = path.resolve(resolvedRoot, sourceRef);
-  const tarPath = path.join(resolvedRoot, `.upload-${publishedAppId}-${Date.now()}.tar.gz`);
+  const destDir = safeBuildPath(resolvedRoot, sourceRef);
+  const tarPath = safeBuildPath(resolvedRoot, `.upload-${publishedAppId}-${Date.now()}.tar.gz`);
 
   try {
     await mkdir(destDir, { recursive: true });
