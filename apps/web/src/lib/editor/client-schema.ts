@@ -33,7 +33,14 @@ import { ImageNode } from '@/lib/editor/image-node';
 export interface CollabOptions {
   /** An initialized Y.Doc — the document this editor instance syncs. */
   document: YDoc;
-  /** The collaboration provider (e.g. a Sync/Hocuspocus provider). Untyped here deliberately; `@tiptap/extension-collaboration-caret` accepts any provider shape. */
+  /**
+   * The collaboration provider (e.g. a Sync/Hocuspocus provider). Untyped
+   * here deliberately; `@tiptap/extension-collaboration-caret` accepts any
+   * provider shape. Optional: `CollaborationCaret` requires a provider and
+   * throws during `onCreate` if configured without one, so `clientExtensions()`
+   * only mounts it when this is set — a caller that has a Y.Doc but no
+   * provider yet still gets document sync, just no presence carets.
+   */
   provider?: unknown;
   user?: { name: string; color: string };
 }
@@ -42,11 +49,14 @@ export interface ClientExtensionOptions {
   readOnly: boolean;
   isPaginated: boolean;
   /**
-   * When set, the client mounts `Collaboration` + `CollaborationCaret` bound
-   * to `collab.document`, and MUST NOT also receive initial `content` — that
-   * would duplicate the whole document alongside the Yjs-synced one. Native
-   * undo/redo (`StarterKit`'s `undoRedo`) is force-disabled: leaving it on
-   * with Yjs mounted makes Cmd-Z undo other people's edits, not just your own.
+   * When set, the client mounts `Collaboration` bound to `collab.document`
+   * (plus `CollaborationCaret` too, if `collab.provider` is also set — it
+   * requires one), and MUST NOT also receive initial `content` — that would
+   * duplicate the whole document alongside the Yjs-synced one. Native
+   * undo/redo (`StarterKit`'s `undoRedo`) is force-disabled ONLY in this
+   * case: leaving it on with Yjs mounted makes Cmd-Z undo other people's
+   * edits, not just your own. Every editor built without `collab` keeps its
+   * own undo/redo.
    */
   collab?: CollabOptions;
 }
@@ -64,9 +74,13 @@ export function clientExtensions({ readOnly, isPaginated, collab }: ClientExtens
         defaultProtocol: 'https',
       },
       codeBlock: false,
-      // Native history fights Yjs's own undo stack when collab is mounted:
-      // Cmd-Z would revert other people's edits, not just yours.
-      undoRedo: false,
+      // Native history fights Yjs's own undo stack, so it's disabled ONLY
+      // when collab is mounted: Cmd-Z would otherwise revert other people's
+      // edits, not just yours. Every non-collaborative RichEditor (documents
+      // without `collab`, and every task-description surface) keeps
+      // StarterKit's own undo/redo — force-disabling it unconditionally here
+      // silently removed Cmd-Z from all of them.
+      ...(collab ? { undoRedo: false } : {}),
     }),
     CodeBlockShiki,
     Markdown,
@@ -112,10 +126,14 @@ export function clientExtensions({ readOnly, isPaginated, collab }: ClientExtens
     ...(collab
       ? [
           Collaboration.configure({ document: collab.document }),
-          CollaborationCaret.configure({
-            provider: collab.provider,
-            user: collab.user,
-          }),
+          ...(collab.provider
+            ? [
+                CollaborationCaret.configure({
+                  provider: collab.provider,
+                  user: collab.user,
+                }),
+              ]
+            : []),
         ]
       : []),
   ];

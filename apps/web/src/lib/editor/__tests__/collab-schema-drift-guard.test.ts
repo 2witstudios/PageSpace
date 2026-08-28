@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSchema } from '@tiptap/core';
+import { getSchema, Node } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import {
   collabExtensions,
@@ -109,6 +109,38 @@ describe('SCHEMA_HASH projection is order-insensitive', () => {
     const forward = projectSchema(getSchema(collabExtensions()));
     const reversed = projectSchema(getSchema([...collabExtensions()].reverse()));
     expect(hashProjection(reversed)).toBe(hashProjection(forward));
+  });
+});
+
+describe('projectSpec captures attribute default changes (Class A)', () => {
+  // A single node, differing ONLY in one attribute's default — same node
+  // name, same attribute name, same structure. Before this fix, projectSpec
+  // hashed only attribute NAMES, so this pair produced an identical
+  // projection and SCHEMA_HASH would not move for e.g. changing
+  // `pageMention.mentionType`'s default from 'page' to something else, even
+  // though the v1 decision classifies an attribute-default change as Class A.
+  function schemaWithDefault(defaultValue: string) {
+    const TestNode = Node.create({
+      name: 'testNode',
+      group: 'block',
+      addAttributes() {
+        return { kind: { default: defaultValue } };
+      },
+    });
+    return getSchema([StarterKit, TestNode]);
+  }
+
+  it('produces different projections for two schemas differing only in an attribute default', () => {
+    const withDefaultA = projectSchema(schemaWithDefault('a'));
+    const withDefaultB = projectSchema(schemaWithDefault('b'));
+    expect(withDefaultA).not.toEqual(withDefaultB);
+    expect(hashProjection(withDefaultA)).not.toBe(hashProjection(withDefaultB));
+  });
+
+  it('produces identical projections for two schemas with the same default', () => {
+    const first = projectSchema(schemaWithDefault('a'));
+    const second = projectSchema(schemaWithDefault('a'));
+    expect(first).toEqual(second);
   });
 });
 

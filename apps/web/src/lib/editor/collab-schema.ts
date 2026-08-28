@@ -1,5 +1,4 @@
 import type { Extensions } from '@tiptap/core';
-import { getSchema } from '@tiptap/core';
 import type { Schema, NodeSpec, MarkSpec } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
@@ -115,6 +114,12 @@ export function collabExtensions(): Extensions {
 // Schema-drift guard
 // ---------------------------------------------------------------------------
 
+interface ProjectedAttr {
+  name: string;
+  /** `JSON.stringify` of `attrs[name].default` — see the module docstring for why this is hashed. */
+  default: string;
+}
+
 interface ProjectedSpec {
   name: string;
   group?: string;
@@ -122,28 +127,31 @@ interface ProjectedSpec {
   marks?: string;
   inline: boolean;
   atom: boolean;
-  attrs: string[];
+  attrs: ProjectedAttr[];
 }
 
 /**
  * `Schema.spec` is `{ nodes: OrderedMap<NodeSpec>, marks: OrderedMap<MarkSpec>,
  * topNode? }` — order-preserving but NOT directly JSON-serialisable.
- * `NodeSpec.toDOM`/`parseDOM.getAttrs` are functions, and `attrs[x].default`
- * can hold arbitrary values, so `JSON.stringify(schema.spec)` silently drops
- * every function. This projects deliberately: name, group, content
- * expression, inline/atom flags, and the SORTED set of attribute names —
- * structure and names only, never the attribute default values themselves
- * (some defaults, like `blockId`, are intentionally per-instance `null` and
- * carry no drift signal) and never `parseDOM`/`toDOM`/`parseHTML`/`renderHTML`.
+ * `NodeSpec.toDOM`/`parseDOM.getAttrs` are functions, so `JSON.stringify(schema.spec)`
+ * silently drops every function. This projects deliberately: name, group,
+ * content expression, inline/atom flags, and the SORTED set of attributes —
+ * each attribute's name AND its `JSON.stringify`-d default value — never
+ * `parseDOM`/`toDOM`/`parseHTML`/`renderHTML`. An attribute's default is part
+ * of the schema's compatibility surface (changing `pageMention.mentionType`'s
+ * default from `'page'` would reinterpret every stored node that omits it —
+ * Class A) and must move the hash; `blockId`'s own default is `null` either
+ * way, but the mechanism has to hash *whatever* the default is, not special-
+ * case it away.
  *
  * That is a real, measured blind spot, not a hedge: removing `FontFormatting`
  * from the pre-v1 extension list produced an identical projected hash to
  * keeping it, because it and `TextStyleKit` declared the same attribute names
  * with the same defaults and differed only in `parseHTML`. A change that
  * silently repoints which parser is live for an existing attribute sails
- * straight through this guard. It catches node/mark/attribute
- * additions, removals, and renames — not behavior changes within an
- * unchanged shape.
+ * straight through this guard. It catches node/mark/attribute additions,
+ * removals, renames, and default-value changes — not behavior changes within
+ * an otherwise-unchanged shape.
  *
  * Order-insensitive by construction (map keys are sorted before hashing), so
  * reordering `collabExtensions()` does not change `SCHEMA_HASH` even though
@@ -153,6 +161,7 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
   return Object.entries(map.toObject())
     .map(([name, spec]) => {
       const nodeSpec = spec as Partial<NodeSpec>;
+      const attrs = spec.attrs ?? {};
       return {
         name,
         group: nodeSpec.group,
@@ -160,7 +169,12 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
         marks: nodeSpec.marks,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
-        attrs: Object.keys(spec.attrs ?? {}).sort(),
+        attrs: Object.keys(attrs)
+          .sort()
+          .map((attrName) => ({
+            name: attrName,
+            default: JSON.stringify(attrs[attrName]?.default ?? null),
+          })),
       };
     })
     .sort((a, b) => a.name.localeCompare(b.name));
@@ -192,11 +206,21 @@ export function hashProjection(projection: unknown): string {
 /**
  * The frozen v1 schema's hash. Changes on ANY schema change — Class A, B or
  * C alike (though C changes to `parseHTML`/`renderHTML`/`toDOM` are the
- * documented blind spot above and will NOT move this hash). Recomputed by
- * `collab-schema-drift-guard.test.ts` on every CI run; a mismatch there means
- * `collabExtensions()` changed without this constant being updated —
- * deliberately, since regenerating it is a one-line diff and forces the
- * author to look at `COLLAB_SCHEMA_VERSION` next to it.
+ * documented blind spot above and will NOT move this hash).
+ *
+ * DELIBERATELY A LITERAL, not `hashProjection(projectSchema(getSchema(collabExtensions())))`
+ * computed inline. If this constant re-derived itself from
+ * `collabExtensions()` at module-eval time, `collab-schema-drift-guard.test.ts`
+ * recomputing the exact same expression would always match it — the test
+ * would compare a value against itself and could never fail, no matter how
+ * far the schema drifted. Pinning it to a snapshot string means a schema
+ * change silently breaks the drift-guard test (`SCHEMA_HASH` !==
+ * recomputed), which is the whole point: CI fails, and updating this literal
+ * is a one-line diff that forces the author to look at
+ * `COLLAB_SCHEMA_VERSION` next to it before doing so.
+ *
+ * To regenerate after an intentional schema change: run the drift-guard test,
+ * copy the "recomputed" value it reports on failure into this literal.
  *
  * IMPORTANT: `RichEditor` (`RichEditor.tsx`) is not only the collaborative
  * document editor. It is also the task-description editor —
@@ -209,7 +233,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = hashProjection(projectSchema(getSchema(collabExtensions())));
+export const SCHEMA_HASH = '5d231ccc';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or
