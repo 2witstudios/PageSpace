@@ -235,6 +235,15 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
   the only hint was a count inside the expanded row.
 
+### Changed
+
+- **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
+  window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
+  New accounts pick it up automatically; anyone with an explicit model already selected keeps that
+  choice. Also refreshed the whole OpenRouter model catalog: many new models and providers are now
+  selectable (a lot more vendor choice), pricing and context-window figures were corrected against
+  OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
+
 ### Fixed
 
 - **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
