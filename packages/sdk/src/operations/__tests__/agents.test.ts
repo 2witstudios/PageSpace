@@ -346,7 +346,7 @@ describe('filterModelCatalog — pure client-side D3 replacement', () => {
       provider: 'openai',
       name: 'OpenAI',
       dynamic: false,
-      models: [{ id: 'openai/gpt-5.4-nano', displayName: 'GPT-5.3 Chat', provider: 'openai', free: false }],
+      models: [{ id: 'openai/gpt-5.4-nano', displayName: 'GPT-5.4 Nano', provider: 'openai', free: false }],
     },
   ];
 

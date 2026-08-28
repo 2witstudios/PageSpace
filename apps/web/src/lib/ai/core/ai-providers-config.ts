@@ -392,6 +392,11 @@ export const AI_PROVIDERS = {
     // normally. Distinct from the admin-only `glm` provider below, which routes
     // directly to the Z.ai Coder Plan endpoint and is exempt from billing.
     models: {
+      // GLM-5.3 Flash listed first: getDefaultModel(provider) returns the first
+      // entry, and it's the product default (DEFAULT_MODEL in model-defaults.ts) —
+      // keep the two in agreement so switching to this provider in the UI lands on
+      // the actual default rather than an arbitrary older model.
+      'z-ai/glm-5.3-flash': 'GLM 5.3 Flash',
       'z-ai/glm-5.2': 'GLM-5.2',
       'z-ai/glm-5.1': 'GLM-5.1',
       'z-ai/glm-5-turbo': 'GLM-5 Turbo',
@@ -405,7 +410,6 @@ export const AI_PROVIDERS = {
       'z-ai/glm-4.6v': 'GLM 4.6V',
       'z-ai/glm-5.2:free': 'GLM 5.2 (free)',
       'z-ai/glm-5.3': 'GLM 5.3',
-      'z-ai/glm-5.3-flash': 'GLM 5.3 Flash',
       'z-ai/glm-5v-turbo': 'GLM 5V Turbo',
     },
   },
