@@ -215,10 +215,18 @@ interface ProjectedSpec {
  * removals, renames, and default-value changes — not behavior changes within
  * an otherwise-unchanged shape.
  *
- * Order-insensitive by construction (map keys are sorted before hashing), so
- * reordering `collabExtensions()` does not change `SCHEMA_HASH` even though
- * `OrderedMap`'s own attribute order does shift with registration order.
+ * Order-insensitive for NODES (sorted alphabetically before hashing), but
+ * NOT for marks: `MarkType.rank` (`prosemirror-model`) is assigned by
+ * registration order and drives mark-set canonicalization, so reordering
+ * marks in `collabExtensions()` genuinely changes how overlapping marks
+ * serialize for the same underlying set — this is Class A, and the mark
+ * projection preserves registration order specifically so a hash mismatch
+ * catches it. Reordering NODES (or reordering marks relative to nodes, e.g.
+ * moving `Highlight` earlier in the array without moving it past another
+ * mark) is still free — verified by a mutation-checked test, not asserted
+ * on the design's own claim alone.
  *
+
  * Deliberately NOT hashed: `AttrSpec.validate`. Unlike `excludes`/
  * `inclusive` (booleans/strings — stable, cheap to compare), `validate` can
  * be an arbitrary function, and no attribute in this extension set currently
@@ -227,8 +235,23 @@ interface ProjectedSpec {
  * instability is worse than the blind spot, for a case nothing here uses.
  * Revisit if an attribute here ever needs a validator.
  */
-function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): ProjectedSpec[] {
-  return Object.entries(map.toObject())
+/**
+ * `preserveOrder: true` for marks — see the docstring above: `MarkType.rank`
+ * (`prosemirror-model`) is assigned by iteration order of the schema's mark
+ * `OrderedMap`, and mark-set canonicalization (`Mark.addToSet`,
+ * `Fragment`'s mark sort) uses that rank, so reordering marks in
+ * `collabExtensions()` changes how overlapping marks nest in serialized
+ * output for the SAME underlying mark set — a real compatibility
+ * difference, not cosmetic. `false` for nodes: node position in a document
+ * is explicit (not a canonicalized set), so node registration order has no
+ * equivalent effect, and alphabetical sorting keeps the hash stable across
+ * harmless node-list reordering.
+ */
+function projectSpec(
+  map: { toObject(): Record<string, NodeSpec | MarkSpec> },
+  preserveOrder: boolean,
+): ProjectedSpec[] {
+  const entries = Object.entries(map.toObject())
     .map(([name, spec]) => {
       const nodeSpec = spec as Partial<NodeSpec>;
       const markSpec = spec as Partial<MarkSpec>;
@@ -252,15 +275,15 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
               : '<required>',
           })),
       };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+    });
+  return preserveOrder ? entries : entries.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The projection `SCHEMA_HASH` is computed from — exported so tests can recompute it independently of the constant. */
 export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: ProjectedSpec[]; topNode?: string } {
   return {
-    nodes: projectSpec(schema.spec.nodes),
-    marks: projectSpec(schema.spec.marks),
+    nodes: projectSpec(schema.spec.nodes, false),
+    marks: projectSpec(schema.spec.marks, true),
     // Which node the document root must be. Two schemas with identical node
     // maps can still disagree on this — e.g. StarterKit's default `doc` vs a
     // hypothetical custom root — which the node/mark maps alone can't catch.
@@ -313,7 +336,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = 'e86c948b';
+export const SCHEMA_HASH = 'c3a1244b';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

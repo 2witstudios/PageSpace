@@ -156,11 +156,37 @@ describe('mutation check: the parity assertion actually catches drift', () => {
   });
 });
 
-describe('SCHEMA_HASH projection is order-insensitive', () => {
-  it('hashes identically regardless of extension registration order', () => {
-    const forward = projectSchema(getSchema(collabExtensions()));
-    const reversed = projectSchema(getSchema([...collabExtensions()].reverse()));
+describe('SCHEMA_HASH projection order-sensitivity', () => {
+  // Corrected finding: nodes and marks behave differently. Node position in
+  // a document is explicit, so node registration order is free to change.
+  // Mark registration order sets `MarkType.rank` (prosemirror-model), which
+  // drives mark-set canonicalization — reordering marks genuinely changes
+  // how overlapping marks serialize for the same set, so it MUST move the
+  // hash. A single "reverse the whole list" test can't tell these apart
+  // (reversing flips both at once); each gets its own case.
+
+  it('reordering nodes relative to each other does not change the hash', () => {
+    const NodeA = Node.create({ name: 'nodeA', group: 'block', content: 'text*' });
+    const NodeB = Node.create({ name: 'nodeB', group: 'block', content: 'text*' });
+    const forward = projectSchema(getSchema([StarterKit, NodeA, NodeB]));
+    const reversed = projectSchema(getSchema([StarterKit, NodeB, NodeA]));
     expect(hashProjection(reversed)).toBe(hashProjection(forward));
+  });
+
+  it('reordering marks relative to each other changes the hash', () => {
+    const MarkA = Mark.create({ name: 'markA' });
+    const MarkB = Mark.create({ name: 'markB' });
+    const forward = projectSchema(getSchema([StarterKit, MarkA, MarkB]));
+    const reversed = projectSchema(getSchema([StarterKit, MarkB, MarkA]));
+    expect(hashProjection(reversed)).not.toBe(hashProjection(forward));
+  });
+
+  it('collabExtensions() itself is deterministic', () => {
+    // Now that arbitrary reordering is NOT assumed harmless, this confirms
+    // the real, frozen list's own output is stable across calls.
+    const first = projectSchema(getSchema(collabExtensions()));
+    const second = projectSchema(getSchema(collabExtensions()));
+    expect(hashProjection(second)).toBe(hashProjection(first));
   });
 });
 
