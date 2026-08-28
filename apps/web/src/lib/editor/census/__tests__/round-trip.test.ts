@@ -73,24 +73,32 @@ describe('analyzeHtmlDocument', () => {
     expect(result.status === 'analysed' && result.dropped).toContain('<img>');
   });
 
-  it('reports <h4>-<h6>, which the schema flattens to paragraphs', () => {
+  // COLLAB_SCHEMA_VERSION v1 widened heading levels to 1-6 (Class C for the
+  // CRDT) — h4-h6 round-trip instead of flattening to <p> now.
+  it('no longer drops <h4>-<h6>: v1 widened heading levels to 1-6', () => {
     const result = analyse('<h4>a</h4><h5>b</h5><h6>c</h6>');
-    expect(result.status === 'analysed' && result.dropped).toEqual(['<h4>', '<h5>', '<h6>']);
+    expect(result).toMatchObject({ status: 'analysed', dropped: [], textPreserved: true });
   });
 
-  it('reports task-list markup by its data-type value', () => {
+  // v1 added taskList/taskItem (359 pages measured — the largest single gap
+  // the census found).
+  it('no longer drops task-list markup: v1 added taskList/taskItem', () => {
     const result = analyse('<ul data-type="taskList"><li data-checked="true"><p>a</p></li></ul>');
-    expect(result.status === 'analysed' && result.dropped).toContain('attr:data-type=taskList');
+    expect(result.status === 'analysed' && result.dropped).not.toContain('attr:data-type=taskList');
   });
 
-  it('reports text-align, which survives on no node in this schema', () => {
+  // v1 added textAlign as a global attribute on paragraph/heading.
+  it('no longer drops text-align: v1 added the textAlign attribute', () => {
     const result = analyse('<p style="text-align: center">a</p>');
-    expect(result.status === 'analysed' && result.dropped).toContain('style:text-align');
+    expect(result.status === 'analysed' && result.dropped).not.toContain('style:text-align');
   });
 
-  it('reports <mark>, <sup> and <sub>', () => {
+  // v1 added the highlight mark (<mark>, 4 pages measured); sup/sub were not
+  // in the v1 RECOMMENDATION table (no positive census evidence) and still
+  // drop.
+  it('no longer drops <mark>; <sup> and <sub> still drop (not in v1)', () => {
     const result = analyse('<p><mark>a</mark><sup>b</sup><sub>c</sub></p>');
-    expect(result.status === 'analysed' && result.dropped).toEqual(['<mark>', '<sub>', '<sup>']);
+    expect(result.status === 'analysed' && result.dropped).toEqual(['<sub>', '<sup>']);
   });
 
   it('keeps text a dropped wrapper was only wrapping', () => {
