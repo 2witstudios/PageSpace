@@ -198,3 +198,117 @@ decision rather than contradicting it.
 The raw-HTML passthrough question (24 pages, flagged as "needs its own decision" in the
 v1 leaf) is still open. I did not invent a node for it and did not drop it silently —
 it's named as deferred in `collab-schema.ts`'s docstring.
+
+## Review-convergence round (13 follow-up commits, `be5e777ad`..`8c28abc1b`)
+
+After the initial push, CodeRabbit and Codex (`@coderabbitai review` / `@codex review`,
+re-requested after every push) found a steady stream of real issues across ~13 rounds.
+Every finding was verified against source before acting — never taken on the bot's word
+alone. Summary, most consequential first:
+
+- **`getMarkdown()` crashed on any document with a genuine image node** — `tiptap-markdown`
+  falls back to its own bundled `image`-named node's default serializer
+  (`prosemirror-markdown`'s `node.attrs.src.replace(...)`) for any node it recognizes by
+  name without its own `storage.markdown`. `ImageNode` has no `src`, so this threw
+  `TypeError` on every markdown serialization once an image existed. Fixed with an
+  explicit no-op `addStorage().markdown.serialize` (`image-node.ts`, `bbca56855`).
+  Verified separately that markdown-*parsed* `![alt](src)` never reaches this path at all
+  — `ImageNode` is `group: 'block'` but markdown image syntax is inline, so it's dropped
+  during parsing before any node exists (the pre-existing "flattens on seed" limitation,
+  unaffected).
+- **`SCHEMA_HASH` was computed live from the same expression the drift-guard test
+  recomputed** — the two sides could never disagree, no matter how far the schema
+  drifted; the guard could not guard. Pinned to a literal (`be5e777ad`).
+- **`projectSpec()`'s schema-drift projection was missing most of `NodeSpec`/`MarkSpec`'s
+  compatibility-significant fields** — added over several rounds as each was found:
+  attribute defaults and required-vs-optional presence (`be5e777ad`, `a63e9d299`),
+  `excludes`/`inclusive` (`a63e9d299`, `c6baa5dac`), `Schema.spec.topNode`
+  (`c6baa5dac`), `isolating` (`7a91d4838`), `defining`/`definingAsContext`/
+  `definingForContent` (`9b6fa13a3`), `code`/`whitespace` (`25eb6c183`),
+  `linebreakReplacement`/`spanning` (`03c9b197f`, found proactively by reading the rest
+  of the ProseMirror interfaces after the pattern repeated three rounds running).
+  Deliberately NOT hashed: `AttrSpec.validate` (no current attribute uses it; hashing an
+  arbitrary function via `toString()` would make the hash unstable across harmless
+  reformatting) and `selectable`/`draggable` (UI/interaction affordances only — verified
+  this schema's `Collaboration` extension uses `ySyncPlugin`, Y.Doc-structural sync, not
+  step-replay, so these flags can't make the *synced* content diverge, only local
+  interaction capability).
+- **The schema-hash projection's "order doesn't matter" premise was wrong, TWICE** —
+  first correction: `MarkType.rank` is assigned by mark registration order and drives
+  mark-set canonicalization, so reordering marks changes how overlapping marks serialize
+  for the same set (`3955298fb`). Second correction, days into the same review chain,
+  overturning that fix's own "nodes are still order-free" carve-out: `resolveName()`
+  resolves group expressions like `doc`'s `"block+"` by iterating node types in
+  registration order, and `ContentMatch.defaultType` (used by commands/`createAndFill` to
+  synthesize required content) picks the first eligible type in that order — node order is
+  compatibility-significant too (`724e283ee`). Both nodes and marks now preserve
+  registration order in the projection; the collapsed `preserveOrder` parameter is gone.
+  The lesson recorded in the docstring: both "order-free" conclusions were backed by
+  mutation-checked tests that only verified the code matched its own premise, never
+  checked against actual ProseMirror behavior.
+- **`clientExtensions()` unconditionally set `undoRedo: false`**, removing Cmd-Z from
+  every non-collaborative `RichEditor` (including every task-description surface) since
+  none of them have a Yjs undo stack to replace it. Now conditional on `collab`
+  (`be5e777ad`).
+- **`CollaborationCaret` was configured whenever `collab` was set, even without a
+  `provider`** — it requires one and throws in `onCreate` without it. Now only mounted
+  when `collab.provider` is also set (`be5e777ad`).
+- **`CommentMark` had no `excludes`**, so ProseMirror's default (exclusive with marks of
+  the same type) meant a second comment thread over already-commented text would replace
+  or reject the first, keyed on mark name rather than `threadId` — breaking the ordinary
+  case of overlapping comment threads. Set `excludes: ''` (`8c28abc1b`). Left
+  `insertion`/`deletion` with the default: two independent comments legitimately covering
+  the same text is normal; two colliding pending insertions over the same new text reads
+  as a merge conflict, not a case that needs representing.
+- **`image-node.ts`'s `alt` used the new shared `simpleDataAttr()` helper**, which
+  collapses an empty string to `null` — correct for every other attribute added that PR,
+  wrong for `alt`: an explicit `alt=""` is the accessibility signal for a deliberately
+  decorative image. Reverted to a bespoke definition preserving `''` through both parse
+  and render (`c6baa5dac`).
+- **The structural drift-guard's comment-stripping regex was fooled by regex literals
+  shaped like block comments** — verified concretely against
+  `monaco/sudolang-language.ts`, whose Monarch tokenizer rules contain `/\*`/`*\/`
+  literals that made the naive stripper delete real code (including that file's own,
+  unrelated `extensions: [...]` property) between them. `monaco/` excluded from the scan,
+  with the exclusion decision extracted into a testable `isExcludedFromScan()` predicate
+  and the blind spot locked in as a regression test (`a63e9d299`).
+- **`STARTER_KIT_SCHEMA_OPTIONS`/`TEXT_ALIGN_SCHEMA_OPTIONS` were each duplicated
+  verbatim** between `collab-schema.ts` and `client-schema.ts` — a Class-C-only change to
+  either (e.g. `link.openOnClick`) wouldn't move `SCHEMA_HASH`, so nothing would fail if
+  the two files disagreed. Extracted to one shared constant each (`2ee78043a`, `a63e9d299`).
+- **`block-id.ts`/`collab-marks.ts`/`image-node.ts` each repeated the same
+  `{ default: null, parseHTML: (el) => el.getAttribute(x), renderHTML: ... }` shape 12
+  times**, and none of them normalized `element.getAttribute()`'s `''` (present-but-empty
+  attribute) to `null`. One shared `simpleDataAttr(js, html)` helper fixes the gap once
+  (`a63e9d299`).
+- **The AI-facing `writing-documents.ts` skill still told models checkbox/task-list
+  markup and `<h4>`–`<h6>` were unsupported and to refuse writing them** — both false the
+  moment this PR mounted `TaskList`/`TaskItem` and widened headings to 1–6. Fixed across
+  two rounds as CodeRabbit found the first pass had missed two more instances of the same
+  stale claim (`42ed610f4`, `724e283ee`).
+- **Declined, with reasoning posted in-thread**: `RichEditor` `useEditingStore`
+  registration (pre-existing gap, not introduced by this PR, and a genuinely separate
+  "heavy lift" per CodeRabbit's own tag); `CodeBlockNode.ts` naming convention
+  (kebab-case/`UPPER_SNAKE_CASE` suggested, but every sibling TipTap-extension file and
+  export in this directory is PascalCase — CodeRabbit agreed and withdrew after seeing the
+  precedent); a real, pre-existing `readMentionType`/`readMentionId` attribute-precedence
+  inconsistency in `page-mention-node.ts`, verified identical in `master`'s
+  `tiptap-mention-config.tsx` before this PR's split — out of scope for a schema-freeze
+  PR; a full markdown round-trip for genuine (uploaded) image nodes, which needs the
+  raw-HTML-passthrough decision this PR's own v1 leaf already defers, and is unreachable
+  in practice today since no code path in the app inserts an `image` node yet (verified by
+  grep) — flagged for whoever wires image upload to revisit before shipping it in
+  markdown mode.
+
+`SCHEMA_HASH` was re-pinned nine times across this round (`5d231ccc` → `defbe936` →
+`967ecfef` → `e86c948b` → `c3a1244b` → `7598e791` → `b3fa6f3b` → `b12f5c82` →
+`4cd78162` → `8d8f58cd`) as the projection genuinely gained coverage each time — every
+move is in its commit message with the specific field(s) added. Every fix in this section
+has a dedicated regression test, and every one was mutation-checked (reverted, confirmed
+red with the exact expected failure, restored) — documented in each commit message rather
+than repeated here.
+
+All three CI checks (`Unit Tests`, `Lint & TypeScript Check`, `E2E`) green on the final
+push. One E2E flake (`18-sidebar-directory-live.spec.ts`, `role "root" does not exist` /
+Postgres container setup noise, unrelated to this PR's diff — nothing here touches
+sidebar/session-listing code or DB roles) reran green; not treated as a real signal.
