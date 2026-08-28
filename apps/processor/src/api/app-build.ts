@@ -75,6 +75,18 @@ const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
 
 const EXTRACT_TIMEOUT_MS = 120_000;
 
+/**
+ * Thrown when the extracted tree exceeds `MAX_EXTRACTED_BYTES` — a distinct
+ * type rather than a string the catch block has to pattern-match, so the
+ * status-code mapping below can't drift out of sync with the message text.
+ */
+class ExtractionCeilingExceededError extends Error {
+  constructor(public readonly extractedBytes: number, public readonly maxBytes: number) {
+    super(`extracted snapshot is ${extractedBytes} bytes, exceeding the ${maxBytes}-byte post-extraction interim cap`);
+    this.name = 'ExtractionCeilingExceededError';
+  }
+}
+
 async function publishedAppExists(publishedAppId: string): Promise<boolean> {
   const client = await getPoolForWorker().connect();
   try {
@@ -82,6 +94,14 @@ async function publishedAppExists(publishedAppId: string): Promise<boolean> {
     return (result.rowCount ?? 0) > 0;
   } finally {
     client.release();
+  }
+}
+
+/** The pre-decompression compressed-upload cap in `streamRequestToFile` was exceeded — maps to 413, distinct from `ExtractionCeilingExceededError`'s 507. */
+class UploadCapExceededError extends Error {
+  constructor(public readonly maxBytes: number) {
+    super(`snapshot exceeds the ${maxBytes}-byte interim cap`);
+    this.name = 'UploadCapExceededError';
   }
 }
 
@@ -100,7 +120,7 @@ async function streamRequestToFile(req: Request, destPath: string, maxBytes: num
     req.on('data', (chunk: Buffer) => {
       received += chunk.length;
       if (received > maxBytes) {
-        fail(new Error(`snapshot exceeds the ${maxBytes}-byte interim cap`));
+        fail(new UploadCapExceededError(maxBytes));
       }
     });
     req.on('error', fail);
@@ -165,24 +185,36 @@ router.post('/build', async (req, res) => {
     // Independent of the pre-upload compressed-size cap: a crafted archive
     // can compress small and expand huge, so the extracted tree gets its own
     // ceiling before anything is enqueued.
+    //
+    // RESIDUAL RISK, documented rather than silently accepted: this check
+    // runs only AFTER `tar` finishes, so a decompression-bomb-shaped archive
+    // can still spend up to `EXTRACT_TIMEOUT_MS` decompressing before this
+    // line ever executes — the ceiling stops it from being ENQUEUED and from
+    // occupying disk past this point, it does not stop the CPU/disk spent
+    // getting here. That exposure is bounded by the extraction timeout above,
+    // not eliminated; a streaming extractor that enforces the ceiling
+    // mid-decompression would close it, and is out of scope for this interim
+    // tar-over-HTTP mechanism (see this file's own docblock).
     const extractedBytes = await getDirectorySize(destDir);
     if (extractedBytes > MAX_EXTRACTED_BYTES) {
-      throw new Error(`extracted snapshot is ${extractedBytes} bytes, exceeding the ${MAX_EXTRACTED_BYTES}-byte post-extraction interim cap`);
+      throw new ExtractionCeilingExceededError(extractedBytes, MAX_EXTRACTED_BYTES);
     }
 
+    // `singletonKey` dedups a QUEUED job against another queued one for the
+    // same app (queue-manager.ts's own documented invariant) — it does NOT
+    // protect against an ACTIVE build, and it must not: a `singletonSeconds`
+    // window here would make pg-boss treat ANY enqueue with this key inside
+    // the window as a duplicate, active build or not, which turns an ordinary
+    // publish → wait for it to finish → publish again a minute later into a
+    // rejected/500 request long after the build has actually completed. The
+    // ACTIVE-build guard belongs where the app's real state lives — the
+    // status-transactional CAS in `.../envs/[envId]/app/route.ts` (`status`
+    // flips to `building` only if it wasn't already `building`/`deploying`) —
+    // not in a time-boxed queue key that knows nothing about the row.
     const jobId = await queueManager.addJob(
       'app-build',
       { publishedAppId, sourceRef },
-      // `singletonKey` alone only dedups a QUEUED job against another queued
-      // one (queue-manager.ts's own documented invariant) — once a build is
-      // picked up and ACTIVE, a second enqueue with the same key is accepted
-      // and races the first. `singletonSeconds` closes that: pg-boss treats
-      // any job with this key created within the window as a duplicate
-      // regardless of state, so it must dwarf the build's own timeout the
-      // same way `expireInSeconds` does for the `app-build` retry policy
-      // above (45 minutes) — a shorter window would let a build racing past
-      // its own singleton dedup, which defeats the point.
-      { singletonKey: `app-build:${publishedAppId}`, singletonSeconds: 45 * 60 },
+      { singletonKey: `app-build:${publishedAppId}` },
     );
 
     return res.json({ success: true, jobId, sourceRef });
@@ -191,9 +223,14 @@ router.post('/build', async (req, res) => {
       publishedAppId,
       error: error instanceof Error ? error.message : String(error),
     });
+    // The extracted tree is always deleted on failure, ceiling-exceeded
+    // included — a refused publish must never leave a multi-GB tree on disk.
     await rm(destDir, { recursive: true, force: true }).catch(() => {});
     const message = error instanceof Error ? error.message : 'Failed to extract snapshot and enqueue build';
-    const status = message.includes('interim cap') ? 413 : 500;
+    // 507 (Insufficient Storage) for a post-extraction bomb, 413 for the
+    // pre-upload compressed-size cap — two distinct failures, so a client can
+    // tell which one it hit instead of both collapsing into the same code.
+    const status = error instanceof ExtractionCeilingExceededError ? 507 : error instanceof UploadCapExceededError ? 413 : 500;
     return res.status(status).json({ error: message });
   } finally {
     await rm(tarPath, { force: true }).catch(() => {});

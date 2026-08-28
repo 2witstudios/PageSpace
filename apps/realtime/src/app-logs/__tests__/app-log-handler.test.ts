@@ -32,8 +32,11 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const subscribeToAppLogs = vi.fn();
 vi.mock('../nats-log-source', () => ({
-  isAppLogsNatsConfigured: vi.fn(() => true),
   subscribeToAppLogs: (...args: unknown[]) => subscribeToAppLogs(...args),
+}));
+
+vi.mock('@pagespace/lib/services/app-hosting/app-logs-env', () => ({
+  isAppLogsNatsConfigured: vi.fn(() => true),
 }));
 
 import { getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
@@ -106,5 +109,49 @@ describe('app-log-handler onSubscribe payload contract', () => {
 
     expect(subscribeToAppLogs).not.toHaveBeenCalled();
     expect(sessionMap.getByApp('pgs-app-spoofed')).toBeUndefined();
+  });
+});
+
+describe('app-log-handler — one socket watching two apps independently', () => {
+  beforeEach(() => {
+    limitQueue.length = 0;
+    subscribeToAppLogs.mockReset();
+    vi.mocked(getUserDriveAccess).mockReset();
+  });
+
+  it('unsubscribing from one app leaves the other subscription live, and disconnect tears down both', async () => {
+    const unsubscribeA = vi.fn();
+    const unsubscribeB = vi.fn();
+    subscribeToAppLogs.mockImplementation((flyAppName: string) =>
+      Promise.resolve({ unsubscribe: flyAppName === 'pgs-app-a' ? unsubscribeA : unsubscribeB }),
+    );
+    vi.mocked(getUserDriveAccess).mockResolvedValue(true);
+    // Two envs, each resolving to a different app — one socket, two subscribes.
+    limitQueue.push([{ driveId: 'drive-1' }], [{ flyAppName: 'pgs-app-a' }]);
+    limitQueue.push([{ driveId: 'drive-1' }], [{ flyAppName: 'pgs-app-b' }]);
+
+    const socket = makeSocket('user-1');
+    const sessionMap = createAppLogSessionMap();
+    const handlers = buildAppLogHandlers(socket, sessionMap);
+
+    await handlers.onSubscribe({ envId: 'env-a', flyAppName: 'pgs-app-a' });
+    await handlers.onSubscribe({ envId: 'env-b', flyAppName: 'pgs-app-b' });
+
+    expect(sessionMap.getByApp('pgs-app-a')).toBeDefined();
+    expect(sessionMap.getByApp('pgs-app-b')).toBeDefined();
+
+    // Without per-(socket,app) viewer keys, this would have removed the
+    // viewer from whichever session the single shared key last pointed at
+    // (app B, since it subscribed second) — leaving app A's viewer entry
+    // permanently orphaned and never idle-reaped.
+    handlers.onUnsubscribe({ flyAppName: 'pgs-app-a' });
+
+    expect(unsubscribeA).not.toHaveBeenCalled(); // idle-armed, not torn down synchronously
+    expect(sessionMap.getByApp('pgs-app-a')?.viewers.size).toBe(0);
+    expect(sessionMap.getByApp('pgs-app-b')?.viewers.size).toBe(1); // untouched by A's unsubscribe
+
+    handlers.onDisconnect();
+
+    expect(sessionMap.getByApp('pgs-app-b')?.viewers.size).toBe(0);
   });
 });

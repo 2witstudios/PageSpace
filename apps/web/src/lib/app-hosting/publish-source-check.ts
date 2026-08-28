@@ -21,9 +21,11 @@
  */
 
 import { createProductionSpritesSandboxClient } from '@/lib/sandbox/sprites-client';
+import type { ExecutableSandbox } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
 import {
   planDockerfileSynthesis,
+  GENERATED_DOCKERFILE_MARKER,
   type SourceRootListing,
 } from '@pagespace/lib/services/app-hosting/dockerfile-synthesis-core';
 
@@ -71,19 +73,49 @@ export async function ensureBuildableSource(sandboxId: string | null): Promise<E
   const sandbox = await client.get({ sandboxId });
   if (!sandbox) return { ok: false, reason: 'sandbox_not_found' };
 
-  const ls = await sandbox.runCommand({
-    cmd: 'ls',
-    args: ['-a', SANDBOX_ROOT],
-    timeoutMs: 10_000,
-    maxBytes: 16 * 1024,
-  });
-  if (ls.exitCode !== 0) {
-    return { ok: false, reason: 'inspect_failed', detail: ls.stderr.slice(0, 500) };
+  // Direct existence checks, never a directory listing: `ls -a`'s output is
+  // capped (`maxBytes`) and a root with enough entries to exceed that cap
+  // would make a Dockerfile-HAVING env look Dockerfile-less to a substring
+  // parse of a truncated listing — which would then overwrite the user's
+  // real Dockerfile. `test -f` on a specific path can't be truncated into a
+  // wrong answer.
+  const hasDockerfile = await fileExists(sandbox, `${SANDBOX_ROOT}/Dockerfile`);
+  if (hasDockerfile === 'inspect_failed') {
+    return { ok: false, reason: 'inspect_failed', detail: 'could not check for a Dockerfile at the environment root' };
   }
-  const entries = new Set(ls.stdout.split('\n').map((line) => line.trim()).filter(Boolean));
+
+  let dockerfileFirstLine: string | null = null;
+  if (hasDockerfile) {
+    const head = await sandbox.runCommand({
+      cmd: 'head',
+      args: ['-n', '1', `${SANDBOX_ROOT}/Dockerfile`],
+      timeoutMs: 10_000,
+      maxBytes: 4 * 1024,
+    });
+    dockerfileFirstLine = head.exitCode === 0 ? head.stdout.replace(/\n$/, '') : '';
+
+    // A real, user-authored Dockerfile wins outright and needs nothing else
+    // inspected — a repo that happens to also carry a `package.json` (build
+    // tooling config, not the app itself) must never have that fact read,
+    // let alone acted on, once its own Dockerfile has already settled the
+    // question.
+    if (dockerfileFirstLine !== GENERATED_DOCKERFILE_MARKER) {
+      return { ok: true };
+    }
+  }
+
+  const hasPackageJson = await fileExists(sandbox, `${SANDBOX_ROOT}/package.json`);
+  if (hasPackageJson === 'inspect_failed') {
+    return { ok: false, reason: 'inspect_failed', detail: 'could not check for a package.json at the environment root' };
+  }
+
+  const hasIndexHtml = await fileExists(sandbox, `${SANDBOX_ROOT}/index.html`);
+  if (hasIndexHtml === 'inspect_failed') {
+    return { ok: false, reason: 'inspect_failed', detail: 'could not check for an index.html at the environment root' };
+  }
 
   let packageJson: SourceRootListing['packageJson'] = null;
-  if (entries.has('package.json')) {
+  if (hasPackageJson) {
     const cat = await sandbox.runCommand({
       cmd: 'cat',
       args: [`${SANDBOX_ROOT}/package.json`],
@@ -94,8 +126,8 @@ export async function ensureBuildableSource(sandboxId: string | null): Promise<E
   }
 
   const plan = planDockerfileSynthesis({
-    hasDockerfile: entries.has('Dockerfile'),
-    hasIndexHtml: entries.has('index.html'),
+    dockerfileFirstLine,
+    hasIndexHtml,
     packageJson,
   });
 
@@ -103,7 +135,10 @@ export async function ensureBuildableSource(sandboxId: string | null): Promise<E
   if (plan.action === 'refuse') return { ok: false, reason: plan.reason };
 
   try {
-    await sandbox.writeFiles([{ path: `${SANDBOX_ROOT}/Dockerfile`, content: plan.dockerfile }]);
+    await sandbox.writeFiles([
+      { path: `${SANDBOX_ROOT}/Dockerfile`, content: plan.dockerfile },
+      { path: `${SANDBOX_ROOT}/.dockerignore`, content: plan.dockerignore },
+    ]);
   } catch (error) {
     return {
       ok: false,
@@ -113,6 +148,24 @@ export async function ensureBuildableSource(sandboxId: string | null): Promise<E
   }
 
   return { ok: true };
+}
+
+/**
+ * `test -f <path>` inside the sandbox — exit 0 means present, exit 1 means
+ * absent, anything else (timeout, sandbox error) is `'inspect_failed'` rather
+ * than silently treated as "absent," which would route a genuinely
+ * uninspectable root into synthesis instead of refusing honestly.
+ */
+async function fileExists(sandbox: ExecutableSandbox, path: string): Promise<boolean | 'inspect_failed'> {
+  const result = await sandbox.runCommand({
+    cmd: 'test',
+    args: ['-f', path],
+    timeoutMs: 10_000,
+    maxBytes: 1024,
+  });
+  if (result.exitCode === 0) return true;
+  if (result.exitCode === 1) return false;
+  return 'inspect_failed';
 }
 
 /** User-facing copy for each refusal — used by the publish route. */

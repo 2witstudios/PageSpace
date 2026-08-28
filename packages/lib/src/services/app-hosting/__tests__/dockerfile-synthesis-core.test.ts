@@ -1,16 +1,28 @@
 import { describe, expect, it } from 'vitest';
-import { planDockerfileSynthesis, type SourceRootListing } from '../dockerfile-synthesis-core';
+import { planDockerfileSynthesis, GENERATED_DOCKERFILE_MARKER, type SourceRootListing } from '../dockerfile-synthesis-core';
 import { PUBLISHED_APP_INTERNAL_PORT } from '../build-core';
 
 function listing(overrides: Partial<SourceRootListing> = {}): SourceRootListing {
-  return { hasDockerfile: false, hasIndexHtml: false, packageJson: null, ...overrides };
+  return { dockerfileFirstLine: null, hasIndexHtml: false, packageJson: null, ...overrides };
 }
 
 describe('planDockerfileSynthesis', () => {
-  it('D1: an existing Dockerfile always wins, even alongside a package.json', () => {
+  it('D1: a user-authored Dockerfile always wins, even alongside a package.json', () => {
     const plan = planDockerfileSynthesis(
-      listing({ hasDockerfile: true, packageJson: { scripts: { start: 'node index.js' } } }),
+      listing({ dockerfileFirstLine: 'FROM ubuntu:22.04', packageJson: { scripts: { start: 'node index.js' } } }),
     );
+    expect(plan).toEqual({ action: 'use_existing' });
+  });
+
+  it('regenerates over a Dockerfile that carries the generated marker (ours from a previous publish)', () => {
+    const plan = planDockerfileSynthesis(
+      listing({ dockerfileFirstLine: GENERATED_DOCKERFILE_MARKER, packageJson: { scripts: { start: 'node index.js' } } }),
+    );
+    expect(plan.action).toBe('synthesize');
+  });
+
+  it('keeps a marker-carrying Dockerfile as-is when nothing recognizable remains underneath it', () => {
+    const plan = planDockerfileSynthesis(listing({ dockerfileFirstLine: GENERATED_DOCKERFILE_MARKER }));
     expect(plan).toEqual({ action: 'use_existing' });
   });
 
@@ -22,6 +34,11 @@ describe('planDockerfileSynthesis', () => {
     expect(plan.dockerfile.replace(/\s/g, '')).toContain('CMD["npm","run","start"]');
     expect(plan.dockerfile).not.toContain('npm run build');
     expect(plan.dockerfile).toContain(`EXPOSE ${PUBLISHED_APP_INTERNAL_PORT}`);
+    expect(plan.dockerfile.startsWith(GENERATED_DOCKERFILE_MARKER)).toBe(true);
+    expect(plan.dockerfile).toContain('USER node');
+    expect(plan.dockerignore).toContain('node_modules');
+    expect(plan.dockerignore).toContain('.env*');
+    expect(plan.dockerignore).toContain('.git');
   });
 
   it('includes a build step only when scripts.build exists', () => {
@@ -57,6 +74,9 @@ describe('planDockerfileSynthesis', () => {
     // while being completely unreachable.
     expect(plan.dockerfile).toContain(`listen ${PUBLISHED_APP_INTERNAL_PORT};`);
     expect(plan.dockerfile).toContain(`EXPOSE ${PUBLISHED_APP_INTERNAL_PORT}`);
+    expect(plan.dockerfile.startsWith(GENERATED_DOCKERFILE_MARKER)).toBe(true);
+    expect(plan.dockerfile).toContain('USER nginx');
+    expect(plan.dockerignore).toContain('node_modules');
   });
 
   it('refuses anything unrecognizable', () => {

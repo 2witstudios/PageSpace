@@ -116,6 +116,11 @@ const AUDIT_EXEMPT_ROUTES = new Map<string, string>([
   ['pages/[pageId]/share-links/[linkId]', 'Page share link revoke — covered by parent page auth, follow-up'],
   ['share/[token]', 'Token info read — session-auth required; reads only publicly-shareable link metadata, no user data written, low-risk read'],
 
+  // --- App hosting (publish surface) read-only routes ---
+  ['app-hosting/capability', 'Public GET of a single boolean (APP_HOSTING_ENABLED) — no auth, no user data, constant response used only to hide the app pane on a dark deployment'],
+  ['drives/[driveId]/envs/[envId]/app/dunning', 'Read-only dedicated-tier subscription state (status/cancelAtPeriodEnd/purchasable) — no data written, covered by isPrincipalDriveMember check'],
+  ['drives/[driveId]/published-apps', 'Read-only listing of a drive\'s published apps for the domain-target picker — no data written, covered by isPrincipalDriveMember check'],
+
   // --- Drive backup sub-routes ---
   ['drives/[driveId]/backups/schedule', 'Backup schedule GET/PATCH — owner/admin-gated settings, tier enforcement audited via isDriveOwnerOrAdmin; no sensitive data written beyond schedule config'],
   ['drives/[driveId]/backups/[backupId]', 'Read-only backup detail (pages/members/roles/files) — no data written, covered by isDriveOwnerOrAdmin check'],

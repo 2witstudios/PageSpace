@@ -32,7 +32,7 @@ import { snapshotEnvFilesystem } from '@/lib/app-hosting/env-snapshot';
 import { ensureBuildableSource, describeUnbuildableSourceReason } from '@/lib/app-hosting/publish-source-check';
 import { enqueuePublishBuild } from '@/lib/app-hosting/publish-build-enqueue';
 import { db } from '@pagespace/db/db';
-import { like } from '@pagespace/db/operators';
+import { and, eq, like, notInArray } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { findPublishedAppByEnvId, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
 
@@ -104,6 +104,20 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       );
     }
 
+    // D1: "a Dockerfile at the root wins, else a default buildpack." Checked
+    // BEFORE `createPublishedApp` and before any snapshot/tar/upload work — an
+    // env whose source we cannot recognize must not leave a Fly app + hosting
+    // row behind it, and a 400 here can never carry an `app` DTO because
+    // nothing has been created yet. See `publish-source-check.ts`.
+    const buildable = await ensureBuildableSource(env.sandboxId);
+    if (!buildable.ok) {
+      const status = buildable.reason === 'no_live_sandbox' ? 409 : buildable.reason === 'inspect_failed' || buildable.reason === 'sandbox_not_found' ? 502 : 400;
+      return NextResponse.json(
+        { error: describeUnbuildableSourceReason(buildable.reason), reason: buildable.reason },
+        { status },
+      );
+    }
+
     const subdomain =
       existing?.subdomain ??
       (await allocateUniqueSubdomainWithRetry({
@@ -143,23 +157,6 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       return NextResponse.json({ error: `Publish failed: ${created.reason}`, reason: created.reason }, { status });
     }
 
-    // D1: "a Dockerfile at the root wins, else a default buildpack." Checked
-    // BEFORE any snapshot/tar/upload work — a source this cannot recognize
-    // refuses here, at essentially no cost, rather than after a multi-hundred-MB
-    // round trip fails deep in the build queue. See `publish-source-check.ts`.
-    const buildable = await ensureBuildableSource(env.sandboxId);
-    if (!buildable.ok) {
-      const status = buildable.reason === 'no_live_sandbox' ? 409 : buildable.reason === 'inspect_failed' || buildable.reason === 'sandbox_not_found' ? 502 : 400;
-      return NextResponse.json(
-        {
-          error: describeUnbuildableSourceReason(buildable.reason),
-          reason: buildable.reason,
-          app: toPublishedAppDTO(created.app),
-        },
-        { status },
-      );
-    }
-
     // Re-publish means "build again", even when createPublishedApp's own answer
     // was a no-op on the ROW — the row being unchanged says nothing about whether
     // the environment's filesystem has changed since the last build. A merely
@@ -184,6 +181,27 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       );
     }
 
+    // The status-transactional guard the early read-only check above cannot
+    // provide: two publishes racing past that check both see a non-building
+    // status and both reach here. This single UPDATE is the enqueue-time
+    // record of the build AND its own concurrency check — Postgres commits at
+    // most one of two racing UPDATEs with this WHERE clause, so exactly one
+    // caller sees a returned row and proceeds; the loser gets an honest 409,
+    // never a generic 500 from two callers enqueueing the same build twice.
+    const [claimed] = await db
+      .update(publishedApps)
+      .set({ status: 'building' })
+      .where(and(eq(publishedApps.id, created.app.id), notInArray(publishedApps.status, ['building', 'deploying'])))
+      .returning();
+
+    if (!claimed) {
+      await snapshot.cleanup();
+      return NextResponse.json(
+        { error: 'A build is already running for this app — wait for it to finish before publishing again.', reason: 'build_in_progress' },
+        { status: 409 },
+      );
+    }
+
     let enqueued;
     try {
       enqueued = await enqueuePublishBuild({
@@ -203,7 +221,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       details: { route: 'drive-envs-app', operation: 'publish', envId, publishedAppId: created.app.id, jobId: enqueued.jobId },
     });
 
-    return NextResponse.json({ app: toPublishedAppDTO(created.app), buildJobId: enqueued.jobId });
+    return NextResponse.json({ app: toPublishedAppDTO(claimed), buildJobId: enqueued.jobId });
   } catch (error) {
     loggers.api.error('Failed to publish environment', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to publish environment' }, { status: 500 });

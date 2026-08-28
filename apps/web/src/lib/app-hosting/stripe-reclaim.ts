@@ -96,7 +96,7 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
       failed += 1;
       const unexpectedStatusError = `cancel returned status "${subscription.status}"`;
       const nextAttempts = row.attempts + 1;
-      await db
+      const [updatedRow] = await db
         .update(appHostingStripeReclaims)
         .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: unexpectedStatusError })
         .where(
@@ -104,8 +104,14 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
             eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
             eq(appHostingStripeReclaims.attempts, row.attempts),
           ),
-        );
-      if (nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
+        )
+        .returning();
+      // Alert ONLY when THIS call's CAS actually matched (won the race) AND
+      // pushed the row past the threshold — a lost race means some other
+      // process already advanced (or reset) the row, and alerting on our own
+      // stale, unapplied computation would be alerting on a write that never
+      // happened.
+      if (updatedRow && nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
         alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, unexpectedStatusError);
       }
     } catch (error) {
@@ -116,7 +122,7 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
         error as Error,
       );
       const nextAttempts = row.attempts + 1;
-      await db
+      const [updatedRow] = await db
         .update(appHostingStripeReclaims)
         .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: message })
         .where(
@@ -124,8 +130,9 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
             eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
             eq(appHostingStripeReclaims.attempts, row.attempts),
           ),
-        );
-      if (nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
+        )
+        .returning();
+      if (updatedRow && nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
         alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, message);
       }
     }

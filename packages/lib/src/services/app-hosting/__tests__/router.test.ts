@@ -32,9 +32,13 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
   customDomains: {
     hostname: 'hostname',
     publishedAppId: 'publishedAppId',
+    status: 'status',
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ eq: [a, b] }) }));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
+  and: (...conditions: unknown[]) => ({ and: conditions }),
+}));
 // The billing modules are mocked rather than imported: every balance read in this
 // file goes through an injected dep, so pulling in the real credit gate would drag
 // the whole ledger schema into a suite that never calls it. Their own semantics are
@@ -368,7 +372,7 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
     expect(await defaultAppRouterDeps.findAppBySubdomain('nope')).toBeNull();
   });
 
-  it('reads the custom_domains row JOINED to published_apps, keyed on hostname', async () => {
+  it('reads the custom_domains row JOINED to published_apps, keyed on hostname AND active status', async () => {
     const found = row();
     const limit = vi.fn().mockResolvedValue([found]);
     const where = vi.fn(() => ({ limit }));
@@ -380,7 +384,9 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
 
     expect(from).toHaveBeenCalledWith(customDomains);
     expect(innerJoin).toHaveBeenCalledWith(publishedApps, { eq: [customDomains.publishedAppId, publishedApps.id] });
-    expect(where).toHaveBeenCalledWith({ eq: [customDomains.hostname, 'docs.acme.com'] });
+    expect(where).toHaveBeenCalledWith({
+      and: [{ eq: [customDomains.hostname, 'docs.acme.com'] }, { eq: [customDomains.status, 'active'] }],
+    });
     expect(result).toEqual(found);
   });
 
@@ -389,6 +395,24 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
     vi.mocked(db.select).mockReturnValue({ from: () => ({ innerJoin: () => ({ where: () => ({ limit }) }) }) } as never);
 
     expect(await defaultAppRouterDeps.findAppByCustomHost('nope.example.com')).toBeNull();
+  });
+
+  it('answers null for a domain pointed at an app but not yet active — a pending/provisioning/failed domain must not route to the app', async () => {
+    // The query itself filters on status = 'active' server-side, so a
+    // not-yet-active domain never comes back as a row — proven here by the
+    // WHERE clause actually carrying the status condition (asserted above)
+    // combined with this: a `.limit()` result of [] (what Postgres would
+    // return for a WHERE that excludes the row) still falls through cleanly.
+    const limit = vi.fn().mockResolvedValue([]);
+    const where = vi.fn(() => ({ limit }));
+    vi.mocked(db.select).mockReturnValue({ from: () => ({ innerJoin: () => ({ where }) }) } as never);
+
+    const result = await defaultAppRouterDeps.findAppByCustomHost('pending.acme.com');
+
+    expect(where).toHaveBeenCalledWith({
+      and: [{ eq: [customDomains.hostname, 'pending.acme.com'] }, { eq: [customDomains.status, 'active'] }],
+    });
+    expect(result).toBeNull();
   });
 });
 

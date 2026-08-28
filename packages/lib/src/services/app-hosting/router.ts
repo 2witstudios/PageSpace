@@ -140,19 +140,25 @@ async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRou
 /**
  * Resolve a custom hostname to the `published_apps` row it targets.
  *
- * Returns null both when the hostname is not a `custom_domains` row at all AND
- * when it is one but `publishedAppId` is NULL — the caller cannot and must not
- * tell those two apart, because both answer the same way: fall through to the
- * drive's static published site, exactly as every custom host has always been
- * served. Only a domain that is BOTH ours AND explicitly pointed at an app
- * reaches the published-app routing decision at all.
+ * Returns null when the hostname is not a `custom_domains` row at all, when it
+ * is one but `publishedAppId` is NULL, AND when its `status` is not `active` —
+ * the caller cannot and must not tell any of those apart, because all three
+ * answer the same way: fall through to the drive's static published site,
+ * exactly as every custom host has always been served. A `pending`,
+ * `provisioning`, `dns_failed`, `cert_failed`, `verified`-but-not-yet-`active`,
+ * or `failed` domain has not finished proving it is safe to route traffic to
+ * (DNS/cert are unconfirmed), so it must not gain app-routing power just
+ * because someone set a `publishedAppId` on it — that column records intent,
+ * `status = 'active'` is what makes the intent servable. Only a domain that is
+ * ours, explicitly pointed at an app, AND active reaches the published-app
+ * routing decision at all.
  */
 async function findAppByCustomHostRow(hostname: string): Promise<PublishedAppRouteRow | null> {
   const [row] = await db
     .select(ROUTE_ROW_COLUMNS)
     .from(customDomains)
     .innerJoin(publishedApps, eq(customDomains.publishedAppId, publishedApps.id))
-    .where(eq(customDomains.hostname, hostname))
+    .where(and(eq(customDomains.hostname, hostname), eq(customDomains.status, 'active')))
     .limit(1);
   return row ?? null;
 }

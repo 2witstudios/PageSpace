@@ -206,7 +206,7 @@ export function DriveEnvAppPane({
           <AlertDialogHeader>
             <AlertDialogTitle>Unpublish “{envName}”?</AlertDialogTitle>
             <AlertDialogDescription>
-              The live URL stops resolving and the app's hosting is torn down, including any
+              The live URL stops resolving and the app&apos;s hosting is torn down, including any
               always-on subscription. The environment itself — its filesystem and sessions — is
               untouched, and you can publish it again any time. This cannot be undone for the app
               that is deleted.

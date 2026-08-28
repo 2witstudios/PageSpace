@@ -43,6 +43,10 @@ function makeRow(overrides: Partial<ReclaimRow> = {}): ReclaimRow {
 
 let selectedRows: ReclaimRow[] = [];
 const updateSetCalls: Array<Record<string, unknown>> = [];
+// Controls whether the CAS-guarded UPDATE "wins" (returns the updated row, as
+// a real `WHERE attempts = row.attempts` match would) or "loses" (returns
+// nothing, as it would when another process already advanced the row first).
+let updateWinsCAS = true;
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -58,7 +62,11 @@ vi.mock('@pagespace/db/db', () => ({
     update: () => ({
       set: (values: Record<string, unknown>) => {
         updateSetCalls.push(values);
-        return { where: async () => undefined };
+        return {
+          where: () => ({
+            returning: async () => (updateWinsCAS ? [{ ...values }] : []),
+          }),
+        };
       },
     }),
     delete: () => ({ where: async () => undefined }),
@@ -79,6 +87,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   selectedRows = [];
   updateSetCalls.length = 0;
+  updateWinsCAS = true;
 });
 
 describe('drainAppHostingStripeReclaims — exhaustion alert', () => {
@@ -108,6 +117,17 @@ describe('drainAppHostingStripeReclaims — exhaustion alert', () => {
     // The concurrency guard: the failing update must be scoped to the attempts
     // value it read, so a row that raced ahead concurrently is never clobbered.
     expect(updateSetCalls[0].attempts).toBe(STRIPE_RECLAIM_MAX_ATTEMPTS);
+  });
+
+  it('does NOT alert when the CAS loses the race, even though the pre-write computed attempts crossed the threshold', async () => {
+    selectedRows = [makeRow({ attempts: STRIPE_RECLAIM_MAX_ATTEMPTS - 1 })];
+    mockCancel.mockRejectedValue(new Error('stripe is down'));
+    updateWinsCAS = false; // another process already advanced/reset this row first
+
+    const result = await drainAppHostingStripeReclaims();
+
+    expect(result.failed).toBe(1);
+    expect(mockCaptureMessage).not.toHaveBeenCalled();
   });
 
   it('does not alert on a clean cancel', async () => {

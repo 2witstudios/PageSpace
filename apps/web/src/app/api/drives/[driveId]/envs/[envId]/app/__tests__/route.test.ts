@@ -45,8 +45,21 @@ vi.mock('@/lib/app-hosting/publish-source-check', () => ({
 vi.mock('@/lib/app-hosting/publish-build-enqueue', () => ({
   enqueuePublishBuild: vi.fn(),
 }));
+// `update` defaults to "claim succeeds" (returns the row) so every existing
+// happy-path test keeps working without knowing about the CAS guard; a test
+// that needs to simulate a lost race overrides this per-test.
+const updateReturning = vi.fn(() => Promise.resolve([{ id: PUBLISHED_APP_ID, status: 'building' }]));
 vi.mock('@pagespace/db/db', () => ({
-  db: { select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })) },
+  db: {
+    select: vi.fn(() => ({ from: vi.fn(() => Promise.resolve([])) })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => ({
+          returning: () => updateReturning(),
+        })),
+      })),
+    })),
+  },
 }));
 vi.mock('@/lib/app-hosting/published-app-dto', () => ({
   findPublishedAppByEnvId: vi.fn(),
@@ -83,6 +96,7 @@ beforeEach(() => {
   vi.mocked(resolveEnvInDrive).mockResolvedValue(envRow as never);
   vi.mocked(findPublishedAppByEnvId).mockResolvedValue(null);
   vi.mocked(createPublishedApp).mockResolvedValue({ ok: true, app: appRow } as never);
+  updateReturning.mockReset().mockResolvedValue([{ id: PUBLISHED_APP_ID, status: 'building' }]);
 });
 
 describe('POST /app — the up-front buildability refusal (D1)', () => {
@@ -155,6 +169,27 @@ describe('POST /app — the up-front buildability refusal (D1)', () => {
 
     expect(response.status).toBe(200);
     expect(enqueuePublishBuild).toHaveBeenCalled();
+  });
+
+  it('given two publishes racing past the early status check, the CAS lets exactly one through and 409s the loser', async () => {
+    // The early `findPublishedAppByEnvId` read sees a non-building status (the
+    // race window this guard exists for), but by the time the CAS UPDATE runs
+    // another request already flipped the row to `building` — simulated by
+    // the update's WHERE clause matching zero rows.
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
+    vi.mocked(snapshotEnvFilesystem).mockResolvedValue({
+      ok: true,
+      tarPath: '/tmp/snapshot.tar.gz',
+      cleanup: vi.fn(),
+    } as never);
+    updateReturning.mockResolvedValue([]);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(409);
+    const body = await response.json();
+    expect(body.reason).toBe('build_in_progress');
+    expect(enqueuePublishBuild).not.toHaveBeenCalled();
   });
 
   it('given a buildable source, proceeds to snapshot and enqueue', async () => {

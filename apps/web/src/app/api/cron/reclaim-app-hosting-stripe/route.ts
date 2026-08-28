@@ -30,7 +30,7 @@ export async function GET(request: Request) {
       eventType: 'data.write',
       resourceType: 'cron_job',
       resourceId: 'reclaim_app_hosting_stripe',
-      details: run,
+      details: { ...run },
     });
 
     return NextResponse.json({ success: true, ...run, timestamp: new Date().toISOString() });
