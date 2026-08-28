@@ -12,17 +12,21 @@ export interface AppLogLine {
  * Tails one published app's live log stream over the shared realtime socket.
  *
  * Contract with the realtime bridge (`apps/realtime`): the client emits
- * `app:logs:subscribe` with `{ flyAppName }` to attach and `app:logs:unsubscribe`
- * with `{ flyAppName }` to detach, and the server emits `app:logs:line` with
- * `{ flyAppName, message, timestamp }` to every subscriber of that app. Only one
- * subscription is ever live per mounted viewer — attaching again on a
+ * `app:logs:subscribe` with `{ envId, flyAppName }` to attach and
+ * `app:logs:unsubscribe` with `{ flyAppName }` to detach, and the server emits
+ * `app:logs:line` with `{ flyAppName, message, timestamp }` to every subscriber
+ * of that app. `envId` is required on subscribe — the handler authorizes by
+ * resolving the env to a drive membership and cross-checking that env's own
+ * `published_apps.flyAppName` against the claim (see `app-log-handler.ts`); a
+ * subscribe carrying only `flyAppName` is silently dropped, never authorized.
+ * Only one subscription is ever live per mounted viewer — attaching again on a
  * `flyAppName` change detaches the previous one first.
  *
  * A capped, non-virtualized buffer (last 500 lines) is deliberate: this is a
  * tail viewer for "is my app doing what I expect", not a log archive — anything
  * further back belongs in a real log search, not this pane.
  */
-export function useAppLogs(flyAppName: string | null): AppLogLine[] {
+export function useAppLogs(envId: string | null, flyAppName: string | null): AppLogLine[] {
   const socket = useSocket();
   const [lines, setLines] = useState<AppLogLine[]>([]);
   const subscribedTo = useRef<string | null>(null);
@@ -32,9 +36,9 @@ export function useAppLogs(flyAppName: string | null): AppLogLine[] {
   }, [flyAppName]);
 
   useEffect(() => {
-    if (!socket || !flyAppName) return;
+    if (!socket || !envId || !flyAppName) return;
 
-    socket.emit('app:logs:subscribe', { flyAppName });
+    socket.emit('app:logs:subscribe', { envId, flyAppName });
     subscribedTo.current = flyAppName;
 
     const onLine = (payload: { flyAppName: string; message: string; timestamp: string }) => {
@@ -54,7 +58,7 @@ export function useAppLogs(flyAppName: string | null): AppLogLine[] {
         subscribedTo.current = null;
       }
     };
-  }, [socket, flyAppName]);
+  }, [socket, envId, flyAppName]);
 
   return lines;
 }

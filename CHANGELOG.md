@@ -10,7 +10,11 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
   action, and the resulting app pane lives on the environment itself rather than in a separate
   dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
-  the first time (a Dockerfile at the root wins, otherwise a default buildpack), and streams the
+  the first time. A Dockerfile at the environment's root always wins; otherwise PageSpace generates
+  one for you — a `package.json` with a `start` script or a `main` entry becomes a Node Dockerfile
+  (running the `build` script first if there is one), and plain static content (an `index.html` with
+  no `package.json`) becomes a small nginx image. An environment with none of those is told so up
+  front, before anything is built, with what to add. Publishing then streams the
   build to a running subdomain; publishing again is just a fresh build of the same app, so nothing
   about the URL or its history changes underneath a re-deploy. The pane shows live status, the app's
   usage drain, and per-app logs, plus stop / resume / unpublish controls that all go through the

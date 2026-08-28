@@ -118,3 +118,15 @@ export function canManageDrive(drive: { isOwned?: boolean; role?: string } | nul
   const role = drive.role?.toUpperCase();
   return role === 'ADMIN' || role === 'OWNER';
 }
+
+/**
+ * Check if the user IS the drive's owner — stricter than {@link canManageDrive}.
+ * An ADMIN can manage a drive's resources but must not be able to spend the
+ * owner's money: use this (not `canManageDrive`) to gate anything that starts
+ * or cancels a paid subscription on the owner's behalf.
+ */
+export function isDriveOwner(drive: { isOwned?: boolean; role?: string } | null | undefined): boolean {
+  if (!drive) return false;
+  if (drive.isOwned === true) return true;
+  return drive.role?.toUpperCase() === 'OWNER';
+}

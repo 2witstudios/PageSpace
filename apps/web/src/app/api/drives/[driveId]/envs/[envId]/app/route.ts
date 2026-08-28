@@ -27,10 +27,12 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { createPublishedApp, destroyPublishedApp } from '@pagespace/lib/services/app-hosting/provisioner';
 import { resolvePublishedAppsOrgSlug } from '@pagespace/lib/services/app-hosting/app-hosting-env';
-import { allocateUniqueSubdomainWithRetry } from '@pagespace/lib/services/subdomain-allocation';
+import { allocateUniqueSubdomainWithRetry, subdomainCollisionPrefix } from '@pagespace/lib/services/subdomain-allocation';
 import { snapshotEnvFilesystem } from '@/lib/app-hosting/env-snapshot';
+import { ensureBuildableSource, describeUnbuildableSourceReason } from '@/lib/app-hosting/publish-source-check';
 import { enqueuePublishBuild } from '@/lib/app-hosting/publish-build-enqueue';
 import { db } from '@pagespace/db/db';
+import { like } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { findPublishedAppByEnvId, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
 
@@ -89,12 +91,35 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     // ignores it on a retry/re-publish of an existing row (see its docblock: a
     // republish must not silently rename the app's live address).
     const existing = await findPublishedAppByEnvId(envId);
+
+    // Refuse BEFORE any tar/snapshot/upload work if a build for this app is
+    // already queued or actively running. `singletonKey` on the pg-boss job
+    // only dedups a QUEUED job (see queue-manager.ts's own invariant) — once a
+    // build is being actively worked, the row is `building`/`deploying`, so
+    // this check catches exactly the case the queue layer cannot.
+    if (existing && (existing.status === 'building' || existing.status === 'deploying')) {
+      return NextResponse.json(
+        { error: 'A build is already running for this app — wait for it to finish before publishing again.', reason: 'build_in_progress' },
+        { status: 409 },
+      );
+    }
+
     const subdomain =
       existing?.subdomain ??
       (await allocateUniqueSubdomainWithRetry({
         base: env.name,
         fetchTaken: async () => {
-          const rows = await db.select({ subdomain: publishedApps.subdomain }).from(publishedApps);
+          // Bounded to subdomains that could actually collide with THIS base —
+          // see `subdomainCollisionPrefix`'s docblock for why the prefix
+          // filter can never hide a real collision. Without it this was an
+          // unbounded, unfiltered scan of the whole `published_apps` table on
+          // every single publish, growing more expensive forever as the
+          // platform grows.
+          const prefix = subdomainCollisionPrefix(env.name);
+          const rows = await db
+            .select({ subdomain: publishedApps.subdomain })
+            .from(publishedApps)
+            .where(like(publishedApps.subdomain, `${prefix}%`));
           return rows.map((r) => r.subdomain);
         },
         attempt: async (candidate) => candidate,
@@ -118,6 +143,23 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       return NextResponse.json({ error: `Publish failed: ${created.reason}`, reason: created.reason }, { status });
     }
 
+    // D1: "a Dockerfile at the root wins, else a default buildpack." Checked
+    // BEFORE any snapshot/tar/upload work — a source this cannot recognize
+    // refuses here, at essentially no cost, rather than after a multi-hundred-MB
+    // round trip fails deep in the build queue. See `publish-source-check.ts`.
+    const buildable = await ensureBuildableSource(env.sandboxId);
+    if (!buildable.ok) {
+      const status = buildable.reason === 'no_live_sandbox' ? 409 : buildable.reason === 'inspect_failed' || buildable.reason === 'sandbox_not_found' ? 502 : 400;
+      return NextResponse.json(
+        {
+          error: describeUnbuildableSourceReason(buildable.reason),
+          reason: buildable.reason,
+          app: toPublishedAppDTO(created.app),
+        },
+        { status },
+      );
+    }
+
     // Re-publish means "build again", even when createPublishedApp's own answer
     // was a no-op on the ROW — the row being unchanged says nothing about whether
     // the environment's filesystem has changed since the last build. A merely
@@ -125,13 +167,16 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     // 409 below is only for an env that never had a session at all.
     const snapshot = await snapshotEnvFilesystem(env.sandboxId);
     if (!snapshot.ok) {
-      const status = snapshot.reason === 'no_live_sandbox' ? 409 : 502;
+      const status =
+        snapshot.reason === 'no_live_sandbox' ? 409 : snapshot.reason === 'too_large' ? 413 : 502;
       return NextResponse.json(
         {
           error:
             snapshot.reason === 'no_live_sandbox'
               ? 'This environment has no live session to publish from — start a session in it first.'
-              : `Could not snapshot the environment's filesystem: ${snapshot.reason}`,
+              : snapshot.reason === 'too_large'
+                ? `This environment's filesystem is too large to publish (${snapshot.detail ?? 'over the interim cap'}) — exclude build artifacts and large binaries and try again.`
+                : `Could not snapshot the environment's filesystem: ${snapshot.reason}`,
           reason: snapshot.reason,
           app: toPublishedAppDTO(created.app),
         },

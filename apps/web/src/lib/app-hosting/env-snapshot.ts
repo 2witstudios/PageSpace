@@ -43,17 +43,20 @@ import { createWriteStream } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { createProductionSpritesSandboxClient } from '@/lib/sandbox/sprites-client';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
-
-const SNAPSHOT_TAR_PATH = '/tmp/pgs-publish-snapshot.tar.gz';
 
 /** The Sprite SDK's read boundary is one whole-file Buffer — this caps that single read, not any local file. */
 export const ENV_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024;
 
 export type SnapshotEnvFilesystemResult =
   | { ok: true; tarPath: string; cleanup: () => Promise<void> }
-  | { ok: false; reason: 'no_live_sandbox' | 'sandbox_not_found' | 'tar_failed' | 'read_failed'; detail?: string };
+  | {
+      ok: false;
+      reason: 'no_live_sandbox' | 'sandbox_not_found' | 'tar_failed' | 'stat_failed' | 'too_large' | 'read_failed';
+      detail?: string;
+    };
 
 /**
  * Tar up an env's workspace and land the archive on THIS PROCESS'S local
@@ -63,6 +66,19 @@ export type SnapshotEnvFilesystemResult =
  *
  * `sandboxId` is read by the caller from `drive_envs` — this function does
  * not touch the database, only the Sprite the caller already resolved.
+ *
+ * SIZE IS CHECKED BEFORE THE ONE UNAVOIDABLE BUFFER READ (see the module
+ * docblock's named seam): a `stat` runs inside the Sprite via the same exec
+ * channel as the tar itself, and an over-cap archive is refused there,
+ * BEFORE `readFileToBuffer` ever runs. The whole-file buffer this SDK forces
+ * is acceptable only because nothing over the cap ever reaches it.
+ *
+ * The tar path is unique PER CALL (`randomUUID()`), never a fixed name —
+ * two publishes racing the same env (a re-publish fired twice, or a retry
+ * overlapping the original) must not read or delete each other's archive.
+ * The in-Sprite tarball is removed in a `finally` regardless of outcome, so
+ * a failed or aborted publish never leaves it behind in the user's
+ * environment.
  */
 export async function snapshotEnvFilesystem(sandboxId: string | null): Promise<SnapshotEnvFilesystemResult> {
   if (!sandboxId) return { ok: false, reason: 'no_live_sandbox' };
@@ -71,47 +87,90 @@ export async function snapshotEnvFilesystem(sandboxId: string | null): Promise<S
   const sandbox = await client.get({ sandboxId });
   if (!sandbox) return { ok: false, reason: 'sandbox_not_found' };
 
-  // A hibernating Sprite wakes on this exec automatically — see the docblock.
-  const tarResult = await sandbox.runCommand({
-    cmd: 'tar',
-    args: ['czf', SNAPSHOT_TAR_PATH, '-C', SANDBOX_ROOT, '.'],
-    timeoutMs: 120_000,
-    maxBytes: 64 * 1024,
-  });
-  if (tarResult.exitCode !== 0) {
-    return { ok: false, reason: 'tar_failed', detail: tarResult.stderr.slice(0, 2000) };
-  }
+  const remoteTarPath = `/tmp/pgs-publish-snapshot-${randomUUID()}.tar.gz`;
 
-  // The one unavoidable whole-file Buffer (see docblock's named seam). It is
-  // written to disk immediately below and the reference is dropped —
-  // nothing after this point may hold the tarball in memory again.
-  const buffer = await sandbox.readFileToBuffer({ path: SNAPSHOT_TAR_PATH });
-  if (!buffer || buffer.length === 0) {
-    return { ok: false, reason: 'read_failed' };
-  }
-  if (buffer.length > ENV_SNAPSHOT_MAX_BYTES) {
+  try {
+    // A hibernating Sprite wakes on this exec automatically — see the docblock.
+    const tarResult = await sandbox.runCommand({
+      cmd: 'tar',
+      args: ['czf', remoteTarPath, '-C', SANDBOX_ROOT, '.'],
+      timeoutMs: 120_000,
+      maxBytes: 64 * 1024,
+    });
+    if (tarResult.exitCode !== 0) {
+      // A Sprite that dies mid-tar (killed, evicted, network partition) surfaces
+      // here as a non-zero exit or a thrown exec error (caught below) — both map
+      // to a typed refusal the route can turn into a 502, never a bare 500.
+      return { ok: false, reason: 'tar_failed', detail: tarResult.stderr.slice(0, 2000) };
+    }
+
+    const statResult = await sandbox.runCommand({
+      cmd: 'stat',
+      args: ['-c', '%s', remoteTarPath],
+      timeoutMs: 30_000,
+      maxBytes: 1024,
+    });
+    if (statResult.exitCode !== 0) {
+      return { ok: false, reason: 'stat_failed', detail: statResult.stderr.slice(0, 2000) };
+    }
+    const remoteSize = Number.parseInt(statResult.stdout.trim(), 10);
+    if (!Number.isFinite(remoteSize)) {
+      return { ok: false, reason: 'stat_failed', detail: `unparseable stat output: ${statResult.stdout.slice(0, 200)}` };
+    }
+    if (remoteSize > ENV_SNAPSHOT_MAX_BYTES) {
+      return {
+        ok: false,
+        reason: 'too_large',
+        detail: `snapshot is ${remoteSize} bytes, exceeding the ${ENV_SNAPSHOT_MAX_BYTES}-byte interim cap`,
+      };
+    }
+
+    // The one unavoidable whole-file Buffer (see docblock's named seam) — only
+    // reached now that the pre-check above has bounded its size. It is written
+    // to disk immediately below and the reference is dropped — nothing after
+    // this point may hold the tarball in memory again.
+    const buffer = await sandbox.readFileToBuffer({ path: remoteTarPath });
+    if (!buffer || buffer.length === 0) {
+      return { ok: false, reason: 'read_failed' };
+    }
+    if (buffer.length > ENV_SNAPSHOT_MAX_BYTES) {
+      // Defense in depth: the stat above is the primary guard, this catches a
+      // Sprite that grew the file between the two calls.
+      return {
+        ok: false,
+        reason: 'too_large',
+        detail: `snapshot is ${buffer.length} bytes, exceeding the ${ENV_SNAPSHOT_MAX_BYTES}-byte interim cap`,
+      };
+    }
+
+    const dir = await mkdtemp(join(tmpdir(), 'pgs-publish-snapshot-'));
+    const localTarPath = join(dir, 'snapshot.tar.gz');
+
+    await new Promise<void>((resolve, reject) => {
+      const ws = createWriteStream(localTarPath);
+      ws.on('error', reject);
+      ws.on('finish', resolve);
+      ws.end(buffer);
+    });
+
+    return {
+      ok: true,
+      tarPath: localTarPath,
+      cleanup: async () => {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      },
+    };
+  } catch (error) {
     return {
       ok: false,
-      reason: 'read_failed',
-      detail: `snapshot is ${buffer.length} bytes, exceeding the ${ENV_SNAPSHOT_MAX_BYTES}-byte interim cap`,
+      reason: 'tar_failed',
+      detail: error instanceof Error ? error.message : 'unknown error snapshotting the sandbox',
     };
+  } finally {
+    // Best-effort: the in-Sprite tarball must never be left behind, whether
+    // this call succeeded, refused on size, or the Sprite died mid-flight.
+    await sandbox
+      .runCommand({ cmd: 'rm', args: ['-f', remoteTarPath], timeoutMs: 10_000, maxBytes: 1024 })
+      .catch(() => {});
   }
-
-  const dir = await mkdtemp(join(tmpdir(), 'pgs-publish-snapshot-'));
-  const localTarPath = join(dir, 'snapshot.tar.gz');
-
-  await new Promise<void>((resolve, reject) => {
-    const ws = createWriteStream(localTarPath);
-    ws.on('error', reject);
-    ws.on('finish', resolve);
-    ws.end(buffer);
-  });
-
-  return {
-    ok: true,
-    tarPath: localTarPath,
-    cleanup: async () => {
-      await rm(dir, { recursive: true, force: true }).catch(() => {});
-    },
-  };
 }

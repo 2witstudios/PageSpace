@@ -32,6 +32,7 @@ function app(overrides: Partial<RoutableApp> = {}): RoutableApp {
     tier: 'metered',
     hasMachine: true,
     driveId: 'drive1',
+    envId: 'env1',
     ...overrides,
   };
 }
@@ -45,14 +46,14 @@ describe('decideAppRoute — the balance gate is the wake gate', () => {
     given: 'a running metered app whose payer is out of credits',
     should: 'refuse to replay, so the machine is never started',
     actual: route(app(), false),
-    expected: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive1' },
+    expected: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive1', envId: 'env1' },
   });
 
   assert({
     given: 'a STOPPED metered app whose payer is out of credits',
     should: 'still refuse — a stopped machine is exactly the one a replay would wake',
     actual: route(app({ status: 'stopped' }), false),
-    expected: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive1' },
+    expected: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive1', envId: 'env1' },
   });
 
   assert({
@@ -80,28 +81,28 @@ describe('decideAppRoute — status precedes the live balance read', () => {
     given: 'a parked app whose payer has since topped up',
     should: 'stay parked — un-parking belongs to the cron, not to a router that never writes',
     actual: route(app({ status: 'parked' }), true),
-    expected: { kind: 'parked', reason: 'parked_status', driveId: 'drive1' },
+    expected: { kind: 'parked', reason: 'parked_status', driveId: 'drive1', envId: 'env1' },
   });
 
   assert({
     given: 'an app mid-first-deploy with no machine yet',
     should: 'answer deploying — fly-replay auto-starts a machine, it cannot create one',
     actual: route(app({ hasMachine: false })),
-    expected: { kind: 'unavailable', reason: 'deploying', driveId: 'drive1' },
+    expected: { kind: 'unavailable', reason: 'deploying', driveId: 'drive1', envId: 'env1' },
   });
 
   it.each([
     ['destroying', 'destroying'],
     ['failed', 'failed'],
   ])('given status %s, should be unavailable', (status, reason) => {
-    expect(route(app({ status }))).toEqual({ kind: 'unavailable', reason, driveId: 'drive1' });
+    expect(route(app({ status }))).toEqual({ kind: 'unavailable', reason, driveId: 'drive1', envId: 'env1' });
   });
 
   assert({
     given: 'a status this file has never been taught',
     should: 'fail CLOSED to unavailable, so a status added later cannot start billing machines',
     actual: route(app({ status: 'some_status_added_in_2027' })),
-    expected: { kind: 'unavailable', reason: 'deploying', driveId: 'drive1' },
+    expected: { kind: 'unavailable', reason: 'deploying', driveId: 'drive1', envId: 'env1' },
   });
 
   assert({

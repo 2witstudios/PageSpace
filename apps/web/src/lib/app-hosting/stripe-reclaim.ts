@@ -22,12 +22,30 @@ import { db } from '@pagespace/db/db';
 import { appHostingStripeReclaims } from '@pagespace/db/schema/app-hosting-stripe-reclaims';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { stripe, Stripe } from '@/lib/stripe';
+import * as Sentry from '@sentry/nextjs';
 
 /** Caps a single tick's work so one huge backlog can't blow the cron's time budget. */
 export const STRIPE_RECLAIM_DRAIN_CAP = 200;
 
 /** A reclaim is retried forever, but stops being retried EVERY tick once it looks stuck — an operator should look at it instead. */
 export const STRIPE_RECLAIM_MAX_ATTEMPTS = 20;
+
+/**
+ * A reclaim row that has exhausted its attempts is a subscription this cron
+ * can no longer cancel on its own — the row stays (so a manual fix is still
+ * discoverable and the drain query still excludes it going forward), but
+ * silence past this point would mean nobody ever finds out a customer may
+ * still be paying for a torn-down app. Fingerprinted on the subscription id so
+ * a stuck reclaim opens exactly one issue, not one per tick.
+ */
+function alertReclaimExhausted(stripeSubscriptionId: string, attempts: number, lastError: string | null): void {
+  Sentry.captureMessage('App-hosting Stripe reclaim exhausted its cancel attempts', {
+    level: 'error',
+    fingerprint: ['app-hosting-stripe-reclaim-exhausted', stripeSubscriptionId],
+    tags: { check: 'app_hosting_stripe_reclaim', reason: 'attempts_exhausted' },
+    extra: { stripeSubscriptionId, attempts, lastError },
+  });
+}
 
 export interface DrainStripeReclaimsResult {
   processed: number;
@@ -76,14 +94,20 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
       // response is the fact here, not our assumption) — leave the row so the
       // next tick tries again rather than assuming success.
       failed += 1;
+      const unexpectedStatusError = `cancel returned status "${subscription.status}"`;
+      const nextAttempts = row.attempts + 1;
       await db
         .update(appHostingStripeReclaims)
-        .set({
-          attempts: row.attempts + 1,
-          lastAttemptAt: new Date(),
-          lastError: `cancel returned status "${subscription.status}"`,
-        })
-        .where(eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId));
+        .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: unexpectedStatusError })
+        .where(
+          and(
+            eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
+            eq(appHostingStripeReclaims.attempts, row.attempts),
+          ),
+        );
+      if (nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
+        alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, unexpectedStatusError);
+      }
     } catch (error) {
       failed += 1;
       const message = error instanceof Error ? error.message : 'unknown Stripe error';
@@ -91,15 +115,19 @@ export async function drainAppHostingStripeReclaims(): Promise<DrainStripeReclai
         `[app-hosting-stripe-reclaim] cancel failed for subscription ${row.stripeSubscriptionId}`,
         error as Error,
       );
+      const nextAttempts = row.attempts + 1;
       await db
         .update(appHostingStripeReclaims)
-        .set({ attempts: row.attempts + 1, lastAttemptAt: new Date(), lastError: message })
+        .set({ attempts: nextAttempts, lastAttemptAt: new Date(), lastError: message })
         .where(
           and(
             eq(appHostingStripeReclaims.stripeSubscriptionId, row.stripeSubscriptionId),
             eq(appHostingStripeReclaims.attempts, row.attempts),
           ),
         );
+      if (nextAttempts >= STRIPE_RECLAIM_MAX_ATTEMPTS) {
+        alertReclaimExhausted(row.stripeSubscriptionId, nextAttempts, message);
+      }
     }
   }
 

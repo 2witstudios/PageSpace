@@ -6,6 +6,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 import { queueManager } from '../server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { getPoolForWorker } from '../db';
+import { getDirectorySize } from './app-build-size';
 
 const execFileAsync = promisify(execFile);
 
@@ -24,6 +26,26 @@ const execFileAsync = promisify(execFile);
  * or any client-supplied string: `materializeBuildSource`
  * (`workers/app-build-runner.ts`) trusts this value to stay inside the build
  * root, so it must be server-derived, not client input.
+ *
+ * AUTHORIZATION IS SCOPE-ONLY, NOT RESOURCE-BOUND — worth being honest about
+ * rather than implying a stronger guarantee than exists. The token is scoped
+ * to `app-hosting:publish` and stamped with the calling user's id
+ * (`createUserServiceToken` in `publish-build-enqueue.ts`), but there is no
+ * `requireResourceBinding`-style check tying the token to THIS
+ * `publishedAppId` — the shared resource-binding middleware
+ * (`middleware/resource-binding.ts`) only understands `file`/`page`
+ * bindings today, and adding a `published_app` binding type is a larger,
+ * cross-cutting change to that middleware and to `createUserServiceToken`'s
+ * signature, out of scope for this route. What DOES happen: the web app
+ * verifies the caller is a drive OWNER/ADMIN for the env being published
+ * before it ever mints this token (the route that calls
+ * `enqueuePublishBuild`), and this handler independently re-verifies below
+ * that `publishedAppId` actually exists in `published_apps` — a minimal,
+ * real check against a garbage or stale id, not a substitute for real
+ * resource binding. The token is short-lived (2 minutes) and userId-scoped,
+ * which bounds the blast radius of the missing binding to "an already-
+ * authenticated caller could name a DIFFERENT valid published app's id
+ * within that window," not an unauthenticated one.
  *
  * STREAMING IS LOAD-BEARING, not an optimization: `express.json()` (mounted
  * globally in `server.ts`) only consumes `application/json` bodies, so `req`
@@ -46,6 +68,21 @@ const router: RouterType = Router();
 
 function resolveBuildSourceRoot(): string {
   return process.env.APP_BUILD_SOURCE_ROOT ?? '';
+}
+
+/** Post-extraction ceiling — independent of the pre-upload compressed-tarball cap, since a crafted archive can compress small and expand huge. */
+const MAX_EXTRACTED_BYTES = 2 * 1024 * 1024 * 1024; // 2GB
+
+const EXTRACT_TIMEOUT_MS = 120_000;
+
+async function publishedAppExists(publishedAppId: string): Promise<boolean> {
+  const client = await getPoolForWorker().connect();
+  try {
+    const result = await client.query('SELECT 1 FROM published_apps WHERE id = $1 LIMIT 1', [publishedAppId]);
+    return (result.rowCount ?? 0) > 0;
+  } finally {
+    client.release();
+  }
 }
 
 /** Streams `req` to `destPath`, aborting (and deleting the partial file) past `maxBytes`. */
@@ -92,6 +129,14 @@ router.post('/build', async (req, res) => {
     return res.status(400).json({ error: 'publishedAppId has an invalid shape' });
   }
 
+  // Minimal, real check standing in for full resource binding (see the
+  // docblock above) — a garbage or stale id refuses here rather than
+  // extracting a tarball for an app that does not exist.
+  const exists = await publishedAppExists(publishedAppId);
+  if (!exists) {
+    return res.status(404).json({ error: 'Unknown publishedAppId' });
+  }
+
   const root = resolveBuildSourceRoot();
   if (root.length === 0) {
     return res.status(503).json({ error: 'This processor is not configured as an app build host' });
@@ -105,12 +150,39 @@ router.post('/build', async (req, res) => {
   try {
     await mkdir(destDir, { recursive: true });
     await streamRequestToFile(req, tarPath, MAX_UPLOAD_BYTES);
-    await execFileAsync('tar', ['xzf', tarPath, '-C', destDir]);
+    // --no-same-owner/--no-same-permissions: this archive came from a user's
+    // Sprite, not a trusted build artifact — extracting with the uid/perms it
+    // was packed with would let it plant setuid bits or files owned by
+    // whatever uid happened to run `tar` inside the Sprite. `timeout` bounds a
+    // decompression-bomb-shaped archive that would otherwise hang this
+    // handler indefinitely.
+    await execFileAsync(
+      'tar',
+      ['--no-same-owner', '--no-same-permissions', '-xzf', tarPath, '-C', destDir],
+      { timeout: EXTRACT_TIMEOUT_MS },
+    );
+
+    // Independent of the pre-upload compressed-size cap: a crafted archive
+    // can compress small and expand huge, so the extracted tree gets its own
+    // ceiling before anything is enqueued.
+    const extractedBytes = await getDirectorySize(destDir);
+    if (extractedBytes > MAX_EXTRACTED_BYTES) {
+      throw new Error(`extracted snapshot is ${extractedBytes} bytes, exceeding the ${MAX_EXTRACTED_BYTES}-byte post-extraction interim cap`);
+    }
 
     const jobId = await queueManager.addJob(
       'app-build',
       { publishedAppId, sourceRef },
-      { singletonKey: `app-build:${publishedAppId}` },
+      // `singletonKey` alone only dedups a QUEUED job against another queued
+      // one (queue-manager.ts's own documented invariant) — once a build is
+      // picked up and ACTIVE, a second enqueue with the same key is accepted
+      // and races the first. `singletonSeconds` closes that: pg-boss treats
+      // any job with this key created within the window as a duplicate
+      // regardless of state, so it must dwarf the build's own timeout the
+      // same way `expireInSeconds` does for the `app-build` retry policy
+      // above (45 minutes) — a shorter window would let a build racing past
+      // its own singleton dedup, which defeats the point.
+      { singletonKey: `app-build:${publishedAppId}`, singletonSeconds: 45 * 60 },
     );
 
     return res.json({ success: true, jobId, sourceRef });

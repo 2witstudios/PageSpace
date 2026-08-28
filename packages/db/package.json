@@ -306,6 +306,10 @@
     "./schema/published-app-subscriptions": {
       "types": "./dist/schema/published-app-subscriptions.d.ts",
       "default": "./dist/schema/published-app-subscriptions.js"
+    },
+    "./schema/app-hosting-stripe-reclaims": {
+      "types": "./dist/schema/app-hosting-stripe-reclaims.d.ts",
+      "default": "./dist/schema/app-hosting-stripe-reclaims.js"
     }
   },
   "scripts": {

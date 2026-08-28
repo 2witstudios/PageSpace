@@ -37,7 +37,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useTouchDevice } from '@/hooks/useTouchDevice';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
-import { canManageDrive } from '@/hooks/usePermissions';
+import { canManageDrive, isDriveOwner } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -466,6 +466,15 @@ function SessionList({
     [drives],
   );
 
+  // Which drives this user OWNS — stricter than manageableDriveIds. Spending
+  // the drive's money (the dedicated-hosting purchase surface) is gated on
+  // this, not on ADMIN/OWNER manage rights: an admin may run an app, not buy
+  // hosting on the owner's card.
+  const ownerDriveIds = useMemo(
+    () => new Set(drives.filter((d) => isDriveOwner(d)).map((d) => d.id)),
+    [drives],
+  );
+
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
   const { openSpawn, openSpawnInEnv, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
 
@@ -583,6 +592,7 @@ function SessionList({
             sessions={group.sessions}
             agentNamesById={agentNamesById}
             canManage={manageableDriveIds.has(group.driveId)}
+            isOwner={ownerDriveIds.has(group.driveId)}
             // Three things switch it off. `canSpawn` is the authentication gate
             // — the same one that nulls the sessions SWR key, because a surface
             // that will not show a signed-out visitor anything has no business
@@ -707,6 +717,7 @@ function DriveGroupRows({
   sessions,
   agentNamesById,
   canManage,
+  isOwner,
   showEnvironments,
   onNewSessionInEnv,
 }: {
@@ -714,6 +725,8 @@ function DriveGroupRows({
   sessions: SessionListEntry[];
   agentNamesById: Map<string, string>;
   canManage: boolean;
+  /** May spend this drive's money — stricter than `canManage`. See `DriveEnvAppPane`'s dedicated-tier gate. */
+  isOwner: boolean;
   showEnvironments: boolean;
   /** Start a session INSIDE one of this drive's environments — the row's own "+". */
   onNewSessionInEnv: (envId: string) => void;
@@ -759,6 +772,7 @@ function DriveGroupRows({
           driveId={driveId}
           group={group}
           canManage={canManage}
+          isOwner={isOwner}
           agentNamesById={agentNamesById}
           onEnvsChanged={refreshEnvs}
           onNewSession={() => onNewSessionInEnv(group.envId)}
@@ -815,6 +829,7 @@ function DriveEnvRow({
   driveId,
   group,
   canManage,
+  isOwner,
   agentNamesById,
   onEnvsChanged,
   onNewSession,
@@ -822,6 +837,7 @@ function DriveEnvRow({
   driveId: string;
   group: EnvGroup<SessionListEntry>;
   canManage: boolean;
+  isOwner: boolean;
   agentNamesById: Map<string, string>;
   onEnvsChanged: () => void;
   onNewSession: () => void;
@@ -1003,7 +1019,13 @@ function DriveEnvRow({
         </div>
       )}
       {!isOrphan && (
-        <DriveEnvAppPane driveId={driveId} envId={group.envId} envName={displayName} canManage={canManage} />
+        <DriveEnvAppPane
+          driveId={driveId}
+          envId={group.envId}
+          envName={displayName}
+          canManage={canManage}
+          isOwner={isOwner}
+        />
       )}
     </div>
   );

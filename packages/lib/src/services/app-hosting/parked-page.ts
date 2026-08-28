@@ -84,17 +84,22 @@ interface PageCopy {
  * No trailing slash assumed: `WEB_APP_URL` is documented and validated
  * (`env-validation.ts`) as a bare origin.
  */
-function manageHrefFor(driveId: string | undefined): string | undefined {
+function manageHrefFor(driveId: string | undefined, envId: string | undefined): string | undefined {
   if (!driveId) return undefined;
   const appUrl = (process.env.WEB_APP_URL ?? process.env.NEXT_PUBLIC_APP_URL ?? '').replace(/\/+$/, '');
   if (!appUrl) return undefined;
-  return `${appUrl}/dashboard/${encodeURIComponent(driveId)}`;
+  const base = `${appUrl}/dashboard/${encodeURIComponent(driveId)}`;
+  // `?env=<envId>` deep-links at the app's own environment rather than the
+  // drive root — the app pane lives on the environment row in the sidebar, not
+  // a separate dashboard. Degrades gracefully to the drive root today if the
+  // sidebar does not yet read this param; it is additive, never a regression.
+  return envId ? `${base}?env=${encodeURIComponent(envId)}` : base;
 }
 
 function copyFor(decision: AppRouteDecision): PageCopy {
   switch (decision.kind) {
     case 'parked': {
-      const manageHref = manageHrefFor(decision.driveId);
+      const manageHref = manageHrefFor(decision.driveId, decision.envId);
       // The daily budget is a DIFFERENT thing to be told: nobody needs to top
       // anything up, and the app returns by itself when the counter rolls over at
       // midnight UTC. Saying "it ran out of credits" there would send the owner to
@@ -138,7 +143,7 @@ function copyFor(decision: AppRouteDecision): PageCopy {
             // to the person reading it, so this points the one reader who can act
             // at the place where they can.
             body: 'It is not currently able to serve requests. If this is your app, check its status in PageSpace.',
-            manageHref: manageHrefFor(decision.driveId),
+            manageHref: manageHrefFor(decision.driveId, decision.envId),
           };
     case 'not_found':
       return {

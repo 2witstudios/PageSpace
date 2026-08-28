@@ -8,7 +8,14 @@
  *
  * Read/write split: any drive member sees status/URL/logs; publish, stop,
  * resume and unpublish are OWNER/ADMIN only (`canManage`, the same flag that
- * already gates rename/rebuild/delete on the row above).
+ * already gates rename/rebuild/delete on the row above). Buying or cancelling
+ * the always-on tier is stricter still — OWNER only (`isOwner`) — because that
+ * spends the drive's money, not just its compute.
+ *
+ * Gated on `useAppHostingCapability()`: this entire pane renders NOTHING on a
+ * deployment where `APP_HOSTING_ENABLED` is off (the default everywhere). A
+ * visible Publish button whose click 404s is worse than no button — a dark
+ * feature must read as absent, not broken.
  */
 
 import { useCallback, useState } from 'react';
@@ -31,6 +38,8 @@ import { post, del, ApiRequestError } from '@/lib/auth/auth-fetch';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useDriveEnvApp, type DriveEnvAppDTO, type PublishedAppStatus } from '@/hooks/drive-envs/useDriveEnvApp';
 import { useAppLogs } from '@/hooks/drive-envs/useAppLogs';
+import { useAppHostingCapability } from '@/hooks/drive-envs/useAppHostingCapability';
+import { useEditingSession } from '@/stores/useEditingSession';
 import { StripeProvider } from '@/components/billing/StripeProvider';
 import { PaymentElement, useElements, useStripe } from '@stripe/react-stripe-js';
 
@@ -45,6 +54,16 @@ const STATUS_COPY: Record<PublishedAppStatus, { label: string; tone: 'default' |
   failed: { label: 'Failed', tone: 'destructive' },
 };
 
+/**
+ * Falls back rather than crashing on a status this build doesn't know about
+ * yet — the `published_app_status` enum can grow a value before every reader
+ * of it is updated, and an undefined lookup here must never white-screen the
+ * sidebar.
+ */
+export function statusCopyFor(status: PublishedAppStatus): { label: string; tone: 'default' | 'secondary' | 'destructive' | 'outline' } {
+  return STATUS_COPY[status] ?? { label: status, tone: 'outline' };
+}
+
 function appPath(driveId: string, envId: string): string {
   return `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app`;
 }
@@ -54,18 +73,26 @@ export function DriveEnvAppPane({
   envId,
   envName,
   canManage,
+  isOwner,
 }: {
   driveId: string;
   envId: string;
   envName: string;
   canManage: boolean;
+  /** May spend this drive's money — gates the dedicated-tier buy/cancel affordance, stricter than `canManage`. */
+  isOwner: boolean;
 }) {
+  const appHostingEnabled = useAppHostingCapability();
   const [expanded, setExpanded] = useState(false);
   const { app, isLoading, mutate } = useDriveEnvApp(driveId, envId, { enabled: expanded });
   const [publishing, setPublishing] = useState(false);
   const [actioning, setActioning] = useState(false);
   const [confirmingUnpublish, setConfirmingUnpublish] = useState(false);
   const [logsOpen, setLogsOpen] = useState(false);
+
+  useEditingSession(`drive-env-app-unpublish-${envId}`, confirmingUnpublish, 'form', {
+    componentName: 'DriveEnvAppPane.unpublishDialog',
+  });
 
   const path = appPath(driveId, envId);
 
@@ -117,6 +144,12 @@ export function DriveEnvAppPane({
     }
   }, [path, envName, mutate]);
 
+  // `undefined` while the capability is still loading, `false` once it's
+  // confirmed off — both render nothing, so a dark deployment never flashes
+  // the pane before settling, and an enabled one only pays the extra request
+  // once (SWR dedupes it across every row).
+  if (appHostingEnabled !== true) return null;
+
   return (
     <div className="ml-4 border-l border-border pl-1.5">
       <button
@@ -129,8 +162,8 @@ export function DriveEnvAppPane({
         <Rocket className="size-3" aria-hidden="true" />
         <span>Published app</span>
         {app && (
-          <Badge variant={STATUS_COPY[app.status].tone} className="ml-auto text-[10px]">
-            {STATUS_COPY[app.status].label}
+          <Badge variant={statusCopyFor(app.status).tone} className="ml-auto text-[10px]">
+            {statusCopyFor(app.status).label}
           </Badge>
         )}
       </button>
@@ -153,6 +186,7 @@ export function DriveEnvAppPane({
             <AppPaneBody
               app={app}
               canManage={canManage}
+              isOwner={isOwner}
               actioning={actioning}
               onPublishAgain={publish}
               onStop={() => void runAction('stop')}
@@ -193,6 +227,7 @@ export function DriveEnvAppPane({
 function AppPaneBody({
   app,
   canManage,
+  isOwner,
   actioning,
   onPublishAgain,
   onStop,
@@ -205,6 +240,7 @@ function AppPaneBody({
 }: {
   app: DriveEnvAppDTO;
   canManage: boolean;
+  isOwner: boolean;
   actioning: boolean;
   onPublishAgain: () => void;
   onStop: () => void;
@@ -215,7 +251,7 @@ function AppPaneBody({
   driveId: string;
   envId: string;
 }) {
-  const lines = useAppLogs(logsOpen ? app.flyAppName : null);
+  const lines = useAppLogs(logsOpen ? envId : null, logsOpen ? app.flyAppName : null);
 
   return (
     <div className="space-y-2">
@@ -269,7 +305,7 @@ function AppPaneBody({
         </div>
       )}
 
-      <DedicatedTierSection app={app} canManage={canManage} driveId={driveId} envId={envId} />
+      <DedicatedTierSection app={app} isOwner={isOwner} driveId={driveId} envId={envId} />
 
       <div>
         <button
@@ -300,31 +336,40 @@ interface DunningState {
   currentPeriodEnd: string;
 }
 
-async function dunningFetcher(url: string): Promise<{ subscription: DunningState | null }> {
+async function dunningFetcher(url: string): Promise<{ subscription: DunningState | null; purchasable: boolean }> {
   const response = await fetchWithAuth(url);
   if (!response.ok) throw new Error('Failed to load subscription state');
   return response.json();
 }
 
-/** Buy/cancel the flat always-on SKU, and show the dunning state honestly rather than hiding a payment problem. */
+/**
+ * Buy/cancel the flat always-on SKU, and show the dunning state honestly
+ * rather than hiding a payment problem.
+ *
+ * Gated on `isOwner`, NOT `canManage` — spending the drive's money is a
+ * stricter question than managing its published app, mirroring the backend
+ * `/dedicated` route's own owner-direct check (it deliberately does not use
+ * `isPrincipalDriveOwnerOrAdmin`).
+ */
 function DedicatedTierSection({
   app,
-  canManage,
+  isOwner,
   driveId,
   envId,
 }: {
   app: DriveEnvAppDTO;
-  canManage: boolean;
+  isOwner: boolean;
   driveId: string;
   envId: string;
 }) {
   const [starting, setStarting] = useState(false);
   const [clientSecret, setClientSecret] = useState<string | null>(null);
 
-  const { data } = useSWR<{ subscription: DunningState | null }>(
-    app.tier === 'dedicated'
-      ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning`
-      : null,
+  // Fetched regardless of tier (not just when already `dedicated`): the
+  // metered case needs `purchasable` too, to decide whether the "Buy
+  // always-on" button should even render.
+  const { data } = useSWR<{ subscription: DunningState | null; purchasable: boolean }>(
+    isOwner ? `/api/drives/${encodeURIComponent(driveId)}/envs/${encodeURIComponent(envId)}/app/dunning` : null,
     dunningFetcher,
     { revalidateOnFocus: false, shouldRetryOnError: false },
   );
@@ -358,11 +403,19 @@ function DedicatedTierSection({
     }
   }, [app.id]);
 
-  if (!canManage) return null;
+  useEditingSession(`drive-env-app-dedicated-checkout-${app.id}`, clientSecret !== null, 'form', {
+    componentName: 'DriveEnvAppPane.dedicatedCheckout',
+  });
+
+  if (!isOwner) return null;
+  // `undefined` (still loading) renders nothing rather than a button that
+  // might immediately need to disappear — same "don't flash a dead control"
+  // reasoning as the pane-level capability gate.
+  const purchasable = data?.purchasable;
 
   return (
     <div className="space-y-1.5 border-t border-border pt-1.5">
-      {app.tier === 'metered' && !clientSecret && (
+      {app.tier === 'metered' && purchasable === true && !clientSecret && (
         <Button size="sm" variant="outline" disabled={starting} onClick={() => void startDedicated()}>
           {starting ? 'Starting…' : 'Buy always-on'}
         </Button>

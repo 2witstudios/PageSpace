@@ -37,6 +37,7 @@
 import { db } from '@pagespace/db/db';
 import { and, eq, isNull, or, sql } from '@pagespace/db/operators';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { hasSpendableBalance } from '../../billing/credit-gate';
 import { resolveTier } from '../../billing/credit-balance';
 import { loggers } from '../../logging/logger-config';
@@ -65,6 +66,13 @@ export interface AppRouterDeps {
   replaySecret: () => string;
   /** `published_apps` row for a subdomain, or null. */
   findAppBySubdomain: (subdomain: string) => Promise<PublishedAppRouteRow | null>;
+  /**
+   * The `published_apps` row a custom hostname targets, or null when the
+   * hostname isn't one of our custom domains, or when it is but its
+   * `publishedAppId` is NULL — the caller reads null as "fall through to the
+   * static-site path", exactly as an unrecognized custom host always has.
+   */
+  findAppByCustomHost: (hostname: string) => Promise<PublishedAppRouteRow | null>;
   /**
    * Who pays — resolved the SAME way the awake-seconds meter resolves it
    * (`drives.ownerId`, via `resolveEnvPayerId`). Null means unresolvable (a stale
@@ -106,20 +114,45 @@ export interface PublishedAppRouteRow {
    * charge lands on another's.
    */
   driveId: string;
+  /** `published_apps.envId` — echoed onward exactly like `driveId`, see `RoutableApp.envId`. */
+  envId: string;
 }
+
+const ROUTE_ROW_COLUMNS = {
+  id: publishedApps.id,
+  flyAppName: publishedApps.flyAppName,
+  status: publishedApps.status,
+  tier: publishedApps.tier,
+  machineId: publishedApps.machineId,
+  driveId: publishedApps.driveId,
+  envId: publishedApps.envId,
+} as const;
 
 async function findAppBySubdomainRow(subdomain: string): Promise<PublishedAppRouteRow | null> {
   const [row] = await db
-    .select({
-      id: publishedApps.id,
-      flyAppName: publishedApps.flyAppName,
-      status: publishedApps.status,
-      tier: publishedApps.tier,
-      machineId: publishedApps.machineId,
-      driveId: publishedApps.driveId,
-    })
+    .select(ROUTE_ROW_COLUMNS)
     .from(publishedApps)
     .where(eq(publishedApps.subdomain, subdomain))
+    .limit(1);
+  return row ?? null;
+}
+
+/**
+ * Resolve a custom hostname to the `published_apps` row it targets.
+ *
+ * Returns null both when the hostname is not a `custom_domains` row at all AND
+ * when it is one but `publishedAppId` is NULL — the caller cannot and must not
+ * tell those two apart, because both answer the same way: fall through to the
+ * drive's static published site, exactly as every custom host has always been
+ * served. Only a domain that is BOTH ours AND explicitly pointed at an app
+ * reaches the published-app routing decision at all.
+ */
+async function findAppByCustomHostRow(hostname: string): Promise<PublishedAppRouteRow | null> {
+  const [row] = await db
+    .select(ROUTE_ROW_COLUMNS)
+    .from(customDomains)
+    .innerJoin(publishedApps, eq(customDomains.publishedAppId, publishedApps.id))
+    .where(eq(customDomains.hostname, hostname))
     .limit(1);
   return row ?? null;
 }
@@ -129,6 +162,7 @@ export const defaultAppRouterDeps: AppRouterDeps = {
   apex: resolvePublishedAppsApex,
   replaySecret: resolveAppReplaySecret,
   findAppBySubdomain: findAppBySubdomainRow,
+  findAppByCustomHost: findAppByCustomHostRow,
   // The SAME resolver `app-billing.ts`'s `defaultAppBillingDeps` hands the meter
   // and the wake gate — not an equivalent, the identical function — so a drift
   // between "who the router asks" and "who the meter charges" is structurally
@@ -192,7 +226,7 @@ async function stampAppHit(publishedAppId: string): Promise<void> {
  * for a machine we have decided not to pay for — the unmetered start this whole
  * wiring exists to close.
  */
-function refusalForWake(wake: WakePublishedAppRunResult, driveId: string): AppRouteDecision | null {
+function refusalForWake(wake: WakePublishedAppRunResult, driveId: string, envId: string): AppRouteDecision | null {
   switch (wake.outcome) {
     case 'woken':
     case 'wake_in_progress':
@@ -205,11 +239,12 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string): AppRo
         kind: 'parked',
         reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : 'out_of_credits',
         driveId,
+        envId,
       };
     case 'start_failed':
       // Fly refused the start. Nothing is billed and nothing is stamped; replaying
       // would ask the proxy to start the same machine outside the seam.
-      return { kind: 'unavailable', reason: 'failed', driveId };
+      return { kind: 'unavailable', reason: 'failed', driveId, envId };
     case 'refused':
       switch (wake.reason) {
         case 'not_wakeable':
@@ -220,13 +255,13 @@ function refusalForWake(wake: WakePublishedAppRunResult, driveId: string): AppRo
         case 'no_machine':
           // Mid blue/green swap: there is nothing to start yet, and the next
           // deploy finishes in seconds.
-          return { kind: 'unavailable', reason: 'deploying', driveId };
+          return { kind: 'unavailable', reason: 'deploying', driveId, envId };
         case 'disabled':
-          return { kind: 'unavailable', reason: 'hosting_disabled', driveId };
+          return { kind: 'unavailable', reason: 'hosting_disabled', driveId, envId };
         case 'unresolved_payer':
           // No honest payer, so no start. Refusing costs one visitor a page;
           // serving would bill a machine to somebody who may not own the drive.
-          return { kind: 'unavailable', reason: 'failed', driveId };
+          return { kind: 'unavailable', reason: 'failed', driveId, envId };
       }
   }
 }
@@ -252,24 +287,31 @@ export async function resolveAppRoute(
   if (host.kind === 'apex') return { kind: 'not_found', reason: 'apex' };
   if (host.kind === 'foreign') {
     // A custom domain reaches the edge as a hostname that is not under our apex.
-    // Binding one to a published app needs a pointer that does not exist yet:
-    // `custom_domains` carries `driveId` and resolves to a drive's STATIC
-    // published site, with no column naming a `published_apps` row. Answering
-    // `not_found` here (rather than guessing a drive's app) is what keeps the
-    // existing custom-domain behaviour intact — those hosts are served by the
-    // proxy's own custom-domain block and never reach this route.
-    return { kind: 'not_found', reason: 'custom_host' };
+    // `findAppByCustomHost` answers null both for "not our domain" and "ours but
+    // pointed at the static site" — both fall through to `custom_host`, which is
+    // exactly the answer that keeps the EXISTING static-published-site behaviour
+    // intact (those hosts are served by the proxy's own custom-domain block and
+    // never reach a replay decision). Only a domain explicitly pointed at a
+    // published app (a non-null `publishedAppId`) is decided here, through the
+    // SAME gate/replay logic a subdomain hit gets — no shortcuts, no cache.
+    const app = await deps.findAppByCustomHost(host.hostname);
+    if (!app) return { kind: 'not_found', reason: 'custom_host' };
+    return decideForRow(app, deps);
   }
 
   const app = await deps.findAppBySubdomain(host.subdomain);
   if (!app) return { kind: 'not_found', reason: 'no_such_app' };
+  return decideForRow(app, deps);
+}
 
+async function decideForRow(app: PublishedAppRouteRow, deps: AppRouterDeps): Promise<AppRouteDecision> {
   const routable: RoutableApp = {
     flyAppName: app.flyAppName,
     status: app.status,
     tier: app.tier,
     hasMachine: app.machineId !== null,
     driveId: app.driveId,
+    envId: app.envId,
   };
 
   // Decide as far as the ROW alone allows, with the balance optimistically OK.
@@ -312,7 +354,7 @@ export async function resolveAppRoute(
       secret: deps.replaySecret(),
     });
   } catch {
-    return { kind: 'unavailable', reason: 'failed' };
+    return { kind: 'unavailable', reason: 'failed', driveId: app.driveId, envId: app.envId };
   }
 
   const decision = decideAppRoute({ app: routable, balanceOk: true, replayState });
@@ -334,7 +376,7 @@ export async function resolveAppRoute(
   // replay is exactly the unmetered start this exists to prevent.
   if (app.status === 'stopped' && decision.kind === 'replay') {
     const wake = await deps.wake(app.id);
-    const refusal = refusalForWake(wake, app.driveId);
+    const refusal = refusalForWake(wake, app.driveId, app.envId);
     if (refusal) return refusal;
   }
 
