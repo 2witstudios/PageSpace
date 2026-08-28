@@ -359,6 +359,30 @@ describe('projectSpec includes NodeSpec.defining/definingAsContext/definingForCo
   });
 });
 
+describe('projectSpec includes NodeSpec.code/whitespace', () => {
+  // ProseMirror uses these to determine whitespace and line-break handling —
+  // codeBlock relies on `code: true`. Mixed clients could parse/transform
+  // code-block content differently while the hash stayed unchanged.
+  function schemaWithCodeNode(flags: { code?: boolean; whitespace?: 'pre' | 'normal' }) {
+    const TestNode = Node.create({ name: 'testNode', group: 'block', content: 'text*', ...flags });
+    return getSchema([StarterKit, TestNode]);
+  }
+
+  it('produces different projections for nodes with different code', () => {
+    const withCode = projectSchema(schemaWithCodeNode({ code: true }));
+    const without = projectSchema(schemaWithCodeNode({}));
+    expect(withCode).not.toEqual(without);
+    expect(hashProjection(withCode)).not.toBe(hashProjection(without));
+  });
+
+  it('produces different projections for nodes with different whitespace', () => {
+    const pre = projectSchema(schemaWithCodeNode({ whitespace: 'pre' }));
+    const normal = projectSchema(schemaWithCodeNode({ whitespace: 'normal' }));
+    expect(pre).not.toEqual(normal);
+    expect(hashProjection(pre)).not.toBe(hashProjection(normal));
+  });
+});
+
 describe('projectSchema includes Schema.spec.topNode', () => {
   // Two schemas can have identical node maps yet disagree on which node is
   // the document root — the node/mark maps alone can't catch that. TipTap's

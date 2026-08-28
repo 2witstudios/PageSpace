@@ -197,6 +197,14 @@ interface ProjectedSpec {
   defining?: boolean;
   definingAsContext?: boolean;
   definingForContent?: boolean;
+  /**
+   * Nodes only (`NodeSpec.code`/`NodeSpec.whitespace`) — whitespace and
+   * line-break handling; `codeBlock` relies on `code: true`. Compatibility-
+   * significant: mixed clients could parse or transform code-block content
+   * differently. `undefined` for marks.
+   */
+  code?: boolean;
+  whitespace?: 'pre' | 'normal';
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -277,6 +285,8 @@ function projectSpec(
         defining: nodeSpec.defining,
         definingAsContext: nodeSpec.definingAsContext,
         definingForContent: nodeSpec.definingForContent,
+        code: nodeSpec.code,
+        whitespace: nodeSpec.whitespace,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
@@ -349,7 +359,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = '7598e791';
+export const SCHEMA_HASH = 'b3fa6f3b';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or
