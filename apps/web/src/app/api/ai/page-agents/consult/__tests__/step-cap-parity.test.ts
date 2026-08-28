@@ -43,7 +43,7 @@ const AGENT_ROW = {
   title: 'Helper',
   driveId: 'drive-1',
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   systemPrompt: 'You help.',
   enabledTools: ['ask_agent'],
 };
@@ -105,7 +105,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({
@@ -119,11 +119,11 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 

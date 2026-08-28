@@ -40,7 +40,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 // Single row returned for every query in this test's db mock — so it carries both
 // the agent-page fields and the gate user's subscriptionTier/role.
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -95,7 +95,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({
@@ -109,11 +109,11 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -160,7 +160,7 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
     // Reset the shared row to a non-admin, public-provider default each test.
     agentPage.aiProvider = 'openai';
-    agentPage.aiModel = 'openai/gpt-5.3-chat';
+    agentPage.aiModel = 'openai/gpt-5.4-nano';
     agentPage.role = 'user';
   });
 

@@ -143,12 +143,12 @@ describe('ai-providers-config', () => {
     });
 
     it('limits free tier to the allowlist', () => {
-      expect(isModelAllowedForTier('openai/gpt-5.3-chat', 'free')).toBe(true);
+      expect(isModelAllowedForTier('openai/gpt-5.4-nano', 'free')).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', 'free')).toBe(false);
     });
 
     it('treats undefined/unknown tier as free', () => {
-      expect(isModelAllowedForTier('openai/gpt-5.3-chat', undefined)).toBe(true);
+      expect(isModelAllowedForTier('openai/gpt-5.4-nano', undefined)).toBe(true);
       expect(isModelAllowedForTier('anthropic/claude-opus-4.8', undefined)).toBe(false);
     });
   });
@@ -320,7 +320,7 @@ describe('ai-providers-config', () => {
     });
 
     it('accepts a valid (provider, model) pair', () => {
-      expect(validateAgentModelSelection('openai', 'openai/gpt-5.3-chat')).toBeNull();
+      expect(validateAgentModelSelection('openai', 'openai/gpt-5.4-nano')).toBeNull();
       expect(validateAgentModelSelection('anthropic', 'anthropic/claude-opus-4.8')).toBeNull();
     });
 
@@ -360,7 +360,7 @@ describe('ai-providers-config', () => {
     it('respects deployment-mode visibility (cloud provider rejected on-prem)', () => {
       process.env.NEXT_PUBLIC_DEPLOYMENT_MODE = 'onprem';
       process.env.DEPLOYMENT_MODE = 'onprem';
-      const reason = validateAgentModelSelection('openai', 'openai/gpt-5.3-chat');
+      const reason = validateAgentModelSelection('openai', 'openai/gpt-5.4-nano');
       expect(reason).toMatch(/unknown or unavailable/i);
     });
   });

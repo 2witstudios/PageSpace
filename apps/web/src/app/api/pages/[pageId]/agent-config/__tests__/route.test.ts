@@ -756,7 +756,7 @@ describe('PATCH /api/pages/[pageId]/agent-config', () => {
 
     it('accepts a valid catalog model id', async () => {
       const response = await PATCH(
-        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat' }),
+        createPatchRequest({ aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano' }),
         mockParams
       );
 

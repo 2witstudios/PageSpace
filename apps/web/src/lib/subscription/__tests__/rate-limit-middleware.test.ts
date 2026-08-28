@@ -5,7 +5,7 @@ import { FREE_TIER_MODELS, DEFAULT_MODEL } from '@/lib/ai/core/ai-providers-conf
 // A model that is NOT in the free allowlist (a paid frontier model).
 const PAID_MODEL = 'anthropic/claude-opus-4.8';
 // A model that IS in the free allowlist.
-const FREE_MODEL = DEFAULT_MODEL; // 'openai/gpt-5.6-luna', a member of FREE_TIER_MODELS
+const FREE_MODEL = DEFAULT_MODEL; // 'z-ai/glm-5.3-flash', a member of FREE_TIER_MODELS
 
 describe('Rate Limit Middleware', () => {
   describe('requiresProSubscription()', () => {

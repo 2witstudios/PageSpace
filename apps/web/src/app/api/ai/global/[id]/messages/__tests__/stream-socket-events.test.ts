@@ -318,7 +318,7 @@ vi.mock('@/lib/ai/core/help-responder', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -466,7 +466,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -555,7 +555,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null } = {}) => {
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 };

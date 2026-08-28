@@ -178,7 +178,7 @@ vi.mock('../../core/ai-providers-config', () => ({
   AI_PROVIDERS: { openai: { name: 'OpenAI' } },
   getModelDisplayName: vi.fn(() => 'Test Model'),
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
 }));
 
 import { agentCommunicationTools, executeAskAgent } from '../agent-communication-tools';
@@ -364,7 +364,7 @@ describe('agent-communication-tools', () => {
       vi.mocked(createAIProvider).mockResolvedValue({
         model: { modelId: 'test-model' } as unknown as ReturnType<typeof createAIProvider> extends Promise<infer T> ? T extends { model: infer M } ? M : never : never,
         provider: 'openai',
-        modelName: 'openai/gpt-5.3-chat',
+        modelName: 'openai/gpt-5.4-nano',
       } as Awaited<ReturnType<typeof createAIProvider>>);
       vi.mocked(generateText).mockResolvedValue({
         text: 'Agent response',
@@ -563,13 +563,13 @@ describe('agent-communication-tools', () => {
         );
 
         // ask_agent runs a tool loop (stepCountIs(20)); it must bill the requesting
-        // user against the resolved backend model (openai/gpt-5.3-chat), not the unmetered alias,
+        // user against the resolved backend model (openai/gpt-5.4-nano), not the unmetered alias,
         // using totalUsage so every round-trip is counted.
         expect(AIMonitoring.trackUsage).toHaveBeenCalledWith(
           expect.objectContaining({
             userId: 'user-123',
             provider: 'openai',
-            model: 'openai/gpt-5.3-chat',
+            model: 'openai/gpt-5.4-nano',
             inputTokens: 100,
             outputTokens: 200,
             totalTokens: 300,
@@ -992,7 +992,7 @@ describe('agent-communication-tools', () => {
         vi.mocked(createAIProvider).mockResolvedValue({
           model: { modelId: 'test-model' } as never,
           provider: 'openai',
-          modelName: 'openai/gpt-5.3-chat',
+          modelName: 'openai/gpt-5.4-nano',
         } as Awaited<ReturnType<typeof createAIProvider>>);
         vi.mocked(generateText).mockResolvedValue({
           text: 'Agent response',
@@ -1048,7 +1048,7 @@ describe('agent-communication-tools', () => {
           pageId: 'agent-1',
           userId: 'user-123',
           provider: 'openai',
-          model: 'openai/gpt-5.3-chat',
+          model: 'openai/gpt-5.4-nano',
           plan: {
             reason: 'over-soft-threshold' as const,
             cutBeforeIndex: 0,

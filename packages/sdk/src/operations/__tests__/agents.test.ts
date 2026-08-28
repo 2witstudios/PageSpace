@@ -346,7 +346,7 @@ describe('filterModelCatalog — pure client-side D3 replacement', () => {
       provider: 'openai',
       name: 'OpenAI',
       dynamic: false,
-      models: [{ id: 'openai/gpt-5.3-chat', displayName: 'GPT-5.3 Chat', provider: 'openai', free: false }],
+      models: [{ id: 'openai/gpt-5.4-nano', displayName: 'GPT-5.3 Chat', provider: 'openai', free: false }],
     },
   ];
 
@@ -356,7 +356,7 @@ describe('filterModelCatalog — pure client-side D3 replacement', () => {
 
   it('filters to a single provider', () => {
     const result = filterModelCatalog(catalog, { provider: 'openai' });
-    expect(result.map((m) => m.id)).toEqual(['openai/gpt-5.3-chat']);
+    expect(result.map((m) => m.id)).toEqual(['openai/gpt-5.4-nano']);
   });
 
   it('filters to free models only, across providers', () => {

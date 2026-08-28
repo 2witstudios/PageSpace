@@ -119,8 +119,8 @@ describe('provider-factory', () => {
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
           // DEFAULT_PROVIDER / DEFAULT_MODEL
-          expect(result.provider).toBe('openai');
-          expect(result.modelName).toBe('openai/gpt-5.6-luna');
+          expect(result.provider).toBe('zai');
+          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
           expect(createOpenRouter).toHaveBeenCalled();
         }
       });
@@ -214,11 +214,11 @@ describe('provider-factory', () => {
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.provider).toBe('openai');
-          expect(result.modelName).toBe('openai/gpt-5.6-luna');
+          expect(result.provider).toBe('zai');
+          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
         }
         // the arbitrary model is never sent — only the default is
-        expect(mockOpenRouterChat).toHaveBeenCalledWith('openai/gpt-5.6-luna', expect.anything());
+        expect(mockOpenRouterChat).toHaveBeenCalledWith('z-ai/glm-5.3-flash', expect.anything());
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('totally-unknown/model', expect.anything());
       });
 
@@ -233,7 +233,7 @@ describe('provider-factory', () => {
 
         expect(isProviderError(result)).toBe(false);
         if (!isProviderError(result)) {
-          expect(result.modelName).toBe('openai/gpt-5.6-luna');
+          expect(result.modelName).toBe('z-ai/glm-5.3-flash');
         }
         expect(mockOpenRouterChat).not.toHaveBeenCalledWith('openai/not-a-real-model', expect.anything());
       });
@@ -453,7 +453,7 @@ describe('provider-factory', () => {
 
     describe('when a pre-loaded user row is provided', () => {
       it('skips the DB select for the user', async () => {
-        const preloaded = { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-5.3-chat' };
+        const preloaded = { currentAiProvider: 'openai', currentAiModel: 'openai/gpt-5.4-nano' };
 
         await updateUserProviderSettings('user-123', 'anthropic', 'anthropic/claude-sonnet-4.6', {
           user: preloaded,
