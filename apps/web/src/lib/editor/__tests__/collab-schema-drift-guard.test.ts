@@ -383,6 +383,40 @@ describe('projectSpec includes NodeSpec.code/whitespace', () => {
   });
 });
 
+describe('projectSpec includes NodeSpec.linebreakReplacement and MarkSpec.spanning', () => {
+  // linebreakReplacement: setBlockType uses it to convert between newlines
+  // and linebreak nodes for whitespace: 'pre' blocks. spanning: whether a
+  // mark can span multiple adjacent nodes when serialized. Both
+  // compatibility-significant; built as raw ProseMirror schemas (StarterKit
+  // already has a linebreakReplacement node — hardBreak — and ProseMirror
+  // rejects a second one, so this can't go through Node.create() the way
+  // `defining` did).
+  const baseNodes = {
+    doc: { content: 'block+' },
+    paragraph: { content: 'inline*', group: 'block' },
+    text: { group: 'inline', inline: true },
+    br: { group: 'inline', inline: true },
+  };
+
+  it('produces different projections for nodes with different linebreakReplacement', () => {
+    const without = projectSchema(new PMSchema({ nodes: baseNodes }));
+    const withFlag = projectSchema(
+      new PMSchema({ nodes: { ...baseNodes, br: { ...baseNodes.br, linebreakReplacement: true } } }),
+    );
+    expect(withFlag).not.toEqual(without);
+    expect(hashProjection(withFlag)).not.toBe(hashProjection(without));
+  });
+
+  it('produces different projections for marks with different spanning', () => {
+    const without = projectSchema(new PMSchema({ nodes: baseNodes, marks: { testMark: {} } }));
+    const withFlag = projectSchema(
+      new PMSchema({ nodes: baseNodes, marks: { testMark: { spanning: false } } }),
+    );
+    expect(withFlag).not.toEqual(without);
+    expect(hashProjection(withFlag)).not.toBe(hashProjection(without));
+  });
+});
+
 describe('projectSchema includes Schema.spec.topNode', () => {
   // Two schemas can have identical node maps yet disagree on which node is
   // the document root — the node/mark maps alone can't catch that. TipTap's

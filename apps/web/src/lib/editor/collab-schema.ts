@@ -205,6 +205,21 @@ interface ProjectedSpec {
    */
   code?: boolean;
   whitespace?: 'pre' | 'normal';
+  /**
+   * Nodes only (`NodeSpec.linebreakReplacement`) — whether this inline node
+   * is a linebreak equivalent; `setBlockType` uses it to convert between
+   * newlines and linebreak nodes for `whitespace: 'pre'` blocks.
+   * Compatibility-significant for the same reason as `whitespace`.
+   * `undefined` for marks.
+   */
+  linebreakReplacement?: boolean;
+  /**
+   * Marks only (`MarkSpec.spanning`) — whether this mark can span multiple
+   * adjacent nodes when serialized to DOM/HTML. Compatibility-significant:
+   * clients disagreeing produce different serialized output for the same
+   * marked content. `undefined` for nodes.
+   */
+  spanning?: boolean;
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -287,6 +302,8 @@ function projectSpec(
         definingForContent: nodeSpec.definingForContent,
         code: nodeSpec.code,
         whitespace: nodeSpec.whitespace,
+        linebreakReplacement: nodeSpec.linebreakReplacement,
+        spanning: markSpec.spanning,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
@@ -359,7 +376,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = 'b3fa6f3b';
+export const SCHEMA_HASH = 'b12f5c82';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or
