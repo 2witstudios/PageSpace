@@ -171,6 +171,14 @@ interface ProjectedSpec {
    * apply.
    */
   excludes?: string;
+  /**
+   * Marks only (`MarkSpec.inclusive`) — whether text typed at the boundary
+   * of a marked run inherits the mark. Compatibility-significant for the
+   * same reason as `excludes`: a client disagreeing on boundary behavior
+   * generates different marked content for the same edit. `undefined` for
+   * nodes.
+   */
+  inclusive?: boolean;
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -215,6 +223,7 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
         content: nodeSpec.content,
         marks: nodeSpec.marks,
         excludes: markSpec.excludes,
+        inclusive: markSpec.inclusive,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
@@ -231,10 +240,14 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
 }
 
 /** The projection `SCHEMA_HASH` is computed from — exported so tests can recompute it independently of the constant. */
-export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: ProjectedSpec[] } {
+export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: ProjectedSpec[]; topNode?: string } {
   return {
     nodes: projectSpec(schema.spec.nodes),
     marks: projectSpec(schema.spec.marks),
+    // Which node the document root must be. Two schemas with identical node
+    // maps can still disagree on this — e.g. StarterKit's default `doc` vs a
+    // hypothetical custom root — which the node/mark maps alone can't catch.
+    topNode: schema.spec.topNode,
   };
 }
 
@@ -283,7 +296,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = 'defbe936';
+export const SCHEMA_HASH = '967ecfef';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

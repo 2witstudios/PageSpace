@@ -27,7 +27,19 @@ export const ImageNode = Node.create({
   addAttributes() {
     return {
       fileId: simpleDataAttr('fileId', 'data-file-id'),
-      alt: simpleDataAttr('alt', 'alt'),
+      // NOT simpleDataAttr: `alt=""` is a meaningful accessibility signal
+      // (an explicitly decorative image), distinct from "no alt set" —
+      // simpleDataAttr's `|| null` would collapse that signal to the same
+      // null as a missing attribute, and a screen reader treats the two
+      // differently. Preserve '' through both parse and render.
+      alt: {
+        default: null,
+        parseHTML: (element: HTMLElement) => element.getAttribute('alt'),
+        renderHTML: (attributes: Record<string, unknown>) => {
+          const alt = attributes.alt;
+          return alt === null || alt === undefined ? {} : { alt };
+        },
+      },
       width: simpleDataAttr('width', 'data-width'),
       height: simpleDataAttr('height', 'data-height'),
     };

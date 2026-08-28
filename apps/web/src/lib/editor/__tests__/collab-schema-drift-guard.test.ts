@@ -12,6 +12,7 @@ import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { getSchema, Node, Mark } from '@tiptap/core';
+import { Schema as PMSchema } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
 import {
   collabExtensions,
@@ -241,6 +242,47 @@ describe('projectSpec includes MarkSpec.excludes', () => {
     const excludesNone = projectSchema(schemaWithExcludes(''));
     expect(excludesSelf).not.toEqual(excludesNone);
     expect(hashProjection(excludesSelf)).not.toBe(hashProjection(excludesNone));
+  });
+});
+
+describe('projectSpec includes MarkSpec.inclusive', () => {
+  // inclusive controls whether text typed at a mark's boundary inherits it —
+  // a client disagreeing generates different marked content for the same
+  // boundary edit. Not part of the projection before this fix.
+  function schemaWithInclusive(inclusive: boolean) {
+    const TestMark = Mark.create({
+      name: 'testMark',
+      inclusive,
+    });
+    return getSchema([StarterKit, TestMark]);
+  }
+
+  it('produces different projections for marks with different inclusive', () => {
+    const inclusiveTrue = projectSchema(schemaWithInclusive(true));
+    const inclusiveFalse = projectSchema(schemaWithInclusive(false));
+    expect(inclusiveTrue).not.toEqual(inclusiveFalse);
+    expect(hashProjection(inclusiveTrue)).not.toBe(hashProjection(inclusiveFalse));
+  });
+});
+
+describe('projectSchema includes Schema.spec.topNode', () => {
+  // Two schemas can have identical node maps yet disagree on which node is
+  // the document root — the node/mark maps alone can't catch that. TipTap's
+  // getSchema() doesn't expose topNode configuration, so this builds the raw
+  // ProseMirror Schema directly — projectSchema only cares about the
+  // resulting Schema object, not how it was constructed.
+  const nodes = {
+    doc: { content: 'block+' },
+    altRoot: { content: 'block+' },
+    paragraph: { content: 'text*', group: 'block' },
+    text: { group: 'inline' },
+  };
+
+  it('produces different projections for schemas with different topNode', () => {
+    const defaultRoot = projectSchema(new PMSchema({ nodes }));
+    const customRoot = projectSchema(new PMSchema({ nodes, topNode: 'altRoot' }));
+    expect(defaultRoot).not.toEqual(customRoot);
+    expect(hashProjection(defaultRoot)).not.toBe(hashProjection(customRoot));
   });
 });
 
