@@ -210,6 +210,14 @@ interface ProjectedSpec {
  * Order-insensitive by construction (map keys are sorted before hashing), so
  * reordering `collabExtensions()` does not change `SCHEMA_HASH` even though
  * `OrderedMap`'s own attribute order does shift with registration order.
+ *
+ * Deliberately NOT hashed: `AttrSpec.validate`. Unlike `excludes`/
+ * `inclusive` (booleans/strings — stable, cheap to compare), `validate` can
+ * be an arbitrary function, and no attribute in this extension set currently
+ * sets one. Hashing it via `fn.toString()` would make `SCHEMA_HASH` move on
+ * a harmless reformat or rebuild of semantically-identical logic — false
+ * instability is worse than the blind spot, for a case nothing here uses.
+ * Revisit if an attribute here ever needs a validator.
  */
 function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): ProjectedSpec[] {
   return Object.entries(map.toObject())

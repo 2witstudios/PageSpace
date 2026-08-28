@@ -58,4 +58,41 @@ export const ImageNode = Node.create({
   renderHTML({ HTMLAttributes }) {
     return ['img', mergeAttributes(HTMLAttributes)];
   },
+
+  /**
+   * `tiptap-markdown` falls back to its own bundled default for any node
+   * NAME it recognizes that doesn't provide `storage.markdown` itself — and
+   * it ships its own `image` node with that exact name, whose default
+   * serializer is `prosemirror-markdown`'s `defaultMarkdownSerializer.nodes.image`:
+   * `node.attrs.src.replace(...)`. This node has no `src` (file reference
+   * only, never a URL — see the class docstring), so without this override
+   * `getMarkdown()` THROWS (`Cannot read properties of undefined`) the
+   * moment a markdown-mode document contains an image, not merely emits bad
+   * output.
+   *
+   * `fileId` is always null here: markdown-it's built-in image token parses
+   * `![alt](src)` into `{ src, alt, title }`, none of which is `fileId`, so
+   * `src`/`title` are silently dropped by ProseMirror's attribute
+   * construction and `fileId` never gets set from markdown source. There is
+   * no URL-to-`fileId` ingestion pipeline yet (Phase K, a later leaf) — so
+   * serializing back writes nothing for this node rather than fabricating a
+   * URL or reintroducing the crash. That is a real fidelity loss for
+   * existing `md:image` content, but it is the SAME "flattens on seed"
+   * limitation already named in this file's class docstring — this fix
+   * makes that flattening happen cleanly (silently drop the node) instead
+   * of crashing every markdown-mode `getMarkdown()` call.
+   */
+  addStorage() {
+    return {
+      markdown: {
+        serialize() {
+          // Nothing safe to emit — see docstring above.
+        },
+        parse: {
+          // markdown-it's default image rule; addAttributes() above governs
+          // which of its output attrs this node actually keeps (only `alt`).
+        },
+      },
+    };
+  },
 });
