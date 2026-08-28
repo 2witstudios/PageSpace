@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSchema, Node } from '@tiptap/core';
+import { getSchema, Node, Mark } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import {
   collabExtensions,
@@ -39,6 +39,13 @@ const APP_SRC_DIR = join(EDITOR_DIR, '..', '..');
 // `extensions: clientExtensions(...)` (a function CALL, which this pattern
 // does not match). Comments are stripped first so documentation may still
 // describe the shape without tripping the guard.
+//
+// Textual, not semantic: `const exts = [StarterKit]; useEditor({ extensions: exts })`
+// bypasses this guard via one level of indirection. Same limitation as the
+// literal-scan `apps/realtime/src/__tests__/room-grammar-drift-guard.test.ts`
+// this is modelled on — accepted there for the same reason: catching the
+// common case (a hand-rolled array typed straight into the call) at near-zero
+// cost beats building a real static analyzer for a determined bypass.
 const INLINE_EXTENSIONS_ARRAY = /extensions:\s*\[/;
 
 /**
@@ -47,6 +54,20 @@ const INLINE_EXTENSIONS_ARRAY = /extensions:\s*\[/;
  * below so both the "offense found" and "clean source" branches are
  * exercised directly, matching the pattern used by
  * `apps/realtime/src/__tests__/room-grammar-drift-guard.test.ts`.
+ *
+ * The comment-stripping regex is NAIVE — it does not tokenize the source, so
+ * a `/*`-or-`*``/`-shaped sequence inside a STRING or REGEX literal (not an
+ * actual comment) confuses it into treating unrelated code as commented-out.
+ * Verified concretely against `monaco/sudolang-language.ts`, whose Monarch
+ * tokenizer rules contain regex literals matching `/\*` and `*\/`: this
+ * function silently deletes that file's real, uncommented
+ * `extensions: ['.sudo', '.sudolang']` (Monaco's own, unrelated
+ * `LanguageConfiguration.extensions` — file extensions, not a TipTap list)
+ * along with everything the naive stripper mistakes for the "comment" body.
+ * That is a false NEGATIVE risk (a real TipTap bypass could be hidden the
+ * same way) as much as it is a false positive on Monaco's own property, so
+ * `monaco/` is excluded from the directory walk below rather than trusted to
+ * round-trip through this stripper correctly.
  */
 function findInlineExtensionsArrayOffenses(path: string, rawSource: string): string[] {
   const source = rawSource
@@ -174,6 +195,55 @@ describe('projectSpec captures attribute default changes (Class A)', () => {
   });
 });
 
+describe('projectSpec distinguishes a required attribute from an explicit null default', () => {
+  // ProseMirror treats these as materially different: an attribute with no
+  // `default` key is REQUIRED (throws if omitted when creating the node);
+  // one with `default: null` is optional and resolves to null. Collapsing
+  // both to the string "null" (the pre-fix behavior) hid a Class A change —
+  // making a required attribute optional, or vice versa — from SCHEMA_HASH.
+  function schemaWithAttr(attr: { isRequired?: boolean; default?: unknown }) {
+    const TestNode = Node.create({
+      name: 'testNode',
+      group: 'block',
+      addAttributes() {
+        return { kind: attr };
+      },
+    });
+    return getSchema([StarterKit, TestNode]);
+  }
+
+  it('projects a required attribute (no default key) differently from default: null', () => {
+    // TipTap only omits `default` from the compiled NodeSpec when the
+    // extension explicitly marks the attribute `isRequired: true` with no
+    // default — `{}` alone still gets `default: null` merged in by TipTap's
+    // own attribute normalization (`getAttributesFromExtensions`).
+    const required = projectSchema(schemaWithAttr({ isRequired: true }));
+    const explicitNull = projectSchema(schemaWithAttr({ default: null }));
+    expect(required).not.toEqual(explicitNull);
+    expect(hashProjection(required)).not.toBe(hashProjection(explicitNull));
+  });
+});
+
+describe('projectSpec includes MarkSpec.excludes', () => {
+  // excludes controls which marks may coexist on the same text run — a
+  // client disagreeing on this can apply the same edit differently. Not part
+  // of the projection before this fix, so it was invisible to SCHEMA_HASH.
+  function schemaWithExcludes(excludes: string | undefined) {
+    const TestMark = Mark.create({
+      name: 'testMark',
+      excludes,
+    });
+    return getSchema([StarterKit, TestMark]);
+  }
+
+  it('produces different projections for marks with different excludes', () => {
+    const excludesSelf = projectSchema(schemaWithExcludes('testMark'));
+    const excludesNone = projectSchema(schemaWithExcludes(''));
+    expect(excludesSelf).not.toEqual(excludesNone);
+    expect(hashProjection(excludesSelf)).not.toBe(hashProjection(excludesNone));
+  });
+});
+
 describe('structural guard: RichEditor must consume clientExtensions()', () => {
   it('RichEditor.tsx calls clientExtensions(', () => {
     const source = readFileSync(RICH_EDITOR_PATH, 'utf8');
@@ -205,6 +275,55 @@ describe('findInlineExtensionsArrayOffenses (pure scanner)', () => {
     );
     expect(offenses).toEqual([]);
   });
+
+  it('is fooled by regex literals shaped like block comments (documented blind spot)', () => {
+    // Locks in the exact failure mode found against monaco/sudolang-language.ts:
+    // a `/\*` regex literal opens a "comment" the naive stripper doesn't close
+    // until an unrelated later '/*' string literal, deleting the real
+    // `extensions: [...]` in between. This is why monaco/ is excluded from the
+    // directory walk below rather than trusted to this scanner.
+    const source = [
+      "const rule = [/\\/\\*/, 'comment'];",
+      "export const extensions = ['.sudo', '.sudolang'];",
+      "const closer = ['/*', '*/'];",
+    ].join('\n');
+    const offenses = findInlineExtensionsArrayOffenses('fixture.ts', source);
+    expect(offenses).toEqual([]); // BLIND SPOT: a real match exists on line 2 and is missed.
+  });
+});
+
+/**
+ * Paths the directory walk below does not scan.
+ * - `__tests__`: client-schema.ts/collab-schema.ts themselves return
+ *   extension arrays (`return [...]`), never assign one to an `extensions:`
+ *   property key — no exclusion needed there, and leaving those files
+ *   scanned proves that; this only excludes test fixtures.
+ * - `editor/monaco`: Monaco (code-block language tooling, not TipTap) has
+ *   its own unrelated `extensions:` property AND regex literals that defeat
+ *   the naive comment stripper in `findInlineExtensionsArrayOffenses` —
+ *   see that function's docstring for the concrete, verified failure mode.
+ */
+function isExcludedFromScan(path: string): boolean {
+  return path.includes(`${join('__tests__', '')}`) || path.includes(`${join('editor', 'monaco', '')}`);
+}
+
+describe('isExcludedFromScan (pure predicate)', () => {
+  it('excludes __tests__ fixtures', () => {
+    expect(isExcludedFromScan(join('apps', 'web', 'src', 'lib', 'editor', '__tests__', 'x.test.ts'))).toBe(true);
+  });
+
+  it('excludes editor/monaco', () => {
+    expect(isExcludedFromScan(join('apps', 'web', 'src', 'lib', 'editor', 'monaco', 'sudolang-language.ts'))).toBe(true);
+  });
+
+  it('does not exclude an ordinary editor source file', () => {
+    expect(isExcludedFromScan(join('apps', 'web', 'src', 'lib', 'editor', 'block-id.ts'))).toBe(false);
+  });
+
+  it('does not exclude a same-named "monaco" file outside editor/', () => {
+    // Guards against an overly broad substring match — only editor/monaco/*.
+    expect(isExcludedFromScan(join('apps', 'web', 'src', 'components', 'monaco', 'x.ts'))).toBe(false);
+  });
 });
 
 describe('structural guard: no source file bypasses clientExtensions()/collabExtensions() with a hand-rolled extensions array', () => {
@@ -214,10 +333,7 @@ describe('structural guard: no source file bypasses clientExtensions()/collabExt
       if (!entry.isFile()) continue;
       if (!/\.(ts|tsx)$/.test(entry.name)) continue;
       const path = join(entry.parentPath, entry.name);
-      // client-schema.ts/collab-schema.ts themselves return extension arrays
-      // (`return [...]`), never assign one to an `extensions:` property key —
-      // no exclusion needed, and leaving them scanned proves that.
-      if (path.includes(`${join('__tests__', '')}`)) continue;
+      if (isExcludedFromScan(path)) continue;
 
       offenders.push(...findInlineExtensionsArrayOffenses(path, readFileSync(path, 'utf8')));
     }

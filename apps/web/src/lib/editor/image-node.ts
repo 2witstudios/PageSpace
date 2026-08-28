@@ -1,4 +1,5 @@
 import { Node, mergeAttributes } from '@tiptap/core';
+import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
 
 /**
  * The `image` node — included in v1 despite the census finding only 9
@@ -25,38 +26,10 @@ export const ImageNode = Node.create({
 
   addAttributes() {
     return {
-      fileId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-file-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.fileId) return {};
-          return { 'data-file-id': attributes.fileId };
-        },
-      },
-      alt: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('alt'),
-        renderHTML: (attributes) => {
-          if (!attributes.alt) return {};
-          return { alt: attributes.alt };
-        },
-      },
-      width: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-width'),
-        renderHTML: (attributes) => {
-          if (!attributes.width) return {};
-          return { 'data-width': attributes.width };
-        },
-      },
-      height: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-height'),
-        renderHTML: (attributes) => {
-          if (!attributes.height) return {};
-          return { 'data-height': attributes.height };
-        },
-      },
+      fileId: simpleDataAttr('fileId', 'data-file-id'),
+      alt: simpleDataAttr('alt', 'alt'),
+      width: simpleDataAttr('width', 'data-width'),
+      height: simpleDataAttr('height', 'data-height'),
     };
   },
 

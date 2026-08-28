@@ -1,4 +1,5 @@
 import { Mark } from '@tiptap/core';
+import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
 
 /**
  * Comment, insertion and deletion marks — schema-only, inert. No commands, no
@@ -24,14 +25,7 @@ export const CommentMark = Mark.create({
 
   addAttributes() {
     return {
-      threadId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-thread-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.threadId) return {};
-          return { 'data-thread-id': attributes.threadId };
-        },
-      },
+      threadId: simpleDataAttr('threadId', 'data-thread-id'),
     };
   },
 
@@ -49,22 +43,8 @@ export const InsertionMark = Mark.create({
 
   addAttributes() {
     return {
-      authorId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-author-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.authorId) return {};
-          return { 'data-author-id': attributes.authorId };
-        },
-      },
-      changeId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-change-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.changeId) return {};
-          return { 'data-change-id': attributes.changeId };
-        },
-      },
+      authorId: simpleDataAttr('authorId', 'data-author-id'),
+      changeId: simpleDataAttr('changeId', 'data-change-id'),
     };
   },
 
@@ -82,22 +62,8 @@ export const DeletionMark = Mark.create({
 
   addAttributes() {
     return {
-      authorId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-author-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.authorId) return {};
-          return { 'data-author-id': attributes.authorId };
-        },
-      },
-      changeId: {
-        default: null,
-        parseHTML: (element) => element.getAttribute('data-change-id'),
-        renderHTML: (attributes) => {
-          if (!attributes.changeId) return {};
-          return { 'data-change-id': attributes.changeId };
-        },
-      },
+      authorId: simpleDataAttr('authorId', 'data-author-id'),
+      changeId: simpleDataAttr('changeId', 'data-change-id'),
     };
   },
 

@@ -17,7 +17,7 @@ import { FindExtension } from '@/lib/editor/find-plugin';
 import { BlockId } from '@/lib/editor/block-id';
 import { CommentMark, InsertionMark, DeletionMark } from '@/lib/editor/collab-marks';
 import { ImageNode } from '@/lib/editor/image-node';
-import { STARTER_KIT_SCHEMA_OPTIONS } from '@/lib/editor/collab-schema';
+import { STARTER_KIT_SCHEMA_OPTIONS, TEXT_ALIGN_SCHEMA_OPTIONS } from '@/lib/editor/collab-schema';
 
 /**
  * The client's extension set: everything in the frozen schema
@@ -83,7 +83,7 @@ export function clientExtensions({ readOnly, isPaginated, collab }: ClientExtens
     TaskItem,
     ImageNode,
     Highlight,
-    TextAlign.configure({ types: ['paragraph', 'heading'] }),
+    TextAlign.configure(TEXT_ALIGN_SCHEMA_OPTIONS),
     CharacterCount,
     PageMention,
     FindExtension,

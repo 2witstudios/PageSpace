@@ -80,6 +80,15 @@ import { ImageNode } from '@/lib/editor/image-node';
  */
 
 /**
+ * `TextAlign`'s schema-affecting option (the node types it attaches its
+ * global `textAlign` attribute to) — shared between `collabExtensions()`
+ * (below) and `clientExtensions()` (`client-schema.ts`) for the same reason
+ * as `STARTER_KIT_SCHEMA_OPTIONS` below: this exact line was previously
+ * duplicated verbatim in both files.
+ */
+export const TEXT_ALIGN_SCHEMA_OPTIONS = { types: ['paragraph', 'heading'] };
+
+/**
  * StarterKit's schema-affecting options, shared between `collabExtensions()`
  * (below, `undoRedo` always off) and `clientExtensions()`
  * (`client-schema.ts`, `undoRedo` off only when `collab` is mounted).
@@ -121,7 +130,7 @@ export function collabExtensions(): Extensions {
     TaskItem,
     ImageNode,
     Highlight,
-    TextAlign.configure({ types: ['paragraph', 'heading'] }),
+    TextAlign.configure(TEXT_ALIGN_SCHEMA_OPTIONS),
     PageMentionNode,
     BlockId,
     CommentMark,
@@ -136,7 +145,16 @@ export function collabExtensions(): Extensions {
 
 interface ProjectedAttr {
   name: string;
-  /** `JSON.stringify` of `attrs[name].default` — see the module docstring for why this is hashed. */
+  /**
+   * `JSON.stringify` of `attrs[name].default`, EXCEPT when `default` is
+   * absent from the spec entirely — that attribute is REQUIRED (ProseMirror
+   * throws when a node is created without it), a materially different
+   * compatibility contract than `default: null` (optional, resolves to
+   * `null` when omitted). `'<required>'` can never collide with a real
+   * `JSON.stringify` output (which always starts with a quote, digit,
+   * brace, bracket, or `t`/`f`/`n`), so presence and value both move the
+   * hash independently.
+   */
   default: string;
 }
 
@@ -145,6 +163,14 @@ interface ProjectedSpec {
   group?: string;
   content?: string;
   marks?: string;
+  /**
+   * Marks only (`MarkSpec.excludes`) — which other marks this one cannot
+   * coexist with on the same run. Compatibility-significant: a client
+   * disagreeing with the frozen schema on exclusion rules can apply the same
+   * edit operation differently. `undefined` for nodes, where it doesn't
+   * apply.
+   */
+  excludes?: string;
   inline: boolean;
   atom: boolean;
   attrs: ProjectedAttr[];
@@ -181,19 +207,23 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
   return Object.entries(map.toObject())
     .map(([name, spec]) => {
       const nodeSpec = spec as Partial<NodeSpec>;
+      const markSpec = spec as Partial<MarkSpec>;
       const attrs = spec.attrs ?? {};
       return {
         name,
         group: nodeSpec.group,
         content: nodeSpec.content,
         marks: nodeSpec.marks,
+        excludes: markSpec.excludes,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
         attrs: Object.keys(attrs)
           .sort()
           .map((attrName) => ({
             name: attrName,
-            default: JSON.stringify(attrs[attrName]?.default ?? null),
+            default: 'default' in attrs[attrName]
+              ? JSON.stringify(attrs[attrName].default)
+              : '<required>',
           })),
       };
     })
@@ -253,7 +283,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = '5d231ccc';
+export const SCHEMA_HASH = 'defbe936';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

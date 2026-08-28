@@ -1,4 +1,5 @@
 import { Extension } from '@tiptap/core';
+import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
 
 /**
  * Every top-level block node type `blockId` and the tracked-change attributes
@@ -46,31 +47,10 @@ export const BlockId = Extension.create({
       {
         types: [...BLOCK_NODE_TYPES],
         attributes: {
-          blockId: {
-            default: null,
-            parseHTML: (element) => element.getAttribute('data-block-id'),
-            renderHTML: (attributes) => {
-              if (!attributes.blockId) return {};
-              return { 'data-block-id': attributes.blockId };
-            },
-          },
-          changeId: {
-            default: null,
-            parseHTML: (element) => element.getAttribute('data-change-id'),
-            renderHTML: (attributes) => {
-              if (!attributes.changeId) return {};
-              return { 'data-change-id': attributes.changeId };
-            },
-          },
+          blockId: simpleDataAttr('blockId', 'data-block-id'),
+          changeId: simpleDataAttr('changeId', 'data-change-id'),
           // 'insertion' | 'deletion' | null
-          changeType: {
-            default: null,
-            parseHTML: (element) => element.getAttribute('data-change-type'),
-            renderHTML: (attributes) => {
-              if (!attributes.changeType) return {};
-              return { 'data-change-type': attributes.changeType };
-            },
-          },
+          changeType: simpleDataAttr('changeType', 'data-change-type'),
         },
       },
     ];
