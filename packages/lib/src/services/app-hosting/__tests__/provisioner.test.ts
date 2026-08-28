@@ -15,7 +15,7 @@ vi.mock('@pagespace/db/db', () => ({
     update: updateMock,
     delete: deleteMock,
     transaction: async (fn: (tx: unknown) => unknown) =>
-      fn({ select: selectMock, update: updateMock }),
+      fn({ select: selectMock, insert: insertMock, update: updateMock, delete: deleteMock }),
   },
 }));
 vi.mock('@pagespace/db/schema/published-apps', () => ({
@@ -36,6 +36,15 @@ vi.mock('@pagespace/db/schema/published-apps', () => ({
 // environment it serves.
 vi.mock('@pagespace/db/schema/drive-envs', () => ({
   driveEnvs: { id: 'driveEnvs.id', driveId: 'driveEnvs.driveId' },
+}));
+vi.mock('@pagespace/db/schema/published-app-subscriptions', () => ({
+  publishedAppSubscriptions: {
+    publishedAppId: 'publishedAppSubscriptions.publishedAppId',
+    stripeSubscriptionId: 'publishedAppSubscriptions.stripeSubscriptionId',
+  },
+}));
+vi.mock('@pagespace/db/schema/app-hosting-stripe-reclaims', () => ({
+  appHostingStripeReclaims: { stripeSubscriptionId: 'appHostingStripeReclaims.stripeSubscriptionId' },
 }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
@@ -517,11 +526,39 @@ describe('createPublishedApp — row before Fly', () => {
 });
 
 describe('destroyPublishedApp', () => {
-  it('given a live app, should mark destroying, delete on Fly, then delete the row', async () => {
-    mockSelect([ROW]);
+  it('given a live app with no dedicated subscription, should mark destroying, delete on Fly, check for a subscription, then delete the row', async () => {
+    // Two reads: the row itself (outside the transaction), then the
+    // subscription lookup INSIDE the deleting transaction — the second batch
+    // is empty, matching the common case of a metered (non-dedicated) app.
+    mockSelectQueue([
+      { rows: [ROW], label: 'db:select' },
+      { rows: [], label: 'db:select:subscription' },
+    ]);
     const result = await destroyPublishedApp('app1', deps());
     expect(result).toEqual({ ok: true });
-    expect(callLog).toEqual(['db:select', 'db:update:destroying', 'fly:deleteApp', 'db:delete']);
+    expect(callLog).toEqual(['db:select', 'db:update:destroying', 'fly:deleteApp', 'db:select:subscription', 'db:delete']);
+    // No subscription found -> nothing written to the Stripe reclaim outbox.
+    expect(callLog).not.toContain('db:insert');
+  });
+
+  it('given a live app WITH a dedicated subscription, writes the Stripe reclaim outbox row in the same transaction as the delete', async () => {
+    mockSelectQueue([
+      { rows: [ROW], label: 'db:select' },
+      { rows: [{ stripeSubscriptionId: 'sub_123' }], label: 'db:select:subscription' },
+    ]);
+    const result = await destroyPublishedApp('app1', deps());
+    expect(result).toEqual({ ok: true });
+    expect(callLog).toEqual([
+      'db:select',
+      'db:update:destroying',
+      'fly:deleteApp',
+      'db:select:subscription',
+      'db:insert',
+      'db:delete',
+    ]);
+    expect(insertedRows).toContainEqual(
+      expect.objectContaining({ stripeSubscriptionId: 'sub_123', publishedAppId: 'app1' }),
+    );
   });
 
   it('given the Fly delete fails, should keep the row so the teardown can be retried', async () => {
@@ -545,7 +582,10 @@ describe('destroyPublishedApp', () => {
   });
 
   it('given a teardown, should leave the environment entirely alone', async () => {
-    mockSelect([ROW]);
+    mockSelectQueue([
+      { rows: [ROW], label: 'db:select' },
+      { rows: [], label: 'db:select:subscription' },
+    ]);
     await destroyPublishedApp('app1', deps());
 
     // Unpublishing is not deleting an environment: the env keeps its Sprite, its
