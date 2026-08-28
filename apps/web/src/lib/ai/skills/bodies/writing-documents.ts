@@ -92,14 +92,15 @@ Only compose content by hand when you are actually authoring it. Moving existing
 
 The rich editor's Tiptap 3 schema accepts a specific set of elements. Verified supported:
 
-- **Blocks**: \`<p>\`, headings \`<h1>\` \`<h2>\` \`<h3>\` **only**, \`<blockquote>\`, \`<ul>\`/\`<ol>\` with \`<li>\`, \`<hr>\`, \`<br>\`.
-- **Inline marks**: \`<strong>\`, \`<em>\`, \`<s>\`, \`<u>\`, inline \`<code>\`, \`<a href="...">\` links (https is the default protocol).
+- **Blocks**: \`<p>\`, headings \`<h1>\`–\`<h6>\`, \`<blockquote>\`, \`<ul>\`/\`<ol>\` with \`<li>\`, task lists \`<ul data-type="taskList">\` with \`<li data-type="taskItem" data-checked="true|false">\`, \`<hr>\`, \`<br>\`.
+- **Inline marks**: \`<strong>\`, \`<em>\`, \`<s>\`, \`<u>\`, inline \`<code>\`, \`<mark>\` (highlight), \`<a href="...">\` links (https is the default protocol).
 - **Code blocks**: \`<pre><code class="language-xxx">...</code></pre>\` — the language class drives Shiki syntax highlighting. Escape \`<\`, \`>\`, \`&\` inside as HTML entities.
 - **Tables**: \`<table>\`, \`<tr>\`, \`<th>\`, \`<td>\` (table extension).
 - **Font styling**: \`<span style="font-family: ...">\` / \`<span style="font-size: ...">\`.
+- **Text alignment**: \`style="text-align: left|center|right|justify"\` on a paragraph or heading.
 - **Mentions**: see the mentions section below.
 
-Anything outside the schema is silently dropped or unwrapped the next time the document is opened in the editor — even if your write "succeeds". Notably **not** supported: \`<img>\` (no image node), \`<h4>\`–\`<h6>\` (only levels 1–3 are configured), \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers, and checkbox/task-list markup. Do not write them.
+Anything outside the schema is silently dropped or unwrapped the next time the document is opened in the editor — even if your write "succeeds". Notably **not** supported: \`<iframe>\`/\`<script>\`/\`<style>\`, \`<div>\`/\`<section>\` wrappers. \`<img>\` has schema support, but only \`<img data-file-id="...">\` referencing an internal file — never a plain \`src="https://..."\` URL, which is dropped on the next open. You don't have a way to obtain a \`data-file-id\` from this tool, so don't write \`<img>\` either. Do not write any of these.
 
 Rules of thumb:
 
