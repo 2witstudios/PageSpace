@@ -37,7 +37,8 @@ export type ServiceScope =
   | 'avatars:write:any'
   | 'queue:read'
   | 'erasure:enqueue'
-  | 'broadcast:enqueue';
+  | 'broadcast:enqueue'
+  | 'app-hosting:publish';
 
 // Duration bounds for service tokens
 const DEFAULT_EXPIRY_MS = 5 * 60 * 1000;        // 5 minutes default

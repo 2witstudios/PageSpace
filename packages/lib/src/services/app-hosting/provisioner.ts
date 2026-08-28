@@ -27,6 +27,8 @@ import {
   type PublishedAppStatus,
 } from '@pagespace/db/schema/published-apps';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { publishedAppSubscriptions } from '@pagespace/db/schema/published-app-subscriptions';
+import { appHostingStripeReclaims } from '@pagespace/db/schema/app-hosting-stripe-reclaims';
 import { and, eq, inArray, isNull, lt, or, sql } from '@pagespace/db/operators';
 import {
   isAppHostingEnabled,
@@ -285,6 +287,13 @@ export type DestroyPublishedAppResult =
  * braces: the drain cron's kill is idempotent, so the redundant entry simply
  * confirms the death and drops itself — and it covers the case where `deleteApp`
  * returned success but Fly had not in fact finished.
+ *
+ * The row delete cascades away `published_app_subscriptions` (the dedicated-tier
+ * Stripe mirror) WITHOUT cancelling anything at Stripe — see that table's
+ * docblock. So before deleting, this reads any subscription mirror for the app
+ * and, in the SAME transaction as the delete, writes its Stripe subscription id
+ * into `app_hosting_stripe_reclaims`. Either both the row and the rescue land, or
+ * neither does — a deleted app can never strand a still-billing subscription.
  */
 export async function destroyPublishedApp(
   publishedAppId: string,
@@ -317,7 +326,23 @@ export async function destroyPublishedApp(
     return { ok: false, reason: 'fly_error', error: message };
   }
 
-  await db.delete(publishedApps).where(eq(publishedApps.id, publishedAppId));
+  await db.transaction(async (tx) => {
+    const [subscription] = await tx
+      .select({ stripeSubscriptionId: publishedAppSubscriptions.stripeSubscriptionId })
+      .from(publishedAppSubscriptions)
+      .where(eq(publishedAppSubscriptions.publishedAppId, publishedAppId))
+      .limit(1);
+
+    if (subscription) {
+      await tx
+        .insert(appHostingStripeReclaims)
+        .values({ stripeSubscriptionId: subscription.stripeSubscriptionId, publishedAppId })
+        .onConflictDoNothing();
+    }
+
+    await tx.delete(publishedApps).where(eq(publishedApps.id, publishedAppId));
+  });
+
   return { ok: true };
 }
 

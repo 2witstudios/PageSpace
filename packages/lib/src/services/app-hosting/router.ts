@@ -192,7 +192,7 @@ async function stampAppHit(publishedAppId: string): Promise<void> {
  * for a machine we have decided not to pay for — the unmetered start this whole
  * wiring exists to close.
  */
-function refusalForWake(wake: WakePublishedAppRunResult): AppRouteDecision | null {
+function refusalForWake(wake: WakePublishedAppRunResult, driveId: string): AppRouteDecision | null {
   switch (wake.outcome) {
     case 'woken':
     case 'wake_in_progress':
@@ -204,11 +204,12 @@ function refusalForWake(wake: WakePublishedAppRunResult): AppRouteDecision | nul
       return {
         kind: 'parked',
         reason: wake.reason === DAILY_CAP_PARK_REASON ? 'daily_cap' : 'out_of_credits',
+        driveId,
       };
     case 'start_failed':
       // Fly refused the start. Nothing is billed and nothing is stamped; replaying
       // would ask the proxy to start the same machine outside the seam.
-      return { kind: 'unavailable', reason: 'failed' };
+      return { kind: 'unavailable', reason: 'failed', driveId };
     case 'refused':
       switch (wake.reason) {
         case 'not_wakeable':
@@ -219,13 +220,13 @@ function refusalForWake(wake: WakePublishedAppRunResult): AppRouteDecision | nul
         case 'no_machine':
           // Mid blue/green swap: there is nothing to start yet, and the next
           // deploy finishes in seconds.
-          return { kind: 'unavailable', reason: 'deploying' };
+          return { kind: 'unavailable', reason: 'deploying', driveId };
         case 'disabled':
-          return { kind: 'unavailable', reason: 'hosting_disabled' };
+          return { kind: 'unavailable', reason: 'hosting_disabled', driveId };
         case 'unresolved_payer':
           // No honest payer, so no start. Refusing costs one visitor a page;
           // serving would bill a machine to somebody who may not own the drive.
-          return { kind: 'unavailable', reason: 'failed' };
+          return { kind: 'unavailable', reason: 'failed', driveId };
       }
   }
 }
@@ -268,6 +269,7 @@ export async function resolveAppRoute(
     status: app.status,
     tier: app.tier,
     hasMachine: app.machineId !== null,
+    driveId: app.driveId,
   };
 
   // Decide as far as the ROW alone allows, with the balance optimistically OK.
@@ -332,7 +334,7 @@ export async function resolveAppRoute(
   // replay is exactly the unmetered start this exists to prevent.
   if (app.status === 'stopped' && decision.kind === 'replay') {
     const wake = await deps.wake(app.id);
-    const refusal = refusalForWake(wake);
+    const refusal = refusalForWake(wake, app.driveId);
     if (refusal) return refusal;
   }
 

@@ -2,6 +2,7 @@ import { pgTable, text, timestamp, boolean, index, uniqueIndex, pgEnum } from 'd
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { drives, pages } from './core';
+import { publishedApps } from './published-apps';
 
 export const customDomainStatus = pgEnum('custom_domain_status', ['pending', 'verified', 'failed', 'provisioning', 'active', 'dns_failed', 'cert_failed']);
 
@@ -30,10 +31,19 @@ export const customDomains = pgTable('custom_domains', {
   // in-app workspace landing page, not the public published site's.
   publishLandingPageId: text('publish_landing_page_id').references(() => pages.id, { onDelete: 'set null' }),
   publishNotFoundPageId: text('publish_not_found_page_id').references(() => pages.id, { onDelete: 'set null' }),
+  // What this domain points at. NULL (the default, and today's only behavior) =
+  // the drive's static published site. Set to a `published_apps.id` to route the
+  // domain to that app instead. Nullability IS the discriminator — there is no
+  // enum, because "static site" is not a third kind of target, it is the absence
+  // of an app target. `onDelete: 'set null'` so unpublishing an app falls a
+  // domain back to the static site rather than leaving it dangling or deleting
+  // the domain: the domain is the user's, the app is not.
+  publishedAppId: text('published_app_id').references(() => publishedApps.id, { onDelete: 'set null' }),
   createdAt: timestamp('created_at', { mode: 'date' }).defaultNow().notNull(),
 }, (table) => ({
   hostnameKey: uniqueIndex('custom_domains_hostname_key').on(table.hostname),
   driveIdx: index('custom_domains_drive_id_idx').on(table.driveId),
+  publishedAppIdx: index('custom_domains_published_app_id_idx').on(table.publishedAppId),
   // At most one primary domain per drive.
   primaryPerDrive: uniqueIndex('custom_domains_primary_per_drive')
     .on(table.driveId)
@@ -44,6 +54,10 @@ export const customDomainsRelations = relations(customDomains, ({ one }) => ({
   drive: one(drives, {
     fields: [customDomains.driveId],
     references: [drives.id],
+  }),
+  publishedApp: one(publishedApps, {
+    fields: [customDomains.publishedAppId],
+    references: [publishedApps.id],
   }),
 }));
 

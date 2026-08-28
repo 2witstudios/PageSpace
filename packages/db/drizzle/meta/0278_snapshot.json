@@ -1,5 +1,5 @@
 {
-  "id": "1a906647-55f3-4e66-8497-45ebd0def8d3",
+  "id": "77e349dd-1d68-4c8d-abe7-9d912906af9a",
   "prevId": "0704a2d5-d2ef-44ff-8560-ef03e926a6ef",
   "version": "7",
   "dialect": "postgresql",
@@ -839,14 +839,14 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'zai'"
+          "default": "'openai'"
         },
         "currentAiModel": {
           "name": "currentAiModel",
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'z-ai/glm-5.3-flash'"
+          "default": "'openai/gpt-5.6-luna'"
         },
         "imageGenerationModel": {
           "name": "imageGenerationModel",
@@ -18833,6 +18833,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "published_app_id": {
+          "name": "published_app_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "created_at": {
           "name": "created_at",
           "type": "timestamp",
@@ -18862,6 +18868,21 @@
           "columns": [
             {
               "expression": "drive_id",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        },
+        "custom_domains_published_app_id_idx": {
+          "name": "custom_domains_published_app_id_idx",
+          "columns": [
+            {
+              "expression": "published_app_id",
               "isExpression": false,
               "asc": true,
               "nulls": "last"
@@ -18922,6 +18943,19 @@
           "tableTo": "pages",
           "columnsFrom": [
             "publish_not_found_page_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "set null",
+          "onUpdate": "no action"
+        },
+        "custom_domains_published_app_id_published_apps_id_fk": {
+          "name": "custom_domains_published_app_id_published_apps_id_fk",
+          "tableFrom": "custom_domains",
+          "tableTo": "published_apps",
+          "columnsFrom": [
+            "published_app_id"
           ],
           "columnsTo": [
             "id"
@@ -21472,6 +21506,78 @@
         "published_app_subscriptions_period_ordered": {
           "name": "published_app_subscriptions_period_ordered",
           "value": "\"published_app_subscriptions\".\"currentPeriodEnd\" >= \"published_app_subscriptions\".\"currentPeriodStart\""
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.app_hosting_stripe_reclaims": {
+      "name": "app_hosting_stripe_reclaims",
+      "schema": "",
+      "columns": {
+        "stripeSubscriptionId": {
+          "name": "stripeSubscriptionId",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "publishedAppId": {
+          "name": "publishedAppId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "recordedAt": {
+          "name": "recordedAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "attempts": {
+          "name": "attempts",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "default": 0
+        },
+        "lastAttemptAt": {
+          "name": "lastAttemptAt",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "lastError": {
+          "name": "lastError",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {
+        "app_hosting_stripe_reclaims_recorded_at_idx": {
+          "name": "app_hosting_stripe_reclaims_recorded_at_idx",
+          "columns": [
+            {
+              "expression": "recordedAt",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
+      "foreignKeys": {},
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {
+        "app_hosting_stripe_reclaims_attempts_nonneg": {
+          "name": "app_hosting_stripe_reclaims_attempts_nonneg",
+          "value": "\"app_hosting_stripe_reclaims\".\"attempts\" >= 0"
         }
       },
       "isRLSEnabled": false

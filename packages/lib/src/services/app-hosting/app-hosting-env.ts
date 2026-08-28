@@ -56,6 +56,14 @@ export function resolvePublishedAppsNetwork(): string {
   return configured && configured.length > 0 ? configured : PUBLISHED_APPS_NETWORK_DEFAULT;
 }
 
+/** The Fly org every published app is created in. Same override shape as the network name above. */
+export const PUBLISHED_APPS_ORG_SLUG_DEFAULT = 'pagespace';
+
+export function resolvePublishedAppsOrgSlug(): string {
+  const configured = process.env.FLY_MACHINES_ORG_SLUG;
+  return configured && configured.length > 0 ? configured : PUBLISHED_APPS_ORG_SLUG_DEFAULT;
+}
+
 /**
  * Parse a positive-integer env knob, falling back to `fallback` for anything that
  * is not one.

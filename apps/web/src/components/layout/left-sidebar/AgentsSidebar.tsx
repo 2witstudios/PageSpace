@@ -65,6 +65,7 @@ import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import { DriveEnvAppPane } from './DriveEnvAppPane';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
@@ -1000,6 +1001,9 @@ function DriveEnvRow({
             <div className="px-2 py-1 text-xs text-muted-foreground">No sessions running in here</div>
           )}
         </div>
+      )}
+      {!isOrphan && (
+        <DriveEnvAppPane driveId={driveId} envId={group.envId} envName={displayName} canManage={canManage} />
       )}
     </div>
   );

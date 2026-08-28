@@ -228,3 +228,27 @@ the one thing code *can* do: `validateEnv` refuses to start with
 "the apex is whatever the default is" into a value somebody typed, and therefore
 owns. It does **not** verify PSL registration, and it is not a substitute for
 working the list above.
+
+## Per-app log streaming (runbook)
+
+The app pane's live log viewer (`apps/realtime/src/app-logs/`) subscribes to
+Fly's **org-wide firehose**, a fixed NATS endpoint on the org's private 6PN
+network at `nats://[fdaa::3]:4223` (`app-logs-env.ts`) — not a per-app or
+per-deployment server. Reaching it requires the connecting process to be
+attached to the org's 6PN network; a Fly Machine is, a host outside Fly's
+network is not, so `apps/realtime` must run on a Fly Machine in this org (or
+behind a WireGuard peer to it) for logs to stream at all — this is a deploy
+topology requirement, not a code path this repo can satisfy on its own.
+
+Required secret: **`FLY_LOGS_NATS_TOKEN`** — a **read-only** NATS credential
+for the firehose, provisioned as a Fly secret only (never a default, never
+committed). Auth is the org slug (`resolvePublishedAppsOrgSlug` /
+`FLY_MACHINES_ORG_SLUG`, the same org every published app lives in) as the
+NATS username with this token as the password. Unset token = firehose not
+configured = log streaming fails closed (no subscription opens; the pane shows
+"logs unavailable" rather than the realtime process crashing).
+
+The subject subscribed for one app (`logs.<flyAppName>.*.*`) is always built
+server-side from the `published_apps` row the requesting user is
+authorized to see — never from the client's copy of `flyAppName` — see
+`app-log-handler.ts`'s `resolveAuthorizedFlyAppName`.

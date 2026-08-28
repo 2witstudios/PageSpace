@@ -153,7 +153,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer' });
     expect(resolveTier).not.toHaveBeenCalled();
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
@@ -163,7 +163,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ hasSpendableBalance: async () => false }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer' });
   });
 
   it('given a DEDICATED app, should never touch the ledger at all', async () => {
@@ -188,7 +188,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ findAppBySubdomain: async () => row({ status: 'parked' }), hasSpendableBalance }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'parked_status' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'parked_status', driveId: 'drive_payer' });
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 });
@@ -206,7 +206,7 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
 
   it('given an UNSET replay secret, should refuse rather than replay with a blank state', async () => {
     const decision = await resolveAppRoute('acme.pagespace.app', deps({ replaySecret: () => '' }));
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer' });
   });
 
   it('given a too-short replay secret, should refuse', async () => {
@@ -214,7 +214,7 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
       'acme.pagespace.app',
       deps({ replaySecret: () => 'short' }),
     );
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer' });
   });
 
   it('given two different apps, should derive different state keys', async () => {
@@ -362,7 +362,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
       deps({ stampHit, hasSpendableBalance: async () => false }),
     );
 
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer' });
     expect(stampHit).not.toHaveBeenCalled();
   });
 
@@ -432,7 +432,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       }),
     );
 
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer' });
     expect(stampHit).not.toHaveBeenCalled();
   });
 
@@ -453,10 +453,10 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     );
 
     expect({ outOfCredits, dailyCap }).toEqual({
-      outOfCredits: { kind: 'parked', reason: 'out_of_credits' },
+      outOfCredits: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer' },
       // A different thing to be told: nobody needs to top anything up, and the app
       // returns by itself when the counter rolls over.
-      dailyCap: { kind: 'parked', reason: 'daily_cap' },
+      dailyCap: { kind: 'parked', reason: 'daily_cap', driveId: 'drive_payer' },
     });
   });
 
@@ -497,7 +497,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       }),
     );
 
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer' });
   });
 
   it('given an insolvent payer, should never reach the wake at all', async () => {
@@ -510,7 +510,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       deps({ findAppBySubdomain: async () => stopped(), hasSpendableBalance: async () => false, wake }),
     );
 
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer' });
     expect(wake).not.toHaveBeenCalled();
   });
 });
