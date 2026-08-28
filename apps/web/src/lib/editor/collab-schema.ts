@@ -222,6 +222,25 @@ interface ProjectedSpec {
   spanning?: boolean;
   inline: boolean;
   atom: boolean;
+  /**
+   * Nodes only (`NodeSpec.selectable`) — whether this node can become a
+   * `NodeSelection`. Compatibility-significant, same class as `isolating`/
+   * `defining`: `Selection.findFrom`/`NodeSelection.isSelectable` and
+   * commands like `deleteSelection` branch on it, so a client disagreeing on
+   * whether e.g. `pageMention` is selectable produces different edits from
+   * the same backspace/select-all. Defaults to `true` for non-text nodes
+   * when unset, so this is read with `?? true` (not `Boolean(...)`, which
+   * would collapse an unset default to `false`) — but only for the node
+   * map; marks have no such field, so it stays `undefined` there.
+   *
+   * Deliberately NOT hashed: `NodeSpec.draggable`. Unlike `selectable`, it
+   * only gates the DOM `draggable` attribute and ProseMirror's native
+   * browser-drag-initiated move — the resulting document edit (a standard
+   * replace) is identical whichever client produced it. It's a client-local
+   * DOM/UX affordance, the same class as `parseHTML`/`renderHTML`/`toDOM`
+   * already excluded above, not a compatibility-significant flag.
+   */
+  selectable?: boolean;
   attrs: ProjectedAttr[];
 }
 
@@ -293,7 +312,10 @@ interface ProjectedSpec {
  * the code did what it was written to do, never that what it was written
  * to do was the right ProseMirror behavior. That gap is the actual lesson.
  */
-function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): ProjectedSpec[] {
+function projectSpec(
+  map: { toObject(): Record<string, NodeSpec | MarkSpec> },
+  kind: 'node' | 'mark',
+): ProjectedSpec[] {
   return Object.entries(map.toObject())
     .map(([name, spec]) => {
       const nodeSpec = spec as Partial<NodeSpec>;
@@ -316,6 +338,11 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
         spanning: markSpec.spanning,
         inline: Boolean(nodeSpec.inline),
         atom: Boolean(nodeSpec.atom),
+        // `selectable` defaults to `true` for nodes when unset — only
+        // meaningful for the `kind === 'node'` map; marks never have this
+        // field, so it stays `undefined` there rather than defaulting to
+        // `true` (which `nodeSpec.selectable ?? true` alone would do).
+        selectable: kind === 'node' ? nodeSpec.selectable ?? true : undefined,
         attrs: Object.keys(attrs)
           .sort()
           .map((attrName) => ({
@@ -331,8 +358,8 @@ function projectSpec(map: { toObject(): Record<string, NodeSpec | MarkSpec> }): 
 /** The projection `SCHEMA_HASH` is computed from — exported so tests can recompute it independently of the constant. */
 export function projectSchema(schema: Schema): { nodes: ProjectedSpec[]; marks: ProjectedSpec[]; topNode?: string } {
   return {
-    nodes: projectSpec(schema.spec.nodes),
-    marks: projectSpec(schema.spec.marks),
+    nodes: projectSpec(schema.spec.nodes, 'node'),
+    marks: projectSpec(schema.spec.marks, 'mark'),
     // Which node the document root must be. Two schemas with identical node
     // maps can still disagree on this — e.g. StarterKit's default `doc` vs a
     // hypothetical custom root — which the node/mark maps alone can't catch.
@@ -385,7 +412,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = '8d8f58cd';
+export const SCHEMA_HASH = 'ded0823d';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or

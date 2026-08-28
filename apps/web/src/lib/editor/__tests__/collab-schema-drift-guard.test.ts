@@ -318,6 +318,51 @@ describe('projectSpec includes NodeSpec.isolating', () => {
   });
 });
 
+describe('projectSpec includes NodeSpec.selectable', () => {
+  // selectable controls whether this node can become a NodeSelection —
+  // Selection.findFrom/NodeSelection.isSelectable and commands like
+  // deleteSelection branch on it, so clients disagreeing produce different
+  // edits from the same backspace/select-all. Not part of the projection
+  // before this fix. PageMentionNode sets `selectable: false` for real.
+  function schemaWithSelectable(selectable: boolean) {
+    const TestNode = Node.create({
+      name: 'testNode',
+      group: 'block',
+      content: 'text*',
+      selectable,
+    });
+    return getSchema([StarterKit, TestNode]);
+  }
+
+  it('produces different projections for nodes with different selectable', () => {
+    const selectableTrue = projectSchema(schemaWithSelectable(true));
+    const selectableFalse = projectSchema(schemaWithSelectable(false));
+    expect(selectableTrue).not.toEqual(selectableFalse);
+    expect(hashProjection(selectableTrue)).not.toBe(hashProjection(selectableFalse));
+  });
+
+  it('treats an unset selectable the same as an explicit true (both default true)', () => {
+    // ProseMirror defaults NodeSpec.selectable to true for non-text nodes
+    // when the field is entirely absent — the projection must read that
+    // default with `?? true`, not collapse an unset field to `false`.
+    const unset = projectSchema(
+      getSchema([StarterKit, Node.create({ name: 'testNode', group: 'block', content: 'text*' })]),
+    );
+    const explicitTrue = projectSchema(schemaWithSelectable(true));
+    expect(unset).toEqual(explicitTrue);
+  });
+
+  it('leaves selectable undefined for marks, not defaulted to true', () => {
+    // Marks have no selectable concept; the node-only default of `true`
+    // must not leak onto the mark projection.
+    const schema = getSchema([StarterKit]);
+    const projection = projectSchema(schema);
+    for (const mark of projection.marks) {
+      expect(mark.selectable).toBeUndefined();
+    }
+  });
+});
+
 describe('projectSpec includes NodeSpec.defining/definingAsContext/definingForContent', () => {
   // These control whether a node's parents are preserved (vs. discarded)
   // during replace/paste transforms — clients disagreeing produce different
