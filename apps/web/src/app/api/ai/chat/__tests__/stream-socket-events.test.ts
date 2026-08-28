@@ -444,10 +444,10 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DYNAMIC_MODEL_PROVIDERS: new Set<string>(['ollama', 'lmstudio']),
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -489,7 +489,7 @@ const mockDbRow = {
   systemPrompt: null,
   enabledTools: null,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   driveId: 'drive-1',
   includeDrivePrompt: false,
   includePageTree: false,
@@ -497,7 +497,7 @@ const mockDbRow = {
   revision: 0,
   name: 'Auth User',
   currentAiProvider: 'openai',
-  currentAiModel: 'openai/gpt-5.3-chat',
+  currentAiModel: 'openai/gpt-5.4-nano',
   subscriptionTier: 'free',
   timezone: 'UTC',
   displayName: 'Profile User',
@@ -558,7 +558,7 @@ const makeRequest = (overrides: { browserSessionId?: string | null; conversation
       chatId: 'page-1',
       conversationId: overrides.conversationId ?? CONV_ID,
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 };

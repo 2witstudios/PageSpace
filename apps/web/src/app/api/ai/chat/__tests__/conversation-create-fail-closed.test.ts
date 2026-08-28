@@ -80,7 +80,7 @@ vi.mock('@pagespace/db/db', () => {
     systemPrompt: null,
     enabledTools: null,
     aiProvider: 'openai',
-    aiModel: 'openai/gpt-5.3-chat',
+    aiModel: 'openai/gpt-5.4-nano',
     driveId: 'drive_A',
     includeDrivePrompt: false,
     includePageTree: false,
@@ -262,7 +262,7 @@ const createChatRequest = () =>
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       chatId: 'page_123',
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 

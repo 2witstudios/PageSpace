@@ -41,7 +41,7 @@ vi.mock('@/lib/ai/core/model-capabilities', () => ({
 vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 // enabledTools includes create_drive so filtering behavior is observable.
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: ['create_drive', 'list_pages'], subscriptionTier: 'pro', role: 'user' };
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano', systemPrompt: 'You help.', enabledTools: ['create_drive', 'list_pages'], subscriptionTier: 'pro', role: 'user' };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -95,7 +95,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
 // pageSpaceTools includes create_drive so filtering behavior is observable.
@@ -120,11 +120,11 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -179,7 +179,7 @@ describe('POST /api/ai/page-agents/consult - account-level-only tool listing', (
   beforeEach(() => {
     vi.clearAllMocks();
     agentPage.aiProvider = 'openai';
-    agentPage.aiModel = 'openai/gpt-5.3-chat';
+    agentPage.aiModel = 'openai/gpt-5.4-nano';
     agentPage.role = 'user';
   });
 

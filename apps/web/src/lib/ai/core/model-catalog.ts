@@ -13,7 +13,7 @@ import { MODEL_CONTEXT_WINDOWS } from '@pagespace/lib/monitoring/ai-monitoring';
 import { getVisibleProviders, FREE_TIER_MODELS, isDynamicModelProvider } from './ai-providers-config';
 
 export interface CatalogModel {
-  /** Full OpenRouter model id, e.g. "openai/gpt-5.6-luna". The value to store as an agent's aiModel. */
+  /** Full OpenRouter model id, e.g. "z-ai/glm-5.3-flash". The value to store as an agent's aiModel. */
   id: string;
   /** Human-friendly display name from the catalog. */
   displayName: string;

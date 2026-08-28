@@ -7,13 +7,16 @@ import {
 } from '../model-defaults';
 
 describe('model-defaults', () => {
-  it('defaults to the OpenAI GPT-5.6 Luna product default (OpenRouter-backed)', () => {
-    expect(DEFAULT_AI_PROVIDER).toBe('openai');
-    expect(DEFAULT_AI_MODEL).toBe('openai/gpt-5.6-luna');
+  it('defaults to the Z.ai GLM-5.3 Flash product default (OpenRouter-backed)', () => {
+    expect(DEFAULT_AI_PROVIDER).toBe('zai');
+    expect(DEFAULT_AI_MODEL).toBe('z-ai/glm-5.3-flash');
   });
 
   it('uses a vendor-prefixed (OpenRouter) model id', () => {
-    expect(DEFAULT_AI_MODEL.startsWith(`${DEFAULT_AI_PROVIDER}/`)).toBe(true);
+    // The internal provider key (e.g. `zai`, `xai`) doesn't always match the
+    // OpenRouter vendor slug in the model id (e.g. `z-ai/`, `x-ai/`) — just
+    // confirm the model id itself is in OpenRouter's `vendor/model` format.
+    expect(DEFAULT_AI_MODEL).toMatch(/^[\w-]+\/[\w.-]+$/);
   });
 });
 
