@@ -23,6 +23,15 @@ import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
 export const CommentMark = Mark.create({
   name: 'comment',
 
+  // ProseMirror's MarkSpec.excludes defaults to "only exclusive with marks
+  // of the same type" — unset, applying a second `comment` mark (a second
+  // thread) over text already covered by one would replace or reject the
+  // first, keyed only on mark NAME, not `threadId`. Overlapping comment
+  // threads on the same or intersecting text ranges are a normal, expected
+  // case for a comment system — `excludes: ''` lets any number of `comment`
+  // marks (distinguished by their own `threadId` attrs) coexist.
+  excludes: '',
+
   addAttributes() {
     return {
       threadId: simpleDataAttr('threadId', 'data-thread-id'),

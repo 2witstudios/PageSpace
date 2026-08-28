@@ -385,7 +385,7 @@ export function hashProjection(projection: unknown): string {
  * collaborative document is involved. The drift guard will catch the hash
  * change; it cannot catch a version bump a human declined to make.
  */
-export const SCHEMA_HASH = '4cd78162';
+export const SCHEMA_HASH = '8d8f58cd';
 
 /**
  * Bumped only for Class A (remove/rename/narrow an existing node, mark or
