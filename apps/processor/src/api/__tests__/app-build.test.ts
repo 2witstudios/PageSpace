@@ -177,4 +177,23 @@ describe('POST /api/app-hosting/build — upload rate limiting', () => {
       expect.any(Object),
     );
   });
+
+  it('the Express-level burst limiter itself engages after enough requests from one caller', async () => {
+    const app = createApp();
+    let sawTooManyRequests = false;
+    // The configured limit is 20/min; a small buffer past that is enough to
+    // prove the middleware is actually wired in front of the handler, not
+    // just present in the import graph.
+    for (let i = 0; i < 25; i++) {
+      const res = await request(app)
+        .post('/api/app-hosting/build')
+        .set('X-Published-App-Id', 'abc123')
+        .send(Buffer.from('fake-tarball-bytes'));
+      if (res.status === 429) {
+        sawTooManyRequests = true;
+        break;
+      }
+    }
+    expect(sawTooManyRequests).toBe(true);
+  });
 });

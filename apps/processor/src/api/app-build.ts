@@ -5,6 +5,7 @@ import { mkdir, rm } from 'node:fs/promises';
 import path from 'node:path';
 import { promisify } from 'node:util';
 import { isCuid } from '@paralleldrive/cuid2';
+import { rateLimit } from 'express-rate-limit';
 import { queueManager } from '../server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
@@ -137,15 +138,34 @@ async function streamRequestToFile(req: Request, destPath: string, maxBytes: num
 /** One publish upload per user per window — this is a multi-hundred-MB tar extraction, not a cheap read. */
 const UPLOAD_RATE_LIMIT = { maxAttempts: 10, windowMs: 5 * 60 * 1000, progressiveDelay: false };
 
-router.post('/build', async (req, res) => {
+/**
+ * Express-level rate limiter, in front of the distributed one inside the
+ * handler. Two layers, deliberately: this one is process-local and cheap,
+ * shedding an obviously-abusive burst before a single byte is streamed or a
+ * database round trip is made; `checkDistributedRateLimit` inside the
+ * handler (keyed by the authenticated userId, Postgres-backed) is the
+ * correct-across-instances limit that actually bounds one caller's upload
+ * rate. Neither replaces the other — this one runs first and cannot see
+ * `req.auth` reliably at the middleware-registration boundary express-rate-limit
+ * expects, so it falls back to IP; the in-handler check is what's actually
+ * keyed by identity.
+ */
+const uploadBurstLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  limit: 20,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+router.post('/build', uploadBurstLimiter, async (req, res) => {
   const auth = req.auth;
   if (!auth?.userId) {
     return res.status(401).json({ error: 'Service authentication required' });
   }
 
-  const rateLimit = await checkDistributedRateLimit(`app-build:upload:${auth.userId}`, UPLOAD_RATE_LIMIT);
-  if (!rateLimit.allowed) {
-    if (rateLimit.retryAfter) res.setHeader('Retry-After', String(rateLimit.retryAfter));
+  const uploadLimit = await checkDistributedRateLimit(`app-build:upload:${auth.userId}`, UPLOAD_RATE_LIMIT);
+  if (!uploadLimit.allowed) {
+    if (uploadLimit.retryAfter) res.setHeader('Retry-After', String(uploadLimit.retryAfter));
     return res.status(429).json({ error: 'Too many publish uploads — please wait before trying again' });
   }
 
