@@ -901,5 +901,50 @@ describe('createSpriteSandboxHost', () => {
       expect(events[0]).toEqual({ type: 'port_opened', port: 6 });
       expect(events[events.length - 1]).toEqual({ type: 'port_opened', port: 69 });
     });
+
+    it('given a replay callback that itself calls onPortEvent (a nested subscribe), the nested listener should get NO backlog replay of its own and the outer listener should still see the full backlog exactly once', async () => {
+      // CodeRabbit review, PR #2520: with the naive "replay, then check
+      // listeners.length, then push" ordering, a subscribe triggered
+      // synchronously from inside a replay callback would see
+      // listeners.length === 0 (the outer subscribe hadn't pushed yet) and
+      // replay the SAME backlog again to the nested listener — while also
+      // mutating `buffered.length` mid-iteration out from under the outer
+      // loop. Register-then-drain-atomically fixes both.
+      const session = fakeSessionCommand({ autoSpawn: false });
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const streamPromise = handle.stream({});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      session.emitMessage({ type: 'port_opened', port: 3000 });
+      session.emitMessage({ type: 'port_opened', port: 3001 });
+      session.emitSpawn();
+      const stream = await streamPromise;
+
+      const outer: unknown[] = [];
+      const nested: unknown[] = [];
+      let nestedSubscribed = false;
+      stream.onPortEvent((event) => {
+        outer.push(event);
+        if (!nestedSubscribed) {
+          nestedSubscribed = true;
+          stream.onPortEvent((e) => nested.push(e));
+        }
+      });
+
+      expect(outer).toEqual([{ type: 'port_opened', port: 3000 }, { type: 'port_opened', port: 3001 }]);
+      expect(nested).toEqual([]);
+
+      // A live event after both are subscribed reaches both.
+      session.emitMessage({ type: 'port_closed', port: 3000 });
+      expect(outer).toEqual([
+        { type: 'port_opened', port: 3000 },
+        { type: 'port_opened', port: 3001 },
+        { type: 'port_closed', port: 3000 },
+      ]);
+      expect(nested).toEqual([{ type: 'port_closed', port: 3000 }]);
+    });
   });
 });

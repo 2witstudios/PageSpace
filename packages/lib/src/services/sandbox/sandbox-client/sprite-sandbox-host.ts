@@ -252,14 +252,19 @@ function bufferPortEvents(command: SpriteCommandLike): {
   });
   return {
     subscribe(l) {
-      // Replay what arrived before ANY subscriber existed — only the FIRST
-      // subscribe drains and clears the buffer; once at least one listener
-      // is attached, every event forwards live to all of them and the
-      // buffer never accumulates again. A subscriber joining after that
-      // point gets live events only, same as joining any other pub/sub late.
-      for (const event of buffered) l(event);
-      if (listeners.length === 0) buffered.length = 0;
+      // Register BEFORE replaying, and drain the buffer atomically (splice
+      // into a local array, not a bare loop over `buffered`) — a replay
+      // callback that itself calls `onPortEvent` synchronously (a nested
+      // subscribe) must see `listeners` already non-empty and an already
+      // -emptied `buffered`, or it would replay the same backlog a second
+      // time to the nested listener while truncating the outer replay loop
+      // out from under itself (mutating `buffered.length` mid-iteration).
+      // CodeRabbit review on PR #2520.
+      const isFirstSubscriber = listeners.length === 0;
       listeners.push(l);
+      if (!isFirstSubscriber) return;
+      const backlog = buffered.splice(0);
+      for (const event of backlog) l(event);
     },
   };
 }
