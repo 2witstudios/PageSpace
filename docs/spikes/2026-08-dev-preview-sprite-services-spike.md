@@ -38,7 +38,8 @@
 
 ## 1. Setup (verified)
 
-- Token recipe: `flyctl tokens create org -o personal -x 2h`, strip the `FlyV1 ` prefix,
+- Token recipe: `flyctl tokens create org -o personal -x 2h`, strip the leading `FlyV1` (plus
+  its trailing space) prefix,
   `SpritesClient.createToken(macaroon, 'personal')` → a `personal…`-prefixed Sprites token
   (114 chars). The 2h expiry is real — a later run failed `APIError: unauthorized` until
   re-minted.
