@@ -66,6 +66,7 @@ function fakeCommand(
     emitStderr: (chunk: string) => stderr.emit('data', chunk),
     emitExit: (code: number) => events.emit('exit', code),
     emitMessage: (message: unknown) => events.emit('message', message),
+    emitSpawn: () => events.emit('spawn'),
   };
 }
 
@@ -741,16 +742,20 @@ describe('createSpriteSandboxHost', () => {
     // and the stream would never open. So `createSession` builds a FRESH
     // command at call time (the pattern every other test in this file uses)
     // and stashes it in `cmdRef` so the test can emit on it afterwards.
-    function fakeSessionCommand() {
+    function fakeSessionCommand(over: Partial<Parameters<typeof fakeCommand>[0]> = {}) {
       let cmdRef: ReturnType<typeof fakeCommand> | undefined;
       const createSession = () => {
-        cmdRef = fakeCommand({ autoExit: false });
+        cmdRef = fakeCommand({ autoExit: false, ...over });
         return cmdRef.command;
       };
-      return { createSession, emitMessage: (message: unknown) => cmdRef?.emitMessage(message) };
+      return {
+        createSession,
+        emitMessage: (message: unknown) => cmdRef?.emitMessage(message),
+        emitSpawn: () => cmdRef?.emitSpawn(),
+      };
     }
 
-    it('given a port_opened control frame on the stream, should deliver it to a subscribed listener', async () => {
+    it('given a port_opened control frame delivered AFTER the caller subscribes, should deliver it live', async () => {
       const session = fakeSessionCommand();
       const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
       const client = createSpritesSandboxClient({ sdk });
@@ -778,6 +783,58 @@ describe('createSpriteSandboxHost', () => {
       session.emitMessage({ type: 'session_info', session_id: '1' });
 
       expect(events).toEqual([]);
+    });
+
+    it('given a port_opened frame that arrives BEFORE the caller can call onPortEvent (a fast dev server racing stream() itself), should still deliver it — buffered, not dropped', async () => {
+      // Codex review, PR #2520: EventEmitter never replays a past event to a
+      // late subscriber. A caller can only call `onPortEvent` AFTER `stream()`
+      // resolves, but the server can emit `port_opened` the instant the
+      // process binds a port — which can be before `stream()` even returns.
+      // Manual spawn control (autoSpawn: false) lets this test put the frame
+      // in exactly that window: after the command exists (so
+      // `bufferPortEvents` has attached its listener) but before `spawn`
+      // fires (so `stream()` has not yet resolved, and the caller could not
+      // possibly have called `onPortEvent` yet).
+      const session = fakeSessionCommand({ autoSpawn: false });
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const streamPromise = handle.stream({});
+      // Flush the microtasks up through `sdk.getSprite` resolving and
+      // `sprite.createSession(...)` running synchronously after it — enough
+      // for `bufferPortEvents` to have attached its `message` listener, but
+      // `awaitStreamOpen` is still waiting (spawn is manual in this test).
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      session.emitMessage({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 500 });
+      session.emitSpawn();
+      const stream = await streamPromise;
+
+      const events: unknown[] = [];
+      stream.onPortEvent((event) => events.push(event));
+
+      expect(events).toEqual([{ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 500 }]);
+    });
+
+    it('given both a buffered pre-subscribe event and a later live one, should deliver both in order without duplication', async () => {
+      const session = fakeSessionCommand({ autoSpawn: false });
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const streamPromise = handle.stream({});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      session.emitMessage({ type: 'port_opened', port: 5173 });
+      session.emitSpawn();
+      const stream = await streamPromise;
+
+      const events: unknown[] = [];
+      stream.onPortEvent((event) => events.push(event));
+      session.emitMessage({ type: 'port_closed', port: 5173 });
+
+      expect(events).toEqual([{ type: 'port_opened', port: 5173 }, { type: 'port_closed', port: 5173 }]);
     });
   });
 });

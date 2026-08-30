@@ -21,6 +21,7 @@ import {
   SandboxStreamOpenTimeoutError,
   type SandboxHandle,
   type SandboxHost,
+  type SandboxPortEvent,
   type SandboxServiceInfo,
   type SandboxServiceStatus,
   type SandboxServicesApi,
@@ -198,7 +199,59 @@ function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): Sandb
   };
 }
 
-function wrapSpriteStream(command: SpriteCommandLike): SandboxStream {
+/**
+ * Buffers port_opened/port_closed notifications on `command`'s message
+ * channel from the moment THIS is called, replaying anything buffered to
+ * the first `subscribe` call and forwarding live afterward.
+ *
+ * Necessary because a caller cannot subscribe to `onPortEvent` before
+ * `stream()` resolves and hands back the `SandboxStream` — but a fast dev
+ * server can bind its port and emit `port_opened` inside that very window
+ * (spawn -> stream open confirmed -> caller receives the handle -> caller
+ * calls `onPortEvent`). Unlike terminal scrollback (which the server
+ * replays on attach — see `readSessionInfoId`'s doc), a missed port event
+ * is gone for good: the spike found no server-side replay for it (docs/
+ * spikes/2026-08-dev-preview-sprite-services-spike.md §5). So the listener
+ * for the underlying `message` event is attached unconditionally, as early
+ * as the command handle exists — not deferred to the first `onPortEvent`
+ * call, which is what `EventEmitter`'s no-replay semantics would otherwise
+ * silently drop. (Flagged by Codex review on PR #2520.)
+ */
+function bufferPortEvents(command: SpriteCommandLike): {
+  subscribe(listener: (event: SandboxPortEvent) => void): void;
+} {
+  const buffered: SandboxPortEvent[] = [];
+  let listener: ((event: SandboxPortEvent) => void) | undefined;
+  command.on('message', (message) => {
+    // Same `message` event `readSessionInfoId` reads — the SDK re-emits every
+    // TEXT control frame there. Port frames only actually arrive on TTY
+    // sessions (server-side filter — see `SpritePortNotification`), which is
+    // what every SandboxStream is. Non-port frames parse to undefined and
+    // are dropped; nothing here classifies or acts, per the seam contract.
+    const event = readPortNotification(message);
+    if (event === undefined) return;
+    if (listener) {
+      listener(event);
+    } else {
+      buffered.push(event);
+    }
+  });
+  return {
+    subscribe(l) {
+      listener = l;
+      // Replay what arrived before anyone was listening, then clear — a
+      // second `subscribe` call is not a supported use of this seam (one
+      // caller-provided listener per stream, matching onData/onExit/onError).
+      for (const event of buffered) l(event);
+      buffered.length = 0;
+    },
+  };
+}
+
+function wrapSpriteStream(
+  command: SpriteCommandLike,
+  portEvents: { subscribe(listener: (event: SandboxPortEvent) => void): void },
+): SandboxStream {
   return {
     write(data) {
       if (!command.stdin) {
@@ -223,15 +276,7 @@ function wrapSpriteStream(command: SpriteCommandLike): SandboxStream {
       command.on('error', listener);
     },
     onPortEvent(listener) {
-      // Same `message` event `readSessionInfoId` reads — the SDK re-emits every
-      // TEXT control frame there. Port frames only actually arrive on TTY
-      // sessions (server-side filter — see `SpritePortNotification`), which is
-      // what every SandboxStream is. Non-port frames parse to undefined and
-      // are dropped; nothing here classifies or acts, per the seam contract.
-      command.on('message', (message) => {
-        const event = readPortNotification(message);
-        if (event !== undefined) listener(event);
-      });
+      portEvents.subscribe(listener);
     },
     kill(signal) {
       command.kill(signal);
@@ -302,8 +347,12 @@ function wrapSpriteHandle({
                   rows: args.rows,
                 },
               );
+        // Start buffering port events IMMEDIATELY — before awaiting the open
+        // confirmation, let alone before the caller can call `onPortEvent`.
+        // See `bufferPortEvents`'s doc for why this can't wait.
+        const portEvents = bufferPortEvents(command);
         await awaitStreamOpen(command, streamOpenTimeoutMs);
-        return wrapSpriteStream(command);
+        return wrapSpriteStream(command, portEvents);
       };
 
       // Retry ONLY the attach. Re-opening an attach is idempotent — it targets a
