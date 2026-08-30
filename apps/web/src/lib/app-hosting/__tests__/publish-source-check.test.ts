@@ -97,7 +97,7 @@ describe('ensureBuildableSource', () => {
     const dockerfile = files.find((f) => f.path === '/workspace/Dockerfile')!;
     const dockerignore = files.find((f) => f.path === '/workspace/.dockerignore')!;
     expect(dockerfile.content.startsWith(GENERATED_DOCKERFILE_MARKER)).toBe(true);
-    expect(dockerfile.content).toContain('USER node');
+    expect(dockerfile.content).toContain('USER bun');
     expect(dockerignore.content).toContain('node_modules');
     expect(dockerignore.content).toContain('.env*');
     expect(dockerignore.content).toContain('.git');
