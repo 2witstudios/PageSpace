@@ -217,11 +217,24 @@ function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): Sandb
  * call, which is what `EventEmitter`'s no-replay semantics would otherwise
  * silently drop. (Flagged by Codex review on PR #2520.)
  */
+// Cap on the pre-subscribe buffer in `bufferPortEvents` — see its doc. A
+// stream nobody ever calls `onPortEvent` on (true of every caller today —
+// this seam is dark) must not accumulate port events for its entire
+// lifetime; drop the oldest once this many are queued. Generous for any
+// realistic single-process port lifecycle (repeated crash-restart loops
+// included) while still bounding memory on an hours-long PTY session.
+const PORT_EVENT_BUFFER_CAP = 64;
+
 function bufferPortEvents(command: SpriteCommandLike): {
   subscribe(listener: (event: SandboxPortEvent) => void): void;
 } {
   const buffered: SandboxPortEvent[] = [];
-  let listener: ((event: SandboxPortEvent) => void) | undefined;
+  // A LIST, not a single slot: `onData`/`onExit`/`onError` above all attach a
+  // fresh listener to the underlying EventEmitter on every call, so two
+  // subscribers coexist (fan-out) rather than the second silently replacing
+  // the first. `onPortEvent` must match that shape — a caller has no way to
+  // know a second subscribe would otherwise orphan the first with no error.
+  const listeners: Array<(event: SandboxPortEvent) => void> = [];
   command.on('message', (message) => {
     // Same `message` event `readSessionInfoId` reads — the SDK re-emits every
     // TEXT control frame there. Port frames only actually arrive on TTY
@@ -230,20 +243,23 @@ function bufferPortEvents(command: SpriteCommandLike): {
     // are dropped; nothing here classifies or acts, per the seam contract.
     const event = readPortNotification(message);
     if (event === undefined) return;
-    if (listener) {
-      listener(event);
+    if (listeners.length > 0) {
+      for (const l of listeners) l(event);
     } else {
       buffered.push(event);
+      if (buffered.length > PORT_EVENT_BUFFER_CAP) buffered.shift();
     }
   });
   return {
     subscribe(l) {
-      listener = l;
-      // Replay what arrived before anyone was listening, then clear — a
-      // second `subscribe` call is not a supported use of this seam (one
-      // caller-provided listener per stream, matching onData/onExit/onError).
+      // Replay what arrived before ANY subscriber existed — only the FIRST
+      // subscribe drains and clears the buffer; once at least one listener
+      // is attached, every event forwards live to all of them and the
+      // buffer never accumulates again. A subscriber joining after that
+      // point gets live events only, same as joining any other pub/sub late.
       for (const event of buffered) l(event);
-      buffered.length = 0;
+      if (listeners.length === 0) buffered.length = 0;
+      listeners.push(l);
     },
   };
 }
@@ -389,9 +405,24 @@ function wrapSpriteHandle({
 
     // Dev-preview seam (dark until the proxy/decision-core tasks consume it):
     // the service lifecycle + URL info verified live by
-    // docs/spikes/2026-08-dev-preview-sprite-services-spike.md. Same
-    // getSprite-per-call pattern as stream/listStreams/killSession above — the
-    // per-connect handle cache collapses the reads.
+    // docs/spikes/2026-08-dev-preview-sprite-services-spike.md.
+    //
+    // Same getSprite-PER-CALL pattern as stream/listStreams/killSession
+    // above — no local caching or wake-retry wrapping here, matching those
+    // pre-existing methods exactly (this is not a new gap this seam
+    // introduces). `apps/realtime` wraps its `sdk` in
+    // `createSpriteHandleCache` (sprites.ts) before reaching this file, which
+    // collapses same-connect reads to one round trip; `apps/web`'s
+    // `sprites-client.ts` does NOT, so a caller chaining several of these
+    // calls there pays one control-plane read per call. Fixing that is
+    // production SDK-factory wiring, out of scope for this dark seam —
+    // whoever wires the first real caller should either request the cache be
+    // added to the web factory or accept the N+1 cost. Wake-retry is the same
+    // story: a hibernated sprite may need `withWakeRetry` around these calls
+    // once a real caller exists, but the correct retry POSTURE depends on
+    // that caller (see the container doc's note on the code-exec gate for
+    // wake-through-the-proxy) — copying `withWakeRetry` here blind would be a
+    // guess, not a verified behavior.
     services: wrapSpriteServices(() => sdk.getSprite(exec.sandboxId)),
 
     async urlInfo(): Promise<SandboxUrlInfo> {

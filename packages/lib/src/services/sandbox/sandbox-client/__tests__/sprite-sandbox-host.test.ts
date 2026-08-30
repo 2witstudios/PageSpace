@@ -836,5 +836,70 @@ describe('createSpriteSandboxHost', () => {
 
       expect(events).toEqual([{ type: 'port_opened', port: 5173 }, { type: 'port_closed', port: 5173 }]);
     });
+
+    it('given a SECOND onPortEvent subscriber, should deliver live events to BOTH — matching onData/onExit/onError fan-out, not silently orphaning the first', async () => {
+      const session = fakeSessionCommand();
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+      const stream = await handle.stream({});
+
+      const first: unknown[] = [];
+      const second: unknown[] = [];
+      stream.onPortEvent((event) => first.push(event));
+      stream.onPortEvent((event) => second.push(event));
+      session.emitMessage({ type: 'port_opened', port: 8000 });
+
+      expect(first).toEqual([{ type: 'port_opened', port: 8000 }]);
+      expect(second).toEqual([{ type: 'port_opened', port: 8000 }]);
+    });
+
+    it('given a pre-subscribe buffered event, a second (later) subscriber should NOT receive it again — only the first subscriber drains the backlog', async () => {
+      const session = fakeSessionCommand({ autoSpawn: false });
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const streamPromise = handle.stream({});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      session.emitMessage({ type: 'port_opened', port: 5173 });
+      session.emitSpawn();
+      const stream = await streamPromise;
+
+      const first: unknown[] = [];
+      const second: unknown[] = [];
+      stream.onPortEvent((event) => first.push(event));
+      stream.onPortEvent((event) => second.push(event));
+
+      expect(first).toEqual([{ type: 'port_opened', port: 5173 }]);
+      expect(second).toEqual([]);
+    });
+
+    it('given more port events than the buffer cap while nobody has subscribed, should drop the oldest rather than grow unbounded', async () => {
+      const session = fakeSessionCommand({ autoSpawn: false });
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const streamPromise = handle.stream({});
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      // 70 events, well past the 64-entry cap, before anyone subscribes.
+      for (let port = 0; port < 70; port += 1) {
+        session.emitMessage({ type: 'port_opened', port });
+      }
+      session.emitSpawn();
+      const stream = await streamPromise;
+
+      const events: Array<{ port: number }> = [];
+      stream.onPortEvent((event) => events.push(event as { port: number }));
+
+      expect(events.length).toBe(64);
+      // The oldest (lowest ports) were dropped; the tail survives, in order.
+      expect(events[0]).toEqual({ type: 'port_opened', port: 6 });
+      expect(events[events.length - 1]).toEqual({ type: 'port_opened', port: 69 });
+    });
   });
 });
