@@ -112,6 +112,23 @@ describe('ensureBuildableSource', () => {
     expect(writeFiles).not.toHaveBeenCalled();
   });
 
+  it('treats a non-string scripts.start value as absent, refusing rather than generating an unrunnable Dockerfile', async () => {
+    // A malformed package.json (`"start": {}`) must not be treated as a
+    // valid start command just because it's truthy — `parsePackageJson` has
+    // to filter it out before `planDockerfileSynthesis` ever sees it.
+    const present = new Set(['/workspace/package.json']);
+    runCommand.mockImplementation((call: Cmd) => {
+      if (call.cmd === 'test') return testF(present)(call);
+      if (call.cmd === 'cat') return Promise.resolve({ exitCode: 0, stdout: JSON.stringify({ scripts: { start: {} } }), stderr: '' });
+      throw new Error(`unexpected cmd ${call.cmd}`);
+    });
+
+    const result = await ensureBuildableSource('sandbox-1');
+
+    expect(result).toEqual({ ok: false, reason: 'node_missing_start_command' });
+    expect(writeFiles).not.toHaveBeenCalled();
+  });
+
   it('treats an inspect failure (test -f itself erroring) as inspect_failed, never as absent', async () => {
     runCommand.mockImplementation(({ cmd, args }: Cmd) => {
       if (cmd === 'test' && args[1] === '/workspace/Dockerfile') {

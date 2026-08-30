@@ -30,12 +30,18 @@ describe('planDockerfileSynthesis', () => {
     const plan = planDockerfileSynthesis(listing({ packageJson: { scripts: { start: 'node server.js' } } }));
     expect(plan.action).toBe('synthesize');
     if (plan.action !== 'synthesize') throw new Error('expected synthesize');
-    expect(plan.dockerfile).toContain('FROM node:20-alpine');
-    expect(plan.dockerfile.replace(/\s/g, '')).toContain('CMD["npm","run","start"]');
+    // Bun-only repository policy (CLAUDE.md: "bun only. Never npm/pnpm.") —
+    // a generated image must not be the one place that reaches for npm.
+    expect(plan.dockerfile).toContain('FROM oven/bun:1-alpine');
+    expect(plan.dockerfile).not.toContain('node:20-alpine');
+    expect(plan.dockerfile).toContain('RUN bun install');
+    expect(plan.dockerfile).not.toContain('npm install');
+    expect(plan.dockerfile.replace(/\s/g, '')).toContain('CMD["bun","run","start"]');
     expect(plan.dockerfile).not.toContain('npm run build');
+    expect(plan.dockerfile).not.toContain('npm run start');
     expect(plan.dockerfile).toContain(`EXPOSE ${PUBLISHED_APP_INTERNAL_PORT}`);
     expect(plan.dockerfile.startsWith(GENERATED_DOCKERFILE_MARKER)).toBe(true);
-    expect(plan.dockerfile).toContain('USER node');
+    expect(plan.dockerfile).toContain('USER bun');
     expect(plan.dockerignore).toContain('node_modules');
     expect(plan.dockerignore).toContain('.env*');
     expect(plan.dockerignore).toContain('.git');
@@ -47,14 +53,15 @@ describe('planDockerfileSynthesis', () => {
     );
     expect(plan.action).toBe('synthesize');
     if (plan.action !== 'synthesize') throw new Error('expected synthesize');
-    expect(plan.dockerfile).toContain('RUN npm run build');
+    expect(plan.dockerfile).toContain('RUN bun run build');
+    expect(plan.dockerfile).not.toContain('npm run build');
   });
 
   it('falls back to `main` when there is no start script', () => {
     const plan = planDockerfileSynthesis(listing({ packageJson: { main: 'index.js' } } as SourceRootListing));
     expect(plan.action).toBe('synthesize');
     if (plan.action !== 'synthesize') throw new Error('expected synthesize');
-    expect(plan.dockerfile.replace(/\s/g, '')).toContain('CMD["node","index.js"]');
+    expect(plan.dockerfile.replace(/\s/g, '')).toContain('CMD["bun","run","index.js"]');
   });
 
   it('refuses a Node source with neither a start script nor a main entry', () => {

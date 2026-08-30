@@ -65,14 +65,20 @@ export type DockerfileSynthesisPlan =
   | { action: 'synthesize'; dockerfile: string; dockerignore: string }
   | { action: 'refuse'; reason: DockerfineSynthesisRefusalReason };
 
-// TODO(publish/dockerfile-synthesis): pin to the CURRENT node:20-alpine /
-// nginx:alpine digest before this synthesizer ships live — this repo has no
-// registry access at generation time, so these are placeholder digests
-// (obviously fake: all-zero) rather than a fabricated value that would look
-// real but isn't. A floating tag is not acceptable for a generated image
-// definition: fully pin it before removing this TODO.
-const NODE_IMAGE_TAG = 'node:20-alpine@sha256:0000000000000000000000000000000000000000000000000000000000000';
-const NGINX_IMAGE_TAG = 'nginx:alpine@sha256:0000000000000000000000000000000000000000000000000000000000000';
+// Digests verified directly against Docker Hub's public repository API
+// (`GET /v2/repositories/<repo>/tags/<tag>`, the `digest` field of the
+// manifest LIST — the multi-arch-aware value `docker buildx imagetools
+// inspect` reports and the one that resolves correctly regardless of the
+// build host's architecture) on 2026-08-30. Re-verify before shipping if
+// this file is touched again after that date — an image's tag can move to a
+// new digest on any push, which is exactly why a floating tag alone is not
+// an acceptable pin.
+//
+// `oven/bun:1-alpine`, not `node:20-alpine`: the repo is Bun-only end to
+// end (CLAUDE.md: "bun only. Never npm/pnpm.") and a synthesized image must
+// not be the one place that quietly reaches for npm.
+const BUN_IMAGE_TAG = 'oven/bun:1-alpine@sha256:07235578f79ef8c6f97d94aee7938e76f5cdba5f21ae5dbfdd3d3d38058437eb';
+const NGINX_IMAGE_TAG = 'nginx:alpine@sha256:db35bfc6b2951e7f8a72db5db120288c127ffaeeb4a6d4b95a26fead017d5913';
 
 const BASE_DOCKERIGNORE = `node_modules
 .git
@@ -86,9 +92,9 @@ const STATIC_DOCKERIGNORE = BASE_DOCKERIGNORE;
 
 function synthesizeNodeDockerfile(pkg: { scripts?: Record<string, string>; main?: string }): DockerfileSynthesisPlan {
   const startCommand = pkg.scripts?.start
-    ? ['npm', 'run', 'start']
+    ? ['bun', 'run', 'start']
     : pkg.main
-      ? ['node', pkg.main]
+      ? ['bun', 'run', pkg.main]
       : null;
 
   if (startCommand === null) {
@@ -99,7 +105,7 @@ function synthesizeNodeDockerfile(pkg: { scripts?: Record<string, string>; main?
     return { action: 'refuse', reason: 'node_missing_start_command' };
   }
 
-  const buildStep = pkg.scripts?.build ? '\nRUN npm run build' : '';
+  const buildStep = pkg.scripts?.build ? '\nRUN bun run build' : '';
   const cmdJson = JSON.stringify(startCommand);
 
   // `PORT` is also set on the machine's env by `buildMachineConfig`, but that
@@ -107,17 +113,23 @@ function synthesizeNodeDockerfile(pkg: { scripts?: Record<string, string>; main?
   // costs nothing and makes the image correct even run outside a published
   // machine (e.g. `docker run -p 8080:8080` while debugging one locally).
   //
-  // Non-root: `node` images ship an unprivileged `node` user (uid 1000) for
-  // exactly this — a synthesized image should never run the user's app as
-  // root inside the container.
+  // `bun install`, not `bun install --frozen-lockfile`: the snapshot is an
+  // arbitrary user source tree, not this monorepo's own workspace, and there
+  // is no guarantee it carries a `bun.lock` at all — `publish-source-check.ts`
+  // never inspects for one, so requiring it here would refuse a perfectly
+  // buildable app that simply hasn't committed a lockfile.
+  //
+  // Non-root: the official `oven/bun` image ships an unprivileged `bun` user
+  // for exactly this — a synthesized image should never run the user's app
+  // as root inside the container.
   const dockerfile = `${GENERATED_DOCKERFILE_MARKER}
-FROM ${NODE_IMAGE_TAG}
+FROM ${BUN_IMAGE_TAG}
 WORKDIR /app
-COPY package*.json ./
-RUN npm install
+COPY package.json ./
+RUN bun install
 COPY . .${buildStep}
-RUN chown -R node:node /app
-USER node
+RUN chown -R bun:bun /app
+USER bun
 ENV PORT=${PUBLISHED_APP_INTERNAL_PORT}
 EXPOSE ${PUBLISHED_APP_INTERNAL_PORT}
 CMD ${cmdJson}

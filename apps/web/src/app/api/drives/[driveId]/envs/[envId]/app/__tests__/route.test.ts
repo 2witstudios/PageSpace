@@ -132,6 +132,34 @@ describe('POST /app — the up-front buildability refusal (D1)', () => {
     expect(enqueuePublishBuild).not.toHaveBeenCalled();
   });
 
+  it('given a snapshot failure on a FIRST-TIME publish, never calls createPublishedApp — a first publish must not leave a Fly app + row behind a failed snapshot', async () => {
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
+    vi.mocked(snapshotEnvFilesystem).mockResolvedValue({ ok: false, reason: 'too_large', detail: '600MB' } as never);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(413);
+    expect(createPublishedApp).not.toHaveBeenCalled();
+    expect(enqueuePublishBuild).not.toHaveBeenCalled();
+    // No `app` in the body either — nothing was created, so there is nothing
+    // to report a DTO for (the response used to carry a stale `created.app`).
+    const body = await response.json();
+    expect(body.app).toBeUndefined();
+  });
+
+  it('a snapshot taken successfully is still cleaned up if createPublishedApp itself then fails', async () => {
+    vi.mocked(ensureBuildableSource).mockResolvedValue({ ok: true });
+    const cleanup = vi.fn();
+    vi.mocked(snapshotEnvFilesystem).mockResolvedValue({ ok: true, tarPath: '/tmp/snapshot.tar.gz', cleanup } as never);
+    vi.mocked(createPublishedApp).mockResolvedValue({ ok: false, reason: 'fly_error', error: 'fly down' } as never);
+
+    const response = await POST(postReq(), envParams);
+
+    expect(response.status).toBe(502);
+    expect(cleanup).toHaveBeenCalledTimes(1);
+    expect(enqueuePublishBuild).not.toHaveBeenCalled();
+  });
+
   it('given a build already in progress, refuses with 409 before any Dockerfile check, snapshot, or enqueue', async () => {
     vi.mocked(findPublishedAppByEnvId).mockResolvedValue({ ...appRow, status: 'building' } as never);
 

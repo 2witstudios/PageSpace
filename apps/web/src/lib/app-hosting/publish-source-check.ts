@@ -47,8 +47,19 @@ function parsePackageJson(raw: string): SourceRootListing['packageJson'] {
     const parsed: unknown = JSON.parse(raw);
     if (parsed === null || typeof parsed !== 'object') return {};
     const { scripts, main } = parsed as { scripts?: unknown; main?: unknown };
+    // Only string-valued script entries are kept — a malformed package.json
+    // (e.g. `"start": {}`) must read as "no start script" to
+    // `planDockerfileSynthesis`'s truthiness check, not as a present-but-odd
+    // value it would treat as a valid command.
+    let validScripts: Record<string, string> | undefined;
+    if (scripts && typeof scripts === 'object') {
+      const entries = Object.entries(scripts as Record<string, unknown>).filter(
+        (entry): entry is [string, string] => typeof entry[1] === 'string',
+      );
+      validScripts = entries.length > 0 ? Object.fromEntries(entries) : undefined;
+    }
     return {
-      scripts: scripts && typeof scripts === 'object' ? (scripts as Record<string, string>) : undefined,
+      scripts: validScripts,
       main: typeof main === 'string' ? main : undefined,
     };
   } catch {

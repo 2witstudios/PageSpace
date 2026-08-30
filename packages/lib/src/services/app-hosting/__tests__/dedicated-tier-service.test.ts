@@ -15,7 +15,16 @@ const mockDb = vi.hoisted(() => {
     /** Rows the guarded UPDATE ... RETURNING gives back, in order. */
     returning: unknown[][];
     inserted: Array<Record<string, unknown>>;
-  } = { rows: [], updateSets: [], returning: [], inserted: [] };
+    /**
+     * Raw `tx.execute(sql...)` results, in call order — used ONLY by
+     * `recordDedicatedSubscription`'s destroying-guard lock read, kept
+     * entirely separate from `rows` (which every other test in this file
+     * already uses to mean "whatever `.select().from(...)` returns") so that
+     * guard's new query can't collide with the query-builder-based double
+     * every other function under test relies on.
+     */
+    executeResults: unknown[][];
+  } = { rows: [], updateSets: [], returning: [], inserted: [], executeResults: [] };
 
   // Three shapes are used against this double: `.where(...)` awaited directly
   // (the dunning survey), `.where(...).limit(1)` awaited, and
@@ -47,14 +56,20 @@ const mockDb = vi.hoisted(() => {
     },
   });
 
+  // Defaults to a live, non-destroying row so tests that never call
+  // `recordDedicatedSubscription`'s new guard (i.e. every test except its own)
+  // never have to know this query exists.
+  const execute = async () => ({ rows: state.executeResults.shift() ?? [{ status: 'running' }] });
+
   return {
     __state: state,
     select,
     update,
     insert,
+    execute,
     // The mirror write upserts INSIDE the transaction (it reads FOR UPDATE first),
     // so the tx double has to carry `insert` too.
-    transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb({ select, update, insert }),
+    transaction: async (cb: (tx: unknown) => Promise<unknown>) => cb({ select, update, insert, execute }),
   };
 });
 vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
@@ -65,6 +80,7 @@ vi.mock('@pagespace/db/db', () => ({ db: mockDb }));
 vi.mock('@pagespace/db/operators', () => ({
   and: (...a: unknown[]) => ({ op: 'and', a }),
   eq: (a: unknown, b: unknown) => ({ op: 'eq', a, b }),
+  sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({ sql: [strings.raw, values] }),
 }));
 vi.mock('@pagespace/db/schema/published-apps', () => ({ publishedApps: { id: 'published_apps.id', tier: 'published_apps.tier' } }));
 vi.mock('@pagespace/db/schema/published-app-subscriptions', () => ({
@@ -135,6 +151,7 @@ beforeEach(() => {
   mockDb.__state.updateSets.length = 0;
   mockDb.__state.returning.length = 0;
   mockDb.__state.inserted.length = 0;
+  mockDb.__state.executeResults.length = 0;
   mockIsEnabled.mockReturnValue(true);
   mockIsBillingEnabled.mockReturnValue(true);
 });
@@ -495,6 +512,35 @@ describe('recordDedicatedSubscription', () => {
     status: 'canceled',
     stripeEventCreated: new Date('2026-08-25T12:00:00Z'),
     ...over,
+  });
+
+  // Regression: a dedicated-tier purchase racing `destroyPublishedApp` could
+  // insert a subscription mirror row that the destroy's own DELETE then
+  // cascades away with no reclaim row ever written for its Stripe
+  // subscription — a live, still-billing subscription stranded with no local
+  // pointer. Both sides now take a `FOR UPDATE` lock on the same
+  // `published_apps` row before doing anything else, so this proves the
+  // purchase side of that lock refuses outright when it sees `destroying`.
+  it('refuses to write a mirror row for an app that is being unpublished', async () => {
+    mockDb.__state.executeResults = [[{ status: 'destroying' }]];
+    const result = await recordDedicatedSubscription(facts());
+    assert({
+      given: 'an app whose FOR UPDATE lock read reports status=destroying',
+      should: 'refuse without writing anything',
+      actual: [result.outcome, result.row, mockDb.__state.inserted.length],
+      expected: ['app_destroying', null, 0],
+    });
+  });
+
+  it('refuses to write a mirror row for an app that no longer exists', async () => {
+    mockDb.__state.executeResults = [[]];
+    const result = await recordDedicatedSubscription(facts());
+    assert({
+      given: 'a published_apps row that has already been deleted',
+      should: 'refuse without writing anything',
+      actual: [result.outcome, mockDb.__state.inserted.length],
+      expected: ['app_destroying', 0],
+    });
   });
 
   it('writes the row and stamps the event it came from', async () => {

@@ -26,6 +26,16 @@ describe('safeBuildPath', () => {
     expect(() => safeBuildPath(root, '../build-sources-evil', 'x')).toThrow(/escapes the build root/);
   });
 
+  it('handles "/" as the build root without falsely rejecting a well-formed child path', () => {
+    expect(safeBuildPath('/', 'abc')).toBe(path.resolve('/', 'abc'));
+  });
+
+  it('does not false-positive on a sibling directory that merely starts with two dots', () => {
+    // `..foo` is a legitimate (if unusual) directory name, not a traversal —
+    // a naive `startsWith('..')` check on the relative path would reject it.
+    expect(() => safeBuildPath(root, '..foo', 'x')).not.toThrow();
+  });
+
   it('allows a deeply nested well-formed relative path', () => {
     const result = safeBuildPath(root, 'abc123', '1700000000000', 'src', 'index.js');
     expect(result.startsWith(root + path.sep)).toBe(true);

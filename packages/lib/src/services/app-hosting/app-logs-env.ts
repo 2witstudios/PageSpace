@@ -21,6 +21,8 @@
  * in `ROUTING.md`).
  */
 
+import { isOnPrem } from '../../deployment-mode';
+
 const DEFAULT_NATS_URL = 'nats://[fdaa::3]:4223';
 
 export function resolveAppLogsNatsUrl(): string {
@@ -36,8 +38,14 @@ export function resolveAppLogsNatsToken(): string {
 /**
  * The firehose is "configured" once a read-only token is present — the URL
  * always has a value (the fixed Fly address), so the token is the actual
- * on/off signal.
+ * on/off signal. Gated on `isOnPrem()` first, never `!isCloud()` (see
+ * CLAUDE.md's deployment-mode guard rule): an on-prem deployment must never
+ * reach an external Fly integration even if `FLY_LOGS_NATS_TOKEN` happens to
+ * be set in its environment — self-hosted means no external calls, full
+ * stop. Tenant deployments (dedicated-image cloud, not on-prem) are
+ * unaffected and still gate on the token alone.
  */
 export function isAppLogsNatsConfigured(): boolean {
+  if (isOnPrem()) return false;
   return resolveAppLogsNatsToken().length > 0;
 }

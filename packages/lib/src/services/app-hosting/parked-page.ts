@@ -129,6 +129,7 @@ function copyFor(decision: AppRouteDecision): PageCopy {
             title: 'App starting',
             heading: 'This app is starting up',
             body: 'A new version is being deployed. Refresh in a few seconds.',
+            manageHref: manageHrefFor(decision.driveId, decision.envId),
           }
         : {
             title: 'App unavailable',

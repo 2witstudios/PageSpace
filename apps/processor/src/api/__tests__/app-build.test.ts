@@ -6,12 +6,12 @@ import { mkdtempSync, readdirSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-const mockAddJob = vi.fn(async () => 'job-1');
+const mockAddJob = vi.fn(async (..._args: unknown[]) => 'job-1');
 vi.mock('../../server', () => ({
   queueManager: { addJob: (...args: unknown[]) => mockAddJob(...args) },
 }));
 
-const mockQuery = vi.fn(async () => ({ rowCount: 1 }));
+const mockQuery = vi.fn(async (..._args: unknown[]) => ({ rowCount: 1 }));
 vi.mock('../../db', () => ({
   getPoolForWorker: () => ({
     connect: async () => ({
@@ -38,7 +38,7 @@ vi.mock('../app-build-size', () => ({
   getDirectorySize: async () => extractedBytes,
 }));
 
-const mockCheckRateLimit = vi.fn(async () => ({ allowed: true, attemptsRemaining: 9 }));
+const mockCheckRateLimit = vi.fn(async (..._args: unknown[]) => ({ allowed: true, attemptsRemaining: 9 }));
 vi.mock('@pagespace/lib/security/distributed-rate-limit', () => ({
   checkDistributedRateLimit: (...args: unknown[]) => mockCheckRateLimit(...args),
 }));

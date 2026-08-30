@@ -327,6 +327,22 @@ export async function destroyPublishedApp(
   }
 
   await db.transaction(async (tx) => {
+    // Locked FIRST, before reading `publishedAppSubscriptions` below — the
+    // same row, same lock, same order as `recordDedicatedSubscription`'s own
+    // guard (`dedicated-tier-service.ts`), which closes the race this
+    // ordering exists for: a dedicated-tier PURCHASE racing this destroy
+    // could otherwise insert a brand-new subscription mirror after this
+    // transaction's subscription read but before its DELETE commits, and the
+    // `ON DELETE CASCADE` would remove that mirror with no reclaim row ever
+    // written for its Stripe subscription — a live, still-billing
+    // subscription stranded with no local pointer at all. Whichever
+    // transaction acquires this lock first now fully completes before the
+    // other proceeds: if this one wins, the purchase blocks until after the
+    // delete and then refuses (the app row is gone, or `status` already
+    // reads `destroying`); if the purchase wins, its committed row is what
+    // this transaction's subscription read below actually sees.
+    await tx.execute(sql`SELECT 1 FROM ${publishedApps} WHERE ${publishedApps.id} = ${publishedAppId} FOR UPDATE`);
+
     const [subscription] = await tx
       .select({ stripeSubscriptionId: publishedAppSubscriptions.stripeSubscriptionId })
       .from(publishedAppSubscriptions)

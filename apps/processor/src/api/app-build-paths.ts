@@ -11,15 +11,26 @@ import path from 'node:path';
  *
  * Mirrors the discipline `build-source-retention.ts` already applied at its
  * own single call site: resolve, then assert the result is still inside
- * `resolvedRoot` (a trailing `path.sep` in the prefix check, so
- * `/root-evil` can never pass as a prefix of `/root`).
+ * `resolvedRoot`. Containment is checked via `path.relative`, not a
+ * string-prefix test — a prefix check needs a trailing separator to stop
+ * `/root-evil` passing as contained under `/root`, but that same trailing
+ * separator makes `resolvedRoot === '/'` (the OS root) reject every legal
+ * path, since `path.resolve('/', 'abc')` is `/abc`, which never starts with
+ * the doubled `//` a naive `resolvedRoot + path.sep` prefix would require.
+ * `path.relative` sidesteps both: contained iff the relative path is empty,
+ * or doesn't escape upward (`..`) or land on an absolute path (Windows
+ * drive-letter case). Checking for an EXACT `..` segment or a `..` + sep
+ * prefix — not a bare `startsWith('..')` — also avoids rejecting a
+ * legitimately named sibling that merely starts with two dots, e.g. `..foo`.
  *
  * `resolvedRoot` itself is trusted (an operator-configured env var, never
  * request input) — this only bounds the SEGMENTS joined onto it.
  */
 export function safeBuildPath(resolvedRoot: string, ...segments: string[]): string {
   const joined = path.resolve(resolvedRoot, ...segments);
-  if (joined !== resolvedRoot && !joined.startsWith(resolvedRoot + path.sep)) {
+  const relative = path.relative(resolvedRoot, joined);
+  const escapesRoot = relative === '..' || relative.startsWith('..' + path.sep) || path.isAbsolute(relative);
+  if (escapesRoot) {
     throw new Error(`Path escapes the build root: ${segments.join('/')}`);
   }
   return joined;

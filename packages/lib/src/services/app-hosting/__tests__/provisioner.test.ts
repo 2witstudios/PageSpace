@@ -15,7 +15,12 @@ vi.mock('@pagespace/db/db', () => ({
     update: updateMock,
     delete: deleteMock,
     transaction: async (fn: (tx: unknown) => unknown) =>
-      fn({ select: selectMock, insert: insertMock, update: updateMock, delete: deleteMock }),
+      // `execute` backs destroyPublishedApp's own `FOR UPDATE` lock on
+      // `published_apps` (see dedicated-tier-service.ts's matching guard) —
+      // a no-op here since none of these tests exercise the actual
+      // concurrent-lock semantics, only that the call happens without
+      // throwing.
+      fn({ select: selectMock, insert: insertMock, update: updateMock, delete: deleteMock, execute: vi.fn(async () => ({ rows: [] })) }),
   },
 }));
 vi.mock('@pagespace/db/schema/published-apps', () => ({

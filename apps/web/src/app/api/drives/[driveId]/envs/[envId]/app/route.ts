@@ -33,7 +33,7 @@ import { ensureBuildableSource, describeUnbuildableSourceReason } from '@/lib/ap
 import { enqueuePublishBuild } from '@/lib/app-hosting/publish-build-enqueue';
 import { db } from '@pagespace/db/db';
 import { and, eq, like, notInArray } from '@pagespace/db/operators';
-import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { publishedApps, type PublishedApp } from '@pagespace/db/schema/published-apps';
 import { findPublishedAppByEnvId, toPublishedAppDTO } from '@/lib/app-hosting/published-app-dto';
 
 const AUTH_OPTIONS_READ = { allow: ['session', 'mcp'] as const, requireCSRF: false };
@@ -118,6 +118,45 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       );
     }
 
+    // The snapshot is taken BEFORE `createPublishedApp`, not after — same
+    // reasoning as `ensureBuildableSource` above, one step further: a
+    // first-time publish must not leave a Fly app + hosting row behind a
+    // snapshot failure. Taking it after used to leave a freshly created row
+    // stuck at `building` forever (nothing ever moves it off that status on
+    // this failure path), which is worse than merely "leaked" — the
+    // status-transactional CAS below would then refuse every subsequent
+    // publish attempt with 409 "already building", permanently, with no
+    // retry path short of a manual unpublish. Neither the buildability check
+    // nor the snapshot depends on `created.app`, only on `env.sandboxId`, so
+    // both can run first. A merely HIBERNATING sprite wakes automatically
+    // inside `snapshotEnvFilesystem` — the 409 below is only for an env that
+    // never had a session at all.
+    const snapshot = await snapshotEnvFilesystem(env.sandboxId);
+    if (!snapshot.ok) {
+      const status =
+        snapshot.reason === 'onprem_unsupported'
+          ? 404
+          : snapshot.reason === 'no_live_sandbox'
+            ? 409
+            : snapshot.reason === 'too_large'
+              ? 413
+              : 502;
+      return NextResponse.json(
+        {
+          error:
+            snapshot.reason === 'onprem_unsupported'
+              ? 'Not available'
+              : snapshot.reason === 'no_live_sandbox'
+                ? 'This environment has no live session to publish from — start a session in it first.'
+                : snapshot.reason === 'too_large'
+                  ? `This environment's filesystem is too large to publish (${snapshot.detail ?? 'over the interim cap'}) — exclude build artifacts and large binaries and try again.`
+                  : `Could not snapshot the environment's filesystem: ${snapshot.reason}`,
+          reason: snapshot.reason,
+        },
+        { status },
+      );
+    }
+
     const subdomain =
       existing?.subdomain ??
       (await allocateUniqueSubdomainWithRetry({
@@ -139,71 +178,49 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
         attempt: async (candidate) => candidate,
       }));
 
-    const created = await createPublishedApp({
-      envId,
-      driveId,
-      ownerId: auth.userId,
-      subdomain,
-      orgSlug: resolvePublishedAppsOrgSlug(),
-    });
-
-    if (!created.ok) {
-      const status =
-        created.reason === 'fly_error'
-          ? 502
-          : created.reason === 'raced'
-            ? 409
-            : 404;
-      return NextResponse.json({ error: `Publish failed: ${created.reason}`, reason: created.reason }, { status });
-    }
-
-    // Re-publish means "build again", even when createPublishedApp's own answer
-    // was a no-op on the ROW — the row being unchanged says nothing about whether
-    // the environment's filesystem has changed since the last build. A merely
-    // HIBERNATING sprite wakes automatically inside snapshotEnvFilesystem — the
-    // 409 below is only for an env that never had a session at all.
-    const snapshot = await snapshotEnvFilesystem(env.sandboxId);
-    if (!snapshot.ok) {
-      const status =
-        snapshot.reason === 'no_live_sandbox' ? 409 : snapshot.reason === 'too_large' ? 413 : 502;
-      return NextResponse.json(
-        {
-          error:
-            snapshot.reason === 'no_live_sandbox'
-              ? 'This environment has no live session to publish from — start a session in it first.'
-              : snapshot.reason === 'too_large'
-                ? `This environment's filesystem is too large to publish (${snapshot.detail ?? 'over the interim cap'}) — exclude build artifacts and large binaries and try again.`
-                : `Could not snapshot the environment's filesystem: ${snapshot.reason}`,
-          reason: snapshot.reason,
-          app: toPublishedAppDTO(created.app),
-        },
-        { status },
-      );
-    }
-
-    // The status-transactional guard the early read-only check above cannot
-    // provide: two publishes racing past that check both see a non-building
-    // status and both reach here. This single UPDATE is the enqueue-time
-    // record of the build AND its own concurrency check — Postgres commits at
-    // most one of two racing UPDATEs with this WHERE clause, so exactly one
-    // caller sees a returned row and proceeds; the loser gets an honest 409,
-    // never a generic 500 from two callers enqueueing the same build twice.
-    const [claimed] = await db
-      .update(publishedApps)
-      .set({ status: 'building' })
-      .where(and(eq(publishedApps.id, created.app.id), notInArray(publishedApps.status, ['building', 'deploying'])))
-      .returning();
-
-    if (!claimed) {
-      await snapshot.cleanup();
-      return NextResponse.json(
-        { error: 'A build is already running for this app — wait for it to finish before publishing again.', reason: 'build_in_progress' },
-        { status: 409 },
-      );
-    }
-
-    let enqueued;
+    let enqueued: { jobId: string };
+    let claimedApp: PublishedApp;
     try {
+      const created = await createPublishedApp({
+        envId,
+        driveId,
+        ownerId: auth.userId,
+        subdomain,
+        orgSlug: resolvePublishedAppsOrgSlug(),
+      });
+
+      if (!created.ok) {
+        const status =
+          created.reason === 'fly_error'
+            ? 502
+            : created.reason === 'raced'
+              ? 409
+              : 404;
+        return NextResponse.json({ error: `Publish failed: ${created.reason}`, reason: created.reason }, { status });
+      }
+
+      // The status-transactional guard the early read-only check above cannot
+      // provide: two publishes racing past that check both see a non-building
+      // status and both reach here. This single UPDATE is the enqueue-time
+      // record of the build AND its own concurrency check — Postgres commits
+      // at most one of two racing UPDATEs with this WHERE clause, so exactly
+      // one caller sees a returned row and proceeds; the loser gets an honest
+      // 409, never a generic 500 from two callers enqueueing the same build
+      // twice.
+      const [claimed] = await db
+        .update(publishedApps)
+        .set({ status: 'building' })
+        .where(and(eq(publishedApps.id, created.app.id), notInArray(publishedApps.status, ['building', 'deploying'])))
+        .returning();
+
+      if (!claimed) {
+        return NextResponse.json(
+          { error: 'A build is already running for this app — wait for it to finish before publishing again.', reason: 'build_in_progress' },
+          { status: 409 },
+        );
+      }
+      claimedApp = claimed;
+
       enqueued = await enqueuePublishBuild({
         publishedAppId: created.app.id,
         tarPath: snapshot.tarPath,
@@ -218,10 +235,10 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       userId: auth.userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { route: 'drive-envs-app', operation: 'publish', envId, publishedAppId: created.app.id, jobId: enqueued.jobId },
+      details: { route: 'drive-envs-app', operation: 'publish', envId, publishedAppId: claimedApp.id, jobId: enqueued.jobId },
     });
 
-    return NextResponse.json({ app: toPublishedAppDTO(claimed), buildJobId: enqueued.jobId });
+    return NextResponse.json({ app: toPublishedAppDTO(claimedApp), buildJobId: enqueued.jobId });
   } catch (error) {
     loggers.api.error('Failed to publish environment', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to publish environment' }, { status: 500 });

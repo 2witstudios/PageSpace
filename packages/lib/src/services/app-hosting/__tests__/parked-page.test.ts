@@ -143,6 +143,14 @@ describe('manageHref — the owner link deep-links to the app pane, not the driv
     expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
   });
 
+  it('given a DEPLOYING decision with driveId and envId, should still include the manage link — an owner must be able to open the app pane while it is deploying', () => {
+    const html = renderAppRouterPage(
+      { kind: 'unavailable', reason: 'deploying', driveId: 'drive_1', envId: 'env_1' },
+      'acme.pagespace.app',
+    );
+    expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
+  });
+
   it('given a decision with driveId but no envId, should degrade to the drive root', () => {
     const html = renderAppRouterPage(
       { kind: 'unavailable', reason: 'failed', driveId: 'drive_1' },

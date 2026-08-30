@@ -12,6 +12,11 @@ vi.mock('@pagespace/lib/services/sandbox/sandbox-paths', () => ({
   SANDBOX_ROOT: '/workspace',
 }));
 
+let onPrem = false;
+vi.mock('@pagespace/lib/deployment-mode', () => ({
+  isOnPrem: () => onPrem,
+}));
+
 import { snapshotEnvFilesystem, ENV_SNAPSHOT_MAX_BYTES } from '../env-snapshot';
 
 describe('snapshotEnvFilesystem', () => {
@@ -20,11 +25,19 @@ describe('snapshotEnvFilesystem', () => {
     readFileToBuffer.mockReset();
     clientGet.mockReset();
     clientGet.mockResolvedValue({ runCommand, readFileToBuffer });
+    onPrem = false;
   });
 
   it('refuses immediately with no_live_sandbox when there is no sandboxId', async () => {
     const result = await snapshotEnvFilesystem(null);
     expect(result).toEqual({ ok: false, reason: 'no_live_sandbox' });
+    expect(clientGet).not.toHaveBeenCalled();
+  });
+
+  it('refuses with onprem_unsupported before ever creating a Fly Sprites client — external integrations are never reachable on-prem', async () => {
+    onPrem = true;
+    const result = await snapshotEnvFilesystem('sandbox-1');
+    expect(result).toEqual({ ok: false, reason: 'onprem_unsupported' });
     expect(clientGet).not.toHaveBeenCalled();
   });
 

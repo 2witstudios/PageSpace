@@ -46,6 +46,7 @@ import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { createProductionSpritesSandboxClient } from '@/lib/sandbox/sprites-client';
 import { SANDBOX_ROOT } from '@pagespace/lib/services/sandbox/sandbox-paths';
+import { isOnPrem } from '@pagespace/lib/deployment-mode';
 
 /** The Sprite SDK's read boundary is one whole-file Buffer — this caps that single read, not any local file. */
 export const ENV_SNAPSHOT_MAX_BYTES = 512 * 1024 * 1024;
@@ -54,7 +55,14 @@ export type SnapshotEnvFilesystemResult =
   | { ok: true; tarPath: string; cleanup: () => Promise<void> }
   | {
       ok: false;
-      reason: 'no_live_sandbox' | 'sandbox_not_found' | 'tar_failed' | 'stat_failed' | 'too_large' | 'read_failed';
+      reason:
+        | 'no_live_sandbox'
+        | 'sandbox_not_found'
+        | 'tar_failed'
+        | 'stat_failed'
+        | 'too_large'
+        | 'read_failed'
+        | 'onprem_unsupported';
       detail?: string;
     };
 
@@ -81,6 +89,14 @@ export type SnapshotEnvFilesystemResult =
  * environment.
  */
 export async function snapshotEnvFilesystem(sandboxId: string | null): Promise<SnapshotEnvFilesystemResult> {
+  // Fly Sprites is an external integration — gated on `isOnPrem()`, never
+  // `!isCloud()` (CLAUDE.md's deployment-mode guard rule), so a tenant
+  // deployment (dedicated-image cloud, not self-hosted) is unaffected. An
+  // on-prem deployment must never reach a Fly Sprites client regardless of
+  // whether `sandboxId` happens to be set; self-hosted environments use a
+  // local bridge instead (deferred, per the Drive Environments epic), never
+  // this Sprite-backed publish path.
+  if (isOnPrem()) return { ok: false, reason: 'onprem_unsupported' };
   if (!sandboxId) return { ok: false, reason: 'no_live_sandbox' };
 
   const client = await createProductionSpritesSandboxClient();
