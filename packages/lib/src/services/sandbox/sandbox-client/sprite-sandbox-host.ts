@@ -21,16 +21,26 @@ import {
   SandboxStreamOpenTimeoutError,
   type SandboxHandle,
   type SandboxHost,
+  type SandboxServiceInfo,
+  type SandboxServiceStatus,
+  type SandboxServicesApi,
   type SandboxStream,
   type SandboxStreamSessionInfo,
+  type SandboxUrlAuth,
+  type SandboxUrlInfo,
 } from '../sandbox-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import {
   withWakeRetry,
   asPreOpenDrop,
+  drainServiceLogStream,
   isSpriteGoneStatus,
+  readPortNotification,
   spawnWithSelfHealingCwd,
+  SERVICE_LOG_MONITOR_WINDOW,
   type SpriteCommandLike,
+  type SpriteInstanceLike,
+  type SpriteServiceRecordLike,
   type SpritesSdk,
 } from './sprites';
 import { SANDBOX_ROOT } from '../sandbox-paths';
@@ -103,6 +113,91 @@ function awaitStreamOpen(command: SpriteCommandLike, timeoutMs: number): Promise
 // wall-clock cap. Bounded by kill frequency, and not fixable here without an SDK
 // change.
 
+/** The Sprite wire statuses this seam recognizes. Anything else — a future
+ *  SDK/runtime addition — normalizes to 'unknown' rather than leaking an
+ *  unvalidated string through the provider-neutral type. */
+const KNOWN_SERVICE_STATUSES: readonly SandboxServiceStatus[] = [
+  'stopped',
+  'starting',
+  'running',
+  'stopping',
+  'failed',
+];
+
+/**
+ * Pure: map a Sprite service record onto the provider-neutral shape.
+ * A record with no `state` at all (never observed live, but the SDK types it
+ * optional) is 'unknown', not a guess.
+ */
+export function normalizeSpriteService(record: SpriteServiceRecordLike): SandboxServiceInfo {
+  const status = record.state?.status;
+  return {
+    name: record.name,
+    command: record.cmd,
+    args: record.args,
+    ...(record.httpPort !== undefined ? { httpPort: record.httpPort } : {}),
+    status: status !== undefined && (KNOWN_SERVICE_STATUSES as readonly string[]).includes(status)
+      ? status
+      : 'unknown',
+    ...(record.state?.pid !== undefined ? { pid: record.state.pid } : {}),
+    ...(record.state?.error !== undefined ? { error: record.state.error } : {}),
+  };
+}
+
+/**
+ * Pure: map the wire's URL auth string onto the closed union. The wire returns
+ * a superset of the SDK types (`private_access` rides alongside `auth` —
+ * verified), so only the two modes the platform verifies map through; anything
+ * else — including an absent value — is 'unknown', which consumers must treat
+ * as NOT proven private (see `SandboxUrlAuth`).
+ */
+export function normalizeSpriteUrlAuth(auth: string | undefined): SandboxUrlAuth {
+  return auth === 'public' || auth === 'sprite' ? auth : 'unknown';
+}
+
+function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): SandboxServicesApi {
+  return {
+    async create({ name, command, args, httpPort }) {
+      const sprite = await getSprite();
+      // The PUT auto-starts the service and hands back its startup log stream;
+      // resolving before that stream completes would report success for an
+      // operation still in flight (and leak the response body's reader).
+      await drainServiceLogStream(
+        await sprite.createService(
+          name,
+          { cmd: command, ...(args !== undefined ? { args } : {}), ...(httpPort !== undefined ? { httpPort } : {}) },
+          SERVICE_LOG_MONITOR_WINDOW,
+        ),
+      );
+    },
+    async list() {
+      const sprite = await getSprite();
+      return (await sprite.listServices()).map(normalizeSpriteService);
+    },
+    async get(name) {
+      // Derived from list rather than the SDK's getService: the SDK rejects a
+      // miss with an untyped `Error('Service not found: …')` that message-match
+      // classification would have to fish out — an absent row from the listing
+      // is the same answer without the fragility.
+      const sprite = await getSprite();
+      const record = (await sprite.listServices()).find((s) => s.name === name);
+      return record !== undefined ? normalizeSpriteService(record) : null;
+    },
+    async start(name) {
+      const sprite = await getSprite();
+      await drainServiceLogStream(await sprite.startService(name, SERVICE_LOG_MONITOR_WINDOW));
+    },
+    async stop(name) {
+      const sprite = await getSprite();
+      await drainServiceLogStream(await sprite.stopService(name));
+    },
+    async remove(name) {
+      const sprite = await getSprite();
+      await sprite.deleteService(name);
+    },
+  };
+}
+
 function wrapSpriteStream(command: SpriteCommandLike): SandboxStream {
   return {
     write(data) {
@@ -126,6 +221,17 @@ function wrapSpriteStream(command: SpriteCommandLike): SandboxStream {
     },
     onError(listener) {
       command.on('error', listener);
+    },
+    onPortEvent(listener) {
+      // Same `message` event `readSessionInfoId` reads — the SDK re-emits every
+      // TEXT control frame there. Port frames only actually arrive on TTY
+      // sessions (server-side filter — see `SpritePortNotification`), which is
+      // what every SandboxStream is. Non-port frames parse to undefined and
+      // are dropped; nothing here classifies or acts, per the seam contract.
+      command.on('message', (message) => {
+        const event = readPortNotification(message);
+        if (event !== undefined) listener(event);
+      });
     },
     kill(signal) {
       command.kill(signal);
@@ -230,6 +336,26 @@ function wrapSpriteHandle({
     async killSession(sessionId: string): Promise<void> {
       const sprite = await sdk.getSprite(exec.sandboxId);
       await sprite.killSession(sessionId);
+    },
+
+    // Dev-preview seam (dark until the proxy/decision-core tasks consume it):
+    // the service lifecycle + URL info verified live by
+    // docs/spikes/2026-08-dev-preview-sprite-services-spike.md. Same
+    // getSprite-per-call pattern as stream/listStreams/killSession above — the
+    // per-connect handle cache collapses the reads.
+    services: wrapSpriteServices(() => sdk.getSprite(exec.sandboxId)),
+
+    async urlInfo(): Promise<SandboxUrlInfo> {
+      const sprite = await sdk.getSprite(exec.sandboxId);
+      return {
+        url: sprite.url ?? null,
+        auth: normalizeSpriteUrlAuth(sprite.urlSettings?.auth),
+      };
+    },
+
+    async setUrlAuth(auth): Promise<void> {
+      const sprite = await sdk.getSprite(exec.sandboxId);
+      await sprite.updateURLSettings({ auth });
     },
   };
 }

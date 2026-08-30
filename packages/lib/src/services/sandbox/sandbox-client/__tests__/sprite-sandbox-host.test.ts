@@ -65,6 +65,7 @@ function fakeCommand(
     emitStdout: (chunk: string) => stdout.emit('data', chunk),
     emitStderr: (chunk: string) => stderr.emit('data', chunk),
     emitExit: (code: number) => events.emit('exit', code),
+    emitMessage: (message: unknown) => events.emit('message', message),
   };
 }
 
@@ -80,7 +81,22 @@ function fakeSprite(over: Partial<SpriteInstanceLike> = {}): SpriteInstanceLike 
     createCheckpoint: async () => ({ processAll: async () => {}, close: () => {} }),
     destroy: async () => {},
     killSession: async () => {},
+    updateURLSettings: async () => {},
+    listServices: async () => [],
+    createService: async () => fakeServiceLogStream(),
+    startService: async () => fakeServiceLogStream(),
+    stopService: async () => fakeServiceLogStream(),
+    deleteService: async () => {},
     ...over,
+  };
+}
+
+function fakeServiceLogStream(events: Array<{ type: string; data?: string }> = []) {
+  return {
+    processAll: async (handler: (event: { type: string; data?: string }) => void | Promise<void>) => {
+      for (const event of events) await handler(event);
+    },
+    close: () => {},
   };
 }
 
@@ -527,5 +543,241 @@ describe('createSpriteSandboxHost', () => {
 
     const stream = await handle.stream({});
     expect(() => stream.write('x')).toThrow(/not interactive/);
+  });
+
+  describe('services + url (dev-preview seam)', () => {
+    it('given services.create, should PUT via createService and drain its startup log stream before resolving', async () => {
+      let created: { name: string; config: unknown; duration: unknown } | undefined;
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          createService: async (name, config, duration) => {
+            created = { name, config, duration };
+            return fakeServiceLogStream([{ type: 'started' }, { type: 'complete' }]);
+          },
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await handle.services.create({ name: 'devserver', command: 'python3', args: ['-m', 'http.server'], httpPort: 8000 });
+
+      expect(created).toEqual({
+        name: 'devserver',
+        config: { cmd: 'python3', args: ['-m', 'http.server'], httpPort: 8000 },
+        duration: '5s',
+      });
+    });
+
+    it('given services.create, should reject when the startup log stream reports an error event', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          createService: async () => fakeServiceLogStream([{ type: 'error', data: 'boom' }]),
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.services.create({ name: 'devserver', command: 'python3' })).rejects.toThrow(/boom/);
+    });
+
+    it('given services.list, should normalize a Sprite service record onto the provider-neutral shape', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          listServices: async () => [
+            {
+              name: 'devserver',
+              cmd: 'python3',
+              args: ['-m', 'http.server'],
+              needs: null,
+              httpPort: 8000,
+              state: { name: 'devserver', status: 'running', pid: 26 },
+            },
+          ],
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.services.list()).resolves.toEqual([
+        { name: 'devserver', command: 'python3', args: ['-m', 'http.server'], httpPort: 8000, status: 'running', pid: 26 },
+      ]);
+    });
+
+    it('given services.list, should normalize an unrecognized status string to "unknown" rather than leak it', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          listServices: async () => [
+            { name: 'x', cmd: 'x', args: [], state: { name: 'x', status: 'crashlooping' as never } },
+          ],
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      const [service] = await handle.services.list();
+      expect(service?.status).toBe('unknown');
+    });
+
+    it('given services.get for a name present in the listing, should return its normalized record', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          listServices: async () => [
+            { name: 'devserver', cmd: 'python3', args: [], state: { name: 'devserver', status: 'running' } },
+          ],
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.services.get('devserver')).resolves.toMatchObject({ name: 'devserver', status: 'running' });
+    });
+
+    it('given services.get for a name absent from the listing, should return null', async () => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ listServices: async () => [] }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.services.get('missing')).resolves.toBeNull();
+    });
+
+    it('given services.stop, should record a "failed" status verbatim — Sprite records a stop as a failed exit, not "stopped"', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          stopService: async () => fakeServiceLogStream([{ type: 'stopping' }, { type: 'stopped' }]),
+          listServices: async () => [
+            { name: 'devserver', cmd: 'python3', args: [], state: { name: 'devserver', status: 'failed', error: 'exited with code 143' } },
+          ],
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await handle.services.stop('devserver');
+      await expect(handle.services.get('devserver')).resolves.toMatchObject({ status: 'failed', error: 'exited with code 143' });
+    });
+
+    it('given services.start, should call startService and drain its stream', async () => {
+      let started: string | undefined;
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({
+          startService: async (name) => { started = name; return fakeServiceLogStream([{ type: 'started' }]); },
+        }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await handle.services.start('devserver');
+      expect(started).toBe('devserver');
+    });
+
+    it('given services.remove, should call deleteService', async () => {
+      let removed: string | undefined;
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({ deleteService: async (name) => { removed = name; } }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await handle.services.remove('devserver');
+      expect(removed).toBe('devserver');
+    });
+
+    it('given urlInfo, should report the sprite url + normalized auth mode', async () => {
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({ url: 'https://x.sprites.app', urlSettings: { auth: 'sprite' } }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.urlInfo()).resolves.toEqual({ url: 'https://x.sprites.app', auth: 'sprite' });
+    });
+
+    it('given urlInfo, should normalize an absent/unrecognized auth mode to "unknown" — never default to a proven-private claim', async () => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ url: 'https://x.sprites.app', urlSettings: undefined }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.urlInfo()).resolves.toEqual({ url: 'https://x.sprites.app', auth: 'unknown' });
+    });
+
+    it('given urlInfo on a sprite reporting no url, should return url: null', async () => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ url: undefined }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.urlInfo()).resolves.toEqual({ url: null, auth: 'unknown' });
+    });
+
+    it('given setUrlAuth, should call updateURLSettings with the requested mode', async () => {
+      let settings: { auth: string } | undefined;
+      const { sdk } = makeSdk({
+        getSprite: async () => fakeSprite({ updateURLSettings: async (s) => { settings = s; } }),
+      });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await handle.setUrlAuth('public');
+      expect(settings).toEqual({ auth: 'public' });
+    });
+  });
+
+  describe('onPortEvent (port_opened/port_closed frames)', () => {
+    // fakeCommand's 'spawn' auto-fires on a setTimeout(0) registered at
+    // CONSTRUCTION time — building it before `host.provision()` (which itself
+    // awaits) would fire 'spawn' before `awaitStreamOpen`'s listener attaches,
+    // and the stream would never open. So `createSession` builds a FRESH
+    // command at call time (the pattern every other test in this file uses)
+    // and stashes it in `cmdRef` so the test can emit on it afterwards.
+    function fakeSessionCommand() {
+      let cmdRef: ReturnType<typeof fakeCommand> | undefined;
+      const createSession = () => {
+        cmdRef = fakeCommand({ autoExit: false });
+        return cmdRef.command;
+      };
+      return { createSession, emitMessage: (message: unknown) => cmdRef?.emitMessage(message) };
+    }
+
+    it('given a port_opened control frame on the stream, should deliver it to a subscribed listener', async () => {
+      const session = fakeSessionCommand();
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+      const stream = await handle.stream({});
+
+      const events: unknown[] = [];
+      stream.onPortEvent((event) => events.push(event));
+      session.emitMessage({ type: 'port_opened', port: 8124, address: '10.0.0.1', pid: 383 });
+
+      expect(events).toEqual([{ type: 'port_opened', port: 8124, address: '10.0.0.1', pid: 383 }]);
+    });
+
+    it('given a non-port control frame (e.g. session_info), should not invoke the port-event listener', async () => {
+      const session = fakeSessionCommand();
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ createSession: session.createSession }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+      const stream = await handle.stream({});
+
+      const events: unknown[] = [];
+      stream.onPortEvent((event) => events.push(event));
+      session.emitMessage({ type: 'session_info', session_id: '1' });
+
+      expect(events).toEqual([]);
+    });
   });
 });
