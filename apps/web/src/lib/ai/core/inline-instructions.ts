@@ -164,10 +164,11 @@ const AGENTS = `AGENTS:
 • Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
 • Delegate with spawn_session (pass the agent's id as \`agent\`); send_session continues the same worker — save the sessionId from the spawn for follow-ups
 • The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
+• For work that benefits from a dedicated, reusable specialist, configure a new AI_CHAT agent instead of always doing the job inline yourself
 • Never guess a model ID when configuring an agent — call list_models first`;
 
 const AUTOMATION = `AUTOMATION:
-• When a user asks for something recurring, propose a trigger instead of doing it once manually
+• Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too
 • Triggers require an existing AI_CHAT page in the same drive as the source (task/calendar/drive)
 • After setting a trigger, tell the user what will run, when, and what the agent will receive as context`;
 
