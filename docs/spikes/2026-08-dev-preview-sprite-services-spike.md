@@ -169,6 +169,41 @@ Run 3, distinct marker files per port, URL set `public` to remove auth noise:
   when platform ships httpPort routing?) is that task's call — posted as
   `[Q-preview-spike]`.
 
+## 8. Addendum (2026-08-31): docs say httpPort/409/start-on-request ARE real — re-verified, they are NOT live
+
+The published docs (`docs.sprites.dev/concepts/services`, fetched directly) are unambiguous and
+internally consistent: *"The proxy routes incoming requests to port 8080 by default. Services with
+`--http-port` override this routing target."*; a second `--http-port` service *"fails with `409:
+another service already has an HTTP port configured`"*; and *"If the service isn't running when a
+request arrives, the proxy starts it first, then forwards the request."* This directly contradicts
+§2–3 above. Rather than take either the docs or the original spike on faith, ran one more decisive
+test designed to rule out the two most likely explanations for the discrepancy:
+
+- **Not an SDK bug**: every service-lifecycle call in this run was a hand-rolled `fetch()` — not
+  `@fly/sprites` — hitting the exact endpoints/body shapes read directly out of the SDK's own
+  source (`PUT /v1/sprites/{name}/services/{name}`, body `{cmd, args, httpPort}`;
+  `PUT /v1/sprites/{name}` with `{url_settings: {auth}}`), so there is no daylight between "what the
+  SDK sends" and "what this test sent."
+- **Not propagation delay**: polled the sprite URL every 15s for **5 minutes** after creating the
+  httpPort service (20 attempts) — every single attempt was a bare timeout, never a 502, never a
+  200. Same pattern for start-on-request: polled for 3 minutes after stopping the service (12
+  attempts) — never auto-started, service stayed `status: 'failed'` throughout.
+- **Not stale tooling**: the fresh sprite created for this run reported `"version":"0.0.1-rc48"` —
+  newer than both the pinned SDK (`0.0.1-rc37`) and the locally installed `sprite` CLI (`rc43`). The
+  live platform itself, on its current version, does not exhibit the documented behavior.
+- **New detail on the 409 claim**: retried the second-httpPort create three times. The retries
+  don't even attempt-and-reject — they return `200` with `{"message":"Service already running with
+  that command, use POST /v1/services/second/restart if you want to restart it"}`, i.e. the API
+  treats a repeat of the identical request as an idempotent no-op, never as a conflict to reject.
+
+**Conclusion — upgraded from "assumed" to "verified, repeatedly, two independent runs, raw API, long
+polling windows": `httpPort` routing, the one-http-port 409, and start-on-request are documented
+platform behavior that is NOT live on the API/runtime version this org can reach as of 2026-08-31.**
+This is not a criticism of the SDK or this driver — it is a live platform/documentation gap, and
+should be re-checked before anyone builds the proxy task against the assumption that it works. The
+findings in §2–3 (URL always proxies port 8080; no scarcity; no start-on-request) stand as the
+operative behavior to design against today.
+
 ## Appendix: raw evidence
 
 Scratch scripts (`spike-services{,-2,-3,-4}.mjs`) and full logs lived in the session
