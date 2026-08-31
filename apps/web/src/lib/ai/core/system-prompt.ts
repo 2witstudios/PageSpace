@@ -148,13 +148,31 @@ export function buildPersonalizationPrompt(personalization?: PersonalizationInfo
  * + prompt-assembly.ts), not here, so this string stays byte-identical
  * across turns regardless of where the user navigates and provider prefix
  * caches survive.
+ *
+ * `allowedToolNames`, when provided, gates the sandbox section on the agent
+ * actually holding a sandbox tool (checked via `bash`, present whenever the
+ * sandbox family is) — `codeExecutionEnabled` alone is the deployment-wide
+ * kill switch, not the per-agent `sandboxEnabled` switch
+ * (`filterToolsForSandboxEnablement`), which can strip the whole family from
+ * an agent's tools while the deployment flag stays on. `undefined` means "no
+ * filtering context" (same sentinel as buildInlineInstructions) and does not
+ * suppress the section — every current caller that omits it wants the
+ * unfiltered admin/preview behavior, not an empty tool list.
  */
 export function buildSystemPrompt(
   isReadOnly: boolean = false,
   personalization?: PersonalizationInfo,
-  codeExecutionEnabled: boolean = false
+  codeExecutionEnabled: boolean = false,
+  allowedToolNames?: string[]
 ): string {
   const personalizationPrompt = buildPersonalizationPrompt(personalization);
+  const hasSandboxTools = allowedToolNames === undefined || allowedToolNames.includes('bash');
+  // Read-only strips bash (a write tool) from a real caller's allowedToolNames
+  // before this runs, but the drive-write instructions inside the sandbox
+  // block would contradict READ-ONLY MODE if this ever ran with a stale or
+  // unfiltered tool list — so the read-only check is asserted directly here
+  // too, not left to depend on that upstream filtering alone.
+  const includeSandboxInstructions = codeExecutionEnabled && !isReadOnly && hasSandboxTools;
 
   const sections = [
     '# PAGESPACE AI',
@@ -167,7 +185,7 @@ export function buildSystemPrompt(
     personalizationPrompt,
     BEHAVIOR_PROMPT,
     isReadOnly ? READ_ONLY_CONSTRAINT : null,
-    codeExecutionEnabled ? SANDBOX_INSTRUCTIONS : null,
+    includeSandboxInstructions ? SANDBOX_INSTRUCTIONS : null,
   ].filter(Boolean);
 
   return sections.join('\n\n');

@@ -62,6 +62,36 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('/workspace');
   });
 
+  it('given codeExecutionEnabled true but allowedToolNames has no sandbox tool, should NOT include sandbox guidance', () => {
+    // The per-agent sandboxEnabled switch (filterToolsForSandboxEnablement) strips
+    // every sandbox tool including bash from allowedToolNames without touching the
+    // deployment-wide codeExecutionEnabled flag — the section must follow the tools
+    // the agent actually has, not the global kill switch alone.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'create_task']);
+    expect(result).not.toContain('/workspace');
+  });
+
+  it('given codeExecutionEnabled true and allowedToolNames includes bash, should include sandbox guidance', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash']);
+    expect(result).toContain('/workspace');
+  });
+
+  it('given codeExecutionEnabled true and allowedToolNames omitted, should include sandbox guidance (undefined = no filtering context)', () => {
+    // Matches the sentinel semantics used elsewhere in this module (buildInlineInstructions,
+    // buildNonCoreToolNamesPrompt): undefined means "no tool list to filter against", not "no tools".
+    const result = buildSystemPrompt(false, undefined, true);
+    expect(result).toContain('/workspace');
+  });
+
+  it('given isReadOnly true and codeExecutionEnabled true, should NOT include sandbox guidance even with bash present', () => {
+    // Read-only mode strips bash (a write tool) from the agent's real tool list
+    // before this is ever called, but the drive-write instructions inside the
+    // sandbox block would still contradict READ-ONLY MODE if this ever fires
+    // with a stale/unfiltered tool list — assert the invariant directly.
+    const result = buildSystemPrompt(true, undefined, true, ['read_page', 'bash']);
+    expect(result).not.toContain('/workspace');
+  });
+
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {
     const result = buildSystemPrompt(false, undefined, true);
     // Auth boundary → dedicated tools

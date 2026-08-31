@@ -259,11 +259,34 @@ describe('buildAgentSystemPrompt — what both surfaces owe the caller', () => {
     expect(without).not.toContain('create_task');
   });
 
-  it('should describe the sandbox only when code execution is on', () => {
-    expect(buildAgentSystemPrompt(pageInput({ codeExecutionEnabled: true }))).toContain(
-      'CODE SANDBOX:',
-    );
+  it('should describe the sandbox only when code execution is on and the agent has sandbox tools', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({ codeExecutionEnabled: true, allowedToolNames: [...TOOL_NAMES, 'bash'] }),
+      ),
+    ).toContain('CODE SANDBOX:');
     expect(buildAgentSystemPrompt(pageInput())).not.toContain('CODE SANDBOX:');
+  });
+
+  it('should not describe the sandbox when code execution is globally on but this agent has no sandbox tools', () => {
+    // Mirrors filterToolsForSandboxEnablement: a page with sandboxEnabled: false
+    // (the schema default) never gets bash/writeFile/etc in allowedToolNames even
+    // though the deployment-wide codeExecutionEnabled flag is on.
+    expect(
+      buildAgentSystemPrompt(pageInput({ codeExecutionEnabled: true, allowedToolNames: TOOL_NAMES })),
+    ).not.toContain('CODE SANDBOX:');
+  });
+
+  it('should not describe the sandbox in read-only mode even with sandbox tools present', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({
+          readOnly: true,
+          codeExecutionEnabled: true,
+          allowedToolNames: [...TOOL_NAMES, 'bash'],
+        }),
+      ),
+    ).not.toContain('CODE SANDBOX:');
   });
 
   it('should be pure — same input, same output, nothing accumulated between calls', () => {

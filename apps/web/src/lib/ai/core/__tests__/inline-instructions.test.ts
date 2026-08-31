@@ -100,6 +100,46 @@ describe('buildInlineInstructions — AGENTS gating', () => {
   });
 });
 
+describe('buildInlineInstructions — AGENTS sub-bullet gating', () => {
+  it('omits the configure-a-specialist bullet when create_page or update_agent_config is missing', () => {
+    // spawn_session alone is enough to include the AGENTS section, but not
+    // enough to create and configure a new AI_CHAT agent.
+    const result = buildInlineInstructions(['spawn_session', 'create_page']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('configure a new AI_CHAT agent');
+  });
+
+  it('includes the configure-a-specialist bullet only when both create_page and update_agent_config are present', () => {
+    const result = buildInlineInstructions(['spawn_session', 'create_page', 'update_agent_config']);
+    expect(result).toContain('configure a new AI_CHAT agent');
+  });
+
+  it('omits the "call list_models first" bullet when list_models is missing', () => {
+    const result = buildInlineInstructions(['spawn_session']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('call list_models first');
+  });
+
+  it('includes the "call list_models first" bullet when list_models is present', () => {
+    const result = buildInlineInstructions(['spawn_session', 'list_models']);
+    expect(result).toContain('call list_models first');
+  });
+
+  it('given availableTools=undefined, includes both sub-bullets (no filtering context)', () => {
+    const result = buildInlineInstructions();
+    expect(result).toContain('configure a new AI_CHAT agent');
+    expect(result).toContain('call list_models first');
+  });
+
+  it('buildGlobalAssistantInstructions gates the same sub-bullets on the tools it is given', () => {
+    expect(buildGlobalAssistantInstructions(['spawn_session'])).not.toContain('configure a new AI_CHAT agent');
+    expect(buildGlobalAssistantInstructions(['spawn_session'])).not.toContain('call list_models first');
+    expect(
+      buildGlobalAssistantInstructions(['spawn_session', 'create_page', 'update_agent_config', 'list_models']),
+    ).toContain('configure a new AI_CHAT agent');
+  });
+});
+
 describe('buildInlineInstructions — AUTOMATION gating', () => {
   it('includes AUTOMATION when set_task_trigger is available', () => {
     const result = buildInlineInstructions(['set_task_trigger']);

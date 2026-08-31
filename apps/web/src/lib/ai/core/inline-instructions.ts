@@ -160,12 +160,31 @@ function buildTaskManagement(availableTools?: string[]): string {
     : TASK_MANAGEMENT_FULL;
 }
 
-const AGENTS = `AGENTS:
-• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
-• Delegate with spawn_session (pass the agent's id as \`agent\`); send_session continues the same worker — save the sessionId from the spawn for follow-ups
-• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
-• For work that benefits from a dedicated, reusable specialist, configure a new AI_CHAT agent instead of always doing the job inline yourself
-• Never guess a model ID when configuring an agent — call list_models first`;
+/**
+ * AGENTS section. The base bullets apply whenever the section is included
+ * (gated by includeAgents in buildInlineInstructions — buildGlobalAssistantInstructions
+ * includes the section unconditionally). Two bullets name a capability beyond
+ * that base gate — configuring a new specialist needs create_page AND
+ * update_agent_config, not just spawn_session/list_agents — so they compose
+ * in only when their own required tools are present, the same discipline
+ * buildPageTypes uses for SHEET/DOCUMENT.
+ */
+function buildAgents(availableTools?: string[]): string {
+  const has = (tool: string) => hasAny(availableTools, [tool]);
+  const lines = [
+    'AGENTS:',
+    "• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured",
+    "• Delegate with spawn_session (pass the agent's id as `agent`); send_session continues the same worker — save the sessionId from the spawn for follow-ups",
+    '• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec',
+  ];
+  if (has('create_page') && has('update_agent_config')) {
+    lines.push('• For work that benefits from a dedicated, reusable specialist, configure a new AI_CHAT agent instead of always doing the job inline yourself');
+  }
+  if (has('list_models')) {
+    lines.push('• Never guess a model ID when configuring an agent — call list_models first');
+  }
+  return lines.join('\n');
+}
 
 const AUTOMATION = `AUTOMATION:
 • Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too
@@ -240,7 +259,7 @@ export function buildInlineInstructions(availableTools?: string[]): string {
     WORKSPACE_RULES,
     buildPageTypes(availableTools),
     includeTaskManagement ? buildTaskManagement(availableTools) : null,
-    includeAgents ? AGENTS : null,
+    includeAgents ? buildAgents(availableTools) : null,
     includeAutomation ? AUTOMATION : null,
     includeSearch ? SEARCH : null,
     includeAskUser ? ASK_USER_SECTION : null,
@@ -267,7 +286,7 @@ ${buildPageTypes(availableTools)}
 
 ${buildTaskManagement(availableTools)}
 
-${AGENTS}
+${buildAgents(availableTools)}
 
 ${AUTOMATION}
 
