@@ -118,3 +118,27 @@ export function canManageDrive(drive: { isOwned?: boolean; role?: string } | nul
   const role = drive.role?.toUpperCase();
   return role === 'ADMIN' || role === 'OWNER';
 }
+
+/**
+ * Check if the user IS the drive's owner — stricter than {@link canManageDrive}.
+ * An ADMIN can manage a drive's resources but must not be able to spend the
+ * owner's money: use this (not `canManageDrive`) to gate anything that starts
+ * or cancels a paid subscription on the owner's behalf.
+ *
+ * UI-ONLY. This has no server-side counterpart and is not the security
+ * boundary — it derives a display decision from a `{isOwned, role}` DTO the
+ * server already returned, the same shape `canManageDrive` above already
+ * uses; there is nothing else in this codebase that expresses this exact
+ * client-side check to reuse instead. The actual money-moving routes (e.g.
+ * the dedicated-tier purchase/cancel endpoints) independently re-check
+ * `drives.ownerId` server-side and do NOT trust this function or any
+ * role-based permission helper for that decision (a role can be granted, and
+ * "may spend this person's money" deliberately is not something a role
+ * should be able to grant) — see that route's own docblock. A bug here can
+ * at most show or hide a button; it cannot authorize a charge.
+ */
+export function isDriveOwner(drive: { isOwned?: boolean; role?: string } | null | undefined): boolean {
+  if (!drive) return false;
+  if (drive.isOwned === true) return true;
+  return drive.role?.toUpperCase() === 'OWNER';
+}

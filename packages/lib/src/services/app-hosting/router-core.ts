@@ -65,6 +65,26 @@ export interface RoutableApp {
    * ourselves is both honest and diagnosable.
    */
   hasMachine: boolean;
+  /**
+   * The app's owning drive, ECHOED (not trusted, not authenticated) onto a
+   * non-replay decision so the parked/unavailable page can link a visitor back
+   * to `/dashboard/<driveId>` in PageSpace. This route is proxy-authenticated,
+   * not session-authenticated — it never learns who is actually looking at the
+   * page — so the link is deliberately generic ("open this app in PageSpace")
+   * rather than a claim about the visitor's identity: whether they can see
+   * anything there, and whether what they see includes "resume this app", is
+   * decided entirely by that destination page's own session/permission check,
+   * never by this edge. See the app pane in the environments UI for where the
+   * real resume affordance lives.
+   */
+  driveId: string;
+  /**
+   * `published_apps.envId` — the environment this app was published from,
+   * echoed the same way `driveId` is, so a non-replay decision can deep-link to
+   * the app's own pane (`/dashboard/<driveId>?env=<envId>`) rather than the
+   * drive's root. Never authenticated at this edge, same caveat as `driveId`.
+   */
+  envId: string;
 }
 
 /**
@@ -82,8 +102,8 @@ export interface RoutableApp {
  */
 export type AppRouteDecision =
   | { kind: 'replay'; flyAppName: string; state: string; timeoutMs: number }
-  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap' }
-  | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled' }
+  | { kind: 'parked'; reason: 'out_of_credits' | 'parked_status' | 'daily_cap'; driveId?: string; envId?: string }
+  | { kind: 'unavailable'; reason: 'deploying' | 'failed' | 'destroying' | 'hosting_disabled'; driveId?: string; envId?: string }
   | { kind: 'not_found'; reason: 'unknown_host' | 'apex' | 'custom_host' | 'no_such_app' };
 
 /** A hostname resolved against the published-apps apex. */
@@ -186,19 +206,19 @@ export function decideAppRoute(input: AppRouteInput): AppRouteDecision {
   const { app } = input;
   if (!app) return { kind: 'not_found', reason: 'no_such_app' };
 
-  if (app.status === 'parked') return { kind: 'parked', reason: 'parked_status' };
-  if (app.status === 'destroying') return { kind: 'unavailable', reason: 'destroying' };
-  if (app.status === 'failed') return { kind: 'unavailable', reason: 'failed' };
+  if (app.status === 'parked') return { kind: 'parked', reason: 'parked_status', driveId: app.driveId, envId: app.envId };
+  if (app.status === 'destroying') return { kind: 'unavailable', reason: 'destroying', driveId: app.driveId, envId: app.envId };
+  if (app.status === 'failed') return { kind: 'unavailable', reason: 'failed', driveId: app.driveId, envId: app.envId };
 
   // provisioning / building, and any status this file has not been taught, are
   // "not serving yet". Defaulting an UNKNOWN status to unavailable rather than
   // to replay is the fail-closed direction: a status added later must not start
   // billing machines through a router that has never heard of it.
-  if (!SERVABLE_STATUSES.has(app.status)) return { kind: 'unavailable', reason: 'deploying' };
-  if (!app.hasMachine) return { kind: 'unavailable', reason: 'deploying' };
+  if (!SERVABLE_STATUSES.has(app.status)) return { kind: 'unavailable', reason: 'deploying', driveId: app.driveId, envId: app.envId };
+  if (!app.hasMachine) return { kind: 'unavailable', reason: 'deploying', driveId: app.driveId, envId: app.envId };
 
   if (app.tier === 'metered' && !input.balanceOk) {
-    return { kind: 'parked', reason: 'out_of_credits' };
+    return { kind: 'parked', reason: 'out_of_credits', driveId: app.driveId, envId: app.envId };
   }
 
   return {

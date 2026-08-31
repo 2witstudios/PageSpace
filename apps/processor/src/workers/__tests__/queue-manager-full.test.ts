@@ -123,7 +123,7 @@ describe('QueueManager', () => {
       await qm.initialize();
 
       expect(mockBossStart).toHaveBeenCalledTimes(1);
-      expect(mockBossWork).toHaveBeenCalledTimes(13);
+      expect(mockBossWork).toHaveBeenCalledTimes(14);
       expect(mockBossWork.mock.calls[0][0]).toBe('ingest-file');
       expect(mockBossWork.mock.calls[1][0]).toBe('image-optimize');
       expect(mockBossWork.mock.calls[2][0]).toBe('text-extract');
@@ -137,7 +137,8 @@ describe('QueueManager', () => {
       expect(mockBossWork.mock.calls[10][0]).toBe('stuck-page-reconciler');
       expect(mockBossWork.mock.calls[11][0]).toBe('app-build');
       expect(mockBossWork.mock.calls[12][0]).toBe('app-build-reconciler');
-      expect(mockBossCreateQueue).toHaveBeenCalledTimes(13);
+      expect(mockBossWork.mock.calls[13][0]).toBe('app-build-source-retention');
+      expect(mockBossCreateQueue).toHaveBeenCalledTimes(14);
       expect(mockBossCreateQueue).toHaveBeenCalledWith('ingest-file');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('pull-verify');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('image-optimize');
@@ -151,6 +152,7 @@ describe('QueueManager', () => {
       expect(mockBossCreateQueue).toHaveBeenCalledWith('stuck-page-reconciler');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build');
       expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build-reconciler');
+      expect(mockBossCreateQueue).toHaveBeenCalledWith('app-build-source-retention');
       expect(mockBossSchedule).toHaveBeenCalledWith('siem-delivery', '*/30 * * * * *', {}, { retryLimit: 0 });
       // Same cadence + no-stack pattern as siem-delivery: retryLimit 0 so
       // overlapping scheduled runs never pile up; the advisory lock inside
@@ -163,6 +165,9 @@ describe('QueueManager', () => {
       // pattern, with the claim's durable lease — not the schedule — doing the
       // real work of stopping two processors recovering the same app.
       expect(mockBossSchedule).toHaveBeenCalledWith('app-build-reconciler', '*/5 * * * *', {}, { retryLimit: 0 });
+      // The build-source disk sweep: daily, since this is hygiene rather than
+      // anything time-sensitive.
+      expect(mockBossSchedule).toHaveBeenCalledWith('app-build-source-retention', '0 3 * * *', {}, { retryLimit: 0 });
     }, 30000);
 
     it('handles queue creation errors gracefully', async () => {
