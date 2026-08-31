@@ -204,6 +204,58 @@ should be re-checked before anyone builds the proxy task against the assumption 
 findings in §2–3 (URL always proxies port 8080; no scarcity; no start-on-request) stand as the
 operative behavior to design against today.
 
+## 9. Addendum (2026-08-31): ruled out "wrong config on our end"; discovered a better port-detection endpoint; found no hidden per-port routing
+
+Before trusting either the docs or §8's re-verification, checked whether the gap could be explained
+by something wrong with how PageSpace's own account is set up, rather than a platform/docs gap:
+
+- **Not the wrong org**: `flyctl orgs list` shows exactly one org on this account (`2Wits`/`personal`).
+  `flyctl apps list` confirms every production app (`pagespace-web`, `pagespace-realtime`, etc.) is
+  owned by that exact same org — there is no separate, better-provisioned "company" Sprites org this
+  spike missed.
+- **Not the wrong token shape**: production's `resolveSpritesToken()` reads `SPRITES_API_TOKEN` into
+  `new SpritesClient(token)` — the identical bearer-token shape minted here via
+  `SpritesClient.createToken(macaroon, 'personal')`.
+- **Not a billing/plan gate**: production apps are actively deployed and billed under this org, which
+  rules out "unpaid trial account" as an explanation. No plan/beta/tier language appears anywhere in
+  the docs for the services/httpPort/ports features.
+- **Not stale docs vs. a newer platform**: `docs.sprites.dev/api/` resolves to `/api/v001-rc48/` —
+  the exact runtime version (`0.0.1-rc48`) every freshly-created sprite in this investigation
+  reported. The docs being read are documentation for the exact version being tested.
+- **Not an ongoing platform incident**: Fly's own status page (`status.flyio.net`) shows no open or
+  recent incident touching Sprites HTTP routing/services/proxy — the one Sprites-related incident in
+  the last month (sprite deletion jobs failing, 2026-08-30 21:18–22:05 UTC) is unrelated and outside
+  every test window here.
+
+Also discovered a previously-missed API surface — `docs.sprites.dev/api/v001-rc48/ports/` documents
+`WSS /v1/sprites/{name}/ports/watch`: *"Watch for port open/close events across all processes in the
+sprite namespace. On connect, sends a snapshot of all currently listening ports as a `port_list`
+message, then streams incremental `port_opened`/`port_closed` events."* The SDK does not wrap this
+endpoint at all (grepped the dist — zero references). Tested it directly:
+
+- **Correction to §5's finding**: `port_opened`/`port_closed` are NOT TTY-session-only. §5 concluded
+  this from the exec-WS's own `message` channel, which genuinely is TTY-only (verified: a plain
+  `spawn()` produced zero frames there). But the dedicated `ports/watch` WS saw a `port_opened` +
+  `port_closed` pair for a **plain non-TTY `spawn()`** process within ~1.5s of it binding the port —
+  a strictly more general, more reliable detection channel than the one wired into this PR's seam.
+  **If/when the dev-server-detection decision core gets built, it should watch `ports/watch`, not
+  the exec-WS message channel** — this seam's `onPortEvent` (TTY-only) should be treated as
+  superseded, not extended.
+- **The docs' example message is misleading**: the docs example shows
+  `"address": "https://my-sprite.sprites.dev:3000"` (a routable per-port URL), which would have been
+  a completely different — and much simpler — path to a working preview (watch for the port, hit its
+  own URL directly, no Services/httpPort involved at all). The ACTUAL wire response only ever
+  contained `"address": "10.0.0.1"` — the sprite's internal IP, matching exactly what the exec-WS
+  channel already showed in §5 of the original spike. **There is no hidden per-port public URL.**
+  `ports/watch` is a notification-only channel; it does not make a port externally reachable.
+
+**Net effect on the open question**: the "wrong config" and "secret per-port URL" hypotheses are
+both ruled out. The httpPort/409/start-on-request gap from §8 stands, now with corroborating context
+(matching API version, no incident, no plan gate) rather than a plausible alternate explanation. The
+one channel genuinely not checkable from here: an account-level feature flag invisible to `flyctl`,
+the `sprite` CLI, and the public docs — only Fly support or a Sprites account dashboard could confirm
+or rule that out.
+
 ## Appendix: raw evidence
 
 Scratch scripts (`spike-services{,-2,-3,-4}.mjs`) and full logs lived in the session
