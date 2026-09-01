@@ -161,7 +161,9 @@ const saveMessageToDatabase = vi.fn().mockResolvedValue(undefined);
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT:
 // the reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
 // D6, PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// `messageRepository.getPageConversationMessages` (the cross-conversation
+// `getRecentPageMessagesForUser` reader is gone — a new conversation now
+// starts empty),
 // which read the unified `messages` table. The fixtures below are unchanged —
 // what they stand in for moved one layer up.
 vi.mock('@/lib/repositories/message-repository', () => ({
@@ -170,8 +172,6 @@ vi.mock('@/lib/repositories/message-repository', () => ({
       saveMessageToDatabase(...args).then(() => ({ saved: true, rev: 1 })),
     getPageConversationMessages: vi.fn(async (_pageId: string, conversationId: string) =>
       ALL_MESSAGES.filter((m) => m.conversationId === conversationId)),
-    getRecentPageMessagesForUser: vi.fn(async (_pageId: string, _userId: string, limit: number) =>
-      ALL_MESSAGES.slice(-limit)),
   },
 }));
 
@@ -215,6 +215,7 @@ vi.mock('ai', () => ({
 }));
 
 import { POST } from '../route';
+import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { messageRepository } from '@/lib/repositories/message-repository';
 import { authenticateRequestWithOptions } from '@/lib/auth';
 
@@ -334,13 +335,125 @@ describe('POST /api/ai/page-agents/consult — cross-user history', () => {
     expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
   });
 
-  it('the no-conversationId fallback asks for THIS caller\'s messages, not the page\'s', async () => {
+  /**
+   * SUPERSEDES "the no-conversationId fallback asks for THIS caller's
+   * messages, not the page's". That assertion documented the owner-scoped
+   * cross-conversation read, which was the right containment for the WRONG
+   * read: scoping a leak to one user makes it not a leak, but it left every
+   * one-shot consult seeing that user's other conversations. The reader is
+   * gone, so the strongest available statement is that no history is read at
+   * all.
+   */
+  it('reads no history whatsoever when no conversationId is given', async () => {
     const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q' }));
 
     expect(response.status).toBe(200);
-    // The owner-scoping lives in the argument list: a page-only read is what
-    // leaked, so the caller's id has to be passed for the repository to
-    // constrain on it at all.
-    expect(messageRepository.getRecentPageMessagesForUser).toHaveBeenCalledWith('agent-1', 'user-1', 10);
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * CALLER-ADDRESSED CONSULTATIONS.
+ *
+ * The route runs to completion whether or not its caller is still listening —
+ * nothing here reads `request.signal`, and the consult is billed and persisted
+ * either way. While the conversation id was always minted server-side and
+ * returned only in the 200 body, a caller whose client deadline expired never
+ * learned where its own answer had been written: real credits spent on a
+ * result that could not be reached. `newConversationId` lets the caller name
+ * the address before sending, which is what makes an abandoned consult
+ * recoverable through the conversations API.
+ */
+describe('POST /api/ai/page-agents/consult — caller-supplied newConversationId', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    convertToModelMessages.mockClear();
+    saveMessageToDatabase.mockClear();
+  });
+
+  it('creates the conversation at the caller\'s address and echoes it back', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'conv-mine' }));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).conversationId).toBe('conv-mine');
+    expect(conversationRepository.createConversation).toHaveBeenCalledWith('conv-mine', 'user-1', 'agent-1');
+  });
+
+  it('persists both turns under the caller\'s address, so it is readable afterwards', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'conv-mine' }));
+
+    const conversationIds = saveMessageToDatabase.mock.calls.map((call) => (call[0] as { conversationId: string }).conversationId);
+    expect(conversationIds).toEqual(['conv-mine', 'conv-mine']);
+  });
+
+  /** A new conversation is new: naming its address does not import context. */
+  it('starts empty despite naming an address', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'conv-mine' }));
+
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Refused, never appended to. Writing this turn into whatever conversation
+   * already lives at that address — possibly another user's — is the failure
+   * this check exists to prevent, and it is categorically worse than the mild
+   * existence signal a 409 gives back for an id the caller supplied itself.
+   */
+  it('refuses with 409 when the address is already taken, rather than writing into it', async () => {
+    getConversation.mockResolvedValueOnce({
+      id: 'conv-taken',
+      userId: 'alice',
+      type: 'page',
+      contextId: 'agent-1',
+      agentPageId: null,
+      isShared: false,
+      isActive: true,
+    });
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'conv-taken' }));
+
+    expect(response.status).toBe(409);
+    expect(conversationRepository.createConversation).not.toHaveBeenCalled();
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `conversationId` CONTINUES, `newConversationId` CREATES. Resolving the
+   * contradiction by precedence would write the turn somewhere the caller did
+   * not name.
+   */
+  it('rejects both fields together with a 400', async () => {
+    const response = await POST(
+      makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-a', newConversationId: 'conv-mine' }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  it('rejects an empty newConversationId', async () => {
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: '' }));
+    expect(response.status).toBe(400);
+  });
+
+  /**
+   * The continue path's refusal is unchanged: an unknown id there is still a
+   * 404, identical to someone else's id, so `newConversationId` did not turn
+   * that deliberate ambiguity into an existence oracle for every id.
+   */
+  it('leaves conversationId\'s unknown-id 404 exactly as it was', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-unknown' }));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Conversation not found' });
   });
 });

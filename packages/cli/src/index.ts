@@ -3,7 +3,7 @@ export { parseArgv, PROFILE_FLAG_RENAMED_MESSAGE } from './argv/parse.js';
 export type { CommandIntent, ParsedFlags, ParseResult, UsageError } from './argv/parse.js';
 
 // Config precedence resolver (flags > env > loaded credential > defaults).
-export { DEFAULT_HOST, resolveConfig } from './config/resolve.js';
+export { DEFAULT_HOST, resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 export type { ConfigCredential, ConfigEnv, ConfigFlags, ConfigSources, ResolvedConfig } from './config/resolve.js';
 
 // Router — resolves a parsed command path to a handler.
@@ -126,11 +126,24 @@ export {
   agentsAskHandler,
   agentsConfigHandler,
   agentsListHandler,
+  createAgentsAskHandler,
   modelsListHandler,
   renderAgentsList,
   renderAgentsMultiDriveList,
+  renderAskTimeoutMessage,
   renderModelsList,
 } from './commands/agents.js';
+export type { AgentsAskDeps } from './commands/agents.js';
+// Conversation reading — the retrieval half of `agents ask`. A consult that
+// outruns its caller's deadline keeps running server-side and persists its
+// answer; these are how that answer is found and read back.
+export {
+  conversationsListHandler,
+  conversationsReadHandler,
+  renderConversation,
+  renderConversationsList,
+  renderMessageParts,
+} from './commands/conversations.js';
 export { activityHandler, renderActivity } from './commands/activity.js';
 export { channelsSendHandler } from './commands/channels.js';
 

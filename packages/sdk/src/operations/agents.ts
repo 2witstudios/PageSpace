@@ -270,16 +270,42 @@ export const askAgent = defineOperation({
     question: z.string().min(1),
     context: z.string().optional(),
     conversationId: z.string().optional(),
+    /**
+     * A caller-minted address for a NEW conversation — the answer's location,
+     * known before the request is sent.
+     *
+     * Deliberately a separate field from `conversationId` rather than a
+     * relaxation of it. `conversationId` names a conversation that must
+     * already exist and must already be readable by the caller; the route
+     * answers an unknown id there with the same 404 it gives someone else's
+     * thread, precisely so an id-guessing caller cannot tell the two apart.
+     * Folding "start a new one here" into that field would have turned that
+     * refusal into an existence oracle for every id. As its own field the
+     * distinction is explicit: `conversationId` continues, `newConversationId`
+     * creates, and the continue path's semantics do not move.
+     *
+     * WHY THIS EXISTS AT ALL: the route otherwise mints the conversation id
+     * itself and returns it only in the 200 body. A caller whose request
+     * exceeded its deadline therefore never learned where its own answer was
+     * being written — while the server, which never reads `request.signal`,
+     * ran the consult to completion and billed for it. Supplying the address
+     * up front is what makes an abandoned consult recoverable
+     * (`conversations.read`) instead of paid-for and lost.
+     */
+    newConversationId: z.string().min(1).optional(),
   }),
   outputSchema: askAgentOutputSchema,
   requiredScope: 'drive',
-  // Long-running: the route's tool loop is capped at 20 steps (#1769 fix,
-  // mirroring the internal ask_agent tool's own budget) inside one
-  // generateText call — comfortably covered by 2 minutes without masking a
-  // genuinely hung request.
+  // A per-operation DEFAULT, not a ceiling: an explicit `timeoutMs` on the
+  // client beats this (see the SDK client's `resolveTimeoutMs`). 2 minutes
+  // covers the route's 20-step tool loop (#1769 fix, mirroring the internal
+  // ask_agent tool's budget) for the common case without masking a genuinely
+  // hung request — but a tool loop against an arbitrary model has no bound
+  // this or any other constant could honestly express, which is why the
+  // caller must be able to raise it.
   timeoutMsOverride: 120_000,
   description:
-    'Consult another AI agent for specialized assistance. Non-idempotent: POST is never auto-retried by the facade (isIdempotentMethod only retries GET), so a timeout or 5xx is surfaced directly rather than retried — a retried ask would double-execute the agent. Omitting `conversationId` falls back to the agent\'s 10 most recent messages across all conversations (#1769 fix); passing one continues that exact conversation.',
+    'Consult another AI agent for specialized assistance. Non-idempotent: POST is never auto-retried by the facade (isIdempotentMethod only retries GET), so a timeout or 5xx is surfaced directly rather than retried — a retried ask would double-execute the agent. A timeout means the CALLER gave up, not that the work stopped: the route runs to completion and persists its answer, so retrieve it with `conversations.read` rather than asking again. Pass `newConversationId` to choose that conversation\'s id up front, so the answer is addressable even if the request times out; pass `conversationId` to continue an existing conversation (it must already exist and be readable); pass neither for a fresh conversation with no prior history.',
 });
 
 // ---------------------------------------------------------------------------

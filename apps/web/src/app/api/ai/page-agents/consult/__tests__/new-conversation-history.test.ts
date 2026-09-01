@@ -2,13 +2,22 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import type { SessionAuthResult } from '@/lib/auth';
 
 // ============================================================================
-// "Recent history" for POST /api/ai/page-agents/consult (#1769)
+// New-conversation history for POST /api/ai/page-agents/consult
 //
-// The route's no-conversationId fallback loads context from the agent's most
-// recent chat_messages rows. `orderBy(chatMessages.createdAt).limit(10)` sorts
-// ASCENDING then takes the first 10 — the agent's FIRST 10 messages EVER, not
-// the most recent. Fix: order DESC + limit, then reverse back to chronological
-// order before handing the history to the model.
+// SUPERSEDES the "recent history ordering" behaviour this file used to assert
+// (#1769). That fix was correct about ordering and wrong about scope: the
+// no-conversationId path wrote to a BRAND-NEW conversation while reading the
+// caller's 10 most recent messages across ALL their conversations on the
+// agent. Writes were conversation-scoped, reads were page-scoped, so
+// consecutive one-shot consults silently saw each other — an agent would
+// recognise a question it had never been asked in that conversation — and it
+// diverged from the internal `ask_agent` tool, which loads history only when
+// given a conversationId. The ordering question is now moot: there is no
+// window to order, because a new conversation starts empty.
+//
+// The fixture below deliberately leaves 15 messages in the database. A test
+// that proved emptiness against an empty database would pass just as happily
+// if the route resumed reading across conversations tomorrow.
 // ============================================================================
 
 vi.mock('@/lib/auth', () => ({
@@ -150,16 +159,17 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
 // reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
 // PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// `messageRepository.getPageConversationMessages` (the cross-conversation
+// `getRecentPageMessagesForUser` reader is gone — a new conversation now
+// starts empty),
 // which read the unified `messages` table.
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
     savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
+    // Returns the full 15-message fixture: if the route ever reads a
+    // conversation it was not given, the emptiness assertions below fail on
+    // content rather than passing against an empty stub.
     getPageConversationMessages: vi.fn(async () => ALL_MESSAGES),
-    // The route asks for the newest 10 and expects them oldest-first; the
-    // repository is what orders DESC under the limit and reverses, so the mock
-    // reproduces that contract rather than the raw SQL that used to do it.
-    getRecentPageMessagesForUser: vi.fn(async (_pageId: string, _userId: string, limit: number) => ALL_MESSAGES.slice(-limit)),
   },
 }));
 
@@ -178,6 +188,7 @@ vi.mock('ai', () => ({
 
 import { POST } from '../route';
 import { authenticateRequestWithOptions } from '@/lib/auth';
+import { messageRepository } from '@/lib/repositories/message-repository';
 
 const mockAuth = (): SessionAuthResult => ({
   userId: 'user-1',
@@ -195,27 +206,31 @@ const makeRequest = () =>
     body: JSON.stringify({ agentId: 'agent-1', question: 'What is up?' }),
   });
 
-describe('POST /api/ai/page-agents/consult — recent history ordering', () => {
+describe('POST /api/ai/page-agents/consult — a new conversation starts empty', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
     convertToModelMessages.mockClear();
   });
 
-  it('uses the MOST RECENT 10 messages, in chronological order — not the first 10', async () => {
+  it('sends the model the question ALONE — no messages from the caller\'s other conversations', async () => {
     const response = await POST(makeRequest());
     expect(response.status).toBe(200);
 
     expect(convertToModelMessages).toHaveBeenCalledTimes(1);
     const modelMessages = convertToModelMessages.mock.calls[0][0] as Array<{ content: string }>;
 
-    // Last entry is always the new consultation question, not history.
-    const historyContents = modelMessages.slice(0, -1).map(m => m.content);
+    // Asserted by VALUE, not just by length: 15 messages exist on this agent
+    // for this caller, and none of their content may appear.
+    expect(modelMessages.map(m => m.content)).toEqual(['What is up?']);
+    for (const message of ALL_MESSAGES) {
+      expect(JSON.stringify(modelMessages)).not.toContain(message.content);
+    }
+  });
 
-    // Most recent 10 of 15 messages (msg-6..msg-15), oldest-first within that window.
-    expect(historyContents).toEqual([
-      'content-6', 'content-7', 'content-8', 'content-9', 'content-10',
-      'content-11', 'content-12', 'content-13', 'content-14', 'content-15',
-    ]);
+  it('reads no conversation at all when none was named', async () => {
+    const response = await POST(makeRequest());
+    expect(response.status).toBe(200);
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
   });
 });

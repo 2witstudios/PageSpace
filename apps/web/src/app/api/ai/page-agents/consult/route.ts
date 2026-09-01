@@ -210,11 +210,29 @@ export async function POST(request: Request) {
     const userId = auth.userId;
 
     const body = await request.json();
-    const { agentId, question, context, conversationId } = body;
+    const { agentId, question, context, conversationId, newConversationId } = body;
 
     if (!agentId || !question) {
       return NextResponse.json(
         { error: 'agentId and question are required' },
+        { status: 400 }
+      );
+    }
+
+    // `conversationId` CONTINUES an existing conversation; `newConversationId`
+    // CREATES one at an address the caller chose. Asking for both is a
+    // contradiction, not something to resolve by precedence — silently
+    // preferring one would write the turn somewhere the caller did not name.
+    if (conversationId && newConversationId) {
+      return NextResponse.json(
+        { error: 'Pass conversationId to continue a conversation or newConversationId to start one, not both' },
+        { status: 400 }
+      );
+    }
+
+    if (newConversationId !== undefined && (typeof newConversationId !== 'string' || newConversationId.length === 0)) {
+      return NextResponse.json(
+        { error: 'newConversationId must be a non-empty string' },
         { status: 400 }
       );
     }
@@ -306,9 +324,47 @@ export async function POST(request: Request) {
     const enabledTools = agent.enabledTools || [];
 
     // Persistent conversation support (parity with the internal ask_agent tool):
-    // a supplied conversationId continues that exact conversation; otherwise a
-    // new one is minted and returned so the caller can continue it later.
-    const activeConversationId: string = conversationId || createId();
+    // `conversationId` continues that exact conversation; `newConversationId`
+    // starts one at an address the CALLER chose; neither mints a fresh id here.
+    //
+    // WHY A CALLER MAY NAME THE ADDRESS. This route runs to completion whether
+    // or not its caller is still listening — nothing here reads
+    // `request.signal`, and a consult is billed and persisted regardless. When
+    // the id was always minted here and returned only in the 200 body, a
+    // caller whose client deadline expired never learned where its own answer
+    // had been written: work paid for and unreachable. Letting the caller name
+    // the conversation up front makes an abandoned consult recoverable through
+    // GET .../conversations/:id/messages.
+    //
+    // The collision check is deliberately NOT folded into `conversationId`'s
+    // 404: that refusal answers "unknown id" and "someone else's id"
+    // identically so an id-guessing caller learns nothing, and accepting
+    // unknown ids there as "create" would have converted it into an existence
+    // oracle for every conversation id. A caller-supplied NEW id that already
+    // exists is refused with 409 — which does reveal that this one id is
+    // taken, accepted knowingly: ids are cuid2, the caller supplied the id
+    // itself, and the alternative (appending this turn to whatever
+    // conversation already lives at that address, possibly another user's) is
+    // categorically worse.
+    if (newConversationId) {
+      const existing = await conversationRepository.getConversation(newConversationId);
+      if (existing) {
+        auditRequest(request, {
+          eventType: 'authz.access.denied',
+          userId,
+          resourceType: 'conversation',
+          resourceId: newConversationId,
+          details: { reason: 'consult_new_conversation_id_taken', action: 'consult', method: 'POST' },
+          riskScore: 0.4,
+        });
+        return NextResponse.json(
+          { error: 'A conversation with that id already exists; use conversationId to continue it' },
+          { status: 409 }
+        );
+      }
+    }
+
+    const activeConversationId: string = conversationId || newConversationId || createId();
 
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
@@ -319,25 +375,35 @@ export async function POST(request: Request) {
     // from a different user (see its doc comment) — safe to call unconditionally.
     await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
 
-    // Both branches feed the target agent's model context, so both exclude 'streaming'
-    // placeholders (empty, mid-flight rows) — see Server Stream Durability epic PR 2. The
-    // fallback branch was also missing the isActive filter the conversationId branch already
-    // had (pre-existing gap, called out in the PR 2 board's reader inventory).
+    // HISTORY IS CONVERSATION-SCOPED, ALWAYS. A consult sees exactly the
+    // conversation it is writing to, and nothing else.
     //
-    // Both branches read the UNIFIED `messages` table since the message-table
-    // merge (epic "Agent-Session Single Source of Truth", Phase 4 / D6). Page
-    // scope moved from `chat_messages.pageId` to the repository's join through
-    // `conversations`. `chat_messages` was DROPPED by migration 0253 — there is
-    // no dual write and no revert path; this route is the only reader left that
-    // needs to state that, because it used to claim the opposite.
+    // It did not used to. The no-conversationId path wrote to a brand-new
+    // conversation while READING this caller's 10 most recent messages across
+    // ALL their conversations on this agent — so consecutive one-shot consults
+    // silently saw each other, producing conversation rows that were each
+    // individually incomplete and collectively overlapping, and an agent that
+    // recognised a question it had supposedly never been asked. Writes were
+    // conversation-scoped; reads were page-scoped; the two disagreed.
     //
-    // BOTH branches are owner-scoped. `canPrincipalViewPage` above answers "may
-    // you use this AGENT", never "is this CONVERSATION yours", and the
-    // page-scoped repository predicate (`unifiedPageScope`) carries no user
-    // predicate at all — so on a SHARED agent page this route previously
-    // returned another member's private transcript verbatim to anyone who
-    // could name the conversation, and the no-conversationId branch handed over
-    // the page's 10 most recent messages across every user for free.
+    // It also broke the parity this route is otherwise held to: the internal
+    // `ask_agent` tool (agent-communication-tools.ts) loads history ONLY when
+    // given a conversationId and starts empty otherwise. Two entry points to
+    // the same consultation, deliberately matched on their step budget, were
+    // handing the same agent different context. Empty is the side that matches,
+    // and it is the side that makes continuity explicit: you pass a
+    // conversationId or you get a fresh agent.
+    //
+    // Reads the UNIFIED `messages` table since the message-table merge (epic
+    // "Agent-Session Single Source of Truth", Phase 4 / D6). Page scope moved
+    // from `chat_messages.pageId` to the repository's join through
+    // `conversations`; `chat_messages` was DROPPED by migration 0253 — no dual
+    // write, no revert path. Excludes 'streaming' placeholders (empty,
+    // mid-flight rows) — see Server Stream Durability epic PR 2.
+    //
+    // `canPrincipalViewPage` above answers "may you use this AGENT", never "is
+    // this CONVERSATION yours" — which is why the surviving branch runs
+    // `authorizePageConversation` before reading a single row.
     let historyMessages: Array<{ role: string; content: string | null }>;
     if (conversationId) {
       // The same decision `page-chat-turn` runs before it will append a turn to
@@ -360,11 +426,10 @@ export async function POST(request: Request) {
       // Scoped to this conversation only, in chronological order.
       historyMessages = await messageRepository.getPageConversationMessages(agentId, conversationId);
     } else {
-      // No conversationId: fall back to THIS CALLER'S most recent messages on
-      // this agent, for lightweight context. The repository orders DESC under
-      // the limit and reverses — ordering ASCENDING with limit(10) would return
-      // the FIRST 10 messages ever, not the most recent.
-      historyMessages = await messageRepository.getRecentPageMessagesForUser(agentId, userId, 10);
+      // A new conversation — caller-addressed or freshly minted — starts with
+      // no prior context. See the block comment above for why this is empty
+      // rather than a cross-conversation window.
+      historyMessages = [];
     }
 
     // Build conversation messages (exclude system - handled separately)

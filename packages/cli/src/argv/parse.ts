@@ -24,6 +24,16 @@
  * unrecognized value on a confirmation flag like `--yes=oops` — better to
  * reject it as an unknown flag than silently coerce a typo to `false`.
  *
+ * `--timeout <seconds>` is the caller's wall-clock deadline for the ONE
+ * request a command makes, in seconds (a human-facing unit; the SDK's own
+ * option is milliseconds). It exists because per-operation deadlines used to
+ * be unraisable: `agents.ask` declares a 120s default and the client applied
+ * it in preference to any caller setting, so a consult whose duration is
+ * inherently unbounded could not be waited on, and the completed answer was
+ * abandoned. Rejected rather than defaulted when non-numeric or non-positive:
+ * silently substituting 30s for `--timeout abc` would make a caller who asked
+ * to wait longer wait LESS, which is the opposite of what they asked for.
+ *
  * `--profile` (the pre-1.5.0 name for `--key`) is special-cased to a
  * dedicated rename error wherever it appears in argv — it was a GLOBAL
  * value flag before the rename, so letting it fall through as a generic
@@ -42,6 +52,8 @@ export interface ParsedFlags {
   readonly help: boolean;
   readonly version: boolean;
   readonly device: boolean;
+  /** `--timeout <seconds>` as milliseconds, ready to hand to `PageSpaceClientOptions.timeoutMs`. */
+  readonly timeoutMs: number | undefined;
 }
 
 export interface CommandIntent {
@@ -58,7 +70,7 @@ export interface UsageError {
 
 export type ParseResult = CommandIntent | UsageError;
 
-const VALUE_FLAGS = new Set(['--host', '--token', '--key']);
+const VALUE_FLAGS = new Set(['--host', '--token', '--key', '--timeout']);
 const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
 
 export const PROFILE_FLAG_RENAMED_MESSAGE = '--profile was renamed to --key in 1.5.0.';
@@ -74,6 +86,7 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   let help = false;
   let version = false;
   let device = false;
+  let timeoutMs: number | undefined;
   const args: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -94,7 +107,17 @@ export function parseArgv(argv: readonly string[]): ParseResult {
       }
       if (flagName === '--host') host = value;
       else if (flagName === '--token') token = value;
-      else key = value;
+      else if (flagName === '--key') key = value;
+      else {
+        // Seconds in, milliseconds out. Finite and > 0 only: 0 and negatives
+        // would mean "already expired", and NaN would silently become the
+        // default the caller was trying to override.
+        const seconds = Number(value);
+        if (!Number.isFinite(seconds) || seconds <= 0) {
+          return { kind: 'usage-error', message: 'Flag --timeout requires a positive number of seconds.' };
+        }
+        timeoutMs = Math.round(seconds * 1000);
+      }
       if (inlineValue === undefined) i += 1;
       continue;
     }
@@ -124,6 +147,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, key, yes, all, force, help, version, device },
+    flags: { json, host, token, key, yes, all, force, help, version, device, timeoutMs },
   };
 }

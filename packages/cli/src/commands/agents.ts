@@ -8,10 +8,22 @@
  * `parts` array (`operations/agents.ts`'s `askAgentOutputSchema`) — same
  * "route truth over an assumed shape" idiom `operations/channels.ts`
  * documents for channel messages. Human-mode rendering prints that string
- * directly; there is no non-text part to summarize. `agents.ask` is also
- * non-idempotent (a retried consult would double-execute the agent), so a
- * timeout is never retried — it renders an honest "may still have run"
- * message instead.
+ * directly; there is no non-text part to summarize.
+ *
+ * ASK IS ADDRESSED BEFORE IT IS SENT. The handler mints the conversation id
+ * itself and passes it as `newConversationId`, rather than letting the route
+ * mint one and report it in a response body that a timed-out caller never
+ * receives. This is the whole recovery story: `agents.ask` is non-idempotent
+ * and is never auto-retried, and the consult route does not read
+ * `request.signal` — so a client-side timeout stops the WAITING, never the
+ * work. The consult keeps running, bills, and persists its answer. Knowing
+ * the address up front is what turns that from paid-for-and-lost into
+ * `pagespace conversations read <agentId> <conversationId>`.
+ *
+ * The success path still prints the id the SERVER reports, not the minted one.
+ * They agree against any server that understands `newConversationId`; against
+ * an older one the field is ignored and the server's own id is the truth, so
+ * echoing the local guess would print an address that does not exist.
  *
  * `agents config --set k=v` intentionally keeps no allowlist of valid keys:
  * it forwards whatever `--set` pairs the caller gives straight onto
@@ -22,6 +34,7 @@
  * the schema/server is the one source of truth for valid keys, never a
  * second CLI-side list that could drift from it.
  */
+import { randomUUID } from 'node:crypto';
 import type { PageSpaceClient } from '@pagespace/sdk';
 import { isTimeoutError } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
@@ -139,47 +152,87 @@ function scanValueFlags(args: readonly string[], flags: readonly string[]): Flag
   return { ok: true, values, rest };
 }
 
-export const agentsAskHandler: CommandHandler = async (ctx, intent) => {
-  const usage = 'Usage: pagespace agents ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]\n';
+/**
+ * Pure: no I/O. The stderr text for a consult whose deadline expired.
+ *
+ * States three things the previous message did not, each of which a caller
+ * needs in order to act: that the work is probably still running rather than
+ * failed, the exact command that retrieves the answer, and how to wait longer
+ * next time. The old text ended at "check the agent's conversation history",
+ * naming a capability the CLI did not have — advice that could not be
+ * followed is worse than none, because it reads as though recovery were
+ * routine.
+ */
+export function renderAskTimeoutMessage(agentId: string, conversationId: string): string {
+  return [
+    `Request to agent ${agentId} timed out — the CLI stopped waiting, but the consult almost certainly did not stop running.`,
+    'It is never retried automatically: a consult is non-idempotent, and asking again would double-execute it (and bill twice).',
+    '',
+    'The answer is being written to:',
+    `  pagespace conversations read ${agentId} ${conversationId}`,
+    '',
+    `If that conversation is not there yet, give it a moment; if it never appears, list what does exist with "pagespace conversations list ${agentId}".`,
+    'To wait longer next time, pass --timeout <seconds> or set PAGESPACE_TIMEOUT_MS.',
+  ].join('\n') + '\n';
+}
 
-  const scanned = scanValueFlags(intent.args, ['--conversation-id', '--context']);
-  if (!scanned.ok) {
-    ctx.stderr.write(`${scanned.message}\n`);
-    return EXIT_USAGE_ERROR;
-  }
+export interface AgentsAskDeps {
+  /** Injected so the minted conversation id is deterministic under test. */
+  readonly newConversationId: () => string;
+}
 
-  const [agentId, question, ...extra] = scanned.rest;
-  if (!agentId || !question || extra.length > 0) {
-    ctx.stderr.write(usage);
-    return EXIT_USAGE_ERROR;
-  }
+export function createAgentsAskHandler(deps: AgentsAskDeps): CommandHandler {
+  return async (ctx, intent) => {
+    const usage = 'Usage: pagespace agents ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]\n';
 
-  let result: Awaited<ReturnType<PageSpaceClient['agents']['ask']>>;
-  try {
-    result = await ctx.sdk.agents.ask({
-      agentId,
-      question,
-      context: scanned.values.get('--context'),
-      conversationId: scanned.values.get('--conversation-id'),
-    });
-  } catch (error) {
-    if (isTimeoutError(error)) {
-      ctx.stderr.write(
-        `Request to agent ${agentId} timed out — it may still be running. This call is never automatically retried (retrying would risk double-executing a non-idempotent request); check the agent's conversation history before asking again.\n`,
-      );
+    const scanned = scanValueFlags(intent.args, ['--conversation-id', '--context']);
+    if (!scanned.ok) {
+      ctx.stderr.write(`${scanned.message}\n`);
+      return EXIT_USAGE_ERROR;
+    }
+
+    const [agentId, question, ...extra] = scanned.rest;
+    if (!agentId || !question || extra.length > 0) {
+      ctx.stderr.write(usage);
+      return EXIT_USAGE_ERROR;
+    }
+
+    // Continuing an existing conversation and starting a new one are separate
+    // fields on the operation, and passing both is a 400 — so mint an address
+    // only when the caller did not name one.
+    const continuing = scanned.values.get('--conversation-id');
+    const minted = continuing === undefined ? deps.newConversationId() : undefined;
+
+    let result: Awaited<ReturnType<PageSpaceClient['agents']['ask']>>;
+    try {
+      result = await ctx.sdk.agents.ask({
+        agentId,
+        question,
+        context: scanned.values.get('--context'),
+        conversationId: continuing,
+        newConversationId: minted,
+      });
+    } catch (error) {
+      if (isTimeoutError(error)) {
+        // `continuing ?? minted` — exactly one is defined, and the address is
+        // known either way, which is the point of minting it before sending.
+        ctx.stderr.write(renderAskTimeoutMessage(agentId, (continuing ?? minted) as string));
+        return EXIT_RUNTIME_ERROR;
+      }
+      ctx.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
-    ctx.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
-    return EXIT_RUNTIME_ERROR;
-  }
 
-  if (intent.flags.json) {
-    ctx.stdout.write(`${JSON.stringify(result)}\n`);
+    if (intent.flags.json) {
+      ctx.stdout.write(`${JSON.stringify(result)}\n`);
+      return EXIT_SUCCESS;
+    }
+    ctx.stdout.write(`${result.response}\n\n(conversationId: ${result.conversationId})\n`);
     return EXIT_SUCCESS;
-  }
-  ctx.stdout.write(`${result.response}\n\n(conversationId: ${result.conversationId})\n`);
-  return EXIT_SUCCESS;
-};
+  };
+}
+
+export const agentsAskHandler: CommandHandler = createAgentsAskHandler({ newConversationId: () => randomUUID() });
 
 // ---------------------------------------------------------------------------
 // agents config -> agents.updateConfig

@@ -6,6 +6,7 @@ import {
   agentsAskHandler,
   agentsConfigHandler,
   agentsListHandler,
+  createAgentsAskHandler,
   modelsListHandler,
   parseArgv,
 } from '@pagespace/cli';
@@ -274,19 +275,88 @@ describe('agentsAskHandler', () => {
     expect(stderr.lines.join('')).toContain('Agent not found');
   });
 
-  it('renders an honest "may still have run" message on timeout, never auto-retrying', async () => {
+  /**
+   * SUPERSEDES 'renders an honest "may still have run" message on timeout'.
+   * That message was honest about the uncertainty and useless about the
+   * remedy: it told the caller to check the agent's conversation history, a
+   * thing the CLI had no verb for. These assert the remedy is now nameable and
+   * runnable — the failure mode was an unrecoverable answer, so a test that
+   * only checked for a reassuring phrase would have passed throughout the bug.
+   */
+  it('names the exact retrieval command, with the conversation id, on timeout', async () => {
     const stderr = createRecordingSink();
     const ask = vi.fn(async () => {
       throw new TimeoutError('timed out');
     });
     const ctx = createFakeContext({ stderr, sdk: fakeSdk({ agents: { ask } }) });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
 
-    const code = await agentsAskHandler(ctx, commandIntent(['ag1', 'q']));
+    const code = await handler(ctx, commandIntent(['ag1', 'q']));
 
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(ask).toHaveBeenCalledTimes(1);
-    expect(stderr.lines.join('')).toContain('may still be running');
-    expect(stderr.lines.join('')).not.toContain('undefined');
+    const text = stderr.lines.join('');
+    expect(text).toContain('pagespace conversations read ag1 conv-minted');
+    expect(text).toContain('--timeout');
+    expect(text).not.toContain('undefined');
+  });
+
+  it('reports the conversation the caller named when continuing one', async () => {
+    const stderr = createRecordingSink();
+    const ask = vi.fn(async () => {
+      throw new TimeoutError('timed out');
+    });
+    const ctx = createFakeContext({ stderr, sdk: fakeSdk({ agents: { ask } }) });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+
+    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'conv-existing']));
+
+    expect(stderr.lines.join('')).toContain('pagespace conversations read ag1 conv-existing');
+  });
+
+  /**
+   * The address must exist BEFORE the request is sent. If the id were only
+   * minted server-side, a timed-out caller would have nothing to read back —
+   * which is the original defect, not a cosmetic one.
+   */
+  it('mints newConversationId and sends it, so a timed-out ask is still addressable', async () => {
+    const ask = vi.fn(async () => ASK_RESULT);
+    const ctx = createFakeContext({ sdk: fakeSdk({ agents: { ask } }) });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+
+    await handler(ctx, commandIntent(['ag1', 'q']));
+
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ newConversationId: 'conv-minted', conversationId: undefined }));
+  });
+
+  /**
+   * The route rejects both fields together with a 400, so the CLI must never
+   * send both — continuing a conversation means NOT minting a new address.
+   */
+  it('sends no newConversationId when continuing an existing conversation', async () => {
+    const ask = vi.fn(async () => ASK_RESULT);
+    const ctx = createFakeContext({ sdk: fakeSdk({ agents: { ask } }) });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+
+    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'conv-existing']));
+
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conv-existing', newConversationId: undefined }));
+  });
+
+  /**
+   * Against a server that ignores `newConversationId`, the server's own id is
+   * the truth. Echoing the local guess would print an address that does not
+   * exist — a worse failure than the one being fixed, because it looks right.
+   */
+  it('prints the SERVER\'s conversationId on success, not the minted one', async () => {
+    const stdout = createRecordingSink();
+    const ctx = createFakeContext({ stdout, sdk: fakeSdk({ agents: { ask: async () => ({ ...ASK_RESULT, conversationId: 'conv-from-server' }) } }) });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+
+    await handler(ctx, commandIntent(['ag1', 'q']));
+
+    expect(stdout.lines.join('')).toContain('conv-from-server');
+    expect(stdout.lines.join('')).not.toContain('conv-minted');
   });
 });
 

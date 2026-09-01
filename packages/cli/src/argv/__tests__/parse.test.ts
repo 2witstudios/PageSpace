@@ -217,3 +217,49 @@ describe('parseArgv', () => {
     expect(JSON.stringify(result)).not.toContain('super-secret-value');
   });
 });
+
+/**
+ * `--timeout` exists because per-operation deadlines used to be unraisable:
+ * `agents.ask` declares 120s and the client applied it in preference to any
+ * caller setting, so a consult that outran it was billed, completed, and
+ * unreachable with no way to wait longer. Seconds in (a human unit at a
+ * prompt), milliseconds out (what the SDK option takes).
+ */
+describe('parseArgv — --timeout', () => {
+  it('converts seconds to milliseconds', () => {
+    const parsed = parseArgv(['agents', 'ask', 'a1', 'q', '--timeout', '600']);
+    expect(parsed.kind).toBe('command');
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(600_000);
+  });
+
+  it('accepts the equals-joined form', () => {
+    const parsed = parseArgv(['agents', 'ask', 'a1', 'q', '--timeout=90']);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(90_000);
+  });
+
+  it('accepts a fractional number of seconds', () => {
+    const parsed = parseArgv(['whoami', '--timeout=1.5']);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(1500);
+  });
+
+  it('is undefined when not given, so each operation keeps its own default', () => {
+    const parsed = parseArgv(['agents', 'ask', 'a1', 'q']);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBeUndefined();
+  });
+
+  /**
+   * Rejected rather than defaulted. Silently substituting the fallback for
+   * `--timeout abc` would make a caller who asked to wait LONGER wait less —
+   * the exact failure they were trying to avoid, now silent.
+   */
+  it.each([['abc'], ['0'], ['-5'], ['NaN']])('rejects %s as a usage error rather than defaulting', (value) => {
+    const parsed = parseArgv(['whoami', `--timeout=${value}`]);
+    expect(parsed.kind).toBe('usage-error');
+    expect((parsed as { message: string }).message).toContain('--timeout');
+  });
+
+  it('requires a value', () => {
+    const parsed = parseArgv(['whoami', '--timeout']);
+    expect(parsed.kind).toBe('usage-error');
+  });
+});
