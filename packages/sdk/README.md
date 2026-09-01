@@ -94,6 +94,39 @@ hand-written wrappers, no second-class tier. One example per namespace:
 | `client.commands` | `client.commands.list({})` |
 | `client.members` | `client.members.list({ driveId })` |
 | `client.workflows` | `client.workflows.list({ driveId })` |
+| `client.uploads` | `client.uploads.presign({ contentHash, driveId, filename, mimeType, fileSize })` |
+
+### Uploading a file
+
+Reach for `uploadFile` rather than the `uploads` operations directly — an upload is three
+legs, and the middle one is a binary `PUT` to object storage that deliberately does not go
+through the SDK transport (its body is a string and its response parser reads JSON or text):
+
+```ts
+import { PageSpaceClient, StaticTokenProvider, uploadFile } from '@pagespace/sdk';
+
+const client = new PageSpaceClient({ baseUrl, auth: new StaticTokenProvider(token) });
+
+const { page, deduplicated } = await uploadFile(client, {
+  driveId,
+  bytes: await file.arrayBuffer(),
+  filename: 'clip.mp4',
+  mimeType: 'video/mp4',
+  parentId,            // optional: where in the tree it lands
+});
+```
+
+Storage is a **global content-addressed namespace**, which produces two outcomes worth
+handling explicitly:
+
+- `deduplicated: true` — the caller already references these exact bytes, so no upload was
+  needed. The page was still created. This is a success.
+- A **409 from presign** — the bytes exist globally but this caller has never referenced
+  them. That is the cross-tenant claim guard, not deduplication; possession has to be proven
+  by uploading the original file under a caller that legitimately holds it.
+
+Any failure after the reservation releases the upload slot via `uploads.cancel`, so an
+abandoned upload does not count against the caller's concurrent-upload limit.
 
 ### The `tokens` namespace needs an OAuth credential
 
