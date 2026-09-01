@@ -200,7 +200,9 @@ const getConversation = vi.fn(async (id: string): Promise<ConversationFixture | 
  * a mock returning nothing would refuse every addressed ask with a 409 and
  * hide the behaviour under test.
  */
-const createConversation = vi.fn(async (): Promise<'created' | 'exists' | 'message_owner_conflict'> => 'created');
+const createConversation = vi.fn(
+  async (_conversationId: string, _userId: string, _pageId: string): Promise<'created' | 'exists' | 'message_owner_conflict'> => 'created',
+);
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
     createConversation: (...args: [string, string, string]) => createConversation(...args),

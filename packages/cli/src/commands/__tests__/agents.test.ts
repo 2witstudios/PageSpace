@@ -307,7 +307,7 @@ describe('agentsAskHandler', () => {
     expect(code).toBe(EXIT_RUNTIME_ERROR);
     expect(ask).toHaveBeenCalledTimes(1);
     const text = stderr.lines.join('');
-    expect(text).toContain('pagespace conversations read ag1 conv-minted');
+    expect(text).toContain('pagespace conversations read ag1 convminted1');
     expect(text).toContain('--timeout');
     expect(text).not.toContain('undefined');
   });
@@ -322,7 +322,7 @@ describe('agentsAskHandler', () => {
 
     await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'convexisting1']));
 
-    expect(stderr.lines.join('')).toContain('pagespace conversations read ag1 conv-existing');
+    expect(stderr.lines.join('')).toContain('pagespace conversations read ag1 convexisting1');
   });
 
   /**
