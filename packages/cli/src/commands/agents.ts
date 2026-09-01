@@ -245,11 +245,12 @@ export function createAgentsAskHandler(deps: AgentsAskDeps): CommandHandler {
  * Deliberately NOT the `@paralleldrive/cuid2` package. `@pagespace/cli` is
  * published to npm, so every runtime dependency is one every user installs,
  * and what the route actually requires is the FORMAT, not a particular
- * generator. This is 24 base36 characters from a CSPRNG — around 124 bits of
- * entropy, comfortably beyond what a collision-refused-with-409 address needs,
- * and more than cuid2 itself claims. The leading letter is what satisfies the
- * pattern's first character; `randomBytes` rather than `Math.random` because a
- * guessable address is one another caller could reserve first.
+ * generator. This is 128 CSPRNG bits rendered in base36 (23-26 characters,
+ * plus the leading letter the pattern's first character requires, so always
+ * inside the 32-character limit) — comfortably beyond what an address whose
+ * collisions are refused with a 409 needs. `randomBytes` rather than
+ * `Math.random` because a guessable address is one another caller could
+ * reserve first.
  */
 function mintConversationId(): string {
   // Base36 of one 128-bit integer, NOT a per-character `byte % 36`: 256 is not
