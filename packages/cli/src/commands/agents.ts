@@ -20,6 +20,11 @@
  * the address up front is what turns that from paid-for-and-lost into
  * `pagespace conversations read <agentId> <conversationId>`.
  *
+ * The id matches the repository-wide id contract (`^[a-z][a-z0-9]{1,31}$` —
+ * the shape `createId()` produces), which the consult route validates: a uuid
+ * would simply be refused. See `mintConversationId` for why this does not pull
+ * in the cuid2 package to produce it.
+ *
  * The success path still prints the id the SERVER reports, not the minted one.
  * They agree against any server that understands `newConversationId`; against
  * an older one the field is ignored and the server's own id is the truth, so
@@ -34,7 +39,7 @@
  * the schema/server is the one source of truth for valid keys, never a
  * second CLI-side list that could drift from it.
  */
-import { randomUUID } from 'node:crypto';
+import { randomBytes } from 'node:crypto';
 import type { PageSpaceClient } from '@pagespace/sdk';
 import { isTimeoutError } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
@@ -232,7 +237,30 @@ export function createAgentsAskHandler(deps: AgentsAskDeps): CommandHandler {
   };
 }
 
-export const agentsAskHandler: CommandHandler = createAgentsAskHandler({ newConversationId: () => randomUUID() });
+/**
+ * A conversation address in the shape the server's id contract requires:
+ * `^[a-z][a-z0-9]{1,31}$`, the format `createId()` (cuid2) produces and the
+ * consult route validates.
+ *
+ * Deliberately NOT the `@paralleldrive/cuid2` package. `@pagespace/cli` is
+ * published to npm, so every runtime dependency is one every user installs,
+ * and what the route actually requires is the FORMAT, not a particular
+ * generator. This is 24 base36 characters from a CSPRNG — around 124 bits of
+ * entropy, comfortably beyond what a collision-refused-with-409 address needs,
+ * and more than cuid2 itself claims. The leading letter is what satisfies the
+ * pattern's first character; `randomBytes` rather than `Math.random` because a
+ * guessable address is one another caller could reserve first.
+ */
+function mintConversationId(): string {
+  // Base36 of one 128-bit integer, NOT a per-character `byte % 36`: 256 is not
+  // a multiple of 36, so mapping each byte independently biases the low digits.
+  // The bias would be harmless at this size, but an id generator that looks
+  // uniform and is not is exactly the kind of thing that gets copied.
+  const body = BigInt(`0x${randomBytes(16).toString('hex')}`).toString(36);
+  return `c${body}`;
+}
+
+export const agentsAskHandler: CommandHandler = createAgentsAskHandler({ newConversationId: mintConversationId });
 
 // ---------------------------------------------------------------------------
 // agents config -> agents.updateConfig

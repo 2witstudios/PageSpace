@@ -7,6 +7,9 @@ import { authenticateRequestWithOptions, isAuthError, isMCPAuthResult, checkMCPP
 import { AIMonitoring, discardUsageOutcome } from '@pagespace/lib/monitoring/ai-monitoring';
 
 const AUTH_OPTIONS = { allow: ['session', 'mcp'] as const, requireCSRF: true };
+
+/** The repository-wide id contract: what `createId()` (cuid2) produces. */
+const CUID2_PATTERN = /^[a-z][a-z0-9]{1,31}$/;
 import { createAIProvider, isProviderError, type ProviderRequest } from '@/lib/ai/core/provider-factory';
 import { pageSpaceTools } from '@/lib/ai/core/ai-tools';
 import { buildTimestampSystemPrompt } from '@/lib/ai/core/timestamp-utils';
@@ -230,9 +233,15 @@ export async function POST(request: Request) {
       );
     }
 
-    if (newConversationId !== undefined && (typeof newConversationId !== 'string' || newConversationId.length === 0)) {
+    // Caller-supplied ids must be CUID2, the repository-wide id contract —
+    // every id this system mints comes from `createId()`. Validating the shape
+    // is what stops a caller-addressed conversation from persisting an address
+    // no other part of the system would ever produce (an oversized string, a
+    // path fragment, a foreign uuid), which is cheap to refuse here and
+    // awkward to reason about once it is a row.
+    if (newConversationId !== undefined && (typeof newConversationId !== 'string' || !CUID2_PATTERN.test(newConversationId))) {
       return NextResponse.json(
-        { error: 'newConversationId must be a non-empty string' },
+        { error: 'newConversationId must be a CUID2 identifier' },
         { status: 400 }
       );
     }
@@ -336,44 +345,51 @@ export async function POST(request: Request) {
     // the conversation up front makes an abandoned consult recoverable through
     // GET .../conversations/:id/messages.
     //
-    // The collision check is deliberately NOT folded into `conversationId`'s
-    // 404: that refusal answers "unknown id" and "someone else's id"
-    // identically so an id-guessing caller learns nothing, and accepting
-    // unknown ids there as "create" would have converted it into an existence
-    // oracle for every conversation id. A caller-supplied NEW id that already
-    // exists is refused with 409 — which does reveal that this one id is
-    // taken, accepted knowingly: ids are cuid2, the caller supplied the id
-    // itself, and the alternative (appending this turn to whatever
-    // conversation already lives at that address, possibly another user's) is
-    // categorically worse.
-    if (newConversationId) {
-      const existing = await conversationRepository.getConversation(newConversationId);
-      if (existing) {
-        auditRequest(request, {
-          eventType: 'authz.access.denied',
-          userId,
-          resourceType: 'conversation',
-          resourceId: newConversationId,
-          details: { reason: 'consult_new_conversation_id_taken', action: 'consult', method: 'POST' },
-          riskScore: 0.4,
-        });
-        return NextResponse.json(
-          { error: 'A conversation with that id already exists; use conversationId to continue it' },
-          { status: 409 }
-        );
-      }
-    }
-
+    // The collision refusal is deliberately NOT folded into `conversationId`'s
+    // 404: that answers "unknown id" and "someone else's id" identically so an
+    // id-guessing caller learns nothing, and accepting unknown ids there as
+    // "create" would have converted it into an existence oracle for every
+    // conversation id. A caller-supplied NEW id that is already taken is
+    // refused with 409 — which does reveal that this one id is taken, accepted
+    // knowingly: the caller supplied the id itself, and the alternative
+    // (appending this turn to whatever conversation already lives there,
+    // possibly another user's) is categorically worse.
+    //
+    // THE RESERVATION IS THE INSERT, never a preceding SELECT. `createConversation`
+    // inserts with `onConflictDoNothing().returning()` and reports 'exists'
+    // when the row was not written — including when a concurrent first-write
+    // won the race (see its doc comment). A read-then-write check here would
+    // be a TOCTOU: two callers submitting the same id both observe no row,
+    // both proceed, and the loser persists and bills its turns inside the
+    // winner's private conversation — exposing its prompt and answer to the
+    // winner, which is precisely what this refusal exists to prevent. So the
+    // outcome of the write is the decision, and it is only ever safe to ignore
+    // it for an id this route minted itself.
     const activeConversationId: string = conversationId || newConversationId || createId();
 
     // Eagerly ensure a conversations row exists so this conversation is
     // listable via GET .../conversations, which joins against `conversations`
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
     // Without this, messages are persisted but the conversation itself is
-    // invisible to list_conversations. createConversation itself refuses to
-    // claim ownership of a supplied conversationId that already has messages
-    // from a different user (see its doc comment) — safe to call unconditionally.
-    await conversationRepository.createConversation(activeConversationId, userId, agentId).catch(() => {});
+    // invisible to list_conversations.
+    const createOutcome = await conversationRepository
+      .createConversation(activeConversationId, userId, agentId)
+      .catch(() => 'error' as const);
+
+    if (newConversationId && createOutcome !== 'created') {
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId,
+        resourceType: 'conversation',
+        resourceId: newConversationId,
+        details: { reason: 'consult_new_conversation_id_taken', action: 'consult', method: 'POST', outcome: createOutcome },
+        riskScore: 0.4,
+      });
+      return NextResponse.json(
+        { error: 'A conversation with that id already exists; use conversationId to continue it' },
+        { status: 409 }
+      );
+    }
 
     // HISTORY IS CONVERSATION-SCOPED, ALWAYS. A consult sees exactly the
     // conversation it is writing to, and nothing else.

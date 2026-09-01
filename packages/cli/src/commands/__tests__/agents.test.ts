@@ -232,14 +232,16 @@ describe('agentsAskHandler', () => {
 
     expect(code).toBe(EXIT_SUCCESS);
     // `newConversationId` is minted per ask so a timed-out consult stays
-    // reachable; the real handler uses randomUUID, so its VALUE is asserted by
-    // shape here and pinned exactly in the injected-generator tests below.
+    // reachable. Asserted by SHAPE against the CUID2 contract the route
+    // validates — a uuid here would be refused with a 400, so the format is
+    // part of the behaviour, not a detail. Its exact value is pinned in the
+    // injected-generator tests below.
     expect(ask).toHaveBeenCalledWith({
       agentId: 'ag1',
       question: 'What is the refund policy?',
       context: undefined,
       conversationId: undefined,
-      newConversationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+      newConversationId: expect.stringMatching(/^[a-z][a-z0-9]{1,31}$/),
     });
   });
 
@@ -298,7 +300,7 @@ describe('agentsAskHandler', () => {
       throw new TimeoutError('timed out');
     });
     const ctx = createFakeContext({ stderr, sdk: fakeSdk({ agents: { ask } }) });
-    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'convminted1' });
 
     const code = await handler(ctx, commandIntent(['ag1', 'q']));
 
@@ -316,9 +318,9 @@ describe('agentsAskHandler', () => {
       throw new TimeoutError('timed out');
     });
     const ctx = createFakeContext({ stderr, sdk: fakeSdk({ agents: { ask } }) });
-    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'convminted1' });
 
-    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'conv-existing']));
+    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'convexisting1']));
 
     expect(stderr.lines.join('')).toContain('pagespace conversations read ag1 conv-existing');
   });
@@ -331,11 +333,11 @@ describe('agentsAskHandler', () => {
   it('mints newConversationId and sends it, so a timed-out ask is still addressable', async () => {
     const ask = vi.fn(async () => ASK_RESULT);
     const ctx = createFakeContext({ sdk: fakeSdk({ agents: { ask } }) });
-    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'convminted1' });
 
     await handler(ctx, commandIntent(['ag1', 'q']));
 
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ newConversationId: 'conv-minted', conversationId: undefined }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ newConversationId: 'convminted1', conversationId: undefined }));
   });
 
   /**
@@ -345,11 +347,11 @@ describe('agentsAskHandler', () => {
   it('sends no newConversationId when continuing an existing conversation', async () => {
     const ask = vi.fn(async () => ASK_RESULT);
     const ctx = createFakeContext({ sdk: fakeSdk({ agents: { ask } }) });
-    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'convminted1' });
 
-    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'conv-existing']));
+    await handler(ctx, commandIntent(['ag1', 'q', '--conversation-id', 'convexisting1']));
 
-    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conv-existing', newConversationId: undefined }));
+    expect(ask).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'convexisting1', newConversationId: undefined }));
   });
 
   /**
@@ -360,12 +362,12 @@ describe('agentsAskHandler', () => {
   it('prints the SERVER\'s conversationId on success, not the minted one', async () => {
     const stdout = createRecordingSink();
     const ctx = createFakeContext({ stdout, sdk: fakeSdk({ agents: { ask: async () => ({ ...ASK_RESULT, conversationId: 'conv-from-server' }) } }) });
-    const handler = createAgentsAskHandler({ newConversationId: () => 'conv-minted' });
+    const handler = createAgentsAskHandler({ newConversationId: () => 'convminted1' });
 
     await handler(ctx, commandIntent(['ag1', 'q']));
 
     expect(stdout.lines.join('')).toContain('conv-from-server');
-    expect(stdout.lines.join('')).not.toContain('conv-minted');
+    expect(stdout.lines.join('')).not.toContain('convminted1');
   });
 });
 
