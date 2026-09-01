@@ -224,14 +224,23 @@ describe('agentsAskHandler', () => {
     expect(ask).not.toHaveBeenCalled();
   });
 
-  it('calls agents.ask with agentId + question', async () => {
+  it('calls agents.ask with agentId + question, addressed by a freshly minted conversation id', async () => {
     const ask = vi.fn(async () => ASK_RESULT);
     const ctx = createFakeContext({ sdk: fakeSdk({ agents: { ask } }) });
 
     const code = await agentsAskHandler(ctx, commandIntent(['ag1', 'What is the refund policy?']));
 
     expect(code).toBe(EXIT_SUCCESS);
-    expect(ask).toHaveBeenCalledWith({ agentId: 'ag1', question: 'What is the refund policy?', context: undefined, conversationId: undefined });
+    // `newConversationId` is minted per ask so a timed-out consult stays
+    // reachable; the real handler uses randomUUID, so its VALUE is asserted by
+    // shape here and pinned exactly in the injected-generator tests below.
+    expect(ask).toHaveBeenCalledWith({
+      agentId: 'ag1',
+      question: 'What is the refund policy?',
+      context: undefined,
+      conversationId: undefined,
+      newConversationId: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+    });
   });
 
   it('passes --conversation-id and --context through', async () => {
