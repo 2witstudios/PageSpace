@@ -128,6 +128,12 @@ handling explicitly:
 Any failure after the reservation releases the upload slot via `uploads.cancel`, so an
 abandoned upload does not count against the caller's concurrent-upload limit.
 
+The bytes are sent with `redirect: 'error'` — a presigned `PUT` is terminal, and following a
+redirect would forward the file to a host the signature was never issued for. A plaintext
+`http://` storage target is refused unless it is loopback (local MinIO and friends) or you
+opt in with `allowInsecureStorageUrl: true`, which a deployment reaching its object storage
+over http at an internal hostname will need.
+
 ### The `tokens` namespace needs an OAuth credential
 
 `client.tokens.list` / `client.tokens.revoke` manage `mcp_` API keys, but the server only

@@ -4,6 +4,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`pagespace files upload <path> --drive <driveId>` — put a file in a drive without a browser.**
+  Previously nothing outside the web client could, which blocked every headless producer of media.
+  Optional `--parent`, `--title` and `--mime`. The media type is resolved from a table of formats
+  the server actually processes, and an unrecognized extension is a usage error asking for `--mime`
+  rather than a silent `application/octet-stream` — the declared type is signed into the storage
+  request, so a wrong guess fails later with an error that names neither the field nor the cause.
+  When the bytes are already stored the command says so (`already stored; no bytes sent`), because
+  that path returns almost instantly and silence reads as a lost upload.
+
 ### Fixed
 
 - **`pages replace-lines` can refuse a stale edit instead of half-applying it.** The new

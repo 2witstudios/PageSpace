@@ -55,7 +55,17 @@ export interface UploadFileInput {
   readonly filename: string;
   /** Declared media type. Sent verbatim as the PUT's `Content-Type` — see `uploadBytes`. */
   readonly mimeType: string;
-  /** Page title. Defaults to `filename`. */
+  /**
+   * Page title. Defaults to `filename`.
+   *
+   * CAVEAT, and it is a server-side one: `/complete` writes this value into
+   * `originalFileName` and `fileMetadata.originalName` as well as the title,
+   * and `/presign` does not retain `filename` in the reservation. So a title
+   * that DIFFERS from the filename replaces the recorded original name —
+   * there is nowhere else it survives. Preserving both requires the
+   * completion contract to carry the filename separately; until it does,
+   * pass a divergent title only when losing the original name is acceptable.
+   */
   readonly title?: string;
   readonly parentId?: string | null;
   /** Drop the new page before or after `afterNodeId`. Omitted appends at the end. */
@@ -66,6 +76,19 @@ export interface UploadFileInput {
 export interface UploadFileOptions {
   /** Injected for tests and non-global-fetch runtimes. Defaults to `globalThis.fetch`. */
   readonly fetch?: typeof fetch;
+  /**
+   * Permit sending file bytes to a plaintext `http://` storage target on a
+   * non-loopback host.
+   *
+   * Off by default: the bytes are the file itself, so a cleartext PUT exposes
+   * the whole payload to anything on the path. Loopback is already exempt
+   * (local MinIO and friends), so this is only needed by a deployment whose
+   * object storage is reached over http at an internal HOSTNAME — e.g. a
+   * self-hosted `http://minio:9000`. Such a deployment is making a considered
+   * choice about its own network, which is exactly the kind of decision that
+   * should be explicit rather than defaulted.
+   */
+  readonly allowInsecureStorageUrl?: boolean;
 }
 
 export interface UploadFileResult {
@@ -103,6 +126,13 @@ export class StorageUploadError extends Error {
  * for a slow upload or a clock problem that is not there.
  */
 export class UploadSlotLostError extends Error {
+  /**
+   * Declared as a field rather than relying on `Error.cause`: the repo targets
+   * es2020, whose `Error` has no `cause`. `NetworkError` in `errors.ts` does
+   * the same for the same reason.
+   */
+  readonly cause: unknown;
+
   constructor(cause: unknown) {
     super(
       'The upload reservation was no longer valid when finalizing. Either it expired (reservations last 10 minutes), ' +
@@ -117,6 +147,44 @@ export class UploadSlotLostError extends Error {
 /** The server's wording for a reservation it cannot find, from either end. */
 function isMissingReservation(error: unknown): boolean {
   return isPermissionDeniedError(error) && /invalid or expired jobid/i.test(error.message);
+}
+
+/** Refused before any bytes leave the process. */
+export class InsecureStorageTargetError extends Error {
+  constructor(url: string) {
+    super(
+      `Refusing to upload file bytes over an insecure connection to ${url}. ` +
+        'Pass `allowInsecureStorageUrl: true` if this deployment reaches its object storage over http on a trusted network.',
+    );
+    this.name = 'InsecureStorageTargetError';
+  }
+}
+
+/**
+ * Hosts where plaintext http is not a real exposure — the bytes never leave
+ * the machine. `URL.hostname` KEEPS the brackets on an IPv6 literal
+ * (`http://[::1]:9000` -> `[::1]`), so the bracketed form is what must be
+ * listed; the bare form is kept alongside it for any runtime that differs.
+ */
+const LOOPBACK_HOSTNAMES: ReadonlySet<string> = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+
+/**
+ * The presign URL is issued by the caller's own PageSpace server, so this is
+ * defence in depth rather than distrust: a server misconfigured with a
+ * cleartext S3 endpoint would otherwise silently downgrade every upload, and
+ * the failure would be invisible precisely because the upload still succeeds.
+ */
+export function assertSecureStorageUrl(rawUrl: string, allowInsecure: boolean): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new InsecureStorageTargetError(rawUrl);
+  }
+  if (parsed.protocol === 'https:') return;
+  if (allowInsecure) return;
+  if (parsed.protocol === 'http:' && LOOPBACK_HOSTNAMES.has(parsed.hostname)) return;
+  throw new InsecureStorageTargetError(`${parsed.protocol}//${parsed.host}`);
 }
 
 async function toBytes(input: UploadBytes): Promise<Uint8Array> {
@@ -151,11 +219,17 @@ async function uploadBytes(
   bytes: Uint8Array,
   mimeType: string,
   doFetch: typeof fetch,
+  allowInsecure: boolean,
 ): Promise<void> {
+  assertSecureStorageUrl(url, allowInsecure);
   const response = await doFetch(url, {
     method: 'PUT',
     headers: { 'Content-Type': mimeType },
     body: bytes as unknown as BodyInit,
+    // A presigned PUT is a single terminal request. A redirect would forward
+    // the file bytes — and the signed headers — to a host the signature was
+    // never issued for, so treat one as a failure rather than following it.
+    redirect: 'error',
   });
   if (!response.ok) {
     const body = await response.text().catch(() => '');
@@ -193,7 +267,7 @@ export async function uploadFile(
   // From here on a slot is held, so every failure path releases it.
   try {
     if (needsUpload(reservation)) {
-      await uploadBytes(reservation.url, bytes, input.mimeType, doFetch);
+      await uploadBytes(reservation.url, bytes, input.mimeType, doFetch, options.allowInsecureStorageUrl ?? false);
     }
 
     const completed = await client.invoke(completeUpload, {

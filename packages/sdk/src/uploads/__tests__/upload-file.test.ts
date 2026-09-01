@@ -229,7 +229,7 @@ describe('uploadFile — the reservation the server lost', () => {
     expect(error).toBeInstanceOf(UploadSlotLostError);
     expect((error as Error).message).toMatch(/different server replicas/);
     // The original is preserved rather than discarded.
-    expect((error as Error).cause).toBeInstanceOf(PermissionDeniedError);
+    expect((error as InstanceType<typeof UploadSlotLostError>).cause).toBeInstanceOf(PermissionDeniedError);
     // Still released, like any other post-presign failure.
     expect(calls.map((c) => c.name)).toContain('uploads.cancel');
   });
@@ -255,5 +255,55 @@ describe('uploadFile — the reservation the server lost', () => {
 
     expect(error).toBe(denial);
     expect(error).not.toBeInstanceOf(UploadSlotLostError);
+  });
+});
+
+describe('storage target safety', () => {
+  it('accepts https anywhere', async () => {
+    const { assertSecureStorageUrl } = await import('../upload-file.js');
+    expect(() => assertSecureStorageUrl('https://storage.example/put', false)).not.toThrow();
+  });
+
+  it('accepts plaintext http on loopback, where the bytes never leave the machine', async () => {
+    const { assertSecureStorageUrl } = await import('../upload-file.js');
+    for (const url of ['http://localhost:9000/put', 'http://127.0.0.1:9000/put', 'http://[::1]:9000/put']) {
+      expect(() => assertSecureStorageUrl(url, false)).not.toThrow();
+    }
+  });
+
+  it('refuses plaintext http to a remote host unless explicitly allowed', async () => {
+    const { assertSecureStorageUrl, InsecureStorageTargetError } = await import('../upload-file.js');
+    expect(() => assertSecureStorageUrl('http://minio.internal:9000/put', false)).toThrow(InsecureStorageTargetError);
+    expect(() => assertSecureStorageUrl('http://minio.internal:9000/put', true)).not.toThrow();
+  });
+
+  it('sends no bytes when the target is insecure', async () => {
+    const { InsecureStorageTargetError } = await import('../upload-file.js');
+    const doFetch = okFetch();
+    const { client, calls } = stubClient({
+      'uploads.presign': () => ({ url: 'http://minio.internal:9000/put', jobId: 'job_1', key: 'k', expiresAt: 'later' }),
+      'uploads.cancel': () => ({ success: true }),
+    });
+
+    await expect(
+      uploadFile(client, { driveId: 'drv_1', bytes: BYTES, filename: 'c.mp4', mimeType: 'video/mp4' }, { fetch: doFetch }),
+    ).rejects.toBeInstanceOf(InsecureStorageTargetError);
+
+    expect(doFetch).not.toHaveBeenCalled();
+    // The reservation is still released — refusing to send is a failure like any other.
+    expect(calls.map((c) => c.name)).toContain('uploads.cancel');
+  });
+
+  it('tells fetch to treat a redirect as an error rather than forwarding the bytes', async () => {
+    const doFetch = okFetch();
+    const { client } = stubClient({
+      'uploads.presign': () => ({ url: 'https://storage.example/put', jobId: 'job_1', key: 'k', expiresAt: 'later' }),
+      'uploads.complete': () => ({ success: true, page: PAGE }),
+    });
+
+    await uploadFile(client, { driveId: 'drv_1', bytes: BYTES, filename: 'c.mp4', mimeType: 'video/mp4' }, { fetch: doFetch });
+
+    const [, init] = (doFetch as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
+    expect(init.redirect).toBe('error');
   });
 });
