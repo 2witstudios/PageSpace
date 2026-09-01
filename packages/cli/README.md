@@ -170,6 +170,8 @@ pages     list --drive <driveId> [parentId]
           trash <pageId> [--all] [--yes]
           restore <pageId>
 
+files     upload <path> --drive <driveId> [--parent <pageId>] [--title <title>] [--mime <type>]
+
 sheets    describe <pageId>                  # tabs and sizes, reads no rows
           query <pageId> [--where <json>] [--select A,B] [--order-by A:desc] [--limit N] [--offset N] [--tab N]
           rows <pageId> [--from-row N] [--limit N] [--tab N]
