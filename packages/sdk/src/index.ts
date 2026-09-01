@@ -203,7 +203,7 @@ export type { PresignFastPath, PresignPutTarget, PresignResult, UploadedFilePage
 // `uploadFile` composes presign -> PUT -> complete, including the binary leg
 // that cannot travel through the SDK transport. This is what callers holding
 // bytes should use; the three operations above are the building blocks.
-export { computeContentHash, StorageUploadError, uploadFile } from './uploads/upload-file.js';
+export { computeContentHash, StorageUploadError, uploadFile, UploadSlotLostError } from './uploads/upload-file.js';
 export type {
   OperationInvoker,
   UploadBytes,

@@ -206,3 +206,54 @@ describe('uploadFile', () => {
     expect(doFetch).not.toHaveBeenCalled();
   });
 });
+
+describe('uploadFile — the reservation the server lost', () => {
+  it('replaces the server\'s one-cause message with one naming the replica split too', async () => {
+    const { PermissionDeniedError } = await import('../../errors.js');
+    const { UploadSlotLostError } = await import('../upload-file.js');
+    const doFetch = okFetch();
+    const { client, calls } = stubClient({
+      'uploads.presign': () => ({ url: 'https://storage.example/put', jobId: 'job_1', key: 'k', expiresAt: 'later' }),
+      'uploads.complete': () => {
+        throw new PermissionDeniedError('Invalid or expired jobId', 'uploads.complete');
+      },
+      'uploads.cancel': () => ({ success: true }),
+    });
+
+    const error = await uploadFile(
+      client,
+      { driveId: 'drv_1', bytes: BYTES, filename: 'c.mp4', mimeType: 'video/mp4' },
+      { fetch: doFetch },
+    ).catch((e: unknown) => e);
+
+    expect(error).toBeInstanceOf(UploadSlotLostError);
+    expect((error as Error).message).toMatch(/different server replicas/);
+    // The original is preserved rather than discarded.
+    expect((error as Error).cause).toBeInstanceOf(PermissionDeniedError);
+    // Still released, like any other post-presign failure.
+    expect(calls.map((c) => c.name)).toContain('uploads.cancel');
+  });
+
+  it('leaves an unrelated permission denial alone', async () => {
+    const { PermissionDeniedError } = await import('../../errors.js');
+    const { UploadSlotLostError } = await import('../upload-file.js');
+    const doFetch = okFetch();
+    const denial = new PermissionDeniedError('You do not have permission to upload to this drive', 'uploads.complete');
+    const { client } = stubClient({
+      'uploads.presign': () => ({ url: 'https://storage.example/put', jobId: 'job_1', key: 'k', expiresAt: 'later' }),
+      'uploads.complete': () => {
+        throw denial;
+      },
+      'uploads.cancel': () => ({ success: true }),
+    });
+
+    const error = await uploadFile(
+      client,
+      { driveId: 'drv_1', bytes: BYTES, filename: 'c.mp4', mimeType: 'video/mp4' },
+      { fetch: doFetch },
+    ).catch((e: unknown) => e);
+
+    expect(error).toBe(denial);
+    expect(error).not.toBeInstanceOf(UploadSlotLostError);
+  });
+});

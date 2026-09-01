@@ -23,6 +23,7 @@
  *    concurrent-upload limit until the server's stale-slot sweep.
  */
 import type { z } from 'zod';
+import { isPermissionDeniedError } from '../errors.js';
 import type { Operation } from '../registry/define.js';
 import {
   cancelUpload,
@@ -88,6 +89,34 @@ export class StorageUploadError extends Error {
     this.status = status;
     this.responseBody = responseBody;
   }
+}
+
+/**
+ * The reservation made by presign was gone by the time complete ran.
+ *
+ * Exists because the server's own message for this — "Invalid or expired
+ * jobId" — names only one of its two causes, and the other is the one a
+ * headless caller is far more likely to hit. The reservation's metadata lives
+ * in an IN-PROCESS map on the web server, so presign and complete must reach
+ * the SAME replica; against a multi-replica deployment this fails
+ * intermittently and at random, and a caller reading "expired" will go looking
+ * for a slow upload or a clock problem that is not there.
+ */
+export class UploadSlotLostError extends Error {
+  constructor(cause: unknown) {
+    super(
+      'The upload reservation was no longer valid when finalizing. Either it expired (reservations last 10 minutes), ' +
+        'or the presign and complete requests reached different server replicas — reservation state is held per-process, ' +
+        'so both calls must land on the same one.',
+    );
+    this.name = 'UploadSlotLostError';
+    this.cause = cause;
+  }
+}
+
+/** The server's wording for a reservation it cannot find, from either end. */
+function isMissingReservation(error: unknown): boolean {
+  return isPermissionDeniedError(error) && /invalid or expired jobid/i.test(error.message);
 }
 
 async function toBytes(input: UploadBytes): Promise<Uint8Array> {
@@ -177,6 +206,13 @@ export async function uploadFile(
 
     return { page: completed.page, contentHash, deduplicated: !needsUpload(reservation) };
   } catch (error) {
+    if (isMissingReservation(error)) {
+      // Rethrown below through the same slot-release path as any other
+      // failure: releasing a reservation the server already lost is a no-op,
+      // not a second error.
+      // eslint-disable-next-line no-ex-assign -- deliberately replacing the cause-obscuring server message
+      error = new UploadSlotLostError(error);
+    }
     // Best-effort: the upload already failed, and a failing cancel must not
     // replace the real cause with a bookkeeping error. A try/catch rather than
     // `.catch()` because an invoker that throws SYNCHRONOUSLY never returns a
