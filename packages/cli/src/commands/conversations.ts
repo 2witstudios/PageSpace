@@ -22,8 +22,13 @@
  * `packages/lib/src/types.ts`), never an assumed flat `content` string: a
  * consult answer arrives as text parts, but a conversation that ran tools
  * also carries `tool-*` parts, and dropping them silently would misrepresent
- * what the agent actually did. Non-text parts render as a labelled
- * placeholder rather than being omitted.
+ * what the agent actually did. Every CONTENT-bearing part therefore renders,
+ * as a labelled placeholder when it has no text of its own — including part
+ * types this CLI has never heard of, since the `parts` union grows server-side
+ * and a renderer that silently drops what it does not recognize gets quieter
+ * over time without anyone noticing. `step-start` is the one deliberate
+ * exception: it is a structural marker with no content, and labelling it would
+ * add noise to every transcript rather than information.
  */
 import type { PageSpaceClient } from '@pagespace/sdk';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
@@ -57,7 +62,12 @@ export function renderMessageParts(message: ConversationMessage): string {
       if (typeof part.text === 'string' && part.text.length > 0) return part.text;
       if (part.type.startsWith('tool-')) return `[tool: ${part.toolName ?? part.type.slice('tool-'.length)}]`;
       if (part.type === 'file') return `[file: ${part.filename ?? part.mediaType ?? 'attachment'}]`;
-      return '';
+      // Structural only — no content to show, so showing a label is noise.
+      if (part.type === 'step-start') return '';
+      // Anything else IS content, including a `data-*` part or a type added
+      // after this was written. Named rather than dropped: a message made only
+      // of unrecognized parts must not render as though the agent said nothing.
+      return `[${part.type}]`;
     })
     .filter((chunk) => chunk.length > 0);
   return rendered.join('\n');

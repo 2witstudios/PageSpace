@@ -192,4 +192,38 @@ describe('renderMessageParts', () => {
     });
     expect(text.length).toBeGreaterThan(0);
   });
+
+  /**
+   * The `parts` union grows server-side. A renderer that silently drops what it
+   * does not recognize gets quieter over time without anyone noticing, so an
+   * unknown part is NAMED rather than skipped — including one this CLI could
+   * not have known about when it was written.
+   */
+  it.each([
+    ['a data part', 'data-citation'],
+    ['a part type added after this was written', 'reasoning'],
+  ])('names %s rather than dropping it', (_label, type) => {
+    const text = renderMessageParts({ id: 'm', role: 'assistant', parts: [{ type }], createdAt: 'now' });
+    expect(text).toBe(`[${type}]`);
+  });
+
+  it('renders a message made ONLY of unknown parts as non-empty', () => {
+    const text = renderMessageParts({
+      id: 'm',
+      role: 'assistant',
+      parts: [{ type: 'data-citation' }],
+      createdAt: 'now',
+    });
+    expect(text.length).toBeGreaterThan(0);
+  });
+
+  /**
+   * The one deliberate exception: `step-start` is a structural marker with no
+   * content, so labelling it would add noise to every transcript. Asserted so
+   * the exception stays a decision rather than becoming an accident.
+   */
+  it('stays silent for a structural step-start marker', () => {
+    const text = renderMessageParts({ id: 'm', role: 'assistant', parts: [{ type: 'step-start' }], createdAt: 'now' });
+    expect(text).toBe('');
+  });
 });
