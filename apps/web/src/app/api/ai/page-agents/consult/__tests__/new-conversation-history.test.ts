@@ -163,6 +163,21 @@ vi.mock('@/lib/ai/core/integration-tool-resolver', () => ({
 // `getRecentPageMessagesForUser` reader is gone — a new conversation now
 // starts empty),
 // which read the unified `messages` table.
+/**
+ * The route reserves the conversation by INSERTING it, and no longer swallows a
+ * rejection from that write: a repository failure is a 500, not a 409 claiming
+ * the id is taken. These specs previously loaded the real repository against a
+ * mocked `db` and relied on the discarded `.catch()` to hide the resulting
+ * failure — so they need the seam mocked explicitly now that failures are
+ * honest. 'created' is the ordinary outcome for the ids they use.
+ */
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: vi.fn(async () => 'created' as const),
+    getConversation: vi.fn(async () => null),
+  },
+}));
+
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
     savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
