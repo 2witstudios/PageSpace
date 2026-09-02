@@ -124,9 +124,15 @@ export function parseArgv(argv: readonly string[]): ParseResult {
         // the caller asking to wait longer is the one who breaks.
         const requestedMs = Math.round(Number(value) * 1000);
         if (!isUsableTimeoutMs(requestedMs)) {
+          // Stated in MILLISECONDS because milliseconds are what is actually
+          // checked. Quoting a seconds range would misdescribe the boundaries
+          // it is supposed to explain: rounding means `0.0005` (1ms) and
+          // `2147483.5` (2147483500ms) are both accepted, so "between 0.001
+          // and 2147483 seconds" would name a range that is neither what is
+          // enforced nor what a caller at the edge observes.
           return {
             kind: 'usage-error',
-            message: `Flag --timeout requires a number of seconds between 0.001 and ${Math.floor(MAX_TIMEOUT_MS / 1000)}.`,
+            message: `Flag --timeout requires a number of seconds that converts to between 1 and ${MAX_TIMEOUT_MS} milliseconds.`,
           };
         }
         timeoutMs = requestedMs;

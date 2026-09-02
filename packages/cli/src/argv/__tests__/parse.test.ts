@@ -287,6 +287,29 @@ describe('parseArgv — --timeout', () => {
     expect((parsed as CommandIntent).flags.timeoutMs).toBe(2_147_483_000);
   });
 
+  /**
+   * The bound is on the CONVERTED milliseconds, and rounding means the
+   * seconds-side boundary is not a round number: `0.0005` rounds up into
+   * range and `2147483.5` stays in range. The message therefore quotes
+   * milliseconds — quoting seconds would describe a range that is neither
+   * what is enforced nor what a caller at the edge observes.
+   */
+  it.each([
+    ['a fractional second that rounds up into range', '0.0005', 1],
+    ['a fractional second at the top of the range', '2147483.5', 2_147_483_500],
+  ])('accepts %s', (_label, value, expected) => {
+    const parsed = parseArgv(['whoami', `--timeout=${value}`]);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(expected);
+  });
+
+  it('states the rejected range in the units it actually validates', () => {
+    const parsed = parseArgv(['whoami', '--timeout=0']);
+    expect(parsed.kind).toBe('usage-error');
+    const { message } = parsed as { message: string };
+    expect(message).toContain('milliseconds');
+    expect(message).toContain('2147483647');
+  });
+
   it('requires a value', () => {
     const parsed = parseArgv(['whoami', '--timeout']);
     expect(parsed.kind).toBe('usage-error');
