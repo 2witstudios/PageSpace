@@ -80,6 +80,26 @@ export class SandboxStreamOpenTimeoutError extends Error {
 }
 
 /**
+ * A port lifecycle notification observed on a machine's interactive stream —
+ * a process inside the sandbox bound (or released) a TCP port. Data only:
+ * whether that port is a dev server, whether it should be exposed, and what to
+ * tell the user are all decisions for a consumer (the dev-preview decision
+ * core), never for the transport that reports it.
+ *
+ * Provider caveats (Sprite, live-verified — see
+ * docs/spikes/2026-08-dev-preview-sprite-services-spike.md §5): notifications
+ * arrive only on TTY streams (a non-TTY exec running the same server emits
+ * nothing), and `port_closed` has never been observed on the wire — treat it
+ * as best-effort, never as a teardown signal.
+ */
+export interface SandboxPortEvent {
+  type: 'port_opened' | 'port_closed';
+  port: number;
+  address?: string;
+  pid?: number;
+}
+
+/**
  * A live interactive (PTY) stream on a machine. Deliberately minimal — bounded
  * reconnect/keepalive orchestration (see `apps/realtime/src/terminal/sprites-shell.ts`)
  * is caller-side policy, not part of this seam: a caller reconnects by calling
@@ -91,6 +111,12 @@ export interface SandboxStream {
   onData(listener: (chunk: Buffer) => void): void;
   onExit(listener: (code: number) => void): void;
   onError(listener: (error: unknown) => void): void;
+  /**
+   * Subscribe to port open/close notifications on this stream (see
+   * {@link SandboxPortEvent} for what arrives and the provider caveats).
+   * Purely additive data: a caller that never subscribes sees no change.
+   */
+  onPortEvent(listener: (event: SandboxPortEvent) => void): void;
   kill(signal?: string): void;
 }
 
@@ -114,6 +140,82 @@ export class SandboxSpriteReplacedError extends Error {
     );
     this.name = 'SandboxSpriteReplacedError';
   }
+}
+
+/**
+ * A machine service's runtime status, provider-neutral. Mirrors the Sprite
+ * wire union plus `'unknown'` for a status string a future backend/SDK bump
+ * reports that this seam does not recognize — normalized at the driver edge
+ * (never a lie, never a crash).
+ *
+ * Semantics caveat (live-verified): on Sprite, an explicit stop records
+ * `'failed'` ("exited with code 143"), and the documented sticky `'stopped'`
+ * was never observed — so status alone cannot distinguish "the user stopped
+ * this" from "this crashed". Stopped-intent is the caller's to persist (the
+ * old design doc's `stoppedByUser`, unchanged by the rebuild).
+ */
+export type SandboxServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed' | 'unknown';
+
+/** A runtime-managed service on a machine, with its current state. */
+export interface SandboxServiceInfo {
+  name: string;
+  command: string;
+  args: string[];
+  /**
+   * The port the service DECLARED. Live-verified to have NO routing effect on
+   * Sprite today (the machine URL always proxies to port 8080) — carried as
+   * data for display/bookkeeping, never as proof of reachability.
+   */
+  httpPort?: number;
+  status: SandboxServiceStatus;
+  pid?: number;
+  /** Failure text when status is `failed` — including after an explicit stop. */
+  error?: string;
+}
+
+/** Arguments for creating (or updating — create is idempotent on `name`) a service. */
+export interface CreateSandboxServiceArgs {
+  name: string;
+  command: string;
+  args?: string[];
+  httpPort?: number;
+}
+
+/**
+ * Auth mode on the machine's inbound URL. `'sprite'` = platform-authenticated
+ * (org token only; anonymous requests get an SSO redirect); `'public'` = no
+ * auth; `'unknown'` = the backend reported a mode this seam does not
+ * recognize — consumers MUST treat it as "not proven private" (fail closed),
+ * never as private-by-default.
+ */
+export type SandboxUrlAuth = 'public' | 'sprite' | 'unknown';
+
+/** The machine's inbound URL and its auth mode. `url: null` when the backend
+ *  reports none. */
+export interface SandboxUrlInfo {
+  url: string | null;
+  auth: SandboxUrlAuth;
+}
+
+/**
+ * Runtime-managed services on a machine (dev servers — the preview workstream;
+ * agent terminals stay exec sessions, per the standing design decision).
+ * Verified operations only; every mutation resolves after the backend's own
+ * operation log stream completes, so a resolved promise means the operation
+ * landed, not merely that a request was accepted.
+ */
+export interface SandboxServicesApi {
+  /** Create-or-update AND auto-start the service (backend behavior — verified). */
+  create(args: CreateSandboxServiceArgs): Promise<void>;
+  list(): Promise<SandboxServiceInfo[]>;
+  /** null for a name the machine has no service under (derived from list —
+   *  the backend's get-by-name rejects with an untyped error on a miss). */
+  get(name: string): Promise<SandboxServiceInfo | null>;
+  start(name: string): Promise<void>;
+  /** Sticky stop — nothing restarts it. See {@link SandboxServiceStatus} for
+   *  the `failed`-not-`stopped` state it records. */
+  stop(name: string): Promise<void>;
+  remove(name: string): Promise<void>;
 }
 
 /** A provisioned/attached machine session — the full surface a caller drives. */
@@ -163,6 +265,27 @@ export interface SandboxHandle {
    * genuinely cannot support checkpoints is introduced.
    */
   createCheckpoint(comment: string): Promise<void>;
+  /**
+   * Runtime-managed services on this machine — see {@link SandboxServicesApi}.
+   * Required, not optional, for the same reason `createCheckpoint` is: one
+   * backend exists, and an optional-with-fallback would guard a hypothetical.
+   */
+  services: SandboxServicesApi;
+  /**
+   * The machine's inbound URL + auth mode, as last read from the control
+   * plane. On the Sprite backend the fields ride the (per-connect cached)
+   * sprite handle, so a `setUrlAuth` in the same connect may not be reflected
+   * until the next attach — read it BEFORE mutating, or re-attach to confirm.
+   */
+  urlInfo(): Promise<SandboxUrlInfo>;
+  /**
+   * Set the machine URL's auth mode. This is a CAPABILITY, not a policy:
+   * v1 preview keeps every machine on `'sprite'` (org-token-only), and the
+   * decision to ever go `'public'` belongs to a permission-gated decision
+   * core, not to any caller of this seam directly. `'unknown'` is
+   * deliberately not accepted here — only the two modes the platform verifies.
+   */
+  setUrlAuth(auth: 'public' | 'sprite'): Promise<void>;
 }
 
 /**
