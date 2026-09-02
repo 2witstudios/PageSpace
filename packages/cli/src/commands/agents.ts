@@ -160,23 +160,37 @@ function scanValueFlags(args: readonly string[], flags: readonly string[]): Flag
 /**
  * Pure: no I/O. The stderr text for a consult whose deadline expired.
  *
- * States three things the previous message did not, each of which a caller
- * needs in order to act: that the work is probably still running rather than
- * failed, the exact command that retrieves the answer, and how to wait longer
- * next time. The old text ended at "check the agent's conversation history",
- * naming a capability the CLI did not have — advice that could not be
- * followed is worse than none, because it reads as though recovery were
- * routine.
+ * States what a caller needs in order to act: that the work is probably still
+ * running rather than failed, the command that retrieves the answer, and how
+ * to wait longer next time. The old text ended at "check the agent's
+ * conversation history", naming a capability the CLI did not have — advice
+ * that could not be followed is worse than none, because it reads as though
+ * recovery were routine.
+ *
+ * The address is offered as THE ADDRESS THIS CLI ASKED FOR, not as a fact
+ * about where the answer landed. A server older than API 1.1.0 ignores
+ * `newConversationId` and mints its own, and this message is produced in the
+ * one situation where the CLI cannot know which it is talking to: nothing came
+ * back, so no `X-PageSpace-API-Version` header was ever observed. (The SDK's
+ * compatibility check runs on the first 2xx, and for a bare `agents ask` the
+ * timing-out request IS the first request — gating on the observed version
+ * would therefore mean gating on a version that is never known, degrading to
+ * the cautious wording every time.) Naming the condition and keeping the
+ * always-correct `conversations list` fallback beside it is what makes the
+ * message true on both servers.
  */
 export function renderAskTimeoutMessage(agentId: string, conversationId: string): string {
   return [
     `Request to agent ${agentId} timed out — the CLI stopped waiting, but the consult almost certainly did not stop running.`,
     'It is never retried automatically: a consult is non-idempotent, and asking again would double-execute it (and bill twice).',
     '',
-    'The answer is being written to:',
+    'Retrieve the answer with:',
     `  pagespace conversations read ${agentId} ${conversationId}`,
     '',
-    `If that conversation is not there yet, give it a moment; if it never appears, list what does exist with "pagespace conversations list ${agentId}".`,
+    'That is the address this CLI asked the server to use. A server older than API 1.1.0 ignores the request and',
+    'picks its own, so if the read finds nothing, list what actually exists:',
+    `  pagespace conversations list ${agentId}`,
+    '',
     'To wait longer next time, pass --timeout <seconds> or set PAGESPACE_TIMEOUT_MS.',
   ].join('\n') + '\n';
 }

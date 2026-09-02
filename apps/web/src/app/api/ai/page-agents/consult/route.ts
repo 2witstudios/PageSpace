@@ -372,9 +372,13 @@ export async function POST(request: Request) {
     // to scope results to their owner (mirrors apps/web/src/app/api/ai/chat/route.ts).
     // Without this, messages are persisted but the conversation itself is
     // invisible to list_conversations.
-    const createOutcome = await conversationRepository
-      .createConversation(activeConversationId, userId, agentId)
-      .catch(() => 'error' as const);
+    // NOT wrapped in a catch. A rejection here is a repository failure — a
+    // database outage, a deadlock — not a collision, and swallowing it would
+    // report 409 "that id already exists" for an id nothing has ever taken,
+    // handing the caller retry guidance that cannot work. Let it reach the
+    // outer handler as a 500, which is both true and retryable. 409 is reserved
+    // for the repository's own explicit non-created outcomes.
+    const createOutcome = await conversationRepository.createConversation(activeConversationId, userId, agentId);
 
     if (newConversationId && createOutcome !== 'created') {
       auditRequest(request, {

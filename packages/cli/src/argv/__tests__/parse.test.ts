@@ -296,10 +296,19 @@ describe('parseArgv — --timeout', () => {
    */
   it.each([
     ['a fractional second that rounds up into range', '0.0005', 1],
-    ['a fractional second at the top of the range', '2147483.5', 2_147_483_500],
+    ['a fractional second inside the range', '2147483.5', 2_147_483_500],
+    // The ACTUAL ceiling, to the millisecond. `2147483.5` sits comfortably
+    // inside it, so a pair of tests either side of THAT would not notice the
+    // bound moving.
+    ['exactly the maximum millisecond value', '2147483.647', 2_147_483_647],
   ])('accepts %s', (_label, value, expected) => {
     const parsed = parseArgv(['whoami', `--timeout=${value}`]);
     expect((parsed as CommandIntent).flags.timeoutMs).toBe(expected);
+  });
+
+  it('rejects one millisecond past the maximum', () => {
+    const parsed = parseArgv(['whoami', '--timeout=2147483.648']);
+    expect(parsed.kind).toBe('usage-error');
   });
 
   it('states the rejected range in the units it actually validates', () => {
