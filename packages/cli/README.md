@@ -136,7 +136,8 @@ runs on the machine that minted them.
 Every command is `pagespace <resource> <verb> [args] [flags]`. `pagespace help` prints this
 list in the terminal; `pagespace --version` prints the CLI and SDK versions. Global flags,
 accepted everywhere: `--json` (machine-readable output on stdout, nothing else), `--host <url>`,
-`--token <token>`, `--key <name>`, and `--yes` (skip confirmations).
+`--token <token>`, `--key <name>`, `--timeout <seconds>` (how long to wait for the one request the
+command makes), and `--yes` (skip confirmations).
 
 ```text
 drives    list [--all]                # --all includes trashed drives
@@ -198,6 +199,9 @@ search    text <query> [--drive <driveId>|--all-drives] [--max-results <n>]
 agents    list --drive <driveId>|--all-drives
           ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]
           config <agentPageId> --set <key>=<value> [--set <key>=<value> …]
+
+conversations list <agentPageId>            # an agent's conversations, newest first
+              read <agentPageId> <conversationId>   # the messages in one conversation
 
 models    list
 
@@ -265,6 +269,7 @@ Coming from the standalone `pagespace-mcp` npm package? It's deprecated in favor
 | `PAGESPACE_TOKEN` | Bearer credential; same precedence slot as `--token`. |
 | `PAGESPACE_KEY` | Stored key name to use; same precedence slot as `--key`. |
 | `PAGESPACE_API_URL` | API host; same precedence slot as `--host`. Defaults to `https://pagespace.ai`. |
+| `PAGESPACE_TIMEOUT_MS` | Request deadline in **milliseconds**; same precedence slot as `--timeout` (which takes seconds), and the way to raise it for `pagespace mcp`, which builds the same client. Unset leaves each operation on its own default. |
 | `PAGESPACE_PROFILE` | Deprecated alias for `PAGESPACE_KEY` (pre-1.5 name); warns on stderr. |
 | `PAGESPACE_AUTH_TOKEN` | Deprecated alias for `PAGESPACE_TOKEN` (old `pagespace-mcp` compatibility); warns on stderr. |
 
