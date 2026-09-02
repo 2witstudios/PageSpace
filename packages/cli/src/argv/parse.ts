@@ -30,9 +30,12 @@
  * be unraisable: `agents.ask` declares a 120s default and the client applied
  * it in preference to any caller setting, so a consult whose duration is
  * inherently unbounded could not be waited on, and the completed answer was
- * abandoned. Rejected rather than defaulted when non-numeric or non-positive:
- * silently substituting 30s for `--timeout abc` would make a caller who asked
- * to wait longer wait LESS, which is the opposite of what they asked for.
+ * abandoned. Rejected rather than defaulted when the CONVERTED millisecond
+ * value is unusable: silently substituting 30s for `--timeout abc` would make
+ * a caller who asked to wait longer wait LESS, which is the opposite of what
+ * they asked for — and so, more quietly, would accepting `--timeout 0.0001`
+ * (rounds to 0ms) or `--timeout 1e308` (overflows to Infinity, which Node's
+ * setTimeout silently treats as 1ms).
  *
  * `--profile` (the pre-1.5.0 name for `--key`) is special-cased to a
  * dedicated rename error wherever it appears in argv — it was a GLOBAL
@@ -40,6 +43,7 @@
  * unknown flag (or worse, pass through to a command arg-mapper after a
  * positional) would bury the one-line fix.
  */
+import { isUsableTimeoutMs, MAX_TIMEOUT_MS } from '../config/resolve.js';
 
 export interface ParsedFlags {
   readonly json: boolean;
@@ -112,11 +116,20 @@ export function parseArgv(argv: readonly string[]): ParseResult {
         // Seconds in, milliseconds out. Finite and > 0 only: 0 and negatives
         // would mean "already expired", and NaN would silently become the
         // default the caller was trying to override.
-        const seconds = Number(value);
-        if (!Number.isFinite(seconds) || seconds <= 0) {
-          return { kind: 'usage-error', message: 'Flag --timeout requires a positive number of seconds.' };
+        // Validated AFTER the conversion, because the conversion is where the
+        // unusable values come from: 0.0001 is a positive finite number of
+        // seconds that rounds to 0ms, and 1e308 is finite until multiplied by
+        // 1000. Both yield a client that aborts every request immediately —
+        // and since an explicit timeout outranks each operation's own default,
+        // the caller asking to wait longer is the one who breaks.
+        const requestedMs = Math.round(Number(value) * 1000);
+        if (!isUsableTimeoutMs(requestedMs)) {
+          return {
+            kind: 'usage-error',
+            message: `Flag --timeout requires a number of seconds between 0.001 and ${Math.floor(MAX_TIMEOUT_MS / 1000)}.`,
+          };
         }
-        timeoutMs = Math.round(seconds * 1000);
+        timeoutMs = requestedMs;
       }
       if (inlineValue === undefined) i += 1;
       continue;

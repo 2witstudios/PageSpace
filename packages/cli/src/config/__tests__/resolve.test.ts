@@ -92,7 +92,29 @@ describe('resolveTimeoutSetting', () => {
    * env var in a shell profile must not make every command in that shell
    * unrunnable.
    */
-  it.each([['abc'], ['0'], ['-1'], ['']])('ignores an unusable env value (%s) rather than failing the command', (value) => {
+  it.each([
+    ['abc'],
+    ['0'],
+    ['-1'],
+    [''],
+    // Sub-millisecond: positive and finite, but rounds to 0ms — a client that
+    // aborts every request instantly, which an explicit setting would impose
+    // over every operation's own default.
+    ['0.4'],
+    // Past setTimeout's 2^31-1 ceiling, where Node silently substitutes 1ms —
+    // so an absurdly LONG timeout would abort immediately.
+    ['99999999999'],
+    ['Infinity'],
+  ])('ignores an unusable env value (%s) rather than failing the command', (value) => {
     expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: value })).toBeUndefined();
+  });
+
+  it('accepts the smallest and largest usable values', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '1' })).toBe(1);
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '2147483647' })).toBe(2_147_483_647);
+  });
+
+  it('rounds a fractional millisecond value up to a usable one', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '0.6' })).toBe(1);
   });
 });

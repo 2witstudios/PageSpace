@@ -258,6 +258,35 @@ describe('parseArgv — --timeout', () => {
     expect((parsed as { message: string }).message).toContain('--timeout');
   });
 
+  /**
+   * Validated AFTER conversion, because conversion is where the unusable
+   * values come from. `0.0001` is a positive finite number of SECONDS that
+   * rounds to 0ms; `1e308` is finite until multiplied by 1000. Both would
+   * hand the client a deadline that aborts every request immediately — and
+   * because an explicit timeout outranks each operation's own default, the
+   * caller asking to wait LONGER is the one whose requests stop working. A
+   * pre-conversion check cannot see either of them.
+   */
+  it.each([
+    ['a sub-millisecond value that rounds to 0ms', '0.0001'],
+    ['a value that rounds to 0ms exactly at the boundary', '0.0004'],
+    ['a value that overflows to Infinity when scaled', '1e308'],
+    ['a value beyond setTimeout\'s 2^31-1 ms ceiling', '99999999'],
+  ])('rejects %s', (_label, value) => {
+    const parsed = parseArgv(['whoami', `--timeout=${value}`]);
+    expect(parsed.kind).toBe('usage-error');
+  });
+
+  it('accepts the smallest value that survives conversion', () => {
+    const parsed = parseArgv(['whoami', '--timeout=0.001']);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(1);
+  });
+
+  it('accepts the largest value setTimeout honours', () => {
+    const parsed = parseArgv(['whoami', '--timeout=2147483']);
+    expect((parsed as CommandIntent).flags.timeoutMs).toBe(2_147_483_000);
+  });
+
   it('requires a value', () => {
     const parsed = parseArgv(['whoami', '--timeout']);
     expect(parsed.kind).toBe('usage-error');

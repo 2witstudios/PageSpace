@@ -3,7 +3,7 @@ export { parseArgv, PROFILE_FLAG_RENAMED_MESSAGE } from './argv/parse.js';
 export type { CommandIntent, ParsedFlags, ParseResult, UsageError } from './argv/parse.js';
 
 // Config precedence resolver (flags > env > loaded credential > defaults).
-export { DEFAULT_HOST, resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
+export { DEFAULT_HOST, isUsableTimeoutMs, MAX_TIMEOUT_MS, resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 export type { ConfigCredential, ConfigEnv, ConfigFlags, ConfigSources, ResolvedConfig } from './config/resolve.js';
 
 // Router — resolves a parsed command path to a handler.

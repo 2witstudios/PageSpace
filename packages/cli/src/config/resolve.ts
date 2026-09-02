@@ -22,6 +22,29 @@ export interface ConfigEnv {
 }
 
 /**
+ * Largest delay `setTimeout` honours (2^31-1 ms, ~24.8 days). Beyond it Node
+ * warns and silently substitutes 1ms — so an absurdly long timeout would abort
+ * IMMEDIATELY rather than waiting a long time, which is the opposite of what
+ * the caller asked for and indistinguishable at the call site from a fast
+ * server hang-up.
+ */
+export const MAX_TIMEOUT_MS = 2_147_483_647;
+
+/**
+ * Whether a millisecond deadline is one a caller could actually have meant.
+ *
+ * Validated AFTER conversion, not before: `--timeout 0.0001` is a positive,
+ * finite number of seconds that rounds to 0ms, and `--timeout 1e308` is finite
+ * until multiplied by 1000. Both produce a client that aborts every request
+ * instantly. That failure is especially bad here because an explicitly-supplied
+ * `timeoutMs` outranks an operation's own default — so the caller who asked to
+ * wait LONGER is the one whose requests stop working.
+ */
+export function isUsableTimeoutMs(value: number): boolean {
+  return Number.isFinite(value) && value >= 1 && value <= MAX_TIMEOUT_MS;
+}
+
+/**
  * The request deadline, in milliseconds, or `undefined` to leave every
  * operation on its own declared default.
  *
@@ -44,9 +67,11 @@ export function resolveTimeoutSetting(
   if (flagTimeoutMs !== undefined) return flagTimeoutMs;
   const raw = env.PAGESPACE_TIMEOUT_MS;
   if (raw === undefined) return undefined;
-  const parsedMs = Number(raw.trim());
-  if (!Number.isFinite(parsedMs) || parsedMs <= 0) return undefined;
-  return Math.round(parsedMs);
+  const parsedMs = Math.round(Number(raw.trim()));
+  // Rounded first: a sub-millisecond value is positive and finite but rounds to
+  // 0, which would abort every request instantly.
+  if (!isUsableTimeoutMs(parsedMs)) return undefined;
+  return parsedMs;
 }
 
 /** The already-LOADED stored credential's contribution (host/token values), not a name — the caller loads it. */
