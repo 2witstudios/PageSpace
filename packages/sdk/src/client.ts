@@ -99,6 +99,7 @@ import {
 } from './operations/tasks.js';
 import { describeSelfKey, listMcpTokens, revokeMcpToken } from './operations/mcp-tokens.js';
 import { globSearch, multiDriveSearch, regexSearch } from './operations/search.js';
+import { cancelUpload, completeUpload, presignUpload } from './operations/uploads.js';
 import { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 import type { Operation } from './registry/define.js';
 import { createRegistry, type OperationRegistry } from './registry/registry.js';
@@ -232,6 +233,17 @@ const DEFAULT_OPERATIONS_MAP = {
     create: createWorkflow,
     update: updateWorkflow,
     delete: deleteWorkflow,
+  },
+  /**
+   * The two API legs of a direct-to-storage upload, plus the slot release.
+   * The binary PUT between them is not here and cannot be: it targets object
+   * storage, not PageSpace. `uploadFile` (uploads/upload-file.ts) composes all
+   * three and is what callers should reach for.
+   */
+  uploads: {
+    presign: presignUpload,
+    complete: completeUpload,
+    cancel: cancelUpload,
   },
 } as const;
 
