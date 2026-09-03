@@ -56,6 +56,7 @@ export * from './schema/form-targets';
 export * from './schema/machine-sprite-reclaims';
 export * from './schema/published-apps';
 export * from './schema/published-app-subscriptions';
+export * from './schema/app-hosting-stripe-reclaims';
 export * from './schema/email-broadcasts';
 export * from './schema/page-webhooks';
 export * from './schema/agent-workspaces';
@@ -119,6 +120,7 @@ import * as formTargets from './schema/form-targets';
 import * as machineSpriteReclaims from './schema/machine-sprite-reclaims';
 import * as publishedApps from './schema/published-apps';
 import * as publishedAppSubscriptions from './schema/published-app-subscriptions';
+import * as appHostingStripeReclaims from './schema/app-hosting-stripe-reclaims';
 import * as emailBroadcasts from './schema/email-broadcasts';
 import * as pageWebhooks from './schema/page-webhooks';
 import * as agentWorkspaces from './schema/agent-workspaces';
@@ -183,6 +185,7 @@ export const schema = {
   ...machineSpriteReclaims,
   ...publishedApps,
   ...publishedAppSubscriptions,
+  ...appHostingStripeReclaims,
   ...emailBroadcasts,
   ...pageWebhooks,
   ...agentWorkspaces,

@@ -98,7 +98,7 @@ describe('AI settings route', () => {
     vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
       id: mockUserId,
       currentAiProvider: 'openai',
-      currentAiModel: 'openai/gpt-5.3-chat',
+      currentAiModel: 'openai/gpt-5.4-nano',
       subscriptionTier: 'pro',
       imageGenerationModel: null,
     });
@@ -260,8 +260,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-5.6-luna');
+      expect(body.currentProvider).toBe('zai');
+      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
       expect(body.userSubscriptionTier).toBe('free');
     });
 
@@ -280,8 +280,8 @@ describe('AI settings route', () => {
       const response = await GET(makeRequest('GET'));
       const body = await response.json();
 
-      expect(body.currentProvider).toBe('openai');
-      expect(body.currentModel).toBe('openai/gpt-5.6-luna');
+      expect(body.currentProvider).toBe('zai');
+      expect(body.currentModel).toBe('z-ai/glm-5.3-flash');
     });
 
     it('leaves a runtime-discovered local model untouched', async () => {
@@ -336,7 +336,7 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'openai',
-        model: 'openai/gpt-5.3-chat',
+        model: 'openai/gpt-5.4-nano',
       }));
       const body = await response.json();
 
@@ -344,7 +344,7 @@ describe('AI settings route', () => {
       expect(body.success).toBe(true);
       expect(aiSettingsRepository.updateProviderSettings).toHaveBeenCalledWith(mockUserId, {
         provider: 'openai',
-        model: 'openai/gpt-5.3-chat',
+        model: 'openai/gpt-5.4-nano',
       });
     });
 
@@ -371,7 +371,7 @@ describe('AI settings route', () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'openai',
-        currentAiModel: 'openai/gpt-5.3-chat',
+        currentAiModel: 'openai/gpt-5.4-nano',
         subscriptionTier: 'free',
         imageGenerationModel: null,
       });
@@ -431,7 +431,7 @@ describe('AI settings route', () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'openai',
-        currentAiModel: 'openai/gpt-5.3-chat',
+        currentAiModel: 'openai/gpt-5.4-nano',
         subscriptionTier: 'free',
         imageGenerationModel: null,
       });
@@ -452,7 +452,7 @@ describe('AI settings route', () => {
       vi.mocked(aiSettingsRepository.getUserSettings).mockResolvedValue({
         id: mockUserId,
         currentAiProvider: 'openai',
-        currentAiModel: 'openai/gpt-5.3-chat',
+        currentAiModel: 'openai/gpt-5.4-nano',
         subscriptionTier: 'free',
         imageGenerationModel: null,
       });
@@ -460,7 +460,7 @@ describe('AI settings route', () => {
 
       const response = await PATCH(makeRequest('PATCH', {
         provider: 'openai',
-        model: 'openai/gpt-5.3-chat',
+        model: 'openai/gpt-5.4-nano',
       }));
 
       expect(response.status).toBe(200);

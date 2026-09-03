@@ -21,6 +21,7 @@
 import { activityHandler } from '../commands/activity.js';
 import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';
 import { channelsSendHandler } from '../commands/channels.js';
+import { conversationsListHandler, conversationsReadHandler } from '../commands/conversations.js';
 import {
   drivesCreateHandler,
   drivesListHandler,
@@ -32,6 +33,7 @@ import {
 } from '../commands/drives.js';
 import { pagesReadHandler, pagesReplaceLinesHandler } from '../commands/content.js';
 import { pagesExportHandler } from '../commands/export.js';
+import { filesUploadHandler } from '../commands/files.js';
 import { createHelpHandler } from '../commands/help.js';
 import { loginHandler } from '../commands/login.js';
 import { logoutHandler } from '../commands/logout.js';
@@ -147,6 +149,7 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['pages', 'read'], handler: pagesReadHandler, summary: 'Read page content' },
   { path: ['pages', 'replace-lines'], handler: pagesReplaceLinesHandler, summary: 'Replace a line range in a page' },
   { path: ['pages', 'export'], handler: pagesExportHandler, summary: 'Export a page to a file' },
+  { path: ['files', 'upload'], handler: filesUploadHandler, summary: 'Upload a local file into a drive' },
   { path: ['sheets', 'describe'], handler: sheetsDescribeHandler, summary: 'Show a sheet\'s tabs and dimensions' },
   { path: ['sheets', 'query'], handler: sheetsQueryHandler, summary: 'Filter and sort sheet rows' },
   { path: ['sheets', 'rows'], handler: sheetsRowsHandler, summary: 'Read sheet rows by position' },
@@ -170,6 +173,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['agents', 'ask'], handler: agentsAskHandler, summary: 'Ask an agent' },
   { path: ['agents', 'config'], handler: agentsConfigHandler, summary: 'Read/update agent config' },
   { path: ['models', 'list'], handler: modelsListHandler, summary: 'List available AI models' },
+  { path: ['conversations', 'list'], handler: conversationsListHandler, summary: 'List an agent\'s conversations' },
+  { path: ['conversations', 'read'], handler: conversationsReadHandler, summary: 'Read a conversation\'s messages' },
   { path: ['activity'], handler: activityHandler, summary: 'Show recent activity' },
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
 ];

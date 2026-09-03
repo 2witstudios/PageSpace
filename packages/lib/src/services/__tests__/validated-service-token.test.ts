@@ -409,6 +409,19 @@ describe('createValidatedServiceToken', () => {
         })
       ).rejects.toThrow('User has no access to user:user-2');
     });
+
+    // Regression: `app-hosting:publish` is a declared `ServiceScope` (the
+    // publish route's `enqueuePublishBuild` requests it) but had no case in
+    // `filterScopesByPermissions`, so it fell to the `default: return false`
+    // branch — every publish would mint zero scopes and
+    // `createValidatedServiceToken` throws on an empty grant, breaking the
+    // publish flow end-to-end right after the row and Fly app were already
+    // created. This proves the scope is actually granted for the caller's
+    // own user resource, matching `erasure:enqueue`/`broadcast:enqueue`.
+    it('grants app-hosting:publish for the caller\'s own user resource', async () => {
+      const result = await createUserServiceToken('user-1', ['app-hosting:publish']);
+      expect(result.grantedScopes).toEqual(['app-hosting:publish']);
+    });
   });
 
   describe('convenience functions', () => {

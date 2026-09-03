@@ -207,6 +207,13 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
     // confirmed kill.
     'app_hosting_reclaims',
+    // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
+    // same reasoning as `app_hosting_reclaims` immediately above, just pointed
+    // at a Stripe subscription id instead of a Fly app name. Nothing here is
+    // authored by or about the subject: it is provenance for a billing
+    // resource this app rescued from a cascade, not a record of anything the
+    // subject did or paid.
+    'app_hosting_stripe_reclaims',
     // The local mirror of a published app's MACHINE lifecycle — start/stop
     // boundaries kept because Fly retains only the last 20 events per machine.
     // Every column is fleet telemetry: a Fly app name, a machine id, a

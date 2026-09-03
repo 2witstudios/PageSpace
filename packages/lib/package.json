@@ -2103,6 +2103,21 @@
       "import": "./dist/services/app-hosting/parked-page.js",
       "require": "./dist/services/app-hosting/parked-page.js"
     },
+    "./services/app-hosting/app-logs-env": {
+      "types": "./dist/services/app-hosting/app-logs-env.d.ts",
+      "import": "./dist/services/app-hosting/app-logs-env.js",
+      "require": "./dist/services/app-hosting/app-logs-env.js"
+    },
+    "./services/app-hosting/dockerfile-synthesis-core": {
+      "types": "./dist/services/app-hosting/dockerfile-synthesis-core.d.ts",
+      "import": "./dist/services/app-hosting/dockerfile-synthesis-core.js",
+      "require": "./dist/services/app-hosting/dockerfile-synthesis-core.js"
+    },
+    "./services/app-hosting/build-source-retention-core": {
+      "types": "./dist/services/app-hosting/build-source-retention-core.d.ts",
+      "import": "./dist/services/app-hosting/build-source-retention-core.js",
+      "require": "./dist/services/app-hosting/build-source-retention-core.js"
+    },
     "./validators/fly-ownership": {
       "types": "./dist/validators/fly-ownership.d.ts",
       "import": "./dist/validators/fly-ownership.js",
@@ -2878,6 +2893,15 @@
       ],
       "services/app-hosting/parked-page": [
         "./dist/services/app-hosting/parked-page.d.ts"
+      ],
+      "services/app-hosting/app-logs-env": [
+        "./dist/services/app-hosting/app-logs-env.d.ts"
+      ],
+      "services/app-hosting/dockerfile-synthesis-core": [
+        "./dist/services/app-hosting/dockerfile-synthesis-core.d.ts"
+      ],
+      "services/app-hosting/build-source-retention-core": [
+        "./dist/services/app-hosting/build-source-retention-core.d.ts"
       ],
       "validators/fly-ownership": [
         "./dist/validators/fly-ownership.d.ts"

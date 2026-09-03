@@ -49,6 +49,7 @@ export type StartDedicatedRefusal =
   | 'unavailable'
   | 'guest_preset_not_allowed'
   | 'already_subscribed'
+  | 'app_destroying'
   | DedicatedPriceRefusal;
 
 export type StartDedicatedResult =
@@ -164,7 +165,7 @@ export async function startDedicatedSubscription(
   // `unknown_subscription` outcome — whereas this ordering leaves at worst a
   // mirror row for a subscription that never activates, which the status column
   // describes accurately and which entitles nobody.
-  await recordDedicatedSubscription({
+  const mirrorResult = await recordDedicatedSubscription({
     publishedAppId: input.publishedAppId,
     userId: input.user.id,
     stripeSubscriptionId: subscription.id,
@@ -180,6 +181,25 @@ export async function startDedicatedSubscription(
     // is what protects this row until an event stamps it.
     stripeEventCreated: null,
   });
+
+  // The app was destroyed (or a concurrent unpublish is mid-flight) between
+  // the price check above and this write — `recordDedicatedSubscription`'s
+  // own `published_apps` row lock caught it. The Stripe subscription above
+  // already exists at this point; leaving it live would charge for an app
+  // that no longer exists with no local mirror to ever reclaim it (the
+  // destroy's own reclaim-outbox write already ran, and it can only rescue a
+  // subscription id it could see — not one created after it committed).
+  // Cancel it immediately, the same way the outbox drain would, rather than
+  // leaving a compensating cleanup to chance.
+  if (mirrorResult.outcome === 'app_destroying') {
+    await stripe.subscriptions.cancel(subscription.id).catch((error) => {
+      loggers.api.error('Failed to cancel a dedicated subscription created for a destroying app', error as Error, {
+        publishedAppId: input.publishedAppId,
+        stripeSubscriptionId: subscription.id,
+      });
+    });
+    return { ok: false, reason: 'app_destroying' };
+  }
 
   const invoice = subscription.latest_invoice as
     | { confirmation_secret?: { client_secret?: string } }
@@ -232,7 +252,7 @@ export async function cancelDedicatedSubscription(
   });
   const period = subscriptionPeriod(subscription);
 
-  await recordDedicatedSubscription({
+  const mirrorResult = await recordDedicatedSubscription({
     publishedAppId: mirror.publishedAppId,
     userId: mirror.userId,
     stripeSubscriptionId: subscription.id,
@@ -244,6 +264,19 @@ export async function cancelDedicatedSubscription(
     cancelAtPeriodEnd: subscription.cancel_at_period_end,
     stripeEventCreated: null,
   });
+
+  // The app was destroyed concurrently — its own unpublish path already
+  // wrote this subscription id into the Stripe reclaim outbox and will
+  // cancel it immediately (not at period end), so the mirror write being
+  // refused here changes nothing about the outcome the caller cares about:
+  // this subscription stops billing either way. Logged, not surfaced as an
+  // error — there is no user action to take.
+  if (mirrorResult.outcome === 'app_destroying') {
+    loggers.api.info('Dedicated subscription cancel raced an unpublish — the reclaim outbox owns the cancel now', {
+      publishedAppId: mirror.publishedAppId,
+      stripeSubscriptionId: subscription.id,
+    });
+  }
 
   return { ok: true, cancelAtPeriodEnd: subscription.cancel_at_period_end, currentPeriodEnd: period.end };
 }

@@ -12,13 +12,15 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { mockSubscriptionsCreate, mockPricesRetrieve } = vi.hoisted(() => ({
+const { mockSubscriptionsCreate, mockPricesRetrieve, mockSubscriptionsCancel, mockSubscriptionsUpdate } = vi.hoisted(() => ({
   mockSubscriptionsCreate: vi.fn(),
   mockPricesRetrieve: vi.fn(),
+  mockSubscriptionsCancel: vi.fn(async () => ({})),
+  mockSubscriptionsUpdate: vi.fn(),
 }));
 vi.mock('@/lib/stripe', () => ({
   stripe: {
-    subscriptions: { create: mockSubscriptionsCreate, update: vi.fn() },
+    subscriptions: { create: mockSubscriptionsCreate, update: mockSubscriptionsUpdate, cancel: mockSubscriptionsCancel },
     prices: { retrieve: mockPricesRetrieve },
   },
 }));
@@ -27,12 +29,19 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
   loggers: { api: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } },
 }));
 
+type MockMirrorWriteResult = {
+  outcome: 'applied' | 'stale_event' | 'terminal_absorbed' | 'app_destroying';
+  row: { publishedAppId: string; status: string } | null;
+};
+
 const { mockFindForApp, mockRecord, mockPurchasable } = vi.hoisted(() => ({
   mockFindForApp: vi.fn(),
-  mockRecord: vi.fn(async (facts: { publishedAppId: string; status: string }) => ({
-    outcome: 'applied' as const,
-    row: { publishedAppId: facts.publishedAppId, status: facts.status },
-  })),
+  mockRecord: vi.fn(
+    async (facts: { publishedAppId: string; status: string }): Promise<MockMirrorWriteResult> => ({
+      outcome: 'applied',
+      row: { publishedAppId: facts.publishedAppId, status: facts.status },
+    }),
+  ),
   mockPurchasable: vi.fn(() => true),
 }));
 vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
@@ -41,7 +50,7 @@ vi.mock('@pagespace/lib/services/app-hosting/dedicated-tier-service', () => ({
   isDedicatedTierPurchasable: mockPurchasable,
 }));
 
-import { startDedicatedSubscription } from '../dedicated-subscription';
+import { startDedicatedSubscription, cancelDedicatedSubscription } from '../dedicated-subscription';
 
 const NOW = Math.floor(Date.now() / 1000);
 const user = { id: 'user_1', email: 'a@b.c', name: 'A', stripeCustomerId: 'cus_1' };
@@ -207,6 +216,31 @@ describe('a successful purchase', () => {
   });
 });
 
+describe('the app is destroyed between the price check and the mirror write', () => {
+  // recordDedicatedSubscription's own `published_apps` row lock can refuse the
+  // write outright (`outcome: 'app_destroying'`) if a concurrent unpublish
+  // committed first. By that point Stripe has already minted the subscription
+  // above — leaving it live would charge for an app that no longer exists, with
+  // no local mirror ever able to reclaim it.
+  it('cancels the just-created Stripe subscription and refuses', async () => {
+    mockFindForApp.mockResolvedValue(null);
+    mockRecord.mockResolvedValueOnce({ outcome: 'app_destroying', row: null });
+
+    const result = await buy();
+
+    expect(result).toEqual({ ok: false, reason: 'app_destroying' });
+    expect(mockSubscriptionsCancel).toHaveBeenCalledWith('sub_new');
+  });
+
+  it('does not throw the purchase call even if the compensating cancel itself fails', async () => {
+    mockFindForApp.mockResolvedValue(null);
+    mockRecord.mockResolvedValueOnce({ outcome: 'app_destroying', row: null });
+    mockSubscriptionsCancel.mockRejectedValueOnce(new Error('stripe down'));
+
+    await expect(buy()).resolves.toEqual({ ok: false, reason: 'app_destroying' });
+  });
+});
+
 describe('two overlapping purchases for the same app', () => {
   it('sends Stripe an idempotency key, so the race cannot mint two subscriptions', async () => {
     // The live-subscription read cannot serialize anything: two POSTs read before
@@ -235,5 +269,34 @@ describe('two overlapping purchases for the same app', () => {
     await buy();
     const [, options] = mockSubscriptionsCreate.mock.calls[0];
     expect(options?.idempotencyKey).toBe('pgs-dedicated:app_1:sub_old');
+  });
+});
+
+describe('cancelling always-on', () => {
+  beforeEach(() => {
+    mockFindForApp.mockResolvedValue(mirror('active'));
+    mockSubscriptionsUpdate.mockResolvedValue({
+      id: 'sub_old',
+      status: 'active',
+      cancel_at_period_end: true,
+      items: { data: [{ current_period_start: NOW, current_period_end: NOW + 2_592_000 }] },
+    });
+  });
+
+  it('succeeds even when the mirror write is refused because the app is being destroyed concurrently', async () => {
+    mockRecord.mockResolvedValueOnce({ outcome: 'app_destroying', row: null });
+
+    const result = await cancelDedicatedSubscription('app_1');
+
+    // The Stripe-side cancel-at-period-end already happened and that is the
+    // outcome that matters here — the app's own unpublish reclaim outbox owns
+    // cancelling this subscription for real, immediately, regardless of
+    // whether the local mirror reflects the update.
+    expect(result).toEqual({ ok: true, cancelAtPeriodEnd: true, currentPeriodEnd: expect.any(Date) });
+  });
+
+  it('succeeds normally when the mirror write applies', async () => {
+    const result = await cancelDedicatedSubscription('app_1');
+    expect(result).toEqual({ ok: true, cancelAtPeriodEnd: true, currentPeriodEnd: expect.any(Date) });
   });
 });

@@ -37,7 +37,8 @@ export type ServiceScope =
   | 'avatars:write:any'
   | 'queue:read'
   | 'erasure:enqueue'
-  | 'broadcast:enqueue';
+  | 'broadcast:enqueue'
+  | 'app-hosting:publish';
 
 // Duration bounds for service tokens
 const DEFAULT_EXPIRY_MS = 5 * 60 * 1000;        // 5 minutes default
@@ -339,6 +340,16 @@ function filterScopesByPermissions(
       // user resource, same shape as erasure:enqueue: the admin-gated route that
       // mints it is the security boundary; the processor endpoint is internal-only.
       case 'broadcast:enqueue':
+        return permissions.isOwner;
+
+      // Publish-build enqueue is minted against the caller's own user resource,
+      // same shape as erasure:enqueue/broadcast:enqueue: the web route that
+      // mints it already verified the caller is a drive OWNER/ADMIN for the
+      // env being published (see `.../envs/[envId]/app/route.ts`'s POST); this
+      // is the security boundary, and the processor endpoint independently
+      // re-verifies `publishedAppId` exists (see `app-build.ts`'s own
+      // docblock on why authorization here is scope-only, not resource-bound).
+      case 'app-hosting:publish':
         return permissions.isOwner;
 
       default:

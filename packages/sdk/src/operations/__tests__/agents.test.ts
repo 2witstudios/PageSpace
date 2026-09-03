@@ -242,11 +242,41 @@ describe('agents.ask — request shape', () => {
   it('rejects an empty question', () => {
     expect(askAgent.inputSchema.safeParse({ agentId: 'a1', question: '' }).success).toBe(false);
   });
+
+  /**
+   * `newConversationId` is what makes a consult addressable BEFORE it runs.
+   * Without it the route mints the id and reports it only in a 200 body, so a
+   * caller whose deadline expired could never reach the answer the server went
+   * on to produce and bill for.
+   */
+  it('sends a caller-minted newConversationId to the route', () => {
+    const request = buildRequest(askAgent, { agentId: 'a1', question: 'q', newConversationId: 'conv-mine' }, config);
+    expect(JSON.parse(request.body!)).toEqual({ agentId: 'a1', question: 'q', newConversationId: 'conv-mine' });
+  });
+
+  it('accepts continuing an existing conversation instead', () => {
+    expect(askAgent.inputSchema.safeParse({ agentId: 'a1', question: 'q', conversationId: 'conv-old' }).success).toBe(true);
+  });
+
+  it('rejects an empty newConversationId — an unaddressable address is worse than none', () => {
+    expect(askAgent.inputSchema.safeParse({ agentId: 'a1', question: 'q', newConversationId: '' }).success).toBe(false);
+  });
 });
 
 describe('agents.ask — extended timeout + non-idempotency (long-running, non-negotiable)', () => {
   it('declares a timeoutMsOverride well beyond the client default (20-step tool loop, #1769 fix)', () => {
     expect(askAgent.timeoutMsOverride).toBe(120_000);
+  });
+
+  /**
+   * The constant above says nothing about whether a caller can get PAST it,
+   * and for a long time they could not — which is the defect this operation
+   * carried. The precedence that makes it a default rather than a ceiling is
+   * asserted where it lives, in `client.test.ts`'s "timeout precedence" block;
+   * this points at it so the two are not maintained in ignorance of each other.
+   */
+  it('is a default a caller can raise, not a ceiling (see client.test.ts precedence)', () => {
+    expect(askAgent.timeoutMsOverride).toBeTypeOf('number');
   });
 
   it('is a POST — the facade never auto-retries a non-idempotent method (isIdempotentMethod only allows GET)', () => {
@@ -346,7 +376,7 @@ describe('filterModelCatalog — pure client-side D3 replacement', () => {
       provider: 'openai',
       name: 'OpenAI',
       dynamic: false,
-      models: [{ id: 'openai/gpt-5.3-chat', displayName: 'GPT-5.3 Chat', provider: 'openai', free: false }],
+      models: [{ id: 'openai/gpt-5.4-nano', displayName: 'GPT-5.4 Nano', provider: 'openai', free: false }],
     },
   ];
 
@@ -356,7 +386,7 @@ describe('filterModelCatalog — pure client-side D3 replacement', () => {
 
   it('filters to a single provider', () => {
     const result = filterModelCatalog(catalog, { provider: 'openai' });
-    expect(result.map((m) => m.id)).toEqual(['openai/gpt-5.3-chat']);
+    expect(result.map((m) => m.id)).toEqual(['openai/gpt-5.4-nano']);
   });
 
   it('filters to free models only, across providers', () => {

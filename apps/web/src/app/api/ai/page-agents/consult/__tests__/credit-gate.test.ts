@@ -40,7 +40,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({ auditRequest: vi.fn() }));
 
 // Single row returned for every query in this test's db mock — so it carries both
 // the agent-page fields and the gate user's subscriptionTier/role.
-const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.3-chat', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
+const agentPage = { id: 'agent-1', type: 'AI_CHAT', title: 'Helper', driveId: 'drive-1', aiProvider: 'openai', aiModel: 'openai/gpt-5.4-nano', systemPrompt: 'You help.', enabledTools: [], subscriptionTier: 'pro', role: 'user' };
 
 vi.mock('@pagespace/db/db', () => {
   type QueryBuilder = {
@@ -63,15 +63,31 @@ vi.mock('@pagespace/db/operators', () => ({ eq: vi.fn(), ne: vi.fn(), desc: vi.f
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT: the
 // reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 / D6,
 // PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// `messageRepository.getPageConversationMessages` (the cross-conversation
+// `getRecentPageMessagesForUser` reader is gone — a new conversation now
+// starts empty),
 // which read the unified `messages` table.
+/**
+ * The route reserves the conversation by INSERTING it, and no longer swallows a
+ * rejection from that write: a repository failure is a 500, not a 409 claiming
+ * the id is taken. These specs previously loaded the real repository against a
+ * mocked `db` and relied on the discarded `.catch()` to hide the resulting
+ * failure — so they need the seam mocked explicitly now that failures are
+ * honest. 'created' is the ordinary outcome for the ids they use.
+ */
+vi.mock('@/lib/repositories/conversation-repository', () => ({
+  conversationRepository: {
+    createConversation: vi.fn(async () => 'created' as const),
+    getConversation: vi.fn(async () => null),
+  },
+}));
+
 vi.mock('@/lib/repositories/message-repository', () => ({
   messageRepository: {
     savePageMessage: vi.fn().mockResolvedValue({ saved: true, rev: 1 }),
     // These suites assert other things, so an empty history is the honest
     // stand-in for the two readers the cutover introduced.
     getPageConversationMessages: vi.fn().mockResolvedValue([]),
-    getRecentPageMessagesForUser: vi.fn().mockResolvedValue([]),
   },
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ pages: { id: 'id' }, drives: { id: 'id' } }));
@@ -95,7 +111,7 @@ vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn().mockReturnValue(false),
 }));
 vi.mock('@/lib/ai/core/ai-tools', () => ({
@@ -109,11 +125,11 @@ vi.mock('@/lib/ai/core/personalization-utils', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ADMIN_ONLY_PROVIDERS: new Set<string>(['glm']),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 
@@ -160,7 +176,7 @@ describe('POST /api/ai/page-agents/consult — prepaid credit gate', () => {
     vi.mocked(canConsumeAI).mockResolvedValue({ allowed: true, reason: 'unlimited' });
     // Reset the shared row to a non-admin, public-provider default each test.
     agentPage.aiProvider = 'openai';
-    agentPage.aiModel = 'openai/gpt-5.3-chat';
+    agentPage.aiModel = 'openai/gpt-5.4-nano';
     agentPage.role = 'user';
   });
 

@@ -8,7 +8,7 @@ const baseParams = {
   imageGenEnabled: false,
   showPageTree: false,
   selectedProvider: 'openai',
-  selectedModel: 'openai/gpt-5.3-chat',
+  selectedModel: 'openai/gpt-5.4-nano',
 };
 
 describe('buildGlobalChatRequestBody', () => {
@@ -89,6 +89,6 @@ describe('buildGlobalChatRequestBody', () => {
     expect(body.webSearchEnabled).toBe(true);
     expect(body.showPageTree).toBe(false);
     expect(body.selectedProvider).toBe('openai');
-    expect(body.selectedModel).toBe('openai/gpt-5.3-chat');
+    expect(body.selectedModel).toBe('openai/gpt-5.4-nano');
   });
 });

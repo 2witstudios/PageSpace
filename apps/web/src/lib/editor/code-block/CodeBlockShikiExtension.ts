@@ -1,4 +1,3 @@
-import CodeBlock from '@tiptap/extension-code-block';
 import { ReactNodeViewRenderer } from '@tiptap/react';
 import { Plugin, PluginKey } from '@tiptap/pm/state';
 import { Decoration, DecorationSet } from '@tiptap/pm/view';
@@ -8,6 +7,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import { tokenizeCode, type ShikiTheme } from './shiki-highlighter';
 import { tokensToDecorationSpecs, specsToDecorations } from './token-decorations';
 import { LanguageSelector } from './LanguageSelector';
+import { CodeBlockNode } from './CodeBlockNode';
 
 const highlightPluginKey = new PluginKey('codeBlockShikiHighlight');
 const DEBOUNCE_MS = 300;
@@ -121,26 +121,15 @@ function createHighlightPlugin(): Plugin {
   });
 }
 
-export const CodeBlockShiki = CodeBlock.extend({
-  addAttributes() {
-    return {
-      ...this.parent?.(),
-      language: {
-        default: null,
-        parseHTML: (element) => {
-          const codeEl = element.querySelector('code');
-          const classList = codeEl?.className || element.className || '';
-          const match = classList.match(/language-(\S+)/);
-          return match?.[1] || null;
-        },
-        renderHTML: (attributes) => {
-          if (!attributes.language) return {};
-          return { class: `language-${attributes.language}` };
-        },
-      },
-    };
-  },
-
+/**
+ * The client's `codeBlock`: `CodeBlockNode`'s frozen schema plus the
+ * React node view (language selector) and the debounced Shiki highlight
+ * plugin. Neither addition is schema-affecting — `addNodeView` and
+ * `addProseMirrorPlugins` don't touch `NodeSpec` — so this is Class C
+ * relative to `collabExtensions()`, but it does import React/DOM, which is
+ * why it stays out of the Node-safe schema module.
+ */
+export const CodeBlockShiki = CodeBlockNode.extend({
   addNodeView() {
     return ReactNodeViewRenderer(LanguageSelector);
   },

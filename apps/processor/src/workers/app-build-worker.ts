@@ -92,7 +92,7 @@ async function countPriorAttempts(publishedAppId: string): Promise<number> {
  * to stop retrying it rather than to keep re-queueing a build it cannot assemble.
  * When the promotion contract lands, only this function changes.
  */
-async function resolveLastBuildSource(publishedAppId: string): Promise<string | null> {
+export async function resolveLastBuildSource(publishedAppId: string): Promise<string | null> {
   const client = await getPoolForWorker().connect();
   try {
     const result = await client.query(
