@@ -98,20 +98,25 @@ export async function callerCanViewUser(
 export async function getRelatedUserIds(callerId: string): Promise<string[]> {
   const related = new Set<string>();
 
-  const acceptedConnections = await db
-    .select({ user1Id: connections.user1Id, user2Id: connections.user2Id })
-    .from(connections)
-    .where(
-      and(
-        eq(connections.status, 'ACCEPTED'),
-        or(eq(connections.user1Id, callerId), eq(connections.user2Id, callerId)),
+  // Accepted connections and the caller's own drive ids are independent lookups;
+  // run them together to keep this off the critical path of a per-keystroke
+  // typeahead search.
+  const [acceptedConnections, callerDriveIds] = await Promise.all([
+    db
+      .select({ user1Id: connections.user1Id, user2Id: connections.user2Id })
+      .from(connections)
+      .where(
+        and(
+          eq(connections.status, 'ACCEPTED'),
+          or(eq(connections.user1Id, callerId), eq(connections.user2Id, callerId)),
+        ),
       ),
-    );
+    getUserDriveIds(callerId),
+  ]);
   for (const row of acceptedConnections) {
     related.add(row.user1Id === callerId ? row.user2Id : row.user1Id);
   }
 
-  const callerDriveIds = await getUserDriveIds(callerId);
   if (callerDriveIds.length > 0) {
     const [coMembers, owners] = await Promise.all([
       db
