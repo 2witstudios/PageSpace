@@ -161,7 +161,9 @@ const saveMessageToDatabase = vi.fn().mockResolvedValue(undefined);
 // HISTORY now comes from the repository, not a raw `chat_messages` SELECT:
 // the reader cutover (epic "Agent-Session Single Source of Truth", Phase 4 /
 // D6, PR 12) moved the consult route's two history branches onto
-// `messageRepository.getPageConversationMessages` / `.getRecentPageMessagesForUser`,
+// `messageRepository.getPageConversationMessages` (the cross-conversation
+// `getRecentPageMessagesForUser` reader is gone — a new conversation now
+// starts empty),
 // which read the unified `messages` table. The fixtures below are unchanged —
 // what they stand in for moved one layer up.
 vi.mock('@/lib/repositories/message-repository', () => ({
@@ -170,8 +172,6 @@ vi.mock('@/lib/repositories/message-repository', () => ({
       saveMessageToDatabase(...args).then(() => ({ saved: true, rev: 1 })),
     getPageConversationMessages: vi.fn(async (_pageId: string, conversationId: string) =>
       ALL_MESSAGES.filter((m) => m.conversationId === conversationId)),
-    getRecentPageMessagesForUser: vi.fn(async (_pageId: string, _userId: string, limit: number) =>
-      ALL_MESSAGES.slice(-limit)),
   },
 }));
 
@@ -194,9 +194,18 @@ const getConversation = vi.fn(async (id: string): Promise<ConversationFixture | 
     ? { id, userId: CONVERSATION_OWNERS[id], type: 'page', contextId: 'agent-1', agentPageId: null, isShared: false, isActive: true }
     : null,
 );
+/**
+ * `createConversation` resolves its real outcome union, not `undefined`: the
+ * route now treats that value as the RESERVATION for a caller-supplied id, so
+ * a mock returning nothing would refuse every addressed ask with a 409 and
+ * hide the behaviour under test.
+ */
+const createConversation = vi.fn(
+  async (_conversationId: string, _userId: string, _pageId: string): Promise<'created' | 'exists' | 'message_owner_conflict'> => 'created',
+);
 vi.mock('@/lib/repositories/conversation-repository', () => ({
   conversationRepository: {
-    createConversation: vi.fn().mockResolvedValue(undefined),
+    createConversation: (...args: [string, string, string]) => createConversation(...args),
     getConversation: (...args: [string]) => getConversation(...args),
   },
 }));
@@ -334,13 +343,156 @@ describe('POST /api/ai/page-agents/consult — cross-user history', () => {
     expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
   });
 
-  it('the no-conversationId fallback asks for THIS caller\'s messages, not the page\'s', async () => {
+  /**
+   * SUPERSEDES "the no-conversationId fallback asks for THIS caller's
+   * messages, not the page's". That assertion documented the owner-scoped
+   * cross-conversation read, which was the right containment for the WRONG
+   * read: scoping a leak to one user makes it not a leak, but it left every
+   * one-shot consult seeing that user's other conversations. The reader is
+   * gone, so the strongest available statement is that no history is read at
+   * all.
+   */
+  it('reads no history whatsoever when no conversationId is given', async () => {
     const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q' }));
 
     expect(response.status).toBe(200);
-    // The owner-scoping lives in the argument list: a page-only read is what
-    // leaked, so the caller's id has to be passed for the repository to
-    // constrain on it at all.
-    expect(messageRepository.getRecentPageMessagesForUser).toHaveBeenCalledWith('agent-1', 'user-1', 10);
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * CALLER-ADDRESSED CONSULTATIONS.
+ *
+ * The route runs to completion whether or not its caller is still listening —
+ * nothing here reads `request.signal`, and the consult is billed and persisted
+ * either way. While the conversation id was always minted server-side and
+ * returned only in the 200 body, a caller whose client deadline expired never
+ * learned where its own answer had been written: real credits spent on a
+ * result that could not be reached. `newConversationId` lets the caller name
+ * the address before sending, which is what makes an abandoned consult
+ * recoverable through the conversations API.
+ */
+describe('POST /api/ai/page-agents/consult — caller-supplied newConversationId', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue(mockAuth());
+    convertToModelMessages.mockClear();
+    saveMessageToDatabase.mockClear();
+  });
+
+  it('creates the conversation at the caller\'s address and echoes it back', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'convmine1' }));
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).conversationId).toBe('convmine1');
+    expect(createConversation).toHaveBeenCalledWith('convmine1', 'user-1', 'agent-1');
+  });
+
+  it('persists both turns under the caller\'s address, so it is readable afterwards', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'convmine1' }));
+
+    const conversationIds = saveMessageToDatabase.mock.calls.map((call) => (call[0] as { conversationId: string }).conversationId);
+    expect(conversationIds).toEqual(['convmine1', 'convmine1']);
+  });
+
+  /** A new conversation is new: naming its address does not import context. */
+  it('starts empty despite naming an address', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'convmine1' }));
+
+    expect(messageRepository.getPageConversationMessages).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Refused, never appended to — and THE RESERVATION IS THE INSERT, never a
+   * preceding SELECT.
+   *
+   * `createConversation` inserts with `onConflictDoNothing().returning()` and
+   * answers 'exists' when the row was not written, INCLUDING when a concurrent
+   * first-write won the race. A read-then-write check here would be a TOCTOU:
+   * two callers submitting the same id both observe no row, both proceed, and
+   * the loser persists and bills its turns inside the winner's private
+   * conversation — exposing its prompt and answer to the winner, the exact
+   * failure this refusal exists to prevent. Driving the write's outcome
+   * directly is what makes this a test about the race rather than about a
+   * prior SELECT that a concurrent writer would have invalidated anyway.
+   */
+  it.each([
+    ['the row already existed', 'exists' as const],
+    ['a concurrent writer won the race', 'exists' as const],
+    ['the id carries another user\'s messages', 'message_owner_conflict' as const],
+  ])('refuses with 409 when %s, rather than writing into it', async (_label, outcome) => {
+    createConversation.mockResolvedValueOnce(outcome);
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: 'convtaken1' }));
+
+    expect(response.status).toBe(409);
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The refusal is scoped to CALLER-supplied addresses. An id this route minted
+   * itself cannot meaningfully collide, and the `conversationId` path has
+   * already authorized the conversation it names — neither may start failing
+   * because the insert reported 'exists'.
+   */
+  it('does not refuse a server-minted conversation when the insert reports exists', async () => {
+    createConversation.mockResolvedValueOnce('exists');
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q' }));
+
+    expect(response.status).toBe(200);
+  });
+
+  /**
+   * `conversationId` CONTINUES, `newConversationId` CREATES. Resolving the
+   * contradiction by precedence would write the turn somewhere the caller did
+   * not name.
+   */
+  it('rejects both fields together with a 400', async () => {
+    const response = await POST(
+      makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-a', newConversationId: 'convmine1' }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The id contract is CUID2 — what `createId()` produces and what every other
+   * id in this system satisfies. A caller-addressed conversation persists an
+   * address, so an address no other part of the system could ever have minted
+   * is refused at the door rather than reasoned about once it is a row.
+   */
+  it.each([
+    ['an empty string', ''],
+    ['a uuid', '3f2504e0-4f89-11d3-9a0c-0305e82c3301'],
+    ['an uppercase id', 'CONVMINE1'],
+    ['a leading digit', '1convmine'],
+    ['a path fragment', '../../etc/passwd'],
+    ['an oversized id', 'c'.repeat(200)],
+  ])('rejects %s as newConversationId', async (_label, value) => {
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', newConversationId: value }));
+    expect(response.status).toBe(400);
+    expect(saveMessageToDatabase).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The continue path's refusal is unchanged: an unknown id there is still a
+   * 404, identical to someone else's id, so `newConversationId` did not turn
+   * that deliberate ambiguity into an existence oracle for every id.
+   */
+  it('leaves conversationId\'s unknown-id 404 exactly as it was', async () => {
+    getConversation.mockResolvedValueOnce(null);
+
+    const response = await POST(makeRequest({ agentId: 'agent-1', question: 'q', conversationId: 'conv-unknown' }));
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: 'Conversation not found' });
   });
 });

@@ -21,6 +21,7 @@
 import { activityHandler } from '../commands/activity.js';
 import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';
 import { channelsSendHandler } from '../commands/channels.js';
+import { conversationsListHandler, conversationsReadHandler } from '../commands/conversations.js';
 import {
   drivesCreateHandler,
   drivesListHandler,
@@ -172,6 +173,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['agents', 'ask'], handler: agentsAskHandler, summary: 'Ask an agent' },
   { path: ['agents', 'config'], handler: agentsConfigHandler, summary: 'Read/update agent config' },
   { path: ['models', 'list'], handler: modelsListHandler, summary: 'List available AI models' },
+  { path: ['conversations', 'list'], handler: conversationsListHandler, summary: 'List an agent\'s conversations' },
+  { path: ['conversations', 'read'], handler: conversationsReadHandler, summary: 'Read a conversation\'s messages' },
   { path: ['activity'], handler: activityHandler, summary: 'Show recent activity' },
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
 ];
