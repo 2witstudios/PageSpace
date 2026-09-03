@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **New accounts get a short first-run walkthrough instead of a blank screen** — signing up now
+  opens a five-step introduction that explains what PageSpace is and ends by asking what you
+  actually want to get done, then hands that request straight to the assistant so your first
+  action is the real thing rather than a setup form. It starts by asking who the workspace is for
+  — just you, a small team, several teams, or a whole company — and everything after that is
+  written for the answer you gave: the example it shows you, the six things it demonstrates it can
+  do, how many assistants turn up when a job is too big for one, and the suggested requests at the
+  end. It configures nothing; your Home drive is already set up before the walkthrough appears.
+  What you type is saved to your About You memory page, so every assistant you work with from then
+  on already knows it. Any step can be skipped, and skipping is remembered. Self-hosted
+  installations are not shown suggestions that depend on services they do not have.
+
 - **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
   an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
   switch. Pick one of the drive's persistent Environments (the same ones the Agents screen's spawn

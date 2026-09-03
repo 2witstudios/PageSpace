@@ -49,6 +49,7 @@ import { useLayoutStore } from '@/stores/useLayoutStore';
 import { useDriveStore } from '@/hooks/useDrive';
 import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { useAssistantSettingsStore } from '@/stores/useAssistantSettingsStore';
+import { useOnboardingHandoffStore } from '@/stores/useOnboardingHandoffStore';
 import { useGlobalChatConversation } from '@/contexts/GlobalChatContext';
 import { usePageAgentDashboardStore } from '@/stores/page-agents';
 import { VoiceCallBarForConversation } from '@/components/ai/voice/realtime';
@@ -739,15 +740,22 @@ const GlobalAssistantView: React.FC = () => {
     mcpToolSchemas,
   ]);
 
-  const handleSendMessage = async () => {
+  /**
+   * Send `text` as the user's message.
+   *
+   * Split out from `handleSendMessage` so a caller that did not come from the
+   * composer — onboarding handing over the user's first request — can send
+   * without having to stuff text into composer state and synthesise a submit.
+   * Kept as its own function rather than an optional first argument to
+   * `handleSendMessage`, because that is wired directly to `onSend` and would
+   * receive a click event in that position.
+   */
+  const sendMessageWithText = async (text: string, options?: { clearComposer?: boolean }) => {
     const files = getFilesForSend();
-    if ((!input.trim() && files.length === 0) || !currentConversationId) return;
+    if ((!text.trim() && files.length === 0) || !currentConversationId) return;
 
     const requestBody = buildRequestBody();
 
-    // Capture the draft BEFORE the handoff await below: the wait can run up to ~1.5s, and
-    // anything the user types or attaches during it must survive (Codex review, PR #2121).
-    const text = input;
     const sendFiles = files.length > 0 ? files : undefined;
     // The ids behind `files` — same processed filter getFilesForSend applies. Attachments are
     // cleared per-id AFTER the handoff confirms, so a refusal loses nothing and anything
@@ -756,7 +764,9 @@ const GlobalAssistantView: React.FC = () => {
 
     // Text clears immediately (typing during the wait must not merge into the old draft) and is
     // restored on refusal ONLY if the composer is still empty — newer keystrokes win.
-    setInput('');
+    // Only for composer sends: a programmatic send must never wipe a draft the
+    // user is part-way through typing.
+    if (options?.clearComposer) setInput('');
 
     // NO PRE-SEND HANDOFF, and no path that can refuse the send. A send is its own `fetch`;
     // a generation already running in another conversation — or in the other mode — is
@@ -786,6 +796,32 @@ const GlobalAssistantView: React.FC = () => {
     );
     // Note: scrollToBottom is now handled by use-stick-to-bottom when pinned
   };
+
+  const handleSendMessage = async () => {
+    // Capture the draft BEFORE any await: the wait can run up to ~1.5s, and
+    // anything the user types or attaches during it must survive (Codex review, PR #2121).
+    await sendMessageWithText(input, { clearComposer: true });
+  };
+
+  // First-run handoff: onboarding queues the user's first request, and we send
+  // it as soon as there is a conversation to send it into.
+  //
+  // `claim()` clears the request as it returns it, so a remount or a second
+  // render can never re-send — a duplicated first request is work the user pays
+  // for twice. The guard ref covers the same window within a single mount,
+  // before the store write has settled.
+  const handoffSentRef = useRef(false);
+  useEffect(() => {
+    if (handoffSentRef.current) return;
+    if (!currentConversationId) return; // not ready yet — keep it queued, don't drop it
+    const pending = useOnboardingHandoffStore.getState().claim();
+    if (!pending) return;
+    handoffSentRef.current = true;
+    void sendMessageWithText(pending);
+    // sendMessageWithText is recreated every render; depending on it would
+    // re-run this effect constantly. The ref + take-once claim are the guards.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentConversationId]);
 
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message, and

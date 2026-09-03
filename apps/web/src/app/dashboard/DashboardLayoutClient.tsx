@@ -5,6 +5,7 @@ import Layout from "@/components/layout/Layout";
 import { PushNotificationManager } from "@/components/PushNotificationManager";
 import { PushActionHandler } from "@/components/PushActionHandler";
 import QuickCreatePalette from "@/components/create/QuickCreatePalette";
+import { OnboardingGate } from "@/components/onboarding/OnboardingGate";
 import { useHotkeyPreferences } from "@/hooks/useHotkeyPreferences";
 import { useDesktopExchangeHandler } from "@/hooks/useDesktopExchangeHandler";
 
@@ -40,6 +41,7 @@ export default function DashboardLayoutClient({ children }: { children: React.Re
       <PushNotificationManager />
       <PushActionHandler />
       <QuickCreatePalette />
+      <OnboardingGate />
       {isFullPageRoute ? <Layout>{children}</Layout> : <Layout />}
     </>
   );
