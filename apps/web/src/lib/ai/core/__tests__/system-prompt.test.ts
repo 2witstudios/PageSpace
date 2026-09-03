@@ -43,6 +43,23 @@ describe('buildSystemPrompt — general', () => {
     expect(result).not.toContain('DRIVE CONTEXT');
     expect(result).not.toContain('PAGE CONTEXT');
   });
+
+  it('the EXECUTION BIAS examples are hedged, not declared unconditionally available', () => {
+    // BEHAVIOR_PROMPT (which holds EXECUTION BIAS) is always-on and unconditional —
+    // it can't be gated per-tool the way SANDBOX_INSTRUCTIONS/AGENTS/AUTOMATION are.
+    // A read-only turn or a restricted allowlist can strip bash, worker dispatch,
+    // trigger setters, and content-writing tools entirely, so the examples here must
+    // read as "check whether you can," never as "you can" — for every mode, since
+    // this block doesn't vary by isReadOnly or allowedToolNames.
+    for (const result of [
+      buildSystemPrompt(false),
+      buildSystemPrompt(true),
+      buildSystemPrompt(false, undefined, true, ['read_page']),
+    ]) {
+      expect(result).toContain('EXECUTION BIAS');
+      expect(result).not.toContain('is well within reach');
+    }
+  });
 });
 
 describe('buildSystemPrompt — sandbox guidance', () => {
