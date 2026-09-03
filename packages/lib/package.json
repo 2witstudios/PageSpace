@@ -43,6 +43,16 @@
       "import": "./dist/onboarding/home-drive.js",
       "require": "./dist/onboarding/home-drive.js"
     },
+    "./onboarding/onboarding-memory": {
+      "types": "./dist/onboarding/onboarding-memory.d.ts",
+      "import": "./dist/onboarding/onboarding-memory.js",
+      "require": "./dist/onboarding/onboarding-memory.js"
+    },
+    "./onboarding/onboarding-state": {
+      "types": "./dist/onboarding/onboarding-state.d.ts",
+      "import": "./dist/onboarding/onboarding-state.js",
+      "require": "./dist/onboarding/onboarding-state.js"
+    },
     "./db/bounded-query": {
       "types": "./dist/db/bounded-query.d.ts",
       "import": "./dist/db/bounded-query.js",

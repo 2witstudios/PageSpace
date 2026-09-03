@@ -87,6 +87,18 @@ export const users = pgTable('users', {
    * "does a command with this trigger exist?" alone would fail both.
    */
   starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
+  /**
+   * When the user finished (or dismissed) first-run onboarding. NULL means the
+   * flow has never run to completion for them.
+   *
+   * NULL deliberately does NOT mean "show onboarding": every user who predates
+   * the feature also has NULL, and showing them a first-run flow on their next
+   * login would be a regression for the entire existing user base. The backfill
+   * (scripts/backfill-onboarding-completed.ts) stamps existing users so that,
+   * from the release onward, NULL means genuinely new. Read it through
+   * `hasCompletedOnboarding`, never as a bare null check.
+   */
+  onboardingCompletedAt: timestamp('onboardingCompletedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({

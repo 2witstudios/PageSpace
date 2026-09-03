@@ -1,0 +1,1 @@
+ALTER TABLE "users" ADD COLUMN "onboardingCompletedAt" timestamp;
