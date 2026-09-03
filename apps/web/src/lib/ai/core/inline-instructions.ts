@@ -165,9 +165,11 @@ function buildTaskManagement(availableTools?: string[]): string {
  * (gated by includeAgents in buildInlineInstructions — buildGlobalAssistantInstructions
  * includes the section unconditionally). Two bullets name a capability beyond
  * that base gate — configuring a new specialist needs create_page AND
- * update_agent_config, not just spawn_session/list_agents — so they compose
- * in only when their own required tools are present, the same discipline
- * buildPageTypes uses for SHEET/DOCUMENT.
+ * update_agent_config, not just spawn_session/list_agents; the list_models
+ * bullet needs update_agent_config too (list_models alone only discovers
+ * models, it doesn't apply one to an agent) — so they compose in only when
+ * their own required tools are present, the same discipline buildPageTypes
+ * uses for SHEET/DOCUMENT.
  */
 function buildAgents(availableTools?: string[]): string {
   const has = (tool: string) => hasAny(availableTools, [tool]);
@@ -180,7 +182,7 @@ function buildAgents(availableTools?: string[]): string {
   if (has('create_page') && has('update_agent_config')) {
     lines.push('• For work that benefits from a dedicated, reusable specialist, configure a new AI_CHAT agent instead of always doing the job inline yourself');
   }
-  if (has('list_models')) {
+  if (has('list_models') && has('update_agent_config')) {
     lines.push('• Never guess a model ID when configuring an agent — call list_models first');
   }
   return lines.join('\n');

@@ -277,6 +277,14 @@ describe('buildAgentSystemPrompt — what both surfaces owe the caller', () => {
     ).not.toContain('CODE SANDBOX:');
   });
 
+  it('should describe the sandbox when the agent holds a non-bash sandbox tool (per-tool allowlist unchecked bash specifically)', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({ codeExecutionEnabled: true, allowedToolNames: [...TOOL_NAMES, 'writeFile'] }),
+      ),
+    ).toContain('CODE SANDBOX:');
+  });
+
   it('should not describe the sandbox in read-only mode even with sandbox tools present', () => {
     expect(
       buildAgentSystemPrompt(

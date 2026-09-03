@@ -76,6 +76,16 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('/workspace');
   });
 
+  it('given codeExecutionEnabled true and allowedToolNames includes a non-bash sandbox tool (bash unchecked in the per-agent allowlist), should still include sandbox guidance', () => {
+    // The Default Tools settings UI (PageAgentSettingsTab) is a per-tool checkbox
+    // list — an admin can enable writeFile/editFile/git_clone/spawn_session while
+    // leaving bash specifically unchecked. That agent can still call those sandbox
+    // tools via execute_tool and needs the /workspace path-resolution and
+    // persistence guidance just as much as a bash-enabled agent does.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile', 'git_clone']);
+    expect(result).toContain('/workspace');
+  });
+
   it('given codeExecutionEnabled true and allowedToolNames omitted, should include sandbox guidance (undefined = no filtering context)', () => {
     // Matches the sentinel semantics used elsewhere in this module (buildInlineInstructions,
     // buildNonCoreToolNamesPrompt): undefined means "no tool list to filter against", not "no tools".

@@ -5,6 +5,8 @@
  * Replaces the complex 3-role system with simple, trust-the-model approach.
  */
 
+import { SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
+
 export interface PersonalizationInfo {
   bio?: string;
   writingStyle?: string;
@@ -150,14 +152,23 @@ export function buildPersonalizationPrompt(personalization?: PersonalizationInfo
  * caches survive.
  *
  * `allowedToolNames`, when provided, gates the sandbox section on the agent
- * actually holding a sandbox tool (checked via `bash`, present whenever the
- * sandbox family is) — `codeExecutionEnabled` alone is the deployment-wide
- * kill switch, not the per-agent `sandboxEnabled` switch
- * (`filterToolsForSandboxEnablement`), which can strip the whole family from
- * an agent's tools while the deployment flag stays on. `undefined` means "no
- * filtering context" (same sentinel as buildInlineInstructions) and does not
- * suppress the section — every current caller that omits it wants the
- * unfiltered admin/preview behavior, not an empty tool list.
+ * actually holding a COMPUTE sandbox tool (`SANDBOX_COMPUTE_TOOL_NAMES` —
+ * core exec/files, git+gh, PTY shell; "a shell IS the sandbox") —
+ * `codeExecutionEnabled` alone is the deployment-wide kill switch, not the
+ * per-agent `sandboxEnabled` switch (`filterToolsForSandboxEnablement`),
+ * which can strip the whole family from an agent's tools while the
+ * deployment flag stays on. Checking the compute family, not just `bash`,
+ * matters because the Default Tools settings UI is a per-tool checkbox
+ * list: an admin can enable writeFile/editFile/git_clone while leaving
+ * `bash` specifically unchecked, and that agent still needs the /workspace
+ * path-resolution and persistence guidance. Deliberately NOT the chat-only
+ * `spawn_session` family (`SANDBOX_TOOL_NAMES` minus compute) — that family
+ * is free on every plan and doesn't itself give this agent /workspace
+ * access, so it shouldn't trigger content that's almost entirely bash/git
+ * mechanics this agent can't call. `undefined` means "no filtering context"
+ * (same sentinel as buildInlineInstructions) and does not suppress the
+ * section — every current caller that omits it wants the unfiltered
+ * admin/preview behavior, not an empty tool list.
  */
 export function buildSystemPrompt(
   isReadOnly: boolean = false,
@@ -166,7 +177,9 @@ export function buildSystemPrompt(
   allowedToolNames?: string[]
 ): string {
   const personalizationPrompt = buildPersonalizationPrompt(personalization);
-  const hasSandboxTools = allowedToolNames === undefined || allowedToolNames.includes('bash');
+  const hasSandboxTools =
+    allowedToolNames === undefined ||
+    allowedToolNames.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
   // Read-only strips bash (a write tool) from a real caller's allowedToolNames
   // before this runs, but the drive-write instructions inside the sandbox
   // block would contradict READ-ONLY MODE if this ever ran with a stale or

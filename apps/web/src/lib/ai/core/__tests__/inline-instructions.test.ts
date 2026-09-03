@@ -115,13 +115,22 @@ describe('buildInlineInstructions — AGENTS sub-bullet gating', () => {
   });
 
   it('omits the "call list_models first" bullet when list_models is missing', () => {
-    const result = buildInlineInstructions(['spawn_session']);
+    const result = buildInlineInstructions(['spawn_session', 'update_agent_config']);
     expect(result).toContain('AGENTS');
     expect(result).not.toContain('call list_models first');
   });
 
-  it('includes the "call list_models first" bullet when list_models is present', () => {
+  it('omits the "call list_models first" bullet when list_models is present but update_agent_config is missing', () => {
+    // The bullet's own text ("when configuring an agent") presumes the agent can
+    // actually configure one — list_models alone lets it discover models, not
+    // apply one to an agent.
     const result = buildInlineInstructions(['spawn_session', 'list_models']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('call list_models first');
+  });
+
+  it('includes the "call list_models first" bullet only when both list_models and update_agent_config are present', () => {
+    const result = buildInlineInstructions(['spawn_session', 'list_models', 'update_agent_config']);
     expect(result).toContain('call list_models first');
   });
 
