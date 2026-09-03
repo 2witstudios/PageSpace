@@ -13,7 +13,6 @@ import {
   UNSURE_PROMPT,
   getExamples,
   getScaleLabel,
-  type Scale,
 } from './onboarding-content';
 import {
   STEP_COUNT,

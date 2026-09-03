@@ -34,33 +34,35 @@ export async function GET(request: Request) {
 }
 
 /**
- * POST /api/onboarding — record completion, and remember what they told us.
+ * POST /api/onboarding — remember what they told us, then record completion.
  *
- * Completion is recorded even when the memory write fails or is skipped: the
- * user has finished the flow either way, and re-showing it because a secondary
- * write failed would be a worse bug than a missing memory line.
+ * Order matters: completion is the irreversible step. See the note at the write
+ * itself.
  */
 export async function POST(request: Request) {
   try {
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS_WRITE);
     if (isAuthError(auth)) return auth.error;
 
-    const body = await request.json().catch(() => ({}));
+    // Parsed directly rather than swallowed into `{}`: a malformed body used to
+    // fall through and permanently mark onboarding complete while silently
+    // discarding the context, leaving the user no way to retry the flow.
+    const body = await request.json();
     const scaleLabel = typeof body?.scaleLabel === 'string' ? body.scaleLabel : '';
     const firstRequest = typeof body?.firstRequest === 'string' ? body.firstRequest : '';
 
-    await markOnboardingComplete(auth.userId);
-
+    // Memory FIRST, completion second. Completion is the irreversible half: once
+    // it is stamped the modal never returns, so if the order were reversed a
+    // failed memory write would lose the user's answers for good — and the copy
+    // promises "it remembers". Writing first means a failure here leaves the
+    // flow available to try again.
     let remembered = false;
     if (scaleLabel && firstRequest.trim()) {
-      try {
-        const result = await recordOnboardingContext(auth.userId, { scaleLabel, firstRequest });
-        remembered = result.written;
-      } catch (error) {
-        // Non-fatal by design — see the note above.
-        loggers.api.error('Failed to record onboarding context to memory', { error });
-      }
+      const result = await recordOnboardingContext(auth.userId, { scaleLabel, firstRequest });
+      remembered = result.written;
     }
+
+    await markOnboardingComplete(auth.userId);
 
     return NextResponse.json({ ok: true, remembered });
   } catch (error) {

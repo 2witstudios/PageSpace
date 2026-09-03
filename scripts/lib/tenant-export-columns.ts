@@ -94,7 +94,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
       'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
+      'onboardingCompletedAt',
     ],
+    // `onboardingCompletedAt` MUST travel for the same reason: a tenant arriving
+    // with it cleared would show the first-run walkthrough to every migrated
+    // user on their next login, as if the whole workspace were brand new.
+    //
     // `starterSkillsInstalledAt` is the starter-skill install stamp (PR #2359).
     // It MUST travel: the skills themselves are ordinary pages and personal
     // `commands` rows, which the bundle already carries, so a tenant arriving

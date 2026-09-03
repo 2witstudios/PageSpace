@@ -91,12 +91,13 @@ export const users = pgTable('users', {
    * When the user finished (or dismissed) first-run onboarding. NULL means the
    * flow has never run to completion for them.
    *
-   * NULL deliberately does NOT mean "show onboarding": every user who predates
-   * the feature also has NULL, and showing them a first-run flow on their next
-   * login would be a regression for the entire existing user base. The backfill
-   * (scripts/backfill-onboarding-completed.ts) stamps existing users so that,
-   * from the release onward, NULL means genuinely new. Read it through
-   * `hasCompletedOnboarding`, never as a bare null check.
+   * Migration 0280 stamps every row that exists at migration time, so from that
+   * point on NULL means genuinely new. That backfill lives in the migration
+   * rather than a standalone script precisely because a script would never run
+   * on self-hosted upgrades (docker-compose runs `db:migrate` and nothing else)
+   * and could race accounts created while it walked the table.
+   *
+   * Read it through `hasCompletedOnboarding`, never as a bare null check.
    */
   onboardingCompletedAt: timestamp('onboardingCompletedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),

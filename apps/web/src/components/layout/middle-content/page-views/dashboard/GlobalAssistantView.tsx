@@ -788,8 +788,11 @@ const GlobalAssistantView: React.FC = () => {
     }) as UIMessage;
     conversationMessagesActions.addOptimisticSend(currentConversationId, userMessage);
 
-    // wrapSend handles pendingSend registration and cleanup when streaming starts
-    rollbackOptimisticSendOnFailure(
+    // wrapSend handles pendingSend registration and cleanup when streaming starts.
+    // Returned (not fire-and-forget) so a caller that must know whether the send
+    // was admitted — the onboarding handoff, which restores the request on a
+    // pre-admission failure like a 402 — can await it.
+    return rollbackOptimisticSendOnFailure(
       () => wrapSend(() => sendMessage(userMessage, currentConversationId, { body: requestBody })),
       currentConversationId,
       userMessage.id,
@@ -804,24 +807,53 @@ const GlobalAssistantView: React.FC = () => {
   };
 
   // First-run handoff: onboarding queues the user's first request, and we send
-  // it as soon as there is a conversation to send it into.
+  // it as soon as the GLOBAL assistant has a conversation to send it into.
   //
-  // `claim()` clears the request as it returns it, so a remount or a second
-  // render can never re-send — a duplicated first request is work the user pays
-  // for twice. The guard ref covers the same window within a single mount,
-  // before the store write has settled.
+  // Subscribed to the store rather than reading it once: in the normal case the
+  // global conversation already exists by the time the user finishes the five
+  // modal steps, so an effect keyed only on the conversation id would have
+  // already run, found nothing, and never run again — leaving the request
+  // queued forever and the whole feature silently dead.
+  //
+  // Gated on `!selectedAgent` because `sendMessage` and `currentConversationId`
+  // both switch on it: with an agent restored from the URL or a cookie, the
+  // user's first request would be delivered to that agent instead of the global
+  // assistant. Waiting is safe — the subscription re-fires when they return to
+  // global mode.
+  //
+  // `claim()` clears the request as it returns it, so a remount can never
+  // re-send; the ref closes the same window within one mount. On a failed send
+  // the request is put back rather than lost, since the user has already been
+  // told it was sent.
+  const pendingHandoffRequest = useOnboardingHandoffStore((s) => s.pendingRequest);
   const handoffSentRef = useRef(false);
+
+  useEffect(() => {
+    useOnboardingHandoffStore.getState().hydrate();
+  }, []);
+
   useEffect(() => {
     if (handoffSentRef.current) return;
-    if (!currentConversationId) return; // not ready yet — keep it queued, don't drop it
+    if (!pendingHandoffRequest) return;
+    if (selectedAgent) return; // wait for global mode — never deliver to an agent
+    if (!globalConversationId) return; // not ready yet — keep it queued, don't drop it
+
     const pending = useOnboardingHandoffStore.getState().claim();
     if (!pending) return;
     handoffSentRef.current = true;
-    void sendMessageWithText(pending);
+
+    void (async () => {
+      try {
+        await sendMessageWithText(pending);
+      } catch {
+        handoffSentRef.current = false;
+        useOnboardingHandoffStore.getState().restore(pending);
+      }
+    })();
     // sendMessageWithText is recreated every render; depending on it would
     // re-run this effect constantly. The ref + take-once claim are the guards.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentConversationId]);
+  }, [pendingHandoffRequest, selectedAgent, globalConversationId]);
 
   // renderedMessages (selector output), not useChat's raw `messages`: "answerable" is
   // decided by whether the ask_user part sits on the conversation's LAST message, and

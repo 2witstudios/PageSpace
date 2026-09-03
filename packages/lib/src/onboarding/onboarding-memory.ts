@@ -1,7 +1,6 @@
 import { db } from '@pagespace/db/db'
-import { eq } from '@pagespace/db/operators'
+import { eq, sql } from '@pagespace/db/operators'
 import { pages } from '@pagespace/db/schema/core'
-import { userPersonalization } from '@pagespace/db/schema/personalization'
 import { getHomeDrive } from '../services/drive-service'
 import { provisionMemoryPages } from '../memory/memory-pages'
 
@@ -30,8 +29,18 @@ export interface OnboardingContext {
   firstRequest: string;
 }
 
-/** The heading this writer owns, so a re-run replaces its own block and nothing else. */
-const SECTION_HEADING = '## From onboarding';
+/**
+ * Exact, unique delimiters marking the block this writer owns.
+ *
+ * HTML comments, not a markdown heading: matching on a heading like
+ * "## From onboarding" also matches user prose such as "## From onboarding
+ * notes", an inline mention, or the same words inside a fenced code block — and
+ * the strip would then delete everything from that point to the next heading.
+ * These markers are invisible in rendered markdown and are not something a user
+ * writes by accident.
+ */
+const BLOCK_START = '<!-- pagespace:onboarding:start -->';
+const BLOCK_END = '<!-- pagespace:onboarding:end -->';
 
 export async function recordOnboardingContext(
   userId: string,
@@ -51,42 +60,56 @@ export async function recordOnboardingContext(
   );
   if (!bioPageId) return { written: false };
 
-  const existing = await db.query.pages.findFirst({
-    where: eq(pages.id, bioPageId),
-    columns: { content: true },
-  });
-
   const block = [
-    SECTION_HEADING,
+    BLOCK_START,
+    '',
+    '## From onboarding',
     '',
     `- Working at this scale: ${context.scaleLabel}`,
     `- What they came here to do: ${trimmedRequest}`,
+    '',
+    BLOCK_END,
   ].join('\n');
 
-  const priorRaw = existing?.content ?? '';
-  // Strip a previous block written by this same function so re-running
-  // onboarding updates its own section instead of stacking duplicates.
-  const prior = stripOwnSection(priorRaw).trimEnd();
-  const next = prior ? `${prior}\n\n${block}\n` : `${block}\n`;
+  // Read and write inside ONE transaction, with the page row locked. The
+  // previous version read the content, rewrote it whole, and updated in a
+  // separate statement — so two concurrent completions could both read the same
+  // content and the later write would silently discard the earlier one, along
+  // with anything the user or another agent had written in between.
+  await db.transaction(async (tx) => {
+    await tx.execute(sql`SELECT 1 FROM ${pages} WHERE ${pages.id} = ${bioPageId} FOR UPDATE`);
 
-  await db
-    .update(pages)
-    .set({ content: next, contentMode: 'markdown' })
-    .where(eq(pages.id, bioPageId));
+    const existing = await tx.query.pages.findFirst({
+      where: eq(pages.id, bioPageId),
+      columns: { content: true },
+    });
+
+    const prior = stripOwnBlock(existing?.content ?? '').trimEnd();
+    const next = prior ? `${prior}\n\n${block}\n` : `${block}\n`;
+
+    await tx
+      .update(pages)
+      .set({ content: next, contentMode: 'markdown' })
+      .where(eq(pages.id, bioPageId));
+  });
 
   return { written: true };
 }
 
 /**
- * Remove a previously-written "From onboarding" section, up to the next
- * top-or-second-level heading, leaving everything else untouched.
+ * Remove a block previously written by this function, matching the exact
+ * delimiters. Anything outside them — including a user heading that happens to
+ * start with the same words — is left untouched.
  */
-function stripOwnSection(content: string): string {
-  const start = content.indexOf(SECTION_HEADING);
+function stripOwnBlock(content: string): string {
+  const start = content.indexOf(BLOCK_START);
   if (start === -1) return content;
 
-  const after = content.slice(start + SECTION_HEADING.length);
-  const nextHeading = after.search(/\n#{1,2} /);
-  if (nextHeading === -1) return content.slice(0, start);
-  return content.slice(0, start) + after.slice(nextHeading + 1);
+  const endIdx = content.indexOf(BLOCK_END, start);
+  // An unterminated start marker means the page was hand-edited mid-block.
+  // Leave the content entirely alone rather than guessing where it ended and
+  // deleting the user's writing.
+  if (endIdx === -1) return content;
+
+  return content.slice(0, start) + content.slice(endIdx + BLOCK_END.length);
 }
