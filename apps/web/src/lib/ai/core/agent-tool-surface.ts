@@ -34,7 +34,7 @@
  * would be the same silent-divergence bug one level up.
  */
 
-import { SANDBOX_TOOL_NAMES, SANDBOX_COMPUTE_TOOL_NAMES } from './tool-filtering';
+import { SANDBOX_TOOL_NAMES, hasSandboxComputeTools } from './tool-filtering';
 import { CORE_TOOL_NAMES } from './stub-tools';
 
 /**
@@ -211,7 +211,7 @@ export function formatAgentToolSurfaceNotes(surface: AgentToolSurface): string[]
  * exist.
  */
 function describeSandboxTierCaveat(surface: AgentToolSurface): string | null {
-  if (!surface.granted.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name))) return null;
+  if (!hasSandboxComputeTools(surface.granted)) return null;
   return 'Sandbox compute tools (bash/files, git+gh, shells) additionally require an eligible payer tier and a session to run in; that is resolved per conversation, not from this config.';
 }
 
