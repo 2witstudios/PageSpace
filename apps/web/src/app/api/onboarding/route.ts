@@ -66,6 +66,11 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ ok: true, remembered });
   } catch (error) {
+    // A malformed body is the caller's error, not ours — reporting it as a 500
+    // would send the client into retry/alerting paths meant for server faults.
+    if (error instanceof SyntaxError) {
+      return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+    }
     loggers.api.error('Failed to complete onboarding', { error });
     return NextResponse.json({ error: 'Failed to complete onboarding' }, { status: 500 });
   }
