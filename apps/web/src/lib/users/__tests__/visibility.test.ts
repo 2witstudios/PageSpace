@@ -36,9 +36,9 @@ vi.mock('@pagespace/db/schema/social', () => ({
   },
 }));
 
-import { callerCanViewUser } from '../visibility';
+import { callerCanViewUser, getRelatedUserIds } from '../visibility';
 import { db } from '@pagespace/db/db';
-import { isNotNull } from '@pagespace/db/operators';
+import { eq, isNotNull } from '@pagespace/db/operators';
 
 function queueSelectResults(results: unknown[][]) {
   let i = 0;
@@ -127,6 +127,83 @@ describe('callerCanViewUser', () => {
     await callerCanViewUser('u1', 'u2');
     // Both the caller's member-drive lookup and the target shared-membership
     // lookup must compose the acceptedAt gate.
+    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+  });
+});
+
+// ============================================================================
+// getRelatedUserIds — the set form used by /api/users/search so a private
+// friend/collaborator is findable by name. Query order per invocation:
+//   1. accepted connections (either direction)
+//   2. caller's owned drives   (getUserDriveIds)
+//   3. caller's member drives  (getUserDriveIds)
+//   4. co-members of the caller's drives
+//   5. owners of the caller's drives
+// ============================================================================
+describe('getRelatedUserIds', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('returns the other side of accepted connections in both directions', async () => {
+    queueSelectResults([
+      [
+        { user1Id: 'u1', user2Id: 'u2' }, // caller is user1 → partner u2
+        { user1Id: 'u3', user2Id: 'u1' }, // caller is user2 → partner u3
+      ],
+      [], // owns no drives
+      [], // member of no drives
+    ]);
+    const ids = await getRelatedUserIds('u1');
+    expect(ids.sort()).toEqual(['u2', 'u3']);
+  });
+
+  it('includes accepted co-members and owners of the caller\'s drives', async () => {
+    queueSelectResults([
+      [], // no connections
+      [{ id: 'drive_a' }], // caller owns drive_a
+      [], // member of none
+      [{ userId: 'u2' }, { userId: 'u3' }], // co-members
+      [{ ownerId: 'u4' }], // owners of shared drives
+    ]);
+    const ids = await getRelatedUserIds('u1');
+    expect(ids.sort()).toEqual(['u2', 'u3', 'u4']);
+  });
+
+  it('excludes the caller themselves and de-dupes', async () => {
+    queueSelectResults([
+      [{ user1Id: 'u1', user2Id: 'u2' }], // partner u2
+      [{ id: 'drive_a' }], // caller owns drive_a
+      [], // member of none
+      [{ userId: 'u1' }, { userId: 'u2' }], // caller appears as its own member row + dup u2
+      [{ ownerId: 'u1' }], // caller owns the shared drive
+    ]);
+    const ids = await getRelatedUserIds('u1');
+    expect(ids).toEqual(['u2']);
+  });
+
+  it('short-circuits drive lookups when the caller has no drives', async () => {
+    queueSelectResults([
+      [], // no connections
+      [], // owns none
+      [], // member of none
+    ]);
+    expect(await getRelatedUserIds('u1')).toEqual([]);
+    // 1 connections select + 2 drive-id selects; the co-member/owner reads are skipped.
+    expect(db.select).toHaveBeenCalledTimes(3);
+  });
+
+  it('gates on accepted status so pending/blocked relationships are excluded', async () => {
+    queueSelectResults([
+      [], // connections
+      [{ id: 'drive_a' }], // owns drive_a
+      [], // member of none
+      [], // co-members
+      [], // owners
+    ]);
+    await getRelatedUserIds('u1');
+    // Connections restricted to ACCEPTED; drive co-members gated on acceptedAt.
+    expect(eq).toHaveBeenCalledWith('connections.status', 'ACCEPTED');
     expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
   });
 });

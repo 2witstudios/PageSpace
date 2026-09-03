@@ -83,3 +83,55 @@ export async function callerCanViewUser(
     .limit(1);
   return sharedOwnership.length > 0;
 }
+
+/**
+ * The set of users the caller already shares context with: accepted connections
+ * (either direction) and co-members/owners of any drive the caller owns or is an
+ * accepted member of. Excludes the caller themselves.
+ *
+ * This is the set form of {@link callerCanViewUser}. The search endpoint uses it
+ * to let already-known people surface by name even when their profile is private
+ * — you can only find, by name, someone you already have a relationship with, so
+ * it opens no new enumeration surface. Same `acceptedAt` gate applies: a pending,
+ * unaccepted invite is not an established relationship.
+ */
+export async function getRelatedUserIds(callerId: string): Promise<string[]> {
+  const related = new Set<string>();
+
+  const acceptedConnections = await db
+    .select({ user1Id: connections.user1Id, user2Id: connections.user2Id })
+    .from(connections)
+    .where(
+      and(
+        eq(connections.status, 'ACCEPTED'),
+        or(eq(connections.user1Id, callerId), eq(connections.user2Id, callerId)),
+      ),
+    );
+  for (const row of acceptedConnections) {
+    related.add(row.user1Id === callerId ? row.user2Id : row.user1Id);
+  }
+
+  const callerDriveIds = await getUserDriveIds(callerId);
+  if (callerDriveIds.length > 0) {
+    const [coMembers, owners] = await Promise.all([
+      db
+        .select({ userId: driveMembers.userId })
+        .from(driveMembers)
+        .where(
+          and(
+            inArray(driveMembers.driveId, callerDriveIds),
+            isNotNull(driveMembers.acceptedAt),
+          ),
+        ),
+      db
+        .select({ ownerId: drives.ownerId })
+        .from(drives)
+        .where(inArray(drives.id, callerDriveIds)),
+    ]);
+    for (const row of coMembers) related.add(row.userId);
+    for (const row of owners) related.add(row.ownerId);
+  }
+
+  related.delete(callerId);
+  return Array.from(related);
+}

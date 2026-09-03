@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { db } from '@pagespace/db/db'
-import { eq, and, or, ilike, isNotNull } from '@pagespace/db/operators'
+import { eq, and, or, ilike, isNotNull, inArray } from '@pagespace/db/operators'
 import { users } from '@pagespace/db/schema/auth'
 import { userProfiles } from '@pagespace/db/schema/members';
 import { verifyAuth } from '@/lib/auth';
@@ -16,6 +16,7 @@ import {
   buildPublicProfileResult,
   buildExactEmailMatchResult,
 } from '@/lib/users/enumeration-safe';
+import { getRelatedUserIds } from '@/lib/users/visibility';
 
 export async function GET(request: Request) {
   try {
@@ -63,6 +64,13 @@ export async function GET(request: Request) {
     // match must never carry an email — that is not part of the public-profile
     // model. Only the exact-email-match branch below (where the caller already
     // supplied the full address) may surface an email.
+    //
+    // The related-profiles branch further down applies the same name match to
+    // people the caller already shares context with (accepted connections /
+    // shared-drive co-members) WITHOUT the isPublic gate, so a private friend or
+    // collaborator is findable by name. That opens no new enumeration surface:
+    // you can only find, by name, someone you already have a relationship with,
+    // and that branch carries no email either.
     const profileResults = await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
@@ -84,6 +92,34 @@ export async function GET(request: Request) {
     )
     .limit(limit);
 
+    // Related profiles: name-match people the caller already shares context with
+    // (accepted connections / shared-drive co-members), regardless of isPublic.
+    // The emailVerified gate stays to keep temp/magic-link accounts invisible,
+    // and no email is selected (same public-profile shape, preserving M3).
+    const relatedIds = await getRelatedUserIds(user.id);
+    const relatedResults = relatedIds.length > 0
+      ? await db.select({
+          userId: userProfiles.userId,
+          username: userProfiles.username,
+          displayName: userProfiles.displayName,
+          bio: userProfiles.bio,
+          avatarUrl: userProfiles.avatarUrl,
+        })
+        .from(userProfiles)
+        .leftJoin(users, eq(userProfiles.userId, users.id))
+        .where(
+          and(
+            inArray(userProfiles.userId, relatedIds),
+            isNotNull(users.emailVerified),
+            or(
+              ilike(userProfiles.username, searchPattern),
+              ilike(userProfiles.displayName, searchPattern)
+            )
+          )
+        )
+        .limit(limit)
+      : [];
+
     // Also search by email (exact match for privacy).
     // emailVerified IS NOT NULL is the gate that closes Review C1: an admin
     // searching `bob@example.com` while bob holds only a pending invite from
@@ -104,9 +140,17 @@ export async function GET(request: Request) {
     // Combine results, avoiding duplicates
     const userMap = new Map<string, ReturnType<typeof buildPublicProfileResult>>();
 
-    // Add profile results — public-profile shape, no email (M3).
-    for (const result of profileResults) {
+    // Add related profiles first — known people are the likely intended targets,
+    // so they surface at the top of the (limited) combined list.
+    for (const result of relatedResults) {
       userMap.set(result.userId, buildPublicProfileResult(result));
+    }
+
+    // Add public profile results — public-profile shape, no email (M3).
+    for (const result of profileResults) {
+      if (!userMap.has(result.userId)) {
+        userMap.set(result.userId, buildPublicProfileResult(result));
+      }
     }
 
     // Add email results if not already in map. These are exact-email matches,
@@ -142,7 +186,9 @@ export async function GET(request: Request) {
       }
     }
 
-    const userResults = Array.from(userMap.values());
+    // Related-first insertion order is preserved by Map; cap the merged list so
+    // the combined branches still respect `limit`.
+    const userResults = Array.from(userMap.values()).slice(0, limit);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'user_search', resourceId: user.id, details: { queryLength: query.length, resultCount: userResults.length } });
 

@@ -79,6 +79,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
   isNotNull: vi.fn((col: unknown) => ({ _isNotNull: true, col })),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ _inArray: true, col, vals })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
@@ -103,7 +104,12 @@ vi.mock('@/lib/utils/query-params', () => ({
   parseBoundedIntParam: vi.fn((_raw: string | null, opts: { defaultValue: number }) => opts.defaultValue),
 }));
 
+vi.mock('@/lib/users/visibility', () => ({
+  getRelatedUserIds: vi.fn(),
+}));
+
 import { GET } from '../route';
+import { getRelatedUserIds } from '@/lib/users/visibility';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
@@ -150,6 +156,50 @@ function setupDbChains(
   });
 }
 
+const relatedSelectChain = {
+  limit: vi.fn(),
+  where: vi.fn(),
+  leftJoin: vi.fn(),
+  from: vi.fn(),
+};
+
+// When the caller HAS related ids, the route issues an extra select for the
+// related-profiles branch between the public-profile and email queries:
+//   1. public profiles  2. related profiles  3. email  4. profile lookup
+function setupDbChainsWithRelated(
+  relatedResults: unknown[] = [],
+  profileResults: unknown[] = [],
+  emailResults: unknown[] = [],
+  profileLookupResults: unknown[] = [],
+) {
+  profileSelectChain.limit.mockResolvedValue(profileResults);
+  profileSelectChain.where.mockReturnValue({ limit: profileSelectChain.limit });
+  profileSelectChain.leftJoin.mockReturnValue({ where: profileSelectChain.where });
+  profileSelectChain.from.mockReturnValue({ leftJoin: profileSelectChain.leftJoin });
+
+  relatedSelectChain.limit.mockResolvedValue(relatedResults);
+  relatedSelectChain.where.mockReturnValue({ limit: relatedSelectChain.limit });
+  relatedSelectChain.leftJoin.mockReturnValue({ where: relatedSelectChain.where });
+  relatedSelectChain.from.mockReturnValue({ leftJoin: relatedSelectChain.leftJoin });
+
+  emailSelectChain.limit.mockResolvedValue(emailResults);
+  emailSelectChain.where.mockReturnValue({ limit: emailSelectChain.limit });
+  emailSelectChain.from.mockReturnValue({ where: emailSelectChain.where });
+
+  profileLookupChain.limit.mockResolvedValue(profileLookupResults);
+  profileLookupChain.where.mockReturnValue({ limit: profileLookupChain.limit });
+  profileLookupChain.from.mockReturnValue({ where: profileLookupChain.where });
+
+  let selectCallCount = 0;
+  vi.mocked(db.select).mockImplementation((..._args: unknown[]) => {
+    selectCallCount++;
+    if (selectCallCount === 1) return { from: profileSelectChain.from } as never;
+    if (selectCallCount === 2) return { from: relatedSelectChain.from } as never;
+    if (selectCallCount === 3) return { from: emailSelectChain.from } as never;
+    return { from: profileLookupChain.from } as never;
+  });
+}
+
 // ============================================================================
 // GET /api/users/search
 // ============================================================================
@@ -163,6 +213,9 @@ describe('GET /api/users/search', () => {
       hasSessionBearerToken: false,
     });
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    // Default: caller has no relationships, so the related-profiles branch issues
+    // no query and the existing profile→email→lookup select ordering is unchanged.
+    vi.mocked(getRelatedUserIds).mockResolvedValue([]);
     setupDbChains();
   });
 
@@ -381,6 +434,78 @@ describe('GET /api/users/search', () => {
 
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(2);
+    });
+  });
+
+  describe('related profiles (find friends/collaborators by name)', () => {
+    it('finds a PRIVATE friend/collaborator by name when the caller is related to them', async () => {
+      // The related branch returns a row that would NOT appear in the public
+      // profile query (isPublic = false). It must still surface by name.
+      vi.mocked(getRelatedUserIds).mockResolvedValue(['friend_1']);
+      const relatedResults = [
+        {
+          userId: 'friend_1',
+          username: 'privfriend',
+          displayName: 'Private Friend',
+          bio: 'hidden bio',
+          avatarUrl: null,
+        },
+      ];
+      setupDbChainsWithRelated(relatedResults, [], []);
+
+      const request = new Request('https://example.com/api/users/search?q=priv');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'friend_1',
+        username: 'privfriend',
+        displayName: 'Private Friend',
+        bio: 'hidden bio',
+        avatarUrl: null,
+      });
+      // Same public-profile shape — the related branch NEVER carries an email.
+      expect(body.users[0]).not.toHaveProperty('email');
+      // The related query must scope to the caller's related ids and NOT gate on
+      // isPublic (that is the whole point of the branch).
+      const relatedWhere = relatedSelectChain.where.mock.calls;
+      expect(relatedWhere.length).toBeGreaterThan(0);
+    });
+
+    it('does NOT issue the related query when the caller has no relationships', async () => {
+      vi.mocked(getRelatedUserIds).mockResolvedValue([]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=priv');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toEqual([]);
+      // Only the public-profile and email selects ran (2), not a related select.
+      expect(vi.mocked(db.select)).toHaveBeenCalledTimes(2);
+    });
+
+    it('de-dupes a user who is both a public match and a related match (related wins position)', async () => {
+      vi.mocked(getRelatedUserIds).mockResolvedValue(['shared_1']);
+      const relatedResults = [
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null },
+      ];
+      const profileResults = [
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null, email: 'x@y.com' },
+      ];
+      setupDbChainsWithRelated(relatedResults, profileResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=shared');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('shared_1');
+      expect(body.users[0]).not.toHaveProperty('email');
     });
   });
 
