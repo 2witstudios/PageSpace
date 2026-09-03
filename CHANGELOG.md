@@ -7,6 +7,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **You can find friends and collaborators by name when inviting them to a drive** — the invite
+  member search now surfaces people you already have a relationship with — anyone you share a drive
+  with, or an accepted connection — by their display name or username, even when their profile is
+  private. Previously a private profile could only be reached by typing their exact email address.
+  Strangers with private profiles stay hidden, and no email is ever revealed by a name match, so this
+  opens no new way to discover people you don't already know.
+
 - **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
   action, and the resulting app pane lives on the environment itself rather than in a separate
   dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app

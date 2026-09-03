@@ -7,6 +7,7 @@ import { verifyAuth } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { userEmailMatch, decryptUserRows } from '@pagespace/lib/auth/user-repository';
+import { escapeLikePattern } from '@pagespace/lib/db/like-pattern';
 import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import {
   checkDistributedRateLimit,
@@ -16,6 +17,7 @@ import {
   buildPublicProfileResult,
   buildExactEmailMatchResult,
 } from '@/lib/users/enumeration-safe';
+import { searchRelatedProfilesByName } from '@/lib/users/visibility';
 
 export async function GET(request: Request) {
   try {
@@ -51,8 +53,12 @@ export async function GET(request: Request) {
     }
 
     // Search for users by username, display name, or email
-    // Only search public profiles or exact email matches
-    const searchPattern = `%${query}%`;
+    // Only search public profiles or exact email matches.
+    // Escape LIKE metacharacters (`%`, `_`, `\`) so a query like `%%` is matched
+    // literally instead of becoming a wildcard that would dump every related
+    // private profile (CWE-200) — the related branch below intentionally drops
+    // the isPublic gate, so an unescaped wildcard there is an info-disclosure.
+    const searchPattern = `%${escapeLikePattern(query)}%`;
 
     // First, search in user profiles (public only).
     // The inner join on users + isNotNull(emailVerified) excludes temp users
@@ -63,6 +69,13 @@ export async function GET(request: Request) {
     // match must never carry an email — that is not part of the public-profile
     // model. Only the exact-email-match branch below (where the caller already
     // supplied the full address) may surface an email.
+    //
+    // The related-profiles branch further down applies the same name match to
+    // people the caller already shares context with (accepted connections /
+    // shared-drive co-members) WITHOUT the isPublic gate, so a private friend or
+    // collaborator is findable by name. That opens no new enumeration surface:
+    // you can only find, by name, someone you already have a relationship with,
+    // and that branch carries no email either.
     const profileResults = await db.select({
       userId: userProfiles.userId,
       username: userProfiles.username,
@@ -84,6 +97,13 @@ export async function GET(request: Request) {
     )
     .limit(limit);
 
+    // Related profiles: name-match people the caller already shares context with
+    // (accepted connections / shared-drive co-members/owners), regardless of
+    // isPublic. Bounded in the database (name predicate + limit applied there,
+    // relationship via correlated EXISTS), so cost scales with matches, not with
+    // total drive membership. Carries no email (same public-profile shape, M3).
+    const relatedResults = await searchRelatedProfilesByName(user.id, searchPattern, limit);
+
     // Also search by email (exact match for privacy).
     // emailVerified IS NOT NULL is the gate that closes Review C1: an admin
     // searching `bob@example.com` while bob holds only a pending invite from
@@ -101,18 +121,16 @@ export async function GET(request: Request) {
     // Decrypt PII at the edge so the exact-email match surfaces plaintext name/email.
     const emailResults = await decryptUserRows(emailRows);
 
-    // Combine results, avoiding duplicates
+    // Combine results, avoiding duplicates. Insertion order matters: the final
+    // list is truncated to `limit`, so higher-intent matches go in first.
     const userMap = new Map<string, ReturnType<typeof buildPublicProfileResult>>();
 
-    // Add profile results — public-profile shape, no email (M3).
-    for (const result of profileResults) {
-      userMap.set(result.userId, buildPublicProfileResult(result));
-    }
-
-    // Add email results if not already in map. These are exact-email matches,
-    // so the caller already knows the address and the result may carry it.
-    // Defense in depth: even if the DB layer returns an unverified row,
-    // drop it here so search can never surface a temp user.
+    // Exact-email matches first — the caller typed a full address, so this is the
+    // strongest signal and must never be pushed out of the list by the slice
+    // below (nor overwritten by a later, less precise name match that carries no
+    // email). These are the only results that may surface an email.
+    // Defense in depth: even if the DB layer returns an unverified row, drop it
+    // here so search can never surface a temp user.
     for (const result of emailResults) {
       if (result.emailVerified === null) continue;
       if (!userMap.has(result.userId)) {
@@ -142,7 +160,24 @@ export async function GET(request: Request) {
       }
     }
 
-    const userResults = Array.from(userMap.values());
+    // Then related profiles — known people are the likely intended targets, so
+    // they rank above anonymous public matches. Public-profile shape, no email.
+    for (const result of relatedResults) {
+      if (!userMap.has(result.userId)) {
+        userMap.set(result.userId, buildPublicProfileResult(result));
+      }
+    }
+
+    // Finally public profile results — public-profile shape, no email (M3).
+    for (const result of profileResults) {
+      if (!userMap.has(result.userId)) {
+        userMap.set(result.userId, buildPublicProfileResult(result));
+      }
+    }
+
+    // Map preserves insertion order (email → related → public); cap the merged
+    // list so the combined branches still respect `limit`.
+    const userResults = Array.from(userMap.values()).slice(0, limit);
 
     auditRequest(request, { eventType: 'data.read', userId: user.id, resourceType: 'user_search', resourceId: user.id, details: { queryLength: query.length, resultCount: userResults.length } });
 

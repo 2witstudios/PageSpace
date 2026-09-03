@@ -15,10 +15,14 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 vi.mock('@pagespace/db/db', () => ({ db: { select: vi.fn() } }));
 vi.mock('@pagespace/db/operators', () => ({
   eq: vi.fn(),
+  ne: vi.fn(),
   and: vi.fn(),
   or: vi.fn(),
   inArray: vi.fn(),
   isNotNull: vi.fn(),
+  ilike: vi.fn(),
+  exists: vi.fn(),
+  sql: vi.fn(),
 }));
 vi.mock('@pagespace/db/schema/core', () => ({ drives: { id: 'drives.id', ownerId: 'drives.ownerId' } }));
 vi.mock('@pagespace/db/schema/members', () => ({
@@ -27,6 +31,16 @@ vi.mock('@pagespace/db/schema/members', () => ({
     driveId: 'driveMembers.driveId',
     acceptedAt: 'driveMembers.acceptedAt',
   },
+  userProfiles: {
+    userId: 'userProfiles.userId',
+    username: 'userProfiles.username',
+    displayName: 'userProfiles.displayName',
+    bio: 'userProfiles.bio',
+    avatarUrl: 'userProfiles.avatarUrl',
+  },
+}));
+vi.mock('@pagespace/db/schema/auth', () => ({
+  users: { id: 'users.id', emailVerified: 'users.emailVerified' },
 }));
 vi.mock('@pagespace/db/schema/social', () => ({
   connections: {
@@ -36,9 +50,9 @@ vi.mock('@pagespace/db/schema/social', () => ({
   },
 }));
 
-import { callerCanViewUser } from '../visibility';
+import { callerCanViewUser, searchRelatedProfilesByName } from '../visibility';
 import { db } from '@pagespace/db/db';
-import { isNotNull } from '@pagespace/db/operators';
+import { eq, ne, isNotNull, ilike, exists } from '@pagespace/db/operators';
 
 function queueSelectResults(results: unknown[][]) {
   let i = 0;
@@ -50,6 +64,8 @@ function queueSelectResults(results: unknown[][]) {
     terminal.limit = () => Promise.resolve(result);
     const chain = {
       from: () => chain,
+      innerJoin: () => chain,
+      leftJoin: () => chain,
       where: () => terminal,
       limit: () => Promise.resolve(result),
     };
@@ -128,5 +144,70 @@ describe('callerCanViewUser', () => {
     // Both the caller's member-drive lookup and the target shared-membership
     // lookup must compose the acceptedAt gate.
     expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+  });
+});
+
+// ============================================================================
+// searchRelatedProfilesByName — name-matches private-or-public profiles the
+// caller already shares context with, used by /api/users/search so a private
+// friend/collaborator is findable by name. The relationship is expressed as
+// correlated EXISTS subqueries, so db.select() is issued in this order:
+//   1. caller's owned drives          (getUserDriveIds)
+//   2. caller's member drives         (getUserDriveIds)
+//   3. connectedToCaller EXISTS subquery (always built)
+//   4. co-member EXISTS subquery      (only when the caller has drives)
+//   5. owner EXISTS subquery          (only when the caller has drives)
+//   6. the main userProfiles query    (its result is what's returned)
+// ============================================================================
+describe('searchRelatedProfilesByName', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const PATTERN = '%bob%';
+  const friend = { userId: 'friend', username: 'bobby', displayName: 'Bob', bio: null, avatarUrl: null };
+
+  it('returns the profiles matched by the bounded relationship query', async () => {
+    queueSelectResults([
+      [{ id: 'drive_a' }], // owned
+      [], // member
+      [], // connectedToCaller EXISTS subquery
+      [], // co-member EXISTS subquery
+      [], // owner EXISTS subquery
+      [friend], // main query
+    ]);
+    const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
+    expect(rows).toEqual([friend]);
+  });
+
+  it('composes the relationship, name, and safety gates', async () => {
+    queueSelectResults([[{ id: 'drive_a' }], [], [], [], [], []]);
+    await searchRelatedProfilesByName('u1', PATTERN, 10);
+    // Accepted connections only; drive co-membership gated on acceptedAt.
+    expect(eq).toHaveBeenCalledWith('connections.status', 'ACCEPTED');
+    expect(isNotNull).toHaveBeenCalledWith('driveMembers.acceptedAt');
+    // Temp/magic-link accounts excluded; caller never matches themselves.
+    expect(isNotNull).toHaveBeenCalledWith('users.emailVerified');
+    expect(ne).toHaveBeenCalledWith('userProfiles.userId', 'u1');
+    // Name predicate applied on both username and display name.
+    expect(ilike).toHaveBeenCalledWith('userProfiles.username', PATTERN);
+    expect(ilike).toHaveBeenCalledWith('userProfiles.displayName', PATTERN);
+    // connection + co-member + owner relationship subqueries.
+    expect(exists).toHaveBeenCalledTimes(3);
+  });
+
+  it('uses only the connection relationship when the caller has no drives', async () => {
+    queueSelectResults([
+      [], // owned — none
+      [], // member — none
+      [], // connectedToCaller EXISTS subquery
+      [friend], // main query
+    ]);
+    const rows = await searchRelatedProfilesByName('u1', PATTERN, 10);
+    expect(rows).toEqual([friend]);
+    // No drive-based EXISTS subqueries are built.
+    expect(exists).toHaveBeenCalledTimes(1);
+    // owned + member + connection subquery + main.
+    expect(db.select).toHaveBeenCalledTimes(4);
   });
 });

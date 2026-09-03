@@ -79,6 +79,7 @@ vi.mock('@pagespace/db/operators', () => ({
   or: vi.fn((...args: unknown[]) => ({ _or: true, args })),
   ilike: vi.fn((col: unknown, val: unknown) => ({ _ilike: true, col, val })),
   isNotNull: vi.fn((col: unknown) => ({ _isNotNull: true, col })),
+  inArray: vi.fn((col: unknown, vals: unknown) => ({ _inArray: true, col, vals })),
 }));
 vi.mock('@pagespace/db/schema/auth', () => ({
   users: {
@@ -103,12 +104,18 @@ vi.mock('@/lib/utils/query-params', () => ({
   parseBoundedIntParam: vi.fn((_raw: string | null, opts: { defaultValue: number }) => opts.defaultValue),
 }));
 
+vi.mock('@/lib/users/visibility', () => ({
+  searchRelatedProfilesByName: vi.fn(),
+}));
+
 import { GET } from '../route';
+import { searchRelatedProfilesByName } from '@/lib/users/visibility';
 import { loggers } from '@pagespace/lib/logging/logger-config'
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { verifyAuth } from '@/lib/auth';
 import { db } from '@pagespace/db/db';
 import { and, isNotNull } from '@pagespace/db/operators';
+import { parseBoundedIntParam } from '@/lib/utils/query-params';
 import { checkDistributedRateLimit } from '@pagespace/lib/security/distributed-rate-limit';
 
 // ============================================================================
@@ -150,6 +157,10 @@ function setupDbChains(
   });
 }
 
+// The related-profiles branch is delegated to `searchRelatedProfilesByName`
+// (mocked here), so it issues no `db.select` of its own — the route's own select
+// order stays: 1. public profiles  2. email  3. profile lookup.
+
 // ============================================================================
 // GET /api/users/search
 // ============================================================================
@@ -163,6 +174,9 @@ describe('GET /api/users/search', () => {
       hasSessionBearerToken: false,
     });
     vi.mocked(checkDistributedRateLimit).mockResolvedValue({ allowed: true });
+    // Default: no related matches; tests that exercise the related branch set a
+    // return value on this mock. It never issues a db.select of its own.
+    vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
     setupDbChains();
   });
 
@@ -381,6 +395,97 @@ describe('GET /api/users/search', () => {
 
       expect(response.status).toBe(200);
       expect(body.users).toHaveLength(2);
+    });
+  });
+
+  describe('related profiles (find friends/collaborators by name)', () => {
+    it('finds a PRIVATE friend/collaborator by name via the related branch', async () => {
+      // searchRelatedProfilesByName returns a row that would NOT appear in the
+      // public profile query (isPublic = false). It must still surface by name.
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        {
+          userId: 'friend_1',
+          username: 'privfriend',
+          displayName: 'Private Friend',
+          bio: 'hidden bio',
+          avatarUrl: null,
+        },
+      ]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=priv');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0]).toEqual({
+        userId: 'friend_1',
+        username: 'privfriend',
+        displayName: 'Private Friend',
+        bio: 'hidden bio',
+        avatarUrl: null,
+      });
+      // Same public-profile shape — the related branch NEVER carries an email.
+      expect(body.users[0]).not.toHaveProperty('email');
+      // The route delegates the relationship scoping to the helper, passing the
+      // caller id, an escaped LIKE pattern, and the result limit.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith('user_123', '%priv%', 10);
+    });
+
+    it('passes a LIKE-escaped pattern to the related branch so wildcards are literal', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([]);
+      setupDbChains([], []);
+
+      const request = new Request('https://example.com/api/users/search?q=' + encodeURIComponent('%%'));
+      await GET(request);
+
+      // `%%` must be escaped to `\%\%`, not passed through as a match-all wildcard.
+      expect(searchRelatedProfilesByName).toHaveBeenCalledWith('user_123', '%\\%\\%%', 10);
+    });
+
+    it('de-dupes a user who is both a public match and a related match', async () => {
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'shared_1', username: 'shared', displayName: 'Shared User', bio: null, avatarUrl: null, email: 'x@y.com' },
+      ];
+      setupDbChains(profileResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=shared');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('shared_1');
+      expect(body.users[0]).not.toHaveProperty('email');
+    });
+
+    it('preserves the exact-email match ahead of name matches (email-first, survives the limit)', async () => {
+      // A related and a public name match, plus an exact-email match for a THIRD
+      // user. With limit=1 the email match must win (highest intent).
+      vi.mocked(parseBoundedIntParam).mockReturnValueOnce(1);
+      vi.mocked(searchRelatedProfilesByName).mockResolvedValue([
+        { userId: 'rel', username: 'rel', displayName: 'Related One', bio: null, avatarUrl: null },
+      ]);
+      const profileResults = [
+        { userId: 'pub', username: 'pub', displayName: 'Public One', bio: null, avatarUrl: null },
+      ];
+      const emailResults = [
+        { userId: 'mail', email: 'exact@example.com', name: 'Exact Mail' },
+      ];
+      setupDbChains(profileResults, emailResults, []);
+
+      const request = new Request('https://example.com/api/users/search?q=exact@example.com');
+      const response = await GET(request);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(body.users).toHaveLength(1);
+      expect(body.users[0].userId).toBe('mail');
+      expect(body.users[0].email).toBe('exact@example.com');
     });
   });
 
