@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
+import { audit } from '@pagespace/lib/audit/audit-log';
 import {
   hasCompletedOnboarding,
   markOnboardingComplete,
@@ -63,6 +64,14 @@ export async function POST(request: Request) {
     }
 
     await markOnboardingComplete(auth.userId);
+
+    // Audited because this writes to the user record and, when `remembered` is
+    // true, to the About You memory page that every agent subsequently reads.
+    audit({
+      eventType: 'admin.settings.changed',
+      userId: auth.userId,
+      resourceType: 'onboarding_completion',
+    });
 
     return NextResponse.json({ ok: true, remembered });
   } catch (error) {

@@ -16,7 +16,10 @@ const advanceToLastStep = async (user: ReturnType<typeof userEvent.setup>) => {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // The store persists to sessionStorage, so resetting in-memory state alone
+  // would let a queued request leak between tests via the storage fallback.
   useOnboardingHandoffStore.setState({ pendingRequest: null });
+  window.sessionStorage.clear();
 });
 
 describe('gating the first step', () => {
@@ -99,7 +102,7 @@ describe('the first request', () => {
     await advanceToLastStep(user);
 
     await user.click(screen.getByRole('button', { name: /Keep on top of quotes and invoices/i }));
-    expect(screen.getByLabelText(/What do you want to get done/i)).toHaveValue(
+    expect(screen.getByLabelText(/your first request/i)).toHaveValue(
       'Keep on top of quotes and invoices',
     );
     expect(onFinish).not.toHaveBeenCalled();
@@ -111,7 +114,7 @@ describe('the first request', () => {
     render(<OnboardingModal open onFinish={onFinish} />);
     await advanceToLastStep(user);
 
-    await user.type(screen.getByLabelText(/What do you want to get done/i), 'run my bakery');
+    await user.type(screen.getByLabelText(/your first request/i), 'run my bakery');
     await user.click(screen.getByRole('button', { name: 'Ask' }));
 
     expect(useOnboardingHandoffStore.getState().pendingRequest).toBe('run my bakery');

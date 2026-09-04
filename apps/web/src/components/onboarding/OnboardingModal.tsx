@@ -232,9 +232,16 @@ export function OnboardingModal({ open, onFinish }: OnboardingModalProps) {
             title="So. What do you want to get done?"
             sub="Anything at all. Big, small, or half-formed. You can change your mind as many times as you like."
           >
+            {/*
+              The label deliberately does not restate the heading. An aria-label
+              identical to the visible "So. What do you want to get done?" makes
+              the two indistinguishable to any accessible-name lookup — and a
+              screen-reader user tabbing into the field would hear the exact
+              phrase they just heard as the heading.
+            */}
             <Textarea
               id="onboarding-first-request"
-              aria-label="What do you want to get done?"
+              aria-label="Your first request"
               placeholder="Tell me what you're here to do…"
               value={state.prompt}
               autoFocus
