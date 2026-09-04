@@ -11,17 +11,26 @@
  * the daemon verifies it here BEFORE anything runs. Server-side gating is
  * necessary but never sufficient; this function is the daemon's own gate.
  *
+ * A verified grant is also BOUND to the frame that carries it. Authenticity
+ * alone is not enough: an attacker holding a captured, unused, correctly signed
+ * grant could otherwise pair it with different work. `argsHash` exists to stop
+ * exactly that, so this gate recomputes `hash(canonicalizeArgs(request.args))`
+ * and compares it — and `op` — to the signed values. The binding is part of the
+ * mandatory gate, never left to a later layer (Codex P1 on PR #2527).
+ *
  * Pure by construction. Nothing in this module reads a clock, generates
  * randomness, touches `node:crypto`, or performs I/O: the caller injects `now`,
- * the Ed25519 `verify` primitive, and the `NonceStore`. That is what makes the
- * adversarial matrix in `__tests__/grant.test.ts` exhaustive rather than flaky,
- * and what lets the same verifier run unchanged in the CLI daemon and in tests.
+ * the Ed25519 `verify` primitive, the `hash` primitive, and the `NonceStore`.
+ * That is what makes the adversarial matrix in `__tests__/grant.test.ts`
+ * exhaustive rather than flaky, and what lets the same verifier run unchanged in
+ * the CLI daemon and in tests.
  *
- * Deny order is FIXED and tested: malformed → wrong_env → ttl_too_long →
- * clock_skew → expired → bad_signature → replayed. Cheap structural checks run
- * before the signature so junk never reaches crypto, and the replay check runs
- * LAST so a grant that fails any earlier check can never burn its nonce — the
- * nonce is recorded only when the whole verdict is `ok`.
+ * Deny order is FIXED and tested: malformed → wrong_env → op_mismatch →
+ * args_mismatch → ttl_too_long → clock_skew → expired → bad_signature →
+ * replayed. Cheap structural checks (including the request binding) run before
+ * the signature so junk never reaches crypto, and the replay check runs LAST so
+ * a grant that fails any earlier check can never burn its nonce — the nonce is
+ * recorded only when the whole verdict is `ok`.
  */
 import { z } from 'zod';
 
@@ -46,7 +55,7 @@ export interface Grant {
   readonly envId: string;
   readonly principal: GrantPrincipal;
   readonly op: GrantOp;
-  /** Hash of the request arguments, binding the grant to exactly this request. */
+  /** `hash(canonicalizeArgs(args))` of the request this grant was issued for. */
   readonly argsHash: string;
   /** Issued-at, ms since epoch. */
   readonly iat: number;
@@ -58,6 +67,8 @@ export interface Grant {
 export type GrantDenyReason =
   | 'malformed'
   | 'wrong_env'
+  | 'op_mismatch'
+  | 'args_mismatch'
   | 'ttl_too_long'
   | 'clock_skew'
   | 'expired'
@@ -80,6 +91,16 @@ export interface NonceStore {
 /** Ed25519 verification primitive, injected so this module stays free of `node:crypto`. */
 export type Ed25519Verify = (message: Uint8Array, signature: Uint8Array, publicKey: Uint8Array) => boolean;
 
+/** Cryptographic hash primitive (bytes → hex/base64 digest), injected for the same reason. */
+export type HashBytes = (bytes: Uint8Array) => string;
+
+/** The frame that carries the grant: what the caller is actually asking to run. */
+export interface GrantRequest {
+  readonly op: GrantOp;
+  /** The request's arguments exactly as received; hashed via `canonicalizeArgs`. */
+  readonly args: unknown;
+}
+
 export interface VerifyGrantInput {
   /** Untrusted: whatever arrived on the wire. */
   readonly grant: unknown;
@@ -92,7 +113,10 @@ export interface VerifyGrantInput {
   readonly nonces: NonceStore;
   /** The env this daemon serves. */
   readonly expectedEnvId: string;
+  /** The request the grant must be bound to. */
+  readonly request: GrantRequest;
   readonly verify: Ed25519Verify;
+  readonly hash: HashBytes;
 }
 
 const principalSchema = z
@@ -141,12 +165,52 @@ export function encodeGrant(grant: Grant): Uint8Array {
   return new TextEncoder().encode(JSON.stringify(canonical));
 }
 
+/**
+ * Deterministic serialization of request arguments, so the server (when it
+ * issues a grant) and the daemon (when it verifies one) hash identical bytes
+ * regardless of key insertion order or transport. Object keys are sorted
+ * recursively; arrays stay positional (arguments are ordered); `undefined`
+ * values are dropped exactly as JSON drops them on the wire; types stay
+ * distinct (`1` ≠ `'1'`, `null` ≠ absent).
+ */
+export function canonicalizeArgs(value: unknown): Uint8Array {
+  return new TextEncoder().encode(canonicalJson(value));
+}
+
+function canonicalJson(value: unknown): string {
+  if (value === null || value === undefined) return 'null';
+  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item)).join(',')}]`;
+  if (typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    const keys = Object.keys(record)
+      .filter((key) => record[key] !== undefined)
+      .sort();
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`;
+  }
+  // string | number | boolean | bigint | symbol | function — JSON semantics for
+  // the first three; the rest cannot arrive on the wire and serialize to null.
+  const encoded = JSON.stringify(value);
+  return encoded === undefined ? 'null' : encoded;
+}
+
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /** Strict base64 → bytes; `null` for anything that is not well-formed base64. */
 function decodeBase64(value: string): Uint8Array | null {
   if (value.length === 0 || value.length % 4 !== 0 || !BASE64_RE.test(value)) return null;
   return new Uint8Array(Buffer.from(value, 'base64'));
+}
+
+/**
+ * Length-then-XOR comparison that does not short-circuit on the first differing
+ * character. Digests are not secrets, but the gate should not leak how much of
+ * a hash matched either.
+ */
+function constantTimeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  return diff === 0;
 }
 
 function deny(reason: GrantDenyReason): GrantVerdict {
@@ -159,6 +223,18 @@ export function verifyGrant(input: VerifyGrantInput): GrantVerdict {
   const grant: Grant = parsed.data;
 
   if (grant.envId !== input.expectedEnvId) return deny('wrong_env');
+
+  // Bind the grant to the frame carrying it BEFORE the signature: a signed grant
+  // for other work is still the wrong grant, and this check is cheap.
+  if (grant.op !== input.request.op) return deny('op_mismatch');
+  let requestHash: string;
+  try {
+    requestHash = input.hash(canonicalizeArgs(input.request.args));
+  } catch {
+    return deny('args_mismatch');
+  }
+  if (!constantTimeEqual(requestHash, grant.argsHash)) return deny('args_mismatch');
+
   if (grant.exp - grant.iat > GRANT_MAX_TTL_MS) return deny('ttl_too_long');
   if (grant.iat > input.now + GRANT_MAX_CLOCK_SKEW_MS) return deny('clock_skew');
   if (grant.exp < input.now) return deny('expired');
