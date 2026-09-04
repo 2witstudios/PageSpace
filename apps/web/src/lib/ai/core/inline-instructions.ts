@@ -222,11 +222,18 @@ function buildAutomation(availableTools?: string[]): string {
   const hasCalendarOneOffSetter = hasAny(availableTools, ['set_calendar_trigger']);
   const hasTaskTrigger = hasAny(availableTools, ['set_task_trigger']);
   const hasCreateTask = hasAny(availableTools, ['create_task']);
+  const hasUpdateTask = hasAny(availableTools, ['update_task']);
 
   let mainClause: string;
   if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask)) {
     mainClause =
       'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too';
+  } else if (hasTaskTrigger && hasUpdateTask) {
+    // codex review, fresh evidence: update_task CAN set a due date on an
+    // existing task (it just can't create a new one from nothing) — the
+    // tier-2 wording must say so, not just "a due date already set".
+    mainClause =
+      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off or event-bound request, check whether it can attach to an existing task (on completion, a due date already set, or one you set via update_task) before assuming you can't schedule it";
   } else if (hasTaskTrigger) {
     mainClause =
       "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off or event-bound request, check whether it can attach to an existing task (on completion, or a due date already set) before assuming you can't schedule it";

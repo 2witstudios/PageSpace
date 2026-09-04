@@ -241,6 +241,14 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).toMatch(/existing task/i);
   });
 
+  it('given set_task_trigger paired with update_task, mentions setting a due date via update_task', () => {
+    // codex review, fresh evidence: the tier-2 wording previously only said
+    // "a due date already set", dropping update_task's actual ability to set
+    // a due date on an existing task (it just can't create a new task).
+    const result = buildInlineInstructions(['set_task_trigger', 'update_task']);
+    expect(result).toContain('one you set via update_task');
+  });
+
   it('given availableTools=undefined, includes the one-off clause (no filtering context)', () => {
     expect(buildInlineInstructions()).toContain('qualifies too');
   });

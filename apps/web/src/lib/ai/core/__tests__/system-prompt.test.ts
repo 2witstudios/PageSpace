@@ -390,9 +390,27 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('read a file back');
   });
 
-  it('given a file tool (writeFile), the persistence bullet does claim file read/write', () => {
+  it('given writeFile only (no readFile), claims write persistence but not a "read it back" suggestion', () => {
+    // codex review, fresh evidence: the persistence bullet previously said
+    // "files you write... read a file back" regardless of which file tools
+    // were present — a writeFile/editFile-only agent has no reader.
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile']);
     expect(result).toContain('files you write');
+    expect(result).not.toContain('read a file back');
+  });
+
+  it('given readFile only (no writeFile/editFile), claims reading for state but not a write claim', () => {
+    // A read-only turn retaining only readFile can't write, so "files you
+    // write are still there" is a false claim.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'readFile']);
+    expect(result).not.toContain('files you write');
+    expect(result).toContain('read a file to check');
+  });
+
+  it('given both readFile and writeFile, claims both write persistence and reading it back', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'readFile', 'writeFile']);
+    expect(result).toContain('files you write');
+    expect(result).toContain('read a file back');
   });
 
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {

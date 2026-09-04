@@ -298,7 +298,22 @@ function buildSandboxInstructions(availableTools?: string[]): string {
           : null,
       ].filter(Boolean).join(' ')
     : hasFileTools
-      ? '• The /workspace filesystem persists across turns and tool calls in this conversation — files you write are still there next turn. Check state before recreating something (e.g. read a file back) rather than assuming a fresh start.'
+      ? (() => {
+          // codex review, fresh evidence: this branch previously said "files
+          // you write are still there... read a file back" regardless of
+          // which of readFile/writeFile/editFile were actually present — a
+          // readFile-only (read-only turn) agent can't write, and a
+          // writeFile/editFile-only agent has no reader to "check state" with.
+          const canReadFile = has('readFile');
+          const canWriteFile = has('writeFile') || has('editFile');
+          if (canWriteFile && canReadFile) {
+            return '• The /workspace filesystem persists across turns and tool calls in this conversation — files you write are still there next turn. Check state before recreating something (e.g. read a file back) rather than assuming a fresh start.';
+          }
+          if (canWriteFile) {
+            return '• The /workspace filesystem persists across turns and tool calls in this conversation — files you write are still there next turn.';
+          }
+          return '• The /workspace filesystem persists across turns and tool calls in this conversation — read a file to check its current state rather than assuming a fresh start.';
+        })()
       // codex review, fresh evidence: this branch also covers shell-only
       // surfaces (read-only read_shell alone, or spawn_shell without
       // send_shell) that can neither write nor read files — "files you
