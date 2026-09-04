@@ -198,6 +198,26 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).toMatch(/recurring|schedule/i);
   });
 
+  it('given set_calendar_trigger without create_workflow, does NOT lead with "recurring work is the common case"', () => {
+    // codex review, fresh evidence: set_calendar_trigger's schema has no
+    // recurrence field (single event, or attach to an existing one) and
+    // set_task_trigger only fires on a due date or completion — only
+    // create_workflow supports true recurring cron schedules.
+    const result = buildInlineInstructions(['set_calendar_trigger']);
+    expect(result).not.toContain('recurring work is the common case');
+    expect(result).toContain('qualifies too');
+  });
+
+  it('given set_calendar_trigger together with create_workflow, does lead with "recurring work is the common case"', () => {
+    const result = buildInlineInstructions(['set_calendar_trigger', 'create_workflow']);
+    expect(result).toContain('recurring work is the common case');
+  });
+
+  it('given set_task_trigger alone (no create_workflow), does NOT lead with "recurring work is the common case"', () => {
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).not.toContain('recurring work is the common case');
+  });
+
   it('includes the one-off/event-bound clause when set_calendar_trigger is available', () => {
     // set_calendar_trigger is self-sufficient — it creates a new scheduling
     // anchor event when none exists yet.

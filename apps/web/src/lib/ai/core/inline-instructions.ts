@@ -231,24 +231,36 @@ function buildAutomation(availableTools?: string[]): string {
   const hasCreateTask = hasAny(availableTools, ['create_task']);
   const hasCreatePage = hasAny(availableTools, ['create_page']);
   const hasUpdateTask = hasAny(availableTools, ['update_task']);
+  // codex review, fresh evidence: set_calendar_trigger's schema has no
+  // recurrence field (attaches to an existing event, or creates ONE new
+  // single-time "scheduling anchor" event) and set_task_trigger only fires
+  // on a due date or completion — only create_workflow supports true
+  // recurring cron schedules. "recurring work is the common case" was
+  // asserted in every tier regardless, implying a capability that isn't
+  // guaranteed present; only lead with it when create_workflow backs it up.
+  const hasCreateWorkflow = hasAny(availableTools, ['create_workflow']);
+  const recurringLeadIn = hasCreateWorkflow ? 'recurring work is the common case, but ' : '';
 
   let mainClause: string;
   if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask && hasCreatePage)) {
     mainClause =
-      'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too';
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}a one-off task that needs to run at a future time or on some future event qualifies too`;
   } else if (hasTaskTrigger && hasCreateTask) {
     mainClause =
-      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off request, check whether the drive already has a task list to add a task to before assuming you can schedule it fresh (creating a new task list needs a separate capability)";
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off request, check whether the drive already has a task list to add a task to before assuming you can schedule it fresh (creating a new task list needs a separate capability)`;
   } else if (hasTaskTrigger && hasUpdateTask) {
     // codex review, fresh evidence: update_task CAN set a due date on an
     // existing task (it just can't create a new one from nothing) — the
     // tier-2 wording must say so, not just "a due date already set".
     mainClause =
-      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off or event-bound request, check whether it can attach to an existing task (on completion, a due date already set, or one you set via update_task) before assuming you can't schedule it";
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off or event-bound request, check whether it can attach to an existing task (on completion, a due date already set, or one you set via update_task) before assuming you can't schedule it`;
   } else if (hasTaskTrigger) {
     mainClause =
-      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off or event-bound request, check whether it can attach to an existing task (on completion, or a due date already set) before assuming you can't schedule it";
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off or event-bound request, check whether it can attach to an existing task (on completion, or a due date already set) before assuming you can't schedule it`;
   } else {
+    // This branch only reaches when includeAutomation was true without any
+    // calendar or task trigger tool — the only remaining possibility is
+    // create_workflow, so "recurring" here is always backed.
     mainClause =
       "Propose a recurring trigger whenever work should repeat on a schedule without the user re-prompting — for a one-off or event-bound request, say that's outside what you can currently schedule rather than forcing it into a recurring one";
   }
