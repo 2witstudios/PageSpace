@@ -243,9 +243,19 @@ function buildSandboxInstructions(availableTools?: string[]): string {
   const hasGitVerbTools = availableTools === undefined || availableTools.some((t) => t.startsWith('git_'));
   const hasGhTools = availableTools === undefined || availableTools.some((t) => t.startsWith('gh_'));
   const hasAnyGitFamily = hasGitVerbTools || hasGhTools;
+  // codex review: git_clone/git_init are PATH-family (their schema takes
+  // `path`, not `cwd` — sandbox-git/tools/repo.ts) — the REST of the git_*
+  // tools (git_checkout/git_add/git_commit/git_status/...) are cwd-family.
+  // hasGitVerbTools (any git_ prefix) conflated the two, so an agent holding
+  // only git_clone was told "the rest of the git_* tools take cwd" when
+  // there was no "rest" present at all.
+  const hasGitPathTools = has('git_clone') || has('git_init');
+  const hasGitCwdTools =
+    availableTools === undefined ||
+    availableTools.some((t) => t.startsWith('git_') && t !== 'git_clone' && t !== 'git_init');
   const cwdFamilyNames = [
     hasBash ? 'bash' : null,
-    hasGitVerbTools ? 'the rest of the git_* tools' : null,
+    hasGitCwdTools ? 'the rest of the git_* tools' : null,
     hasGhTools ? 'the gh_* tools' : null,
   ].filter((n): n is string => n !== null);
 
@@ -293,9 +303,15 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     sessionParts.push('list_sessions re-lists your sessions plus your shells (names are labels, ids address).');
   }
   if (has('spawn_shell')) {
-    const shellFollowUps = namesPresent(['send_shell', 'read_shell']);
+    // codex review: compose each follow-up's own role independently — a
+    // fixed "type keystrokes / read scrollback respectively" suffix mismatched
+    // when only one of send_shell/read_shell was actually present.
+    const shellFollowUpPhrases = [
+      has('send_shell') ? 'send_shell types keystrokes' : null,
+      has('read_shell') ? 'read_shell reads scrollback' : null,
+    ].filter((p): p is string => p !== null);
     sessionParts.push(
-      `spawn_shell opens a persistent PTY in the session's sandbox for interactive or long-running processes${shellFollowUps.length ? ` (${shellFollowUps.join('/')} type keystrokes / read scrollback respectively)` : ''}${hasBash ? ' — bash covers ordinary one-shot commands' : ''}.`,
+      `spawn_shell opens a persistent PTY in the session's sandbox for interactive or long-running processes${shellFollowUpPhrases.length ? ` (${shellFollowUpPhrases.join(', ')})` : ''}${hasBash ? ' — bash covers ordinary one-shot commands' : ''}.`,
     );
   } else if (has('read_shell')) {
     sessionParts.push('read_shell reads the scrollback of a shell already running in the session.');
@@ -308,9 +324,17 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     // for tool families the agent actually holds.
     [
       '• Paths always resolve from /workspace, relative or absolute (e.g. "repo/src/x.ts" and "/workspace/repo/src/x.ts" are the same file) — one rule for every tool.',
-      hasFileTools ? `File tools take path for the file they operate on${hasGitVerbTools ? ' (git_clone/git_init too, for their destination)' : ''};` : null,
+      hasFileTools && hasGitPathTools
+        ? 'File tools take path for the file they operate on (git_clone/git_init too, for their destination);'
+        : hasFileTools
+          ? 'File tools take path for the file they operate on;'
+          : hasGitPathTools
+            ? 'git_clone/git_init take path for their destination;'
+            : null,
       cwdFamilyNames.length ? `${cwdFamilyNames.join(' and ')} take cwd for their working directory instead.` : null,
-      hasFileTools && cwdFamilyNames.length ? 'A field from the wrong family (e.g. cwd on writeFile) is rejected, not silently ignored.' : null,
+      (hasFileTools || hasGitPathTools) && cwdFamilyNames.length
+        ? 'A field from the wrong family (e.g. cwd on writeFile) is rejected, not silently ignored.'
+        : null,
     ].filter(Boolean).join(' '),
     persistenceBullet,
     hasBash ? '• Each tool call is a fresh process — cd does NOT persist between calls (the filesystem persists, the shell does not).' : null,

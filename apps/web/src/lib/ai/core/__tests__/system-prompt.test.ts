@@ -279,6 +279,35 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('kill_session');
   });
 
+  it('given only git_clone (a PATH-family tool, no cwd-family git tool), does not claim "the rest of the git_* tools take cwd"', () => {
+    // codex review: git_clone/git_init take `path` (sandbox-git/tools/repo.ts
+    // schema), not `cwd` — an agent holding only git_clone has no "rest" of
+    // cwd-family git tools, so that clause must not render.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_clone']);
+    expect(result).toContain('git_clone/git_init take path');
+    expect(result).not.toContain('the rest of the git_* tools take cwd');
+  });
+
+  it('given a cwd-family git tool (git_checkout), does claim the git_* cwd clause', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_checkout']);
+    expect(result).toContain('the rest of the git_* tools take cwd');
+  });
+
+  it('given spawn_shell with only send_shell (no read_shell), describes send_shell but not a scrollback-read role', () => {
+    // codex review: a fixed "type keystrokes / read scrollback respectively"
+    // suffix wrongly described read_shell's role even when only send_shell
+    // was present.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell', 'send_shell']);
+    expect(result).toContain('send_shell types keystrokes');
+    expect(result).not.toContain('reads scrollback');
+  });
+
+  it('given spawn_shell with only read_shell (no send_shell), describes read_shell but not a keystroke-typing role', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell', 'read_shell']);
+    expect(result).toContain('read_shell reads scrollback');
+    expect(result).not.toContain('types keystrokes');
+  });
+
   it('given spawn_shell and send_shell but no bash, still claims it can run scripts/scrapers', () => {
     // codex review: send_shell submits commands to a PTY and can run scripts or
     // data-processing jobs just like bash — checking only for the literal 'bash'
