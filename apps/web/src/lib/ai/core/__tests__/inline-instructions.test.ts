@@ -168,6 +168,27 @@ describe('buildInlineInstructions — AUTOMATION gating', () => {
   });
 });
 
+describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
+  it('omits the one-off/event-bound clause when only create_workflow/list_workflows is available', () => {
+    // codex review: create_workflow's own description says one-off or
+    // event-bound scheduling needs set_calendar_trigger instead — it only
+    // supports recurring cron schedules. An allowlist with just the workflow
+    // tools can't back up a "one-off task... qualifies too" claim.
+    const result = buildInlineInstructions(['create_workflow', 'list_workflows']);
+    expect(result).toContain('AUTOMATION');
+    expect(result).not.toContain('qualifies too');
+  });
+
+  it('includes the one-off/event-bound clause when set_task_trigger or set_calendar_trigger is available', () => {
+    expect(buildInlineInstructions(['set_task_trigger'])).toContain('qualifies too');
+    expect(buildInlineInstructions(['set_calendar_trigger'])).toContain('qualifies too');
+  });
+
+  it('given availableTools=undefined, includes the one-off clause (no filtering context)', () => {
+    expect(buildInlineInstructions()).toContain('qualifies too');
+  });
+});
+
 describe('buildInlineInstructions — SEARCH gating', () => {
   it('includes SEARCH when glob_search is available', () => {
     const result = buildInlineInstructions(['glob_search']);

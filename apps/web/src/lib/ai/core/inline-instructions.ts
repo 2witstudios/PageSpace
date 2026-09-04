@@ -188,10 +188,24 @@ function buildAgents(availableTools?: string[]): string {
   return lines.join('\n');
 }
 
-const AUTOMATION = `AUTOMATION:
-• Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too
+/**
+ * AUTOMATION section. create_workflow/list_workflows alone only cover
+ * recurring cron schedules — create_workflow's own description says one-off
+ * or event-bound scheduling needs set_task_trigger/set_calendar_trigger
+ * instead — so the "a one-off task... qualifies too" clause composes in
+ * only when one of those setters is actually present, the same discipline
+ * buildAgents uses for its own sub-bullets.
+ */
+function buildAutomation(availableTools?: string[]): string {
+  const hasOneOffSetter = hasAny(availableTools, ['set_task_trigger', 'set_calendar_trigger']);
+  const scopeClause = hasOneOffSetter
+    ? 'recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too'
+    : 'recurring work is the common case';
+  return `AUTOMATION:
+• Propose a trigger whenever the work should happen without the user re-prompting — ${scopeClause}
 • Triggers require an existing AI_CHAT page in the same drive as the source (task/calendar/drive)
 • After setting a trigger, tell the user what will run, when, and what the agent will receive as context`;
+}
 
 const SEARCH = `SEARCH:
 • list_pages returns one level at a time (ls-style) — navigate with parentId to drill into folders; use recursive: true for a full subtree dump
@@ -262,7 +276,7 @@ export function buildInlineInstructions(availableTools?: string[]): string {
     buildPageTypes(availableTools),
     includeTaskManagement ? buildTaskManagement(availableTools) : null,
     includeAgents ? buildAgents(availableTools) : null,
-    includeAutomation ? AUTOMATION : null,
+    includeAutomation ? buildAutomation(availableTools) : null,
     includeSearch ? SEARCH : null,
     includeAskUser ? ASK_USER_SECTION : null,
     AFTER_TOOLS,
@@ -290,7 +304,7 @@ ${buildTaskManagement(availableTools)}
 
 ${buildAgents(availableTools)}
 
-${AUTOMATION}
+${buildAutomation(availableTools)}
 
 ${SEARCH}
 
