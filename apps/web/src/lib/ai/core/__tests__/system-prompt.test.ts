@@ -284,8 +284,20 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     // schema), not `cwd` — an agent holding only git_clone has no "rest" of
     // cwd-family git tools, so that clause must not render.
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_clone']);
-    expect(result).toContain('git_clone/git_init take path');
+    expect(result).toContain('git_clone takes path');
+    expect(result).not.toContain('git_init');
     expect(result).not.toContain('the rest of the git_* tools take cwd');
+  });
+
+  it('given both git_clone and git_init, names both path-family tools', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_clone', 'git_init']);
+    expect(result).toContain('git_clone/git_init take path');
+  });
+
+  it('given only git_init (not git_clone), names only git_init', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_init']);
+    expect(result).toContain('git_init takes path');
+    expect(result).not.toContain('git_clone');
   });
 
   it('given a cwd-family git tool (git_checkout), does claim the git_* cwd clause', () => {
@@ -319,6 +331,17 @@ describe('buildSystemPrompt — sandbox guidance', () => {
   it('given spawn_shell without send_shell, does NOT claim execution (can dispatch but not observe/run interactively)', () => {
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell']);
     expect(result).not.toContain('scripts, scrapers');
+  });
+
+  it('given send_shell alone (no spawn_shell), still claims execution and describes it as standalone', () => {
+    // codex review, fresh evidence: send_shell is the tool that actually
+    // submits commands — an agent with list_sessions + send_shell but no
+    // spawn_shell can still find and drive a shell already running in the
+    // session, without having spawned it itself.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'list_sessions', 'send_shell']);
+    expect(result).toContain('scripts, scrapers');
+    expect(result).toContain('send_shell submits commands to a shell already running');
+    expect(result).not.toContain('spawn_shell opens a persistent PTY');
   });
 
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {

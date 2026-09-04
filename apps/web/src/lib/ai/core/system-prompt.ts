@@ -95,18 +95,17 @@ export const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 // request (same gate as ai-tools.ts). Deliberately short — the basics that make
 // the sandbox smooth to use, not a wall of instructions.
 /**
- * Whether the agent holds a tool that can actually RUN something — `bash`, or
- * the `spawn_shell`+`send_shell` PTY pair (send_shell submits commands to a
- * running shell, so it's execution capability even without bash itself).
- * `undefined` means "no filtering context" (same sentinel used throughout
- * this module).
+ * Whether the agent holds a tool that can actually RUN something — `bash`,
+ * or `send_shell` (submits commands to a running shell — that's execution
+ * capability whether or not this agent also holds spawn_shell; codex
+ * review, fresh evidence — an agent with list_sessions + send_shell but no
+ * spawn_shell can still find and drive a shell already running in the
+ * session). `undefined` means "no filtering context" (same sentinel used
+ * throughout this module).
  */
 function hasExecutionTool(availableTools?: string[]): boolean {
   if (availableTools === undefined) return true;
-  return (
-    availableTools.includes('bash') ||
-    (availableTools.includes('spawn_shell') && availableTools.includes('send_shell'))
-  );
+  return availableTools.includes('bash') || availableTools.includes('send_shell');
 }
 
 /**
@@ -250,6 +249,7 @@ function buildSandboxInstructions(availableTools?: string[]): string {
   // only git_clone was told "the rest of the git_* tools take cwd" when
   // there was no "rest" present at all.
   const hasGitPathTools = has('git_clone') || has('git_init');
+  const gitPathToolNames = namesPresent(['git_clone', 'git_init']);
   const hasGitCwdTools =
     availableTools === undefined ||
     availableTools.some((t) => t.startsWith('git_') && t !== 'git_clone' && t !== 'git_init');
@@ -313,8 +313,18 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     sessionParts.push(
       `spawn_shell opens a persistent PTY in the session's sandbox for interactive or long-running processes${shellFollowUpPhrases.length ? ` (${shellFollowUpPhrases.join(', ')})` : ''}${hasBash ? ' — bash covers ordinary one-shot commands' : ''}.`,
     );
-  } else if (has('read_shell')) {
-    sessionParts.push('read_shell reads the scrollback of a shell already running in the session.');
+  } else {
+    // No spawn_shell: still describe send_shell/read_shell if held on their
+    // own — codex review, fresh evidence — send_shell can drive a shell
+    // already running in the session (found via list_sessions) without this
+    // agent having spawned it itself.
+    const standaloneShellPhrases = [
+      has('send_shell') ? 'send_shell submits commands to a shell already running in the session (find it via list_sessions)' : null,
+      has('read_shell') ? "read_shell reads that shell's scrollback" : null,
+    ].filter((p): p is string => p !== null);
+    if (standaloneShellPhrases.length) {
+      sessionParts.push(`${standaloneShellPhrases.join('; ')}.`);
+    }
   }
 
   const bullets: (string | null)[] = [
@@ -324,12 +334,15 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     // for tool families the agent actually holds.
     [
       '• Paths always resolve from /workspace, relative or absolute (e.g. "repo/src/x.ts" and "/workspace/repo/src/x.ts" are the same file) — one rule for every tool.',
+      // codex review: name only the git path-family tool(s) actually present
+      // — an allowlist with just git_clone (not git_init) must not advertise
+      // git_init as callable, and vice versa.
       hasFileTools && hasGitPathTools
-        ? 'File tools take path for the file they operate on (git_clone/git_init too, for their destination);'
+        ? `File tools take path for the file they operate on (${gitPathToolNames.join('/')} too, for ${gitPathToolNames.length > 1 ? 'their' : 'its'} destination);`
         : hasFileTools
           ? 'File tools take path for the file they operate on;'
           : hasGitPathTools
-            ? 'git_clone/git_init take path for their destination;'
+            ? `${gitPathToolNames.join('/')} ${gitPathToolNames.length > 1 ? 'take' : 'takes'} path for ${gitPathToolNames.length > 1 ? 'their' : 'its'} destination;`
             : null,
       cwdFamilyNames.length ? `${cwdFamilyNames.join(' and ')} take cwd for their working directory instead.` : null,
       (hasFileTools || hasGitPathTools) && cwdFamilyNames.length
