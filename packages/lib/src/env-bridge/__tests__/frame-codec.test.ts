@@ -178,6 +178,18 @@ describe('frame-codec — the wire protocol as pure data (invariant 6: unknown o
     for (const frame of Object.values(SAMPLES)) expect(encodeFrame(frame)).not.toMatch(/\n/);
   });
 
+  it('given an already-parsed object that would exceed maxFrameBytes on the wire, should reject oversized (the limit must not be bypassable by pre-parsing) — Codex P2', () => {
+    const big = { type: 'pty_data', sessionId: 'p1', seq: 0, dataB64: 'A'.repeat(200_000) };
+    expect(decodeFrame(big, LIMITS)).toEqual({ ok: false, reason: 'oversized' });
+  });
+
+  it('given an already-parsed object that cannot be serialized (circular), should reject malformed and never throw', () => {
+    const circular: Record<string, unknown> = { type: 'ping', ts: 1 };
+    circular.self = circular;
+    expect(() => decodeFrame(circular, LIMITS)).not.toThrow();
+    expect(decodeFrame(circular, LIMITS)).toEqual({ ok: false, reason: 'malformed' });
+  });
+
   it('given an already-parsed object (not a wire string), should decode it the same way', () => {
     expect(decodeFrame(SAMPLES.ping, LIMITS)).toEqual({ ok: true, frame: SAMPLES.ping });
     expect(decodeFrame({ type: 'nope' }, LIMITS)).toEqual({ ok: false, reason: 'unknown_type' });

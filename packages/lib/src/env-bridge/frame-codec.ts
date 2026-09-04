@@ -132,6 +132,18 @@ export function decodeFrame(raw: unknown, limits: FrameLimits): DecodeFrameVerdi
       return reject('malformed');
     }
   } else {
+    // An already-parsed object must face the SAME size limit it would have
+    // faced on the wire, or the limit is bypassable by any transport that
+    // hands us objects (Codex P2 on PR #2529). Serializing to measure is the
+    // equivalent bounded check; anything unserializable is malformed.
+    let serialized: string | undefined;
+    try {
+      serialized = JSON.stringify(raw);
+    } catch {
+      return reject('malformed');
+    }
+    if (serialized === undefined) return reject('malformed');
+    if (Buffer.byteLength(serialized, 'utf8') > limits.maxFrameBytes) return reject('oversized');
     value = raw;
   }
 

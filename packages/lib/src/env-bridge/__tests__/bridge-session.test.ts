@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
-import { reduceBridgeSession, initialBridgeSession, type BridgeSessionState, type BridgeEvent } from '../bridge-session';
+import { reduceBridgeSession, initialBridgeSession, type BridgeSessionState, type BridgeEvent, type HelloFrame } from '../bridge-session';
 import type { Frame } from '../frame-codec';
 
-const HELLO: Frame = { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', sig: 'AAAA' };
+const HELLO: HelloFrame = { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', sig: 'AAAA' };
 const GRANT_EXEC: Frame = { type: 'grant_exec', grant: { grantId: 'g1' }, sig: 'AAAA', cmd: 'ls', args: [] };
 const PING: Frame = { type: 'ping', ts: 1 };
 
@@ -57,6 +57,24 @@ describe('reduceBridgeSession — the daemon connection lifecycle as a pure redu
     const out = reduceBridgeSession(at('authorized'), { type: 'frame', frame: revoke });
     expect(out.state).toEqual(at('authorized'));
     expect(out.effects).toEqual([{ type: 'dispatch', frame: revoke }]);
+  });
+
+  it.each(['disconnected', 'connecting', 'hello_sent'] as const)('%s + revoke FRAME → dispatched for verification even though not authorized (CWE-613: revocation must never wait for authorization)', (status) => {
+    const revoke: Frame = { type: 'revoke', sig: 'AAAA', issuedAt: 1 };
+    const out = reduceBridgeSession(at(status), { type: 'frame', frame: revoke });
+    expect(out.state).toEqual(at(status));
+    expect(out.effects).toEqual([{ type: 'dispatch', frame: revoke }]);
+  });
+
+  it('revoked + revoke FRAME → reject(revoked) (already terminal; nothing more to verify)', () => {
+    const revoke: Frame = { type: 'revoke', sig: 'AAAA', issuedAt: 1 };
+    expect(reduceBridgeSession(at('revoked'), { type: 'frame', frame: revoke })).toEqual({ state: at('revoked'), effects: [{ type: 'reject', reason: 'revoked' }] });
+  });
+
+  it('connecting + socket_open whose "hello" is NOT a hello frame → reject(invalid_hello), stays connecting, sends nothing (a ping must never open the handshake)', () => {
+    // A JS caller is not bound by the HelloFrame type, so the reducer must check at runtime.
+    const out = reduceBridgeSession(at('connecting'), { type: 'socket_open', hello: PING as unknown as HelloFrame });
+    expect(out).toEqual({ state: at('connecting'), effects: [{ type: 'reject', reason: 'invalid_hello' }] });
   });
 
   it.each(['connecting', 'hello_sent', 'authorized'] as const)('%s + disconnect → disconnected with schedule_reconnect and NO deleteKey', (status) => {

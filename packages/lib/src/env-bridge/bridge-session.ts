@@ -11,11 +11,17 @@
  * the security-relevant rules in one place:
  *
  * - An inbound frame is `dispatch`ed to the executor ONLY in `authorized`. In
- *   every other state it is `reject`ed and nothing runs (invariant 6).
- * - A `revoke` FRAME is not honoured here — it is dispatched like any frame so
- *   the adapter can verify its signature; only the adapter's `revoke_verified`
- *   EVENT moves the machine to `revoked`, which emits `deleteKey` (the daemon
- *   destroys its own identity) and is terminal (invariant 8).
+ *   every other state it is `reject`ed and nothing runs (invariant 6). The one
+ *   exception is `revoke`: it is dispatched from EVERY non-revoked state, so
+ *   revocation can never be delayed by simply not being authorized yet
+ *   (CWE-613).
+ * - A `revoke` FRAME is not honoured here — it is dispatched so the adapter
+ *   can verify its signature; only the adapter's `revoke_verified` EVENT moves
+ *   the machine to `revoked`, which emits `deleteKey` (the daemon destroys its
+ *   own identity) and is terminal (invariant 8).
+ * - Only a `hello` frame may open the handshake: `socket_open` is typed
+ *   `HelloFrame` AND checked at runtime, because a JS caller is not bound by
+ *   the type.
  * - `disconnect` never deletes the key; it schedules a reconnect. Losing the
  *   socket is not a revocation.
  *
@@ -26,19 +32,22 @@ import type { Frame } from './frame-codec';
 
 export type BridgeStatus = 'disconnected' | 'connecting' | 'hello_sent' | 'authorized' | 'revoked';
 
+/** The only frame that may open the handshake. */
+export type HelloFrame = Extract<Frame, { type: 'hello' }>;
+
 export interface BridgeSessionState {
   readonly status: BridgeStatus;
 }
 
 export type BridgeEvent =
   | { readonly type: 'connect' }
-  | { readonly type: 'socket_open'; readonly hello: Frame }
+  | { readonly type: 'socket_open'; readonly hello: HelloFrame }
   | { readonly type: 'hello_ack' }
   | { readonly type: 'frame'; readonly frame: Frame }
   | { readonly type: 'revoke_verified' }
   | { readonly type: 'disconnect' };
 
-export type BridgeRejectReason = 'not_authorized' | 'revoked' | 'unexpected_hello_ack' | 'unexpected_socket_open' | 'already_connected';
+export type BridgeRejectReason = 'not_authorized' | 'revoked' | 'unexpected_hello_ack' | 'unexpected_socket_open' | 'invalid_hello' | 'already_connected';
 
 export type BridgeEffect =
   | { readonly type: 'send'; readonly frame: Frame }
@@ -77,10 +86,16 @@ export function reduceBridgeSession(state: BridgeSessionState, event: BridgeEven
     case 'connect':
       return state.status === 'disconnected' ? go('connecting') : stay(state, { type: 'reject', reason: 'already_connected' });
     case 'socket_open':
-      return state.status === 'connecting' ? go('hello_sent', { type: 'send', frame: event.hello }) : stay(state, { type: 'reject', reason: 'unexpected_socket_open' });
+      if (state.status !== 'connecting') return stay(state, { type: 'reject', reason: 'unexpected_socket_open' });
+      // The type says HelloFrame; a JS caller is not bound by it. Only a hello opens the handshake.
+      if (event.hello.type !== 'hello') return stay(state, { type: 'reject', reason: 'invalid_hello' });
+      return go('hello_sent', { type: 'send', frame: event.hello });
     case 'hello_ack':
       return state.status === 'hello_sent' ? go('authorized') : stay(state, { type: 'reject', reason: 'unexpected_hello_ack' });
     case 'frame':
+      // A revoke must reach the adapter for signature verification from EVERY
+      // non-revoked state — revocation never waits for authorization (CWE-613).
+      if (event.frame.type === 'revoke') return stay(state, { type: 'dispatch', frame: event.frame });
       return state.status === 'authorized' ? stay(state, { type: 'dispatch', frame: event.frame }) : stay(state, { type: 'reject', reason: 'not_authorized' });
     case 'disconnect':
       return state.status === 'disconnected' ? stay(state) : go('disconnected', { type: 'schedule_reconnect' });
