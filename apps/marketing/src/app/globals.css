@@ -39,6 +39,7 @@
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -67,6 +68,7 @@
 
   /* Actions & Accents */
   --primary: oklch(0.50 0.16 235);
+  --primary-soft: oklch(0.50 0.16 235 / 0.10);
   --primary-foreground: oklch(0.98 0.005 235);
   --secondary: oklch(0.90 0.025 35);
   --secondary-foreground: oklch(0.15 0.01 220);
@@ -123,24 +125,25 @@
   --radius: 0.625rem;
 
   /* Canvas */
-  --background: oklch(0.15 0 0);
+  --background: oklch(0.19 0 0);
   --foreground: oklch(0.94 0 0);
 
   /* UI Chrome */
-  --card: oklch(0.19 0 0);
+  --card: oklch(0.23 0 0);
   --card-foreground: oklch(0.94 0 0);
-  --popover: oklch(0.19 0 0);
+  --popover: oklch(0.23 0 0);
   --popover-foreground: oklch(0.94 0 0);
 
   /* Actions & Accents */
   --primary: oklch(0.62 0.16 235);
-  --primary-foreground: oklch(0.15 0 0);
-  --secondary: oklch(0.269 0 0);
+  --primary-soft: oklch(0.62 0.16 235 / 0.18);
+  --primary-foreground: oklch(0.19 0 0);
+  --secondary: oklch(0.28 0 0);
   --secondary-foreground: oklch(0.94 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.94 0 0);
+  --muted: oklch(0.28 0 0);
+  --muted-foreground: oklch(0.68 0 0);
+  --accent: oklch(0.31 0.02 235); /* Neutral hover; selected state uses --primary-soft */
+  --accent-foreground: oklch(0.96 0 0);
 
   /* Status */
   --destructive: oklch(0.6 0.2 15);
@@ -149,8 +152,8 @@
   --info: oklch(0.60 0.16 235);
 
   /* Borders & Inputs */
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
+  --border: oklch(0.30 0 0);
+  --input: oklch(0.30 0 0);
   --ring: oklch(0.62 0.16 235);
 
   /* Charts */
@@ -161,19 +164,19 @@
   --chart-5: oklch(0.645 0.246 16.439);
 
   /* Sidebar */
-  --sidebar: oklch(0.155 0 0);
+  --sidebar: oklch(0.20 0 0);
   --sidebar-foreground: oklch(0.94 0 0);
   --sidebar-primary: oklch(0.62 0.16 235);
-  --sidebar-primary-foreground: oklch(0.15 0 0);
-  --sidebar-accent: oklch(0.269 0 0);
-  --sidebar-accent-foreground: oklch(0.94 0 0);
-  --sidebar-border: oklch(0.26 0 0);
+  --sidebar-primary-foreground: oklch(0.19 0 0);
+  --sidebar-accent: oklch(0.31 0.02 235);
+  --sidebar-accent-foreground: oklch(0.96 0 0);
+  --sidebar-border: oklch(0.30 0 0);
   --sidebar-ring: oklch(0.62 0.16 235);
 
   /* Liquid Glass Material System (Dark Mode) */
-  --material-thin: oklch(0.16 0 0 / 0.88);
-  --material-regular: oklch(0.165 0 0 / 0.85);
-  --material-thick: oklch(0.17 0 0 / 0.80);
+  --material-thin: oklch(0.20 0 0 / 0.88);
+  --material-regular: oklch(0.205 0 0 / 0.85);
+  --material-thick: oklch(0.21 0 0 / 0.80);
 
   /* Shadows (Dark Mode) */
   --shadow-ambient: 0 1px 3px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.18);
@@ -183,7 +186,7 @@
   --separator: oklch(0.94 0 0 / 0.08);
 
   /* Sidebar divider */
-  --sidebar-divider: oklch(0.26 0 0);
+  --sidebar-divider: oklch(0.31 0 0);
   --sidebar-section-bg: oklch(1 0 0 / 0.035);
 }
 
@@ -220,8 +223,8 @@
   .dark .liquid-glass-regular {
     background: linear-gradient(
       to bottom,
-      oklch(0.17 0 0 / 0.85),
-      oklch(0.155 0 0 / 0.85)
+      oklch(0.21 0 0 / 0.85),
+      oklch(0.20 0 0 / 0.85)
     );
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);

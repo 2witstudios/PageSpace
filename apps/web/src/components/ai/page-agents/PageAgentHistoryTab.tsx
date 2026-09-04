@@ -74,7 +74,7 @@ const ConversationCard = memo(function ConversationCard({
       data-conversation-id={conversation.id}
       className={cn(
         'p-4 cursor-pointer hover:bg-accent transition-colors',
-        isActive && 'bg-accent border-primary'
+        isActive && 'bg-primary-soft border-primary'
       )}
       onClick={onClick}
     >

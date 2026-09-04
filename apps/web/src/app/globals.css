@@ -131,6 +131,7 @@ svg.lucide {
   --color-secondary: var(--secondary);
   --color-primary-foreground: var(--primary-foreground);
   --color-primary: var(--primary);
+  --color-primary-soft: var(--primary-soft);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
   --color-card-foreground: var(--card-foreground);
@@ -170,6 +171,7 @@ svg.lucide {
   /* Actions & Accents */
   --primary: oklch(0.50 0.16 235);
   --primary-foreground: oklch(0.98 0.005 235);
+  --primary-soft: oklch(0.50 0.16 235 / 0.10);
   --secondary: oklch(0.90 0.025 35);
   --secondary-foreground: oklch(0.15 0.01 220);
   --muted: oklch(0.94 0.003 230);
@@ -219,45 +221,46 @@ svg.lucide {
 .dark {
   color-scheme: dark;
   --radius: 0.625rem;
-  --background: oklch(0.15 0 0);
+  --background: oklch(0.19 0 0);
   --foreground: oklch(0.94 0 0);
-  --card: oklch(0.19 0 0);
+  --card: oklch(0.23 0 0);
   --card-foreground: oklch(0.94 0 0);
-  --popover: oklch(0.19 0 0);
+  --popover: oklch(0.23 0 0);
   --popover-foreground: oklch(0.94 0 0);
   --primary: oklch(0.62 0.16 235);
-  --primary-foreground: oklch(0.15 0 0);
-  --secondary: oklch(0.24 0 0);
+  --primary-soft: oklch(0.62 0.16 235 / 0.18);
+  --primary-foreground: oklch(0.19 0 0);
+  --secondary: oklch(0.28 0 0);
   --secondary-foreground: oklch(0.94 0 0);
-  --muted: oklch(0.24 0 0);
-  --muted-foreground: oklch(0.64 0 0);
-  --accent: oklch(0.48 0.12 235);
+  --muted: oklch(0.28 0 0);
+  --muted-foreground: oklch(0.68 0 0);
+  --accent: oklch(0.31 0.02 235); /* Neutral hover; selected state uses --primary-soft */
   --accent-foreground: oklch(0.96 0 0);
   --destructive: oklch(0.6 0.2 15);
   --success: oklch(0.55 0.16 145);
   --warning: oklch(0.68 0.16 75);
   --info: oklch(0.60 0.16 235);
-  --border: oklch(0.25 0 0);
-  --input: oklch(0.25 0 0);
+  --border: oklch(0.30 0 0);
+  --input: oklch(0.30 0 0);
   --ring: oklch(0.62 0.16 235);
   --chart-1: oklch(0.7 0.2 30);
   --chart-2: oklch(0.6 0.25 90);
   --chart-3: oklch(0.75 0.2 180);
   --chart-4: oklch(0.65 0.22 240);
   --chart-5: oklch(0.8 0.2 300);
-  --sidebar: oklch(0.155 0 0); /* Minimal contrast with background */
+  --sidebar: oklch(0.20 0 0); /* Minimal contrast with background */
   --sidebar-foreground: oklch(0.94 0 0);
   --sidebar-primary: oklch(0.62 0.16 235);
-  --sidebar-primary-foreground: oklch(0.15 0 0);
-  --sidebar-accent: oklch(0.48 0.12 235);
+  --sidebar-primary-foreground: oklch(0.19 0 0);
+  --sidebar-accent: oklch(0.31 0.02 235);
   --sidebar-accent-foreground: oklch(0.96 0 0);
-  --sidebar-border: oklch(0.25 0 0);
+  --sidebar-border: oklch(0.30 0 0);
   --sidebar-ring: oklch(0.62 0.16 235);
 
   /* Liquid Glass Material System (Dark Mode) */
-  --material-thin: oklch(0.16 0 0 / 0.88);
-  --material-regular: oklch(0.165 0 0 / 0.85);
-  --material-thick: oklch(0.17 0 0 / 0.80);
+  --material-thin: oklch(0.20 0 0 / 0.88);
+  --material-regular: oklch(0.205 0 0 / 0.85);
+  --material-thick: oklch(0.21 0 0 / 0.80);
 
   /* Shadows (Dark Mode) */
   --shadow-ambient: 0 1px 3px rgb(0 0 0 / 0.12), 0 8px 24px rgb(0 0 0 / 0.18);
@@ -267,7 +270,7 @@ svg.lucide {
   --separator: oklch(0.94 0 0 / 0.08);
 
   /* Sidebar section dividers - visible but soft */
-  --sidebar-divider: oklch(0.26 0 0);
+  --sidebar-divider: oklch(0.31 0 0);
   --sidebar-section-bg: oklch(1 0 0 / 0.035);
 }
 
@@ -421,8 +424,8 @@ svg.lucide {
   .dark .liquid-glass-regular {
     background: linear-gradient(
       to bottom,
-      oklch(0.17 0 0 / 0.85),
-      oklch(0.155 0 0 / 0.85)
+      oklch(0.21 0 0 / 0.85),
+      oklch(0.20 0 0 / 0.85)
     );
     backdrop-filter: blur(24px) saturate(180%);
     -webkit-backdrop-filter: blur(24px) saturate(180%);

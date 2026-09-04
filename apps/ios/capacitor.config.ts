@@ -39,7 +39,7 @@ const config: CapacitorConfig = {
     contentInset: 'never',
     // The app's real dark background, not pure black — a WebView holding no
     // document is then distinguishable from a loaded dark-theme app.
-    backgroundColor: '#0B0B0B',
+    backgroundColor: '#141414',
     preferredContentMode: 'recommended',
     allowsLinkPreview: false,
     scrollEnabled: true,
@@ -48,7 +48,7 @@ const config: CapacitorConfig = {
     SplashScreen: {
       launchAutoHide: true,
       launchShowDuration: 0,
-      backgroundColor: '#0B0B0B',
+      backgroundColor: '#141414',
       showSpinner: false,
     },
     Keyboard: {
@@ -57,7 +57,7 @@ const config: CapacitorConfig = {
     },
     StatusBar: {
       style: 'light', // Light content (icons/text) on dark background
-      backgroundColor: '#000000',
+      backgroundColor: '#141414',
     },
     SocialLogin: {
       apple: {

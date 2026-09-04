@@ -316,7 +316,7 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
               <DropdownMenuItem
                 key={entry.kind}
                 onSelect={() => onCommand({ kind: 'numberKind', value: entry.kind })}
-                className={cn('flex justify-between gap-4', numberKind === entry.kind && 'bg-accent')}
+                className={cn('flex justify-between gap-4', numberKind === entry.kind && 'bg-primary-soft')}
               >
                 <span>{entry.label}</span>
                 {entry.hint && (

@@ -65,7 +65,7 @@ const TextBlock: React.FC<TextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative mb-1 ${role === 'user'
-        ? 'p-3 rounded-lg bg-primary/10 dark:bg-accent/20 ml-2 sm:ml-8'
+        ? 'p-3 rounded-lg bg-primary-soft ml-2 sm:ml-8'
         : 'mr-2 sm:mr-8'
         }`}
     >

@@ -188,44 +188,44 @@ function SidebarPreview() {
         </div>
 
         <nav className="flex-1 overflow-auto px-1 py-2">
-          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 bg-gray-200 dark:bg-gray-700" style={{ paddingLeft: 4 }}>
-            <button className="p-1 rounded hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors cursor-pointer">
-              <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200 rotate-90" />
+          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 bg-primary-soft" style={{ paddingLeft: 4 }}>
+            <button className="p-1 rounded hover:bg-accent transition-colors cursor-pointer">
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200 rotate-90" />
             </button>
             <div className="p-0.5 rounded cursor-grab">
               <FileText className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
             </div>
-            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">Q1 Planning</span>
+            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-foreground cursor-pointer">Q1 Planning</span>
           </div>
 
           {[
             { icon: FileText, label: "Product Roadmap", indent: 12, dot: true },
             { icon: MessageSquare, label: "Team Discussion", indent: 12 },
           ].map((item) => (
-            <div key={item.label} className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: item.indent }}>
+            <div key={item.label} className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-accent" style={{ paddingLeft: item.indent }}>
               <div className="p-0.5 rounded cursor-grab">
-                <item.icon className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+                <item.icon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
               </div>
               {item.dot && <span className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0 ml-1" />}
-              <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">{item.label}</span>
+              <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-foreground cursor-pointer">{item.label}</span>
             </div>
           ))}
 
-          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700 mt-1" style={{ paddingLeft: 4 }}>
-            <button className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors cursor-pointer">
-              <ChevronRight className="h-3.5 w-3.5 text-gray-500 transition-transform duration-200" />
+          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-accent mt-1" style={{ paddingLeft: 4 }}>
+            <button className="p-1 rounded hover:bg-accent transition-colors cursor-pointer">
+              <ChevronRight className="h-3.5 w-3.5 text-muted-foreground transition-transform duration-200" />
             </button>
             <div className="p-0.5 rounded cursor-grab">
-              <Folder className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+              <Folder className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
             </div>
-            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">Product Launch</span>
+            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-foreground cursor-pointer">Product Launch</span>
           </div>
 
-          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-gray-200 dark:hover:bg-gray-700" style={{ paddingLeft: 4 }}>
+          <div className="group flex items-center px-1 py-1.5 rounded-lg transition-all duration-200 hover:bg-accent" style={{ paddingLeft: 4 }}>
             <div className="p-0.5 rounded cursor-grab ml-6">
-              <FileText className="h-3.5 w-3.5 flex-shrink-0 text-gray-500" />
+              <FileText className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
             </div>
-            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-gray-900 dark:text-gray-100 cursor-pointer">Meeting Notes</span>
+            <span className="flex-1 min-w-0 ml-1.5 truncate text-xs font-medium text-foreground cursor-pointer">Meeting Notes</span>
           </div>
         </nav>
 
