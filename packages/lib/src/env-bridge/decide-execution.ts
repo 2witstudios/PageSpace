@@ -13,20 +13,41 @@
  * audit log; `intersectCapabilities` is the single-boolean form used for
  * `hello` and UI.)
  *
- * Deny order is FIXED and tested: no_policy → policy_deny → principal_not_allowed
- * → op_mismatch → op_not_advertised → server_denied → machine_denied →
- * cwd_denied → path_denied → then `ask` or `allow`. All policy gates run BEFORE
- * any path is confined, so a request denied by policy never reaches the probe.
- * Deny always beats ask: an owner is only ever asked about a request that
- * would otherwise run.
+ * WHAT CONFINEMENT COVERS — stated plainly so M1's negatives test the right
+ * thing. Roots confine the paths an agent NAMES: every fs-op path and every
+ * cwd must resolve inside a root. Roots do NOT sandbox what a command does
+ * once it runs: `exec` with cwd inside a root may still `cat /etc/passwd`.
+ * That is by design at this layer — `exec` is gated by the owner's
+ * ask/allowlist policy and by the server policy, not by path confinement.
+ * (Founder decision recorded on the epic page; if `exec` should ever be
+ * root-confined, that is a runner-level sandbox, not a change here.)
  *
- * The ask → allow seam is pure. In `ask` mode, an op that is not pre-approved
- * is confined and scrubbed FIRST, and the `ask` verdict carries that exact
+ * Deny order is FIXED and tested for every adjacent pair: malformed →
+ * no_policy → policy_deny → principal_not_allowed → op_mismatch →
+ * op_not_advertised → server_denied → machine_denied → cwd_denied →
+ * path_denied → approval_expired → then `ask` or `allow`. `malformed` runs
+ * FIRST so "allow" always means "executable": an exec without a command or an
+ * fs op without paths never reaches the runner as an allow. All policy gates
+ * run BEFORE any path is confined, so a request denied by policy never reaches
+ * the probe. Deny always beats ask: an owner is only ever asked about a
+ * request that would otherwise run.
+ *
+ * THE ASK → ALLOW SEAM. In `ask` mode, an op that is not pre-approved is
+ * confined and scrubbed FIRST, and the `ask` verdict carries that exact
  * `NormalizedRequest` — the owner sees precisely the cwd, paths, env, and caps
- * they are approving. Approval comes back as `localApproval: { grantId }` on a
- * second call, which yields `allow` with the same normalized request; it is
- * bound to one grant (whose nonce is single-use), never mutates the policy,
- * and cannot override a server denial or a confinement failure.
+ * they are approving. Approval comes back as `localApproval` on a second call,
+ * which yields `allow` with the same normalized request. Contract for the
+ * daemon adapter (t08), because this function has no clock and the grant is
+ * single-use:
+ *   - `verifyGrant` burns the nonce on its first ok. The adapter MUST hold the
+ *     already-verified `Grant` across the prompt and call this function again
+ *     with it; it must NEVER re-verify the wire grant after asking.
+ *   - The grant's `exp` bounds the WHOLE authorization, prompt included. A
+ *     human answer that arrives after `exp` is refused here as
+ *     `approval_expired` — the adapter supplies `approvedAt` from its clock
+ *     and does not get to decide otherwise. A late approval means the agent
+ *     must request again with a fresh grant.
+ *   - An approval is bound to one `grantId` and never mutates the policy.
  *
  * On `allow`, the `NormalizedRequest` is the ONLY thing the runner may execute:
  * confined cwd and paths (real paths), scrubbed env, and timeout / output caps
@@ -44,11 +65,12 @@ import { scrubEnv } from './scrub-env';
 
 export interface ExecutionRequest {
   readonly op: GrantOp;
+  /** Required (non-blank) for `exec`. */
   readonly cmd?: string;
   readonly args?: readonly string[];
   /** Working directory; defaults to the machine's first root. */
   readonly cwd?: string;
-  /** File paths named by fs operations. Each must confine. */
+  /** File paths named by fs operations; required (non-empty) for `fs_read` / `fs_write`. Each must confine. */
   readonly paths?: readonly string[];
   readonly env?: Readonly<Record<string, string>>;
   readonly timeoutMs?: number;
@@ -71,6 +93,7 @@ export interface NormalizedRequest {
 }
 
 export type ExecDenyReason =
+  | 'malformed'
   | 'no_policy'
   | 'policy_deny'
   | 'principal_not_allowed'
@@ -79,16 +102,22 @@ export type ExecDenyReason =
   | 'server_denied'
   | 'machine_denied'
   | 'cwd_denied'
-  | 'path_denied';
+  | 'path_denied'
+  | 'approval_expired';
 
 export type ExecutionVerdict =
   | { readonly kind: 'allow'; readonly request: NormalizedRequest }
   | { readonly kind: 'ask'; readonly reason: 'op_not_preapproved'; readonly request: NormalizedRequest }
   | { readonly kind: 'deny'; readonly reason: ExecDenyReason };
 
-/** The owner's answer to an `ask` verdict, bound to the grant it was asked about. */
+/**
+ * The owner's answer to an `ask` verdict, bound to the grant it was asked
+ * about. `approvedAt` (ms since epoch, from the adapter's clock) is compared to
+ * the grant's `exp`; an approval after expiry is refused.
+ */
 export interface LocalApproval {
   readonly grantId: string;
+  readonly approvedAt: number;
 }
 
 export interface DecideExecutionInput {
@@ -104,6 +133,19 @@ export interface DecideExecutionInput {
 
 function deny(reason: ExecDenyReason): ExecutionVerdict {
   return { kind: 'deny', reason };
+}
+
+/** Shape check: does this request carry what its op needs to be executable at all? */
+function isWellFormed(request: ExecutionRequest): boolean {
+  switch (request.op) {
+    case 'exec':
+      return typeof request.cmd === 'string' && request.cmd.trim().length > 0;
+    case 'fs_read':
+    case 'fs_write':
+      return Array.isArray(request.paths) && request.paths.length > 0;
+    case 'pty_open':
+      return true;
+  }
 }
 
 /**
@@ -124,6 +166,7 @@ function resolveLimit(requested: number | undefined, cap: number): { readonly va
 export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
   const { grant, request, machinePolicy, serverPolicy, capabilities, probe, localApproval } = input;
 
+  if (!isWellFormed(request)) return deny('malformed');
   if (machinePolicy === null) return deny('no_policy');
   if (machinePolicy.mode === 'deny') return deny('policy_deny');
   if (!machinePolicy.principals.includes(grant.principal.userId)) return deny('principal_not_allowed');
@@ -166,6 +209,10 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
   };
 
   if (preapproved) return { kind: 'allow', request: normalized };
-  if (localApproval !== undefined && localApproval.grantId === grant.grantId) return { kind: 'allow', request: normalized };
+  if (localApproval !== undefined && localApproval.grantId === grant.grantId) {
+    // The grant bounds the whole authorization, prompt included.
+    if (!Number.isFinite(localApproval.approvedAt) || localApproval.approvedAt > grant.exp) return deny('approval_expired');
+    return { kind: 'allow', request: normalized };
+  }
   return { kind: 'ask', reason: 'op_not_preapproved', request: normalized };
 }

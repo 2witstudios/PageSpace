@@ -56,7 +56,8 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
 
   it('given mode deny, should deny policy_deny for every op', () => {
     for (const op of ['exec', 'fs_read', 'fs_write', 'pty_open'] as const) {
-      expect(decide({ machinePolicy: { ...machine, mode: 'deny', ops: [op] }, grant: { ...grant, op }, request: { ...request, op } })).toEqual({ kind: 'deny', reason: 'policy_deny' });
+      // Well-formed per op (fs ops need paths) so the shape gate is not what denies.
+      expect(decide({ machinePolicy: { ...machine, mode: 'deny', ops: [op] }, grant: { ...grant, op }, request: { ...request, op, paths: [`${ROOT}/f`] } })).toEqual({ kind: 'deny', reason: 'policy_deny' });
     }
   });
 
@@ -65,7 +66,7 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
   });
 
   it('given the request op differs from the grant op, should deny op_mismatch (defense in depth behind verifyGrant)', () => {
-    expect(decide({ request: { ...request, op: 'fs_read' } })).toEqual({ kind: 'deny', reason: 'op_mismatch' });
+    expect(decide({ request: { ...request, op: 'fs_read', paths: [`${ROOT}/f`] } })).toEqual({ kind: 'deny', reason: 'op_mismatch' });
   });
 
   it('given op not advertised by the machine, should deny op_not_advertised', () => {
@@ -95,24 +96,38 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
       expect(decide({ machinePolicy: { ...machine, mode: 'ask' } })).toEqual({ kind: 'allow', request: NORMALIZED });
     });
 
-    it('given mode ask, a non-pre-approved op, and localApproval for THIS grantId, should allow with the same NormalizedRequest', () => {
-      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId } })).toEqual({ kind: 'allow', request: NORMALIZED });
+    const approval = { grantId: grant.grantId, approvedAt: 30_000 }; // grant.exp is 60_000
+
+    it('given mode ask, a non-pre-approved op, and localApproval for THIS grantId within the grant TTL, should allow with the same NormalizedRequest', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: approval })).toEqual({ kind: 'allow', request: NORMALIZED });
     });
 
     it('given localApproval for a DIFFERENT grantId, should still ask (an approval is bound to one grant)', () => {
-      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: 'someone_elses_grant' } }).kind).toBe('ask');
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, grantId: 'someone_elses_grant' } }).kind).toBe('ask');
+    });
+
+    it('given localApproval AFTER grant.exp (a human prompt outlived the 60s TTL), should deny approval_expired — the grant bounds the whole authorization, prompt included', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, approvedAt: grant.exp + 1 } })).toEqual({ kind: 'deny', reason: 'approval_expired' });
+    });
+
+    it('given localApproval exactly at grant.exp, should allow (boundary inclusive, matching verifyGrant\'s exp < now)', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, approvedAt: grant.exp } }).kind).toBe('allow');
+    });
+
+    it('given localApproval with a non-finite approvedAt, should deny approval_expired (fail closed)', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, approvedAt: Number.NaN } })).toEqual({ kind: 'deny', reason: 'approval_expired' });
     });
 
     it('given localApproval but the server denies the op, should deny server_denied (approval cannot override the server)', () => {
-      expect(decide({ machinePolicy: askPolicy, serverPolicy: { ops: ['fs_read'], checkpoint: false }, localApproval: { grantId: grant.grantId } })).toEqual({ kind: 'deny', reason: 'server_denied' });
+      expect(decide({ machinePolicy: askPolicy, serverPolicy: { ops: ['fs_read'], checkpoint: false }, localApproval: approval })).toEqual({ kind: 'deny', reason: 'server_denied' });
     });
 
     it('given localApproval in allowlist mode for a non-listed op, should deny machine_denied (approval is only an ask-mode concept)', () => {
-      expect(decide({ machinePolicy: { ...machine, ops: ['fs_read'] }, localApproval: { grantId: grant.grantId } })).toEqual({ kind: 'deny', reason: 'machine_denied' });
+      expect(decide({ machinePolicy: { ...machine, ops: ['fs_read'] }, localApproval: approval })).toEqual({ kind: 'deny', reason: 'machine_denied' });
     });
 
     it('given localApproval but a cwd outside every root, should deny cwd_denied (approval never bypasses confinement)', () => {
-      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId }, request: { ...request, cwd: '/etc' } })).toEqual({ kind: 'deny', reason: 'cwd_denied' });
+      expect(decide({ machinePolicy: askPolicy, localApproval: approval, request: { ...request, cwd: '/etc' } })).toEqual({ kind: 'deny', reason: 'cwd_denied' });
     });
 
     it('given mode ask and a request that would be denied on confinement, should deny rather than ask (deny beats ask)', () => {
@@ -209,6 +224,59 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
     const probe: PathProbe = { realpath: (p) => (p === ROOT || p === `${ROOT}/src` ? p : null), isSymlink: () => false };
     const verdict = decide({ grant: fsGrant, request: { op: 'fs_write', paths: [`${ROOT}/src/new.ts`] }, probe });
     expect(verdict).toEqual({ kind: 'allow', request: { op: 'fs_write', cwd: ROOT, paths: [`${ROOT}/src/new.ts`], env: {}, timeoutMs: machine.maxTimeoutMs, maxBytes: machine.maxBytes, clamped: false } });
+  });
+
+  describe('malformed request shapes are refused BEFORE the policy gates ("allow" must mean executable)', () => {
+    it.each<[string, Partial<typeof request>]>([
+      ['exec with no cmd', { cmd: undefined }],
+      ['exec with an empty cmd', { cmd: '' }],
+      ['exec with a whitespace-only cmd', { cmd: '   ' }],
+    ])('given %s, should deny malformed', (_label, patch) => {
+      expect(decide({ request: { ...request, ...patch } })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+
+    it.each<['fs_read' | 'fs_write', string[] | undefined]>([
+      ['fs_read', undefined],
+      ['fs_read', []],
+      ['fs_write', undefined],
+      ['fs_write', []],
+    ])('given %s with paths %j, should deny malformed', (op, paths) => {
+      expect(decide({ grant: { ...grant, op }, request: { op, paths } })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+
+    it('given a malformed shape AND a null policy, should deny malformed (shape is checked first)', () => {
+      expect(decide({ machinePolicy: null, request: { ...request, cmd: '' } })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+
+    it('given pty_open with no cmd, should NOT be malformed (the shell is the default)', () => {
+      const ptyGrant = { ...grant, op: 'pty_open' as const };
+      expect(decide({ grant: ptyGrant, machinePolicy: { ...machine, ops: ['pty_open'] }, request: { op: 'pty_open' } }).kind).toBe('allow');
+    });
+  });
+
+  it('should enforce the deny order for EVERY adjacent pair of gates (each row breaks two adjacent gates and expects the earlier)', () => {
+    type Input = Parameters<typeof decideExecution>[0];
+    // Breakers in gate order. Each makes exactly its own gate fail when applied alone.
+    const breakers: ReadonlyArray<[string, (i: Input) => Input]> = [
+      ['malformed', (i) => ({ ...i, request: { ...i.request, cmd: '' } })],
+      ['no_policy', (i) => ({ ...i, machinePolicy: null })],
+      ['policy_deny', (i) => ({ ...i, machinePolicy: i.machinePolicy && { ...i.machinePolicy, mode: 'deny' } })],
+      ['principal_not_allowed', (i) => ({ ...i, grant: { ...i.grant, principal: { ...i.grant.principal, userId: 'rogue' } } })],
+      ['op_mismatch', (i) => ({ ...i, request: { ...i.request, op: 'fs_read', paths: [`${ROOT}/f`] } })],
+      ['op_not_advertised', (i) => ({ ...i, capabilities: { ...i.capabilities, shell: false, fs: false } })],
+      ['server_denied', (i) => ({ ...i, serverPolicy: { ops: [], checkpoint: false } })],
+      ['machine_denied', (i) => ({ ...i, machinePolicy: i.machinePolicy && { ...i.machinePolicy, ops: [] } })],
+      ['cwd_denied', (i) => ({ ...i, request: { ...i.request, cwd: '/etc' } })],
+      ['path_denied', (i) => ({ ...i, request: { ...i.request, paths: ['/etc/passwd'] } })],
+    ];
+    const base: Input = { grant, request, machinePolicy: machine, serverPolicy: server, capabilities: advertised, probe: identityProbe };
+    for (let n = 0; n + 1 < breakers.length; n += 1) {
+      const [earlier, breakEarlier] = breakers[n] as [string, (i: Input) => Input];
+      const [later, breakLater] = breakers[n + 1] as [string, (i: Input) => Input];
+      // Apply the LATER breaker first so the earlier one's effect is never overwritten.
+      const verdict = decideExecution(breakEarlier(breakLater(base)));
+      expect(verdict, `${earlier} must beat ${later}`).toEqual({ kind: 'deny', reason: earlier });
+    }
   });
 
   it('should enforce a fixed deny order: no_policy → policy_deny → principal → op_mismatch → advertised → server → machine → paths', () => {

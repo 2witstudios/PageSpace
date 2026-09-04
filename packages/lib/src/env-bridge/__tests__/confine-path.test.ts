@@ -68,6 +68,29 @@ describe('confinePath — every filesystem path an agent names must resolve insi
     expect(confinePath('/private/tmp/x', ['/tmp'], p)).toEqual({ ok: true, path: '/private/tmp/x' });
   });
 
+  it('given a DELETED root among several, should deny unresolvable for a request under it — not a misleading symlink_escape (a dead root confines nothing)', () => {
+    const p = probe({ real: { '/other': '/other', '/other/y': '/other/y' } });
+    expect(confinePath(`${ROOT}/x`, [ROOT, '/other'], p)).toEqual({ ok: false, reason: 'unresolvable' });
+    expect(confinePath('/other/y', [ROOT, '/other'], p)).toEqual({ ok: true, path: '/other/y' });
+  });
+
+  describe('probe errors fail closed (EACCES / ELOOP / ENOTDIR must never look like "missing")', () => {
+    it('given realpath that THROWS on the request path, should deny unresolvable rather than treating it as a new file', () => {
+      const p: PathProbe = { realpath: (x) => { if (x === ROOT) return ROOT; throw new Error('EACCES'); }, isSymlink: () => false };
+      expect(confinePath(`${ROOT}/secret`, [ROOT], p)).toEqual({ ok: false, reason: 'unresolvable' });
+    });
+
+    it('given isSymlink that THROWS while walking a missing path, should deny symlink_escape (an unknowable component is treated as a symlink)', () => {
+      const p: PathProbe = { realpath: (x) => (x === ROOT ? ROOT : null), isSymlink: () => { throw new Error('ELOOP'); } };
+      expect(confinePath(`${ROOT}/new.txt`, [ROOT], p)).toEqual({ ok: false, reason: 'symlink_escape' });
+    });
+
+    it('given realpath that THROWS on a root, should treat that root as unresolved', () => {
+      const p: PathProbe = { realpath: (x) => { if (x === ROOT) throw new Error('EACCES'); return x; }, isSymlink: () => false };
+      expect(confinePath(`${ROOT}/x`, [ROOT], p)).toEqual({ ok: false, reason: 'unresolvable' });
+    });
+  });
+
   it('given no roots, should deny no_roots', () => {
     expect(confinePath(`${ROOT}/x`, [], identityProbe)).toEqual({ ok: false, reason: 'no_roots' });
   });

@@ -40,9 +40,16 @@ export const ENV_HARD_DENYLIST: readonly string[] = [
   'RUBYLIB',
   'JAVA_TOOL_OPTIONS',
   '_JAVA_OPTIONS',
-  // tool command injection
+  'PERL5DB',
+  // tool command / config injection
   'GIT_SSH_COMMAND',
   'GIT_EXTERNAL_DIFF',
+  'GIT_CONFIG_GLOBAL',
+  'GIT_CONFIG_SYSTEM',
+  'GIT_ASKPASS',
+  'SSH_ASKPASS',
+  // scratch-location redirection
+  'TMPDIR',
 ];
 
 /**

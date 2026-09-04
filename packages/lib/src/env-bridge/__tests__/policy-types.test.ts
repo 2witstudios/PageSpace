@@ -28,6 +28,8 @@ describe('parseMachinePolicy — the daemon policy file, parsed without trust (i
     ['an unknown mode', { ...VALID, mode: 'yolo' }],
     ['an op outside the closed union', { ...VALID, ops: ['exec', 'rm_rf'] }],
     ['a relative root', { ...VALID, roots: ['proj'] }],
+    ['the filesystem root / (confinement would be vacuous)', { ...VALID, roots: ['/'] }],
+    ['a root containing a .. segment', { ...VALID, roots: ['/home/u/../etc'] }],
     ['an empty root', { ...VALID, roots: [''] }],
     ['a non-array principals', { ...VALID, principals: 'user_1' }],
     ['a negative maxBytes', { ...VALID, maxBytes: -1 }],

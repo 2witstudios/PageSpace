@@ -73,7 +73,17 @@ const machinePolicySchema = z
     mode: z.enum(POLICY_MODES),
     principals: z.array(z.string().min(1)),
     ops: z.array(z.enum(GRANT_OPS)),
-    roots: z.array(z.string().min(1).refine((root) => root.startsWith('/'), 'root must be absolute')),
+    // A root must be absolute, must not be `/` (confinement would be vacuous),
+    // and must not contain `..` (the lexical layer refuses `..` in requests, so
+    // a root spelled with one could never be matched consistently).
+    roots: z.array(
+      z
+        .string()
+        .min(1)
+        .refine((root) => root.startsWith('/'), 'root must be absolute')
+        .refine((root) => root.replace(/\/+$/, '') !== '', 'root must not be the filesystem root')
+        .refine((root) => !root.split('/').includes('..'), 'root must not contain .. segments'),
+    ),
     envAllowlist: z.array(z.string().regex(ENV_NAME_RE)),
     maxBytes: z.number().int().positive().default(DEFAULT_MAX_BYTES),
     maxTimeoutMs: z.number().int().positive().default(DEFAULT_MAX_TIMEOUT_MS),
