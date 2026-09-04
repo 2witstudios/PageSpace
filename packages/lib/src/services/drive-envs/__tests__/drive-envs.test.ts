@@ -169,6 +169,37 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.status).toBe('stopped');
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
+
+  describe('substrate (Local Environments epic, t05)', () => {
+    it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
+      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
+      expect(dto.substrate).toBe('sprite');
+      expect(dto.status).toBe('running');
+      expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
+    });
+
+    it('given a local row WITH its drive_env_local facts, should project substrate local, the machine label, and the CONNECTION status — never a Sprite status', () => {
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'jono-macstudio', status: 'connected' });
+      expect(dto).toEqual({ id: ENV_ID, driveId: DRIVE_ID, name: 'staging', substrate: 'local', status: 'connected', label: 'jono-macstudio', createdAt: NOW.toISOString() });
+      expect(driveEnvDtoSchema.safeParse(dto).success).toBe(true);
+    });
+
+    it('given a local row, should ignore the Sprite pointer columns for status (they are CHECK-forbidden anyway)', () => {
+      const dto = toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }), { label: 'm', status: 'disconnected' });
+      expect(dto.status).toBe('disconnected');
+    });
+
+    it('given a local row WITHOUT its facts, should throw rather than invent a label or a status (fail loud, never lie to the UI)', () => {
+      expect(() => toDriveEnvDTO(makeEnvRecord({ substrate: 'local' }))).toThrow(/drive_env_local/);
+    });
+
+    it('given a Sprite row WITH stray local facts, should ignore them (facts do not change the substrate)', () => {
+      const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }), { label: 'x', status: 'connected' });
+      expect(dto.substrate).toBe('sprite');
+      expect(dto.status).toBe('running');
+      expect('label' in dto).toBe(false);
+    });
+  });
 });
 
 describe('renameDriveEnv', () => {

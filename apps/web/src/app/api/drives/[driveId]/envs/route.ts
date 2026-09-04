@@ -89,7 +89,19 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const body = await request.json().catch(() => null);
     const parsed = createDriveEnvRequestSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'A non-empty environment name is required' }, { status: 400 });
+      const labelIssue = parsed.error.issues.some((issue) => issue.path[0] === 'label');
+      return NextResponse.json(
+        { error: labelIssue ? 'A machine label is required for a local environment' : 'A non-empty environment name is required' },
+        { status: 400 },
+      );
+    }
+
+    // Local environments (the user's own machine via the zero-trust bridge)
+    // are created through ENROLLMENT, which a later slice adds. Until then a
+    // local request must be refused outright — never quietly minted as a Sprite
+    // env in its place (Local Environments epic, t05).
+    if (parsed.data.substrate === 'local') {
+      return NextResponse.json({ error: 'Local environments are not available yet' }, { status: 501 });
     }
 
     const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId });

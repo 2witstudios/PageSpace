@@ -56,6 +56,7 @@ const envRow = {
   driveId: DRIVE_ID,
   name: 'staging',
   createdBy: DRIVE_OWNER_ID,
+  substrate: 'sprite',
   spriteKey: null,
   sandboxId: null,
   spriteInstanceId: null,

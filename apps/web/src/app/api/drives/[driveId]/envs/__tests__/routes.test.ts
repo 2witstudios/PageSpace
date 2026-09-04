@@ -115,6 +115,26 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).not.toHaveBeenCalled();
   });
 
+  it('given substrate local, should answer 501 and NOT create anything — enrollment lands in a later slice, and a Sprite env must never be minted in its place (Local Environments t05)', async () => {
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    expect(response.status).toBe(501);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given substrate local without a label, should answer 400 naming the label, not the name', async () => {
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given an explicit substrate sprite, should behave exactly like the plain-name path', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: true, env: envRow } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(201);
+    expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'dev', createdBy: USER_ID });
+  });
+
   it('given a duplicate name, should answer 409', async () => {
     vi.mocked(createEnvInDrive).mockResolvedValue({ ok: false, reason: 'name_taken' } as never);
     const response = await createEnv(jsonReq({ name: 'staging' }), params);

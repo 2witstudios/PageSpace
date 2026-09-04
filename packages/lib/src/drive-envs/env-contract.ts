@@ -106,6 +106,8 @@ export const DRIVE_ENV_SPRITE_STATUSES = ['none', 'running', 'stopped'] as const
  * socket; `'disconnected'` none (including never-enrolled and revoked).
  */
 export const DRIVE_ENV_LOCAL_STATUSES = ['connecting', 'connected', 'disconnected'] as const;
+export type DriveEnvLocalStatus = (typeof DRIVE_ENV_LOCAL_STATUSES)[number];
+export type DriveEnvSpriteStatus = (typeof DRIVE_ENV_SPRITE_STATUSES)[number];
 
 /** Every status any env can report. Which subset applies is fixed by `substrate`. */
 export const DRIVE_ENV_STATUSES = [...DRIVE_ENV_SPRITE_STATUSES, ...DRIVE_ENV_LOCAL_STATUSES] as const;
