@@ -161,8 +161,22 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('write meaningful output back into the drive');
   });
 
-  it('given a PageSpace drive-write tool is present, does claim it can write results into a Sheet or Document', () => {
+  it('given a PageSpace content-writing tool is present, does claim it can write results into a Sheet or Document', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'replace_lines']);
+    expect(result).toContain('write meaningful output back into the drive');
+  });
+
+  it('given only create_page (no content-writing tool), does NOT claim it can write results into a Sheet or Document', () => {
+    // codex review: create_page's inputSchema has no content field — it creates
+    // only a blank destination page. Writing content in needs replace_lines,
+    // insert_content, edit_sheet_cells, or copy_content afterwards.
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'create_page']);
+    expect(result).not.toContain('write meaningful output back into the drive');
+  });
+
+  it('given copy_content is present, does claim it can write results into a Sheet or Document', () => {
+    // copy_content can write into a page (including one just created via create_page).
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'copy_content']);
     expect(result).toContain('write meaningful output back into the drive');
   });
 

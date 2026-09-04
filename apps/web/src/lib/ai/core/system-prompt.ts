@@ -109,8 +109,13 @@ function hasExecutionTool(availableTools?: string[]): boolean {
   );
 }
 
-/** PageSpace tools that can put sandbox output into the drive (a Sheet or Document). */
-const DRIVE_WRITE_TOOL_NAMES = ['create_page', 'replace_lines', 'insert_content', 'edit_sheet_cells'];
+/**
+ * PageSpace tools that can put sandbox output into the drive (a Sheet or
+ * Document). Deliberately NOT create_page — its inputSchema has no content
+ * field, so it creates only a blank destination page; an agent needs one of
+ * these actual content-writing tools to put anything into it.
+ */
+const DRIVE_WRITE_TOOL_NAMES = ['replace_lines', 'insert_content', 'edit_sheet_cells', 'copy_content'];
 
 /** Whether the agent holds any tool that can write sandbox output into the drive. */
 function hasDriveWriteTool(availableTools?: string[]): boolean {
