@@ -103,6 +103,27 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('/workspace');
   });
 
+  it('given a non-bash sandbox tool set (no execution tool), does NOT claim it can run scripts/scrapers', () => {
+    // codex review: hasSandboxComputeTools gates the WHOLE block correctly (an
+    // agent with only readFile/writeFile/git_status still needs path-resolution
+    // and editFile/git mechanics), but the opening sentence specifically claimed
+    // "use it for scripts, scrapers, data processing, calling external APIs" —
+    // an execution claim a file/git-only agent (no bash) cannot back up.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile', 'git_clone']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('scripts, scrapers');
+  });
+
+  it('given bash is present, does claim it can run scripts/scrapers', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash']);
+    expect(result).toContain('scripts, scrapers');
+  });
+
+  it('given allowedToolNames omitted, does claim it can run scripts/scrapers (undefined = no filtering context)', () => {
+    const result = buildSystemPrompt(false, undefined, true);
+    expect(result).toContain('scripts, scrapers');
+  });
+
   it('given codeExecutionEnabled true and allowedToolNames omitted, should include sandbox guidance (undefined = no filtering context)', () => {
     // Matches the sentinel semantics used elsewhere in this module (buildInlineInstructions,
     // buildNonCoreToolNamesPrompt): undefined means "no tool list to filter against", not "no tools".
