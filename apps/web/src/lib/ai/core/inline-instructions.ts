@@ -196,27 +196,37 @@ function buildAgents(availableTools?: string[]): string {
  * only when the agent can actually create that scheduling anchor itself,
  * the same discipline buildAgents uses for its own sub-bullets.
  *
- * set_calendar_trigger alone is sufficient — it creates a new "scheduling
- * anchor" calendar event at the target time when none exists yet.
- * set_task_trigger is NOT self-sufficient: it only attaches to a task that
- * ALREADY has a due date (trigger-tools.ts: "The task must have a due date
- * set before a due_date trigger can be attached. Set the task's due date
- * first via update_task") — codex review, fresh evidence. So set_task_trigger
- * only counts here alongside create_task or update_task, which can put that
- * due date in place.
+ * Three tiers, not two (codex review, two rounds of fresh evidence):
+ * 1. Full one-off capability — set_calendar_trigger alone is sufficient (it
+ *    creates a new "scheduling anchor" calendar event at the target time
+ *    when none exists yet), or set_task_trigger paired with create_task/
+ *    update_task (which can put a fresh due date in place).
+ * 2. Existing-task-only capability — set_task_trigger ALONE is NOT
+ *    self-sufficient to create a new anchor (trigger-tools.ts: "The task
+ *    must have a due date set before a due_date trigger can be attached.
+ *    Set the task's due date first via update_task"), but it can still
+ *    independently attach a completion trigger to ANY existing task, or a
+ *    due-date trigger to one whose due date is ALREADY set — "run this when
+ *    task X completes" is achievable without create_task/update_task at
+ *    all. The first fix over-corrected by denying this whole category.
+ * 3. No one-off capability at all.
  */
 function buildAutomation(availableTools?: string[]): string {
-  const hasOneOffSetter =
-    hasAny(availableTools, ['set_calendar_trigger']) ||
-    (hasAny(availableTools, ['set_task_trigger']) && hasAny(availableTools, ['create_task', 'update_task']));
-  // codex review: gating only a trailing "qualifies too" suffix left the main
-  // clause's own "whenever" unrestricted — it still invited a one-off request
-  // even with the suffix gone. The main clause itself must be scoped to what
-  // this agent can actually schedule when only create_workflow/list_workflows
-  // (recurring-cron-only) is available.
-  const mainClause = hasOneOffSetter
-    ? 'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too'
-    : "Propose a recurring trigger whenever work should repeat on a schedule without the user re-prompting — for a one-off or event-bound request, say that's outside what you can currently schedule rather than forcing it into a recurring one";
+  const hasCalendarOneOffSetter = hasAny(availableTools, ['set_calendar_trigger']);
+  const hasTaskTrigger = hasAny(availableTools, ['set_task_trigger']);
+  const hasTaskCreateOrUpdate = hasAny(availableTools, ['create_task', 'update_task']);
+
+  let mainClause: string;
+  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasTaskCreateOrUpdate)) {
+    mainClause =
+      'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too';
+  } else if (hasTaskTrigger) {
+    mainClause =
+      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off or event-bound request, check whether it can attach to an existing task (on completion, or a due date already set) before assuming you can't schedule it";
+  } else {
+    mainClause =
+      "Propose a recurring trigger whenever work should repeat on a schedule without the user re-prompting — for a one-off or event-bound request, say that's outside what you can currently schedule rather than forcing it into a recurring one";
+  }
   return `AUTOMATION:
 • ${mainClause}
 • Triggers require an existing AI_CHAT page in the same drive as the source (task/calendar/drive)

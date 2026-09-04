@@ -204,7 +204,7 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(buildInlineInstructions(['set_calendar_trigger'])).toContain('qualifies too');
   });
 
-  it('omits the one-off/event-bound clause when set_task_trigger is available alone', () => {
+  it('omits the unrestricted one-off clause when set_task_trigger is available alone', () => {
     // codex review: set_task_trigger only attaches to a task that already has
     // a due date — it cannot create that due date itself, so alone it can't
     // back up "run this tomorrow" for a task that doesn't already have that
@@ -212,6 +212,18 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     const result = buildInlineInstructions(['set_task_trigger']);
     expect(result).toContain('AUTOMATION');
     expect(result).not.toContain('qualifies too');
+  });
+
+  it('given set_task_trigger alone, does NOT categorically deny event-bound scheduling', () => {
+    // codex review (fresh evidence): set_task_trigger can still independently
+    // attach a completion trigger to an existing task, or a due-date trigger
+    // to one whose due date is already set — "run this when task X
+    // completes" is achievable without create_task/update_task at all. The
+    // fallback must not say event-bound scheduling is "outside what you can
+    // currently schedule" when this narrower capability exists.
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).not.toContain("outside what you can currently schedule");
+    expect(result).toMatch(/existing task/i);
   });
 
   it('includes the one-off/event-bound clause when set_task_trigger is paired with create_task or update_task', () => {
