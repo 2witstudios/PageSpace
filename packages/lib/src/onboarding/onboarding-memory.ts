@@ -42,6 +42,19 @@ export interface OnboardingContext {
 const BLOCK_START = '<!-- pagespace:onboarding:start -->';
 const BLOCK_END = '<!-- pagespace:onboarding:end -->';
 
+/**
+ * Strip anything that would read as one of our own markers out of user text.
+ *
+ * `firstRequest` is whatever the user typed. If they type the end marker — by
+ * accident or otherwise — it closes the block early, and the next run's
+ * `stripOwnBlock` then removes only up to the injected marker and leaves stale
+ * content stranded inside the page. Matched loosely (any spacing, either
+ * keyword) so a near-miss cannot slip through.
+ */
+function neutralizeMarkers(value: string): string {
+  return value.replace(/<!--\s*pagespace:onboarding:\w*\s*-->/gi, '');
+}
+
 export async function recordOnboardingContext(
   userId: string,
   context: OnboardingContext,
@@ -65,8 +78,8 @@ export async function recordOnboardingContext(
     '',
     '## From onboarding',
     '',
-    `- Working at this scale: ${context.scaleLabel}`,
-    `- What they came here to do: ${trimmedRequest}`,
+    `- Working at this scale: ${neutralizeMarkers(context.scaleLabel)}`,
+    `- What they came here to do: ${neutralizeMarkers(trimmedRequest)}`,
     '',
     BLOCK_END,
   ].join('\n');
@@ -105,11 +118,24 @@ function stripOwnBlock(content: string): string {
   const start = content.indexOf(BLOCK_START);
   if (start === -1) return content;
 
-  const endIdx = content.indexOf(BLOCK_END, start);
+  const afterStart = start + BLOCK_START.length;
+
+  // Bound the search at the next start marker so we never reach across into a
+  // second block and delete what lies between.
+  const nextStart = content.indexOf(BLOCK_START, afterStart);
+  const regionEnd = nextStart === -1 ? content.length : nextStart;
+  const region = content.slice(afterStart, regionEnd);
+
+  // The LAST end marker in our own region, not the first. A block written
+  // before user text was neutralized can contain an injected end marker
+  // mid-way; stopping at the first one would leave that block's tail stranded
+  // in the page forever, since every later run would strip to the same spot.
+  const lastEnd = region.lastIndexOf(BLOCK_END);
+
   // An unterminated start marker means the page was hand-edited mid-block.
   // Leave the content entirely alone rather than guessing where it ended and
   // deleting the user's writing.
-  if (endIdx === -1) return content;
+  if (lastEnd === -1) return content;
 
-  return content.slice(0, start) + content.slice(endIdx + BLOCK_END.length);
+  return content.slice(0, start) + content.slice(afterStart + lastEnd + BLOCK_END.length);
 }

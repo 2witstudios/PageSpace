@@ -99,6 +99,31 @@ describe('recordOnboardingContext', () => {
     expect(written()).toContain('hand-edited, no end marker');
   });
 
+  test('a request containing the end marker cannot close the block early', async () => {
+    // Without neutralizing, this text terminates the owned block mid-way; the
+    // NEXT run then strips only as far as the injected marker and leaves stale
+    // content stranded inside the page.
+    await recordOnboardingContext('u1', {
+      ...CONTEXT,
+      firstRequest: 'note to self <!-- pagespace:onboarding:end --> and more',
+    });
+    const body = written();
+    expect(body.match(/pagespace:onboarding:end/g)).toHaveLength(1);
+    expect(body.indexOf('pagespace:onboarding:end')).toBeGreaterThan(body.indexOf('note to self'));
+    expect(body).toContain('and more');
+  });
+
+  test('a re-run after a marker-injecting request still replaces cleanly', async () => {
+    findFirst.mockResolvedValue({
+      content:
+        '<!-- pagespace:onboarding:start -->\n\n- What they came here to do: sneaky <!-- pagespace:onboarding:end --> tail\n<!-- pagespace:onboarding:end -->\n',
+    });
+    await recordOnboardingContext('u1', CONTEXT);
+    expect(written()).not.toContain('sneaky');
+    expect(written()).not.toContain('tail');
+    expect(written().match(/pagespace:onboarding:start/g)).toHaveLength(1);
+  });
+
   test('writes nothing when the request is blank rather than recording an empty promise', async () => {
     await expect(
       recordOnboardingContext('u1', { ...CONTEXT, firstRequest: '   ' }),
