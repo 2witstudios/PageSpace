@@ -60,6 +60,7 @@ const mockUser: User = {
   suspendedReason: null,
   timezone: null,
   starterSkillsInstalledAt: null,
+  onboardingCompletedAt: null,
   createdAt: new Date('2024-01-01T00:00:00Z'),
   updatedAt: new Date('2024-01-01T00:00:00Z'),
 };
