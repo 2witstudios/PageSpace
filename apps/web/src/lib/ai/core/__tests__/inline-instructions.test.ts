@@ -155,8 +155,8 @@ describe('buildInlineInstructions — AUTOMATION gating', () => {
     expect(result).toContain('AUTOMATION');
   });
 
-  it('includes AUTOMATION when any trigger/workflow tool is available', () => {
-    for (const tool of ['delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']) {
+  it('includes AUTOMATION when a trigger-creation tool is available', () => {
+    for (const tool of ['set_calendar_trigger', 'create_workflow']) {
       const result = buildInlineInstructions([tool]);
       expect(result).toContain('AUTOMATION');
     }
@@ -164,6 +164,14 @@ describe('buildInlineInstructions — AUTOMATION gating', () => {
 
   it('excludes AUTOMATION when no trigger or workflow tools are available', () => {
     const result = buildInlineInstructions(['create_task', 'ask_agent']);
+    expect(result).not.toContain('AUTOMATION');
+  });
+
+  it('excludes AUTOMATION when only deletion/list tools are available', () => {
+    // CodeRabbit review: delete_task_trigger/delete_calendar_trigger/list_workflows
+    // can only remove or list an existing trigger, not propose one — an agent
+    // holding only those can't act on "propose a trigger" at all.
+    const result = buildInlineInstructions(['delete_task_trigger', 'delete_calendar_trigger', 'list_workflows']);
     expect(result).not.toContain('AUTOMATION');
   });
 });
@@ -190,9 +198,25 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).toMatch(/recurring|schedule/i);
   });
 
-  it('includes the one-off/event-bound clause when set_task_trigger or set_calendar_trigger is available', () => {
-    expect(buildInlineInstructions(['set_task_trigger'])).toContain('qualifies too');
+  it('includes the one-off/event-bound clause when set_calendar_trigger is available', () => {
+    // set_calendar_trigger is self-sufficient — it creates a new scheduling
+    // anchor event when none exists yet.
     expect(buildInlineInstructions(['set_calendar_trigger'])).toContain('qualifies too');
+  });
+
+  it('omits the one-off/event-bound clause when set_task_trigger is available alone', () => {
+    // codex review: set_task_trigger only attaches to a task that already has
+    // a due date — it cannot create that due date itself, so alone it can't
+    // back up "run this tomorrow" for a task that doesn't already have that
+    // due date set.
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).toContain('AUTOMATION');
+    expect(result).not.toContain('qualifies too');
+  });
+
+  it('includes the one-off/event-bound clause when set_task_trigger is paired with create_task or update_task', () => {
+    expect(buildInlineInstructions(['set_task_trigger', 'create_task'])).toContain('qualifies too');
+    expect(buildInlineInstructions(['set_task_trigger', 'update_task'])).toContain('qualifies too');
   });
 
   it('given availableTools=undefined, includes the one-off clause (no filtering context)', () => {

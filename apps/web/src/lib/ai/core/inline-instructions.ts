@@ -193,11 +193,22 @@ function buildAgents(availableTools?: string[]): string {
  * recurring cron schedules — create_workflow's own description says one-off
  * or event-bound scheduling needs set_task_trigger/set_calendar_trigger
  * instead — so the "a one-off task... qualifies too" clause composes in
- * only when one of those setters is actually present, the same discipline
- * buildAgents uses for its own sub-bullets.
+ * only when the agent can actually create that scheduling anchor itself,
+ * the same discipline buildAgents uses for its own sub-bullets.
+ *
+ * set_calendar_trigger alone is sufficient — it creates a new "scheduling
+ * anchor" calendar event at the target time when none exists yet.
+ * set_task_trigger is NOT self-sufficient: it only attaches to a task that
+ * ALREADY has a due date (trigger-tools.ts: "The task must have a due date
+ * set before a due_date trigger can be attached. Set the task's due date
+ * first via update_task") — codex review, fresh evidence. So set_task_trigger
+ * only counts here alongside create_task or update_task, which can put that
+ * due date in place.
  */
 function buildAutomation(availableTools?: string[]): string {
-  const hasOneOffSetter = hasAny(availableTools, ['set_task_trigger', 'set_calendar_trigger']);
+  const hasOneOffSetter =
+    hasAny(availableTools, ['set_calendar_trigger']) ||
+    (hasAny(availableTools, ['set_task_trigger']) && hasAny(availableTools, ['create_task', 'update_task']));
   // codex review: gating only a trailing "qualifies too" suffix left the main
   // clause's own "whenever" unrestricted — it still invited a one-off request
   // even with the suffix gone. The main clause itself must be scoped to what
@@ -272,7 +283,11 @@ function hasAny(availableTools: string[] | undefined, toolNames: string[]): bool
 export function buildInlineInstructions(availableTools?: string[]): string {
   const includeTaskManagement = hasAny(availableTools, ['create_task', 'update_task', 'delete_task', 'create_task_status', 'reorder_task', 'get_assigned_tasks']);
   const includeAgents = hasAny(availableTools, ['spawn_session', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
-  const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
+  // Deliberately excludes delete_task_trigger/delete_calendar_trigger/list_workflows:
+  // those can only remove or list an existing trigger, not propose one — an agent
+  // holding only those can't act on the "propose a trigger" instruction this
+  // section exists to give.
+  const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'set_calendar_trigger', 'create_workflow']);
   const includeSearch = hasAny(availableTools, ['glob_search', 'regex_search', 'multi_drive_search', 'web_search', 'web_fetch']);
   const includeAskUser = hasAny(availableTools, ['ask_user']);
 

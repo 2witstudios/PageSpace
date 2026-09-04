@@ -110,16 +110,51 @@ function hasExecutionTool(availableTools?: string[]): boolean {
 }
 
 /**
- * PageSpace tools that can put sandbox output into the drive (a Sheet or
- * Document). Deliberately NOT create_page — its inputSchema has no content
- * field, so it creates only a blank destination page; an agent needs one of
- * these actual content-writing tools to put anything into it.
+ * PageSpace tools that can put sandbox output into a Document (or generic
+ * file-backed page). Deliberately NOT create_page — its inputSchema has no
+ * content field, so it creates only a blank destination page; an agent needs
+ * one of these actual content-writing tools to put anything into it.
+ *
+ * Kept separate from the Sheet-writer set below: codex review — replace_lines/
+ * insert_content explicitly reject Sheet pages ("Cannot use line
+ * editing/insertion on sheets", page-write-tools.ts) and copy_content refuses
+ * them too ("Sheets are not line-addressable", copy-content-tools.ts). An
+ * agent holding only these can write a Document, never a Sheet.
  */
-const DRIVE_WRITE_TOOL_NAMES = ['replace_lines', 'insert_content', 'edit_sheet_cells', 'copy_content'];
+const DOCUMENT_WRITE_TOOL_NAMES = ['replace_lines', 'insert_content', 'copy_content'];
 
-/** Whether the agent holds any tool that can write sandbox output into the drive. */
+/**
+ * The only tool that can write Sheet cells — edit_sheet_cells explicitly
+ * rejects non-Sheet pages ("Page is not a sheet... Use replace_lines for
+ * document editing", page-write-tools.ts). Conversely an agent holding only
+ * this can write a Sheet, never a Document.
+ */
+const SHEET_WRITE_TOOL_NAMES = ['edit_sheet_cells'];
+
+function hasAnyToolName(availableTools: string[] | undefined, names: readonly string[]): boolean {
+  return availableTools === undefined || names.some((name) => availableTools.includes(name));
+}
+
+/** Whether the agent holds a tool that can write sandbox output into a Document. */
+function canWriteDocument(availableTools?: string[]): boolean {
+  return hasAnyToolName(availableTools, DOCUMENT_WRITE_TOOL_NAMES);
+}
+
+/** Whether the agent holds a tool that can write sandbox output into a Sheet. */
+function canWriteSheet(availableTools?: string[]): boolean {
+  return hasAnyToolName(availableTools, SHEET_WRITE_TOOL_NAMES);
+}
+
+/** Whether the agent holds any tool that can write sandbox output into the drive (Document and/or Sheet). */
 function hasDriveWriteTool(availableTools?: string[]): boolean {
-  return availableTools === undefined || DRIVE_WRITE_TOOL_NAMES.some((name) => availableTools.includes(name));
+  return canWriteDocument(availableTools) || canWriteSheet(availableTools);
+}
+
+/** "a Sheet", "a Document", or "a Sheet or Document" — whichever destination types the agent can actually write to. */
+function buildDriveDestinationPhrase(availableTools?: string[]): string {
+  return [canWriteSheet(availableTools) ? 'a Sheet' : null, canWriteDocument(availableTools) ? 'a Document' : null]
+    .filter((d): d is string => d !== null)
+    .join(' or ');
 }
 
 /** The curated tool names the "Key tools" bullet highlights, in display order. */
@@ -173,17 +208,18 @@ function buildBranchAndInstallBullet(hasGitTools: boolean, canExecute: boolean):
 function buildSandboxInstructions(availableTools?: string[]): string {
   const canExecute = hasExecutionTool(availableTools);
   const canWriteToDrive = hasDriveWriteTool(availableTools);
+  const driveDestination = buildDriveDestinationPhrase(availableTools);
 
   let openingBullet: string;
   if (canExecute && canWriteToDrive) {
     openingBullet =
-      '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.';
+      `• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
   } else if (canExecute) {
     openingBullet =
       '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs).';
   } else if (canWriteToDrive) {
     openingBullet =
-      '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo — write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.';
+      `• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo — write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
   } else {
     openingBullet =
       '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo.';

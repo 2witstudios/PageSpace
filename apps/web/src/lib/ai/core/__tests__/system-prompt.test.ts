@@ -180,6 +180,25 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('write meaningful output back into the drive');
   });
 
+  it('given only a Document-writer tool (replace_lines), claims a Document but not a Sheet', () => {
+    // codex review: replace_lines/insert_content/copy_content explicitly reject
+    // Sheet pages, so a bullet that lists both destinations for a Document-only
+    // agent claims a capability (writing a Sheet) it doesn't have.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'replace_lines']);
+    expect(result).toContain('write meaningful output back into the drive (a Document)');
+  });
+
+  it('given only the Sheet-writer tool (edit_sheet_cells), claims a Sheet but not a Document', () => {
+    // edit_sheet_cells explicitly rejects non-Sheet pages.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'edit_sheet_cells']);
+    expect(result).toContain('write meaningful output back into the drive (a Sheet)');
+  });
+
+  it('given both a Document-writer and the Sheet-writer, claims a Sheet or Document', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'replace_lines', 'edit_sheet_cells']);
+    expect(result).toContain('write meaningful output back into the drive (a Sheet or a Document)');
+  });
+
   it('given a git-only allowlist (git_clone), does not mention bash, file tools, or gh_* tools', () => {
     // CodeRabbit review: hasSandboxComputeTools correctly renders the block for
     // a git-only agent (it still needs path/persistence guidance), but the
