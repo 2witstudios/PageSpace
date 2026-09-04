@@ -1,29 +1,55 @@
 /**
  * Environment scrubbing for commands the server asks the user's machine to run
  * (invariant 4). The server never gets to set environment on the machine except
- * through the owner's allowlist — and even an allowlisted name is refused if it
- * is a loader or interpreter hook, because `LD_PRELOAD=/evil.so ls` is code
- * execution regardless of what `ls` is.
+ * through the owner's allowlist — that allowlist is the real gate. The
+ * hard-deny list below is a BACKSTOP behind it, not an exhaustive catalogue: it
+ * refuses well-known loader, interpreter, shell, and tool injection hooks even
+ * if an owner allowlists them by mistake, because `LD_PRELOAD=/evil.so ls` is
+ * code execution regardless of what `ls` is. Anything not on this list still
+ * needs to be allowlisted to get through.
  */
 import { ENV_NAME_RE } from './policy-types';
 
-/** Names refused unconditionally: dynamic-loader and interpreter injection hooks. */
+/** Names refused unconditionally, grouped by the hook family they represent. */
 export const ENV_HARD_DENYLIST: readonly string[] = [
+  // command resolution
   'PATH',
-  'NODE_OPTIONS',
+  'CDPATH',
+  // dynamic loader tunables (glibc)
+  'GLIBC_TUNABLES',
+  'GCONV_PATH',
+  'LOCPATH',
+  // shell startup / rc-file hijack
+  'HOME',
+  'ZDOTDIR',
+  'XDG_CONFIG_HOME',
   'BASH_ENV',
   'ENV',
+  'PROMPT_COMMAND',
+  'SHELLOPTS',
+  'IFS',
+  // runtime option injection
+  'NODE_OPTIONS',
+  'NODE_PATH',
   'PYTHONPATH',
+  'PYTHONHOME',
   'PYTHONSTARTUP',
   'PERL5OPT',
   'PERL5LIB',
   'RUBYOPT',
   'RUBYLIB',
-  'IFS',
+  'JAVA_TOOL_OPTIONS',
+  '_JAVA_OPTIONS',
+  // tool command injection
+  'GIT_SSH_COMMAND',
+  'GIT_EXTERNAL_DIFF',
 ];
 
-/** Prefix families refused unconditionally (glibc and macOS dynamic loaders). */
-export const ENV_HARD_DENIED_PREFIXES: readonly string[] = ['LD_', 'DYLD_'];
+/**
+ * Prefix families refused unconditionally: glibc and macOS dynamic loaders,
+ * and bash's exported-function mechanism (Shellshock-style `BASH_FUNC_x%%`).
+ */
+export const ENV_HARD_DENIED_PREFIXES: readonly string[] = ['LD_', 'DYLD_', 'BASH_FUNC_'];
 
 export function isHardDeniedEnvVar(name: string): boolean {
   return ENV_HARD_DENYLIST.includes(name) || ENV_HARD_DENIED_PREFIXES.some((prefix) => name.startsWith(prefix));
