@@ -131,13 +131,52 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('/workspace');
   });
 
-  it('given isReadOnly true and codeExecutionEnabled true, should NOT include sandbox guidance even with bash present', () => {
-    // Read-only mode strips bash (a write tool) from the agent's real tool list
-    // before this is ever called, but the drive-write instructions inside the
-    // sandbox block would still contradict READ-ONLY MODE if this ever fires
-    // with a stale/unfiltered tool list — assert the invariant directly.
-    const result = buildSystemPrompt(true, undefined, true, ['read_page', 'bash']);
-    expect(result).not.toContain('/workspace');
+  it('given isReadOnly true with read-only-safe sandbox tools (readFile, git_status), preserves sandbox guidance', () => {
+    // codex review: filterToolsForReadOnly only strips WRITE_TOOLS — readFile,
+    // git_status, git_diff, and the gh_* inspection tools are deliberately NOT
+    // write tools and remain in allowedToolNames during a read-only turn. A
+    // blanket isReadOnly suppression of the whole block would take away the
+    // /workspace path-resolution and untrusted-output guidance those tools
+    // still need. The block must follow tool presence, not the read-only flag.
+    const result = buildSystemPrompt(true, undefined, true, ['read_page', 'readFile', 'git_status']);
+    expect(result).toContain('/workspace');
+  });
+
+  it('given isReadOnly true with only bash-family write tools stripped, does not claim execution or drive write-back', () => {
+    // In real read-only turns bash/writeFile/create_page etc. are already gone
+    // from allowedToolNames (they're WRITE_TOOLS) by the time this runs — assert
+    // that directly rather than depending on isReadOnly as a second gate.
+    const result = buildSystemPrompt(true, undefined, true, ['read_page', 'readFile', 'git_status']);
+    expect(result).not.toContain('scripts, scrapers');
+    expect(result).not.toContain('write meaningful output back into the drive');
+  });
+
+  it('given no PageSpace drive-write tools, does NOT claim it can write results into a Sheet or Document', () => {
+    // codex review: an allowlist with only writeFile/git_clone (no create_page,
+    // replace_lines, insert_content, edit_sheet_cells) can edit sandbox files but
+    // cannot write into the drive — the earlier non-bash fallback still made that
+    // claim unconditionally in both branches.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile', 'git_clone']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('write meaningful output back into the drive');
+  });
+
+  it('given a PageSpace drive-write tool is present, does claim it can write results into a Sheet or Document', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'create_page']);
+    expect(result).toContain('write meaningful output back into the drive');
+  });
+
+  it('given spawn_shell and send_shell but no bash, still claims it can run scripts/scrapers', () => {
+    // codex review: send_shell submits commands to a PTY and can run scripts or
+    // data-processing jobs just like bash — checking only for the literal 'bash'
+    // name missed this valid execution surface.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell', 'send_shell']);
+    expect(result).toContain('scripts, scrapers');
+  });
+
+  it('given spawn_shell without send_shell, does NOT claim execution (can dispatch but not observe/run interactively)', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell']);
+    expect(result).not.toContain('scripts, scrapers');
   });
 
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {

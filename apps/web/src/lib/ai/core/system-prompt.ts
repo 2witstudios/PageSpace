@@ -95,28 +95,58 @@ export const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 // request (same gate as ai-tools.ts). Deliberately short — the basics that make
 // the sandbox smooth to use, not a wall of instructions.
 /**
- * Whether `bash` specifically — not just some sandbox tool — is in
- * `availableTools`. The opening bullet of {@link buildSandboxInstructions}
- * claims the agent can RUN scripts/scrapers/API calls, which needs an
- * execution tool; an agent holding only readFile/writeFile/git_status (bash
- * unchecked in the per-agent allowlist) can inspect and edit files but can't
- * back up that claim. `undefined` means "no filtering context" (same
- * sentinel used throughout this module).
+ * Whether the agent holds a tool that can actually RUN something — `bash`, or
+ * the `spawn_shell`+`send_shell` PTY pair (send_shell submits commands to a
+ * running shell, so it's execution capability even without bash itself).
+ * `undefined` means "no filtering context" (same sentinel used throughout
+ * this module).
  */
 function hasExecutionTool(availableTools?: string[]): boolean {
-  return availableTools === undefined || availableTools.includes('bash');
+  if (availableTools === undefined) return true;
+  return (
+    availableTools.includes('bash') ||
+    (availableTools.includes('spawn_shell') && availableTools.includes('send_shell'))
+  );
+}
+
+/** PageSpace tools that can put sandbox output into the drive (a Sheet or Document). */
+const DRIVE_WRITE_TOOL_NAMES = ['create_page', 'replace_lines', 'insert_content', 'edit_sheet_cells'];
+
+/** Whether the agent holds any tool that can write sandbox output into the drive. */
+function hasDriveWriteTool(availableTools?: string[]): boolean {
+  return availableTools === undefined || DRIVE_WRITE_TOOL_NAMES.some((name) => availableTools.includes(name));
 }
 
 /**
- * The CODE SANDBOX block's opening line varies by whether the agent actually
- * holds an execution tool (bash) — everything else (paths, persistence,
- * editFile vs writeFile, git/gh mechanics) is equally true for a file/git-only
- * agent, so only this one line is composed.
+ * The CODE SANDBOX block's opening line composes from what the agent actually
+ * holds — everything else in the block (paths, persistence, editFile vs
+ * writeFile, git/gh mechanics) is equally true regardless, so only this one
+ * line varies. Deliberately NOT gated on `isReadOnly`: a read-only turn keeps
+ * readFile/git_status/gh_* read tools (filterToolsForReadOnly only strips
+ * WRITE_TOOLS), so it needs the same /workspace guidance as any other agent
+ * holding those tools — and it naturally loses the execution and drive-write
+ * clauses below because bash/create_page/etc. are themselves WRITE_TOOLS,
+ * stripped from allowedToolNames before this ever runs. Tool presence is the
+ * one source of truth; isReadOnly doesn't need a second, redundant gate here.
  */
 function buildSandboxInstructions(availableTools?: string[]): string {
-  const openingBullet = hasExecutionTool(availableTools)
-    ? '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.'
-    : '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo — write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.';
+  const canExecute = hasExecutionTool(availableTools);
+  const canWriteToDrive = hasDriveWriteTool(availableTools);
+
+  let openingBullet: string;
+  if (canExecute && canWriteToDrive) {
+    openingBullet =
+      '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.';
+  } else if (canExecute) {
+    openingBullet =
+      '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs).';
+  } else if (canWriteToDrive) {
+    openingBullet =
+      '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo — write meaningful output back into the drive (a Sheet, a Document) so the user sees it, not just left sitting in /workspace.';
+  } else {
+    openingBullet =
+      '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo.';
+  }
 
   return `CODE SANDBOX:
 ${openingBullet}
@@ -187,6 +217,13 @@ export function buildPersonalizationPrompt(personalization?: PersonalizationInfo
  * UI is a per-tool checkbox list an admin can leave `bash` unchecked while
  * granting file/git tools. `undefined` means "no filtering context" (same
  * sentinel as buildInlineInstructions), so it does not suppress the section.
+ *
+ * NOT additionally gated on `isReadOnly`: filterToolsForReadOnly keeps
+ * readFile/git_status/gh_* read tools (they aren't WRITE_TOOLS), so a
+ * read-only agent holding them still needs this section — and the execution
+ * and drive-write claims inside it (see buildSandboxInstructions) already
+ * disappear on their own in read-only mode, because bash/create_page/etc.
+ * ARE write tools and are gone from allowedToolNames by the time this runs.
  */
 export function buildSystemPrompt(
   isReadOnly: boolean = false,
@@ -196,12 +233,7 @@ export function buildSystemPrompt(
 ): string {
   const personalizationPrompt = buildPersonalizationPrompt(personalization);
   const hasSandboxTools = allowedToolNames === undefined || hasSandboxComputeTools(allowedToolNames);
-  // Read-only strips bash (a write tool) from a real caller's allowedToolNames
-  // before this runs, but the drive-write instructions inside the sandbox
-  // block would contradict READ-ONLY MODE if this ever ran with a stale or
-  // unfiltered tool list — so the read-only check is asserted directly here
-  // too, not left to depend on that upstream filtering alone.
-  const includeSandboxInstructions = codeExecutionEnabled && !isReadOnly && hasSandboxTools;
+  const includeSandboxInstructions = codeExecutionEnabled && hasSandboxTools;
 
   const sections = [
     '# PAGESPACE AI',
