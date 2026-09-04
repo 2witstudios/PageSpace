@@ -333,13 +333,15 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('scripts, scrapers');
   });
 
-  it('given send_shell alone (no spawn_shell), still claims execution and describes it as standalone', () => {
-    // codex review, fresh evidence: send_shell is the tool that actually
-    // submits commands — an agent with list_sessions + send_shell but no
-    // spawn_shell can still find and drive a shell already running in the
-    // session, without having spawned it itself.
+  it('given send_shell+list_sessions (no spawn_shell), describes it as conditional but does NOT claim unconditional execution', () => {
+    // codex review, fresh evidence: list_sessions can legitimately return
+    // shells: [] in a fresh conversation (session-tools.ts) — send_shell
+    // paired with list_sessions (no spawn_shell to GUARANTEE a shell exists)
+    // is only conditionally usable, so it must not drive the confident
+    // "use it for scripts, scrapers" claim. The Sessions & shells bullet
+    // still describes the conditional capability with hedged wording.
     const result = buildSystemPrompt(false, undefined, true, ['read_page', 'list_sessions', 'send_shell']);
-    expect(result).toContain('scripts, scrapers');
+    expect(result).not.toContain('scripts, scrapers');
     expect(result).toContain('send_shell submits commands to a shell already running');
     expect(result).not.toContain('spawn_shell opens a persistent PTY');
   });
@@ -376,6 +378,21 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('file and git/gh tools');
     expect(result).not.toContain('readFile');
     expect(result).not.toContain('git_clone');
+  });
+
+  it('given spawn_shell without send_shell (shell-only, no file tools), the persistence bullet does NOT claim file read/write', () => {
+    // codex review, fresh evidence: the persistence bullet's non-git fallback
+    // hardcoded "files you write are still there... read a file back" even
+    // for a shell-only surface that can neither write nor read files.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('files you write');
+    expect(result).not.toContain('read a file back');
+  });
+
+  it('given a file tool (writeFile), the persistence bullet does claim file read/write', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile']);
+    expect(result).toContain('files you write');
   });
 
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {

@@ -95,21 +95,24 @@ export const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 // request (same gate as ai-tools.ts). Deliberately short — the basics that make
 // the sandbox smooth to use, not a wall of instructions.
 /**
- * Whether the agent holds a tool that can actually RUN something — `bash`,
- * or `send_shell` PLUS a way to discover a `shellId` to send to. send_shell's
- * inputSchema requires a caller-supplied shellId (session-tools.ts) and
- * cannot create or discover one itself — codex review, fresh evidence — so
- * send_shell alone (no spawn_shell to create a shell, no list_sessions to
- * find an existing one) has no usable shellId and isn't actually execution
- * capability. `undefined` means "no filtering context" (same sentinel used
- * throughout this module).
+ * Whether the agent holds a tool that can UNCONDITIONALLY run something —
+ * `bash`, or `spawn_shell`+`send_shell` together (spawn_shell CREATES a
+ * shell, so the pair is guaranteed to have a usable shellId regardless of
+ * runtime state). Deliberately NOT `send_shell`+`list_sessions` alone:
+ * list_sessions can legitimately return `shells: []` in a fresh conversation
+ * (session-tools.ts — "This conversation has no workspace yet") — codex
+ * review, fresh evidence — so that combination is only CONDITIONALLY usable
+ * (depends on whether some other party already spawned a shell in the
+ * shared session), and gets its own hedged mention in the Sessions & shells
+ * bullet instead of feeding this confident "you can run scripts" predicate.
+ * `undefined` means "no filtering context" (same sentinel used throughout
+ * this module).
  */
 function hasExecutionTool(availableTools?: string[]): boolean {
   if (availableTools === undefined) return true;
-  if (availableTools.includes('bash')) return true;
   return (
-    availableTools.includes('send_shell') &&
-    (availableTools.includes('spawn_shell') || availableTools.includes('list_sessions'))
+    availableTools.includes('bash') ||
+    (availableTools.includes('spawn_shell') && availableTools.includes('send_shell'))
   );
 }
 
@@ -294,7 +297,13 @@ function buildSandboxInstructions(availableTools?: string[]): string {
           ? `Check ${ghPrOpenNames.join(' / ')} before opening a PR — to update an open one, push more commits to its branch (force-push is fine for your PR branch, never to main/master) instead of opening a second one.`
           : null,
       ].filter(Boolean).join(' ')
-    : '• The /workspace filesystem persists across turns and tool calls in this conversation — files you write are still there next turn. Check state before recreating something (e.g. read a file back) rather than assuming a fresh start.';
+    : hasFileTools
+      ? '• The /workspace filesystem persists across turns and tool calls in this conversation — files you write are still there next turn. Check state before recreating something (e.g. read a file back) rather than assuming a fresh start.'
+      // codex review, fresh evidence: this branch also covers shell-only
+      // surfaces (read-only read_shell alone, or spawn_shell without
+      // send_shell) that can neither write nor read files — "files you
+      // write" and "read a file back" both claim a capability they lack.
+      : '• The /workspace filesystem persists across turns and tool calls in this conversation, independent of any single tool call.';
 
   // PR-description/thread-resolution bullet: each clause needs its own named
   // tool(s) — gh_pr_edit, the gh_pr_thread_list+gh_pr_thread_resolve pair, and
