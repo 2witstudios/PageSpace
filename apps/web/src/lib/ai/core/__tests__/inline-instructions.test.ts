@@ -179,6 +179,17 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).not.toContain('qualifies too');
   });
 
+  it('given only create_workflow/list_workflows, the main clause itself is scoped to recurring work, not "whenever"', () => {
+    // codex review (fresh evidence): gating only the "qualifies too" suffix
+    // left the main clause reading "Propose a trigger whenever the work
+    // should happen" — an unrestricted "whenever" that still invites a
+    // one-off request even with the suffix gone. The main clause itself must
+    // be scoped to recurring/scheduled work when that's all this agent can do.
+    const result = buildInlineInstructions(['create_workflow', 'list_workflows']);
+    expect(result).not.toMatch(/Propose a trigger whenever the work should happen/);
+    expect(result).toMatch(/recurring|schedule/i);
+  });
+
   it('includes the one-off/event-bound clause when set_task_trigger or set_calendar_trigger is available', () => {
     expect(buildInlineInstructions(['set_task_trigger'])).toContain('qualifies too');
     expect(buildInlineInstructions(['set_calendar_trigger'])).toContain('qualifies too');

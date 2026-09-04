@@ -198,11 +198,16 @@ function buildAgents(availableTools?: string[]): string {
  */
 function buildAutomation(availableTools?: string[]): string {
   const hasOneOffSetter = hasAny(availableTools, ['set_task_trigger', 'set_calendar_trigger']);
-  const scopeClause = hasOneOffSetter
-    ? 'recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too'
-    : 'recurring work is the common case';
+  // codex review: gating only a trailing "qualifies too" suffix left the main
+  // clause's own "whenever" unrestricted — it still invited a one-off request
+  // even with the suffix gone. The main clause itself must be scoped to what
+  // this agent can actually schedule when only create_workflow/list_workflows
+  // (recurring-cron-only) is available.
+  const mainClause = hasOneOffSetter
+    ? 'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too'
+    : "Propose a recurring trigger whenever work should repeat on a schedule without the user re-prompting — for a one-off or event-bound request, say that's outside what you can currently schedule rather than forcing it into a recurring one";
   return `AUTOMATION:
-• Propose a trigger whenever the work should happen without the user re-prompting — ${scopeClause}
+• ${mainClause}
 • Triggers require an existing AI_CHAT page in the same drive as the source (task/calendar/drive)
 • After setting a trigger, tell the user what will run, when, and what the agent will receive as context`;
 }
