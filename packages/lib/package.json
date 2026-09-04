@@ -193,6 +193,16 @@
       "import": "./dist/env-bridge/resolve-timeout.js",
       "require": "./dist/env-bridge/resolve-timeout.js"
     },
+    "./env-bridge/decide-bind": {
+      "types": "./dist/env-bridge/decide-bind.d.ts",
+      "import": "./dist/env-bridge/decide-bind.js",
+      "require": "./dist/env-bridge/decide-bind.js"
+    },
+    "./env-bridge/plan-local-provision": {
+      "types": "./dist/env-bridge/plan-local-provision.d.ts",
+      "import": "./dist/env-bridge/plan-local-provision.js",
+      "require": "./dist/env-bridge/plan-local-provision.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",
