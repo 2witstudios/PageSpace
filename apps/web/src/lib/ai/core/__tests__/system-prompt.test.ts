@@ -228,6 +228,57 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('git_clone');
   });
 
+  it('given spawn_shell+send_shell but no bash, does NOT claim bash-specific fresh-process/GitHub-credential mechanics', () => {
+    // codex review: a persistent PTY (send_shell) does not share bash's
+    // "fresh process every call, cd doesn't persist" behavior — hasBash must
+    // be tracked separately from the broader canExecute predicate.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell', 'send_shell', 'git_clone']);
+    expect(result).toContain('scripts, scrapers'); // canExecute claim still holds
+    expect(result).not.toContain('fresh process');
+    expect(result).not.toContain('NO GitHub credentials');
+    expect(result).not.toContain('bash stdout/stderr');
+  });
+
+  it('given only git_status (not git_branch), mentions git_status but not git_branch', () => {
+    // codex review: a read-only surface retaining only git_status must not be
+    // told to also call the stripped git_branch.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_status']);
+    expect(result).toContain('git_status');
+    expect(result).not.toContain('git_branch');
+  });
+
+  it('given only gh_pr_list (not gh_pr_view), mentions gh_pr_list but not gh_pr_view', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'gh_pr_list']);
+    expect(result).toContain('gh_pr_list');
+    expect(result).not.toContain('gh_pr_view');
+  });
+
+  it('given only gh_pr_edit (not gh_pr_thread_list/resolve or gh_repo_view), only the gh_pr_edit clause appears', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'gh_pr_edit']);
+    expect(result).toContain('gh_pr_edit');
+    expect(result).not.toContain('gh_pr_thread_list');
+    expect(result).not.toContain('gh_repo_view');
+  });
+
+  it('given only read_shell (survives read-only filtering, no spawn_shell), does not claim spawn_session/spawn_shell', () => {
+    // codex review: read_shell can survive read-only filtering alone — it must
+    // not pull in spawn_session/send_session/kill_session/list_sessions/
+    // spawn_shell/send_shell as though all were callable.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'read_shell']);
+    expect(result).toContain('read_shell');
+    expect(result).not.toContain('spawn_session');
+    expect(result).not.toContain('spawn_shell');
+  });
+
+  it('given only spawn_session (no send/read/kill_session), the session bullet omits the absent follow-up verbs', () => {
+    // spawn_session alone isn't a compute tool (it's the free chat-only
+    // session family), so pair it with bash to trigger the block.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'spawn_session']);
+    expect(result).toContain('spawn_session');
+    expect(result).not.toContain('send_session');
+    expect(result).not.toContain('kill_session');
+  });
+
   it('given spawn_shell and send_shell but no bash, still claims it can run scripts/scrapers', () => {
     // codex review: send_shell submits commands to a PTY and can run scripts or
     // data-processing jobs just like bash — checking only for the literal 'bash'
