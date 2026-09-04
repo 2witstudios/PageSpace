@@ -226,8 +226,21 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).toMatch(/existing task/i);
   });
 
-  it('includes the one-off/event-bound clause when set_task_trigger is paired with create_task', () => {
-    expect(buildInlineInstructions(['set_task_trigger', 'create_task'])).toContain('qualifies too');
+  it('includes the unrestricted one-off clause when set_task_trigger is paired with create_task AND create_page', () => {
+    expect(
+      buildInlineInstructions(['set_task_trigger', 'create_task', 'create_page']),
+    ).toContain('qualifies too');
+  });
+
+  it('given set_task_trigger+create_task but no create_page, hedges rather than promises fresh task-list creation', () => {
+    // codex review, fresh evidence: create_task's pageId must name an
+    // EXISTING TASK_LIST page (task-management-tools.ts) — it can't create
+    // that host page itself. Whether a task list already exists in the drive
+    // is runtime/drive content, not a tool-permission fact the prompt can
+    // know statically, so this must hedge rather than promise.
+    const result = buildInlineInstructions(['set_task_trigger', 'create_task']);
+    expect(result).not.toContain('qualifies too');
+    expect(result).toMatch(/already has a task list/i);
   });
 
   it('omits the unrestricted one-off clause when set_task_trigger is paired with update_task alone (no create_task)', () => {

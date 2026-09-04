@@ -196,38 +196,49 @@ function buildAgents(availableTools?: string[]): string {
  * only when the agent can actually create that scheduling anchor itself,
  * the same discipline buildAgents uses for its own sub-bullets.
  *
- * Three tiers, not two (codex review, three rounds of fresh evidence):
+ * Four tiers (codex review, four rounds of fresh evidence):
  * 1. Full one-off capability — set_calendar_trigger alone is sufficient (it
  *    creates a new "scheduling anchor" calendar event at the target time
- *    when none exists yet), or set_task_trigger paired with create_task
- *    specifically. update_task does NOT qualify here even though it can set
- *    a due date: task-management-tools.ts requires an existing taskId
- *    ("taskId is required to update a task. To create a new task, use
- *    create_task.") — it cannot conjure a fresh anchor for a topic with no
- *    existing task, only create_task can.
- * 2. Existing-task-only capability — set_task_trigger ALONE (optionally with
- *    update_task, which still needs an existing task to update) is NOT
+ *    when none exists yet), or set_task_trigger + create_task + create_page
+ *    together. create_page is required alongside create_task: create_task's
+ *    `pageId` must name an EXISTING TASK_LIST page (task-management-tools.ts
+ *    — "TASK_LIST page ID to add the task to") and create_task cannot create
+ *    that host page itself — only create_page can, if the drive has no task
+ *    list yet. update_task does NOT qualify here either: it requires an
+ *    existing taskId ("taskId is required to update a task. To create a new
+ *    task, use create_task.") — it cannot conjure a fresh anchor for a topic
+ *    with no existing task, only create_task (+ a host page) can.
+ * 2c. Conditional task-creation capability — set_task_trigger + create_task
+ *    WITHOUT create_page: task creation only works if the drive already has
+ *    a TASK_LIST page to add to, which the prompt can't know statically
+ *    (that's drive content, not a tool permission) — hedge rather than
+ *    promise, the same "static tool facts vs. runtime state" distinction
+ *    applied to the send_shell+list_sessions case elsewhere in this file.
+ * 2b. set_task_trigger + update_task (no create_task): update_task CAN set a
+ *    due date on an EXISTING task (it just can't create a new one).
+ * 2. Existing-task-only capability — set_task_trigger ALONE is NOT
  *    self-sufficient to create a new anchor from nothing (trigger-tools.ts:
  *    "The task must have a due date set before a due_date trigger can be
  *    attached. Set the task's due date first via update_task"), but it can
  *    still independently attach a completion trigger to ANY existing task,
- *    or a due-date trigger to one whose due date is ALREADY set (or one this
- *    agent can set via update_task) — "run this when task X completes" is
- *    achievable without create_task at all. The first fix over-corrected by
- *    denying this whole category; the second fix over-corrected the other
- *    way by letting update_task alone unlock the unrestricted tier.
+ *    or a due-date trigger to one whose due date is ALREADY set — "run this
+ *    when task X completes" is achievable without create_task at all.
  * 3. No one-off capability at all.
  */
 function buildAutomation(availableTools?: string[]): string {
   const hasCalendarOneOffSetter = hasAny(availableTools, ['set_calendar_trigger']);
   const hasTaskTrigger = hasAny(availableTools, ['set_task_trigger']);
   const hasCreateTask = hasAny(availableTools, ['create_task']);
+  const hasCreatePage = hasAny(availableTools, ['create_page']);
   const hasUpdateTask = hasAny(availableTools, ['update_task']);
 
   let mainClause: string;
-  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask)) {
+  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask && hasCreatePage)) {
     mainClause =
       'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too';
+  } else if (hasTaskTrigger && hasCreateTask) {
+    mainClause =
+      "Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case; for a one-off request, check whether the drive already has a task list to add a task to before assuming you can schedule it fresh (creating a new task list needs a separate capability)";
   } else if (hasTaskTrigger && hasUpdateTask) {
     // codex review, fresh evidence: update_task CAN set a due date on an
     // existing task (it just can't create a new one from nothing) — the
