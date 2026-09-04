@@ -209,21 +209,6 @@ function buildSandboxInstructions(availableTools?: string[]): string {
   const canWriteToDrive = hasDriveWriteTool(availableTools);
   const driveDestination = buildDriveDestinationPhrase(availableTools);
 
-  let openingBullet: string;
-  if (canExecute && canWriteToDrive) {
-    openingBullet =
-      `• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
-  } else if (canExecute) {
-    openingBullet =
-      '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs).';
-  } else if (canWriteToDrive) {
-    openingBullet =
-      `• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo — write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
-  } else {
-    openingBullet =
-      '• This is a persistent environment for the file and git/gh tools you hold here, not just a place to edit an existing repo.';
-  }
-
   const has = (tool: string) => availableTools === undefined || availableTools.includes(tool);
   const hasAnyOf = (tools: readonly string[]) =>
     availableTools === undefined || tools.some((t) => availableTools.includes(t));
@@ -258,6 +243,37 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     hasGitCwdTools ? 'the rest of the git_* tools' : null,
     hasGhTools ? 'the gh_* tools' : null,
   ].filter((n): n is string => n !== null);
+
+  // codex review: the non-executing fallback wording hardcoded "the file and
+  // git/gh tools you hold here" even for an agent holding none of those — a
+  // restricted spawn_shell-without-send_shell or read-only read_shell-alone
+  // surface has canExecute=false and canWriteToDrive=false but ALSO no file
+  // or git/gh tools at all, since a shell tool alone is what triggers
+  // hasSandboxComputeTools. Compose the fallback from the families actually
+  // held, falling back to a shell-specific phrase when none of the
+  // file/git/gh families apply.
+  const heldNonExecuteFamilies = [
+    hasFileTools ? 'file' : null,
+    hasGitPathTools || hasGitCwdTools ? 'git' : null,
+    hasGhTools ? 'GitHub CLI' : null,
+  ].filter((f): f is string => f !== null);
+  const nonExecuteEnvironmentPhrase = heldNonExecuteFamilies.length
+    ? `the ${heldNonExecuteFamilies.join('/')} tools you hold here`
+    : 'the shell tool you hold here';
+
+  let openingBullet: string;
+  if (canExecute && canWriteToDrive) {
+    openingBullet =
+      `• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs), and write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
+  } else if (canExecute) {
+    openingBullet =
+      '• This is a persistent, general-purpose execution environment, not just a place to edit an existing repo — use it for open-ended work too (scripts, scrapers, data processing, calling external APIs).';
+  } else if (canWriteToDrive) {
+    openingBullet =
+      `• This is a persistent environment for ${nonExecuteEnvironmentPhrase}, not just a place to edit an existing repo — write meaningful output back into the drive (${driveDestination}) so the user sees it, not just left sitting in /workspace.`;
+  } else {
+    openingBullet = `• This is a persistent environment for ${nonExecuteEnvironmentPhrase}, not just a place to edit an existing repo.`;
+  }
 
   // Persistence bullet: base sentence, then only the specific git-state and
   // gh-PR clauses for the exact tool names present (codex review — a

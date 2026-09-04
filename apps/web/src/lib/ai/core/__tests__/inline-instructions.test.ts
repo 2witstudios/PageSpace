@@ -226,9 +226,19 @@ describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
     expect(result).toMatch(/existing task/i);
   });
 
-  it('includes the one-off/event-bound clause when set_task_trigger is paired with create_task or update_task', () => {
+  it('includes the one-off/event-bound clause when set_task_trigger is paired with create_task', () => {
     expect(buildInlineInstructions(['set_task_trigger', 'create_task'])).toContain('qualifies too');
-    expect(buildInlineInstructions(['set_task_trigger', 'update_task'])).toContain('qualifies too');
+  });
+
+  it('omits the unrestricted one-off clause when set_task_trigger is paired with update_task alone (no create_task)', () => {
+    // codex review, fresh evidence: update_task requires an existing taskId
+    // and explicitly throws when absent ("taskId is required to update a
+    // task. To create a new task, use create_task.") — it cannot conjure a
+    // fresh scheduling anchor for a topic with no existing task, only
+    // create_task can.
+    const result = buildInlineInstructions(['set_task_trigger', 'update_task']);
+    expect(result).not.toContain('qualifies too');
+    expect(result).toMatch(/existing task/i);
   });
 
   it('given availableTools=undefined, includes the one-off clause (no filtering context)', () => {

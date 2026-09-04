@@ -196,28 +196,35 @@ function buildAgents(availableTools?: string[]): string {
  * only when the agent can actually create that scheduling anchor itself,
  * the same discipline buildAgents uses for its own sub-bullets.
  *
- * Three tiers, not two (codex review, two rounds of fresh evidence):
+ * Three tiers, not two (codex review, three rounds of fresh evidence):
  * 1. Full one-off capability — set_calendar_trigger alone is sufficient (it
  *    creates a new "scheduling anchor" calendar event at the target time
- *    when none exists yet), or set_task_trigger paired with create_task/
- *    update_task (which can put a fresh due date in place).
- * 2. Existing-task-only capability — set_task_trigger ALONE is NOT
- *    self-sufficient to create a new anchor (trigger-tools.ts: "The task
- *    must have a due date set before a due_date trigger can be attached.
- *    Set the task's due date first via update_task"), but it can still
- *    independently attach a completion trigger to ANY existing task, or a
- *    due-date trigger to one whose due date is ALREADY set — "run this when
- *    task X completes" is achievable without create_task/update_task at
- *    all. The first fix over-corrected by denying this whole category.
+ *    when none exists yet), or set_task_trigger paired with create_task
+ *    specifically. update_task does NOT qualify here even though it can set
+ *    a due date: task-management-tools.ts requires an existing taskId
+ *    ("taskId is required to update a task. To create a new task, use
+ *    create_task.") — it cannot conjure a fresh anchor for a topic with no
+ *    existing task, only create_task can.
+ * 2. Existing-task-only capability — set_task_trigger ALONE (optionally with
+ *    update_task, which still needs an existing task to update) is NOT
+ *    self-sufficient to create a new anchor from nothing (trigger-tools.ts:
+ *    "The task must have a due date set before a due_date trigger can be
+ *    attached. Set the task's due date first via update_task"), but it can
+ *    still independently attach a completion trigger to ANY existing task,
+ *    or a due-date trigger to one whose due date is ALREADY set (or one this
+ *    agent can set via update_task) — "run this when task X completes" is
+ *    achievable without create_task at all. The first fix over-corrected by
+ *    denying this whole category; the second fix over-corrected the other
+ *    way by letting update_task alone unlock the unrestricted tier.
  * 3. No one-off capability at all.
  */
 function buildAutomation(availableTools?: string[]): string {
   const hasCalendarOneOffSetter = hasAny(availableTools, ['set_calendar_trigger']);
   const hasTaskTrigger = hasAny(availableTools, ['set_task_trigger']);
-  const hasTaskCreateOrUpdate = hasAny(availableTools, ['create_task', 'update_task']);
+  const hasCreateTask = hasAny(availableTools, ['create_task']);
 
   let mainClause: string;
-  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasTaskCreateOrUpdate)) {
+  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask)) {
     mainClause =
       'Propose a trigger whenever the work should happen without the user re-prompting — recurring work is the common case, but a one-off task that needs to run at a future time or on some future event qualifies too';
   } else if (hasTaskTrigger) {

@@ -344,6 +344,28 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('spawn_shell opens a persistent PTY');
   });
 
+  it('given spawn_shell without send_shell (no execute, no write, no file/git tools), does NOT claim file/git tools', () => {
+    // codex review, fresh evidence: the non-executing fallback wording
+    // hardcoded "the file and git/gh tools you hold here" even when the only
+    // tool present is a non-executing shell one — canExecute and
+    // canWriteToDrive are both false here, and so are hasFileTools/
+    // hasGitPathTools/hasGitCwdTools/hasGhTools, since spawn_shell alone is
+    // what triggers hasSandboxComputeTools.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'spawn_shell']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('file and git/gh tools');
+    expect(result).not.toContain('readFile');
+    expect(result).not.toContain('git_clone');
+  });
+
+  it('given read_shell alone (survives read-only filtering), does NOT claim file/git tools', () => {
+    const result = buildSystemPrompt(true, undefined, true, ['read_page', 'read_shell']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('file and git/gh tools');
+    expect(result).not.toContain('readFile');
+    expect(result).not.toContain('git_clone');
+  });
+
   it('given the sandbox guidance, should cover the auth boundary, cwd, editFile, persistence, and key tools', () => {
     const result = buildSystemPrompt(false, undefined, true);
     // Auth boundary → dedicated tools
