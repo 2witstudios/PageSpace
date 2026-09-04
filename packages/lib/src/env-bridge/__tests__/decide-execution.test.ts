@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decideExecution } from '../decide-execution';
+import { decideExecution, type NormalizedRequest } from '../decide-execution';
 import type { Grant } from '../grant';
 import type { MachinePolicy, ServerPolicy, AdvertisedCapabilities } from '../policy-types';
 import type { PathProbe } from '../confine-path';
@@ -33,7 +33,7 @@ const advertised: AdvertisedCapabilities = { shell: true, pty: true, fs: true, c
 
 const request = { op: 'exec' as const, cmd: 'ls', args: ['-la'], cwd: `${ROOT}/src`, env: { LANG: 'C', LD_PRELOAD: '/evil.so' }, timeoutMs: 10_000, maxBytes: 1024 };
 
-const NORMALIZED = {
+const NORMALIZED: NormalizedRequest = {
   op: 'exec',
   cmd: 'ls',
   args: ['-la'],
