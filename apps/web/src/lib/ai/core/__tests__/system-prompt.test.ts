@@ -180,6 +180,35 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('write meaningful output back into the drive');
   });
 
+  it('given a git-only allowlist (git_clone), does not mention bash, file tools, or gh_* tools', () => {
+    // CodeRabbit review: hasSandboxComputeTools correctly renders the block for
+    // a git-only agent (it still needs path/persistence guidance), but the
+    // "Key tools" list and several bullets unconditionally named bash/readFile/
+    // writeFile/editFile/gh_* — tools this allowlist doesn't grant.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'git_clone']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('bash');
+    expect(result).not.toContain('readFile');
+    expect(result).not.toContain('writeFile');
+    expect(result).not.toContain('editFile');
+    expect(result).not.toContain('gh_pr');
+  });
+
+  it('given a file-only allowlist (writeFile), does not mention bash or git/gh tools', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'writeFile']);
+    expect(result).toContain('/workspace');
+    expect(result).not.toContain('bash');
+    expect(result).not.toContain('git_clone');
+    expect(result).not.toContain('gh_pr');
+  });
+
+  it('given the full sandbox toolkit, still mentions bash, file tools, and git/gh tools', () => {
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'bash', 'writeFile', 'editFile', 'git_clone']);
+    expect(result).toContain('bash');
+    expect(result).toContain('editFile');
+    expect(result).toContain('git_clone');
+  });
+
   it('given spawn_shell and send_shell but no bash, still claims it can run scripts/scrapers', () => {
     // codex review: send_shell submits commands to a PTY and can run scripts or
     // data-processing jobs just like bash — checking only for the literal 'bash'
