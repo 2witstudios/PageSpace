@@ -182,6 +182,7 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       input.readOnly,
       input.personalization ?? undefined,
       codeExecutionEnabled,
+      input.allowedToolNames,
     );
 
     // TOOL_DISCOVERY_PROMPT explains how to reach the tools that were deferred,
@@ -237,6 +238,7 @@ export function buildAgentSystemPrompt(input: AgentSystemPromptInput): string {
       input.readOnly,
       input.personalization ?? undefined,
       codeExecutionEnabled,
+      input.allowedToolNames,
     );
     systemPrompt += buildInlineInstructions(input.allowedToolNames);
   }
