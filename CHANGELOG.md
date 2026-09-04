@@ -708,6 +708,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **The agent now defaults to checking what it can do before saying a request is out of scope** —
+  it always documented the code sandbox, delegating to other agents, and scheduling recurring or
+  future work, but only as mechanical "how to call this tool" text easy to skim past. A new
+  unconditional disposition section nudges it to check its actual capabilities this conversation —
+  "write code," "process data," "get a second opinion" — before defaulting to the narrowest reading
+  of a request. The sandbox is now described as a general-purpose environment for open-ended work
+  (scripts, scrapers, data processing, calling external APIs) rather than only a place to edit an
+  existing repo, agents are told they can configure a new specialist rather than only discover
+  existing ones, and triggers now cover one-off future work, not only recurring schedules. Every
+  capability claim follows the tools the agent actually holds this turn (a per-agent allowlist, a
+  read-only conversation) so nothing is ever suggested that the agent can't back up.
+
 - **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
   agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,
   used to be told only that the call was invalid and that it should go look the schema up. That
