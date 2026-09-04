@@ -9,3 +9,8 @@
  * `__tests__` for its adversarial matrix.
  */
 export * from './grant';
+export * from './policy-types';
+export * from './intersect-capabilities';
+export * from './scrub-env';
+export * from './confine-path';
+export * from './decide-execution';

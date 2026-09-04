@@ -153,6 +153,31 @@
       "import": "./dist/env-bridge/grant.js",
       "require": "./dist/env-bridge/grant.js"
     },
+    "./env-bridge/policy-types": {
+      "types": "./dist/env-bridge/policy-types.d.ts",
+      "import": "./dist/env-bridge/policy-types.js",
+      "require": "./dist/env-bridge/policy-types.js"
+    },
+    "./env-bridge/intersect-capabilities": {
+      "types": "./dist/env-bridge/intersect-capabilities.d.ts",
+      "import": "./dist/env-bridge/intersect-capabilities.js",
+      "require": "./dist/env-bridge/intersect-capabilities.js"
+    },
+    "./env-bridge/scrub-env": {
+      "types": "./dist/env-bridge/scrub-env.d.ts",
+      "import": "./dist/env-bridge/scrub-env.js",
+      "require": "./dist/env-bridge/scrub-env.js"
+    },
+    "./env-bridge/confine-path": {
+      "types": "./dist/env-bridge/confine-path.d.ts",
+      "import": "./dist/env-bridge/confine-path.js",
+      "require": "./dist/env-bridge/confine-path.js"
+    },
+    "./env-bridge/decide-execution": {
+      "types": "./dist/env-bridge/decide-execution.d.ts",
+      "import": "./dist/env-bridge/decide-execution.js",
+      "require": "./dist/env-bridge/decide-execution.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",
