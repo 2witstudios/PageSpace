@@ -96,16 +96,21 @@ export const READ_ONLY_CONSTRAINT = `READ-ONLY MODE:
 // the sandbox smooth to use, not a wall of instructions.
 /**
  * Whether the agent holds a tool that can actually RUN something — `bash`,
- * or `send_shell` (submits commands to a running shell — that's execution
- * capability whether or not this agent also holds spawn_shell; codex
- * review, fresh evidence — an agent with list_sessions + send_shell but no
- * spawn_shell can still find and drive a shell already running in the
- * session). `undefined` means "no filtering context" (same sentinel used
+ * or `send_shell` PLUS a way to discover a `shellId` to send to. send_shell's
+ * inputSchema requires a caller-supplied shellId (session-tools.ts) and
+ * cannot create or discover one itself — codex review, fresh evidence — so
+ * send_shell alone (no spawn_shell to create a shell, no list_sessions to
+ * find an existing one) has no usable shellId and isn't actually execution
+ * capability. `undefined` means "no filtering context" (same sentinel used
  * throughout this module).
  */
 function hasExecutionTool(availableTools?: string[]): boolean {
   if (availableTools === undefined) return true;
-  return availableTools.includes('bash') || availableTools.includes('send_shell');
+  if (availableTools.includes('bash')) return true;
+  return (
+    availableTools.includes('send_shell') &&
+    (availableTools.includes('spawn_shell') || availableTools.includes('list_sessions'))
+  );
 }
 
 /**
@@ -329,11 +334,12 @@ function buildSandboxInstructions(availableTools?: string[]): string {
     sessionParts.push(
       `spawn_shell opens a persistent PTY in the session's sandbox for interactive or long-running processes${shellFollowUpPhrases.length ? ` (${shellFollowUpPhrases.join(', ')})` : ''}${hasBash ? ' — bash covers ordinary one-shot commands' : ''}.`,
     );
-  } else {
-    // No spawn_shell: still describe send_shell/read_shell if held on their
-    // own — codex review, fresh evidence — send_shell can drive a shell
-    // already running in the session (found via list_sessions) without this
-    // agent having spawned it itself.
+  } else if (has('list_sessions')) {
+    // No spawn_shell, but list_sessions can still find an existing shell's
+    // id — send_shell/read_shell both need a caller-supplied shellId
+    // (session-tools.ts) and can't discover one on their own, so mentioning
+    // either without a way to find that id would point at an unusable call
+    // (codex review, fresh evidence).
     const standaloneShellPhrases = [
       has('send_shell') ? 'send_shell submits commands to a shell already running in the session (find it via list_sessions)' : null,
       has('read_shell') ? "read_shell reads that shell's scrollback" : null,

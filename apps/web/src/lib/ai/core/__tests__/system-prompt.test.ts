@@ -260,11 +260,11 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).not.toContain('gh_repo_view');
   });
 
-  it('given only read_shell (survives read-only filtering, no spawn_shell), does not claim spawn_session/spawn_shell', () => {
-    // codex review: read_shell can survive read-only filtering alone — it must
-    // not pull in spawn_session/send_session/kill_session/list_sessions/
-    // spawn_shell/send_shell as though all were callable.
-    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'read_shell']);
+  it('given read_shell with list_sessions (discoverable, no spawn_shell), does not claim spawn_session/spawn_shell', () => {
+    // codex review: read_shell can survive read-only filtering alongside
+    // list_sessions — it must not pull in spawn_session/send_session/
+    // kill_session/spawn_shell/send_shell as though all were callable.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'read_shell', 'list_sessions']);
     expect(result).toContain('read_shell');
     expect(result).not.toContain('spawn_session');
     expect(result).not.toContain('spawn_shell');
@@ -342,6 +342,18 @@ describe('buildSystemPrompt — sandbox guidance', () => {
     expect(result).toContain('scripts, scrapers');
     expect(result).toContain('send_shell submits commands to a shell already running');
     expect(result).not.toContain('spawn_shell opens a persistent PTY');
+  });
+
+  it('given send_shell with neither spawn_shell nor list_sessions, does NOT claim execution or describe send_shell as usable', () => {
+    // codex review, fresh evidence: send_shell's inputSchema requires a
+    // caller-supplied shellId (session-tools.ts) and cannot create or
+    // discover one itself. Without spawn_shell (to create a shell) or
+    // list_sessions (to find an existing one), send_shell has no usable
+    // shellId — the regression test for the "standalone send_shell" case
+    // had silently supplied list_sessions, masking this.
+    const result = buildSystemPrompt(false, undefined, true, ['read_page', 'send_shell']);
+    expect(result).not.toContain('scripts, scrapers');
+    expect(result).not.toContain('send_shell submits commands');
   });
 
   it('given spawn_shell without send_shell (no execute, no write, no file/git tools), does NOT claim file/git tools', () => {
