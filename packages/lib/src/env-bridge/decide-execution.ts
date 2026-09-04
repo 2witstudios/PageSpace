@@ -25,7 +25,7 @@
  * Deny order is FIXED and tested for every adjacent pair: malformed →
  * no_policy → policy_deny → principal_not_allowed → op_mismatch →
  * op_not_advertised → server_denied → machine_denied → cwd_denied →
- * path_denied → approval_expired → then `ask` or `allow`. `malformed` runs
+ * path_denied → approval_expired → approval_mismatch → then `ask` or `allow`. `malformed` runs
  * FIRST so "allow" always means "executable": an exec without a command or an
  * fs op without paths never reaches the runner as an allow. All policy gates
  * run BEFORE any path is confined, so a request denied by policy never reaches
@@ -47,7 +47,11 @@
  *     `approval_expired` — the adapter supplies `approvedAt` from its clock
  *     and does not get to decide otherwise. A late approval means the agent
  *     must request again with a fresh grant.
- *   - An approval is bound to one `grantId` and never mutates the policy.
+ *   - An approval is bound to one `grantId` AND to the exact `NormalizedRequest`
+ *     the owner saw: the adapter passes the `ask` verdict's request back as
+ *     `localApproval.request`, this function re-normalizes and requires a
+ *     byte-identical result (`approval_mismatch` otherwise). It never mutates
+ *     the policy.
  *
  * On `allow`, the `NormalizedRequest` is the ONLY thing the runner may execute:
  * confined cwd and paths (real paths), scrubbed env, and timeout / output caps
@@ -57,7 +61,7 @@
  * it. Clamping is recorded, not denied, so a long-running agent command
  * degrades to the owner's cap rather than failing.
  */
-import type { Grant, GrantOp } from './grant';
+import { canonicalizeArgs, type Grant, type GrantOp } from './grant';
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './policy-types';
 import { capabilityForOp } from './intersect-capabilities';
 import { confinePath, type PathResolver } from './confine-path';
@@ -103,7 +107,8 @@ export type ExecDenyReason =
   | 'machine_denied'
   | 'cwd_denied'
   | 'path_denied'
-  | 'approval_expired';
+  | 'approval_expired'
+  | 'approval_mismatch';
 
 export type ExecutionVerdict =
   | { readonly kind: 'allow'; readonly request: NormalizedRequest }
@@ -112,12 +117,17 @@ export type ExecutionVerdict =
 
 /**
  * The owner's answer to an `ask` verdict, bound to the grant it was asked
- * about. `approvedAt` (ms since epoch, from the adapter's clock) is compared to
- * the grant's `exp`; an approval after expiry is refused.
+ * about AND to the exact request the owner saw. `approvedAt` (ms since epoch,
+ * from the adapter's clock) is compared to the grant's `exp`; an approval after
+ * expiry is refused. `request` is the `NormalizedRequest` carried by the `ask`
+ * verdict: on approval the request is normalized AGAIN and must be byte-
+ * identical, so filesystem drift between prompt and answer (an in-root symlink
+ * retargeted from `a` to `b`) can never execute something the owner did not see.
  */
 export interface LocalApproval {
   readonly grantId: string;
   readonly approvedAt: number;
+  readonly request: NormalizedRequest;
 }
 
 export interface DecideExecutionInput {
@@ -133,6 +143,14 @@ export interface DecideExecutionInput {
 
 function deny(reason: ExecDenyReason): ExecutionVerdict {
   return { kind: 'deny', reason };
+}
+
+/** Byte equality without short-circuiting on the first difference. */
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  let diff = 0;
+  for (let i = 0; i < a.length; i += 1) diff |= (a[i] as number) ^ (b[i] as number);
+  return diff === 0;
 }
 
 /** Shape check: does this request carry what its op needs to be executable at all? */
@@ -212,6 +230,9 @@ export function decideExecution(input: DecideExecutionInput): ExecutionVerdict {
   if (localApproval !== undefined && localApproval.grantId === grant.grantId) {
     // The grant bounds the whole authorization, prompt included.
     if (!Number.isFinite(localApproval.approvedAt) || localApproval.approvedAt > grant.exp) return deny('approval_expired');
+    // The approval is for the request the owner SAW. Anything that drifted
+    // since — filesystem resolution, a tampered copy — is not what was approved.
+    if (!sameBytes(canonicalizeArgs(localApproval.request), canonicalizeArgs(normalized))) return deny('approval_mismatch');
     return { kind: 'allow', request: normalized };
   }
   return { kind: 'ask', reason: 'op_not_preapproved', request: normalized };

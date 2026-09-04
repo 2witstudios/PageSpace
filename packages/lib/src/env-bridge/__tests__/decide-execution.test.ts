@@ -96,7 +96,39 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
       expect(decide({ machinePolicy: { ...machine, mode: 'ask' } })).toEqual({ kind: 'allow', request: NORMALIZED });
     });
 
-    const approval = { grantId: grant.grantId, approvedAt: 30_000 }; // grant.exp is 60_000
+    // The owner approves exactly the NormalizedRequest the ask verdict showed them.
+    const approval = { grantId: grant.grantId, approvedAt: 30_000, request: NORMALIZED }; // grant.exp is 60_000
+
+    it('given an approval whose request is the ask verdict\'s own NormalizedRequest, should allow it unchanged', () => {
+      const asked = decide({ machinePolicy: askPolicy });
+      if (asked.kind !== 'ask') throw new Error('expected ask');
+      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: asked.request } })).toEqual({ kind: 'allow', request: asked.request });
+    });
+
+    it('given the filesystem DRIFTED between ask and approval (an in-root symlink now resolves elsewhere), should deny approval_mismatch — never execute what the owner did not see', () => {
+      const before: PathProbe = { realpath: (p) => (p === `${ROOT}/link` ? `${ROOT}/a` : p), isSymlink: () => false };
+      const after: PathProbe = { realpath: (p) => (p === `${ROOT}/link` ? `${ROOT}/b` : p), isSymlink: () => false };
+      const fsGrant = { ...grant, op: 'fs_write' as const };
+      const fsRequest = { op: 'fs_write' as const, paths: [`${ROOT}/link`] };
+      const askFs: MachinePolicy = { ...askPolicy, ops: [] };
+      const asked = decide({ grant: fsGrant, request: fsRequest, machinePolicy: askFs, probe: before });
+      if (asked.kind !== 'ask') throw new Error('expected ask');
+      expect(asked.request.paths).toEqual([`${ROOT}/a`]);
+      expect(decide({ grant: fsGrant, request: fsRequest, machinePolicy: askFs, probe: after, localApproval: { grantId: grant.grantId, approvedAt: 30_000, request: asked.request } })).toEqual({ kind: 'deny', reason: 'approval_mismatch' });
+    });
+
+    it('given an approval whose request was tampered after the prompt (extra env var), should deny approval_mismatch', () => {
+      const tampered = { ...NORMALIZED, env: { ...NORMALIZED.env, EVIL: '1' } };
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, request: tampered } })).toEqual({ kind: 'deny', reason: 'approval_mismatch' });
+    });
+
+    it('given an approval whose request differs only in cmd, should deny approval_mismatch', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: { ...approval, request: { ...NORMALIZED, cmd: 'rm' } } })).toEqual({ kind: 'deny', reason: 'approval_mismatch' });
+    });
+
+    it('should order the approval tail: approval_expired beats approval_mismatch', () => {
+      expect(decide({ machinePolicy: askPolicy, localApproval: { grantId: grant.grantId, approvedAt: grant.exp + 1, request: { ...NORMALIZED, cmd: 'rm' } } })).toEqual({ kind: 'deny', reason: 'approval_expired' });
+    });
 
     it('given mode ask, a non-pre-approved op, and localApproval for THIS grantId within the grant TTL, should allow with the same NormalizedRequest', () => {
       expect(decide({ machinePolicy: askPolicy, localApproval: approval })).toEqual({ kind: 'allow', request: NORMALIZED });
