@@ -184,6 +184,7 @@ describe('isTeardownStillRequested', () => {
     return {
       id: 'env-1',
       driveId: 'drive-1',
+      substrate: 'sprite',
       name: 'staging',
       createdBy: null,
       spriteKey: null,
