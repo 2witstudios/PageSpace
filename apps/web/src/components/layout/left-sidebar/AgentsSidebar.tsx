@@ -1369,7 +1369,7 @@ function SessionRow({
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
-        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-accent')}
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-primary-soft')}
       >
         <button
           type="button"

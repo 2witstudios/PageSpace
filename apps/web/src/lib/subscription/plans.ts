@@ -140,7 +140,7 @@ export const PLANS: Record<SubscriptionTier, PlanDefinition> = {
     },
     icon: Crown,
     iconColor: 'text-amber-500',
-    accentColor: 'border-input bg-muted/80',
+    accentColor: 'border-border bg-muted/80',
     description: 'Best for professionals and growing teams',
     highlighted: true,
     stripePriceId: STRIPE_PRICE_ID_PRO,

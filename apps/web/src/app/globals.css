@@ -233,7 +233,7 @@ svg.lucide {
   --secondary: oklch(0.28 0 0);
   --secondary-foreground: oklch(0.94 0 0);
   --muted: oklch(0.28 0 0);
-  --muted-foreground: oklch(0.68 0 0);
+  --muted-foreground: oklch(0.70 0 0);
   --accent: oklch(0.31 0.02 235); /* Neutral hover; selected state uses --primary-soft */
   --accent-foreground: oklch(0.96 0 0);
   --destructive: oklch(0.6 0.2 15);
