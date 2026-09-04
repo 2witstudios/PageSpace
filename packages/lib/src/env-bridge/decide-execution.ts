@@ -153,8 +153,25 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return diff === 0;
 }
 
-/** Shape check: does this request carry what its op needs to be executable at all? */
+const isNonEmptyString = (value: unknown): value is string => typeof value === 'string' && value.length > 0;
+
+/**
+ * Shape check: does this request carry what its op needs to be executable at
+ * all — and is every field the TYPE the code below assumes? The request comes
+ * off the wire, so a hostile frame (`paths: [null]`, `cwd: 42`, `env: 'x'`)
+ * must be a `malformed` deny here, never a thrown TypeError further down.
+ */
 function isWellFormed(request: ExecutionRequest): boolean {
+  // Off the wire: inspect as an untyped record so hostile field types are caught, not assumed.
+  const r = request as unknown as Record<string, unknown>;
+  if (r.cwd !== undefined && !isNonEmptyString(r.cwd)) return false;
+  if (r.cmd !== undefined && typeof r.cmd !== 'string') return false;
+  if (r.args !== undefined && !(Array.isArray(r.args) && r.args.every((a) => typeof a === 'string'))) return false;
+  if (r.paths !== undefined && !(Array.isArray(r.paths) && r.paths.every(isNonEmptyString))) return false;
+  if (r.env !== undefined && (r.env === null || typeof r.env !== 'object' || Array.isArray(r.env))) return false;
+  if (r.timeoutMs !== undefined && typeof r.timeoutMs !== 'number') return false;
+  if (r.maxBytes !== undefined && typeof r.maxBytes !== 'number') return false;
+
   switch (request.op) {
     case 'exec':
       return typeof request.cmd === 'string' && request.cmd.trim().length > 0;
@@ -163,6 +180,8 @@ function isWellFormed(request: ExecutionRequest): boolean {
       return Array.isArray(request.paths) && request.paths.length > 0;
     case 'pty_open':
       return true;
+    default:
+      return false;
   }
 }
 

@@ -276,6 +276,26 @@ describe('decideExecution — the daemon is the policy enforcement point (invari
       expect(decide({ grant: { ...grant, op }, request: { op, paths } })).toEqual({ kind: 'deny', reason: 'malformed' });
     });
 
+    it.each<[string, Record<string, unknown>]>([
+      ['a null entry in paths', { op: 'fs_read', paths: [null] }],
+      ['a numeric entry in paths', { op: 'fs_read', paths: [42] }],
+      ['an empty-string entry in paths', { op: 'fs_read', paths: [''] }],
+      ['a non-array paths', { op: 'fs_read', paths: '/x' }],
+      ['a non-string cwd', { op: 'exec', cmd: 'ls', cwd: null }],
+      ['a numeric cmd', { op: 'exec', cmd: 42 }],
+      ['a non-string entry in args', { op: 'exec', cmd: 'ls', args: ['-la', 1] }],
+      ['a non-array args', { op: 'exec', cmd: 'ls', args: '-la' }],
+      ['a non-object env', { op: 'exec', cmd: 'ls', env: 'LANG=C' }],
+      ['a null env', { op: 'exec', cmd: 'ls', env: null }],
+      ['an array env', { op: 'exec', cmd: 'ls', env: ['LANG=C'] }],
+    ])('given %s (a hostile frame), should deny malformed and NEVER throw (CodeRabbit)', (_label, raw) => {
+      const op = raw.op as 'exec' | 'fs_read';
+      const hostile = raw as unknown as Parameters<typeof decideExecution>[0]['request'];
+      const g = { ...grant, op };
+      expect(() => decide({ grant: g, request: hostile })).not.toThrow();
+      expect(decide({ grant: g, request: hostile })).toEqual({ kind: 'deny', reason: 'malformed' });
+    });
+
     it('given a malformed shape AND a null policy, should deny malformed (shape is checked first)', () => {
       expect(decide({ machinePolicy: null, request: { ...request, cmd: '' } })).toEqual({ kind: 'deny', reason: 'malformed' });
     });
