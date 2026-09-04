@@ -178,6 +178,21 @@
       "import": "./dist/env-bridge/decide-execution.js",
       "require": "./dist/env-bridge/decide-execution.js"
     },
+    "./env-bridge/frame-codec": {
+      "types": "./dist/env-bridge/frame-codec.d.ts",
+      "import": "./dist/env-bridge/frame-codec.js",
+      "require": "./dist/env-bridge/frame-codec.js"
+    },
+    "./env-bridge/bridge-session": {
+      "types": "./dist/env-bridge/bridge-session.d.ts",
+      "import": "./dist/env-bridge/bridge-session.js",
+      "require": "./dist/env-bridge/bridge-session.js"
+    },
+    "./env-bridge/resolve-timeout": {
+      "types": "./dist/env-bridge/resolve-timeout.d.ts",
+      "import": "./dist/env-bridge/resolve-timeout.js",
+      "require": "./dist/env-bridge/resolve-timeout.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",
