@@ -99,7 +99,7 @@ function SidebarMock() {
             </div>
 
             <div className="space-y-0.5" style={{ paddingLeft: "16px" }}>
-              <div className="flex items-center gap-1 rounded-lg px-1 py-1.5 bg-muted">
+              <div className="flex items-center gap-1 rounded-lg px-1 py-1.5 bg-primary-soft">
                 <span className="w-4 flex-shrink-0" />
                 <Sparkles className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <span className="text-gray-900 dark:text-gray-100 font-medium truncate">Marketing Agent</span>
