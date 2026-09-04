@@ -66,9 +66,16 @@ export function useOnboardingGate() {
       try {
         await post('/api/onboarding', input ?? {});
       } catch {
-        // Swallowed on purpose: completion is recorded server-side on a best
-        // effort basis, and re-opening the modal because the write failed would
-        // be worse than showing it once more on a later visit.
+        // Swallowed on purpose, and the consequence is deliberate: the route
+        // writes memory BEFORE stamping completion, so a failure here means
+        // completion was never recorded and the flow reappears on a later
+        // visit. That is the intended trade — the alternative is stamping
+        // completion and losing what the user told us, which the copy has
+        // already promised to remember.
+        //
+        // Nothing the user typed is lost either way: their request is already
+        // queued in the handoff store (sessionStorage), so the assistant still
+        // receives it.
       }
     },
     [mutate],
