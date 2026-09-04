@@ -143,6 +143,16 @@
       "import": "./dist/drive-envs/env-sprite-key.js",
       "require": "./dist/drive-envs/env-sprite-key.js"
     },
+    "./env-bridge": {
+      "types": "./dist/env-bridge/index.d.ts",
+      "import": "./dist/env-bridge/index.js",
+      "require": "./dist/env-bridge/index.js"
+    },
+    "./env-bridge/grant": {
+      "types": "./dist/env-bridge/grant.d.ts",
+      "import": "./dist/env-bridge/grant.js",
+      "require": "./dist/env-bridge/grant.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",
