@@ -40,6 +40,8 @@ export const ENV_HARD_DENYLIST: readonly string[] = [
   'RUBYLIB',
   'JAVA_TOOL_OPTIONS',
   '_JAVA_OPTIONS',
+  'JDK_JAVA_OPTIONS',
+  'JDK_JAVAC_OPTIONS',
   'PERL5DB',
   // tool command / config injection
   'GIT_SSH_COMMAND',

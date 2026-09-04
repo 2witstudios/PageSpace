@@ -12,6 +12,8 @@ describe('scrubEnv — the server never gets to set environment on the user\'s m
     'GLIBC_TUNABLES', 'GCONV_PATH', 'LOCPATH', 'HOME', 'ZDOTDIR', 'XDG_CONFIG_HOME', 'PROMPT_COMMAND', 'SHELLOPTS', 'CDPATH', 'NODE_PATH', 'PYTHONHOME', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'GIT_SSH_COMMAND', 'GIT_EXTERNAL_DIFF',
     'BASH_FUNC_ls%%', 'BASH_FUNC_anything',
     'GIT_CONFIG_GLOBAL', 'GIT_CONFIG_SYSTEM', 'GIT_ASKPASS', 'SSH_ASKPASS', 'TMPDIR', 'PERL5DB',
+    // CodeRabbit (PR #2528): the remaining Java launcher option hooks
+    'JDK_JAVA_OPTIONS', 'JDK_JAVAC_OPTIONS',
   ])(
     'given %s, should drop it EVEN IF it is allowlisted (loader/interpreter hooks are hard-denied)',
     (name) => {
