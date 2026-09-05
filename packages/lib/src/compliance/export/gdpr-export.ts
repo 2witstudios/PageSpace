@@ -1519,9 +1519,10 @@ export interface UserLocalEnvironmentExport {
   driveId: string;
   envName: string;
   label: string;
-  machinePublicKey: string;
-  machineKeyFingerprint: string;
-  serverKeyId: string;
+  /** NULL until the machine enrolled (the row exists from creation, with only the label and owner). */
+  machinePublicKey: string | null;
+  machineKeyFingerprint: string | null;
+  serverKeyId: string | null;
   bindPolicy: string;
   capabilities: DriveEnvLocalCapabilities | null;
   enrolledAt: Date | null;

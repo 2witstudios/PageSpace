@@ -121,12 +121,33 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
   });
 
   it('stores only the machine PUBLIC key + fingerprint and which server key was pinned — never private material or a reusable secret', () => {
-    expect(localColumns.machinePublicKey.notNull).toBe(true);
-    expect(localColumns.machineKeyFingerprint.notNull).toBe(true);
-    expect(localColumns.serverKeyId.notNull).toBe(true);
     for (const forbidden of ['machinePrivateKey', 'credential', 'secret', 'token']) {
       expect(Object.keys(localColumns).some((k) => k.toLowerCase().includes(forbidden.toLowerCase())), `no column resembling ${forbidden}`).toBe(false);
     }
+  });
+
+  it('exists from the moment the env is created — so the key columns are NULL until enrolled, and a CHECK makes an ENROLLED row carry its key', () => {
+    // The sibling is the local env's lifecycle row: it holds the label, the
+    // owner and the one-time code before any key exists. Nullable-until-
+    // enrolled is what lets it exist that early; the CHECK is what keeps
+    // "enrolled" meaning "has a pinned key".
+    expect(localColumns.machinePublicKey.notNull).toBe(false);
+    expect(localColumns.machineKeyFingerprint.notNull).toBe(false);
+    expect(localColumns.serverKeyId.notNull).toBe(false);
+    expect(checkSql(localConfig, 'drive_env_local_enrolled_has_key_check')).toMatch(/"enrolledAt" IS NULL OR \(.*"machinePublicKey" IS NOT NULL.*"machineKeyFingerprint" IS NOT NULL.*"serverKeyId" IS NOT NULL\)/);
+  });
+
+  it('carries the one-time enrollment code as a HASH with expiry and consumption time — never the code itself', () => {
+    expect(localColumns.enrollmentCodeHash.notNull).toBe(false);
+    expect(localColumns.enrollmentCodeExpiresAt.notNull).toBe(false);
+    expect(localColumns.enrollmentCodeUsedAt.notNull).toBe(false);
+    expect('enrollmentCode' in localColumns).toBe(false);
+  });
+
+  it('carries the outstanding challenge (one per enrollment at a time) with expiry and consumption time, so nonces survive a multi-replica web tier', () => {
+    expect(localColumns.challengeNonce.notNull).toBe(false);
+    expect(localColumns.challengeExpiresAt.notNull).toBe(false);
+    expect(localColumns.challengeUsedAt.notNull).toBe(false);
   });
 
   it('defaults bindPolicy to owner (RCE on personal hardware warrants the strictest default) and exports the closed set', () => {

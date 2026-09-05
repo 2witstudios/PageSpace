@@ -93,14 +93,43 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   /** Durable enrollment identity — the wire id the daemon presents. Unique across all envs. */
   enrollmentId: text('enrollmentId').notNull(),
 
-  /** The machine's Ed25519 PUBLIC key (SPKI, base64). The private half never leaves the machine. */
-  machinePublicKey: text('machinePublicKey').notNull(),
+  // ---------------------------------------------------------------------------
+  // This row exists from the moment the env is CREATED, before any machine has
+  // a key: it carries the label, the owner and the one-time code. So the key
+  // columns are NULL until enrollment completes, and
+  // `drive_env_local_enrolled_has_key_check` is what keeps "enrolled" meaning
+  // "has a pinned key" — an `enrolledAt` can never be set without all three.
+  // ---------------------------------------------------------------------------
 
-  /** Fingerprint of `machinePublicKey`, pinned and re-checked on every handshake. */
-  machineKeyFingerprint: text('machineKeyFingerprint').notNull(),
+  /** The machine's Ed25519 PUBLIC key (SPKI, base64). The private half never leaves the machine. NULL until enrolled. */
+  machinePublicKey: text('machinePublicKey'),
 
-  /** Which server signing key the machine pinned at enrollment (for rotation). */
-  serverKeyId: text('serverKeyId').notNull(),
+  /** Fingerprint of `machinePublicKey`, pinned and re-checked on every handshake. NULL until enrolled. */
+  machineKeyFingerprint: text('machineKeyFingerprint'),
+
+  /** Which server signing key the machine pinned at enrollment (for rotation). NULL until enrolled. */
+  serverKeyId: text('serverKeyId'),
+
+  /**
+   * The one-time enrollment code, as a HASH (`verifyEnrollmentCode` in
+   * `env-bridge`); the code itself is shown to the user once and never stored.
+   * `enrollmentCodeUsedAt` is set in the same update that pins the key, so a
+   * second presentation is refused as `used`.
+   */
+  enrollmentCodeHash: text('enrollmentCodeHash'),
+  enrollmentCodeExpiresAt: timestamp('enrollmentCodeExpiresAt', { mode: 'date' }),
+  enrollmentCodeUsedAt: timestamp('enrollmentCodeUsedAt', { mode: 'date' }),
+
+  /**
+   * The OUTSTANDING challenge nonce (`issueChallenge` / `verifyChallengeResponse`
+   * in `env-bridge`) — one per enrollment at a time, replaced by each new
+   * request. Stored here rather than in process memory so a proof signed
+   * against one web replica verifies on another. Consumed by compare-and-set
+   * on `challengeUsedAt`.
+   */
+  challengeNonce: text('challengeNonce'),
+  challengeExpiresAt: timestamp('challengeExpiresAt', { mode: 'date' }),
+  challengeUsedAt: timestamp('challengeUsedAt', { mode: 'date' }),
 
   /** Last advertised capabilities (from `hello`). NULL until the first handshake. */
   capabilities: jsonb('capabilities').$type<DriveEnvLocalCapabilities>(),
@@ -142,6 +171,12 @@ export const driveEnvLocal = pgTable('drive_env_local', {
 
   /** The wire identity must name exactly one env. */
   enrollmentIdUnique: unique('drive_env_local_enrollment_id_unique').on(table.enrollmentId),
+
+  /** An ENROLLED row carries its key — all three identity columns — or it is not enrolled. */
+  enrolledHasKeyCheck: check(
+    'drive_env_local_enrolled_has_key_check',
+    sql`${table.enrolledAt} IS NULL OR (${table.machinePublicKey} IS NOT NULL AND ${table.machineKeyFingerprint} IS NOT NULL AND ${table.serverKeyId} IS NOT NULL)`,
+  ),
 
   /** The closed bind-policy set, enforced at the row and built from `DRIVE_ENV_BIND_POLICIES` so the two cannot drift. */
   bindPolicyCheck: check('drive_env_local_bind_policy_check', sql`${table.bindPolicy} IN (${sqlStringList(DRIVE_ENV_BIND_POLICIES)})`),
