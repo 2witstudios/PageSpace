@@ -89,9 +89,9 @@ export function PageTypeCarouselSection() {
           onFocusCapture={() => (hoveringRef.current = true)}
           onBlurCapture={() => (hoveringRef.current = false)}
         >
-          <CarouselContent className="carousel-track">
+          <CarouselContent className="carousel-track -ml-6">
             {PAGE_TYPES.map((t, i) => (
-              <CarouselItem key={t.id} className="slide basis-[86%] max-w-[720px]" data-active={i === current} aria-label={t.label}>
+              <CarouselItem key={t.id} className="slide basis-[86%] max-w-[720px] pl-6" data-active={i === current} aria-label={t.label}>
                 <ScaledFrame designWidth={CARD_W} designHeight={CARD_H}>
                   <MockCard type={t} />
                 </ScaledFrame>

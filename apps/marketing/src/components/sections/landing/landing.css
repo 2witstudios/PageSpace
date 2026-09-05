@@ -157,7 +157,9 @@
   & .tab:hover { color: var(--foreground); background: var(--accent); }
   & .tab[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
   & .tab:focus-visible { outline: 2px solid color-mix(in oklab, var(--primary), transparent 55%); outline-offset: 2px; }
-  & .carousel-track { gap: clamp(16px, 2.4vw, 28px); padding: 6px 0 20px; align-items: center; }
+  /* Per-slide spacing (via the item's pl-6 + the track's -ml-6) instead of `gap`,
+     so the gap survives Embla's loop wrap (first↔last no longer touch). */
+  & .carousel-track { padding: 6px 0 20px; align-items: center; }
   & .slide { transition: transform .35s ease, opacity .35s ease; transform: scale(0.94); opacity: 0.5; }
   & .slide[data-active="true"] { transform: scale(1); opacity: 1; }
   & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: 15px; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 22px; }
