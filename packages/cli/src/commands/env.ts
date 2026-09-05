@@ -32,6 +32,13 @@ import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/k
 
 type Fetch = typeof globalThis.fetch;
 
+/** Placeholder in a pending machine credential for what the server has not answered yet. */
+const PENDING = 'pending';
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 export interface EnvEnrollHandlerDeps {
   readonly createCredentialStore: () => CredentialStore;
   readonly generateKeypair: GenerateMachineKeypair;
@@ -71,25 +78,44 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     const host = hostFor(ctx, intent.flags);
 
     const pair = deps.generateKeypair();
+    const store = deps.createCredentialStore();
+    const profile = machineProfileName(enrollmentId);
+    const createdAt = new Date(deps.now()).toISOString();
+
+    // Persist the key BEFORE spending the code. The server consumes the code
+    // and pins this public key on success; if the private half could not be
+    // kept (keychain down, fallback file unwritable) the environment would be
+    // stranded — enrolled to a key nobody holds. So prove the store is
+    // writable first, with a pending record that carries the key and
+    // placeholders for what the server has not said yet.
+    const pending: MachineHostCredential = {
+      kind: 'machine',
+      privateKey: pair.privateKey,
+      enrollmentId,
+      envId: PENDING,
+      serverPublicKey: PENDING,
+      serverKeyId: PENDING,
+      scopes: [],
+      createdAt,
+    };
+    try {
+      await store.set(host, pending, profile);
+    } catch (error) {
+      ctx.stderr.write(`Could not write this machine's credential store, so the enrollment code was not used: ${messageOf(error)}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
+
     const response = await postJson(deps.fetch, `${host}/api/env-bridge/enroll`, { enrollmentId, code, machinePublicKey: pair.publicKey });
     if (!response.ok) {
       // The key never existed as far as anyone else is concerned.
+      await store.delete(host, profile).catch(() => undefined);
       ctx.stderr.write(`Enrollment refused: ${await refusal(response)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
     const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string };
 
-    const credential: MachineHostCredential = {
-      kind: 'machine',
-      privateKey: pair.privateKey,
-      enrollmentId: result.enrollmentId,
-      envId: result.envId,
-      serverPublicKey: result.serverPublicKey,
-      serverKeyId: result.serverKeyId,
-      scopes: [],
-      createdAt: new Date(deps.now()).toISOString(),
-    };
-    await deps.createCredentialStore().set(host, credential, machineProfileName(result.enrollmentId));
+    const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
+    await store.set(host, credential, profile);
 
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host })}\n`);
@@ -113,7 +139,9 @@ export function createEnvTokenHandler(deps: EnvTokenHandlerDeps): CommandHandler
     const host = hostFor(ctx, intent.flags);
 
     const credential = await deps.createCredentialStore().get(host, machineProfileName(enrollmentId));
-    if (!credential || credential.kind !== 'machine') {
+    // A pending record (enroll was interrupted after the store write) is not
+    // enrolled either: the server never pinned its key.
+    if (!credential || credential.kind !== 'machine' || credential.serverKeyId === PENDING) {
       ctx.stderr.write(`No machine credential for enrollment ${enrollmentId} on ${host}. Run "pagespace env enroll <enrollmentId> <code>" first.\n`);
       return EXIT_RUNTIME_ERROR;
     }

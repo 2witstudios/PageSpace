@@ -671,6 +671,17 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
     expect(row?.challengeUsedAt).toBeNull();
   });
 
+  it('consumeChallenge: given the enrollment was REVOKED after the challenge was issued, should lose the compare-and-set — revocation wins the race, nothing mints', async () => {
+    const { envId } = await createLocal();
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
+    await db.update(driveEnvLocal).set({ revokedAt: NOW }).where(eq(driveEnvLocal.envId, envId));
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(false);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeUsedAt).toBeNull();
+    expect(row?.lastSeenAt).toBeNull();
+  });
+
   it('consumeChallenge: should consume exactly the outstanding nonce ONCE, stamping lastSeenAt; a wrong nonce or a replay loses', async () => {
     const { envId } = await createLocal();
     await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });

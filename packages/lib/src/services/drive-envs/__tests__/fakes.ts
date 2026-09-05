@@ -171,7 +171,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       const sibling = local.get(envId);
       // CAS on the exact nonce and its unconsumed state; consuming is also a
       // heartbeat (the machine just proved it is alive).
-      if (!sibling || sibling.challengeNonce !== nonce || sibling.challengeUsedAt !== null) return false;
+      if (!sibling || sibling.challengeNonce !== nonce || sibling.challengeUsedAt !== null || sibling.revokedAt !== null) return false;
       local.set(envId, { ...sibling, challengeUsedAt: at, lastSeenAt: at, updatedAt: at });
       return true;
     },

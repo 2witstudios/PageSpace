@@ -208,8 +208,10 @@ export interface DriveEnvStore {
   /** Store the outstanding challenge, replacing any previous one, IFF enrolled and not revoked. */
   setChallenge(input: { envId: string; nonce: string; expiresAt: Date; now: Date }): Promise<boolean>;
   /**
-   * Consume the challenge IFF it is exactly this nonce and unconsumed. Also
-   * records `lastSeenAt` — a machine that just proved its key is alive.
+   * Consume the challenge IFF it is exactly this nonce, unconsumed, and the
+   * enrollment is not revoked (revocation is part of the CAS so a concurrent
+   * revoke wins). Also records `lastSeenAt` — a machine that just proved its
+   * key is alive.
    */
   consumeChallenge(input: { envId: string; nonce: string; now: Date }): Promise<boolean>;
   /**
@@ -618,7 +620,10 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       const updated = await db
         .update(driveEnvLocal)
         .set({ challengeUsedAt: at, lastSeenAt: at, updatedAt: at })
-        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.challengeNonce, nonce), isNull(driveEnvLocal.challengeUsedAt)))
+        // `revokedAt IS NULL` is part of the CAS, not just the earlier read:
+        // a revocation landing between the service's read and this write must
+        // win, or a revoked machine mints one last token.
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.challengeNonce, nonce), isNull(driveEnvLocal.challengeUsedAt), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },

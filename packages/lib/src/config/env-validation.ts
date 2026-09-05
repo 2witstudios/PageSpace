@@ -280,6 +280,21 @@ export const serverEnvSchema = z
       });
     }
 
+    // Local environments sign every bridge grant with ENV_BRIDGE_SIGNING_KEY,
+    // and loadServerSigningKey() fails closed without it — which, at request
+    // time, is a generic 500 on the first local-env create. Boot is where an
+    // operator should learn the key is missing, and only once the feature is
+    // actually on: a deployment that never enables local envs must not be
+    // asked for a signing key.
+    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
+        path: ['ENV_BRIDGE_SIGNING_KEY'],
+      });
+    }
+
     if (data.NODE_ENV === 'production' && !isOnPrem() && !data.SENTRY_DSN) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

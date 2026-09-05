@@ -859,6 +859,12 @@ function DriveEnvRow({
   const [rebuilding, setRebuilding] = useState(false);
 
   const isOrphan = group.envName === null;
+  // A LOCAL env is the user's own machine reached through the bridge. Until
+  // the bridge transport lands, every path that provisions a Sprite (a new
+  // session in the env, rebuild) would try to put a VM under a row the
+  // database forbids one on — so those actions are withheld, not offered and
+  // failed. Rename and delete are row operations and stay.
+  const isLocal = group.substrate === 'local';
   // An orphan has no name to show and its id is not one: a raw CUID is not a
   // thing a user has ever seen or could recognise, and printing it would read
   // as the environment's name rather than as the absence of one. What we
@@ -932,10 +938,10 @@ function DriveEnvRow({
   const menuItems: RowMenuItem[] = useMemo(
     () => [
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
-      { label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true },
+      ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
       { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
     ],
-    [],
+    [isLocal],
   );
 
   const rowInner = (
@@ -958,8 +964,9 @@ function DriveEnvRow({
           binding a session to an environment is member-level server-side, and
           management (rename/rebuild/delete) is the OWNER/ADMIN act — this is
           not. Withheld from an ORPHAN, which names an environment this drive's
-          listing did not return: there is nothing here to spawn into. */}
-      {!isOrphan && (
+          listing did not return: there is nothing here to spawn into — and
+          from a LOCAL env until the bridge transport exists (see `isLocal`). */}
+      {!isOrphan && !isLocal && (
         <button
           type="button"
           aria-label={`New session in ${displayName}`}
