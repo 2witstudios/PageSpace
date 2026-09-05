@@ -131,6 +131,8 @@ describe('GET /api/env-bridge/token — the challenge', () => {
     ['not_found', 404],
     ['not_enrolled', 409],
     ['revoked', 410],
+    // A lost issue race is retryable; it must never read as the permanent 410.
+    ['race', 409],
   ] as const)('given the service refuses with %s, should answer %i and audit', async (reason, status) => {
     vi.mocked(issueEnvChallenge).mockResolvedValue({ ok: false, reason });
     const response = await challenge(challengeReq());

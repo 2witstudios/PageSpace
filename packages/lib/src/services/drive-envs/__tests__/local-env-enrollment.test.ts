@@ -278,6 +278,35 @@ describe('issueLocalEnvChallenge / redeemLocalEnvChallenge — proof of possessi
     expect(h.fake.local.get(env.id)?.challengeNonce).toBe('theirs');
   });
 
+  it('given the compare-and-set loses to a concurrent issue whose challenge is CONSUMED before the re-read, should answer race (retryable) — never revoked (Codex P2 on #2537)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      setChallenge: async () => {
+        // Another replica issued AND its daemon redeemed between our read and our write.
+        h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeNonce: 'theirs', challengeIssuedAt: NOW, challengeExpiresAt: new Date(NOW.getTime() + 60_000), challengeUsedAt: NOW });
+        return false;
+      },
+    };
+    expect(await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } })).toEqual({ ok: false, reason: 'race' });
+  });
+
+  it('given the compare-and-set loses and the row is GONE on re-read, should answer not_found', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      setChallenge: async () => {
+        h.fake.local.delete(env.id);
+        return false;
+      },
+    };
+    expect(await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } })).toEqual({ ok: false, reason: 'not_found' });
+  });
+
   it('given the compare-and-set loses to a concurrent REVOKE, should answer revoked', async () => {
     const h = harness();
     const env = await enrolled(h);

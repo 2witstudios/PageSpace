@@ -36,7 +36,7 @@ const redeemSchema = z
   .strict();
 
 /** `challenge_pending` is 429 with `Retry-After`: one live handshake at a time (Codex C5), and the daemon simply waits it out. */
-const ISSUE_STATUS = { not_found: 404, not_enrolled: 409, revoked: 410, challenge_pending: 429 } as const;
+const ISSUE_STATUS = { not_found: 404, not_enrolled: 409, revoked: 410, challenge_pending: 429, race: 409 } as const;
 const REDEEM_STATUS = {
   not_found: 404,
   not_enrolled: 409,

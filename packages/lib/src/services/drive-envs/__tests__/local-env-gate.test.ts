@@ -12,7 +12,7 @@ import { makeLocalRecord, ENV_ID, NOW } from './fakes';
 import type { DriveEnvLocalRecord } from '../drive-envs-store';
 
 const OWNER = 'user-1';
-const row = { id: ENV_ID, substrate: 'local' };
+const row = { id: ENV_ID, substrate: 'local' as const };
 
 function enrolledSibling(over: Partial<DriveEnvLocalRecord> = {}): DriveEnvLocalRecord {
   return makeLocalRecord({ ownerId: OWNER, enrolledAt: NOW, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', lastSeenAt: NOW, ...over });
@@ -93,6 +93,46 @@ describe('gateLocalEnv — the real facts, handed to decideBind then planLocalPr
 
     it('a drifted or hostile policy value denies', async () => {
       expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'everyone' }) }, 'member-3')).toEqual({ ok: false, refusal: 'bind_policy' });
+    });
+  });
+
+  describe('short-circuit order — no IO that cannot change the verdict (Codex P2 on #2537)', () => {
+    const throwingRole = async (): Promise<'member'> => {
+      throw new Error('resolveActorRole must not be reached');
+    };
+    const throwingCanRun = async (): Promise<{ ok: true }> => {
+      throw new Error('canRunCode must not be reached');
+    };
+
+    it('given the flag off, should refuse flag_disabled WITHOUT calling canRunCode or resolving the role', async () => {
+      expect(await gate({ flagEnabled: false, canRunCode: throwingCanRun, resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'flag_disabled' });
+    });
+
+    it('given canRunCode denies, should refuse code_exec_denied WITHOUT resolving the role', async () => {
+      expect(await gate({ canRunCode: async () => ({ ok: false, reason: 'no_drive_access' }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'code_exec_denied', cause: 'no_drive_access' });
+    });
+
+    it('given a revoked or disconnected machine, should refuse WITHOUT resolving the role (the role cannot change those)', async () => {
+      expect(await gate({ sibling: enrolledSibling({ revokedAt: NOW }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'revoked' });
+      expect(await gate({ sibling: enrolledSibling({ lastSeenAt: null }), resolveActorRole: throwingRole })).toEqual({ ok: false, refusal: 'not_connected' });
+    });
+
+    it('given the requester IS the owner, should allow without resolving the role at all (the owner always passes)', async () => {
+      expect(await gate({ resolveActorRole: throwingRole }, OWNER)).toEqual({ ok: true, envId: ENV_ID });
+    });
+
+    it('given a non-owner under the admins policy, should resolve the role — it is the one input that can flip bind_policy', async () => {
+      let resolved = 0;
+      const role = async (): Promise<'admin'> => {
+        resolved += 1;
+        return 'admin';
+      };
+      expect(await gate({ sibling: enrolledSibling({ bindPolicy: 'admins' }), resolveActorRole: role }, 'admin-2')).toEqual({ ok: true, envId: ENV_ID });
+      expect(resolved).toBe(1);
+    });
+
+    it('given a role resolver that throws when it IS needed, should propagate (never invent a verdict)', async () => {
+      await expect(gate({ resolveActorRole: throwingRole }, 'stranger')).rejects.toThrow('resolveActorRole must not be reached');
     });
   });
 

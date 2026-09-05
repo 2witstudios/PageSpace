@@ -83,17 +83,38 @@ export async function gateLocalEnv({
       now,
     }) === 'connected';
 
-  const bind = decideBind({
-    canRunCode: await deps.canRunCode(),
+  const facts = {
     // The row's CHECK pins the closed set; anything else is a drifted row and
     // `decideBind` denies it as `bind_policy` (its default branch).
     bindPolicy: sibling.bindPolicy as BindPolicy,
-    actorRole: await deps.resolveActorRole(),
     actorId: requesterId,
     env: { ownerId: sibling.ownerId, substrate: row.substrate, revokedAt: sibling.revokedAt },
     connected,
     flagEnabled: deps.flagEnabled,
-  });
+  };
+
+  // `decideBind` is consulted in stages so that NO IO runs that cannot change
+  // its verdict, and its documented deny order is what the caller observes
+  // (Codex P2 on #2537). Each stage supplies the not-yet-fetched inputs as
+  // the values under which the planner would be MOST permissive — an `ok`
+  // code-exec verdict, the least-privileged role — so any refusal a stage
+  // returns is independent of those inputs and final; an `ok` from a stage
+  // is never returned until every input is real.
+  //
+  //   1. flag only — a disabled deployment does no authorization work at all;
+  //   2. the code-exec gate — the role cannot rescue a refusal here, and with
+  //      the least-privileged role an `ok` means every role passes;
+  //   3. the role — fetched only when the verdict was `bind_policy`, the one
+  //      refusal the role can flip.
+  const flagProbe = decideBind({ ...facts, canRunCode: { ok: true }, actorRole: 'member' });
+  if (!flagProbe.ok && flagProbe.reason === 'flag_disabled') return { ok: false, refusal: flagProbe.reason };
+
+  const canRunCode = await deps.canRunCode();
+  const memberVerdict = decideBind({ ...facts, canRunCode, actorRole: 'member' });
+  let bind = memberVerdict;
+  if (!memberVerdict.ok && memberVerdict.reason === 'bind_policy') {
+    bind = decideBind({ ...facts, canRunCode, actorRole: await deps.resolveActorRole() });
+  }
   if (!bind.ok) return { ok: false, refusal: bind.reason, cause: bind.cause };
 
   const plan = planLocalProvision({ env: { id: row.id, substrate: row.substrate, revokedAt: sibling.revokedAt }, connected });

@@ -349,7 +349,9 @@ export type IssueLocalEnvChallengeResult =
   | { ok: true; nonce: string; expiresAt: Date }
   | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' }
   /** A live, unconsumed challenge is outstanding; ask again once it has expired (`retryAfterMs`). */
-  | { ok: false; reason: 'challenge_pending'; retryAfterMs: number };
+  | { ok: false; reason: 'challenge_pending'; retryAfterMs: number }
+  /** The compare-and-set lost to a concurrent issue that has since been consumed or expired; retry now. Never `revoked` (Codex P2 on #2537). */
+  | { ok: false; reason: 'race' };
 
 /** Is a live (unconsumed, unexpired) challenge outstanding on this row at `now`? */
 function pendingChallengeMs(row: DriveEnvLocalRecord, now: Date): number | null {
@@ -384,12 +386,16 @@ export async function issueLocalEnvChallenge({
   const expiresAt = new Date(challenge.exp);
   const stored = await deps.store.setChallenge({ envId: row.envId, nonce: challenge.nonce, expiresAt, now });
   if (!stored) {
-    // The CAS refused: either a concurrent issue won (its challenge is now the
-    // live one) or a revocation landed. Re-read and say which — never guess.
+    // The CAS refused: a concurrent issue won (its challenge is the live one, or
+    // was already consumed by its daemon), or a revocation landed, or the row is
+    // gone. Re-read and say WHICH — `revoked` (410, permanent) only when the row
+    // really says so, or a reconnecting daemon would abandon a valid enrollment.
     const after = await deps.store.findLocalByEnrollmentId(enrollmentId);
-    const pendingAfter = after && after.revokedAt === null ? pendingChallengeMs(after, now) : null;
+    if (!after) return { ok: false, reason: 'not_found' };
+    if (after.revokedAt !== null) return { ok: false, reason: 'revoked' };
+    const pendingAfter = pendingChallengeMs(after, now);
     if (pendingAfter !== null) return { ok: false, reason: 'challenge_pending', retryAfterMs: pendingAfter };
-    return { ok: false, reason: 'revoked' };
+    return { ok: false, reason: 'race' };
   }
   return { ok: true, nonce: challenge.nonce, expiresAt };
 }
