@@ -154,7 +154,10 @@ export const serverEnvSchema = z
     // Sprite-only deployment validates, and loaded fail-closed only on a
     // local-env path (loadServerSigningKey()).
     LOCAL_ENVS_ENABLED: z.string().optional(),
-    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional(),
+    // `.or('')`: a declared-but-blank placeholder reads as unset, like the
+    // other optional secrets here; the superRefine below is what requires a
+    // real value once the feature is on.
+    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional().or(z.literal('')),
 
     // Server-held secret keying the sandbox session-key HMAC (see
     // services/sandbox/session-key.ts). A configured value must be >= 32 chars,

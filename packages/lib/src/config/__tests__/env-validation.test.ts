@@ -567,6 +567,16 @@ describe('env-validation', () => {
       expect(() => validateEnv()).not.toThrow();
     });
 
+    // A declared-but-blank placeholder (ENV_BRIDGE_SIGNING_KEY=) reads as unset,
+    // like SANDBOX_SESSION_SECRET and the other optional secrets: a Sprite-only
+    // deployment that copied .env.example must still boot.
+    it('given the flag off and a BLANK key placeholder, should boot', () => {
+      bootable();
+      delete process.env.LOCAL_ENVS_ENABLED;
+      process.env.ENV_BRIDGE_SIGNING_KEY = '';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
     // The gate is on ENABLING, not on the variable: a deployment that has never
     // heard of local envs must not be asked for a signing key.
     it.each([
