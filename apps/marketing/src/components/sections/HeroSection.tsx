@@ -25,7 +25,7 @@ export function HeroSection() {
                 <ArrowRight className="ml-2 h-4 w-4" />
               </a>
             </Button>
-            <span className="hero-plat">On Mac, Windows, Linux &amp; iOS</span>
+            <span className="hero-plat">Also on Mac, Windows, Linux &amp; iOS</span>
           </div>
         </div>
 
