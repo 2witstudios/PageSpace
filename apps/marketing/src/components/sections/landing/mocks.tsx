@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 import { Ico, Avatar } from "./icons";
 
 /**
@@ -267,14 +267,14 @@ function CanvasMock() {
 
 function CodeMock() {
   const L: ReactNode[] = [
-    <span className="cm">// config.json — real-time collaboration</span>,
-    <><span className="kw">export const</span> <span className="cnm">config</span> = {"{"}</>,
-    <>  <span className="fn">deployment</span>: <span className="st">&quot;cloud&quot;</span>,</>,
-    <>  <span className="fn">features</span>: {"{"}</>,
-    <>    <span className="fn">agents</span>: <span className="kw">true</span>,</>,
-    <>    <span className="fn">sandbox</span>: <span className="kw">true</span>,</>,
-    <>  {"}"},</>,
-    <>{"}"}</>,
+    <span key="l1" className="cm">{"// config.json — real-time collaboration"}</span>,
+    <Fragment key="l2"><span className="kw">export const</span> <span className="cnm">config</span> = {"{"}</Fragment>,
+    <Fragment key="l3">  <span className="fn">deployment</span>: <span className="st">&quot;cloud&quot;</span>,</Fragment>,
+    <Fragment key="l4">  <span className="fn">features</span>: {"{"}</Fragment>,
+    <Fragment key="l5">    <span className="fn">agents</span>: <span className="kw">true</span>,</Fragment>,
+    <Fragment key="l6">    <span className="fn">sandbox</span>: <span className="kw">true</span>,</Fragment>,
+    <Fragment key="l7">  {"}"},</Fragment>,
+    <Fragment key="l8">{"}"}</Fragment>,
   ];
   return (
     <>
