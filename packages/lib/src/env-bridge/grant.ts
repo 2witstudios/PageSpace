@@ -33,6 +33,7 @@
  * recorded only when the whole verdict is `ok`.
  */
 import { z } from 'zod';
+import type { GrantRequest } from './grant-args';
 
 /** The closed set of operations a grant may authorize. Anything else is malformed. */
 export const GRANT_OPS = ['exec', 'fs_read', 'fs_write', 'pty_open'] as const;
@@ -94,12 +95,13 @@ export type Ed25519Verify = (message: Uint8Array, signature: Uint8Array, publicK
 /** Cryptographic hash primitive (bytes → hex/base64 digest), injected for the same reason. */
 export type HashBytes = (bytes: Uint8Array) => string;
 
-/** The frame that carries the grant: what the caller is actually asking to run. */
-export interface GrantRequest {
-  readonly op: GrantOp;
-  /** The request's arguments exactly as received; hashed via `canonicalizeArgs`. */
-  readonly args: unknown;
-}
+/**
+ * The frame that carries the grant: what the caller is actually asking to run,
+ * as the per-op PROJECTION from `grant-args.ts` (`grantRequestForFrame`) —
+ * never the raw frame. Both the signer and this gate hash that projection, so
+ * the hashed bytes are defined once (Codex C7).
+ */
+export type { GrantRequest } from './grant-args';
 
 export interface VerifyGrantInput {
   /** Untrusted: whatever arrived on the wire. */

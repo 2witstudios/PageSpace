@@ -8,11 +8,12 @@ import {
   GRANT_MAX_TTL_MS,
   GRANT_MAX_CLOCK_SKEW_MS,
   type Grant,
-  type GrantOp,
   type Ed25519Verify,
   type HashBytes,
   type NonceStore,
+  type GrantRequest,
 } from '../grant';
+import type { ExecGrantArgs } from '../grant-args';
 
 // ---------------------------------------------------------------------------
 // Fixtures. Real Ed25519 keys and a real SHA-256 so the signature and hashing
@@ -39,7 +40,8 @@ const NOW = 1_800_000_000_000; // fixed clock — verifyGrant must never read Da
 const ENV = 'env_local_1';
 
 /** The request the grant in makeGrant() was issued for. */
-const ARGS = { cmd: 'ls', args: ['-la'], cwd: '/home/u/proj', env: { LANG: 'C' } };
+/** The exec PROJECTION (`grantArgsForFrame`): the fixed field set, absent limits as null. */
+const ARGS: ExecGrantArgs = { cmd: 'ls', args: ['-la'], cwd: '/home/u/proj', env: { LANG: 'C' }, timeoutMs: null, maxBytes: null };
 const ARGS_HASH = hash(canonicalizeArgs(ARGS));
 
 function makeGrant(overrides: Partial<Grant> = {}): Grant {
@@ -62,7 +64,7 @@ interface RunOpts {
   expectedEnvId?: string;
   now?: number;
   key?: Uint8Array;
-  request?: { op: GrantOp; args: unknown };
+  request?: GrantRequest;
 }
 
 function run(grant: unknown, opts: RunOpts = {}) {
@@ -147,7 +149,7 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
   });
 
   it('given the same args with object keys in a different order, should still bind (canonical hashing)', () => {
-    const reordered = { env: { LANG: 'C' }, cwd: '/home/u/proj', args: ['-la'], cmd: 'ls' };
+    const reordered: ExecGrantArgs = { maxBytes: null, timeoutMs: null, env: { LANG: 'C' }, cwd: '/home/u/proj', args: ['-la'], cmd: 'ls' };
     expect(run(makeGrant(), { request: { op: 'exec', args: reordered } }).ok).toBe(true);
   });
 
@@ -239,7 +241,7 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
 
   it('should enforce a fixed deny order: request binding is checked before the signature', () => {
     const grant = makeGrant();
-    const verdict = run(grant, { signature: signWith(rogue.privateKey, grant), request: { op: 'pty_open', args: ARGS } });
+    const verdict = run(grant, { signature: signWith(rogue.privateKey, grant), request: { op: 'pty_open', args: { cols: 80, rows: 24, cwd: null, command: null, args: [] } } });
     expect(verdict).toEqual({ ok: false, reason: 'op_mismatch' });
   });
 });
