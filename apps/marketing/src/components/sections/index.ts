@@ -4,7 +4,6 @@ export { PageTypeCarouselSection } from "./PageTypeCarouselSection";
 export { AskAutomateSection } from "./AskAutomateSection";
 export { SkillsSection } from "./SkillsSection";
 export { TrustSection } from "./TrustSection";
-export { FaqSection } from "./FaqSection";
 export { CTASection } from "./CTASection";
 
 // Retained for reuse elsewhere (no longer on the home page):

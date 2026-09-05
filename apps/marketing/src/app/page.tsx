@@ -7,24 +7,16 @@ import {
   AskAutomateSection,
   SkillsSection,
   TrustSection,
-  FaqSection,
   CTASection,
 } from "@/components/sections";
-import { FAQ_ITEMS } from "@/components/sections/landing/faq-data";
 import { TESTIMONIAL } from "@/components/sections/landing/testimonial-data";
 import { pageMetadata } from "@/lib/metadata";
-import {
-  JsonLd,
-  webApplicationSchema,
-  createFaqSchema,
-  createReviewSchema,
-} from "@/lib/schema";
+import { JsonLd, webApplicationSchema, createReviewSchema } from "@/lib/schema";
 import "@/components/sections/landing/landing.css";
 
 export const metadata = pageMetadata.home;
 
 export default function Home() {
-  const faqSchema = createFaqSchema(FAQ_ITEMS.map((f) => ({ q: f.q, a: f.a })));
   const reviewSchema = createReviewSchema({
     author: TESTIMONIAL.author,
     body: TESTIMONIAL.body,
@@ -33,7 +25,7 @@ export default function Home() {
 
   return (
     <div className="lp min-h-screen bg-background">
-      <JsonLd data={[webApplicationSchema, faqSchema, reviewSchema]} />
+      <JsonLd data={[webApplicationSchema, reviewSchema]} />
       <SiteNavbar />
       <HeroSection />
       <TestimonialSection />
@@ -41,7 +33,6 @@ export default function Home() {
       <AskAutomateSection />
       <SkillsSection />
       <TrustSection />
-      <FaqSection />
       <CTASection />
       <SiteFooter />
     </div>
