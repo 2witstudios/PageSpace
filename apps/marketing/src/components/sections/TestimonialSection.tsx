@@ -25,11 +25,6 @@ function TestimonialCard({ t }: { t: Testimonial }) {
           <span className="nm">{t.author}</span>
           <span className="hd">{t.handle}</span>
         </span>
-        {t.url ? (
-          <span className="plat" aria-label="View post">
-            <Ico name="arrowUpRight" size="i18" />
-          </span>
-        ) : null}
       </div>
       <p className="text">{t.quote}</p>
       {t.credential ? (
