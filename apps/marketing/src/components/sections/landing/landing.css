@@ -340,9 +340,9 @@
   & .doc .h3 { font-size: 22px; font-weight: 700; margin: 0 0 10px; letter-spacing: -0.01em; }
   & .doc p { font-size: 14px; line-height: 1.65; color: var(--muted-foreground); margin: 0 0 10px; }
   & .doc p .fg { color: var(--foreground); }
+  & .doc ul { margin: 0; padding: 0; list-style: disc; }
   & .doc li { font-size: 14px; color: var(--muted-foreground); margin-left: 20px; line-height: 1.6; }
   & .stream { display: flex; flex-direction: column; gap: 14px; height: 100%; padding: 18px 20px; }
-  & .doc ul { margin: 0; padding: 0; list-style: disc; }
   & .msg { display: flex; gap: 11px; align-items: flex-start; }
   & .who { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
   & .who .n { font-weight: 600; font-size: 13px; }
@@ -488,6 +488,14 @@
 
 @media (max-width: 820px) {
   .lp .aw-body { height: 500px; }
+  /* Below 820px the hero window always lays out at ScaledAppWindow's 760px
+     design width, which with the 500px body above makes it 547px tall, and is
+     then scaled to fit. Reserve exactly that scaled box (width x 547/760) in
+     CSS so the server HTML is already the right height; the client effect only
+     adds the transform. Without this the window shrank ~270px on hydration
+     (mobile CLS 0.20). Keep the ratio in sync with the mock's chrome height. */
+  .lp .appwin-outer { aspect-ratio: 760 / 547; overflow: hidden; }
+  .lp .appwin-inner { width: 760px; transform-origin: top left; }
 }
 
 /* The hero app window keeps all three panes on every screen; below 900px the
