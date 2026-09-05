@@ -122,7 +122,10 @@ export async function createEnvInDrive(input: {
 
 export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
   const store = await getDriveEnvStore();
-  return listDriveEnvs({ driveId, deps: { store } });
+  // `liveConnection` is this replica's bridge-socket registry. Until the
+  // env-bridge socket route lands there is no registry, so a local env's status
+  // is derived from its heartbeat alone (`deriveLocalEnvStatus`).
+  return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection: () => null } });
 }
 
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {

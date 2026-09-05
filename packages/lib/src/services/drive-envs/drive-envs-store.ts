@@ -77,12 +77,59 @@ export interface DriveEnvRecord {
   updatedAt: Date;
 }
 
+/**
+ * A local env's `drive_env_local` sibling — its LIFECYCLE row: label and owner
+ * from creation, the one-time code's hash until enrolled, the pinned machine
+ * key from enrollment on, the outstanding challenge nonce per handshake, and
+ * the heartbeat / revocation stamps. Never carries a secret the server could
+ * replay: the code and the nonce are one-shot, the key is public.
+ */
+export interface DriveEnvLocalRecord {
+  envId: string;
+  driveId: string;
+  ownerId: string;
+  label: string;
+  enrollmentId: string;
+  machinePublicKey: string | null;
+  machineKeyFingerprint: string | null;
+  serverKeyId: string | null;
+  capabilities: { shell: boolean; pty: boolean; fs: boolean; checkpoint: boolean } | null;
+  serverPolicy: { ops: string[]; checkpoint: boolean };
+  bindPolicy: string;
+  enrollmentCodeHash: string | null;
+  enrollmentCodeExpiresAt: Date | null;
+  enrollmentCodeUsedAt: Date | null;
+  challengeNonce: string | null;
+  challengeExpiresAt: Date | null;
+  challengeUsedAt: Date | null;
+  lastSeenAt: Date | null;
+  enrolledAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+/** The facts a LOCAL create writes to the sibling in the same step as the env row. */
+export interface NewDriveEnvLocalFacts {
+  ownerId: string;
+  label: string;
+  enrollmentId: string;
+  enrollmentCodeHash: string;
+  enrollmentCodeExpiresAt: Date;
+}
+
 export interface NewDriveEnvInput {
   driveId: string;
   name: string;
   /** The creating user, recorded for audit. Null when no user context applies. */
   createdBy: string | null;
   now: Date;
+  /**
+   * Present for a LOCAL env: the row is minted with `substrate = 'local'` and
+   * its sibling is inserted in the SAME transaction, so a local env never
+   * exists without one. Absent for a Sprite env.
+   */
+  local?: NewDriveEnvLocalFacts;
 }
 
 export interface DriveEnvStore {
@@ -137,9 +184,34 @@ export interface DriveEnvStore {
   createIfUnderLimit(
     input: NewDriveEnvInput & { payerId: string; maxEnvs: number },
   ): Promise<
-    | { ok: true; env: DriveEnvRecord }
+    | { ok: true; env: DriveEnvRecord; local: DriveEnvLocalRecord | null }
     | { ok: false; reason: 'name_taken' | 'limit_reached' }
   >;
+
+  // ---------------------------------------------------------------------------
+  // The local-env identity slice, over `drive_env_local`. Every write is a
+  // compare-and-set on the row's CURRENT state (`UPDATE ... WHERE`), never a
+  // read-then-write: two replicas enrolling, or redeeming, the same machine
+  // at once must resolve to exactly one winner.
+  // ---------------------------------------------------------------------------
+
+  /** The sibling by its wire identity (what the daemon presents). */
+  findLocalByEnrollmentId(enrollmentId: string): Promise<DriveEnvLocalRecord | null>;
+  /** Every sibling in the drive — what the listing joins. */
+  listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
+  /**
+   * Enroll: pin the machine key and consume the code, IFF the row is pending
+   * (`enrolledAt IS NULL AND enrollmentCodeUsedAt IS NULL AND revokedAt IS
+   * NULL`). Clears the code hash — a consumed code is not kept around.
+   */
+  pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; now: Date }): Promise<boolean>;
+  /** Store the outstanding challenge, replacing any previous one, IFF enrolled and not revoked. */
+  setChallenge(input: { envId: string; nonce: string; expiresAt: Date; now: Date }): Promise<boolean>;
+  /**
+   * Consume the challenge IFF it is exactly this nonce and unconsumed. Also
+   * records `lastSeenAt` — a machine that just proved its key is alive.
+   */
+  consumeChallenge(input: { envId: string; nonce: string; now: Date }): Promise<boolean>;
   /**
    * Rename, subject to the same unique constraint — and reporting the same
    * `name_taken` answer for the same reason. `not_found` distinguishes a
@@ -448,6 +520,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     { db },
     { eq, and, eqOrIsNull, isNull, sql, count, asc },
     { driveEnvs },
+    { driveEnvLocal },
     { agentWorkspaces },
     { drives },
     { machineSpriteReclaims },
@@ -455,10 +528,37 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     import('@pagespace/db/db'),
     import('@pagespace/db/operators'),
     import('@pagespace/db/schema/drive-envs'),
+    import('@pagespace/db/schema/drive-env-local'),
     import('@pagespace/db/schema/agent-workspaces'),
     import('@pagespace/db/schema/core'),
     import('@pagespace/db/schema/machine-sprite-reclaims'),
   ]);
+
+  /** A sibling row joined with its env's drive (the record carries `driveId` for the listing join). */
+  const localSelection = {
+    envId: driveEnvLocal.envId,
+    driveId: driveEnvs.driveId,
+    ownerId: driveEnvLocal.ownerId,
+    label: driveEnvLocal.label,
+    enrollmentId: driveEnvLocal.enrollmentId,
+    machinePublicKey: driveEnvLocal.machinePublicKey,
+    machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
+    serverKeyId: driveEnvLocal.serverKeyId,
+    capabilities: driveEnvLocal.capabilities,
+    serverPolicy: driveEnvLocal.serverPolicy,
+    bindPolicy: driveEnvLocal.bindPolicy,
+    enrollmentCodeHash: driveEnvLocal.enrollmentCodeHash,
+    enrollmentCodeExpiresAt: driveEnvLocal.enrollmentCodeExpiresAt,
+    enrollmentCodeUsedAt: driveEnvLocal.enrollmentCodeUsedAt,
+    challengeNonce: driveEnvLocal.challengeNonce,
+    challengeExpiresAt: driveEnvLocal.challengeExpiresAt,
+    challengeUsedAt: driveEnvLocal.challengeUsedAt,
+    lastSeenAt: driveEnvLocal.lastSeenAt,
+    enrolledAt: driveEnvLocal.enrolledAt,
+    revokedAt: driveEnvLocal.revokedAt,
+    createdAt: driveEnvLocal.createdAt,
+    updatedAt: driveEnvLocal.updatedAt,
+  };
 
   return {
     async findById(envId) {
@@ -476,7 +576,54 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return rows as DriveEnvRecord[];
     },
 
-    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs }) {
+    async findLocalByEnrollmentId(enrollmentId) {
+      const [row] = await db
+        .select(localSelection)
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.enrollmentId, enrollmentId))
+        .limit(1);
+      return (row as DriveEnvLocalRecord | undefined) ?? null;
+    },
+
+    async listLocalFacts(driveId) {
+      const rows = await db
+        .select(localSelection)
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvs.driveId, driveId))
+        .limit(MAX_DRIVE_ENVS_LISTED);
+      return rows as DriveEnvLocalRecord[];
+    },
+
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.enrolledAt), isNull(driveEnvLocal.enrollmentCodeUsedAt), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async setChallenge({ envId, nonce, expiresAt, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ challengeNonce: nonce, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async consumeChallenge({ envId, nonce, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ challengeUsedAt: at, lastSeenAt: at, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.challengeNonce, nonce), isNull(driveEnvLocal.challengeUsedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs, local }) {
       try {
         return await db.transaction(async (tx) => {
           // Per-payer advisory lock, held for this transaction only — the same
@@ -492,9 +639,16 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
           if (n >= maxEnvs) return { ok: false as const, reason: 'limit_reached' as const };
           const [row] = await tx
             .insert(driveEnvs)
-            .values({ driveId, name, createdBy, createdAt: at, updatedAt: at })
+            .values({ driveId, name, createdBy, substrate: local ? 'local' : 'sprite', createdAt: at, updatedAt: at })
             .returning();
-          return { ok: true as const, env: row as DriveEnvRecord };
+          if (!local) return { ok: true as const, env: row as DriveEnvRecord, local: null };
+          // The sibling in the SAME transaction: a local env never exists
+          // without its lifecycle row, and the composite FK holds both ways.
+          const [sibling] = await tx
+            .insert(driveEnvLocal)
+            .values({ envId: row!.id, ownerId: local.ownerId, label: local.label, enrollmentId: local.enrollmentId, enrollmentCodeHash: local.enrollmentCodeHash, enrollmentCodeExpiresAt: local.enrollmentCodeExpiresAt, createdAt: at, updatedAt: at })
+            .returning();
+          return { ok: true as const, env: row as DriveEnvRecord, local: { ...(sibling as Omit<DriveEnvLocalRecord, 'driveId'>), driveId } as DriveEnvLocalRecord };
         });
       } catch (error) {
         // The `(driveId, name)` unique index still resolves same-name races,

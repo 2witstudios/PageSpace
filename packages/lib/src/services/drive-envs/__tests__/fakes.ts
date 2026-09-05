@@ -12,7 +12,7 @@
  * replaced-instance kill refusal, and an env is the same kind of Sprite holder.
  */
 
-import type { DriveEnvRecord, DriveEnvStore } from '../drive-envs-store';
+import type { DriveEnvRecord, DriveEnvStore, DriveEnvLocalRecord } from '../drive-envs-store';
 import { envStampColumns } from '../drive-envs-store';
 
 export { makeSpriteHost } from '../../agent-workspaces/__tests__/fakes';
@@ -45,9 +45,39 @@ export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecor
   };
 }
 
+export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveEnvLocalRecord {
+  return {
+    envId: ENV_ID,
+    driveId: DRIVE_ID,
+    ownerId: 'user-1',
+    label: 'jono-macstudio',
+    enrollmentId: 'enr-1',
+    machinePublicKey: null,
+    machineKeyFingerprint: null,
+    serverKeyId: null,
+    capabilities: null,
+    serverPolicy: { ops: [], checkpoint: false },
+    bindPolicy: 'owner',
+    enrollmentCodeHash: null,
+    enrollmentCodeExpiresAt: null,
+    enrollmentCodeUsedAt: null,
+    challengeNonce: null,
+    challengeExpiresAt: null,
+    challengeUsedAt: null,
+    lastSeenAt: null,
+    enrolledAt: null,
+    revokedAt: null,
+    createdAt: NOW,
+    updatedAt: NOW,
+    ...over,
+  };
+}
+
 export interface FakeDriveEnvStore {
   store: DriveEnvStore;
   rows: Map<string, DriveEnvRecord>;
+  /** Models `drive_env_local`: envId → the sibling lifecycle row. */
+  local: Map<string, DriveEnvLocalRecord>;
   /** Models `machine_sprite_reclaims`: sandboxId → spriteInstanceId. */
   reclaims: Map<string, string | null>;
   /** envId → live (not-ended) session count, the delete guard's input. */
@@ -60,6 +90,7 @@ export interface FakeDriveEnvStore {
 export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date = () => NOW): FakeDriveEnvStore {
   const rows = new Map<string, DriveEnvRecord>();
   for (const row of seed) rows.set(row.id, row);
+  const local = new Map<string, DriveEnvLocalRecord>();
   const reclaims = new Map<string, string | null>();
   const liveSessions = new Map<string, number>();
   const ownedEnvs = new Map<string, number>();
@@ -85,7 +116,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
     },
 
-    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs }) {
+    async createIfUnderLimit({ driveId, name, createdBy, now: at, payerId, maxEnvs, local: facts }) {
       if (nameTaken(driveId, name)) return { ok: false, reason: 'name_taken' };
       // The structural ceiling, modelled: the fake's map IS the serialized
       // count, so a create past the limit loses here exactly as the advisory
@@ -94,6 +125,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       minted += 1;
       const row = makeEnvRecord({
         id: `env-${minted}`,
+        substrate: facts ? 'local' : 'sprite',
         driveId,
         name,
         createdBy,
@@ -102,7 +134,46 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
         updatedAt: at,
       });
       rows.set(row.id, row);
-      return { ok: true, env: row };
+      if (!facts) return { ok: true, env: row, local: null };
+      // The sibling lands in the SAME step as the env — one transaction in
+      // Postgres, one map write here — so a local env never exists without it.
+      const sibling = makeLocalRecord({ envId: row.id, driveId, ...facts, createdAt: at, updatedAt: at });
+      local.set(row.id, sibling);
+      return { ok: true, env: row, local: sibling };
+    },
+
+    async findLocalByEnrollmentId(enrollmentId) {
+      for (const sibling of local.values()) if (sibling.enrollmentId === enrollmentId) return sibling;
+      return null;
+    },
+
+    async listLocalFacts(driveId) {
+      return [...local.values()].filter((sibling) => sibling.driveId === driveId);
+    },
+
+    async pinMachineKey({ envId, machinePublicKey, machineKeyFingerprint, serverKeyId, now: at }) {
+      const sibling = local.get(envId);
+      // The real store's compare-and-set: only a pending, unrevoked row with an
+      // unconsumed code may be enrolled, and enrolling consumes the code.
+      if (!sibling || sibling.enrolledAt !== null || sibling.enrollmentCodeUsedAt !== null || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, machinePublicKey, machineKeyFingerprint, serverKeyId, enrolledAt: at, enrollmentCodeUsedAt: at, enrollmentCodeHash: null, updatedAt: at });
+      return true;
+    },
+
+    async setChallenge({ envId, nonce, expiresAt, now: at }) {
+      const sibling = local.get(envId);
+      if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, challengeNonce: nonce, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at });
+      return true;
+    },
+
+    async consumeChallenge({ envId, nonce, now: at }) {
+      const sibling = local.get(envId);
+      // CAS on the exact nonce and its unconsumed state; consuming is also a
+      // heartbeat (the machine just proved it is alive).
+      if (!sibling || sibling.challengeNonce !== nonce || sibling.challengeUsedAt !== null) return false;
+      local.set(envId, { ...sibling, challengeUsedAt: at, lastSeenAt: at, updatedAt: at });
+      return true;
     },
 
     async rename({ envId, name, now: at }) {
@@ -225,5 +296,5 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
     },
   };
 
-  return { store, rows, reclaims, liveSessions, ownedEnvs, calls };
+  return { store, rows, local, reclaims, liveSessions, ownedEnvs, calls };
 }
