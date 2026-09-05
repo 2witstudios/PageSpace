@@ -3,13 +3,12 @@ import type { ReactNode } from "react";
 /**
  * Real quotes about PageSpace, shown as pull-quote cards. `body` is plain text
  * for the Review JSON-LD (schema.tsx); `quote` is the styled display node.
- * Wording is verbatim. Social posts carry `handle` + `url` (the card links out);
- * a plain attributed quote carries `role` instead and renders unlinked.
+ * Wording is verbatim. A quote with a `url` links out to the public post; one
+ * without renders as a plain unlinked card.
  */
 export interface Testimonial {
   author: string;
-  handle?: string;
-  role?: string;
+  handle: string;
   url?: string;
   avatar?: string;
   body: string;
@@ -48,7 +47,7 @@ export const TESTIMONIALS: Testimonial[] = [
   },
   {
     author: "Noah Hines",
-    role: "Sales Manager, Ideal Impact",
+    handle: "@NoahHines",
     avatar: "/noah-hines.png",
     body:
       "Every 6-12 months I look into new apps to organize my life, notes, to-do's, etc. because something is always missing. Pretty sure I'm done looking because PageSpace has what I've been looking for (and things I didn't know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.",
@@ -57,5 +56,6 @@ export const TESTIMONIALS: Testimonial[] = [
         Every 6-12 months I look into new apps to organize my life, notes, to-do&rsquo;s, etc. because something is always missing. Pretty sure I&rsquo;m done looking because <span className="lnk">PageSpace</span> has what I&rsquo;ve been looking for (and things I didn&rsquo;t know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.
       </>
     ),
+    credential: { icon: "chart", text: "Sales Manager at Ideal Impact" },
   },
 ];

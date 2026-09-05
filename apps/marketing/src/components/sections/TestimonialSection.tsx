@@ -23,7 +23,7 @@ function TestimonialCard({ t }: { t: Testimonial }) {
         )}
         <span className="who2">
           <span className="nm">{t.author}</span>
-          <span className="hd">{t.handle ?? t.role}</span>
+          <span className="hd">{t.handle}</span>
         </span>
         {t.url ? (
           <span className="plat" aria-label="View post">
