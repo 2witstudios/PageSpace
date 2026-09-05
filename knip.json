@@ -467,6 +467,8 @@
         "src/services/sandbox/containment.ts",
         "src/services/sandbox/egress-ip.ts",
         "src/services/sandbox/egress-lockdown.ts",
+        "src/services/sandbox/preview/preview-relay.ts",
+        "src/services/sandbox/preview/dev-preview-core.ts",
         "src/services/sandbox/egress.ts",
         "src/services/sandbox/execution-policy.ts",
         "src/services/sandbox/git-tool-runners.ts",

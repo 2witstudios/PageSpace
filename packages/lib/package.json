@@ -893,6 +893,16 @@
       "import": "./dist/services/sandbox/egress-lockdown.js",
       "require": "./dist/services/sandbox/egress-lockdown.js"
     },
+    "./services/sandbox/preview/preview-relay": {
+      "types": "./dist/services/sandbox/preview/preview-relay.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-relay.js",
+      "require": "./dist/services/sandbox/preview/preview-relay.js"
+    },
+    "./services/sandbox/preview/dev-preview-core": {
+      "types": "./dist/services/sandbox/preview/dev-preview-core.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-core.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-core.js"
+    },
     "./services/sandbox/sandbox-paths": {
       "types": "./dist/services/sandbox/sandbox-paths.d.ts",
       "import": "./dist/services/sandbox/sandbox-paths.js",
