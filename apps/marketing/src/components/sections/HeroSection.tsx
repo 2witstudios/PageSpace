@@ -49,9 +49,13 @@ export function HeroSection() {
                 My Workspace
                 <svg className="i i14" viewBox="0 0 24 24" aria-hidden="true" style={{ marginLeft: "auto", color: "var(--muted-foreground)" }}><path d="m7 15 5 5 5-5M7 9l5-5 5 5" /></svg>
               </div>
-              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>Dashboard</div>
-              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2" /><path d="M5.5 5.5 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.5A2 2 0 0 0 16.8 4H7.2a2 2 0 0 0-1.7 1.5z" /></svg>Inbox<span className="b">3</span></div>
+              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="m3 9 9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" /></svg>Drive Home</div>
+              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" /></svg>Direct Messages<span className="b">3</span></div>
+              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M10 3 8 21M16 3l-2 18" /></svg>Channels<span className="b">2</span></div>
+              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>Files</div>
               <div className="aw-nav"><Ico name="task" size="i14" />Tasks</div>
+              <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>Calendar</div>
+              <div className="aw-nav"><Ico name="bot" size="i14" />Agents</div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
                 <div style={{ position: "relative", flex: 1 }}>
                   <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--muted-foreground)" }}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
@@ -64,7 +68,6 @@ export function HeroSection() {
                 <Ico name="file" size="i14" />Q1 Planning
               </div>
               <div className="aw-tree" style={{ paddingLeft: 20 }}><Ico name="file" size="i14" />Product Roadmap<span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--primary)", marginLeft: 2 }} /></div>
-              <div className="aw-tree" style={{ paddingLeft: 20 }}><Ico name="channel" size="i14" />Team Discussion</div>
               <div className="aw-tree pri">
                 <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ opacity: 0.5 }}><path d="m9 18 6-6-6-6" /></svg>
                 <Ico name="folder" size="i14" />Product Launch
