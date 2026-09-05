@@ -239,8 +239,6 @@
   & .post .who2 { line-height: 1.35; min-width: 0; }
   & .post .who2 .nm { font-weight: 600; font-size: var(--t-body); color: var(--foreground); display: flex; align-items: center; gap: 5px; }
   & .post .who2 .hd { font-size: var(--t-small); color: var(--muted-foreground); }
-  & .post .plat { margin-left: auto; color: var(--muted-foreground); flex: 0 0 auto; }
-  & .post:hover .plat { color: var(--primary); }
   /* Quotes stay in Geist: the serif is reserved for headings so it means
      "PageSpace speaking". Sized under the hero subline so social proof
      supports the claim instead of shouting over it. */
