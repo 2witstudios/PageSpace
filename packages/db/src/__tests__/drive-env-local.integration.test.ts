@@ -1,5 +1,5 @@
 /**
- * Local Environments epic (M1 · t05) — the substrate CHECK and the sibling's
+ * Local Environments epic — the substrate CHECK and the sibling's
  * cascade, proven against a REAL Postgres (a schema test cannot see whether
  * the constraint actually refuses a row).
  *
@@ -130,7 +130,7 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect((await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, env!.id))).length).toBe(0);
   });
 
-  it('given a SPRITE env, inserting a drive_env_local sibling for it should be REFUSED (foreign_key_violation 23503) — local metadata can never attach to a Sprite env (review)', async () => {
+  it('given a SPRITE env, inserting a drive_env_local sibling for it should be REFUSED (foreign_key_violation 23503) — local metadata can never attach to a Sprite env', async () => {
     const { user, drive } = await seed();
     const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'sprite-parent' }).returning();
     let code: string | undefined;
@@ -142,7 +142,7 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect(code).toBe('23503');
   });
 
-  it("given a local env WITH a sibling, flipping the parent to 'sprite' should be REFUSED (23503) — the composite FK holds both write directions (review)", async () => {
+  it("given a local env WITH a sibling, flipping the parent to 'sprite' should be REFUSED (23503) — the composite FK holds both write directions", async () => {
     const { user, drive } = await seed();
     const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'flip', substrate: 'local' }).returning();
     await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: user.id, label: 'm', enrollmentId: `enr_flip_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
@@ -185,6 +185,49 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect((await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, env!.id))).length).toBe(0);
     expect((await db.select().from(driveEnvs).where(eq(driveEnvs.id, env!.id))).length).toBe(1);
     void user;
+  });
+
+  it('given a freshly created local env (code issued, no key yet), should accept a sibling with NULL key columns and a code hash', async () => {
+    const { user, drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'pending', substrate: 'local' }).returning();
+    const [row] = await db
+      .insert(driveEnvLocal)
+      .values({ envId: env!.id, ownerId: user.id, label: 'm', enrollmentId: `enr_pending_${env!.id}`, enrollmentCodeHash: 'h', enrollmentCodeExpiresAt: new Date() })
+      .returning();
+    expect(row?.machinePublicKey).toBeNull();
+    expect(row?.enrolledAt).toBeNull();
+    expect(row?.enrollmentCodeUsedAt).toBeNull();
+  });
+
+  it('given a sibling marked ENROLLED without a pinned key, should be REFUSED (23514) — enrolled means the key exists', async () => {
+    const { user, drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'half', substrate: 'local' }).returning();
+    let code: string | undefined;
+    try {
+      await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: user.id, label: 'm', enrollmentId: `enr_half_${env!.id}`, enrolledAt: new Date() });
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe(CHECK_VIOLATION);
+  });
+
+  it('given a pending sibling, enrolling it (key + fingerprint + serverKeyId + enrolledAt in one update) should succeed, and clearing the key afterwards should be refused', async () => {
+    const { user, drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'enrol', substrate: 'local' }).returning();
+    await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: user.id, label: 'm', enrollmentId: `enr_enrol_${env!.id}`, enrollmentCodeHash: 'h', enrollmentCodeExpiresAt: new Date() });
+    const [enrolled] = await db
+      .update(driveEnvLocal)
+      .set({ machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', enrolledAt: new Date(), enrollmentCodeUsedAt: new Date() })
+      .where(eq(driveEnvLocal.envId, env!.id))
+      .returning();
+    expect(enrolled?.enrolledAt).not.toBeNull();
+    let code: string | undefined;
+    try {
+      await db.update(driveEnvLocal).set({ machinePublicKey: null }).where(eq(driveEnvLocal.envId, env!.id));
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe(CHECK_VIOLATION);
   });
 
   it('given a sibling row, should default bindPolicy to owner and serverPolicy to deny-by-default', async () => {

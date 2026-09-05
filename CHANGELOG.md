@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
+  owner or admin can now create an Environment with `substrate: "local"` and a machine label,
+  and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that
+  presents the code with its own freshly generated key is pinned to that Environment, and from
+  then on proves it still holds the key every time it connects — the server never stores a
+  secret it could replay, and a used or expired code is worthless. Nothing runs on the machine
+  yet: this release ships the identity and enrollment half of the local-environment bridge; the
+  connection, the daemon and the sandbox host follow. Off by default (`LOCAL_ENVS_ENABLED`),
+  and a deployment that leaves it off answers exactly as before. Your data export
+  (`local-environments.json`) lists the machines you enrolled.
+
 - **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
   the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
   all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
@@ -14,6 +25,7 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
   Organization structured data with a single consistent product description, and a `FAQPage`
   schema added to the existing FAQ page so its answers are machine-readable.
+
 - **You can find friends and collaborators by name when inviting them to a drive** — the invite
   member search now surfaces people you already have a relationship with — anyone you share a drive
   with, or an accepted connection — by their display name or username, even when their profile is

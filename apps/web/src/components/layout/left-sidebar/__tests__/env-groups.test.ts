@@ -20,6 +20,18 @@ const env = (over: Partial<SpriteEnvDTO> & { id: string; name: string }): DriveE
 
 const session = (workspaceId: string, envId: string | null) => ({ workspaceId, envId });
 
+describe('partitionSessionsByEnv — the substrate rides along', () => {
+  it('given a local env, should carry substrate local on its group so the row can withhold Sprite-only actions; an orphan carries null', () => {
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', createdAt: '2026-08-01T00:00:00.000Z' };
+    const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
+    expect(r.envGroups.map((g) => [g.envId, g.substrate])).toEqual([
+      ['env-s', 'sprite'],
+      ['env-l', 'local'],
+      ['env-ghost', null],
+    ]);
+  });
+});
+
 describe('partitionSessionsByEnv', () => {
   it('given an environment with no sessions, should still render a group — infrastructure is not ephemera', () => {
     const r = partitionSessionsByEnv([], [env({ id: 'env-1', name: 'staging' })]);

@@ -85,6 +85,7 @@ import { keysDescribeHandler } from '../commands/keys/describe.js';
 import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -114,6 +115,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys', 'describe'], handler: keysDescribeHandler, summary: "Show this credential's drives, role and effective permissions" },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
+  { path: ['env', 'enroll'], handler: envEnrollHandler, summary: 'Enroll this machine as a local environment with a one-time code' },
+  { path: ['env', 'token'], handler: envTokenHandler, summary: 'Prove this machine holds its key and receive a short-lived bridge token' },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },

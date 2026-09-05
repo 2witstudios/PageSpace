@@ -44,7 +44,16 @@ export {
   tokenPrefix,
   upsertHost,
 } from './credentials/serialize.js';
-export type { CredentialSummary, CredentialsFile, HostCredential, HostProfiles, OAuthHostCredential, StaticHostCredential } from './credentials/serialize.js';
+export type {
+  CredentialSummary,
+  CredentialsFile,
+  HostCredential,
+  HostProfiles,
+  LoginHostCredential,
+  MachineHostCredential,
+  OAuthHostCredential,
+  StaticHostCredential,
+} from './credentials/serialize.js';
 
 // The per-machine active-key map (`pagespace keys use`) — a non-secret
 // host -> key-name JSON file next to the credential file-store fallback.
@@ -355,6 +364,12 @@ export type { BuildKeyActivateScopeResult, BuildKeyUpdateScopeResult, BuildToken
 export { tokensList, tokensListHandler } from './commands/keys/list.js';
 export { keysDescribeHandler, parseKeysDescribeArgs, renderKeyDescription } from './commands/keys/describe.js';
 export { tokensRevoke, tokensRevokeHandler } from './commands/keys/revoke.js';
+
+// `pagespace env enroll|token` — this machine's local-environment identity.
+export { createEnvEnrollHandler, createEnvTokenHandler, envEnrollHandler, envTokenHandler } from './commands/env.js';
+export type { EnvEnrollHandlerDeps, EnvTokenHandlerDeps } from './commands/env.js';
+export { encodeChallenge, generateMachineKeypair, signWithMachineKey } from './env-bridge/keypair.js';
+export type { GenerateMachineKeypair, MachineKeypair, SignWithMachineKey } from './env-bridge/keypair.js';
 
 // `pagespace keys use` — the per-machine active key (browser-approved
 // activation ceremony shared with the wizard's "Set active key").

@@ -1,6 +1,6 @@
 /**
  * Static invariants of the local-environments migrations (Local Environments
- * epic, M1 · t05): `substrate` on `drive_envs`, its CHECKs and the composite-FK
+ * epic): `substrate` on `drive_envs`, its CHECKs and the composite-FK
  * target, and the `drive_env_local` sibling.
  *
  * TWO generated files, deliberately. Postgres requires the UNIQUE that a
@@ -98,6 +98,33 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
       expect(second.code).toMatch(/"bindPolicy" text DEFAULT 'owner' NOT NULL/);
       expect(second.code).toMatch(/"serverPolicy" jsonb DEFAULT '\{"ops":\[\],"checkpoint":false\}'::jsonb NOT NULL/);
       expect(second.code).toMatch(/CONSTRAINT "drive_env_local_bind_policy_check" CHECK/);
+    });
+  });
+
+  describe('0283 — the sibling becomes the lifecycle row (identity & enrollment)', () => {
+    const third = load(283);
+
+    it('should exist in the journal as 283', () => {
+      expect(third.file, 'no 0283_*.sql — run db:generate').toBeDefined();
+    });
+
+    it('should relax the key columns to NULL (unset until enrolled) and add the enrolled-has-key CHECK', () => {
+      for (const column of ['machinePublicKey', 'machineKeyFingerprint', 'serverKeyId']) {
+        expect(third.code).toMatch(new RegExp(`ALTER TABLE "drive_env_local" ALTER COLUMN "${column}" DROP NOT NULL`));
+      }
+      expect(third.code).toContain('ADD CONSTRAINT "drive_env_local_enrolled_has_key_check" CHECK (');
+    });
+
+    it('should add the code-hash and challenge columns, all nullable, and never a plaintext code column', () => {
+      for (const column of ['enrollmentCodeHash', 'enrollmentCodeExpiresAt', 'enrollmentCodeUsedAt', 'challengeNonce', 'challengeExpiresAt', 'challengeUsedAt']) {
+        expect(third.code).toMatch(new RegExp(`ADD COLUMN "${column}" (text|timestamp);`));
+      }
+      expect(third.code).not.toMatch(/"enrollmentCode" /);
+    });
+
+    it('should be additive too: no DROP of a table, column or constraint, no data rewrite', () => {
+      expect(third.code).not.toMatch(/DROP (TABLE|COLUMN|CONSTRAINT|INDEX)/i);
+      expect(third.code).not.toMatch(/^\s*(UPDATE|DELETE FROM|INSERT INTO)\b/m);
     });
   });
 

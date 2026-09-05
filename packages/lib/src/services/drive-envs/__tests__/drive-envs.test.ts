@@ -15,7 +15,7 @@ import { isUniqueViolation } from '../drive-envs-store';
 import { driveEnvDtoSchema } from '../../../drive-envs/env-contract';
 import { getDriveEnvLimit } from '../../sandbox/quota';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
-import { DRIVE_ID, ENV_ID, NOW, PAYER_ID, makeDriveEnvStore, makeEnvRecord, makeSpriteHost } from './fakes';
+import { DRIVE_ID, ENV_ID, NOW, PAYER_ID, makeDriveEnvStore, makeEnvRecord, makeLocalRecord, makeSpriteHost } from './fakes';
 
 const SANDBOX_ID = 'pgs-env-abc';
 
@@ -149,7 +149,7 @@ describe('listDriveEnvs / the DTO', () => {
       makeEnvRecord({ id: 'env-a', name: 'dev' }),
       makeEnvRecord({ id: 'env-b', name: 'staging', sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' }),
     ]);
-    const dtos = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: store.store } });
+    const dtos = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: store.store, now: () => NOW, liveConnection: () => null } });
 
     expect(dtos.map((d) => d.name)).toEqual(['dev', 'staging']);
     for (const dto of dtos) expect(driveEnvDtoSchema.parse(dto)).toEqual(dto);
@@ -170,7 +170,7 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
 
-  describe('substrate (Local Environments epic, t05)', () => {
+  describe('substrate (Local Environments epic)', () => {
     it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
       expect(dto.substrate).toBe('sprite');
@@ -198,6 +198,33 @@ describe('listDriveEnvs / the DTO', () => {
       expect(dto.substrate).toBe('sprite');
       expect(dto.status).toBe('running');
       expect('label' in dto).toBe(false);
+    });
+  });
+
+  describe('listing joins the local facts (carried from the t05 review)', () => {
+    it('given a drive with a Sprite env and an enrolled local env, should return both — the local one with its label and a derived connection status — and never throw', async () => {
+      const fake = makeDriveEnvStore([makeEnvRecord({ id: 'env-s', name: 'cloud' }), makeEnvRecord({ id: 'env-l', name: 'mac', substrate: 'local', createdAt: new Date(NOW.getTime() + 1) })]);
+      fake.local.set('env-l', makeLocalRecord({ envId: 'env-l', label: 'jono-macstudio', enrolledAt: NOW, lastSeenAt: NOW }));
+      const dtos = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: fake.store, now: () => NOW, liveConnection: () => null } });
+      expect(dtos.map((d) => [d.id, d.substrate, d.status])).toEqual([
+        ['env-s', 'sprite', 'none'],
+        ['env-l', 'local', 'connected'],
+      ]);
+      const local = dtos[1];
+      expect(local?.substrate === 'local' && local.label).toBe('jono-macstudio');
+    });
+
+    it('given a local env whose sibling is GONE (owner erased under Art 17), should still list it as disconnected with the env name as its label rather than throw for the whole drive', async () => {
+      const fake = makeDriveEnvStore([makeEnvRecord({ id: 'env-dead', name: 'old-laptop', substrate: 'local' })]);
+      const dtos = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: fake.store, now: () => NOW, liveConnection: () => null } });
+      expect(dtos).toEqual([expect.objectContaining({ id: 'env-dead', substrate: 'local', status: 'disconnected', label: 'old-laptop' })]);
+    });
+
+    it('given the live registry reports a socket for the env, should report connected even when lastSeenAt is stale', async () => {
+      const fake = makeDriveEnvStore([makeEnvRecord({ id: 'env-l', name: 'mac', substrate: 'local' })]);
+      fake.local.set('env-l', makeLocalRecord({ envId: 'env-l', enrolledAt: NOW, lastSeenAt: new Date(0) }));
+      const dtos = await listDriveEnvs({ driveId: DRIVE_ID, deps: { store: fake.store, now: () => NOW, liveConnection: (envId) => (envId === 'env-l' ? 'connected' : null) } });
+      expect(dtos[0]?.status).toBe('connected');
     });
   });
 });

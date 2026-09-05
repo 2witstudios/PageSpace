@@ -6,6 +6,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`pagespace env enroll <enrollmentId> <code>` and `pagespace env token <enrollmentId>` — bind
+  this machine to a local Environment.** `enroll` generates an Ed25519 keypair on the machine,
+  presents the one-time code with the public half, and stores the private half in the credential
+  store under `env:<enrollmentId>`; it is never printed or sent, and a refused enrollment discards
+  it. `token` proves possession of the key (server nonce, machine signature) and prints a
+  short-lived bridge token. Both work without a login, and the machine credential can never
+  authenticate an ordinary command (`logout` reports it as not logged in, `keys use` refuses it).
+  Requires a deployment with `LOCAL_ENVS_ENABLED=true`.
+
 - **`pagespace files upload <path> --drive <driveId>` — put a file in a drive without a browser.**
   Previously nothing outside the web client could, which blocked every headless producer of media.
   Optional `--parent`, `--title` and `--mime`. The media type is resolved from a table of formats

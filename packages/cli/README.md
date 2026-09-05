@@ -211,11 +211,35 @@ channels  send <channelId> <message>
 
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
+env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)
+          token <enrollmentId>           # prove this machine holds its key; prints a short-lived bridge token
+
 mcp       serve the MCP stdio server                                # see below
 ```
 
 One exception to the global flags: `keys create` ignores `--json` — its stdout is either
 ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=…` line.
+
+## `pagespace env` — this machine as a local environment
+
+A drive owner or admin can create an Environment with `substrate: "local"` and is shown a
+**one-time enrollment code** (valid ten minutes, single use). On the machine:
+
+```text
+pagespace env enroll <enrollmentId> <code> [--host <url>]
+pagespace env token <enrollmentId> [--host <url>]
+```
+
+`env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
+with the code, and stores the private half — plus the server signing key it pinned in return — in
+this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
+printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
+key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
+and prints a short-lived bridge token — the round trip `env connect` will perform on every
+reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
+and the machine credential is never used to authenticate ordinary commands (`logout` and
+`keys use` refuse it). The deployment must set `LOCAL_ENVS_ENABLED=true`; otherwise these
+endpoints do not exist.
 
 ## `pagespace mcp`
 

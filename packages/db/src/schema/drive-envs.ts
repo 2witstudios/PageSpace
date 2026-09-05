@@ -76,6 +76,18 @@ import { drives } from './core';
  * uniqueness load-bearing rather than merely tidy. Ids remain the wire
  * address everywhere else.
  */
+/** The closed substrate set. `DRIVE_ENV_SUBSTRATES[0]` is the column default. */
+export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
+export type DriveEnvSubstrate = (typeof DRIVE_ENV_SUBSTRATES)[number];
+
+/**
+ * `'a', 'b'` as raw SQL, for a CHECK's `IN (...)` over a closed set the code
+ * also exports. Raw on purpose: a CHECK is DDL, so the values must be inlined
+ * literals (bound parameters cannot appear in a constraint), and the emitted
+ * text has to match what drizzle-kit already snapshotted.
+ */
+export const sqlStringList = (values: readonly string[]) => sql.raw(values.map((value) => `'${value}'`).join(', '));
+
 export const driveEnvs = pgTable('drive_envs', {
   /**
    * The env's own identity — the API address, and the fold input for the
@@ -194,8 +206,8 @@ export const driveEnvs = pgTable('drive_envs', {
     .on(table.sandboxId, table.spriteTornDownAt)
     .where(sql`${table.sandboxId} IS NOT NULL AND ${table.spriteTornDownAt} IS NULL`),
 
-  /** The closed substrate set, enforced at the row. */
-  substrateCheck: check('drive_envs_substrate_check', sql`${table.substrate} IN ('sprite', 'local')`),
+  /** The closed substrate set, enforced at the row and built from `DRIVE_ENV_SUBSTRATES` so the two cannot drift. */
+  substrateCheck: check('drive_envs_substrate_check', sql`${table.substrate} IN (${sqlStringList(DRIVE_ENV_SUBSTRATES)})`),
 
   /**
    * Redundant with the PK on purpose: it is the TARGET of `drive_env_local`'s
@@ -218,10 +230,6 @@ export const driveEnvs = pgTable('drive_envs', {
     sql`${table.substrate} = 'sprite' OR (${table.spriteKey} IS NULL AND ${table.sandboxId} IS NULL AND ${table.spriteInstanceId} IS NULL)`,
   ),
 }));
-
-/** The closed substrate set. `DRIVE_ENV_SUBSTRATES[0]` is the column default. */
-export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
-export type DriveEnvSubstrate = (typeof DRIVE_ENV_SUBSTRATES)[number];
 
 export const driveEnvsRelations = relations(driveEnvs, ({ one }) => ({
   drive: one(drives, {

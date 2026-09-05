@@ -21,6 +21,7 @@ import { tokensCreateHandler } from './commands/keys/create.js';
 import { tokensListHandler } from './commands/keys/list.js';
 import { tokensRevokeHandler } from './commands/keys/revoke.js';
 import { keysUseHandler } from './commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from './commands/env.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
@@ -96,6 +97,10 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   tokensRevokeHandler,
   keysUseHandler,
   keysHandler,
+  // A machine enrolling, or proving its key, has no login: the one-time code
+  // and then the machine key ARE its credentials (`commands/env.ts`).
+  envEnrollHandler,
+  envTokenHandler,
 ]);
 
 /**
