@@ -342,6 +342,7 @@
   & .doc p .fg { color: var(--foreground); }
   & .doc li { font-size: 14px; color: var(--muted-foreground); margin-left: 20px; line-height: 1.6; }
   & .stream { display: flex; flex-direction: column; gap: 14px; height: 100%; padding: 18px 20px; }
+  & .doc ul { margin: 0; padding: 0; list-style: disc; }
   & .msg { display: flex; gap: 11px; align-items: flex-start; }
   & .who { display: flex; align-items: center; gap: 8px; margin-bottom: 3px; }
   & .who .n { font-weight: 600; font-size: 13px; }
