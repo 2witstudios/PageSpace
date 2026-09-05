@@ -29,6 +29,7 @@
   --tree-active: #e5e7eb;
   --separator: oklch(0.55 0.02 230 / 0.13);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.08), 0 4px 6px -4px rgb(0 0 0/.08);
+  --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0));
   /* Type scale. Two faces: the display serif speaks for the site (headlines,
      pull-quotes); Geist is the product's own face and stays on body, UI, and
      every mock. Marketing copy uses only these six steps — mock internals keep
@@ -58,6 +59,7 @@
   --tree-active: #374151;
   --separator: oklch(0.94 0 0 / 0.10);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.4), 0 4px 6px -4px rgb(0 0 0/.4);
+  --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.12), rgba(0, 0, 0, 0));
 }
 
 .lp {
@@ -78,6 +80,7 @@
   /* bottom padding leaves room for the app window's drop shadow — the section
      clips overflow (for the right-edge bleed), which was cutting the shadow off. */
   & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; }
+  & .hero::before { content: ""; position: absolute; inset: 0; background: var(--hero-glow); pointer-events: none; }
   & .hero-in { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 32px; }
   & h1.hero-h { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-display); font-weight: 500; letter-spacing: -0.02em; line-height: 0.98; text-wrap: balance; margin: 0 0 14px; }
   /* The subline is our claim, so it outranks everything below the fold line:
