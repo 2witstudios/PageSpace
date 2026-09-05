@@ -178,6 +178,10 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
         driveId: machine.driveId,
         createdByService: 'env-bridge',
       }),
+    // The compensating revoke for a revocation that lands between the challenge
+    // CAS and the mint (C4): the real session revoker, keyed by the raw token
+    // the mint just returned.
+    revokeToken: (token, machine) => sessionService.revokeSession(token, `env_bridge_${machine.reason}`),
   };
 }
 

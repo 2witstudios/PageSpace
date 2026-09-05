@@ -273,6 +273,12 @@ export interface LocalEnvIdentityServiceDeps {
    * which drive it serves. The store of tokens is the caller's.
    */
   mintToken: (policy: EnvBridgeTokenPolicy, machine: { envId: string; driveId: string; ownerId: string; enrollmentId: string }) => Promise<string>;
+  /**
+   * Revoke a token this flow minted moments ago — the compensating write for
+   * a revocation that landed between the challenge CAS and the mint (Codex
+   * C4). Wired to the real session revoker; a fake records the call.
+   */
+  revokeToken: (token: string, machine: { envId: string; enrollmentId: string; reason: 'revoked_during_mint' }) => Promise<void>;
 }
 
 export type EnrollLocalDriveEnvResult =
@@ -397,6 +403,14 @@ export type RedeemLocalEnvChallengeResult =
  * The pure gate decides; the store's compare-and-set consumes the nonce (and
  * records the heartbeat) only on ok; the token is minted only after the CAS
  * won — so a replay, a race, or a forged signature mints nothing.
+ *
+ * **Mint, then re-read, then (maybe) revoke** (Codex C4). The consume CAS
+ * carries `revokedAt IS NULL`, but the mint runs AFTER it, so a revocation
+ * landing in that gap would leave a valid token on a revoked machine. Re-read
+ * the row after minting: if it is revoked (or gone), revoke the token just
+ * minted and answer `revoked`. No valid token survives a revoke. The order is
+ * pinned by test — the mint must be visible to the revoker before the re-read
+ * decides, or a crash between the two could still strand a live token.
  */
 export async function redeemLocalEnvChallenge({
   enrollmentId,
@@ -441,6 +455,13 @@ export async function redeemLocalEnvChallenge({
 
   const policy = getEnvBridgeTokenPolicy({ envId: row.envId, enrollmentId: row.enrollmentId });
   const token = await deps.mintToken(policy, { envId: row.envId, driveId: row.driveId, ownerId: row.ownerId, enrollmentId: row.enrollmentId });
+
+  // C4: re-read AFTER the mint; a revocation that landed since the CAS wins.
+  const after = await deps.store.findLocalByEnrollmentId(enrollmentId);
+  if (!after || after.revokedAt !== null) {
+    await deps.revokeToken(token, { envId: row.envId, enrollmentId: row.enrollmentId, reason: 'revoked_during_mint' });
+    return { ok: false, reason: 'revoked' };
+  }
   return { ok: true, token, expiresInMs: policy.ttlMs, envId: row.envId };
 }
 

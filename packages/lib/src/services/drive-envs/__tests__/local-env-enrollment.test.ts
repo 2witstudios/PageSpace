@@ -49,6 +49,9 @@ const resolvePayer = async () => ({ payerId: PAYER_ID, tier: 'pro' as const });
 function harness(now: Date = NOW) {
   const fake = makeDriveEnvStore([], () => now);
   const minted: Array<{ type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }> = [];
+  const revoked: Array<{ token: string; reason: string }> = [];
+  /** Every IO step in order, so a test can pin mint → re-read → revoke. */
+  const order: string[] = [];
   const deps = {
     store: fake.store,
     resolvePayer,
@@ -56,10 +59,15 @@ function harness(now: Date = NOW) {
     identity,
     mintToken: async (policy: { type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }) => {
       minted.push(policy);
+      order.push('mint');
       return `tok_${minted.length}`;
     },
+    revokeToken: async (token: string, machine: { reason: string }) => {
+      revoked.push({ token, reason: machine.reason });
+      order.push('revoke');
+    },
   };
-  return { fake, deps, minted };
+  return { fake, deps, minted, revoked, order };
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
@@ -387,6 +395,80 @@ describe('issueLocalEnvChallenge / redeemLocalEnvChallenge — proof of possessi
     });
     expect(result).toEqual({ ok: false, reason: 'race' });
     expect(h.minted).toHaveLength(0);
+  });
+
+  // C4 (Codex): the consume CAS carries `revokedAt IS NULL`, but the mint runs
+  // after it. A revocation landing in that gap must not leave a live token.
+  it('given a revocation that lands between the challenge CAS and the mint, should mint, RE-READ, revoke the just-minted token, and answer revoked (C4)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    let consumed = false;
+    const store = {
+      ...real,
+      consumeChallenge: async (input: Parameters<typeof real.consumeChallenge>[0]) => {
+        const won = await real.consumeChallenge(input);
+        // The revoke lands right after the CAS won — the row the service read is stale.
+        h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, revokedAt: NOW });
+        consumed = true;
+        return won;
+      },
+      findLocalByEnrollmentId: async (enrollmentId: string) => {
+        h.order.push(consumed ? 'reread' : 'read');
+        return real.findLocalByEnrollmentId(enrollmentId);
+      },
+    };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(h.minted).toHaveLength(1);
+    expect(h.revoked).toEqual([{ token: 'tok_1', reason: 'revoked_during_mint' }]);
+    expect(h.order).toEqual(['read', 'mint', 'reread', 'revoke']);
+  });
+
+  it('given the row VANISHED between the CAS and the mint (owner erased), should likewise revoke the minted token', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      consumeChallenge: async (input: Parameters<typeof real.consumeChallenge>[0]) => {
+        const won = await real.consumeChallenge(input);
+        h.fake.local.delete(env.id);
+        return won;
+      },
+    };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(h.revoked.map((r) => r.token)).toEqual(['tok_1']);
+  });
+
+  it('given NO revocation, the happy path should re-read once and revoke NOTHING', async () => {
+    const h = harness();
+    await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    const store = { ...real, findLocalByEnrollmentId: async (id: string) => { h.order.push('read'); return real.findLocalByEnrollmentId(id); } };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result.ok).toBe(true);
+    expect(h.revoked).toEqual([]);
+    expect(h.order).toEqual(['read', 'mint', 'read']);
   });
 
   it('given no outstanding challenge, should refuse with no_challenge', async () => {
