@@ -89,11 +89,17 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const body = await request.json().catch(() => null);
     const parsed = createDriveEnvRequestSchema.safeParse(body);
     if (!parsed.success) {
-      const labelIssue = parsed.error.issues.some((issue) => issue.path[0] === 'label');
-      return NextResponse.json(
-        { error: labelIssue ? 'A machine label is required for a local environment' : 'A non-empty environment name is required' },
-        { status: 400 },
-      );
+      // Name the field that failed (CodeRabbit): an unknown substrate is not a
+      // name problem, and a blank label is invalid rather than merely missing.
+      const failed = new Set(parsed.error.issues.map((issue) => String(issue.path[0] ?? '')));
+      const error = failed.has('substrate')
+        ? "substrate must be 'sprite' or 'local'"
+        : failed.has('label')
+          ? 'A machine label (1–64 characters) is required for a local environment'
+          : failed.has('name')
+            ? 'A non-empty environment name is required'
+            : 'Invalid environment request';
+      return NextResponse.json({ error }, { status: 400 });
     }
 
     // Local environments (the user's own machine via the zero-trust bridge)

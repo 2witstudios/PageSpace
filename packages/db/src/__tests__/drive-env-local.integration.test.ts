@@ -129,6 +129,52 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect((await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, env!.id))).length).toBe(0);
   });
 
+  it('given a SPRITE env, inserting a drive_env_local sibling for it should be REFUSED (foreign_key_violation 23503) — local metadata can never attach to a Sprite env (review)', async () => {
+    const { drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'sprite-parent' }).returning();
+    let code: string | undefined;
+    try {
+      await db.insert(driveEnvLocal).values({ envId: env!.id, label: 'm', enrollmentId: `enr_sp_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe('23503');
+  });
+
+  it("given a local env WITH a sibling, flipping the parent to 'sprite' should be REFUSED (23503) — the composite FK holds both write directions (review)", async () => {
+    const { drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'flip', substrate: 'local' }).returning();
+    await db.insert(driveEnvLocal).values({ envId: env!.id, label: 'm', enrollmentId: `enr_flip_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
+    let code: string | undefined;
+    try {
+      await db.update(driveEnvs).set({ substrate: 'sprite' }).where(eq(driveEnvs.id, env!.id));
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe('23503');
+  });
+
+  it("given a local env whose sibling was deleted, flipping the parent to 'sprite' should then succeed (the invariant is about the pair, not the column)", async () => {
+    const { drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'flip-ok', substrate: 'local' }).returning();
+    await db.insert(driveEnvLocal).values({ envId: env!.id, label: 'm', enrollmentId: `enr_flipok_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
+    await db.delete(driveEnvLocal).where(eq(driveEnvLocal.envId, env!.id));
+    const [updated] = await db.update(driveEnvs).set({ substrate: 'sprite' }).where(eq(driveEnvs.id, env!.id)).returning();
+    expect(updated?.substrate).toBe('sprite');
+  });
+
+  it("given a sibling inserted with substrate 'sprite' explicitly, should be refused by the sibling's own CHECK (23514)", async () => {
+    const { drive } = await seed();
+    const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'sib-check', substrate: 'local' }).returning();
+    let code: string | undefined;
+    try {
+      await db.insert(driveEnvLocal).values({ envId: env!.id, substrate: 'sprite' as never, label: 'm', enrollmentId: `enr_sc_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });
+    } catch (error) {
+      code = pgCode(error);
+    }
+    expect(code).toBe(CHECK_VIOLATION);
+  });
+
   it('given a sibling row, should default bindPolicy to owner and serverPolicy to deny-by-default', async () => {
     const { drive } = await seed();
     const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'defaults', substrate: 'local' }).returning();

@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, jsonb, check, unique } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, check, unique, foreignKey } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { driveEnvs, DRIVE_ENV_SUBSTRATES } from './drive-envs';
 
@@ -14,6 +14,13 @@ export { DRIVE_ENV_SUBSTRATES };
  * that only a bridged machine has live here, so they never clutter the Sprite
  * row or the crons' table scans:
  *
+ * - **The sibling relationship is a DATABASE fact, both ways.** `envId` is the
+ *   PK, but the FK is COMPOSITE: `(envId, substrate) → drive_envs (id,
+ *   substrate)`, with this table's `substrate` pinned to `'local'` by CHECK.
+ *   So a sibling can never attach to a Sprite env (no `(id, 'local')` row to
+ *   reference), and a local env can never be flipped to `'sprite'` while its
+ *   sibling exists (the referencing row would dangle — 23503). No trigger to
+ *   forget, and deleting the env still cascades.
  * - **Identity is MACHINE-HELD.** The daemon generates an Ed25519 keypair at
  *   enrollment; the private key never leaves the machine's keychain. This row
  *   stores only the PUBLIC key, its fingerprint (pinned on every handshake),
@@ -33,10 +40,9 @@ export { DRIVE_ENV_SUBSTRATES };
  *   Sprite status is derived from its pointers — a cached status is a lie
  *   waiting for a crash.
  *
- * `envId` is both the primary key and a cascading FK: deleting the env deletes
- * its connection facts. The relation edge lives on THIS side only —
- * `drive-envs.ts` must not import this module (it already imports the other
- * way for the FK; see its docblock on the sessions edge for the same rule).
+ * The relation edge lives on THIS side only — `drive-envs.ts` must not import
+ * this module (it already imports the other way for the FK; see its docblock
+ * on the sessions edge for the same rule).
  */
 export const DRIVE_ENV_BIND_POLICIES = ['owner', 'admins', 'members'] as const;
 export type DriveEnvBindPolicy = (typeof DRIVE_ENV_BIND_POLICIES)[number];
@@ -56,10 +62,15 @@ export interface DriveEnvLocalServerPolicy {
 }
 
 export const driveEnvLocal = pgTable('drive_env_local', {
-  /** PK and cascading FK to the env this row describes. */
-  envId: text('envId')
-    .primaryKey()
-    .references(() => driveEnvs.id, { onDelete: 'cascade' }),
+  /** PK; also the first column of the composite FK to the env this row describes. */
+  envId: text('envId').primaryKey(),
+
+  /**
+   * Constant `'local'`, CHECK-pinned. Exists ONLY to be the second column of
+   * the composite FK, which is what ties this row to a LOCAL parent at the
+   * database level.
+   */
+  substrate: text('substrate').notNull().default('local'),
 
   /** Human name of the machine ("jono-macstudio"). A label, never an address. */
   label: text('label').notNull(),
@@ -98,6 +109,19 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
 }, (table) => ({
+  /**
+   * The composite FK — see the table docblock. Cascades with the env; NO
+   * ACTION on update, which is exactly what refuses flipping a local parent
+   * to `'sprite'` while this row exists.
+   */
+  envFk: foreignKey({
+    columns: [table.envId, table.substrate],
+    foreignColumns: [driveEnvs.id, driveEnvs.substrate],
+  }).onDelete('cascade'),
+
+  /** This row is local by definition; the column exists for the FK. */
+  substrateCheck: check('drive_env_local_substrate_check', sql`${table.substrate} = 'local'`),
+
   /** The wire identity must name exactly one env. */
   enrollmentIdUnique: unique('drive_env_local_enrollment_id_unique').on(table.enrollmentId),
 

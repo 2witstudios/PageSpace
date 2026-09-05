@@ -128,6 +128,20 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).not.toHaveBeenCalled();
   });
 
+  it('given an unknown substrate, should answer 400 naming the substrate — not the name (CodeRabbit)', async () => {
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'modal' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/substrate/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given a blank label for a local env, should answer 400 naming the label as invalid (not merely missing)', async () => {
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: '   ' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
   it('given an explicit substrate sprite, should behave exactly like the plain-name path', async () => {
     vi.mocked(createEnvInDrive).mockResolvedValue({ ok: true, env: envRow } as never);
     const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);

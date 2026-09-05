@@ -12,6 +12,8 @@
  * `src/__tests__/drive-env-local.integration.test.ts`. Runs without a database.
  */
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'fs';
+import path from 'path';
 import { getTableConfig } from 'drizzle-orm/pg-core';
 import { getTableColumns } from 'drizzle-orm';
 import { driveEnvs } from '../drive-envs';
@@ -59,6 +61,33 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(fk).toBeDefined();
     expect(getTableConfig(fk!.reference().foreignTable).name).toBe('drive_envs');
     expect(fk!.onDelete).toBe('cascade');
+  });
+
+  it("carries a constant substrate column CHECK-pinned to 'local' — the second half of the composite FK", () => {
+    expect(localColumns.substrate).toBeDefined();
+    expect(localColumns.substrate.notNull).toBe(true);
+    expect(localColumns.substrate.hasDefault).toBe(true);
+    expect(localConfig.checks.find((c) => c.name === 'drive_env_local_substrate_check')).toBeDefined();
+  });
+
+  it('references its parent by (envId, substrate) → drive_envs (id, substrate), so a sibling can only ever belong to a LOCAL env and a local parent cannot be flipped to sprite while its sibling exists (review: Codex + CodeRabbit)', () => {
+    const composite = localConfig.foreignKeys.find((f) => f.reference().columns.length === 2);
+    expect(composite, 'composite FK (envId, substrate)').toBeDefined();
+    expect(composite!.reference().columns.map((c) => c.name)).toEqual(['envId', 'substrate']);
+    expect(composite!.reference().foreignColumns.map((c) => c.name)).toEqual(['id', 'substrate']);
+    expect(getTableConfig(composite!.reference().foreignTable).name).toBe('drive_envs');
+    expect(composite!.onDelete).toBe('cascade');
+    expect(composite!.onUpdate ?? 'no action').toBe('no action');
+  });
+
+  it('drive_envs exposes UNIQUE (id, substrate) as the composite FK target', () => {
+    const target = envConfig.uniqueConstraints.find((u) => u.columns.map((c) => c.name).join(',') === 'id,substrate');
+    expect(target).toBeDefined();
+  });
+
+  it('is exported as a package subpath (@pagespace/db/schema/drive-env-local) per the repo import rule', () => {
+    const pkg = JSON.parse(readFileSync(path.resolve(__dirname, '../../../package.json'), 'utf8')) as { exports: Record<string, unknown> };
+    expect(pkg.exports['./schema/drive-env-local']).toBeDefined();
   });
 
   it('has a UNIQUE enrollmentId — the wire identity the daemon presents', () => {

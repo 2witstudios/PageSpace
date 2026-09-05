@@ -1,6 +1,6 @@
 {
-  "id": "4443181b-446c-4c04-bf00-1d385727d5d2",
-  "prevId": "b81492b9-04e4-4cb8-81eb-101929234b2b",
+  "id": "1716a816-9e9b-499e-8efb-ccf91a70b929",
+  "prevId": "4443181b-446c-4c04-bf00-1d385727d5d2",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -23082,6 +23082,146 @@
         "drive_envs_local_no_sprite_check": {
           "name": "drive_envs_local_no_sprite_check",
           "value": "\"drive_envs\".\"substrate\" = 'sprite' OR (\"drive_envs\".\"spriteKey\" IS NULL AND \"drive_envs\".\"sandboxId\" IS NULL AND \"drive_envs\".\"spriteInstanceId\" IS NULL)"
+        }
+      },
+      "isRLSEnabled": false
+    },
+    "public.drive_env_local": {
+      "name": "drive_env_local",
+      "schema": "",
+      "columns": {
+        "envId": {
+          "name": "envId",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "substrate": {
+          "name": "substrate",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'local'"
+        },
+        "label": {
+          "name": "label",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "enrollmentId": {
+          "name": "enrollmentId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "machinePublicKey": {
+          "name": "machinePublicKey",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "machineKeyFingerprint": {
+          "name": "machineKeyFingerprint",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "serverKeyId": {
+          "name": "serverKeyId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "capabilities": {
+          "name": "capabilities",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "serverPolicy": {
+          "name": "serverPolicy",
+          "type": "jsonb",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'{\"ops\":[],\"checkpoint\":false}'::jsonb"
+        },
+        "bindPolicy": {
+          "name": "bindPolicy",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'owner'"
+        },
+        "lastSeenAt": {
+          "name": "lastSeenAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "enrolledAt": {
+          "name": "enrolledAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "revokedAt": {
+          "name": "revokedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "createdAt": {
+          "name": "createdAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updatedAt": {
+          "name": "updatedAt",
+          "type": "timestamp",
+          "primaryKey": false,
+          "notNull": true
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "drive_env_local_envId_substrate_drive_envs_id_substrate_fk": {
+          "name": "drive_env_local_envId_substrate_drive_envs_id_substrate_fk",
+          "tableFrom": "drive_env_local",
+          "tableTo": "drive_envs",
+          "columnsFrom": [
+            "envId",
+            "substrate"
+          ],
+          "columnsTo": [
+            "id",
+            "substrate"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {
+        "drive_env_local_enrollment_id_unique": {
+          "name": "drive_env_local_enrollment_id_unique",
+          "nullsNotDistinct": false,
+          "columns": [
+            "enrollmentId"
+          ]
+        }
+      },
+      "policies": {},
+      "checkConstraints": {
+        "drive_env_local_substrate_check": {
+          "name": "drive_env_local_substrate_check",
+          "value": "\"drive_env_local\".\"substrate\" = 'local'"
+        },
+        "drive_env_local_bind_policy_check": {
+          "name": "drive_env_local_bind_policy_check",
+          "value": "\"drive_env_local\".\"bindPolicy\" IN ('owner', 'admins', 'members')"
         }
       },
       "isRLSEnabled": false

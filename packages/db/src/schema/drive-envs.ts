@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, bigint, index, uniqueIndex, check } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, bigint, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -196,6 +196,15 @@ export const driveEnvs = pgTable('drive_envs', {
 
   /** The closed substrate set, enforced at the row. */
   substrateCheck: check('drive_envs_substrate_check', sql`${table.substrate} IN ('sprite', 'local')`),
+
+  /**
+   * Redundant with the PK on purpose: it is the TARGET of `drive_env_local`'s
+   * composite FK `(envId, substrate) → (id, substrate)`. That FK is what makes
+   * the sibling relationship a database fact in BOTH write directions — a
+   * sibling cannot attach to a Sprite env, and a local env cannot be flipped
+   * to `'sprite'` while its sibling exists — with no trigger to forget.
+   */
+  idSubstrateUnique: unique('drive_envs_id_substrate_unique').on(table.id, table.substrate),
 
   /**
    * A local env may hold NO Sprite pointer. This is what makes a local row
