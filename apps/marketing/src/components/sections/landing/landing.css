@@ -262,7 +262,9 @@
   /* Emphasis via opacity only — scaling inactive slides made the edge-to-edge
      gaps look uneven (a shrunk neighbor reads as a wider gap). Uniform size keeps
      every gap identical. */
-  & .slide { transition: opacity .3s ease; opacity: 0.5; }
+  /* 0.90 is the lowest opacity at which muted 12px text inside a dimmed slide
+     still clears 4.5:1 on the card (axe blends slide opacity into the text). */
+  & .slide { transition: opacity .3s ease; opacity: 0.90; }
   & .slide[data-active="true"] { opacity: 1; }
   /* Reserve two lines so captions of different lengths don't shift the page. */
   & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: var(--t-body); line-height: 1.5; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 48px; }
