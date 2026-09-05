@@ -386,3 +386,29 @@ jobs:
 
       - name: Knip (unused code gate)
         run: bun run knip:check
+
+  migration-safety:
+    name: Destructive Migration Check
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+
+      # Newly added packages/db/drizzle/*.sql migrations that contain a destructive
+      # statement (DROP TABLE/COLUMN, TRUNCATE, a type change, an enum-swap rename,
+      # or a NOT NULL column with no DEFAULT) must carry a leading
+      # `-- destructive-migration-ack: <reason>` comment. See
+      # scripts/check-destructive-migrations.ts for the full pattern list and scope
+      # notes (per-file only, not retroactive on existing migrations).
+      - name: Check for unacknowledged destructive migrations
+        run: |
+          BASE_REF="${{ github.event.pull_request.base.sha || github.event.before }}"
+          if [ -z "$BASE_REF" ] || [ "$BASE_REF" = "0000000000000000000000000000000000000000" ]; then
+            BASE_REF="HEAD~1"
+          fi
+          bun scripts/check-destructive-migrations.ts "$BASE_REF"
