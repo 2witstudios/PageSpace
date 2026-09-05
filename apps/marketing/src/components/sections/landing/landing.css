@@ -388,13 +388,11 @@
   .lp .aw-body { height: 440px; }
 }
 
-@media (max-width: 1024px) {
-  .lp .aw-ai { display: none; }
-}
-
-@media (max-width: 760px) {
-  .lp .aw-side { display: none; }
-}
+/* The hero app window keeps all three panes on every screen; below 900px the
+   ScaledAppWindow wrapper scales the whole window down to fit (see the wrapper
+   component). Grid-item guard so the wide window bleeds/scales instead of
+   forcing its track wide. */
+.lp .appwin-outer { min-width: 0; }
 
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
