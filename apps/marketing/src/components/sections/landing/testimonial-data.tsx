@@ -1,7 +1,7 @@
 import type { ReactNode } from "react";
 
 /**
- * Real Threads posts about PageSpace, shown as pull-quote cards. `body` is plain
+ * Real social posts about PageSpace, shown as pull-quote cards. `body` is plain
  * text for the Review JSON-LD (schema.tsx); `quote` is the styled display node.
  * Wording is quoted verbatim from the public posts.
  */
@@ -42,5 +42,6 @@ export const TESTIMONIALS: Testimonial[] = [
         slowly, <span className="lnk">pagespace</span> becomes my go-to tool for projects and project kb management. toss things there, sort it after. better vs obsidian and notion in many ways for me.
       </>
     ),
+    credential: { icon: "zap", text: "AI automation specialist" },
   },
 ];
