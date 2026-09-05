@@ -289,17 +289,23 @@ function CodeMock() {
 }
 
 function FileMock() {
-  const widths = ["100%", "97%", "100%", "88%", "100%", "95%", "99%", "64%"];
   return (
     <>
-      <div className="pdfbar"><span className="pdfbtn"><Ico name="chevL" size="i14" /></span>Page 1 of 14<span className="pdfbtn"><Ico name="chevR" size="i14" /></span></div>
+      <div className="pdfbar"><span className="pdfbtn"><Ico name="chevL" size="i14" /></span>Page 1 of 6<span className="pdfbtn"><Ico name="chevR" size="i14" /></span></div>
       <div className="pdfarea">
         <div className="pdfpage">
-          <div className="h" />
-          <div className="sh" />
-          {widths.map((w, i) => (
-            <div className="pl" style={{ width: w, ...(i === 4 ? { marginTop: 16 } : {}) }} key={i} />
-          ))}
+          <div className="pdf-eyebrow">PRODUCT BRIEF</div>
+          <div className="pdf-title">Q1 Launch Brief</div>
+          <div className="pdf-meta">Product team · Feb 2026 · v3</div>
+          <p className="pdf-p">The scope, positioning, and success metrics for the Q1 launch — the source of truth the team and its agents plan from.</p>
+          <div className="pdf-h">Positioning</div>
+          <p className="pdf-p">One workspace where the whole team and its AI get the actual work done together — documents, tasks, and channels in one tree, not scattered across tabs.</p>
+          <div className="pdf-h">Success metrics</div>
+          <ul className="pdf-list">
+            <li>45% week-one activation</li>
+            <li>Redesigned onboarding shipped</li>
+            <li>Announcement &amp; press kit live</li>
+          </ul>
         </div>
       </div>
     </>

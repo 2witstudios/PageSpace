@@ -295,10 +295,15 @@
   & .cnm { color: #b45309; }
   & .pdfbar { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 11px 16px; border-bottom: 1px solid var(--separator); font-size: 13px; color: var(--muted-foreground); }
   & .pdfbtn { width: 28px; height: 28px; border-radius: 7px; border: 1px solid var(--border); display: grid; place-items: center; }
-  & .pdfpage { width: 100%; max-width: 344px; background: #fff; box-shadow: 0 10px 30px rgb(0 0 0/.18); border-radius: 3px; padding: 26px 28px; }
-  & .pdfpage .h { height: 15px; width: 64%; background: #1a1e21; opacity: .85; border-radius: 3px; margin-bottom: 10px; }
-  & .pdfpage .sh { height: 8px; width: 40%; background: #d7dade; border-radius: 4px; margin-bottom: 20px; }
-  & .pdfpage .pl { height: 7px; background: #cbced3; border-radius: 4px; margin-bottom: 9px; }
+  /* Rendered like a printed page — fixed dark-on-white regardless of theme. */
+  & .pdfpage { width: 100%; max-width: 360px; background: #fff; box-shadow: 0 10px 30px rgb(0 0 0/.18); border-radius: 3px; padding: 26px 30px; color: #2b3138; }
+  & .pdfpage .pdf-eyebrow { font-family: var(--font-mono); font-size: 8px; font-weight: 600; letter-spacing: 0.14em; color: #9098a1; margin-bottom: 9px; }
+  & .pdfpage .pdf-title { font-size: 19px; font-weight: 700; letter-spacing: -0.01em; color: #14181c; }
+  & .pdfpage .pdf-meta { font-size: 9px; color: #9098a1; margin: 3px 0 16px; }
+  & .pdfpage .pdf-h { font-size: 11.5px; font-weight: 700; color: #14181c; margin: 13px 0 5px; }
+  & .pdfpage .pdf-p { font-size: 10px; line-height: 1.65; color: #3a4048; margin: 0 0 9px; }
+  & .pdfpage .pdf-list { margin: 0; padding-left: 15px; }
+  & .pdfpage .pdf-list li { font-size: 10px; line-height: 1.7; color: #3a4048; }
   & table.fv { width: 100%; border-collapse: collapse; font-size: 13px; }
   & table.fv th { text-align: left; font-weight: 500; color: var(--muted-foreground); font-size: 12px; padding: 8px 10px; border-bottom: 1px solid var(--separator); }
   & table.fv td { padding: 7px 10px; border-bottom: 1px solid var(--separator); }
