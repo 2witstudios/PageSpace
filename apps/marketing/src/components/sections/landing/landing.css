@@ -67,7 +67,9 @@
   & .sub { font-size: 17px; color: var(--muted-foreground); text-wrap: pretty; line-height: 1.55; margin: 0; }
 
   /* hero — product-as-hero */
-  & .hero { position: relative; overflow: hidden; padding: 28px 0 0; }
+  /* bottom padding leaves room for the app window's drop shadow — the section
+     clips overflow (for the right-edge bleed), which was cutting the shadow off. */
+  & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; }
   & .hero::before { content: ""; position: absolute; inset: 0; background: var(--hero-glow); pointer-events: none; }
   & .hero-in { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 32px; }
   & h1.hero-h { font-size: clamp(36px, 5.6vw, 60px); font-weight: 700; letter-spacing: -0.035em; line-height: 1.0; margin: 0 0 12px; }
