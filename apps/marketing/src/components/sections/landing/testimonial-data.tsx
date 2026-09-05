@@ -50,10 +50,10 @@ export const TESTIMONIALS: Testimonial[] = [
     handle: "@NoahHines",
     avatar: "/noah-hines.png",
     body:
-      "Every 6-12 months I look into new apps to organize my life, notes, to-do's, etc. because something is always missing. Pretty sure I'm done looking because PageSpace has what I've been looking for (and things I didn't know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.",
+      "PageSpace has what I've been looking for (and things I didn't know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.",
     quote: (
       <>
-        Every 6-12 months I look into new apps to organize my life, notes, to-do&rsquo;s, etc. because something is always missing. Pretty sure I&rsquo;m done looking because <span className="lnk">PageSpace</span> has what I&rsquo;ve been looking for (and things I didn&rsquo;t know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.
+        <span className="lnk">PageSpace</span> has what I&rsquo;ve been looking for (and things I didn&rsquo;t know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.
       </>
     ),
     credential: { icon: "chart", text: "Sales Manager at Ideal Impact" },
