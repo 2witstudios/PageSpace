@@ -394,12 +394,11 @@
    forcing its track wide. */
 .lp .appwin-outer { min-width: 0; }
 
-/* The hero answer block (DAB) is visually busy on phones. Hide it below the
-   tablet breakpoint but keep it in the DOM (not conditionally unmounted) so the
-   AEO answer block still reaches crawlers in the first 200 words. */
-@media (max-width: 767px) {
-  .lp .hero-dab { display: none; }
-}
+/* The hero answer block (DAB) exists for AEO (a self-contained answer in the
+   first 200 words). It reads busy in the visual design, so it is hidden from
+   all viewers but kept in the DOM — not conditionally unmounted — so crawlers
+   still get it. */
+.lp .hero-dab { display: none; }
 
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
