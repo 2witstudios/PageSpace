@@ -206,8 +206,25 @@
   & .sstatus .mono { font-weight: 500; color: var(--foreground); }
   & .lang { display: flex; align-items: center; padding: 8px 16px; border-bottom: 1px solid var(--separator); }
   & .langsel { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 5px 11px; font-size: 12px; color: var(--foreground); min-width: 150px; justify-content: space-between; }
-  & .cview { position: relative; padding: 16px; }
-  & .cmax { position: absolute; top: 12px; right: 12px; width: 30px; height: 30px; border-radius: 7px; background: color-mix(in oklab, var(--card), transparent 20%); border: 1px solid var(--separator); display: grid; place-items: center; color: var(--muted-foreground); }
+  & .cview { padding: 16px; }
+  /* Canvas renders a publishable HTML artifact — a mini website, not a dashboard. */
+  & .site { border: 1px solid var(--separator); border-radius: 10px; overflow: hidden; background: var(--background); }
+  & .site-bar { display: flex; align-items: center; gap: 8px; padding: 7px 10px; border-bottom: 1px solid var(--separator); background: color-mix(in oklab, var(--muted), transparent 40%); }
+  & .site-bar .dotrow { display: flex; gap: 4px; flex: 0 0 auto; }
+  & .site-bar .dotrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--border); }
+  & .site-url { flex: 1; text-align: center; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); background: var(--background); border: 1px solid var(--border); border-radius: 5px; padding: 2px 8px; }
+  & .site-nav { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--separator); }
+  & .site-nav .logo { width: 15px; height: 15px; border-radius: 4px; background: linear-gradient(150deg, var(--primary), color-mix(in oklab, var(--primary), #000 25%)); flex: 0 0 auto; }
+  & .site-nav .brand { font-size: 12px; font-weight: 700; }
+  & .site-nav .links { margin-left: auto; display: flex; align-items: center; gap: 12px; }
+  & .site-nav .links .nl { font-size: 11px; color: var(--muted-foreground); }
+  & .site-nav .cta { font-size: 11px; font-weight: 600; color: var(--primary-foreground); background: var(--primary); border-radius: 6px; padding: 4px 10px; }
+  & .site-hero { padding: 18px 16px 16px; text-align: center; background: linear-gradient(160deg, color-mix(in oklab, var(--primary), transparent 84%), transparent 70%); border-bottom: 1px solid var(--separator); }
+  & .site-eyebrow { font-family: var(--font-mono); font-size: 9px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--primary); }
+  & .site-h { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; margin: 6px 0 0; }
+  & .site-p { font-size: 12px; color: var(--muted-foreground); margin: 6px auto 0; max-width: 34ch; line-height: 1.5; }
+  & .site-btn { display: inline-block; margin-top: 12px; background: var(--primary); color: var(--primary-foreground); font-size: 12px; font-weight: 600; padding: 7px 14px; border-radius: 8px; }
+  & .site-foot { padding: 11px 12px; text-align: center; font-family: var(--font-mono); font-size: 10px; color: var(--muted-foreground); }
   & .pdfarea { padding: 18px 16px 0; display: flex; justify-content: center; align-items: flex-start; background: color-mix(in oklab, var(--muted), transparent 55%); height: 100%; }
   & .pill { display: inline-flex; align-items: center; gap: 5px; height: 28px; padding: 0 10px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--muted-foreground); }
   & .pill.on { background: var(--muted); color: var(--foreground); }
@@ -267,14 +284,6 @@
   & .ctabs { display: flex; border-bottom: 1px solid var(--separator); margin: -4px 0 14px; }
   & .ctab { font-size: 13px; color: var(--muted-foreground); padding: 8px 14px; border-bottom: 2px solid transparent; }
   & .ctab.on { color: var(--foreground); border-bottom-color: #3b82f6; font-weight: 500; }
-  & .tiles { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  & .tile { border: 1px solid var(--border); border-radius: 10px; padding: 13px; background: color-mix(in oklab, var(--muted), transparent 65%); }
-  & .tile .k { font-size: 11px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: 0.05em; font-family: var(--font-mono); }
-  & .tile .v { font-size: 24px; font-weight: 700; letter-spacing: -0.02em; margin-top: 4px; }
-  & .tile .v small { font-size: 12px; font-weight: 600; color: var(--green-fg); margin-left: 6px; }
-  & .spark { display: flex; align-items: flex-end; gap: 4px; height: 32px; margin-top: 10px; }
-  & .spark i { flex: 1; background: var(--primary-soft); border-radius: 3px 3px 0 0; }
-  & .spark i.hi { background: var(--primary); }
   & .code { font-family: var(--font-mono); font-size: 12.5px; padding: 8px 0; overflow: hidden; background: color-mix(in oklab, var(--muted), transparent 60%); height: 100%; }
   & .cl { display: grid; grid-template-columns: 36px 1fr; line-height: 1.7; }
   & .cln { color: var(--muted-foreground); opacity: .55; text-align: right; padding-right: 12px; user-select: none; }
@@ -417,6 +426,12 @@
   .lp .slide table.tl th, .lp .slide table.tl td { padding-left: 6px; padding-right: 6px; }
   .lp .slide table.tl .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .lp .slide .uasg, .lp .slide .aiasg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+  /* Canvas: the rendered site's nav links crowd the narrow card; keep brand + CTA.
+     Tighten the hero so the whole mini-site (nav → hero → footer) fits the card. */
+  .lp .slide .site-nav .links .nl { display: none; }
+  .lp .slide .site-hero { padding: 14px 12px 15px; }
+  .lp .slide .site-h { font-size: 17px; }
+  .lp .slide .site-p { font-size: 11px; max-width: 30ch; }
 }
 
 @media (prefers-reduced-motion: reduce) {

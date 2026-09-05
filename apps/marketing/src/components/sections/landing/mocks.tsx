@@ -233,18 +233,32 @@ function SheetMock() {
 }
 
 function CanvasMock() {
-  const bars = (h: number[]) => h.map((v, idx) => <i className={idx === h.length - 1 ? "hi" : ""} style={{ height: `${v}%` }} key={idx} />);
   return (
     <>
       <div className="ctabs"><span className="ctab on">View</span><span className="ctab">Code</span><span className="ctab">Settings</span></div>
       <div className="cview">
-        <span className="cmax"><Ico name="maximize" size="i14" /></span>
-        <div className="tiles">
-          <div className="tile"><div className="k">Signups</div><div className="v">1,284<small>+18%</small></div><div className="spark">{bars([42, 56, 38, 72, 60, 95])}</div></div>
-          <div className="tile"><div className="k">Active</div><div className="v">862<small>+9%</small></div><div className="spark">{bars([50, 46, 66, 56, 76, 88])}</div></div>
-        </div>
-        <div className="muted" style={{ fontSize: 12.5, marginTop: 14, display: "flex", alignItems: "center", gap: 8 }}>
-          <Ico name="canvas" size="i14" />Custom HTML &amp; CSS, rendered in an isolated sandbox.
+        {/* Canvas renders a full static site — HTML & CSS published to a live URL. */}
+        <div className="site">
+          <div className="site-bar">
+            <span className="dotrow"><i /><i /><i /></span>
+            <span className="site-url">launch.pagespace.site</span>
+          </div>
+          <div className="site-nav">
+            <span className="logo" />
+            <span className="brand">Launch</span>
+            <span className="links">
+              <span className="nl">Features</span>
+              <span className="nl">Pricing</span>
+              <span className="cta">Start</span>
+            </span>
+          </div>
+          <div className="site-hero">
+            <div className="site-eyebrow">Launch 2026</div>
+            <div className="site-h">Ship your next big thing</div>
+            <div className="site-p">A full static site — built as HTML &amp; CSS, published straight to a live URL.</div>
+            <span className="site-btn">Get early access</span>
+          </div>
+          <div className="site-foot">© 2026 Launch · Built with PageSpace</div>
         </div>
       </div>
     </>
@@ -329,7 +343,7 @@ export const PAGE_TYPES: PageType[] = [
   { id: "channel", label: "Channel", icon: "channel", parent: "Product Launch", title: "product-launch", actions: <span className="muted" style={{ fontSize: 13 }}>12 members</span>, desc: "Real-time team messaging in the tree — @-mention an agent and it joins in.", Body: ChannelMock },
   { id: "task-list", label: "Task List", icon: "task", parent: "Product Launch", title: "Launch Tasks", actions: <span className="seg"><span className="s"><Ico name="book" size="i14" /></span><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="kanban" size="i14" /></span></span>, desc: "Table and kanban views, custom statuses, and assignees that can include AI agents.", Body: TaskMock },
   { id: "sheet", label: "Sheet", icon: "sheet", parent: "Product Launch", title: "Budget", actions: <span className="iconbtn"><Ico name="download" size="i14" /></span>, desc: "Spreadsheets with formulas, live cell collaboration, and AI that reads and analyses data.", Body: SheetMock },
-  { id: "canvas", label: "Canvas", icon: "canvas", parent: "Product Launch", title: "Dashboard", actions: <span className="pill pri">Publish</span>, desc: "Custom HTML and CSS in an isolated sandbox — dashboards, landing pages, widgets.", Body: CanvasMock },
+  { id: "canvas", label: "Canvas", icon: "canvas", parent: "Product Launch", title: "Launch Site", actions: <span className="pill pri">Publish</span>, desc: "Custom HTML and CSS in an isolated sandbox — build a full static site and publish it to a live URL.", Body: CanvasMock },
   { id: "code", label: "Code", icon: "code", parent: "Product Launch", title: "config.json", actions: null, desc: "A Monaco-powered editor — the VS Code engine — with syntax highlighting and live collaboration.", Body: CodeMock },
   { id: "file", label: "File", icon: "file", parent: "Assets", title: "brief.pdf", actions: <span className="pill on"><Ico name="download" size="i14" />Download</span>, desc: "Uploaded files with preview, text extraction, and search indexing. Identical uploads stored once.", Body: FileMock },
   { id: "folder", label: "Folder", icon: "folder", parent: "", title: "Product Launch", actions: <span className="seg"><span className="s on"><Ico name="rows" size="i14" /></span><span className="s"><Ico name="lgrid" size="i14" /></span></span>, desc: "Containers that organise other pages — no editor and no body of their own.", Body: FolderMock },
