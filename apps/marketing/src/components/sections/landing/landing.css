@@ -160,9 +160,13 @@
   /* Per-slide spacing (via the item's pl-6 + the track's -ml-6) instead of `gap`,
      so the gap survives Embla's loop wrap (first↔last no longer touch). */
   & .carousel-track { padding: 6px 0 20px; align-items: center; }
-  & .slide { transition: transform .35s ease, opacity .35s ease; transform: scale(0.94); opacity: 0.5; }
-  & .slide[data-active="true"] { transform: scale(1); opacity: 1; }
-  & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: 15px; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 22px; }
+  /* Emphasis via opacity only — scaling inactive slides made the edge-to-edge
+     gaps look uneven (a shrunk neighbor reads as a wider gap). Uniform size keeps
+     every gap identical. */
+  & .slide { transition: opacity .3s ease; opacity: 0.5; }
+  & .slide[data-active="true"] { opacity: 1; }
+  /* Reserve two lines so captions of different lengths don't shift the page. */
+  & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: 15px; line-height: 1.45; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 44px; }
   & .caption b { color: var(--foreground); font-weight: 600; }
 
   /* mock frame + internals */

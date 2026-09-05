@@ -23,10 +23,13 @@ export function ScaledFrame({ designWidth, designHeight, children }: { designWid
     return () => ro.disconnect();
   }, [designWidth]);
 
+  // Height comes from CSS aspect-ratio (width-driven), not JS — so every slide is
+  // the exact same height instantly, and the container never resizes as the JS
+  // scale settles or slides change (no layout shift on the rest of the page).
   // The scaled inner is absolutely positioned so its fixed design width can't
   // force the flex slide wider than the available space (min-content trap).
   return (
-    <div ref={outerRef} style={{ position: "relative", width: "100%", height: designHeight * scale, overflow: "hidden" }}>
+    <div ref={outerRef} style={{ position: "relative", width: "100%", aspectRatio: `${designWidth} / ${designHeight}`, overflow: "hidden" }}>
       <div style={{ position: "absolute", top: 0, left: 0, width: designWidth, height: designHeight, transformOrigin: "top left", transform: `scale(${scale})` }}>
         {children}
       </div>
