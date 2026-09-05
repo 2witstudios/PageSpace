@@ -3,6 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Ico } from "./landing/icons";
 import { PAGE_TYPES, MockCard } from "./landing/mocks";
+import { ScaledFrame } from "./landing/ScaledFrame";
+
+// Every card is authored at this desktop size and scaled to fit its slide, so
+// the mocks keep correct UI proportions on any screen (see ScaledFrame).
+const CARD_W = 720;
+const CARD_H = 434;
 
 /**
  * "Everything is a page" — the nine page types as an interactive carousel.
@@ -153,7 +159,9 @@ export function PageTypeCarouselSection() {
                 slideRefs.current[i] = el;
               }}
             >
-              <MockCard type={t} />
+              <ScaledFrame designWidth={CARD_W} designHeight={CARD_H}>
+                <MockCard type={t} />
+              </ScaledFrame>
             </div>
           ))}
         </div>

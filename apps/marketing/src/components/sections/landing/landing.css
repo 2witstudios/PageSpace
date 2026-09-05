@@ -161,7 +161,6 @@
   & .stage::-webkit-scrollbar { display: none; }
   & .slide { flex: 0 0 min(720px, 100%); scroll-snap-align: center; transition: transform .35s ease, opacity .35s ease; transform: scale(0.95); opacity: 0.5; }
   & .slide.is-active { transform: scale(1); opacity: 1; }
-  & .slide .mock { height: 434px; }
   & .ctrls { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 16px; }
   & .arrow { width: 40px; height: 40px; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--card); border: 1px solid var(--border); color: var(--foreground); cursor: pointer; transition: all .16s ease; }
   & .arrow:hover { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
@@ -172,7 +171,7 @@
   & .caption b { color: var(--foreground); font-weight: 600; }
 
   /* mock frame + internals */
-  & .mock { background: var(--card); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); overflow: hidden; display: flex; flex-direction: column; }
+  & .mock { width: 100%; height: 100%; background: var(--card); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-lg); overflow: hidden; display: flex; flex-direction: column; }
   & .mbody { padding: 0; flex: 1; min-height: 0; overflow: hidden; }
   & .tree-wrap { display: flex; flex-direction: column; gap: 2px; padding: 12px 12px; }
   & .tr { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; font-size: 13px; font-weight: 500; color: var(--foreground); }
@@ -406,32 +405,10 @@
 }
 
 @media (max-width: 720px) {
+  /* Cards keep their desktop proportions and scale to fit (ScaledFrame), so no
+     per-mock reflow is needed here — just a touch more peek room on phones. */
   .lp .stage { padding-inline: 5%; }
   .lp .slide { flex-basis: 90%; }
-  .lp .slide .mock { height: 416px; }
-  /* Task List card: the toolbar (no-wrap flex) and the 6-column table both
-     force the card wider than the viewport on phones. Trim the toolbar to just
-     the New Task action, and fix the table layout down to the essential columns
-     (status + AI assignees) so the whole card fits. */
-  .lp .slide .ttoolbar .ftab, .lp .slide .ttoolbar .tsearch { display: none; }
-  .lp .slide .ttoolbar { padding: 8px 12px; }
-  .lp .slide .ttoolbar .tnew { margin-left: auto; }
-  .lp .slide table.tl { table-layout: fixed; width: 100%; }
-  /* Keep Task / Status / Assignee; hide checkbox (col 1), Priority (4), Due (6). */
-  .lp .slide table.tl th:nth-child(1), .lp .slide table.tl td:nth-child(1),
-  .lp .slide table.tl th:nth-child(4), .lp .slide table.tl td:nth-child(4),
-  .lp .slide table.tl th:nth-child(6), .lp .slide table.tl td:nth-child(6) { display: none; }
-  .lp .slide table.tl th:nth-child(3) { width: 84px !important; }
-  .lp .slide table.tl th:nth-child(5) { width: 92px !important; }
-  .lp .slide table.tl th, .lp .slide table.tl td { padding-left: 6px; padding-right: 6px; }
-  .lp .slide table.tl .tname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .lp .slide .uasg, .lp .slide .aiasg { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
-  /* Canvas: the rendered site's nav links crowd the narrow card; keep brand + CTA.
-     Tighten the hero so the whole mini-site (nav → hero → footer) fits the card. */
-  .lp .slide .site-nav .links .nl { display: none; }
-  .lp .slide .site-hero { padding: 14px 12px 15px; }
-  .lp .slide .site-h { font-size: 17px; }
-  .lp .slide .site-p { font-size: 11px; max-width: 30ch; }
 }
 
 @media (prefers-reduced-motion: reduce) {
