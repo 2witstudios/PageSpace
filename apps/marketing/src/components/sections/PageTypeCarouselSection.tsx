@@ -4,123 +4,62 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Ico } from "./landing/icons";
 import { PAGE_TYPES, MockCard } from "./landing/mocks";
 import { ScaledFrame } from "./landing/ScaledFrame";
+import { Carousel, CarouselContent, CarouselItem, type CarouselApi } from "@/components/ui/carousel";
 
-// Every card is authored at this desktop size and scaled to fit its slide, so
-// the mocks keep correct UI proportions on any screen (see ScaledFrame).
+// Every card is authored at this desktop size and scaled to fit its slide.
 const CARD_W = 720;
 const CARD_H = 434;
 
 /**
- * "Everything is a page" — the nine page types as an interactive carousel.
- * Scroll-snap track; programmatic goTo() disables snap during the smooth-scroll
- * and re-enables it only on scroll settle (avoids landing between two cards).
+ * "Everything is a page" — the nine page types as an Embla carousel. Embla owns
+ * centering, the selected-snap index, and click-to-scroll, so the tab chips (the
+ * only control) always match the centered card.
  */
 export function PageTypeCarouselSection() {
-  const stageRef = useRef<HTMLDivElement>(null);
-  const slideRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const [api, setApi] = useState<CarouselApi>();
   const [current, setCurrent] = useState(0);
-  const currentRef = useRef(0);
-  const pausedRef = useRef(false);
-  const reduceRef = useRef(false);
+  const hoveringRef = useRef(false);
+  const pausedUntil = useRef(0);
 
-  const setActive = useCallback((i: number) => {
-    currentRef.current = i;
-    setCurrent(i);
-  }, []);
+  // Keep the active index in sync with the centered slide.
+  useEffect(() => {
+    if (!api) return;
+    const onSelect = () => setCurrent(api.selectedScrollSnap());
+    onSelect();
+    api.on("select", onSelect);
+    api.on("reInit", onSelect);
+    return () => {
+      api.off("select", onSelect);
+      api.off("reInit", onSelect);
+    };
+  }, [api]);
 
-  const pauseAuto = useCallback(() => {
-    pausedRef.current = true;
-    window.setTimeout(() => {
-      pausedRef.current = false;
-    }, 9000);
-  }, []);
+  // Gentle autoplay: advance every 5s, paused on hover/focus/drag and for ~9s
+  // after any manual navigation. Disabled under reduced-motion.
+  useEffect(() => {
+    if (!api) return;
+    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+    const id = window.setInterval(() => {
+      if (hoveringRef.current || Date.now() < pausedUntil.current) return;
+      api.scrollNext();
+    }, 5000);
+    const onPointerDown = () => {
+      pausedUntil.current = Date.now() + 9000;
+    };
+    api.on("pointerDown", onPointerDown);
+    return () => {
+      window.clearInterval(id);
+      api.off("pointerDown", onPointerDown);
+    };
+  }, [api]);
 
   const goTo = useCallback(
-    (i: number, user?: boolean) => {
-      const n = PAGE_TYPES.length;
-      i = ((i % n) + n) % n;
-      const stage = stageRef.current;
-      const s = slideRefs.current[i];
-      if (!stage || !s) return;
-      stage.style.scrollSnapType = "none";
-      stage.scrollTo({ left: Math.round(s.offsetLeft - (stage.clientWidth - s.clientWidth) / 2), behavior: reduceRef.current ? "auto" : "smooth" });
-      setActive(i);
-      if (user) pauseAuto();
+    (i: number) => {
+      pausedUntil.current = Date.now() + 9000;
+      api?.scrollTo(i);
     },
-    [setActive, pauseAuto],
+    [api],
   );
-
-  // Track the nearest card on manual scroll; re-enable snap once scrolling settles.
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    reduceRef.current = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    let raf = 0;
-    let settle = 0;
-    const onScroll = () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => {
-        const c = stage.scrollLeft + stage.clientWidth / 2;
-        let best = 0;
-        let bestD = Infinity;
-        slideRefs.current.forEach((s, k) => {
-          if (!s) return;
-          const cc = s.offsetLeft + s.clientWidth / 2;
-          const d = Math.abs(cc - c);
-          if (d < bestD) {
-            bestD = d;
-            best = k;
-          }
-        });
-        if (best !== currentRef.current) setActive(best);
-      });
-      window.clearTimeout(settle);
-      settle = window.setTimeout(() => {
-        stage.style.scrollSnapType = "x mandatory";
-      }, 150);
-    };
-    stage.addEventListener("scroll", onScroll, { passive: true });
-    return () => {
-      stage.removeEventListener("scroll", onScroll);
-      cancelAnimationFrame(raf);
-      window.clearTimeout(settle);
-    };
-  }, [setActive]);
-
-  // Autoplay (paused on hover/focus/touch and after a manual move).
-  useEffect(() => {
-    const stage = stageRef.current;
-    if (!stage) return;
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
-    const timer = window.setInterval(() => {
-      if (!pausedRef.current) goTo(currentRef.current + 1);
-    }, 5200);
-    const pause = () => {
-      pausedRef.current = true;
-    };
-    const resume = () => {
-      pausedRef.current = false;
-    };
-    (["mouseenter", "focusin", "touchstart"] as const).forEach((ev) => stage.addEventListener(ev, pause, { passive: true }));
-    (["mouseleave", "focusout"] as const).forEach((ev) => stage.addEventListener(ev, resume));
-    // Centre the first card on mount.
-    goTo(0);
-    return () => {
-      window.clearInterval(timer);
-      (["mouseenter", "focusin", "touchstart"] as const).forEach((ev) => stage.removeEventListener(ev, pause));
-      (["mouseleave", "focusout"] as const).forEach((ev) => stage.removeEventListener(ev, resume));
-    };
-  }, [goTo]);
-
-  const onKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === "ArrowRight") {
-      e.preventDefault();
-      goTo(currentRef.current + 1, true);
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      goTo(currentRef.current - 1, true);
-    }
-  };
 
   const active = PAGE_TYPES[current];
 
@@ -134,61 +73,34 @@ export function PageTypeCarouselSection() {
 
         <div className="tabs" role="tablist" aria-label="Page types">
           {PAGE_TYPES.map((t, i) => (
-            <button
-              key={t.id}
-              className="tab"
-              role="tab"
-              aria-selected={i === current}
-              onClick={() => goTo(i, true)}
-              type="button"
-            >
+            <button key={t.id} className="tab" role="tab" aria-selected={i === current} onClick={() => goTo(i)} type="button">
               <Ico name={t.icon} />
               {t.label}
             </button>
           ))}
         </div>
 
-        <div className="stage" ref={stageRef} tabIndex={0} aria-roledescription="carousel" onKeyDown={onKeyDown}>
-          {PAGE_TYPES.map((t, i) => (
-            <div
-              key={t.id}
-              className={`slide${i === current ? " is-active" : ""}`}
-              role="tabpanel"
-              aria-label={t.label}
-              ref={(el) => {
-                slideRefs.current[i] = el;
-              }}
-            >
-              <ScaledFrame designWidth={CARD_W} designHeight={CARD_H}>
-                <MockCard type={t} />
-              </ScaledFrame>
-            </div>
-          ))}
-        </div>
+        <Carousel
+          className="carousel"
+          setApi={setApi}
+          opts={{ align: "center", loop: true }}
+          onMouseEnter={() => (hoveringRef.current = true)}
+          onMouseLeave={() => (hoveringRef.current = false)}
+          onFocusCapture={() => (hoveringRef.current = true)}
+          onBlurCapture={() => (hoveringRef.current = false)}
+        >
+          <CarouselContent className="carousel-track">
+            {PAGE_TYPES.map((t, i) => (
+              <CarouselItem key={t.id} className="slide basis-[86%] max-w-[720px]" data-active={i === current} aria-label={t.label}>
+                <ScaledFrame designWidth={CARD_W} designHeight={CARD_H}>
+                  <MockCard type={t} />
+                </ScaledFrame>
+              </CarouselItem>
+            ))}
+          </CarouselContent>
+        </Carousel>
 
         <div className="caption"><b>{active.label}</b> — {active.desc}</div>
-
-        <div className="ctrls">
-          <button className="arrow" aria-label="Previous page type" onClick={() => goTo(current - 1, true)} type="button">
-            <Ico name="chevL" size="i20" />
-          </button>
-          <div className="dots" role="tablist" aria-label="Select page type">
-            {PAGE_TYPES.map((t, i) => (
-              <button
-                key={t.id}
-                className="dotb"
-                role="tab"
-                aria-label={t.label}
-                aria-current={i === current}
-                onClick={() => goTo(i, true)}
-                type="button"
-              />
-            ))}
-          </div>
-          <button className="arrow" aria-label="Next page type" onClick={() => goTo(current + 1, true)} type="button">
-            <Ico name="chevR" size="i20" />
-          </button>
-        </div>
       </div>
     </section>
   );

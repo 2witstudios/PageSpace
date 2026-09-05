@@ -157,17 +157,10 @@
   & .tab:hover { color: var(--foreground); background: var(--accent); }
   & .tab[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
   & .tab:focus-visible { outline: 2px solid color-mix(in oklab, var(--primary), transparent 55%); outline-offset: 2px; }
-  & .stage { display: flex; gap: clamp(16px, 2.4vw, 28px); overflow-x: auto; scroll-snap-type: x mandatory; scroll-behavior: smooth; padding: 6px clamp(9%, 11vw, 12%) 20px; scrollbar-width: none; }
-  & .stage::-webkit-scrollbar { display: none; }
-  & .slide { flex: 0 0 min(720px, 100%); scroll-snap-align: center; transition: transform .35s ease, opacity .35s ease; transform: scale(0.95); opacity: 0.5; }
-  & .slide.is-active { transform: scale(1); opacity: 1; }
-  & .ctrls { display: flex; align-items: center; justify-content: center; gap: 18px; margin-top: 16px; }
-  & .arrow { width: 40px; height: 40px; border-radius: var(--r-lg); display: grid; place-items: center; background: var(--card); border: 1px solid var(--border); color: var(--foreground); cursor: pointer; transition: all .16s ease; }
-  & .arrow:hover { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
-  & .dots { display: flex; align-items: center; gap: 8px; }
-  & .dotb { width: 7px; height: 7px; border-radius: 50%; border: none; padding: 0; background: var(--border); cursor: pointer; transition: all .2s ease; }
-  & .dotb[aria-current="true"] { background: var(--primary); width: 20px; border-radius: 999px; }
-  & .caption { text-align: center; margin-top: 20px; color: var(--muted-foreground); font-size: 15px; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 22px; }
+  & .carousel-track { gap: clamp(16px, 2.4vw, 28px); padding: 6px 0 20px; align-items: center; }
+  & .slide { transition: transform .35s ease, opacity .35s ease; transform: scale(0.94); opacity: 0.5; }
+  & .slide[data-active="true"] { transform: scale(1); opacity: 1; }
+  & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: 15px; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 22px; }
   & .caption b { color: var(--foreground); font-weight: 600; }
 
   /* mock frame + internals */
@@ -396,14 +389,6 @@
   .lp .hero-in { padding: 0 16px; }
 }
 
-@media (max-width: 720px) {
-  /* Cards keep their desktop proportions and scale to fit (ScaledFrame), so no
-     per-mock reflow is needed here — just a touch more peek room on phones. */
-  .lp .stage { padding-inline: 5%; }
-  .lp .slide { flex-basis: 90%; }
-}
-
 @media (prefers-reduced-motion: reduce) {
-  .lp .stage { scroll-behavior: auto; }
   .lp .slide { transition: none; }
 }
