@@ -25,7 +25,7 @@ const TRUST: { icon: string; title: string; body: string }[] = [
   {
     icon: "database",
     title: "Backed up, not just saved",
-    body: "Scheduled and on-demand drive backups, point-in-time restore, and trash-and-restore. Nothing is ever really gone.",
+    body: "Scheduled and on-demand drive backups you can restore from, plus a trash that keeps deleted pages for 30 days before they’re purged.",
   },
   {
     icon: "shieldCheck",

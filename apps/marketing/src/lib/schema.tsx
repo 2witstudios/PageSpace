@@ -20,7 +20,6 @@ export const organizationSchema = {
   "@context": "https://schema.org",
   "@type": "Organization",
   name: "PageSpace",
-  legalName: "PageSpace",
   url: SITE_URL,
   logo: `${SITE_URL}/android-chrome-512x512.png`,
   description: ENTITY_DESCRIPTION,
@@ -107,13 +106,14 @@ export function createArticleSchema(article: ArticleData) {
 }
 
 /**
- * WebSite schema
+ * WebSite schema — carries the canonical entity description too (AEO).
  */
 export const websiteSchema = {
   "@context": "https://schema.org",
   "@type": "WebSite",
   name: "PageSpace",
   url: SITE_URL,
+  description: ENTITY_DESCRIPTION,
 };
 
 /**
@@ -137,6 +137,8 @@ export function createFaqSchema(items: { q: string; a: string }[]) {
 
 /**
  * Review schema - machine-readable social proof for a testimonial (AEO: trust).
+ * No `reviewRating`: these are quoted social posts, and no star rating was
+ * given, so emitting one would be fabricated structured data.
  */
 export function createReviewSchema(review: {
   author: string;
@@ -151,11 +153,6 @@ export function createReviewSchema(review: {
       name: "PageSpace",
       applicationCategory: "ProductivityApplication",
       operatingSystem: "Web, macOS, Windows, Linux, iOS, Android",
-    },
-    reviewRating: {
-      "@type": "Rating",
-      ratingValue: "5",
-      bestRating: "5",
     },
     author: {
       "@type": "Person",

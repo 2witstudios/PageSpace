@@ -19,6 +19,7 @@ export function PageTypeCarouselSection() {
   const [api, setApi] = useState<CarouselApi>();
   const [current, setCurrent] = useState(0);
   const hoveringRef = useRef(false);
+  const focusWithinRef = useRef(false);
   const pausedUntil = useRef(0);
 
   // Keep the active index in sync with the centered slide.
@@ -40,7 +41,7 @@ export function PageTypeCarouselSection() {
     if (!api) return;
     if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const id = window.setInterval(() => {
-      if (hoveringRef.current || Date.now() < pausedUntil.current) return;
+      if (hoveringRef.current || focusWithinRef.current || Date.now() < pausedUntil.current) return;
       api.scrollNext();
     }, 5000);
     const onPointerDown = () => {
@@ -86,8 +87,14 @@ export function PageTypeCarouselSection() {
           opts={{ align: "center", loop: true }}
           onMouseEnter={() => (hoveringRef.current = true)}
           onMouseLeave={() => (hoveringRef.current = false)}
-          onFocusCapture={() => (hoveringRef.current = true)}
-          onBlurCapture={() => (hoveringRef.current = false)}
+          onFocusCapture={() => (focusWithinRef.current = true)}
+          onBlurCapture={(event) => {
+            // Only clear when focus actually leaves the carousel, not when it
+            // moves between slides/controls inside it.
+            if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+              focusWithinRef.current = false;
+            }
+          }}
         >
           <CarouselContent className="carousel-track -ml-6">
             {PAGE_TYPES.map((t, i) => (

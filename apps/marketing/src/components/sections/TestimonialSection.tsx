@@ -6,7 +6,7 @@ function TestimonialCard({ t }: { t: Testimonial }) {
   return (
     <a className="post" href={t.url} target="_blank" rel="noopener noreferrer">
       <div className="head">
-        <Image className="ee-pic" src={t.avatar} alt={t.author} width={44} height={44} />
+        <Image className="ee-pic" src={t.avatar} alt="" width={44} height={44} />
         <span className="who2">
           <span className="nm">{t.author}</span>
           <span className="hd">{t.handle}</span>

@@ -19,6 +19,8 @@ export const ENTITY_DESCRIPTION =
 export interface PageMetadata {
   title: string;
   description: string;
+  /** Overrides the OG/Twitter description when it should differ from the meta description. */
+  ogDescription?: string;
   path?: string;
   image?: string;
   noIndex?: boolean;
@@ -31,6 +33,7 @@ export interface PageMetadata {
 export function createMetadata({
   title,
   description,
+  ogDescription = description,
   path = "",
   image = DEFAULT_OG_IMAGE,
   noIndex = false,
@@ -66,7 +69,7 @@ export function createMetadata({
       url,
       siteName: SITE_NAME,
       title: ogTitle,
-      description,
+      description: ogDescription,
       images: [
         {
           url: image,
@@ -81,7 +84,7 @@ export function createMetadata({
       site: TWITTER_HANDLE,
       creator: TWITTER_HANDLE,
       title: ogTitle,
-      description,
+      description: ogDescription,
       images: [image],
     },
   };
@@ -171,9 +174,10 @@ export const pageMetadata = {
   home: createMetadata({
     title: "The AI for working",
     // ~155 chars (AEO: 150–160). Trimmed form of ENTITY_DESCRIPTION; the full
-    // sentence is used verbatim in the OG description and schema.
+    // sentence goes verbatim to OG/Twitter (below) and to the schema.
     description:
       "PageSpace is the AI workspace where docs, tasks, channels, sheets, and code live as pages in one tree — and an AI coworker does the real work across them.",
+    ogDescription: ENTITY_DESCRIPTION,
     path: "",
     keywords: ["AI workspace", "AI-powered workspace platform", "AI coworker", "AI agent", "AI that does the work"],
   }),
