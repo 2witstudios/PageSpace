@@ -15,8 +15,8 @@
  * falls through to `none`, never leaking a credential minted for another
  * host/key.
  */
-import type { HostCredential } from '../credentials/serialize.js';
-import { DEFAULT_PROFILE_NAME } from '../credentials/serialize.js';
+import type { HostCredential, LoginHostCredential } from '../credentials/serialize.js';
+import { DEFAULT_PROFILE_NAME, isLoginCredential } from '../credentials/serialize.js';
 import { resolveEnvKeyName, resolveEnvToken } from './legacy-token-env.js';
 
 export interface ResolveAuthFlags {
@@ -43,7 +43,7 @@ export const KEY_ENV_VAR_NAME = 'PAGESPACE_KEY';
 export type AuthSource =
   | { readonly kind: 'flag'; readonly token: string }
   | { readonly kind: 'env'; readonly token: string }
-  | { readonly kind: 'stored'; readonly host: string; readonly keyName?: string; readonly credential: HostCredential }
+  | { readonly kind: 'stored'; readonly host: string; readonly keyName?: string; readonly credential: LoginHostCredential }
   | { readonly kind: 'none'; readonly host: string };
 
 function presentToken(value: string | undefined): string | null {
@@ -97,8 +97,11 @@ export function resolveAuth(
 
   if (Object.hasOwn(stored, host)) {
     const hostKeys = stored[host];
-    if (Object.hasOwn(hostKeys, keyName)) {
-      return { kind: 'stored', host, keyName, credential: hostKeys[keyName] };
+    // A machine credential (`pagespace env enroll`) is an identity, not an API
+    // credential: it never authenticates a call, so it is not an auth source.
+    const candidate = Object.hasOwn(hostKeys, keyName) ? hostKeys[keyName] : undefined;
+    if (candidate !== undefined && isLoginCredential(candidate)) {
+      return { kind: 'stored', host, keyName, credential: candidate };
     }
   }
 

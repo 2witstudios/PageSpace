@@ -804,7 +804,14 @@ function EnvStatusDot({ status }: { status: DriveEnvStatus | null }) {
         ? { className: 'bg-amber-500', label: 'Environment stopped' }
         : status === 'none'
           ? { className: 'bg-muted-foreground/40', label: 'Environment not started yet' }
-          : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
+          : // A LOCAL environment reports its bridge connection, not a VM state.
+            status === 'connected'
+            ? { className: 'bg-emerald-500', label: 'Machine connected' }
+            : status === 'connecting'
+              ? { className: 'bg-amber-500', label: 'Machine connecting' }
+              : status === 'disconnected'
+                ? { className: 'bg-muted-foreground/40', label: 'Machine disconnected' }
+                : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
   // `role="img"` so the label is announced — aria-label on a bare span is not.
   return <span role="img" aria-label={label} className={cn('size-1.5 shrink-0 rounded-full', className)} />;
 }

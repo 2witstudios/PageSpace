@@ -147,6 +147,15 @@ export const serverEnvSchema = z
     // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
     CODE_EXECUTION_ENABLED: z.string().optional(),
 
+    // Local environments (the user's own machine via the zero-trust bridge):
+    // cloud opt-in, same contract as CODE_EXECUTION_ENABLED — only the exact
+    // string 'true' enables (isLocalEnvsEnabled()). The signing key is the
+    // base64 PKCS#8 Ed25519 key every grant is signed with; optional here so a
+    // Sprite-only deployment validates, and loaded fail-closed only on a
+    // local-env path (loadServerSigningKey()).
+    LOCAL_ENVS_ENABLED: z.string().optional(),
+    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional(),
+
     // Server-held secret keying the sandbox session-key HMAC (see
     // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
     // but a blank placeholder (SANDBOX_SESSION_SECRET=) is accepted — mirroring

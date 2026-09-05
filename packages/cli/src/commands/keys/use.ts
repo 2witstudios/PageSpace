@@ -240,7 +240,9 @@ export function createKeysUseHandler(deps: TokensCreateHandlerDeps): CommandHand
       ctx.stderr.write(`${missingKeyMessage(name, host)}\n`);
       return EXIT_USAGE_ERROR;
     }
-    if (credential.kind === 'oauth') {
+    // Only a scoped key activates: a login credential is not a key, and a
+    // machine credential (`pagespace env enroll`) is not an API credential at all.
+    if (credential.kind !== 'static') {
       ctx.stderr.write(`${loginCredentialNotActivatableMessage(name)}\n`);
       return EXIT_USAGE_ERROR;
     }
