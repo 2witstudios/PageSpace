@@ -15,6 +15,7 @@ export const ICON_PATHS: Record<string, ReactNode> = {
   canvas: (<><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><circle cx="10" cy="12" r="2" /><path d="m20 17-1.3-1.3a2.4 2.4 0 0 0-3.4 0L9 22" /></>),
   code: (<><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="m10 13-2 2 2 2M14 13l2 2-2 2" /></>),
   folder: (<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.7-.9l-.8-1.2A2 2 0 0 0 7.9 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" />),
+  tree: (<><path d="M20 10h-9M20 6h-9M20 14h-6M20 18h-6" /><path d="M4 4v13a2 2 0 0 0 2 2h2" /></>),
   updown: (<path d="m7 15 5 5 5-5M7 9l5-5 5 5" />),
   download: (<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />),
   book: (<path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20" />),
