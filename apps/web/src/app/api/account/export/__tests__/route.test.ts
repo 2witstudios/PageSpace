@@ -240,7 +240,7 @@ describe('GET /api/account/export', () => {
       const names = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
       expect(names).toContain('agent-workspaces.json');
       expect(names).toContain('stream-state.json');
-      // Local Environments epic (t05): the machines the subject enrolled are a first-class category.
+      // The machines the subject enrolled as local environments are a first-class category.
       expect(names).toContain('local-environments.json');
     });
 

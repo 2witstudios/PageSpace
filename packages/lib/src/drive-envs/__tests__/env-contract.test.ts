@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { DRIVE_ENV_SUBSTRATES as SCHEMA_SUBSTRATES } from '@pagespace/db/schema/drive-envs';
 import {
   createDriveEnvRequestSchema,
   driveEnvDtoSchema,
@@ -10,12 +11,16 @@ import {
 
 const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
 
-describe('drive-env contract — the substrate axis (Local Environments epic, t05)', () => {
+describe('drive-env contract — the substrate axis (Local Environments epic)', () => {
   it('exposes the closed substrate set and a schema for it', () => {
     expect([...DRIVE_ENV_SUBSTRATES]).toEqual(['sprite', 'local']);
     expect(driveEnvSubstrateSchema.safeParse('sprite').success).toBe(true);
     expect(driveEnvSubstrateSchema.safeParse('local').success).toBe(true);
     expect(driveEnvSubstrateSchema.safeParse('modal').success).toBe(false);
+  });
+
+  it('keeps its substrate set identical to the schema\'s — the contract is a zod-only module for browser clients, so the set is declared twice and must be pinned once', () => {
+    expect([...DRIVE_ENV_SUBSTRATES]).toEqual([...SCHEMA_SUBSTRATES]);
   });
 
   describe('createDriveEnvRequestSchema', () => {

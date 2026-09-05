@@ -115,7 +115,7 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).not.toHaveBeenCalled();
   });
 
-  it('given substrate local, should answer 501 and NOT create anything — enrollment lands in a later slice, and a Sprite env must never be minted in its place (Local Environments t05)', async () => {
+  it('given substrate local, should answer 501 and NOT create anything — enrollment lands in a later slice, and a Sprite env must never be minted in its place', async () => {
     const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
     expect(response.status).toBe(501);
     expect(createEnvInDrive).not.toHaveBeenCalled();
@@ -128,7 +128,7 @@ describe('POST /envs — who may CREATE one', () => {
     expect(createEnvInDrive).not.toHaveBeenCalled();
   });
 
-  it('given an unknown substrate, should answer 400 naming the substrate — not the name (CodeRabbit)', async () => {
+  it('given an unknown substrate, should answer 400 naming the substrate — not the name', async () => {
     const response = await createEnv(jsonReq({ name: 'dev', substrate: 'modal' }), params);
     expect(response.status).toBe(400);
     expect(((await response.json()) as { error: string }).error).toMatch(/substrate/i);

@@ -1,13 +1,13 @@
 import { pgTable, text, timestamp, jsonb, check, unique, foreignKey, index } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { users } from './auth';
-import { driveEnvs, DRIVE_ENV_SUBSTRATES } from './drive-envs';
+import { driveEnvs, DRIVE_ENV_SUBSTRATES, sqlStringList } from './drive-envs';
 
 export { DRIVE_ENV_SUBSTRATES };
 
 /**
  * Local Environment connection facts — the 1:1 sibling of a `drive_envs` row
- * whose `substrate = 'local'` (Local Environments epic, M1 · t05).
+ * whose `substrate = 'local'` (Local Environments epic).
  *
  * A local env is the user's OWN machine, reached through the zero-trust bridge
  * (`packages/lib/src/env-bridge/`). Everything Sprite-shaped stays on
@@ -143,8 +143,8 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   /** The wire identity must name exactly one env. */
   enrollmentIdUnique: unique('drive_env_local_enrollment_id_unique').on(table.enrollmentId),
 
-  /** The closed bind-policy set, enforced at the row. */
-  bindPolicyCheck: check('drive_env_local_bind_policy_check', sql`${table.bindPolicy} IN ('owner', 'admins', 'members')`),
+  /** The closed bind-policy set, enforced at the row and built from `DRIVE_ENV_BIND_POLICIES` so the two cannot drift. */
+  bindPolicyCheck: check('drive_env_local_bind_policy_check', sql`${table.bindPolicy} IN (${sqlStringList(DRIVE_ENV_BIND_POLICIES)})`),
 }));
 
 export const driveEnvLocalRelations = relations(driveEnvLocal, ({ one }) => ({

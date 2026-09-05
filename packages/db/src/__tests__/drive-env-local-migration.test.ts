@@ -1,6 +1,6 @@
 /**
  * Static invariants of the local-environments migrations (Local Environments
- * epic, M1 · t05): `substrate` on `drive_envs`, its CHECKs and the composite-FK
+ * epic): `substrate` on `drive_envs`, its CHECKs and the composite-FK
  * target, and the `drive_env_local` sibling.
  *
  * TWO generated files, deliberately. Postgres requires the UNIQUE that a

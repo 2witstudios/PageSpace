@@ -232,7 +232,9 @@ export async function listDriveEnvs({
 }): Promise<DriveEnvDTO[]> {
   const rows = await deps.store.list(driveId);
   // Explicit lambda: `map` would otherwise hand the array INDEX to the `local`
-  // facts parameter. Listing carries no local facts yet (t13 joins them).
+  // facts parameter. Listing carries no local facts yet, so a local row here
+  // throws (see `toDriveEnvDTO`); the enrollment slice that creates the first
+  // local row must also join `drive_env_local` into this listing.
   return rows.map((row) => toDriveEnvDTO(row));
 }
 

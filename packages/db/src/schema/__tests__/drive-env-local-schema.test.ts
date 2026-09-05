@@ -1,5 +1,5 @@
 /**
- * Local Environments epic (M1 · t05) — schema-level proof of the SUBSTRATE
+ * Local Environments epic — schema-level proof of the SUBSTRATE
  * contract on `drive_envs` and the `drive_env_local` sibling.
  *
  * The invariant this guards: a local env keeps every Sprite pointer column
@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import path from 'path';
-import { getTableConfig } from 'drizzle-orm/pg-core';
+import { getTableConfig, PgDialect } from 'drizzle-orm/pg-core';
 import { getTableColumns } from 'drizzle-orm';
 import { driveEnvs } from '../drive-envs';
 import { driveEnvLocal, driveEnvLocalRelations, DRIVE_ENV_SUBSTRATES, DRIVE_ENV_BIND_POLICIES } from '../drive-env-local';
@@ -23,6 +23,16 @@ const envConfig = getTableConfig(driveEnvs);
 const envColumns = getTableColumns(driveEnvs);
 const localConfig = getTableConfig(driveEnvLocal);
 const localColumns = getTableColumns(driveEnvLocal);
+
+/** The SQL text of a named CHECK, as drizzle-kit would emit it. */
+function checkSql(config: { checks: Array<{ name: string; value: Parameters<PgDialect['sqlToQuery']>[0] }> }, name: string): string {
+  const found = config.checks.find((c) => c.name === name);
+  if (!found) throw new Error(`no CHECK named ${name}`);
+  return new PgDialect().sqlToQuery(found.value).sql;
+}
+
+/** `'a', 'b'` — the literal list a CHECK's `IN (...)` must carry for a closed set. */
+const inList = (values: readonly string[]) => values.map((v) => `'${v}'`).join(', ');
 
 describe('drive_envs.substrate — the reserved substrate axis, not the deleted use-case kind', () => {
   it('is a NOT NULL text column defaulting to sprite, so every existing row is a Sprite env without a backfill', () => {
@@ -33,6 +43,10 @@ describe('drive_envs.substrate — the reserved substrate axis, not the deleted 
 
   it('exports the closed substrate set', () => {
     expect([...DRIVE_ENV_SUBSTRATES]).toEqual(['sprite', 'local']);
+  });
+
+  it('builds drive_envs_substrate_check FROM the exported set, so the constant and the CHECK cannot drift apart', () => {
+    expect(checkSql(envConfig, 'drive_envs_substrate_check')).toContain(`IN (${inList(DRIVE_ENV_SUBSTRATES)})`);
   });
 
   it('carries drive_envs_local_no_sprite_check: a local env may hold NO Sprite pointer (invariant 9)', () => {
@@ -70,7 +84,7 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(localConfig.checks.find((c) => c.name === 'drive_env_local_substrate_check')).toBeDefined();
   });
 
-  it('references its parent by (envId, substrate) → drive_envs (id, substrate), so a sibling can only ever belong to a LOCAL env and a local parent cannot be flipped to sprite while its sibling exists (review: Codex + CodeRabbit)', () => {
+  it('references its parent by (envId, substrate) → drive_envs (id, substrate), so a sibling can only ever belong to a LOCAL env and a local parent cannot be flipped to sprite while its sibling exists', () => {
     const composite = localConfig.foreignKeys.find((f) => f.reference().columns.length === 2);
     expect(composite, 'composite FK (envId, substrate)').toBeDefined();
     expect(composite!.reference().columns.map((c) => c.name)).toEqual(['envId', 'substrate']);
@@ -121,8 +135,8 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect([...DRIVE_ENV_BIND_POLICIES]).toEqual(['owner', 'admins', 'members']);
   });
 
-  it('carries a CHECK that bindPolicy is one of the closed set', () => {
-    expect(localConfig.checks.find((c) => c.name === 'drive_env_local_bind_policy_check')).toBeDefined();
+  it('carries a CHECK that bindPolicy is one of the closed set, built FROM the exported set so the two cannot drift apart', () => {
+    expect(checkSql(localConfig, 'drive_env_local_bind_policy_check')).toContain(`IN (${inList(DRIVE_ENV_BIND_POLICIES)})`);
   });
 
   it('keeps capabilities and serverPolicy as jsonb, with serverPolicy defaulting to deny-by-default', () => {

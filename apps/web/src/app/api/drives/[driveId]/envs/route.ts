@@ -89,8 +89,8 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const body = await request.json().catch(() => null);
     const parsed = createDriveEnvRequestSchema.safeParse(body);
     if (!parsed.success) {
-      // Name the field that failed (CodeRabbit): an unknown substrate is not a
-      // name problem, and a blank label is invalid rather than merely missing.
+      // Name the field that failed: an unknown substrate is not a name problem,
+      // and a blank label is invalid rather than merely missing.
       const failed = new Set(parsed.error.issues.map((issue) => String(issue.path[0] ?? '')));
       const error = failed.has('substrate')
         ? "substrate must be 'sprite' or 'local'"
@@ -105,7 +105,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     // Local environments (the user's own machine via the zero-trust bridge)
     // are created through ENROLLMENT, which a later slice adds. Until then a
     // local request must be refused outright — never quietly minted as a Sprite
-    // env in its place (Local Environments epic, t05).
+    // env in its place.
     if (parsed.data.substrate === 'local') {
       return NextResponse.json({ error: 'Local environments are not available yet' }, { status: 501 });
     }

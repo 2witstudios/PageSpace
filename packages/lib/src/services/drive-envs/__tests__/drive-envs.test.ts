@@ -170,7 +170,7 @@ describe('listDriveEnvs / the DTO', () => {
     expect(dto.createdAt).toBe(NOW.toISOString());
   });
 
-  describe('substrate (Local Environments epic, t05)', () => {
+  describe('substrate (Local Environments epic)', () => {
     it('should project a Sprite row with substrate sprite and a Sprite status, and the result must satisfy the wire schema', () => {
       const dto = toDriveEnvDTO(makeEnvRecord({ sandboxId: SANDBOX_ID }));
       expect(dto.substrate).toBe('sprite');

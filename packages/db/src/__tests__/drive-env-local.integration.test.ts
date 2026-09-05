@@ -1,5 +1,5 @@
 /**
- * Local Environments epic (M1 · t05) — the substrate CHECK and the sibling's
+ * Local Environments epic — the substrate CHECK and the sibling's
  * cascade, proven against a REAL Postgres (a schema test cannot see whether
  * the constraint actually refuses a row).
  *
@@ -130,7 +130,7 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect((await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, env!.id))).length).toBe(0);
   });
 
-  it('given a SPRITE env, inserting a drive_env_local sibling for it should be REFUSED (foreign_key_violation 23503) — local metadata can never attach to a Sprite env (review)', async () => {
+  it('given a SPRITE env, inserting a drive_env_local sibling for it should be REFUSED (foreign_key_violation 23503) — local metadata can never attach to a Sprite env', async () => {
     const { user, drive } = await seed();
     const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'sprite-parent' }).returning();
     let code: string | undefined;
@@ -142,7 +142,7 @@ describe('drive_envs.substrate + drive_env_local (real Postgres)', () => {
     expect(code).toBe('23503');
   });
 
-  it("given a local env WITH a sibling, flipping the parent to 'sprite' should be REFUSED (23503) — the composite FK holds both write directions (review)", async () => {
+  it("given a local env WITH a sibling, flipping the parent to 'sprite' should be REFUSED (23503) — the composite FK holds both write directions", async () => {
     const { user, drive } = await seed();
     const [env] = await db.insert(driveEnvs).values({ driveId: drive.id, name: 'flip', substrate: 'local' }).returning();
     await db.insert(driveEnvLocal).values({ envId: env!.id, ownerId: user.id, label: 'm', enrollmentId: `enr_flip_${env!.id}`, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1' });

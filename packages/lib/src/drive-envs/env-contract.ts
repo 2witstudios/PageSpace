@@ -71,7 +71,12 @@ export const driveEnvLabelSchema = z
   .transform((value) => value.trim())
   .pipe(z.string().min(1).max(MAX_DRIVE_ENV_LABEL_LENGTH));
 
-/** The closed substrate set. Mirrors `DRIVE_ENV_SUBSTRATES` on the schema. */
+/**
+ * The closed substrate set. Declared here AND on the schema (`drive-envs.ts`)
+ * rather than imported: this module is the wire contract, shared with browser
+ * and CLI clients, so it stays zod-only with no Drizzle import. The contract
+ * test pins the two declarations equal.
+ */
 export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
 export const driveEnvSubstrateSchema = z.enum(DRIVE_ENV_SUBSTRATES);
 export type DriveEnvSubstrate = z.infer<typeof driveEnvSubstrateSchema>;
@@ -162,21 +167,15 @@ export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
  * dropped rather than stored.
  */
 export const createDriveEnvRequestSchema = z
-  .object({
-    name: driveEnvNameSchema,
-    substrate: driveEnvSubstrateSchema.default('sprite'),
-    label: driveEnvLabelSchema.optional(),
-  })
-  .superRefine((value, ctx) => {
-    if (value.substrate === 'local' && value.label === undefined) {
-      ctx.addIssue({ code: 'custom', path: ['label'], message: 'a local environment requires a machine label' });
-    }
-  })
-  .transform((value) =>
-    value.substrate === 'local'
-      ? { name: value.name, substrate: value.substrate, label: value.label as string }
-      : { name: value.name, substrate: value.substrate },
-  );
+  .preprocess(
+    // The discriminator's default: a body with no substrate is a Sprite request.
+    (body) => (typeof body === 'object' && body !== null && !('substrate' in body) ? { ...body, substrate: 'sprite' } : body),
+    z.discriminatedUnion('substrate', [
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional() }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema }),
+    ]),
+  )
+  .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));
 
 export type CreateDriveEnvRequest = z.infer<typeof createDriveEnvRequestSchema>;
 

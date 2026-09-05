@@ -1,5 +1,5 @@
 /**
- * Local Environments epic (M1 · t05) — the Art 15 collector for the machines a
+ * Local Environments epic — the Art 15 collector for the machines a
  * subject enrolled, run against a real database.
  *
  * `drive_env_local` is the subject's OWN device: a label they chose, their
