@@ -35,6 +35,10 @@ function makeSpawnDeps(
     // No env exists unless a test declares one — a spawn that passes `envId`
     // against this default is refused, which is the behavior under test.
     findEnv: async () => null,
+    // Only consulted for a LOCAL env; the default proves a Sprite spawn never asks.
+    gateLocalEnvBind: async () => {
+      throw new Error('gateLocalEnvBind must not be consulted for a Sprite env');
+    },
     ...over,
   };
 }
@@ -433,7 +437,8 @@ describe('toAgentSessionDTO', () => {
  */
 describe('spawnAgentSession — inside an environment', () => {
   const ENV_ID = 'env-1';
-  const envInDrive = { findEnv: async () => ({ driveId: DRIVE_ID }) };
+  const envInDrive = { findEnv: async () => ({ driveId: DRIVE_ID, substrate: 'sprite' }) };
+  const localEnvInDrive = { findEnv: async () => ({ driveId: DRIVE_ID, substrate: 'local' }) };
 
   it('given an env in the session\'s drive, should bind the session to it and STILL provision nothing', async () => {
     const store = makeAgentSessionStore();
@@ -476,7 +481,7 @@ describe('spawnAgentSession — inside an environment', () => {
       ownerId: OWNER_ID,
       driveId: DRIVE_ID,
       envId: ENV_ID,
-      deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-other' }) }),
+      deps: makeSpawnDeps(store, { findEnv: async () => ({ driveId: 'drive-other', substrate: 'sprite' }) }),
     });
 
     expect(result).toEqual({ ok: false, reason: 'env_not_found' });
@@ -517,6 +522,55 @@ describe('spawnAgentSession — inside an environment', () => {
     expect(looked).toBe(0);
     if (!result.ok) return;
     expect(result.session.envId).toBeNull();
+  });
+
+  // C1 (Codex): binding to the user's own machine is gated at the server at
+  // spawn time — `decideBind` fed the real inputs through the shared gate.
+  describe('a LOCAL env (C1)', () => {
+    it('given the gate allows, should bind exactly as a Sprite env would, having asked the gate about THIS env and THIS requester', async () => {
+      const store = makeAgentSessionStore();
+      const asked: Array<{ envId: string; requesterId: string }> = [];
+      const result = await spawnAgentSession({
+        ownerId: OWNER_ID,
+        driveId: DRIVE_ID,
+        envId: ENV_ID,
+        deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async (input) => { asked.push(input); return { ok: true, envId: input.envId }; } }),
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.session.envId).toBe(ENV_ID);
+      expect(asked).toEqual([{ envId: ENV_ID, requesterId: OWNER_ID }]);
+    });
+
+    it('given the gate refuses, should answer env_bind_refused with the typed refusal and mint NO row', async () => {
+      const store = makeAgentSessionStore();
+      const result = await spawnAgentSession({
+        ownerId: OWNER_ID,
+        driveId: DRIVE_ID,
+        envId: ENV_ID,
+        deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'not_connected' }) }),
+      });
+      expect(result).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'not_connected' });
+      expect(store.rows.size).toBe(0);
+    });
+
+    it('given the gate refuses on the base code-exec gate, should carry its cause', async () => {
+      const store = makeAgentSessionStore();
+      const result = await spawnAgentSession({
+        ownerId: OWNER_ID,
+        driveId: DRIVE_ID,
+        envId: ENV_ID,
+        deps: makeSpawnDeps(store, { ...localEnvInDrive, gateLocalEnvBind: async () => ({ ok: false, refusal: 'code_exec_denied', cause: 'tier_ineligible' }) }),
+      });
+      expect(result).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'code_exec_denied', cause: 'tier_ineligible' });
+      expect(store.rows.size).toBe(0);
+    });
+
+    it('given a SPRITE env, should never consult the gate (byte-identical to before)', async () => {
+      const store = makeAgentSessionStore();
+      const result = await spawnAgentSession({ ownerId: OWNER_ID, driveId: DRIVE_ID, envId: ENV_ID, deps: makeSpawnDeps(store, envInDrive) });
+      expect(result.ok).toBe(true);
+    });
   });
 });
 

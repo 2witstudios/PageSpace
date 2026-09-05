@@ -57,6 +57,7 @@
  */
 
 import type { SandboxHandle, SandboxHost, SandboxSubstrateSpec } from '../sandbox/sandbox-host';
+import type { LocalEnvRefusal } from '../drive-envs/local-env-gate';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import type { SandboxCreateOptions } from '../sandbox/sandbox-options';
 import type { FullEgressEnablement } from '../sandbox/containment';
@@ -267,8 +268,12 @@ export type EnsureSpriteHolderSandboxResult =
         | 'egress_denied'
         | 'provision_failed'
         | 'persist_failed'
-        | 'race_lost';
+        | 'race_lost'
+        /** A LOCAL env refused at the server-side gate (C1); `refusal` names why and nothing reached the Sprite host. */
+        | 'local_refused';
       denial?: SpriteHolderDenyReason;
+      /** Set with `reason: 'local_refused'` — the typed local-env verdict (`decideBind` / `planLocalProvision` vocabulary). */
+      refusal?: LocalEnvRefusal;
       detail?: string;
     };
 

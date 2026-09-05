@@ -199,6 +199,8 @@ export interface DriveEnvStore {
 
   /** The sibling by its wire identity (what the daemon presents). */
   findLocalByEnrollmentId(enrollmentId: string): Promise<DriveEnvLocalRecord | null>;
+  /** The sibling by its env — what the server-side gate reads before any bind / provision of a local env (C1). */
+  findLocalByEnvId(envId: string): Promise<DriveEnvLocalRecord | null>;
   /** Every sibling in the drive — what the listing joins. */
   listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
   /**
@@ -595,6 +597,16 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         .from(driveEnvLocal)
         .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
         .where(eq(driveEnvLocal.enrollmentId, enrollmentId))
+        .limit(1);
+      return (row as DriveEnvLocalRecord | undefined) ?? null;
+    },
+
+    async findLocalByEnvId(envId) {
+      const [row] = await db
+        .select(localSelection)
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.envId, envId))
         .limit(1);
       return (row as DriveEnvLocalRecord | undefined) ?? null;
     },

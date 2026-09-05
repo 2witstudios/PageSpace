@@ -19,6 +19,8 @@
  */
 
 import type { SandboxHost } from '../sandbox/sandbox-host';
+import type { LocalEnvGateVerdict, LocalEnvRefusal } from '../drive-envs/local-env-gate';
+import type { CodeExecutionDenialReason } from '../sandbox/can-run-code';
 import { SandboxSpriteReplacedError } from '../sandbox/sandbox-host';
 import { planSpriteHolderLifecycle, type SpriteHolderLifecyclePlan } from '../../agent-workspaces/plan-workspace-lifecycle';
 import type { AgentSessionDTO } from '../../agent-workspaces/session-contract';
@@ -45,7 +47,15 @@ export interface SpawnAgentSessionDeps {
    * never looked at that drive. A dep cannot be forgotten; a call-site check
    * can.
    */
-  findEnv: (envId: string) => Promise<{ driveId: string } | null>;
+  findEnv: (envId: string) => Promise<{ driveId: string; substrate: string } | null>;
+  /**
+   * The server-side gate for binding to a LOCAL env (C1): `decideBind` fed the
+   * real inputs, via the ONE shared assembly (`gateLocalEnvForRequester`).
+   * REQUIRED for the same reason `findEnv` is — a call site cannot forget a
+   * dep. Called only when the env's substrate is `local`; a Sprite env's spawn
+   * is byte-identical to before.
+   */
+  gateLocalEnvBind: (input: { envId: string; requesterId: string }) => Promise<LocalEnvGateVerdict>;
   /**
    * The most NOT-ENDED sessions this owner may hold. REQUIRED, mirroring
    * `checkConcurrency` in `agent-workspace-sprite.ts`: the ceiling used to be a
@@ -69,7 +79,9 @@ export type SpawnAgentSessionResult =
    * `resolveEnvInDrive` makes: a caller who may not see a drive must not learn
    * from the error which of its envs exist, so both answer 404.
    */
-  | { ok: false; reason: 'env_not_found' };
+  | { ok: false; reason: 'env_not_found' }
+  /** A LOCAL env refused the bind at the server (C1); `refusal` is the typed `decideBind` / `planLocalProvision` word. */
+  | { ok: false; reason: 'env_bind_refused'; refusal: LocalEnvRefusal; cause?: CodeExecutionDenialReason };
 
 /**
  * Spawn a session: mint the workspace row.
@@ -133,6 +145,13 @@ export async function spawnAgentSession({
     // `drive_envs.driveId` is NOT NULL: a global-assistant session is refused
     // an env here without a branch of its own.
     if (!env || env.driveId !== driveId) return { ok: false, reason: 'env_not_found' };
+    // C1: binding to the user's own machine is gated at the server BEFORE the
+    // row exists — a refused bind never leaves a session pointing at hardware
+    // it may not use.
+    if (env.substrate === 'local') {
+      const verdict = await deps.gateLocalEnvBind({ envId: boundEnvId, requesterId: ownerId });
+      if (!verdict.ok) return { ok: false, reason: 'env_bind_refused', refusal: verdict.refusal, cause: verdict.cause };
+    }
   }
   try {
     const result = await deps.store.createIfUnderLimit({

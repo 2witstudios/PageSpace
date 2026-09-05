@@ -584,6 +584,22 @@ describe('rebuildDriveEnv', () => {
     };
   }
 
+  it('given a LOCAL env, should refuse substrate_unsupported BEFORE any teardown or provision — the machine is the user\'s, there is no Sprite to replace (C1)', async () => {
+    const store = makeDriveEnvStore([makeEnvRecord({ substrate: 'local' })]);
+    const host = makeSpriteHost();
+    const deps = makeRebuildDeps(store, host);
+    let ensured = 0;
+    deps.ensureSandbox = async (row) => {
+      ensured += 1;
+      return { ok: true, sandboxId: row.id, resumed: false };
+    };
+    expect(await rebuildDriveEnv({ envId: ENV_ID, deps })).toEqual({ ok: false, reason: 'substrate_unsupported' });
+    expect(host.calls.kill).toEqual([]);
+    expect(host.calls.provision).toEqual([]);
+    expect(ensured).toBe(0);
+    expect(store.rows.get(ENV_ID)).toEqual(makeEnvRecord({ substrate: 'local' }));
+  });
+
   it('should KILL before it re-provisions — a deterministic name would otherwise hand back the same disk', async () => {
     const order: string[] = [];
     const store = makeDriveEnvStore([makeEnvRecord({ sandboxId: SANDBOX_ID, spriteInstanceId: 'inst-1' })]);

@@ -148,6 +148,10 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return null;
     },
 
+    async findLocalByEnvId(envId) {
+      return local.get(envId) ?? null;
+    },
+
     async listLocalFacts(driveId) {
       return [...local.values()].filter((sibling) => sibling.driveId === driveId);
     },

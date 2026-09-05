@@ -997,6 +997,8 @@ export interface RebuildDriveEnvDeps {
 export type RebuildDriveEnvResult =
   | { ok: true; sandboxId: string }
   | { ok: false; reason: 'not_found' }
+  /** A LOCAL env has no Sprite to replace: rebuild is a Sprite verb (C1). Nothing is torn down or provisioned. */
+  | { ok: false; reason: 'substrate_unsupported' }
   | { ok: false; reason: 'teardown_failed'; detail: string }
   /** The old Sprite is gone but the new one could not be minted. The env survives, machineless, and the next ensure retries. */
   | { ok: false; reason: 'provision_failed'; detail: string };
@@ -1032,6 +1034,9 @@ export async function rebuildDriveEnv({
 }): Promise<RebuildDriveEnvResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
+  // C1: the user's own machine has no Sprite to destroy and re-mint. Refuse
+  // BEFORE the teardown and before the provisioner is ever consulted.
+  if (row.substrate === 'local') return { ok: false, reason: 'substrate_unsupported' };
 
   if (row.sandboxId !== null && row.spriteTornDownAt === null) {
     const teardown = await teardownEnvSprite({

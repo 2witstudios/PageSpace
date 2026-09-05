@@ -43,6 +43,9 @@ import {
 import type { SandboxHost } from '../sandbox/sandbox-host';
 import type { SubscriptionTier } from '../subscription-utils';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
+import { isLocalEnvsEnabled } from './local-envs-enabled';
+import { gateLocalEnv, noLiveConnections, resolveDriveActorRole, type LiveConnectionReader, type LocalEnvGateVerdict } from './local-env-gate';
+import type { ActorRole } from '../../env-bridge/decide-bind';
 
 /**
  * The env's PAYER — the drive's OWNER — and their tier.
@@ -176,7 +179,7 @@ export function buildEnvProvisionDeps({
 }
 
 export interface EnsureDriveEnvSandboxDeps {
-  store: DriveEnvProvisionStore & Pick<DriveEnvStore, 'findById'>;
+  store: DriveEnvProvisionStore & Pick<DriveEnvStore, 'findById' | 'findLocalByEnvId'>;
   host: SandboxHost;
   /**
    * The drive's payer and tier, or null when the drive is gone. Null FAILS the
@@ -184,6 +187,50 @@ export interface EnsureDriveEnvSandboxDeps {
    * tenant — see `DriveEnvPayer`.
    */
   resolvePayer: (driveId: string) => Promise<DriveEnvPayer | null>;
+  /**
+   * LOCAL envs only (C1). This replica's bridge-socket registry reading; absent
+   * until the socket route (t07) exists, so status derives from the heartbeat.
+   */
+  liveConnection?: LiveConnectionReader;
+  /** LOCAL envs only. Test seam; production resolves the role with the centralized permission helper. */
+  resolveActorRole?: (input: { userId: string; driveId: string }) => Promise<ActorRole>;
+  /** LOCAL envs only. `LOCAL_ENVS_ENABLED`; read from the environment when absent. */
+  localEnvsEnabled?: boolean;
+}
+
+/**
+ * The server-side gate for a LOCAL env, fed the real inputs from the same deps
+ * a provision uses: the payer (so `canRunCode` bills the right tenant), the
+ * requester's drive role, the flag and the live-socket reading. Shared by the
+ * provisioner below and by the session-spawn bind, so both ask ONE question.
+ */
+export async function gateLocalEnvForRequester({
+  row,
+  requesterId,
+  deps,
+}: {
+  row: Pick<DriveEnvRecord, 'id' | 'driveId' | 'substrate'>;
+  requesterId: string;
+  deps: Pick<EnsureDriveEnvSandboxDeps, 'store' | 'resolvePayer' | 'liveConnection' | 'resolveActorRole' | 'localEnvsEnabled'>;
+}): Promise<LocalEnvGateVerdict> {
+  const payer = await deps.resolvePayer(row.driveId);
+  // A vanished drive has nobody to authorize against; the code-exec gate's own
+  // vocabulary says so rather than this module inventing a verdict.
+  const canRun = payer
+    ? () => canRunCode({ userId: requesterId, driveId: row.driveId, ownerId: payer.payerId, requestOrigin: 'user' })
+    : async () => ({ ok: false as const, reason: 'no_drive_access' as const });
+  return gateLocalEnv({
+    row,
+    requesterId,
+    deps: {
+      store: deps.store,
+      canRunCode: canRun,
+      resolveActorRole: () => (deps.resolveActorRole ?? resolveDriveActorRole)({ userId: requesterId, driveId: row.driveId }),
+      liveConnection: deps.liveConnection ?? noLiveConnections,
+      flagEnabled: deps.localEnvsEnabled ?? isLocalEnvsEnabled(),
+      now: () => new Date(),
+    },
+  });
 }
 
 /**
@@ -213,6 +260,15 @@ export async function ensureDriveEnvSandbox({
 }): Promise<EnsureSpriteHolderSandboxResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'provision_failed', detail: 'env_not_found' };
+  // C1: a LOCAL env never reaches the Sprite host. The pure planners decide
+  // (via the gate); an allowed, connected machine is still refused here as
+  // `substrate_unsupported` until the local SandboxHost lands (t09) — a typed
+  // refusal, never a Sprite minted for a row the t05 CHECK would reject.
+  if (row.substrate === 'local') {
+    const verdict = await gateLocalEnvForRequester({ row, requesterId, deps });
+    if (!verdict.ok) return { ok: false, reason: 'local_refused', refusal: verdict.refusal, detail: verdict.cause ?? verdict.refusal };
+    return { ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' };
+  }
   const payer = await deps.resolvePayer(row.driveId);
   if (!payer) return { ok: false, reason: 'provision_failed', detail: 'drive_not_found' };
   return ensureSpriteHolderSandbox({
