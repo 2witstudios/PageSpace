@@ -671,6 +671,60 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
     expect(row?.challengeUsedAt).toBeNull();
   });
 
+  // C5 (Codex): the "no overwrite of a live challenge" rule IS the CAS
+  // predicate, so it is pinned here against the real planner — including on a
+  // cluster whose session timezone is not UTC, where a `now()` would drift.
+  async function enrolledLocal() {
+    const { envId } = await createLocal();
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    return envId;
+  }
+  const LIVE = new Date(NOW.getTime() + 60_000);
+
+  it('setChallenge (C5): given a live unconsumed challenge, a second issue should LOSE the compare-and-set and leave nonce, issuedAt and expiry untouched', async () => {
+    const envId = await enrolledLocal();
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: LIVE, now: NOW })).toBe(true);
+    const later = new Date(NOW.getTime() + 10_000);
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: new Date(later.getTime() + 60_000), now: later })).toBe(false);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeNonce).toBe('n1');
+    expect(row?.challengeIssuedAt?.getTime()).toBe(NOW.getTime());
+    expect(row?.challengeExpiresAt?.getTime()).toBe(LIVE.getTime());
+    expect(row?.challengeUsedAt).toBeNull();
+  });
+
+  it('setChallenge (C5): given the outstanding challenge is EXPIRED (expiresAt <= now, boundary inclusive), should replace it', async () => {
+    const envId = await enrolledLocal();
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: LIVE, now: NOW })).toBe(true);
+    // One ms before expiry: still live.
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: new Date(LIVE.getTime() + 60_000), now: new Date(LIVE.getTime() - 1) })).toBe(false);
+    // Exactly at expiry: expired, replaced.
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: new Date(LIVE.getTime() + 60_000), now: LIVE })).toBe(true);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeNonce).toBe('n2');
+    expect(row?.challengeIssuedAt?.getTime()).toBe(LIVE.getTime());
+  });
+
+  it('setChallenge (C5): given the outstanding challenge was CONSUMED, should replace it and clear the consumption', async () => {
+    const envId = await enrolledLocal();
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: LIVE, now: NOW })).toBe(true);
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(true);
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: LIVE, now: NOW })).toBe(true);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeNonce).toBe('n2');
+    expect(row?.challengeUsedAt).toBeNull();
+  });
+
+  it('setChallenge (C5): given N concurrent issues against a row with no live challenge, exactly ONE should win — the predicate is the CAS, not a read', async () => {
+    const envId = await enrolledLocal();
+    const results = await Promise.all(
+      Array.from({ length: 6 }, (_, i) => store.setChallenge({ envId, nonce: `race-${i}`, expiresAt: LIVE, now: NOW })),
+    );
+    expect(results.filter(Boolean)).toHaveLength(1);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeNonce).toBe(`race-${results.indexOf(true)}`);
+  });
+
   it('consumeChallenge: given the enrollment was REVOKED after the challenge was issued, should lose the compare-and-set — revocation wins the race, nothing mints', async () => {
     const { envId } = await createLocal();
     await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });

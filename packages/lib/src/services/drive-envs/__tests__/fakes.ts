@@ -164,6 +164,9 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
     async setChallenge({ envId, nonce, expiresAt, now: at }) {
       const sibling = local.get(envId);
       if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
+      // The real store's C5 predicate: a live, unconsumed nonce is never replaced.
+      const live = sibling.challengeNonce !== null && sibling.challengeUsedAt === null && sibling.challengeExpiresAt !== null && sibling.challengeExpiresAt.getTime() > at.getTime();
+      if (live) return false;
       local.set(envId, { ...sibling, challengeNonce: nonce, challengeIssuedAt: at, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at });
       return true;
     },

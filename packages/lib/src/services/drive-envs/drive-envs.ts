@@ -341,9 +341,25 @@ export async function enrollLocalDriveEnv({
 
 export type IssueLocalEnvChallengeResult =
   | { ok: true; nonce: string; expiresAt: Date }
-  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' };
+  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' }
+  /** A live, unconsumed challenge is outstanding; ask again once it has expired (`retryAfterMs`). */
+  | { ok: false; reason: 'challenge_pending'; retryAfterMs: number };
 
-/** A fresh nonce for the machine to sign. Replaces any outstanding one — one handshake at a time. */
+/** Is a live (unconsumed, unexpired) challenge outstanding on this row at `now`? */
+function pendingChallengeMs(row: DriveEnvLocalRecord, now: Date): number | null {
+  if (row.challengeNonce === null || row.challengeUsedAt !== null || row.challengeExpiresAt === null) return null;
+  const remaining = row.challengeExpiresAt.getTime() - now.getTime();
+  return remaining > 0 ? remaining : null;
+}
+
+/**
+ * A fresh nonce for the machine to sign — ONE handshake at a time. An
+ * outstanding challenge that is unconsumed and unexpired is NOT replaced
+ * (Codex C5): a leaked enrollmentId must not let a stranger invalidate the
+ * nonce the daemon is about to sign. The store's compare-and-set is the
+ * mechanism; the pre-read only chooses the honest answer (`challenge_pending`
+ * with the time left) without a write. An expired or consumed one IS replaced.
+ */
 export async function issueLocalEnvChallenge({
   enrollmentId,
   deps,
@@ -356,10 +372,19 @@ export async function issueLocalEnvChallenge({
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
   if (row.enrolledAt === null) return { ok: false, reason: 'not_enrolled' };
   const now = deps.now();
+  const pending = pendingChallengeMs(row, now);
+  if (pending !== null) return { ok: false, reason: 'challenge_pending', retryAfterMs: pending };
   const challenge = issueChallenge({ random: deps.identity.random, now: now.getTime(), enrollmentId });
   const expiresAt = new Date(challenge.exp);
   const stored = await deps.store.setChallenge({ envId: row.envId, nonce: challenge.nonce, expiresAt, now });
-  if (!stored) return { ok: false, reason: 'revoked' };
+  if (!stored) {
+    // The CAS refused: either a concurrent issue won (its challenge is now the
+    // live one) or a revocation landed. Re-read and say which — never guess.
+    const after = await deps.store.findLocalByEnrollmentId(enrollmentId);
+    const pendingAfter = after && after.revokedAt === null ? pendingChallengeMs(after, now) : null;
+    if (pendingAfter !== null) return { ok: false, reason: 'challenge_pending', retryAfterMs: pendingAfter };
+    return { ok: false, reason: 'revoked' };
+  }
   return { ok: true, nonce: challenge.nonce, expiresAt };
 }
 
