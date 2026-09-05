@@ -298,6 +298,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Changed
 
+- **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
+  sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
+  longer sits on a pure-black floor, which is easier to read and reduces halation. Hover
+  highlights in dark mode are now a quiet gray rather than saturated blue, and the *selected*
+  item (active channel, drive, sidebar entry, agent history row) gets a soft blue tint instead,
+  so "hovered" and "selected" no longer look the same. Sidebars, the AI panel and the header sit
+  one tone above the page, and the hairlines between regions are a touch stronger, so the lighter
+  surfaces read as layered rather than flat. Primary text is a touch whiter and secondary text
+  slightly brighter to
+  keep contrast comfortable on the lighter surfaces (the marketing site's secondary text is a hair
+  darker, matching the app). The admin app, the marketing site (including
+  the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
+  splash colors all use the same new floor so nothing looks darker than the page around it.
+
 - **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
   window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
   New accounts pick it up automatically; anyone with an explicit model already selected keeps that

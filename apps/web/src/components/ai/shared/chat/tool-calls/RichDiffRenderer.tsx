@@ -345,7 +345,7 @@ export const RichDiffRenderer: React.FC<RichDiffRendererProps> = memo(function R
 
       {/* Content with contextual diff */}
       <div
-        className="bg-white dark:bg-gray-900 overflow-auto"
+        className="bg-card overflow-auto"
         style={{ maxHeight: `${maxHeight}px` }}
       >
         <div className="text-gray-900 dark:text-gray-100">

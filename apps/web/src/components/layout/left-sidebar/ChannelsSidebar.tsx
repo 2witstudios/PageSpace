@@ -191,7 +191,7 @@ export default function ChannelsSidebar({ className }: SidebarProps) {
                   onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
                   className={cn(
                     'flex items-start gap-3 p-2 rounded-lg hover:bg-accent transition-colors cursor-pointer',
-                    isActive && 'bg-accent'
+                    isActive && 'bg-primary-soft'
                   )}
                 >
                   <div className="h-9 w-9 flex-shrink-0 rounded-full bg-muted flex items-center justify-center">

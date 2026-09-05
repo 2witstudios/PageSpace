@@ -161,7 +161,7 @@ function NavLinks({ pathname, alerts, onNavigate }: {
                   className={cn(
                     'flex min-h-10 items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors',
                     active
-                      ? 'bg-sidebar-primary/10 font-medium text-sidebar-primary dark:bg-sidebar-accent dark:text-sidebar-accent-foreground'
+                      ? 'bg-primary-soft font-medium text-sidebar-primary'
                       : 'text-sidebar-foreground/70 hover:bg-sidebar-accent/60 hover:text-sidebar-foreground dark:hover:bg-sidebar-accent/30',
                   )}
                 >

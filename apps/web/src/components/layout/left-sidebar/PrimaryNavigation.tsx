@@ -131,7 +131,7 @@ export default function PrimaryNavigation({ driveId }: PrimaryNavigationProps) {
                         className={cn(
                             "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm font-medium transition-colors",
                             isActive
-                                ? "bg-accent text-accent-foreground"
+                                ? "bg-primary-soft text-foreground"
                                 : "text-sidebar-foreground hover:bg-accent hover:text-accent-foreground"
                         )}
                     >

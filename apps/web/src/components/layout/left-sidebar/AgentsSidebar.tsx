@@ -1383,7 +1383,7 @@ function SessionRow({
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
-        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-accent')}
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-primary-soft')}
       >
         <button
           type="button"
@@ -1532,7 +1532,7 @@ function ConversationRow({
       className={cn(
         'gap-1.5 rounded-md px-1.5 py-0.5 text-xs hover:bg-accent hover:text-foreground',
         placement === 'grid' ? 'text-muted-foreground' : 'text-muted-foreground/60',
-        isSelected && 'bg-accent text-foreground',
+        isSelected && 'bg-primary-soft text-foreground',
       )}
     >
       <button

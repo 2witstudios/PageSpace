@@ -168,7 +168,7 @@ export default function DMSidebar({ className }: SidebarProps) {
                   onClick={() => isSheetBreakpoint && setLeftSheetOpen(false)}
                   className={cn(
                     'flex items-start gap-3 p-2 rounded-lg hover:bg-accent transition-colors cursor-pointer',
-                    isActive && 'bg-accent'
+                    isActive && 'bg-primary-soft'
                   )}
                 >
                   <Avatar className="h-9 w-9 flex-shrink-0">

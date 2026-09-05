@@ -132,7 +132,7 @@ export const RichContentRenderer: React.FC<RichContentRendererProps> = memo(func
 
       {/* Content - rendered HTML or plain text */}
       <div
-        className="bg-white dark:bg-gray-900 overflow-auto"
+        className="bg-card overflow-auto"
         style={{ maxHeight: `${maxHeight}px` }}
       >
         {hasHtmlContent ? (
