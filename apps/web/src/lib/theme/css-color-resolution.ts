@@ -16,7 +16,7 @@
  * future rebrand.
  */
 export const THEME_FALLBACK = {
-  dark: { background: '#141414', foreground: '#f0f0f0', primary: '#5b8cff' },
+  dark: { background: '#0f0f0f', foreground: '#f5f5f5', primary: '#5b8cff' },
   light: { background: '#ffffff', foreground: '#1f1f1f', primary: '#3f6dff' },
 } as const;
 

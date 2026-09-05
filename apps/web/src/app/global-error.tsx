@@ -29,7 +29,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
           alignItems: 'center',
           justifyContent: 'center',
           fontFamily: 'system-ui, -apple-system, sans-serif',
-          backgroundColor: '#141414',
+          backgroundColor: '#0f0f0f',
           color: '#ededed',
         }}
       >
@@ -110,7 +110,7 @@ export default function GlobalError({ error, reset }: GlobalErrorProps) {
                 borderRadius: '6px',
                 border: 'none',
                 backgroundColor: '#ededed',
-                color: '#141414',
+                color: '#0f0f0f',
                 fontWeight: 500,
                 fontSize: '14px',
                 cursor: 'pointer',

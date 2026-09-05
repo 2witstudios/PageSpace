@@ -265,7 +265,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   longer sits on a pure-black floor, which is easier to read and reduces halation. Hover
   highlights in dark mode are now a quiet gray rather than saturated blue, and the *selected*
   item (active channel, drive, sidebar entry, agent history row) gets a soft blue tint instead,
-  so "hovered" and "selected" no longer look the same. Secondary text is slightly brighter to
+  so "hovered" and "selected" no longer look the same. Sidebars, the AI panel and the header sit
+  one tone above the page, and the hairlines between regions are a touch stronger, so the lighter
+  surfaces read as layered rather than flat. Primary text is a touch whiter and secondary text
+  slightly brighter to
   keep contrast comfortable on the lighter surfaces (the marketing site's secondary text is a hair
   darker, matching the app). The admin app, the marketing site (including
   the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
