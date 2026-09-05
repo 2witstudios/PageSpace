@@ -18,10 +18,6 @@ export function HeroSection() {
             The AI for working<span className="dot">.</span>
           </h1>
           <p className="hero-sub">An AI coworker that actually does the work — everywhere your team already works.</p>
-          {/* AEO answer block: self-contained, category terms, grounded specifics. */}
-          <p className="hero-dab">
-            <b>PageSpace is the AI-powered workspace platform where your team&rsquo;s work lives</b> — documents, tasks, channels, spreadsheets, and code, all as pages in one tree. Instead of a chatbot on the side, an AI coworker works inside it: writing docs, updating sheets, filing issues, and running tasks. Free on Mac, Windows, Linux, and iOS.
-          </p>
           <div className="hero-cta">
             <Button size="lg" asChild>
               <a href={`${APP_URL}/auth/signup`}>
