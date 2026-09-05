@@ -79,23 +79,30 @@
   /* hero — product-as-hero */
   /* bottom padding leaves room for the app window's drop shadow — the section
      clips overflow (for the right-edge bleed), which was cutting the shadow off. */
-  & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; }
-  & .hero::before { content: ""; position: absolute; inset: 0; background: var(--hero-glow); pointer-events: none; }
+  /* Space-themed hero: the backdrop image sits at z 0, a legibility gradient
+     over it (the copy lives on the image's near-black left third), content at
+     z 1. Background colour matches the image's edge so the pre-image paint and
+     any letterboxing read as the same black in both themes. */
+  & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; background: #010305; }
+  & .hero .hero-bg { object-fit: cover; object-position: 50% 50%; z-index: 0; }
+  & .hero::before { content: ""; position: absolute; inset: 0; z-index: 0; pointer-events: none;
+    background: linear-gradient(90deg, rgba(1, 3, 5, 0.72) 0%, rgba(1, 3, 5, 0.35) 38%, rgba(1, 3, 5, 0) 62%), var(--hero-glow); }
   & .hero-in { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 32px; }
   & h1.hero-h { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-display); font-weight: 500; letter-spacing: -0.02em; line-height: 0.98; text-wrap: balance; margin: 0 0 14px; }
   /* The subline is our claim, so it outranks everything below the fold line:
      foreground, not muted, and one step above the testimonial quotes. */
-  & .hero-sub { font-size: 20px; color: var(--foreground); line-height: 1.5; text-wrap: pretty; margin: 0 0 22px; }
-  & .hero-cap { max-width: 640px; margin-bottom: 28px; }
+  & .hero-sub { font-size: 20px; color: rgba(255, 255, 255, 0.88); line-height: 1.5; text-wrap: pretty; margin: 0 0 22px; }
+  /* light copy scoped to the caption only: the app window mock must keep its own (dark-on-card) text */
+  & .hero-cap { max-width: 640px; margin-bottom: 28px; color: #fff; }
   & .hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
   /* quiet, linked cross-platform cue — inline beside the CTA, links to /downloads */
   & .hero-plat {
     font-size: var(--t-small);
-    color: var(--muted-foreground);
+    color: rgba(255, 255, 255, 0.68);
     text-decoration: none;
     transition: color 0.16s ease;
   }
-  & a.hero-plat:hover { color: var(--foreground); }
+  & a.hero-plat:hover { color: #fff; }
   & .hero-plat:focus-visible {
     outline: 2px solid color-mix(in oklab, var(--primary), transparent 55%);
     outline-offset: 3px;
@@ -497,6 +504,9 @@
 
 @media (max-width: 600px) {
   .lp .hero-in { padding: 0 16px; }
+  /* portrait crop of a landscape image: bias left so the copy stays on the
+     dark starfield and the nebula peeks in behind the window */
+  .lp .hero .hero-bg { object-position: 30% 50%; }
 }
 
 @media (prefers-reduced-motion: reduce) {

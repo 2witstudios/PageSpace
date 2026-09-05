@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { APP_URL } from "@/lib/metadata";
@@ -12,6 +13,21 @@ import { ScaledAppWindow } from "./landing/ScaledAppWindow";
 export function HeroSection() {
   return (
     <section className="hero">
+      {/* Space backdrop. next/image negotiates AVIF/WebP and picks a width for
+          the viewport (~25-145 KB at q60); `priority` preloads it since it is
+          the LCP candidate. The inline blur paints the dark field instantly. */}
+      <Image
+        className="hero-bg"
+        src="/hero-space.webp"
+        alt=""
+        fill
+        priority
+        fetchPriority="high"
+        sizes="100vw"
+        quality={60}
+        placeholder="blur"
+        blurDataURL="data:image/webp;base64,UklGRnAAAABXRUJQVlA4IGQAAAAQBACdASoYAAoAPtFYpkwoJSOiMAgBABoJZACdMoAKQw9BMKr6iiDlWAD+/re+PbanR8qjsEn7npIBrBQK6sYqQ/B9PGByqwbKUI8AAKlsNvwoEd4Tj6Xm/xI/jzT7gXAXAIAA"
+      />
       <div className="hero-in">
         <div className="hero-cap">
           <h1 className="hero-h">The AI for working</h1>
