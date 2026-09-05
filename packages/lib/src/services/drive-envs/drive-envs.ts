@@ -312,7 +312,8 @@ export async function enrollLocalDriveEnv({
     presented: code,
     storedHash: row.enrollmentCodeHash,
     exp: row.enrollmentCodeExpiresAt.getTime(),
-    usedAt: row.enrollmentCodeUsedAt?.getTime() ?? null,
+    // Established null by the `used` guard above; the pure gate re-checks it anyway.
+    usedAt: null,
     now: now.getTime(),
     hash: deps.identity.hash,
   });
