@@ -206,7 +206,7 @@ function SheetMock() {
         <span className="tb"><Ico name="percent" size="i14" /></span>
       </div>
       <div className="fbar"><span className="addr">B5</span><Ico name="fx" size="i14 muted" /><span className="finput">=SUM(B2:B4)</span></div>
-      <div className="grid" style={{ margin: "0 16px" }}>
+      <div className="sgrid" style={{ margin: "0 16px" }}>
         {grid.map((row, ri) => (
           <div className="gr" key={ri}>
             {row.map((cell, ci) => {

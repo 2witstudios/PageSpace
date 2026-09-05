@@ -271,7 +271,9 @@
   & .aidot { width: 22px; height: 22px; border-radius: 50%; background: var(--primary-soft); color: var(--primary); display: grid; place-items: center; flex: 0 0 auto; }
   & .addr { border: 1px solid var(--separator); background: var(--muted); border-radius: 6px; padding: 4px 8px; min-width: 56px; text-align: center; font-family: var(--font-mono); font-size: 12px; }
   & .finput { flex: 1; border: 1px solid var(--border); border-radius: 6px; padding: 5px 9px; font-family: var(--font-mono); font-size: 13px; }
-  & .grid { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13px; }
+  /* Spreadsheet grid — NOT `.grid` (that's a Tailwind display utility used
+     elsewhere on the page, e.g. the shared footer). Keep this name unique. */
+  & .sgrid { border: 1px solid var(--border); border-radius: 8px; overflow: hidden; font-size: 13px; }
   & .gr { display: grid; grid-template-columns: 40px repeat(3, 1fr); }
   & .gc { padding: 6px 9px; border-right: 1px solid var(--separator); border-bottom: 1px solid var(--separator); height: 30px; display: flex; align-items: center; }
   & .gr:last-child .gc { border-bottom: none; }
