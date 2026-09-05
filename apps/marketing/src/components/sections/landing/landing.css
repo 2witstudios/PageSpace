@@ -143,14 +143,7 @@
   & .post .who2 .hd { font-size: 13px; color: var(--muted-foreground); }
   & .post .plat { margin-left: auto; color: var(--muted-foreground); flex: 0 0 auto; }
   & .post:hover .plat { color: var(--primary); }
-  /* ParallelDrive trust mark between the two cards. Logo is a monochrome PNG
-     rendered as a mask so it takes the theme color (and works in dark mode). */
-  & .pd-mark { align-self: center; flex: 0 0 auto; display: flex; flex-direction: column; align-items: center; gap: 9px; padding: 0 6px; max-width: 132px; text-decoration: none; color: var(--muted-foreground); }
-  & .pd-logo { width: 28px; height: 28px; background-color: var(--muted-foreground); -webkit-mask: url(/paralleldrive.png) center / contain no-repeat; mask: url(/paralleldrive.png) center / contain no-repeat; transition: background-color .16s ease; }
-  & .pd-name { font-size: 13px; font-weight: 600; line-height: 1.2; text-align: center; color: var(--muted-foreground); transition: color .16s ease; }
-  & .pd-mark:hover .pd-logo { background-color: var(--primary); }
-  & .pd-mark:hover .pd-name { color: var(--primary); }
-  & .post .text { font-size: 17px; line-height: 1.55; margin: 14px 0 0; color: var(--foreground); }
+  & .post .text { font-size: 17px; line-height: 1.55; margin: 14px 0 0; color: var(--foreground); flex: 1 0 auto; }
   & .post .foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--separator); font-size: 13px; color: var(--muted-foreground); }
 
   /* section rhythm */
@@ -408,13 +401,6 @@
      per-mock reflow is needed here — just a touch more peek room on phones. */
   .lp .stage { padding-inline: 5%; }
   .lp .slide { flex-basis: 90%; }
-}
-
-/* Testimonials: below the point where two cards + the mark fit one row, stack
-   them into a single centered column (card → mark → card). */
-@media (max-width: 899px) {
-  .lp .quote-band .qwrap { flex-direction: column; align-items: center; }
-  .lp .quote-band .post { flex: 0 1 auto; width: 100%; max-width: 500px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

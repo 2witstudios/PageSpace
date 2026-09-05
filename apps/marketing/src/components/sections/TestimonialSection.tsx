@@ -1,4 +1,3 @@
-import { Fragment } from "react";
 import Image from "next/image";
 import { Ico } from "./landing/icons";
 import { TESTIMONIALS, type Testimonial } from "./landing/testimonial-data";
@@ -27,30 +26,16 @@ function TestimonialCard({ t }: { t: Testimonial }) {
   );
 }
 
-/** ParallelDrive trust mark shown between the two cards (Eric Elliott's OSS company). */
-function ParallelDriveMark() {
-  return (
-    <a className="pd-mark" href="https://paralleldrive.com/" target="_blank" rel="noopener noreferrer" aria-label="Parallel Drive">
-      <span className="pd-logo" aria-hidden="true" />
-      <span className="pd-name">Parallel Drive</span>
-    </a>
-  );
-}
-
 /**
- * Quiet social-proof band: real social pull-quotes as cards, with the ParallelDrive
- * mark between them. Review JSON-LD for each quote lives in schema.tsx (AEO).
+ * Quiet social-proof band: real social pull-quotes as cards. Review JSON-LD for
+ * each quote lives in schema.tsx (AEO: machine-readable social proof).
  */
 export function TestimonialSection() {
-  const pair = TESTIMONIALS.length === 2;
   return (
     <section className="quote-band">
       <div className="qwrap">
-        {TESTIMONIALS.map((t, i) => (
-          <Fragment key={t.handle}>
-            <TestimonialCard t={t} />
-            {pair && i === 0 ? <ParallelDriveMark /> : null}
-          </Fragment>
+        {TESTIMONIALS.map((t) => (
+          <TestimonialCard t={t} key={t.handle} />
         ))}
       </div>
     </section>
