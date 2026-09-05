@@ -49,7 +49,7 @@ export const TESTIMONIALS: Testimonial[] = [
   {
     author: "Noah Hines",
     role: "Sales Manager, Ideal Impact",
-    avatar: "/noah-hines.jpg",
+    avatar: "/noah-hines.png",
     body:
       "Every 6-12 months I look into new apps to organize my life, notes, to-do's, etc. because something is always missing. Pretty sure I'm done looking because PageSpace has what I've been looking for (and things I didn't know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.",
     quote: (
