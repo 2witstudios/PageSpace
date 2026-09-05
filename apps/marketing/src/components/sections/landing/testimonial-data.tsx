@@ -1,15 +1,17 @@
 import type { ReactNode } from "react";
 
 /**
- * Real social posts about PageSpace, shown as pull-quote cards. `body` is plain
- * text for the Review JSON-LD (schema.tsx); `quote` is the styled display node.
- * Wording is quoted verbatim from the public posts.
+ * Real quotes about PageSpace, shown as pull-quote cards. `body` is plain text
+ * for the Review JSON-LD (schema.tsx); `quote` is the styled display node.
+ * Wording is verbatim. Social posts carry `handle` + `url` (the card links out);
+ * a plain attributed quote carries `role` instead and renders unlinked.
  */
 export interface Testimonial {
   author: string;
-  handle: string;
-  url: string;
-  avatar: string;
+  handle?: string;
+  role?: string;
+  url?: string;
+  avatar?: string;
   body: string;
   quote: ReactNode;
   credential?: { icon: string; text: ReactNode };
@@ -43,5 +45,17 @@ export const TESTIMONIALS: Testimonial[] = [
       </>
     ),
     credential: { icon: "zap", text: "AI automation specialist" },
+  },
+  {
+    author: "Noah Hines",
+    role: "Sales Manager, Ideal Impact",
+    avatar: "/noah-hines.jpg",
+    body:
+      "Every 6-12 months I look into new apps to organize my life, notes, to-do's, etc. because something is always missing. Pretty sure I'm done looking because PageSpace has what I've been looking for (and things I didn't know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.",
+    quote: (
+      <>
+        Every 6-12 months I look into new apps to organize my life, notes, to-do&rsquo;s, etc. because something is always missing. Pretty sure I&rsquo;m done looking because <span className="lnk">PageSpace</span> has what I&rsquo;ve been looking for (and things I didn&rsquo;t know I wanted). You can make it simple or very automated and complex, which helps me manage each area of my life according to what it actually needs.
+      </>
+    ),
   },
 ];

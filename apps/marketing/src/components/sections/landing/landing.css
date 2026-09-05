@@ -235,6 +235,7 @@
   & .post .text .lnk { color: var(--primary); font-weight: 500; }
   & .post .head { display: flex; align-items: center; gap: 12px; }
   & .post .ee-pic { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
+  & .post .ee-init { display: inline-flex; align-items: center; justify-content: center; background: var(--primary-soft); color: var(--primary); font-weight: 600; font-size: var(--t-small); letter-spacing: 0.02em; }
   & .post .who2 { line-height: 1.35; min-width: 0; }
   & .post .who2 .nm { font-weight: 600; font-size: var(--t-body); color: var(--foreground); display: flex; align-items: center; gap: 5px; }
   & .post .who2 .hd { font-size: var(--t-small); color: var(--muted-foreground); }

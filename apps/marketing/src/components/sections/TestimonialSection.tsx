@@ -2,18 +2,34 @@ import Image from "next/image";
 import { Ico } from "./landing/icons";
 import { TESTIMONIALS, type Testimonial } from "./landing/testimonial-data";
 
+function initials(name: string) {
+  return name
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((w) => w[0]?.toUpperCase() ?? "")
+    .join("");
+}
+
 function TestimonialCard({ t }: { t: Testimonial }) {
-  return (
-    <a className="post" href={t.url} target="_blank" rel="noopener noreferrer">
+  const inner = (
+    <>
       <div className="head">
-        <Image className="ee-pic" src={t.avatar} alt="" width={44} height={44} />
+        {t.avatar ? (
+          <Image className="ee-pic" src={t.avatar} alt="" width={44} height={44} />
+        ) : (
+          <span className="ee-pic ee-init" aria-hidden="true">
+            {initials(t.author)}
+          </span>
+        )}
         <span className="who2">
           <span className="nm">{t.author}</span>
-          <span className="hd">{t.handle}</span>
+          <span className="hd">{t.handle ?? t.role}</span>
         </span>
-        <span className="plat" aria-label="View post">
-          <Ico name="arrowUpRight" size="i18" />
-        </span>
+        {t.url ? (
+          <span className="plat" aria-label="View post">
+            <Ico name="arrowUpRight" size="i18" />
+          </span>
+        ) : null}
       </div>
       <p className="text">{t.quote}</p>
       {t.credential ? (
@@ -22,12 +38,19 @@ function TestimonialCard({ t }: { t: Testimonial }) {
           <span>{t.credential.text}</span>
         </div>
       ) : null}
+    </>
+  );
+  return t.url ? (
+    <a className="post" href={t.url} target="_blank" rel="noopener noreferrer">
+      {inner}
     </a>
+  ) : (
+    <div className="post">{inner}</div>
   );
 }
 
 /**
- * Quiet social-proof band: real social pull-quotes as cards. Review JSON-LD for
+ * Quiet social-proof band: real pull-quotes as cards. Review JSON-LD for
  * each quote lives in schema.tsx (AEO: machine-readable social proof).
  */
 export function TestimonialSection() {
@@ -35,7 +58,7 @@ export function TestimonialSection() {
     <section className="quote-band">
       <div className="qwrap">
         {TESTIMONIALS.map((t) => (
-          <TestimonialCard t={t} key={t.handle} />
+          <TestimonialCard t={t} key={t.author} />
         ))}
       </div>
     </section>
