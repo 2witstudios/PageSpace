@@ -57,6 +57,7 @@ export const ICON_PATHS: Record<string, ReactNode> = {
   database: (<><ellipse cx="12" cy="5" rx="9" ry="3" /><path d="M3 5v14a9 3 0 0 0 18 0V5" /><path d="M3 12a9 3 0 0 0 18 0" /></>),
   shieldCheck: (<><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" /><path d="m9 12 2 2 4-4" /></>),
   arrowRight: (<path d="M5 12h14M12 5l7 7-7 7" />),
+  arrowUpRight: (<path d="M7 17 17 7M7 7h10v10" />),
   webby: (<><circle cx="12" cy="8" r="6" /><path d="M8.5 13.5 7 22l5-3 5 3-1.5-8.5" /></>),
 };
 
