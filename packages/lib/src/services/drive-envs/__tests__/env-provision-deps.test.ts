@@ -243,7 +243,7 @@ describe('ensureDriveEnvSandbox', () => {
    * called. (A mutant that skips the branch mints a Sprite and goes red here.)
    */
   describe('a LOCAL env never reaches the Sprite host (C1)', () => {
-    const localRow = { ...envRow, substrate: 'local' };
+    const localRow = { ...envRow, substrate: 'local' as const };
     const sibling = (over: Partial<ReturnType<typeof makeLocalRecord>> = {}) =>
       makeLocalRecord({ envId: ENV_ID, driveId: DRIVE_ID, ownerId: REQUESTER_ID, enrolledAt: new Date(), machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', lastSeenAt: new Date(), ...over });
 

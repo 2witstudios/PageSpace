@@ -211,8 +211,8 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
     run(grant, { nonces, signature: signWith(rogue.privateKey, grant) });
     run(makeGrant({ envId: 'env_other', nonce: 'n_env' }), { nonces });
     run(makeGrant({ iat: NOW - 50_000, exp: NOW - 1, nonce: 'n_exp' }), { nonces });
-    run(makeGrant({ nonce: 'n_op' }), { nonces, request: { op: 'fs_write', args: ARGS } });
-    run(makeGrant({ nonce: 'n_args' }), { nonces, request: { op: 'exec', args: { cmd: 'other' } } });
+    run(makeGrant({ nonce: 'n_op' }), { nonces, request: { op: 'fs_write', args: { files: [] } } });
+    run(makeGrant({ nonce: 'n_args' }), { nonces, request: { op: 'exec', args: { ...ARGS, cmd: 'other' } } });
     expect(nonces.has(grant.nonce)).toBe(false);
     for (const n of ['n_env', 'n_exp', 'n_op', 'n_args']) expect(nonces.has(n)).toBe(false);
   });

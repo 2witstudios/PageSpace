@@ -72,7 +72,7 @@ describe('grantArgsForFrame — one exact args object per op, pinned by object, 
 
   it('should never leak the envelope (type, grant, sig) or any unknown field into the hashed args', () => {
     const smuggled = { ...execFull, isAdmin: true, sudo: 'yes' } as unknown as GrantFrame;
-    const args = grantArgsForFrame(smuggled) as Record<string, unknown>;
+    const args = grantArgsForFrame(smuggled) as unknown as Record<string, unknown>;
     for (const key of ['type', 'grant', 'sig', 'isAdmin', 'sudo']) expect(args).not.toHaveProperty(key);
   });
 
