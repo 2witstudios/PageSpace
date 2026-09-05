@@ -7,6 +7,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), a self-contained
+  answer block high on the page, a new FAQ section answering the top search questions, and
+  FAQPage / Review / Organization structured data with a single consistent product description.
+
 - **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
   action, and the resulting app pane lives on the environment itself rather than in a separate
   dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
