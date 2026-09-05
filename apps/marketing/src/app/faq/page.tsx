@@ -1,3 +1,4 @@
+import { isValidElement, type ReactNode } from "react";
 import Link from "next/link";
 import { ChevronDown, ArrowRight, MessageCircle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -5,7 +6,17 @@ import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
 import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
+
+/** Flatten a ReactNode answer to plain text for the FAQPage schema. */
+function faqText(node: ReactNode): string {
+  if (node == null || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(faqText).join("");
+  if (isValidElement(node)) return faqText((node.props as { children?: ReactNode }).children);
+  return "";
+}
 
 export const metadata = pageMetadata.faq;
 
@@ -50,6 +61,13 @@ const faqs: FAQItem[] = [
     question: "Is it just for teams, or can I use it on my own?",
     answer:
       "Both. Individuals use it as a personal AI-powered notebook and task system. Teams use it for real-time collaboration. You can start solo and add people whenever.",
+    category: "What is PageSpace?",
+  },
+  {
+    id: "when-not-the-fit",
+    question: "When is PageSpace not the right fit?",
+    answer:
+      "If you want a purely offline notebook with no AI, or a single-purpose tool for one narrow job, PageSpace is more than you need. It's built for people and teams who want an AI coworker acting across their whole workspace — if you don't want AI touching your work, it isn't the right pick.",
     category: "What is PageSpace?",
   },
 
@@ -269,9 +287,14 @@ const faqs: FAQItem[] = [
 
 const categories = [...new Set(faqs.map((faq) => faq.category))];
 
+const faqSchema = createFaqSchema(
+  faqs.map((faq) => ({ q: faq.question, a: faqText(faq.answer).replace(/\s+/g, " ").trim() })),
+);
+
 export default function FAQPage() {
   return (
     <div className="min-h-screen bg-background">
+      <JsonLd data={faqSchema} />
       <SiteNavbar />
       <FAQHashOpener />
 

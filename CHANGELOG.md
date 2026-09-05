@@ -18,6 +18,14 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   and a deployment that leaves it off answers exactly as before. Your data export
   (`local-environments.json`) lists the machines you enrolled.
 
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
+  Organization structured data with a single consistent product description, and a `FAQPage`
+  schema added to the existing FAQ page so its answers are machine-readable.
+
 - **You can find friends and collaborators by name when inviting them to a drive** — the invite
   member search now surfaces people you already have a relationship with — anyone you share a drive
   with, or an accepted connection — by their display name or username, even when their profile is
