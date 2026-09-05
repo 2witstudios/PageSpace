@@ -203,6 +203,26 @@
       "import": "./dist/env-bridge/plan-local-provision.js",
       "require": "./dist/env-bridge/plan-local-provision.js"
     },
+    "./env-bridge/enrollment": {
+      "types": "./dist/env-bridge/enrollment.d.ts",
+      "import": "./dist/env-bridge/enrollment.js",
+      "require": "./dist/env-bridge/enrollment.js"
+    },
+    "./env-bridge/challenge": {
+      "types": "./dist/env-bridge/challenge.d.ts",
+      "import": "./dist/env-bridge/challenge.js",
+      "require": "./dist/env-bridge/challenge.js"
+    },
+    "./env-bridge/server-signing-key": {
+      "types": "./dist/env-bridge/server-signing-key.d.ts",
+      "import": "./dist/env-bridge/server-signing-key.js",
+      "require": "./dist/env-bridge/server-signing-key.js"
+    },
+    "./auth/env-bridge-signing-key": {
+      "types": "./dist/auth/env-bridge-signing-key.d.ts",
+      "import": "./dist/auth/env-bridge-signing-key.js",
+      "require": "./dist/auth/env-bridge-signing-key.js"
+    },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",
       "import": "./dist/agent-workspaces/credential-scope.js",

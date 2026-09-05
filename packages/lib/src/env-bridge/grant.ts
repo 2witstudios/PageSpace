@@ -195,8 +195,8 @@ function canonicalJson(value: unknown): string {
 
 const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
 
-/** Strict base64 → bytes; `null` for anything that is not well-formed base64. */
-function decodeBase64(value: string): Uint8Array | null {
+/** Strict base64 → bytes; `null` for anything that is not well-formed base64. Shared by the other gates in this folder. */
+export function decodeBase64(value: string): Uint8Array | null {
   if (value.length === 0 || value.length % 4 !== 0 || !BASE64_RE.test(value)) return null;
   return new Uint8Array(Buffer.from(value, 'base64'));
 }
@@ -204,9 +204,9 @@ function decodeBase64(value: string): Uint8Array | null {
 /**
  * Length-then-XOR comparison that does not short-circuit on the first differing
  * character. Digests are not secrets, but the gate should not leak how much of
- * a hash matched either.
+ * a hash matched either. Shared by the other gates in this folder.
  */
-function constantTimeEqual(a: string, b: string): boolean {
+export function constantTimeEqual(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let diff = 0;
   for (let i = 0; i < a.length; i += 1) diff |= a.charCodeAt(i) ^ b.charCodeAt(i);
