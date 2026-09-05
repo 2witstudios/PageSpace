@@ -48,6 +48,12 @@ import { MAX_DRIVE_ENVS_LISTED } from '../../drive-envs/env-contract';
 export interface DriveEnvRecord {
   /** The env's own id — the API address and the Sprite-key fold. */
   id: string;
+  /**
+   * What runs this env: `'sprite'` (every pre-existing row) or `'local'` (the
+   * user's own machine via the bridge). A local row's Sprite columns below are
+   * CHECK-forbidden to be non-null — see the `drive_envs` table docblock.
+   */
+  substrate: 'sprite' | 'local';
   /** The owning drive. NOT NULL: an env has no user-scoped form. */
   driveId: string;
   /** Unique within the drive — an address, not a label. */

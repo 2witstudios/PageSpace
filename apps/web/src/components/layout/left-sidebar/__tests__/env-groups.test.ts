@@ -7,8 +7,12 @@ import { describe, it, expect } from 'vitest';
 import { partitionSessionsByEnv } from '../env-groups';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 
-const env = (over: Partial<DriveEnvDTO> & { id: string; name: string }): DriveEnvDTO => ({
+type SpriteEnvDTO = Extract<DriveEnvDTO, { substrate: 'sprite' }>;
+
+/** A Sprite env DTO; the partition is substrate-agnostic, so Sprite is a fine default. */
+const env = (over: Partial<SpriteEnvDTO> & { id: string; name: string }): DriveEnvDTO => ({
   driveId: 'drive-1',
+  substrate: 'sprite',
   status: 'none',
   createdAt: '2026-08-01T00:00:00.000Z',
   ...over,

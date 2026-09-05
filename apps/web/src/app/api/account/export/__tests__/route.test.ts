@@ -106,6 +106,7 @@ const mockUserData = {
   agentWorkspaces: [{ id: 'ws-1', role: 'owner', name: 'Working context', shells: [] }],
   streamState: [{ messageId: 'sm-1', conversationId: 'c-1', status: 'complete', parts: [] }],
   contentTags: [{ tagName: 'risk', pageId: 'p-1', pageTitle: 'Page', targetKind: 'page', anchor: null, anchorStatus: null, channelMessageId: null, aiMessageId: null, source: 'user', confidence: null }],
+  localEnvironments: [{ envId: 'env-1', driveId: 'd-1', envName: 'my-mac', label: 'jono-macstudio', machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:abc', serverKeyId: 'k1', bindPolicy: 'owner', capabilities: null, enrolledAt: null, lastSeenAt: null, revokedAt: null, createdAt: new Date('2026-09-04T00:00:00.000Z'), updatedAt: new Date('2026-09-04T00:00:00.000Z') }],
 };
 
 describe('GET /api/account/export', () => {
@@ -239,6 +240,8 @@ describe('GET /api/account/export', () => {
       const names = buildNativeExportFiles(mockUserData as never).map((f) => f.name);
       expect(names).toContain('agent-workspaces.json');
       expect(names).toContain('stream-state.json');
+      // Local Environments epic (t05): the machines the subject enrolled are a first-class category.
+      expect(names).toContain('local-environments.json');
     });
 
     it('manifest.json documents the schema version and file inventory', async () => {

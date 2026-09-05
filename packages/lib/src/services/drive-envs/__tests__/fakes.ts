@@ -25,6 +25,7 @@ export const PAYER_ID = 'owner-1';
 export function makeEnvRecord(over: Partial<DriveEnvRecord> = {}): DriveEnvRecord {
   return {
     id: ENV_ID,
+    substrate: 'sprite',
     driveId: DRIVE_ID,
     name: 'staging',
     createdBy: 'user-1',
