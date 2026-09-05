@@ -1,5 +1,5 @@
+import Link from "next/link";
 import { ArrowRight } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { APP_URL } from "@/lib/metadata";
 import { Ico } from "./landing/icons";
 import { ScaledAppWindow } from "./landing/ScaledAppWindow";
@@ -17,15 +17,17 @@ export function HeroSection() {
           <h1 className="hero-h">
             The AI for working<span className="dot">.</span>
           </h1>
-          <p className="hero-sub">An AI coworker that actually does the work — everywhere your team already works.</p>
+          <p className="hero-sub">Partner for any project, workspace for any team.</p>
           <div className="hero-cta">
-            <Button size="lg" asChild>
-              <a href={`${APP_URL}/auth/signup`}>
-                Start free
-                <ArrowRight className="ml-2 h-4 w-4" />
-              </a>
-            </Button>
-            <span className="hero-plat">Also on Mac, Windows, Linux &amp; iOS</span>
+            <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
+              Start free
+              <span className="cta-arrow" aria-hidden="true">
+                <ArrowRight />
+              </span>
+            </a>
+            <Link className="hero-plat" href="/downloads">
+              Also on desktop &amp; mobile
+            </Link>
           </div>
         </div>
 

@@ -11,13 +11,18 @@ export function CTASection() {
         <h2>Ready to put AI to work?</h2>
         <p>Start free and give your team an AI that does the actual work.</p>
         <div className="cta-actions">
-          <Button size="lg" asChild>
-            <a href={`${APP_URL}/auth/signup`}>
-              Start free
-              <ArrowRight className="ml-2 h-4 w-4" />
-            </a>
-          </Button>
-          <Button size="lg" variant="outline" asChild>
+          <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
+            Start free
+            <span className="cta-arrow" aria-hidden="true">
+              <ArrowRight />
+            </span>
+          </a>
+          <Button
+            size="lg"
+            variant="outline"
+            asChild
+            className="h-[44px] rounded-[calc(var(--radius)+2px)] px-5 text-[15px]"
+          >
             <Link href="/pricing">View pricing</Link>
           </Button>
         </div>
