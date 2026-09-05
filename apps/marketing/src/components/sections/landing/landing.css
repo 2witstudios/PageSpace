@@ -29,7 +29,16 @@
   --tree-active: #e5e7eb;
   --separator: oklch(0.55 0.02 230 / 0.13);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.08), 0 4px 6px -4px rgb(0 0 0/.08);
-  --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.08), rgba(255, 255, 255, 0));
+  /* Type scale. Two faces: the display serif speaks for the site (headlines,
+     pull-quotes); Geist is the product's own face and stays on body, UI, and
+     every mock. Marketing copy uses only these six steps — mock internals keep
+     their app-mimicking sizes because they are pictures of the product. */
+  --t-display: clamp(44px, 6.4vw, 76px);
+  --t-h2: clamp(30px, 4.2vw, 46px);
+  --t-lead: 19px;
+  --t-body: 16px;
+  --t-small: 14px;
+  --t-micro: 12px;
   color: var(--foreground);
   font-family: var(--font-sans);
 }
@@ -49,7 +58,6 @@
   --tree-active: #374151;
   --separator: oklch(0.94 0 0 / 0.10);
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0/.4), 0 4px 6px -4px rgb(0 0 0/.4);
-  --hero-glow: radial-gradient(ellipse 62% 50% at 50% -6%, rgba(59, 130, 246, 0.12), rgba(0, 0, 0, 0));
 }
 
 .lp {
@@ -63,23 +71,23 @@
   & .mono { font-family: var(--font-mono); }
   & .wrap { max-width: 1120px; margin: 0 auto; padding: 0 24px; }
   & .liquid-thin { background: var(--material-thin); -webkit-backdrop-filter: blur(20px) saturate(180%); backdrop-filter: blur(20px) saturate(180%); }
-  & h2.sec { font-size: clamp(26px, 4vw, 40px); font-weight: 700; letter-spacing: -0.025em; line-height: 1.1; text-wrap: balance; margin: 0 0 12px; }
-  & .sub { font-size: 17px; color: var(--muted-foreground); text-wrap: pretty; line-height: 1.55; margin: 0; }
+  & h2.sec { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-h2); font-weight: 500; letter-spacing: -0.015em; line-height: 1.05; text-wrap: balance; margin: 0 0 12px; }
+  & .sub { font-size: var(--t-lead); color: var(--muted-foreground); text-wrap: pretty; line-height: 1.5; margin: 0; }
 
   /* hero — product-as-hero */
   /* bottom padding leaves room for the app window's drop shadow — the section
      clips overflow (for the right-edge bleed), which was cutting the shadow off. */
   & .hero { position: relative; overflow: hidden; padding: 28px 0 56px; }
-  & .hero::before { content: ""; position: absolute; inset: 0; background: var(--hero-glow); pointer-events: none; }
   & .hero-in { position: relative; z-index: 1; max-width: 1280px; margin: 0 auto; padding: 0 32px; }
-  & h1.hero-h { font-size: clamp(38px, 6vw, 68px); font-weight: 800; letter-spacing: -0.04em; line-height: 1.0; margin: 0 0 12px; }
-  & h1.hero-h .dot { color: var(--primary); }
-  & .hero-sub { font-size: clamp(16px, 1.9vw, 19px); color: var(--muted-foreground); line-height: 1.5; margin: 0 0 22px; }
+  & h1.hero-h { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-display); font-weight: 500; letter-spacing: -0.02em; line-height: 0.98; text-wrap: balance; margin: 0 0 14px; }
+  /* The subline is our claim, so it outranks everything below the fold line:
+     foreground, not muted, and one step above the testimonial quotes. */
+  & .hero-sub { font-size: 20px; color: var(--foreground); line-height: 1.5; text-wrap: pretty; margin: 0 0 22px; }
   & .hero-cap { max-width: 640px; margin-bottom: 28px; }
   & .hero-cta { display: flex; flex-wrap: wrap; align-items: center; gap: 16px; }
   /* quiet, linked cross-platform cue — inline beside the CTA, links to /downloads */
   & .hero-plat {
-    font-size: 12.5px;
+    font-size: var(--t-small);
     color: var(--muted-foreground);
     text-decoration: none;
     transition: color 0.16s ease;
@@ -95,7 +103,8 @@
      the page a visitor must reach for, so it's built to feel like the product —
      a solid, machined key lit from above, grounded by its own colored shadow.
      Depth is drawn with light (a top highlight, a base seat), not decoration;
-     the only motion is a press that answers the pointer. */
+     the only motion is a press that answers the pointer. The arrow stays put:
+     a sliding arrow is the stock hover and says nothing. */
   & .cta-primary {
     --cta-lift: 0px;
     position: relative;
@@ -135,10 +144,7 @@
       box-shadow 0.22s cubic-bezier(0.2, 0.7, 0.3, 1);
   }
   & .cta-primary svg { width: 16px; height: 16px; }
-  & .cta-primary .cta-arrow {
-    display: inline-flex;
-    transition: transform 0.18s cubic-bezier(0.2, 0.7, 0.3, 1);
-  }
+  & .cta-primary .cta-arrow { display: inline-flex; }
   & .cta-primary:hover {
     --cta-lift: -1px;
     box-shadow:
@@ -146,7 +152,6 @@
       0 2px 4px rgb(15 23 42 / 0.18),
       0 12px 24px -10px color-mix(in oklab, var(--primary), transparent 50%);
   }
-  & .cta-primary:hover .cta-arrow { transform: translateX(3px); }
   & .cta-primary:active {
     --cta-lift: 0.5px;
     transition-duration: 0.06s;
@@ -162,10 +167,8 @@
       0 0 0 3px color-mix(in oklab, var(--primary), transparent 62%);
   }
   @media (prefers-reduced-motion: reduce) {
-    & .cta-primary,
-    & .cta-primary .cta-arrow { transition: none; }
+    & .cta-primary { transition: none; }
     & .cta-primary:hover { --cta-lift: 0px; }
-    & .cta-primary:hover .cta-arrow { transform: none; }
   }
 
   /* app window (real painted UI) */
@@ -230,12 +233,15 @@
   & .post .head { display: flex; align-items: center; gap: 12px; }
   & .post .ee-pic { width: 44px; height: 44px; border-radius: 50%; object-fit: cover; flex: 0 0 auto; }
   & .post .who2 { line-height: 1.35; min-width: 0; }
-  & .post .who2 .nm { font-weight: 600; font-size: 15px; color: var(--foreground); display: flex; align-items: center; gap: 5px; }
-  & .post .who2 .hd { font-size: 13px; color: var(--muted-foreground); }
+  & .post .who2 .nm { font-weight: 600; font-size: var(--t-body); color: var(--foreground); display: flex; align-items: center; gap: 5px; }
+  & .post .who2 .hd { font-size: var(--t-small); color: var(--muted-foreground); }
   & .post .plat { margin-left: auto; color: var(--muted-foreground); flex: 0 0 auto; }
   & .post:hover .plat { color: var(--primary); }
+  /* Quotes stay in Geist: the serif is reserved for headings so it means
+     "PageSpace speaking". Sized under the hero subline so social proof
+     supports the claim instead of shouting over it. */
   & .post .text { font-size: 17px; line-height: 1.55; margin: 14px 0 0; color: var(--foreground); flex: 1 0 auto; }
-  & .post .foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--separator); font-size: 13px; color: var(--muted-foreground); }
+  & .post .foot { display: flex; align-items: center; gap: 8px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--separator); font-size: var(--t-small); color: var(--muted-foreground); }
 
   /* section rhythm */
   & section.band { padding: 60px 0; }
@@ -243,7 +249,7 @@
 
   /* carousel */
   & .tabs { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-bottom: 34px; }
-  & .tab { display: inline-flex; align-items: center; gap: 7px; font-size: 14px; font-weight: 500; color: var(--muted-foreground); background: transparent; cursor: pointer; border: 1px solid var(--border); border-radius: 999px; padding: 6px 13px; transition: all .16s ease; white-space: nowrap; }
+  & .tab { display: inline-flex; align-items: center; gap: 7px; font-size: var(--t-small); font-weight: 500; color: var(--muted-foreground); background: transparent; cursor: pointer; border: 1px solid var(--border); border-radius: 999px; padding: 6px 13px; transition: all .16s ease; white-space: nowrap; }
   & .tab .i { width: 15px; height: 15px; }
   & .tab:hover { color: var(--foreground); background: var(--accent); }
   & .tab[aria-selected="true"] { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }
@@ -257,7 +263,7 @@
   & .slide { transition: opacity .3s ease; opacity: 0.5; }
   & .slide[data-active="true"] { opacity: 1; }
   /* Reserve two lines so captions of different lengths don't shift the page. */
-  & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: 15px; line-height: 1.45; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 44px; }
+  & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: var(--t-body); line-height: 1.5; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 48px; }
   & .caption b { color: var(--foreground); font-weight: 600; }
 
   /* mock frame + internals */
@@ -413,25 +419,25 @@
   & .pal-list { padding: 6px; }
   & .pal-row { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 8px; }
   & .pal-row .pal-ic { color: var(--muted-foreground); flex: 0 0 auto; }
-  & .pal-row .req { flex: 1; font-size: 14px; line-height: 1.4; color: var(--foreground); }
+  & .pal-row .req { flex: 1; font-size: var(--t-body); line-height: 1.4; color: var(--foreground); }
   & .pal-row .k { margin-left: auto; font-size: 11px; color: var(--muted-foreground); opacity: 0; flex: 0 0 auto; }
   & .pal-row.sel { background: var(--primary-soft); }
   & .pal-row.sel .pal-ic { color: var(--primary); }
   & .pal-row.sel .k { opacity: 1; color: var(--primary); }
   & .pal-foot { padding: 11px 16px; border-top: 1px solid var(--separator); font-size: 12px; color: var(--muted-foreground); display: flex; justify-content: space-between; }
-  & .pal-hd { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px 2px; font-size: 14px; }
+  & .pal-hd { display: flex; align-items: baseline; gap: 8px; padding: 14px 16px 2px; font-size: var(--t-body); }
   & .pal-hd b { font-weight: 600; }
-  & .pal-hd .muted { font-size: 12.5px; }
+  & .pal-hd .muted { font-size: var(--t-small); }
   & .pal-row .req .trg { color: var(--primary); font-weight: 600; }
 
   /* teach it new skills */
   & .byo-grid { display: grid; grid-template-columns: 1fr; gap: 40px; align-items: center; }
   & .byo-points { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 12px; }
-  & .byo-points li { display: flex; gap: 11px; align-items: flex-start; font-size: 15px; color: var(--foreground); }
+  & .byo-points li { display: flex; gap: 11px; align-items: flex-start; font-size: var(--t-body); line-height: 1.55; color: var(--foreground); }
   & .byo-points li .i { color: var(--primary); margin-top: 2px; }
   & .byo-points li span b { font-weight: 600; }
   & .byo-points li .d { color: var(--muted-foreground); }
-  & .pro-cta { display: inline-flex; align-items: center; gap: 8px; margin-top: 24px; background: var(--primary); color: var(--primary-foreground); border-radius: var(--r-md); padding: 11px 18px; font-weight: 500; font-size: 15px; text-decoration: none; }
+  & .pro-cta { display: inline-flex; align-items: center; gap: 8px; margin-top: 24px; background: var(--primary); color: var(--primary-foreground); border-radius: var(--r-md); padding: 11px 18px; font-weight: 500; font-size: var(--t-body); text-decoration: none; }
   & .pro-cta:hover { filter: brightness(1.06); }
   & .skill { width: 100%; max-width: 520px; border: 1px solid var(--border); border-radius: var(--r-xl); background: var(--card); box-shadow: var(--shadow-elevated); overflow: hidden; }
   & .skill .sk-head { display: flex; align-items: center; gap: 10px; padding: 15px 18px; border-bottom: 1px solid var(--separator); }
@@ -439,7 +445,7 @@
   & .skill .sk-name { font-weight: 600; font-size: 15px; }
   & .skill .sk-pro { margin-left: auto; display: inline-flex; align-items: center; gap: 5px; font-size: 11px; font-weight: 600; color: var(--primary); border: 1px solid color-mix(in oklab, var(--primary), transparent 55%); border-radius: 999px; padding: 3px 9px; flex: 0 0 auto; }
   & .skill .sk-body { padding: 16px 18px; }
-  & .skill .sk-desc { font-size: 14.5px; line-height: 1.5; margin: 0 0 14px; color: var(--foreground); }
+  & .skill .sk-desc { font-size: var(--t-body); line-height: 1.5; margin: 0 0 14px; color: var(--foreground); }
   & .skill .sk-lbl { font-size: 11px; font-family: var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted-foreground); margin-bottom: 8px; }
   & .skill .step { display: flex; align-items: center; gap: 11px; font-size: 14px; padding: 6px 0; }
   & .skill .step .n { width: 22px; height: 22px; border-radius: 50%; background: var(--muted); color: var(--muted-foreground); display: grid; place-items: center; font-size: 12px; font-weight: 600; flex: 0 0 auto; }
@@ -450,14 +456,14 @@
   & .tlist { display: grid; grid-template-columns: 1fr; gap: 28px 44px; max-width: 940px; margin: 4px auto 0; }
   & .trow { display: flex; gap: 14px; align-items: flex-start; }
   & .trow .ic { color: var(--primary); margin-top: 2px; flex: 0 0 auto; }
-  & .trow h3 { font-size: 15px; font-weight: 600; margin: 0 0 4px; }
-  & .trow p { font-size: 13.5px; color: var(--muted-foreground); margin: 0; line-height: 1.5; max-width: 46ch; }
+  & .trow h3 { font-size: var(--t-body); font-weight: 600; margin: 0 0 4px; }
+  & .trow p { font-size: var(--t-body); color: var(--muted-foreground); margin: 0; line-height: 1.55; max-width: 46ch; }
 
   /* final cta + footer echo */
   & .cta { border-top: 1px solid var(--border); }
   & .cta-in { text-align: center; padding: 78px 24px; }
-  & .cta h2 { font-size: clamp(28px, 4.5vw, 44px); font-weight: 700; letter-spacing: -0.03em; margin: 0 0 12px; }
-  & .cta p { font-size: 17px; color: var(--muted-foreground); max-width: 500px; margin: 0 auto 24px; }
+  & .cta h2 { font-family: var(--font-display); font-optical-sizing: auto; font-size: var(--t-h2); font-weight: 500; letter-spacing: -0.015em; line-height: 1.05; text-wrap: balance; margin: 0 0 12px; }
+  & .cta p { font-size: var(--t-lead); line-height: 1.5; color: var(--muted-foreground); max-width: 520px; margin: 0 auto 24px; }
   & .cta-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 12px; }
 }
 

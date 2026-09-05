@@ -69,7 +69,7 @@ export function PageTypeCarouselSection() {
       <div className="wrap">
         <div className="center">
           <h2 className="sec">Everything is a page</h2>
-          <p className="sub">Documents, channels, agents, spreadsheets, task lists, code files — the same primitive in one tree. Where you place them shapes what the AI knows.</p>
+          <p className="sub">Documents, channels, agents, sheets, task lists, and code are one primitive in one tree. Where a page sits is what the AI knows about it.</p>
         </div>
 
         <div className="tabs" role="tablist" aria-label="Page types">
@@ -107,7 +107,7 @@ export function PageTypeCarouselSection() {
           </CarouselContent>
         </Carousel>
 
-        <div className="caption"><b>{active.label}</b> — {active.desc}</div>
+        <div className="caption"><b>{active.label}.</b> {active.desc}</div>
       </div>
     </section>
   );

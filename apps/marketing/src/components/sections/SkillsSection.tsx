@@ -6,15 +6,15 @@ export function SkillsSection() {
     <section className="band" style={{ borderTop: "1px solid var(--border)" }}>
       <div className="wrap">
         <div className="center">
-          <h2 className="sec">Teach it new skills.</h2>
-          <p className="sub">Show it how you do something once, save it as a skill, and your whole team&rsquo;s AI can run it on demand. On Pro, skills can even run code and programs.</p>
+          <h2 className="sec">Teach it how you work</h2>
+          <p className="sub">Write the steps once, save them as a skill, and anyone on the drive can run it. Pro skills can also run code.</p>
         </div>
         <div className="byo-grid">
           <div className="byo-copy">
             <ul className="byo-points">
               <li>
                 <Ico name="file" size="i18" />
-                <span><b>Made from a page.</b> <span className="d">Write the steps in plain words — no code required.</span></span>
+                <span><b>Made from a page.</b> <span className="d">Write the steps in plain words. No code required.</span></span>
               </li>
               <li>
                 <Ico name="users" size="i18" />

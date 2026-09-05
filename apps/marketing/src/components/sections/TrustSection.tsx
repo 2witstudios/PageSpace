@@ -5,7 +5,7 @@ const TRUST: { icon: string; title: string; body: string }[] = [
   {
     icon: "users",
     title: "You control who sees what",
-    body: "Role-based permissions down to the individual page — with custom roles and time-limited access. Everyone, and every agent, gets exactly the reach you grant.",
+    body: "Role-based permissions down to the individual page, with custom roles and time-limited access. Everyone, and every agent, gets exactly the reach you grant.",
   },
   {
     icon: "sliders",
@@ -15,7 +15,7 @@ const TRUST: { icon: string; title: string; body: string }[] = [
   {
     icon: "lock",
     title: "No back-door for AI",
-    body: "Every AI action runs through the same permission checks as people — no privileged bypass, and it fails closed. An agent only ever has the access you gave it.",
+    body: "Every AI action runs through the same permission checks as people. There is no privileged bypass, and it fails closed. An agent only ever has the access you gave it.",
   },
   {
     icon: "undo",
@@ -39,8 +39,8 @@ export function TrustSection() {
     <section className="band" style={{ borderTop: "1px solid var(--border)" }}>
       <div className="wrap">
         <div className="center">
-          <h2 className="sec">Full access, safely.</h2>
-          <p className="sub">An AI that acts needs guardrails you control — set the access, keep every version, and it&rsquo;s all backed up and logged.</p>
+          <h2 className="sec">Full access, with the brakes you set</h2>
+          <p className="sub">Permissions, restore points, backups, and an audit trail apply to the AI exactly as they apply to people.</p>
         </div>
         <div className="tlist">
           {TRUST.map((t) => (

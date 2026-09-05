@@ -14,10 +14,10 @@ export function HeroSection() {
     <section className="hero">
       <div className="hero-in">
         <div className="hero-cap">
-          <h1 className="hero-h">
-            The AI for working<span className="dot">.</span>
-          </h1>
-          <p className="hero-sub">Partner for any project, workspace for any team.</p>
+          <h1 className="hero-h">The AI for working</h1>
+          <p className="hero-sub">
+            An AI that reads your pages, does the job, and writes the result back where your team already works.
+          </p>
           <div className="hero-cta">
             <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
               Start free

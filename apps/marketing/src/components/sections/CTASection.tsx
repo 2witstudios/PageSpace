@@ -8,8 +8,8 @@ export function CTASection() {
   return (
     <section className="cta">
       <div className="cta-in">
-        <h2>Ready to put AI to work?</h2>
-        <p>Start free and give your team an AI that does the actual work.</p>
+        <h2>Put it to work on a real project</h2>
+        <p>Free to start. Bring one project and see what it finishes by Friday.</p>
         <div className="cta-actions">
           <a className="cta-primary" href={`${APP_URL}/auth/signup`}>
             Start free
