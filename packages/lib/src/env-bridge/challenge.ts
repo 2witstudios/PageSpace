@@ -13,9 +13,14 @@
  * Pure: randomness, the Ed25519 verify primitive and the clock are injected.
  *
  * Deny order is FIXED and tested: malformed → wrong_enrollment →
- * nonce_mismatch → used → expired → bad_signature. Cheap structural checks run
- * before crypto, and the caller marks the nonce consumed only on `ok` — a
- * response that fails any check has proven nothing and must not burn the nonce.
+ * nonce_mismatch → used → expired → bad_signature. `malformed` covers the
+ * response's shape AND the stored challenge's window: `exp < iat` means the
+ * row is fabricated or corrupted and no proof can rescue it (Codex C15 — the
+ * service used to fabricate `iat` from the expiry; it now stores
+ * `challengeIssuedAt` and this gate refuses an inverted window). Cheap
+ * structural checks run before crypto, and the caller marks the nonce consumed
+ * only on `ok` — a response that fails any check has proven nothing and must
+ * not burn the nonce.
  */
 import { z } from 'zod';
 import { constantTimeEqual, decodeBase64, type Ed25519Verify } from './grant';
@@ -87,6 +92,8 @@ export function verifyChallengeResponse(input: VerifyChallengeResponseInput): Ch
   if (!parsed.success) return deny('malformed');
   const signature = decodeBase64(parsed.data.signature);
   if (signature === null) return deny('malformed');
+  // The stored window must be sane before any field of it is trusted (C15).
+  if (input.challenge.exp < input.challenge.iat) return deny('malformed');
 
   if (parsed.data.enrollmentId !== input.challenge.enrollmentId) return deny('wrong_enrollment');
   if (!constantTimeEqual(parsed.data.nonce, input.challenge.nonce)) return deny('nonce_mismatch');

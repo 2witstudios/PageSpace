@@ -205,6 +205,47 @@ describe('issueLocalEnvChallenge / redeemLocalEnvChallenge — proof of possessi
     expect(second.expiresAt.getTime() - NOW.getTime()).toBeLessThanOrEqual(60_000);
   });
 
+  it('should STORE when the challenge was issued (C15): challengeIssuedAt = now, never fabricated from the expiry', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const issued = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!issued.ok) throw new Error(issued.reason);
+    const sibling = h.fake.local.get(env.id)!;
+    expect(sibling.challengeIssuedAt).toEqual(NOW);
+    expect(sibling.challengeExpiresAt).toEqual(issued.expiresAt);
+    expect(sibling.challengeExpiresAt!.getTime()).toBeGreaterThan(sibling.challengeIssuedAt!.getTime());
+  });
+
+  it('given a stored challenge whose issue time is AFTER its expiry (an inverted window), should refuse as malformed even with a valid proof — iat is reconstructed from challengeIssuedAt (C15)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeIssuedAt: new Date(challenge.expiresAt.getTime() + 1) });
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: h.deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'malformed' });
+    expect(h.minted).toHaveLength(0);
+  });
+
+  it('given a nonce with NO issue stamp (a row from before C15), should refuse with no_challenge rather than guess a window', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeIssuedAt: null });
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: h.deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_challenge' });
+    expect(h.minted).toHaveLength(0);
+  });
+
   it('given a machine that has not enrolled yet, should refuse with not_enrolled', async () => {
     const h = harness();
     await createLocal(h);

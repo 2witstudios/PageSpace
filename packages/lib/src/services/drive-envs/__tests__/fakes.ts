@@ -62,6 +62,7 @@ export function makeLocalRecord(over: Partial<DriveEnvLocalRecord> = {}): DriveE
     enrollmentCodeExpiresAt: null,
     enrollmentCodeUsedAt: null,
     challengeNonce: null,
+    challengeIssuedAt: null,
     challengeExpiresAt: null,
     challengeUsedAt: null,
     lastSeenAt: null,
@@ -163,7 +164,7 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
     async setChallenge({ envId, nonce, expiresAt, now: at }) {
       const sibling = local.get(envId);
       if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
-      local.set(envId, { ...sibling, challengeNonce: nonce, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at });
+      local.set(envId, { ...sibling, challengeNonce: nonce, challengeIssuedAt: at, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at });
       return true;
     },
 

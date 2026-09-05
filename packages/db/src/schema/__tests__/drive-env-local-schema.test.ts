@@ -146,6 +146,7 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
 
   it('carries the outstanding challenge (one per enrollment at a time) with expiry and consumption time, so nonces survive a multi-replica web tier', () => {
     expect(localColumns.challengeNonce.notNull).toBe(false);
+    expect(localColumns.challengeIssuedAt.notNull).toBe(false);
     expect(localColumns.challengeExpiresAt.notNull).toBe(false);
     expect(localColumns.challengeUsedAt.notNull).toBe(false);
   });

@@ -27,10 +27,13 @@
  *
  * Deny order is FIXED and tested: malformed → wrong_env → op_mismatch →
  * args_mismatch → ttl_too_long → clock_skew → expired → bad_signature →
- * replayed. Cheap structural checks (including the request binding) run before
- * the signature so junk never reaches crypto, and the replay check runs LAST so
- * a grant that fails any earlier check can never burn its nonce — the nonce is
- * recorded only when the whole verdict is `ok`.
+ * replayed. `malformed` covers the schema AND the window's sanity: `exp < iat`
+ * is not a short grant, it is not a grant, so it is refused as structure —
+ * before `ttl_too_long`, which only has meaning for a non-negative window
+ * (Codex C15). Cheap structural checks (including the request binding) run
+ * before the signature so junk never reaches crypto, and the replay check runs
+ * LAST so a grant that fails any earlier check can never burn its nonce — the
+ * nonce is recorded only when the whole verdict is `ok`.
  */
 import { z } from 'zod';
 import type { GrantRequest } from './grant-args';
@@ -223,6 +226,8 @@ export function verifyGrant(input: VerifyGrantInput): GrantVerdict {
   const parsed = grantSchema.safeParse(input.grant);
   if (!parsed.success) return deny('malformed');
   const grant: Grant = parsed.data;
+  // A negative window is structural nonsense, not a TTL question (C15).
+  if (grant.exp < grant.iat) return deny('malformed');
 
   if (grant.envId !== input.expectedEnvId) return deny('wrong_env');
 

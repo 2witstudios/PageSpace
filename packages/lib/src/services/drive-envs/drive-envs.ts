@@ -386,7 +386,9 @@ export async function redeemLocalEnvChallenge({
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
   if (row.enrolledAt === null || row.machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
-  if (row.challengeNonce === null || row.challengeExpiresAt === null) return { ok: false, reason: 'no_challenge' };
+  // A nonce without its issue stamp cannot be judged (its window is unknown),
+  // so it is no challenge at all — the daemon simply asks for a fresh one (C15).
+  if (row.challengeNonce === null || row.challengeIssuedAt === null || row.challengeExpiresAt === null) return { ok: false, reason: 'no_challenge' };
 
   const machinePublicKey = decodeBase64(row.machinePublicKey);
   if (machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
@@ -396,7 +398,9 @@ export async function redeemLocalEnvChallenge({
     challenge: {
       nonce: row.challengeNonce,
       enrollmentId: row.enrollmentId,
-      iat: row.challengeExpiresAt.getTime(),
+      // The STORED issue time, never fabricated from the expiry (Codex C15):
+      // the pure gate refuses an inverted window as malformed.
+      iat: row.challengeIssuedAt.getTime(),
       exp: row.challengeExpiresAt.getTime(),
       usedAt: row.challengeUsedAt?.getTime() ?? null,
     },

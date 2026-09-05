@@ -167,6 +167,22 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
     expect(run(makeGrant({ iat, exp: iat + 10_000 })).ok).toBe(true);
   });
 
+  // C15 (Codex adversarial review): a grant whose window is negative is not a
+  // "short TTL", it is not a grant. Structural, so it is `malformed` and is
+  // judged BEFORE ttl_too_long — and before anything that costs more.
+  it('given exp < iat, should deny malformed — evaluated before ttl_too_long (C15)', () => {
+    expect(run(makeGrant({ iat: NOW, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given exp < iat AND a wrong envId, should still deny malformed — the structural check beats wrong_env in the fixed order', () => {
+    expect(run(makeGrant({ envId: 'env_other', iat: NOW, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given exp === iat (a zero-length window), should NOT be malformed — it is simply expired the instant after', () => {
+    expect(run(makeGrant({ iat: NOW, exp: NOW }))).toEqual({ ok: true, grant: makeGrant({ iat: NOW, exp: NOW }) });
+    expect(run(makeGrant({ iat: NOW - 1, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'expired' });
+  });
+
   it('given exp - iat > the max TTL, should deny ttl_too_long even when otherwise valid and unexpired', () => {
     expect(run(makeGrant({ iat: NOW - 1_000, exp: NOW - 1_000 + GRANT_MAX_TTL_MS + 1 }))).toEqual({ ok: false, reason: 'ttl_too_long' });
   });

@@ -128,6 +128,12 @@ export const driveEnvLocal = pgTable('drive_env_local', {
    * on `challengeUsedAt`.
    */
   challengeNonce: text('challengeNonce'),
+  /**
+   * When the outstanding challenge was issued — stored, not fabricated from
+   * the expiry (Codex C15), so the pure gate can refuse an inverted window and
+   * the audit trail says when the nonce was minted. Set with the nonce.
+   */
+  challengeIssuedAt: timestamp('challengeIssuedAt', { mode: 'date' }),
   challengeExpiresAt: timestamp('challengeExpiresAt', { mode: 'date' }),
   challengeUsedAt: timestamp('challengeUsedAt', { mode: 'date' }),
 

@@ -100,6 +100,8 @@ export interface DriveEnvLocalRecord {
   enrollmentCodeExpiresAt: Date | null;
   enrollmentCodeUsedAt: Date | null;
   challengeNonce: string | null;
+  /** When the outstanding challenge was issued — stored, never fabricated from the expiry (C15). */
+  challengeIssuedAt: Date | null;
   challengeExpiresAt: Date | null;
   challengeUsedAt: Date | null;
   lastSeenAt: Date | null;
@@ -205,7 +207,7 @@ export interface DriveEnvStore {
    * NULL`). Clears the code hash — a consumed code is not kept around.
    */
   pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; now: Date }): Promise<boolean>;
-  /** Store the outstanding challenge, replacing any previous one, IFF enrolled and not revoked. */
+  /** Store the outstanding challenge (issued `now`), replacing any previous one, IFF enrolled and not revoked. */
   setChallenge(input: { envId: string; nonce: string; expiresAt: Date; now: Date }): Promise<boolean>;
   /**
    * Consume the challenge IFF it is exactly this nonce, unconsumed, and the
@@ -553,6 +555,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     enrollmentCodeExpiresAt: driveEnvLocal.enrollmentCodeExpiresAt,
     enrollmentCodeUsedAt: driveEnvLocal.enrollmentCodeUsedAt,
     challengeNonce: driveEnvLocal.challengeNonce,
+    challengeIssuedAt: driveEnvLocal.challengeIssuedAt,
     challengeExpiresAt: driveEnvLocal.challengeExpiresAt,
     challengeUsedAt: driveEnvLocal.challengeUsedAt,
     lastSeenAt: driveEnvLocal.lastSeenAt,
@@ -610,7 +613,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     async setChallenge({ envId, nonce, expiresAt, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ challengeNonce: nonce, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at })
+        .set({ challengeNonce: nonce, challengeIssuedAt: at, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at })
         .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;

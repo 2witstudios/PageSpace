@@ -128,6 +128,18 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
     });
   });
 
+  describe('0285 — the challenge records when it was ISSUED (Codex C15)', () => {
+    const fourth = load(285);
+
+    it('should exist in the journal as 0285', () => {
+      expect(fourth.file, 'no 0285_*.sql — run db:generate').toBeDefined();
+    });
+
+    it('should add exactly one nullable timestamp, challengeIssuedAt, and nothing else', () => {
+      expect(fourth.code.trim()).toBe('ALTER TABLE "drive_env_local" ADD COLUMN "challengeIssuedAt" timestamp;');
+    });
+  });
+
   it('should be strictly ADDITIVE across both: no DROP of any kind, no touch of agent_workspaces or its env_no_sprite check', () => {
     expect(both).not.toMatch(/DROP (TABLE|COLUMN|CONSTRAINT|INDEX)/i);
     expect(both).not.toMatch(/agent_workspaces/);
