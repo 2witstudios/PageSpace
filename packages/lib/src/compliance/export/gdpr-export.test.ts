@@ -96,6 +96,10 @@ const { mockTable } = vi.hoisted(() => {
 });
 
 vi.mock('@pagespace/db/schema/auth', () => ({ users: mockTable('users') }));
+// Local environments: the collector joins these two; mocked by path like every
+// other schema module so the real declarations never load under the mocked drizzle-orm.
+vi.mock('@pagespace/db/schema/drive-envs', () => ({ driveEnvs: mockTable('driveEnvs') }));
+vi.mock('@pagespace/db/schema/drive-env-local', () => ({ driveEnvLocal: mockTable('driveEnvLocal') }));
 vi.mock('@pagespace/db/schema/core', () => ({
   drives: mockTable('drives'),
   pages: mockTable('pages'),

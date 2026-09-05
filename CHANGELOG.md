@@ -7,6 +7,32 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
+  owner or admin can now create an Environment with `substrate: "local"` and a machine label,
+  and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that
+  presents the code with its own freshly generated key is pinned to that Environment, and from
+  then on proves it still holds the key every time it connects — the server never stores a
+  secret it could replay, and a used or expired code is worthless. Nothing runs on the machine
+  yet: this release ships the identity and enrollment half of the local-environment bridge; the
+  connection, the daemon and the sandbox host follow. Off by default (`LOCAL_ENVS_ENABLED`),
+  and a deployment that leaves it off answers exactly as before. Your data export
+  (`local-environments.json`) lists the machines you enrolled.
+
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
+  Organization structured data with a single consistent product description, and a `FAQPage`
+  schema added to the existing FAQ page so its answers are machine-readable.
+
+- **You can find friends and collaborators by name when inviting them to a drive** — the invite
+  member search now surfaces people you already have a relationship with — anyone you share a drive
+  with, or an accepted connection — by their display name or username, even when their profile is
+  private. Previously a private profile could only be reached by typing their exact email address.
+  Strangers with private profiles stay hidden, and no email is ever revealed by a name match, so this
+  opens no new way to discover people you don't already know.
+
 - **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
   action, and the resulting app pane lives on the environment itself rather than in a separate
   dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
@@ -29,6 +55,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   (nullable per-domain, so nothing changes for a domain nobody touches) from the same Domains settings
   page used for the static site today. The whole surface ships dark behind `APP_HOSTING_ENABLED` until
   it's turned on for a deployment.
+
+- **New accounts get a short first-run walkthrough instead of a blank screen** — signing up now
+  opens a five-step introduction that explains what PageSpace is and ends by asking what you
+  actually want to get done, then hands that request straight to the assistant so your first
+  action is the real thing rather than a setup form. It starts by asking who the workspace is for
+  — just you, a small team, several teams, or a whole company — and everything after that is
+  written for the answer you gave: the example it shows you, the six things it demonstrates it can
+  do, how many assistants turn up when a job is too big for one, and the suggested requests at the
+  end. It configures nothing; your Home drive is already set up before the walkthrough appears.
+  What you type is saved to your About You memory page, so every assistant you work with from then
+  on already knows it. Any step can be skipped, and skipping is remembered. Self-hosted
+  installations are not shown suggestions that depend on services they do not have.
 
 - **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
   an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
@@ -753,6 +791,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   conversation uses, or about which sessions appear in your sidebar.
 
 ### Changed
+
+- **The agent now defaults to checking what it can do before saying a request is out of scope** —
+  it always documented the code sandbox, delegating to other agents, and scheduling recurring or
+  future work, but only as mechanical "how to call this tool" text easy to skim past. A new
+  unconditional disposition section nudges it to check its actual capabilities this conversation —
+  "write code," "process data," "get a second opinion" — before defaulting to the narrowest reading
+  of a request. The sandbox is now described as a general-purpose environment for open-ended work
+  (scripts, scrapers, data processing, calling external APIs) rather than only a place to edit an
+  existing repo, agents are told they can configure a new specialist rather than only discover
+  existing ones, and triggers now cover one-off future work, not only recurring schedules. Every
+  capability claim follows the tools the agent actually holds this turn (a per-agent allowlist, a
+  read-only conversation) so nothing is ever suggested that the agent can't back up.
 
 - **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
   agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,

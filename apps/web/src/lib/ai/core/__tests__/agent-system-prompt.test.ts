@@ -259,11 +259,60 @@ describe('buildAgentSystemPrompt — what both surfaces owe the caller', () => {
     expect(without).not.toContain('create_task');
   });
 
-  it('should describe the sandbox only when code execution is on', () => {
-    expect(buildAgentSystemPrompt(pageInput({ codeExecutionEnabled: true }))).toContain(
-      'CODE SANDBOX:',
-    );
+  it('should describe the sandbox only when code execution is on and the agent has sandbox tools', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({ codeExecutionEnabled: true, allowedToolNames: [...TOOL_NAMES, 'bash'] }),
+      ),
+    ).toContain('CODE SANDBOX:');
     expect(buildAgentSystemPrompt(pageInput())).not.toContain('CODE SANDBOX:');
+  });
+
+  it('should not describe the sandbox when code execution is globally on but this agent has no sandbox tools', () => {
+    // Mirrors filterToolsForSandboxEnablement: a page with sandboxEnabled: false
+    // (the schema default) never gets bash/writeFile/etc in allowedToolNames even
+    // though the deployment-wide codeExecutionEnabled flag is on.
+    expect(
+      buildAgentSystemPrompt(pageInput({ codeExecutionEnabled: true, allowedToolNames: TOOL_NAMES })),
+    ).not.toContain('CODE SANDBOX:');
+  });
+
+  it('should describe the sandbox when the agent holds a non-bash sandbox tool (per-tool allowlist unchecked bash specifically)', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({ codeExecutionEnabled: true, allowedToolNames: [...TOOL_NAMES, 'writeFile'] }),
+      ),
+    ).toContain('CODE SANDBOX:');
+  });
+
+  it('should describe the sandbox in read-only mode when read-only-safe sandbox tools are present', () => {
+    // codex review: filterToolsForReadOnly keeps readFile/git_status (they're
+    // not WRITE_TOOLS) even in read-only mode. Blanket-suppressing the whole
+    // block for isReadOnly took away guidance those tools still need — the
+    // block must follow which tools are actually present, not the read-only
+    // flag. (bash itself is always absent from a real read-only tool list,
+    // since it IS a write tool — this test reflects that realistic case.)
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({
+          readOnly: true,
+          codeExecutionEnabled: true,
+          allowedToolNames: [...TOOL_NAMES, 'readFile', 'git_status'],
+        }),
+      ),
+    ).toContain('CODE SANDBOX:');
+  });
+
+  it('should not describe the sandbox in read-only mode when no sandbox tools survive filtering', () => {
+    expect(
+      buildAgentSystemPrompt(
+        pageInput({
+          readOnly: true,
+          codeExecutionEnabled: true,
+          allowedToolNames: TOOL_NAMES,
+        }),
+      ),
+    ).not.toContain('CODE SANDBOX:');
   });
 
   it('should be pure — same input, same output, nothing accumulated between calls', () => {

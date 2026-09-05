@@ -136,7 +136,8 @@ runs on the machine that minted them.
 Every command is `pagespace <resource> <verb> [args] [flags]`. `pagespace help` prints this
 list in the terminal; `pagespace --version` prints the CLI and SDK versions. Global flags,
 accepted everywhere: `--json` (machine-readable output on stdout, nothing else), `--host <url>`,
-`--token <token>`, `--key <name>`, and `--yes` (skip confirmations).
+`--token <token>`, `--key <name>`, `--timeout <seconds>` (how long to wait for the one request the
+command makes), and `--yes` (skip confirmations).
 
 ```text
 drives    list [--all]                # --all includes trashed drives
@@ -199,6 +200,9 @@ agents    list --drive <driveId>|--all-drives
           ask <agentPageId> <message> [--conversation-id <id>] [--context <text>]
           config <agentPageId> --set <key>=<value> [--set <key>=<value> …]
 
+conversations list <agentPageId>            # an agent's conversations, newest first
+              read <agentPageId> <conversationId>   # the messages in one conversation
+
 models    list
 
 activity  <driveId>
@@ -207,11 +211,35 @@ channels  send <channelId> <message>
 
 keys      (no args: guided wizard) · create · use · list · describe · revoke
 
+env       enroll <enrollmentId> <code>   # bind THIS machine to a local environment (one-time code)
+          token <enrollmentId>           # prove this machine holds its key; prints a short-lived bridge token
+
 mcp       serve the MCP stdio server                                # see below
 ```
 
 One exception to the global flags: `keys create` ignores `--json` — its stdout is either
 ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=…` line.
+
+## `pagespace env` — this machine as a local environment
+
+A drive owner or admin can create an Environment with `substrate: "local"` and is shown a
+**one-time enrollment code** (valid ten minutes, single use). On the machine:
+
+```text
+pagespace env enroll <enrollmentId> <code> [--host <url>]
+pagespace env token <enrollmentId> [--host <url>]
+```
+
+`env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
+with the code, and stores the private half — plus the server signing key it pinned in return — in
+this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
+printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
+key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
+and prints a short-lived bridge token — the round trip `env connect` will perform on every
+reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
+and the machine credential is never used to authenticate ordinary commands (`logout` and
+`keys use` refuse it). The deployment must set `LOCAL_ENVS_ENABLED=true`; otherwise these
+endpoints do not exist.
 
 ## `pagespace mcp`
 
@@ -265,6 +293,7 @@ Coming from the standalone `pagespace-mcp` npm package? It's deprecated in favor
 | `PAGESPACE_TOKEN` | Bearer credential; same precedence slot as `--token`. |
 | `PAGESPACE_KEY` | Stored key name to use; same precedence slot as `--key`. |
 | `PAGESPACE_API_URL` | API host; same precedence slot as `--host`. Defaults to `https://pagespace.ai`. |
+| `PAGESPACE_TIMEOUT_MS` | Request deadline in **milliseconds**; same precedence slot as `--timeout` (which takes seconds), and the way to raise it for `pagespace mcp`, which builds the same client. Unset leaves each operation on its own default. |
 | `PAGESPACE_PROFILE` | Deprecated alias for `PAGESPACE_KEY` (pre-1.5 name); warns on stderr. |
 | `PAGESPACE_AUTH_TOKEN` | Deprecated alias for `PAGESPACE_TOKEN` (old `pagespace-mcp` compatibility); warns on stderr. |
 

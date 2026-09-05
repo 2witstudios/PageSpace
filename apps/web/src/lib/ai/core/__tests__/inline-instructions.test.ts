@@ -100,14 +100,63 @@ describe('buildInlineInstructions — AGENTS gating', () => {
   });
 });
 
+describe('buildInlineInstructions — AGENTS sub-bullet gating', () => {
+  it('omits the configure-a-specialist bullet when create_page or update_agent_config is missing', () => {
+    // spawn_session alone is enough to include the AGENTS section, but not
+    // enough to create and configure a new AI_CHAT agent.
+    const result = buildInlineInstructions(['spawn_session', 'create_page']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('configure a new AI_CHAT agent');
+  });
+
+  it('includes the configure-a-specialist bullet only when both create_page and update_agent_config are present', () => {
+    const result = buildInlineInstructions(['spawn_session', 'create_page', 'update_agent_config']);
+    expect(result).toContain('configure a new AI_CHAT agent');
+  });
+
+  it('omits the "call list_models first" bullet when list_models is missing', () => {
+    const result = buildInlineInstructions(['spawn_session', 'update_agent_config']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('call list_models first');
+  });
+
+  it('omits the "call list_models first" bullet when list_models is present but update_agent_config is missing', () => {
+    // The bullet's own text ("when configuring an agent") presumes the agent can
+    // actually configure one — list_models alone lets it discover models, not
+    // apply one to an agent.
+    const result = buildInlineInstructions(['spawn_session', 'list_models']);
+    expect(result).toContain('AGENTS');
+    expect(result).not.toContain('call list_models first');
+  });
+
+  it('includes the "call list_models first" bullet only when both list_models and update_agent_config are present', () => {
+    const result = buildInlineInstructions(['spawn_session', 'list_models', 'update_agent_config']);
+    expect(result).toContain('call list_models first');
+  });
+
+  it('given availableTools=undefined, includes both sub-bullets (no filtering context)', () => {
+    const result = buildInlineInstructions();
+    expect(result).toContain('configure a new AI_CHAT agent');
+    expect(result).toContain('call list_models first');
+  });
+
+  it('buildGlobalAssistantInstructions gates the same sub-bullets on the tools it is given', () => {
+    expect(buildGlobalAssistantInstructions(['spawn_session'])).not.toContain('configure a new AI_CHAT agent');
+    expect(buildGlobalAssistantInstructions(['spawn_session'])).not.toContain('call list_models first');
+    expect(
+      buildGlobalAssistantInstructions(['spawn_session', 'create_page', 'update_agent_config', 'list_models']),
+    ).toContain('configure a new AI_CHAT agent');
+  });
+});
+
 describe('buildInlineInstructions — AUTOMATION gating', () => {
   it('includes AUTOMATION when set_task_trigger is available', () => {
     const result = buildInlineInstructions(['set_task_trigger']);
     expect(result).toContain('AUTOMATION');
   });
 
-  it('includes AUTOMATION when any trigger/workflow tool is available', () => {
-    for (const tool of ['delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']) {
+  it('includes AUTOMATION when a trigger-creation tool is available', () => {
+    for (const tool of ['set_calendar_trigger', 'create_workflow']) {
       const result = buildInlineInstructions([tool]);
       expect(result).toContain('AUTOMATION');
     }
@@ -116,6 +165,125 @@ describe('buildInlineInstructions — AUTOMATION gating', () => {
   it('excludes AUTOMATION when no trigger or workflow tools are available', () => {
     const result = buildInlineInstructions(['create_task', 'ask_agent']);
     expect(result).not.toContain('AUTOMATION');
+  });
+
+  it('excludes AUTOMATION when only deletion/list tools are available', () => {
+    // CodeRabbit review: delete_task_trigger/delete_calendar_trigger/list_workflows
+    // can only remove or list an existing trigger, not propose one — an agent
+    // holding only those can't act on "propose a trigger" at all.
+    const result = buildInlineInstructions(['delete_task_trigger', 'delete_calendar_trigger', 'list_workflows']);
+    expect(result).not.toContain('AUTOMATION');
+  });
+});
+
+describe('buildInlineInstructions — AUTOMATION one-off clause gating', () => {
+  it('omits the one-off/event-bound clause when only create_workflow/list_workflows is available', () => {
+    // codex review: create_workflow's own description says one-off or
+    // event-bound scheduling needs set_calendar_trigger instead — it only
+    // supports recurring cron schedules. An allowlist with just the workflow
+    // tools can't back up a "one-off task... qualifies too" claim.
+    const result = buildInlineInstructions(['create_workflow', 'list_workflows']);
+    expect(result).toContain('AUTOMATION');
+    expect(result).not.toContain('qualifies too');
+  });
+
+  it('given only create_workflow/list_workflows, the main clause itself is scoped to recurring work, not "whenever"', () => {
+    // codex review (fresh evidence): gating only the "qualifies too" suffix
+    // left the main clause reading "Propose a trigger whenever the work
+    // should happen" — an unrestricted "whenever" that still invites a
+    // one-off request even with the suffix gone. The main clause itself must
+    // be scoped to recurring/scheduled work when that's all this agent can do.
+    const result = buildInlineInstructions(['create_workflow', 'list_workflows']);
+    expect(result).not.toMatch(/Propose a trigger whenever the work should happen/);
+    expect(result).toMatch(/recurring|schedule/i);
+  });
+
+  it('given set_calendar_trigger without create_workflow, does NOT lead with "recurring work is the common case"', () => {
+    // codex review, fresh evidence: set_calendar_trigger's schema has no
+    // recurrence field (single event, or attach to an existing one) and
+    // set_task_trigger only fires on a due date or completion — only
+    // create_workflow supports true recurring cron schedules.
+    const result = buildInlineInstructions(['set_calendar_trigger']);
+    expect(result).not.toContain('recurring work is the common case');
+    expect(result).toContain('qualifies too');
+  });
+
+  it('given set_calendar_trigger together with create_workflow, does lead with "recurring work is the common case"', () => {
+    const result = buildInlineInstructions(['set_calendar_trigger', 'create_workflow']);
+    expect(result).toContain('recurring work is the common case');
+  });
+
+  it('given set_task_trigger alone (no create_workflow), does NOT lead with "recurring work is the common case"', () => {
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).not.toContain('recurring work is the common case');
+  });
+
+  it('includes the one-off/event-bound clause when set_calendar_trigger is available', () => {
+    // set_calendar_trigger is self-sufficient — it creates a new scheduling
+    // anchor event when none exists yet.
+    expect(buildInlineInstructions(['set_calendar_trigger'])).toContain('qualifies too');
+  });
+
+  it('omits the unrestricted one-off clause when set_task_trigger is available alone', () => {
+    // codex review: set_task_trigger only attaches to a task that already has
+    // a due date — it cannot create that due date itself, so alone it can't
+    // back up "run this tomorrow" for a task that doesn't already have that
+    // due date set.
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).toContain('AUTOMATION');
+    expect(result).not.toContain('qualifies too');
+  });
+
+  it('given set_task_trigger alone, does NOT categorically deny event-bound scheduling', () => {
+    // codex review (fresh evidence): set_task_trigger can still independently
+    // attach a completion trigger to an existing task, or a due-date trigger
+    // to one whose due date is already set — "run this when task X
+    // completes" is achievable without create_task/update_task at all. The
+    // fallback must not say event-bound scheduling is "outside what you can
+    // currently schedule" when this narrower capability exists.
+    const result = buildInlineInstructions(['set_task_trigger']);
+    expect(result).not.toContain("outside what you can currently schedule");
+    expect(result).toMatch(/existing task/i);
+  });
+
+  it('includes the unrestricted one-off clause when set_task_trigger is paired with create_task AND create_page', () => {
+    expect(
+      buildInlineInstructions(['set_task_trigger', 'create_task', 'create_page']),
+    ).toContain('qualifies too');
+  });
+
+  it('given set_task_trigger+create_task but no create_page, hedges rather than promises fresh task-list creation', () => {
+    // codex review, fresh evidence: create_task's pageId must name an
+    // EXISTING TASK_LIST page (task-management-tools.ts) — it can't create
+    // that host page itself. Whether a task list already exists in the drive
+    // is runtime/drive content, not a tool-permission fact the prompt can
+    // know statically, so this must hedge rather than promise.
+    const result = buildInlineInstructions(['set_task_trigger', 'create_task']);
+    expect(result).not.toContain('qualifies too');
+    expect(result).toMatch(/already has a task list/i);
+  });
+
+  it('omits the unrestricted one-off clause when set_task_trigger is paired with update_task alone (no create_task)', () => {
+    // codex review, fresh evidence: update_task requires an existing taskId
+    // and explicitly throws when absent ("taskId is required to update a
+    // task. To create a new task, use create_task.") — it cannot conjure a
+    // fresh scheduling anchor for a topic with no existing task, only
+    // create_task can.
+    const result = buildInlineInstructions(['set_task_trigger', 'update_task']);
+    expect(result).not.toContain('qualifies too');
+    expect(result).toMatch(/existing task/i);
+  });
+
+  it('given set_task_trigger paired with update_task, mentions setting a due date via update_task', () => {
+    // codex review, fresh evidence: the tier-2 wording previously only said
+    // "a due date already set", dropping update_task's actual ability to set
+    // a due date on an existing task (it just can't create a new task).
+    const result = buildInlineInstructions(['set_task_trigger', 'update_task']);
+    expect(result).toContain('one you set via update_task');
+  });
+
+  it('given availableTools=undefined, includes the one-off clause (no filtering context)', () => {
+    expect(buildInlineInstructions()).toContain('qualifies too');
   });
 });
 

@@ -21,6 +21,7 @@
 import { activityHandler } from '../commands/activity.js';
 import { agentsAskHandler, agentsConfigHandler, agentsListHandler, modelsListHandler } from '../commands/agents.js';
 import { channelsSendHandler } from '../commands/channels.js';
+import { conversationsListHandler, conversationsReadHandler } from '../commands/conversations.js';
 import {
   drivesCreateHandler,
   drivesListHandler,
@@ -84,6 +85,7 @@ import { keysDescribeHandler } from '../commands/keys/describe.js';
 import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -113,6 +115,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys', 'describe'], handler: keysDescribeHandler, summary: "Show this credential's drives, role and effective permissions" },
   { path: ['keys', 'revoke'], handler: tokensRevokeHandler, summary: 'Revoke an access key' },
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
+  { path: ['env', 'enroll'], handler: envEnrollHandler, summary: 'Enroll this machine as a local environment with a one-time code' },
+  { path: ['env', 'token'], handler: envTokenHandler, summary: 'Prove this machine holds its key and receive a short-lived bridge token' },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },
@@ -172,6 +176,8 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['agents', 'ask'], handler: agentsAskHandler, summary: 'Ask an agent' },
   { path: ['agents', 'config'], handler: agentsConfigHandler, summary: 'Read/update agent config' },
   { path: ['models', 'list'], handler: modelsListHandler, summary: 'List available AI models' },
+  { path: ['conversations', 'list'], handler: conversationsListHandler, summary: 'List an agent\'s conversations' },
+  { path: ['conversations', 'read'], handler: conversationsReadHandler, summary: 'Read a conversation\'s messages' },
   { path: ['activity'], handler: activityHandler, summary: 'Show recent activity' },
   { path: ['channels', 'send'], handler: channelsSendHandler, summary: 'Send a channel message' },
 ];

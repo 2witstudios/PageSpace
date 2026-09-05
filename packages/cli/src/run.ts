@@ -21,10 +21,11 @@ import { tokensCreateHandler } from './commands/keys/create.js';
 import { tokensListHandler } from './commands/keys/list.js';
 import { tokensRevokeHandler } from './commands/keys/revoke.js';
 import { keysUseHandler } from './commands/keys/use.js';
+import { envEnrollHandler, envTokenHandler } from './commands/env.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
-import { resolveConfig } from './config/resolve.js';
+import { resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 import { createNullActiveKeyStore, type ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
@@ -96,6 +97,10 @@ const AUTH_EXEMPT_HANDLERS = new Set([
   tokensRevokeHandler,
   keysUseHandler,
   keysHandler,
+  // A machine enrolling, or proving its key, has no login: the one-time code
+  // and then the machine key ARE its credentials (`commands/env.ts`).
+  envEnrollHandler,
+  envTokenHandler,
 ]);
 
 /**
@@ -132,6 +137,8 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     env: { PAGESPACE_API_URL: deps.env.PAGESPACE_API_URL },
     credential: null,
   });
+
+  const timeoutMs = resolveTimeoutSetting(parsed.flags.timeoutMs, deps.env);
 
   const envToken = resolveEnvToken(deps.env);
   if (envToken.deprecationNotice) {
@@ -190,7 +197,11 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   });
 
   const ctx: HandlerContext = {
-    sdk: new PageSpaceClient({ baseUrl: host, auth }),
+    // `timeoutMs` is passed only when the caller actually asked for one:
+    // supplying it unconditionally would make it EXPLICIT for every command
+    // and so beat every operation's own declared default (see the SDK's
+    // `resolveTimeoutMs`), silently dropping `agents.ask` from 120s to 30s.
+    sdk: new PageSpaceClient({ baseUrl: host, auth, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     stdout: deps.stdout,
     stderr: deps.stderr,
     env: deps.env,

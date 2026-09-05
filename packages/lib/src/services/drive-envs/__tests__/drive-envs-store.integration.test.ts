@@ -34,6 +34,7 @@ import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { driveEnvLocal } from '@pagespace/db/schema/drive-env-local';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
 import { createDbDriveEnvStore } from '../drive-envs-store';
@@ -593,5 +594,104 @@ describe('countLiveSessionsInEnv / countEnvsOwnedBy', () => {
 
     expect(await store.countEnvsOwnedBy(payerId)).toBe(2);
     expect(await store.countEnvsOwnedBy(otherPayerId)).toBe(1);
+  });
+});
+
+describe('the local-env identity slice — compare-and-set predicates, in SQL', () => {
+  // The fake models these as map writes; what matters in production is that
+  // each write is ONE guarded UPDATE, so two replicas enrolling or redeeming
+  // the same machine resolve to exactly one winner.
+  const NOW = new Date('2026-09-05T10:00:00.000Z');
+  const facts = (enrollmentId: string) => ({ ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) });
+
+  async function createLocal(name = 'mac') {
+    const enrollmentId = `enr_${createId()}`;
+    const created = await store.createIfUnderLimit({ driveId, name, createdBy: payerId, now: NOW, payerId, maxEnvs: 10, local: facts(enrollmentId) });
+    if (!created.ok) throw new Error(created.reason);
+    return { envId: created.env.id, enrollmentId, created };
+  }
+
+  it('given local facts, should mint the env as substrate local AND its sibling in the same step, returning both', async () => {
+    const { envId, enrollmentId, created } = await createLocal();
+    expect(created.env.substrate).toBe('local');
+    expect(created.local).toMatchObject({ envId, driveId, ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrolledAt: null, machinePublicKey: null });
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.substrate).toBe('local');
+  });
+
+  it('given no local facts, should mint a Sprite env with local: null and no sibling', async () => {
+    const created = await store.createIfUnderLimit({ driveId, name: 'cloud', createdBy: payerId, now: NOW, payerId, maxEnvs: 10 });
+    if (!created.ok) throw new Error(created.reason);
+    expect(created.env.substrate).toBe('sprite');
+    expect(created.local).toBeNull();
+    expect(await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, created.env.id))).toEqual([]);
+  });
+
+  it('given a local create that loses the name to a duplicate, should leave NO sibling behind (one transaction)', async () => {
+    await seedEnv({ driveId, name: 'taken' });
+    const created = await store.createIfUnderLimit({ driveId, name: 'taken', createdBy: payerId, now: NOW, payerId, maxEnvs: 10, local: facts(`enr_${createId()}`) });
+    expect(created).toEqual({ ok: false, reason: 'name_taken' });
+    const orphans = await db.select({ envId: driveEnvLocal.envId }).from(driveEnvLocal).innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId)).where(eq(driveEnvs.driveId, driveId));
+    expect(orphans).toEqual([]);
+  });
+
+  it('findLocalByEnrollmentId / listLocalFacts: should join the drive id and scope the listing to the drive', async () => {
+    const { envId, enrollmentId } = await createLocal('a');
+    await store.createIfUnderLimit({ driveId: otherDriveId, name: 'theirs', createdBy: otherPayerId, now: NOW, payerId: otherPayerId, maxEnvs: 10, local: { ...facts(`enr_${createId()}`), ownerId: otherPayerId } });
+    expect((await store.findLocalByEnrollmentId(enrollmentId))?.envId).toBe(envId);
+    expect(await store.findLocalByEnrollmentId('enr_nope')).toBeNull();
+    expect((await store.listLocalFacts(driveId)).map((r) => r.envId)).toEqual([envId]);
+  });
+
+  it('pinMachineKey: should enroll ONCE — the second attempt loses the compare-and-set, and a revoked row cannot be enrolled at all', async () => {
+    const { envId } = await createLocal();
+    const pin = { envId, machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', now: NOW };
+    expect(await store.pinMachineKey(pin)).toBe(true);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row).toMatchObject({ machinePublicKey: 'pk', machineKeyFingerprint: 'sha256:fp', serverKeyId: 'k1', enrollmentCodeHash: null });
+    expect(row?.enrolledAt?.getTime()).toBe(NOW.getTime());
+    expect(row?.enrollmentCodeUsedAt?.getTime()).toBe(NOW.getTime());
+    expect(await store.pinMachineKey({ ...pin, machinePublicKey: 'pk2' })).toBe(false);
+    expect((await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId)))[0]?.machinePublicKey).toBe('pk');
+
+    const other = await createLocal('revoked');
+    await db.update(driveEnvLocal).set({ revokedAt: NOW }).where(eq(driveEnvLocal.envId, other.envId));
+    expect(await store.pinMachineKey({ ...pin, envId: other.envId })).toBe(false);
+  });
+
+  it('setChallenge: should refuse before enrollment, then store the nonce, replacing a previous one and clearing its consumption', async () => {
+    const { envId } = await createLocal();
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(false);
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW })).toBe(true);
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(true);
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: NOW, now: NOW })).toBe(true);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeNonce).toBe('n2');
+    expect(row?.challengeUsedAt).toBeNull();
+  });
+
+  it('consumeChallenge: given the enrollment was REVOKED after the challenge was issued, should lose the compare-and-set — revocation wins the race, nothing mints', async () => {
+    const { envId } = await createLocal();
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
+    await db.update(driveEnvLocal).set({ revokedAt: NOW }).where(eq(driveEnvLocal.envId, envId));
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(false);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeUsedAt).toBeNull();
+    expect(row?.lastSeenAt).toBeNull();
+  });
+
+  it('consumeChallenge: should consume exactly the outstanding nonce ONCE, stamping lastSeenAt; a wrong nonce or a replay loses', async () => {
+    const { envId } = await createLocal();
+    await store.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    await store.setChallenge({ envId, nonce: 'n1', expiresAt: NOW, now: NOW });
+    expect(await store.consumeChallenge({ envId, nonce: 'wrong', now: NOW })).toBe(false);
+    const later = new Date(NOW.getTime() + 5_000);
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: later })).toBe(true);
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: later })).toBe(false);
+    const [row] = await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId));
+    expect(row?.challengeUsedAt?.getTime()).toBe(later.getTime());
+    expect(row?.lastSeenAt?.getTime()).toBe(later.getTime());
   });
 });

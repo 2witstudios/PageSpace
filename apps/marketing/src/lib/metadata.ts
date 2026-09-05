@@ -8,9 +8,19 @@ const TWITTER_HANDLE = "@PageSpaceAI";
 
 export const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 
+/**
+ * Canonical one-sentence entity description. Reused verbatim across the home
+ * meta description, Organization/WebSite schema, and the hero answer block so
+ * AI engines resolve a single, consistent entity (AEO: entity disambiguation).
+ */
+export const ENTITY_DESCRIPTION =
+  "PageSpace is an AI-powered workspace where documents, tasks, channels, spreadsheets, and code live as pages in one tree, and an AI coworker does the actual work across all of them.";
+
 export interface PageMetadata {
   title: string;
   description: string;
+  /** Overrides the OG/Twitter description when it should differ from the meta description. */
+  ogDescription?: string;
   path?: string;
   image?: string;
   noIndex?: boolean;
@@ -23,6 +33,7 @@ export interface PageMetadata {
 export function createMetadata({
   title,
   description,
+  ogDescription = description,
   path = "",
   image = DEFAULT_OG_IMAGE,
   noIndex = false,
@@ -58,7 +69,7 @@ export function createMetadata({
       url,
       siteName: SITE_NAME,
       title: ogTitle,
-      description,
+      description: ogDescription,
       images: [
         {
           url: image,
@@ -73,7 +84,7 @@ export function createMetadata({
       site: TWITTER_HANDLE,
       creator: TWITTER_HANDLE,
       title: ogTitle,
-      description,
+      description: ogDescription,
       images: [image],
     },
   };
@@ -161,10 +172,14 @@ export const LEGAL_LAST_UPDATED = "July 5, 2026";
  */
 export const pageMetadata = {
   home: createMetadata({
-    title: "PageSpace - AI-Powered Unified Workspace",
+    title: "The AI for working",
+    // ~155 chars (AEO: 150–160). Trimmed form of ENTITY_DESCRIPTION; the full
+    // sentence goes verbatim to OG/Twitter (below) and to the schema.
     description:
-      "Your AI-powered workspace for documents, tasks, calendar, and team collaboration. Work with AI that understands your entire workspace.",
+      "PageSpace is the AI workspace where docs, tasks, channels, sheets, and code live as pages in one tree — and an AI coworker does the real work across them.",
+    ogDescription: ENTITY_DESCRIPTION,
     path: "",
+    keywords: ["AI workspace", "AI-powered workspace platform", "AI coworker", "AI agent", "AI that does the work"],
   }),
 
   pricing: createMetadata({

@@ -16,6 +16,7 @@
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
+import { isLoginCredential } from '../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../exit-codes.js';
 import type { ExitCode } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
@@ -69,7 +70,9 @@ async function logoutHost(
   profile: string,
 ): Promise<LogoutHostOutcome> {
   const credential = await store.get(host, profile);
-  if (!credential) {
+  // A machine credential (`pagespace env enroll`) is not a login; forgetting it
+  // is `pagespace env` business, not logout's. Reported as not logged in.
+  if (!credential || !isLoginCredential(credential)) {
     return { host, kind: 'not_logged_in' };
   }
 

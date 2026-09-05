@@ -7,6 +7,7 @@ import { NavbarAuthButtons } from "@/components/NavbarAuthButtons";
 
 const navLinks = [
   { href: "/pricing", label: "Pricing" },
+  { href: "/downloads", label: "Downloads" },
   { href: "/docs", label: "Docs" },
   { href: "/blog", label: "Blog" },
   { href: "/faq", label: "FAQ" },

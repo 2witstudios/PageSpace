@@ -13,16 +13,24 @@
  * rather than left to the database's unique index to reject after the fact: a
  * blank or whitespace-only name is a 400, not a row.
  *
- * There is deliberately NO `kind` field. Environments are untyped and uniformly
- * Sprite-backed; dev / staging / prod are use cases expressed by NAMING an env
- * (see the `drive_envs` table docblock, which explains why the enum was deleted
- * rather than never written).
+ * There is deliberately NO `kind` field: dev / staging / prod are use cases
+ * expressed by NAMING an env (see the `drive_envs` table docblock, which explains
+ * why the enum was deleted rather than never written). There IS a `substrate`
+ * field, which is a different axis — WHAT RUNS the env: `'sprite'` (the default,
+ * every pre-existing env) or `'local'`, the user's own machine reached through
+ * the zero-trust bridge (Local Environments epic). A local env additionally
+ * carries a human `label` for the machine, and reports a CONNECTION status
+ * (`connecting|connected|disconnected`, derived from the bridge socket) instead
+ * of a Sprite status; the two vocabularies never mix on one DTO.
  */
 
 import { z } from 'zod';
 
 /** Longest environment name accepted. Long enough for `staging-eu-west` and its kin, short enough to render in a sidebar row. */
 export const MAX_DRIVE_ENV_NAME_LENGTH = 64;
+
+/** Longest machine label accepted for a local env ("jono-macstudio"). */
+export const MAX_DRIVE_ENV_LABEL_LENGTH = 64;
 
 /**
  * The most environments one listing returns — and, because the store's list
@@ -57,6 +65,22 @@ export const driveEnvNameSchema = z
   .transform((value) => value.trim())
   .pipe(z.string().min(1).max(MAX_DRIVE_ENV_NAME_LENGTH));
 
+/** A local env's machine label: trimmed, non-empty, bounded. A label, never an address. */
+export const driveEnvLabelSchema = z
+  .string()
+  .transform((value) => value.trim())
+  .pipe(z.string().min(1).max(MAX_DRIVE_ENV_LABEL_LENGTH));
+
+/**
+ * The closed substrate set. Declared here AND on the schema (`drive-envs.ts`)
+ * rather than imported: this module is the wire contract, shared with browser
+ * and CLI clients, so it stays zod-only with no Drizzle import. The contract
+ * test pins the two declarations equal.
+ */
+export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
+export const driveEnvSubstrateSchema = z.enum(DRIVE_ENV_SUBSTRATES);
+export type DriveEnvSubstrate = z.infer<typeof driveEnvSubstrateSchema>;
+
 /**
  * The Sprite states an environment can be reported in, DERIVED from its pointer
  * columns and never stored (`deriveDriveEnvStatus`).
@@ -78,7 +102,20 @@ export const driveEnvNameSchema = z
  * `SandboxStatus`: provisioning happens inside ONE call, so there is no
  * persisted in-flight state to read.
  */
-export const DRIVE_ENV_STATUSES = ['none', 'running', 'stopped'] as const;
+export const DRIVE_ENV_SPRITE_STATUSES = ['none', 'running', 'stopped'] as const;
+
+/**
+ * The CONNECTION states a local env can be reported in, derived from
+ * `drive_env_local.lastSeenAt` plus the live bridge-socket registry — never
+ * stored. `'connecting'` is a socket mid-handshake; `'connected'` an authorized
+ * socket; `'disconnected'` none (including never-enrolled and revoked).
+ */
+export const DRIVE_ENV_LOCAL_STATUSES = ['connecting', 'connected', 'disconnected'] as const;
+export type DriveEnvLocalStatus = (typeof DRIVE_ENV_LOCAL_STATUSES)[number];
+export type DriveEnvSpriteStatus = (typeof DRIVE_ENV_SPRITE_STATUSES)[number];
+
+/** Every status any env can report. Which subset applies is fixed by `substrate`. */
+export const DRIVE_ENV_STATUSES = [...DRIVE_ENV_SPRITE_STATUSES, ...DRIVE_ENV_LOCAL_STATUSES] as const;
 
 export const driveEnvStatusSchema = z.enum(DRIVE_ENV_STATUSES);
 export type DriveEnvStatus = z.infer<typeof driveEnvStatusSchema>;
@@ -86,30 +123,73 @@ export type DriveEnvStatus = z.infer<typeof driveEnvStatusSchema>;
 /** Wire timestamps are ISO-8601 strings; `Date` never crosses the boundary. */
 const isoTimestamp = z.string().datetime();
 
-/**
- * One drive environment as served to any client.
- *
- * Deliberately NARROW: identity, ownership, name, derived status, birthday. No
- * Sprite pointer, no egress token, no storage measurement — those are internal
- * lifecycle and billing facts, and a client that could read `sandboxId` would be
- * one step from addressing a VM by something other than its env.
- */
-export const driveEnvDtoSchema = z.object({
+const driveEnvDtoBase = {
   /** `drive_envs.id` — the API address and the Sprite-key fold. */
   id: z.string().min(1),
   /** The owning drive. An env has no user-scoped form: it is drive-owned, drive-paid, drive-shared. */
   driveId: z.string().min(1),
   /** Unique within the drive — an address humans use, not a label. */
   name: z.string().min(1),
-  status: driveEnvStatusSchema,
   createdAt: isoTimestamp,
-});
+};
+
+/**
+ * One drive environment as served to any client, discriminated by substrate.
+ *
+ * Deliberately NARROW: identity, ownership, name, substrate, derived status,
+ * birthday — plus the machine label for a local env. No Sprite pointer, no
+ * egress token, no storage measurement, no public key or fingerprint — those
+ * are internal lifecycle, billing and identity facts, and a client that could
+ * read `sandboxId` would be one step from addressing a VM by something other
+ * than its env.
+ */
+export const driveEnvDtoSchema = z.discriminatedUnion('substrate', [
+  z.object({
+    ...driveEnvDtoBase,
+    substrate: z.literal('sprite'),
+    status: z.enum(DRIVE_ENV_SPRITE_STATUSES),
+  }),
+  z.object({
+    ...driveEnvDtoBase,
+    substrate: z.literal('local'),
+    status: z.enum(DRIVE_ENV_LOCAL_STATUSES),
+    /** Human name of the machine. */
+    label: z.string().min(1),
+  }),
+]);
 
 export type DriveEnvDTO = z.infer<typeof driveEnvDtoSchema>;
 
-/** POST body for creating an environment. Just a name — there is no kind to choose. */
-export const createDriveEnvRequestSchema = z.object({
-  name: driveEnvNameSchema,
+/**
+ * POST body for creating an environment. A name, and optionally a substrate
+ * (defaults to `'sprite'`, so every existing client is unchanged). A local env
+ * REQUIRES a machine label; a label sent for a Sprite env means nothing and is
+ * dropped rather than stored.
+ */
+export const createDriveEnvRequestSchema = z
+  .preprocess(
+    // The discriminator's default: a body with no substrate is a Sprite request.
+    (body) => (typeof body === 'object' && body !== null && !('substrate' in body) ? { ...body, substrate: 'sprite' } : body),
+    z.discriminatedUnion('substrate', [
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('sprite'), label: driveEnvLabelSchema.optional() }),
+      z.object({ name: driveEnvNameSchema, substrate: z.literal('local'), label: driveEnvLabelSchema }),
+    ]),
+  )
+  .transform((value) => (value.substrate === 'local' ? value : { name: value.name, substrate: value.substrate }));
+
+export type CreateDriveEnvRequest = z.infer<typeof createDriveEnvRequestSchema>;
+
+/**
+ * What a LOCAL create returns alongside the env, ONCE: the one-time enrollment
+ * code the user carries to their machine (`pagespace env enroll <code>`), the
+ * enrollment id the daemon will present, and when the code stops working. The
+ * server keeps only the code's hash, so this is the only time the code exists
+ * on the wire.
+ */
+export const localEnvEnrollmentIssueSchema = z.object({
+  enrollmentId: z.string().min(1),
+  code: z.string().min(1),
+  expiresAt: isoTimestamp,
 });
 
 /** PATCH body for renaming an environment. */

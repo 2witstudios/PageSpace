@@ -160,16 +160,115 @@ function buildTaskManagement(availableTools?: string[]): string {
     : TASK_MANAGEMENT_FULL;
 }
 
-const AGENTS = `AGENTS:
-• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured
-• Delegate with spawn_session (pass the agent's id as \`agent\`); send_session continues the same worker — save the sessionId from the spawn for follow-ups
-• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec
-• Never guess a model ID when configuring an agent — call list_models first`;
+/**
+ * AGENTS section. The base bullets apply whenever the section is included
+ * (gated by includeAgents in buildInlineInstructions — buildGlobalAssistantInstructions
+ * includes the section unconditionally). Two bullets name a capability beyond
+ * that base gate — configuring a new specialist needs create_page AND
+ * update_agent_config, not just spawn_session/list_agents; the list_models
+ * bullet needs update_agent_config too (list_models alone only discovers
+ * models, it doesn't apply one to an agent) — so they compose in only when
+ * their own required tools are present, the same discipline buildPageTypes
+ * uses for SHEET/DOCUMENT.
+ */
+function buildAgents(availableTools?: string[]): string {
+  const has = (tool: string) => hasAny(availableTools, [tool]);
+  const lines = [
+    'AGENTS:',
+    "• Discover available agents first — each has its own system prompt, tools, and expertise; list_agents reveals what's configured",
+    "• Delegate with spawn_session (pass the agent's id as `agent`); send_session continues the same worker — save the sessionId from the spawn for follow-ups",
+    '• The target agent does its own discovery and tool use — give it a clear question with context, not a pre-solved spec',
+  ];
+  if (has('create_page') && has('update_agent_config')) {
+    lines.push('• For work that benefits from a dedicated, reusable specialist, configure a new AI_CHAT agent instead of always doing the job inline yourself');
+  }
+  if (has('list_models') && has('update_agent_config')) {
+    lines.push('• Never guess a model ID when configuring an agent — call list_models first');
+  }
+  return lines.join('\n');
+}
 
-const AUTOMATION = `AUTOMATION:
-• When a user asks for something recurring, propose a trigger instead of doing it once manually
+/**
+ * AUTOMATION section. create_workflow/list_workflows alone only cover
+ * recurring cron schedules — create_workflow's own description says one-off
+ * or event-bound scheduling needs set_task_trigger/set_calendar_trigger
+ * instead — so the "a one-off task... qualifies too" clause composes in
+ * only when the agent can actually create that scheduling anchor itself,
+ * the same discipline buildAgents uses for its own sub-bullets.
+ *
+ * Four tiers (codex review, four rounds of fresh evidence):
+ * 1. Full one-off capability — set_calendar_trigger alone is sufficient (it
+ *    creates a new "scheduling anchor" calendar event at the target time
+ *    when none exists yet), or set_task_trigger + create_task + create_page
+ *    together. create_page is required alongside create_task: create_task's
+ *    `pageId` must name an EXISTING TASK_LIST page (task-management-tools.ts
+ *    — "TASK_LIST page ID to add the task to") and create_task cannot create
+ *    that host page itself — only create_page can, if the drive has no task
+ *    list yet. update_task does NOT qualify here either: it requires an
+ *    existing taskId ("taskId is required to update a task. To create a new
+ *    task, use create_task.") — it cannot conjure a fresh anchor for a topic
+ *    with no existing task, only create_task (+ a host page) can.
+ * 2c. Conditional task-creation capability — set_task_trigger + create_task
+ *    WITHOUT create_page: task creation only works if the drive already has
+ *    a TASK_LIST page to add to, which the prompt can't know statically
+ *    (that's drive content, not a tool permission) — hedge rather than
+ *    promise, the same "static tool facts vs. runtime state" distinction
+ *    applied to the send_shell+list_sessions case elsewhere in this file.
+ * 2b. set_task_trigger + update_task (no create_task): update_task CAN set a
+ *    due date on an EXISTING task (it just can't create a new one).
+ * 2. Existing-task-only capability — set_task_trigger ALONE is NOT
+ *    self-sufficient to create a new anchor from nothing (trigger-tools.ts:
+ *    "The task must have a due date set before a due_date trigger can be
+ *    attached. Set the task's due date first via update_task"), but it can
+ *    still independently attach a completion trigger to ANY existing task,
+ *    or a due-date trigger to one whose due date is ALREADY set — "run this
+ *    when task X completes" is achievable without create_task at all.
+ * 3. No one-off capability at all.
+ */
+function buildAutomation(availableTools?: string[]): string {
+  const hasCalendarOneOffSetter = hasAny(availableTools, ['set_calendar_trigger']);
+  const hasTaskTrigger = hasAny(availableTools, ['set_task_trigger']);
+  const hasCreateTask = hasAny(availableTools, ['create_task']);
+  const hasCreatePage = hasAny(availableTools, ['create_page']);
+  const hasUpdateTask = hasAny(availableTools, ['update_task']);
+  // codex review, fresh evidence: set_calendar_trigger's schema has no
+  // recurrence field (attaches to an existing event, or creates ONE new
+  // single-time "scheduling anchor" event) and set_task_trigger only fires
+  // on a due date or completion — only create_workflow supports true
+  // recurring cron schedules. "recurring work is the common case" was
+  // asserted in every tier regardless, implying a capability that isn't
+  // guaranteed present; only lead with it when create_workflow backs it up.
+  const hasCreateWorkflow = hasAny(availableTools, ['create_workflow']);
+  const recurringLeadIn = hasCreateWorkflow ? 'recurring work is the common case, but ' : '';
+
+  let mainClause: string;
+  if (hasCalendarOneOffSetter || (hasTaskTrigger && hasCreateTask && hasCreatePage)) {
+    mainClause =
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}a one-off task that needs to run at a future time or on some future event qualifies too`;
+  } else if (hasTaskTrigger && hasCreateTask) {
+    mainClause =
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off request, check whether the drive already has a task list to add a task to before assuming you can schedule it fresh (creating a new task list needs a separate capability)`;
+  } else if (hasTaskTrigger && hasUpdateTask) {
+    // codex review, fresh evidence: update_task CAN set a due date on an
+    // existing task (it just can't create a new one from nothing) — the
+    // tier-2 wording must say so, not just "a due date already set".
+    mainClause =
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off or event-bound request, check whether it can attach to an existing task (on completion, a due date already set, or one you set via update_task) before assuming you can't schedule it`;
+  } else if (hasTaskTrigger) {
+    mainClause =
+      `Propose a trigger whenever the work should happen without the user re-prompting — ${recurringLeadIn}for a one-off or event-bound request, check whether it can attach to an existing task (on completion, or a due date already set) before assuming you can't schedule it`;
+  } else {
+    // This branch only reaches when includeAutomation was true without any
+    // calendar or task trigger tool — the only remaining possibility is
+    // create_workflow, so "recurring" here is always backed.
+    mainClause =
+      "Propose a recurring trigger whenever work should repeat on a schedule without the user re-prompting — for a one-off or event-bound request, say that's outside what you can currently schedule rather than forcing it into a recurring one";
+  }
+  return `AUTOMATION:
+• ${mainClause}
 • Triggers require an existing AI_CHAT page in the same drive as the source (task/calendar/drive)
 • After setting a trigger, tell the user what will run, when, and what the agent will receive as context`;
+}
 
 const SEARCH = `SEARCH:
 • list_pages returns one level at a time (ls-style) — navigate with parentId to drill into folders; use recursive: true for a full subtree dump
@@ -231,7 +330,11 @@ function hasAny(availableTools: string[] | undefined, toolNames: string[]): bool
 export function buildInlineInstructions(availableTools?: string[]): string {
   const includeTaskManagement = hasAny(availableTools, ['create_task', 'update_task', 'delete_task', 'create_task_status', 'reorder_task', 'get_assigned_tasks']);
   const includeAgents = hasAny(availableTools, ['spawn_session', 'list_agents', 'multi_drive_list_agents', 'update_agent_config', 'list_models']);
-  const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'delete_task_trigger', 'set_calendar_trigger', 'delete_calendar_trigger', 'create_workflow', 'list_workflows']);
+  // Deliberately excludes delete_task_trigger/delete_calendar_trigger/list_workflows:
+  // those can only remove or list an existing trigger, not propose one — an agent
+  // holding only those can't act on the "propose a trigger" instruction this
+  // section exists to give.
+  const includeAutomation = hasAny(availableTools, ['set_task_trigger', 'set_calendar_trigger', 'create_workflow']);
   const includeSearch = hasAny(availableTools, ['glob_search', 'regex_search', 'multi_drive_search', 'web_search', 'web_fetch']);
   const includeAskUser = hasAny(availableTools, ['ask_user']);
 
@@ -239,8 +342,8 @@ export function buildInlineInstructions(availableTools?: string[]): string {
     WORKSPACE_RULES,
     buildPageTypes(availableTools),
     includeTaskManagement ? buildTaskManagement(availableTools) : null,
-    includeAgents ? AGENTS : null,
-    includeAutomation ? AUTOMATION : null,
+    includeAgents ? buildAgents(availableTools) : null,
+    includeAutomation ? buildAutomation(availableTools) : null,
     includeSearch ? SEARCH : null,
     includeAskUser ? ASK_USER_SECTION : null,
     AFTER_TOOLS,
@@ -266,9 +369,9 @@ ${buildPageTypes(availableTools)}
 
 ${buildTaskManagement(availableTools)}
 
-${AGENTS}
+${buildAgents(availableTools)}
 
-${AUTOMATION}
+${buildAutomation(availableTools)}
 
 ${SEARCH}
 

@@ -39,7 +39,46 @@ export interface StaticHostCredential {
   readonly createdAt: string;
 }
 
-export type HostCredential = OAuthHostCredential | StaticHostCredential;
+/**
+ * A machine enrolled as a local environment (`pagespace env enroll`): the
+ * Ed25519 PRIVATE key generated on this machine, the enrollment it belongs
+ * to, and the server signing key it pinned in return. Stored under the
+ * profile `env:<enrollmentId>` so it never collides with a login or a key.
+ * `scopes` is always empty — this is not an API credential; the socket token
+ * it can earn (`pagespace env token`) is minted per connection by proving
+ * possession of the key, never by presenting it.
+ */
+export interface MachineHostCredential {
+  readonly kind: 'machine';
+  /** Base64 PKCS#8 DER. Never printed, never sent. */
+  readonly privateKey: string;
+  readonly enrollmentId: string;
+  readonly envId: string;
+  /** Base64 SPKI DER of the server signing key this machine pinned at enrollment. */
+  readonly serverPublicKey: string;
+  readonly serverKeyId: string;
+  readonly scopes: readonly string[];
+  readonly createdAt: string;
+}
+
+export type HostCredential = OAuthHostCredential | StaticHostCredential | MachineHostCredential;
+
+/**
+ * The credentials that AUTHENTICATE API calls. A machine credential is not
+ * one: the auth resolver never yields it (`auth/resolve.ts`), and the two
+ * commands that read the store directly (`logout`, `keys use`) refuse it —
+ * normalized at the door rather than as a third branch in every consumer.
+ */
+export type LoginHostCredential = OAuthHostCredential | StaticHostCredential;
+
+export function isLoginCredential(credential: HostCredential): credential is LoginHostCredential {
+  return credential.kind !== 'machine';
+}
+
+/** The credential-store profile a machine's identity lives under. */
+export function machineProfileName(enrollmentId: string): string {
+  return `env:${enrollmentId}`;
+}
 
 export interface HostProfiles {
   readonly profiles: Readonly<Record<string, HostCredential>>;
@@ -117,19 +156,50 @@ function normalizeHostCredential(value: unknown): HostCredential | null {
     return { kind: 'static', token: candidate.token, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
   }
 
+  if (kind === 'machine') {
+    const fields = ['privateKey', 'enrollmentId', 'envId', 'serverPublicKey', 'serverKeyId'] as const;
+    const strings = fields.map((field) => candidate[field]);
+    if (!strings.every((value): value is string => typeof value === 'string' && value.length > 0)) {
+      return null;
+    }
+    const [privateKey, enrollmentId, envId, serverPublicKey, serverKeyId] = strings as [string, string, string, string, string];
+    return { kind: 'machine', privateKey, enrollmentId, envId, serverPublicKey, serverKeyId, scopes: [...candidate.scopes], createdAt: candidate.createdAt };
+  }
+
   return null;
 }
 
 /** Pure copy — the caller already holds a well-typed `HostCredential` (in-memory, this session). */
 function toHostCredential(value: HostCredential): HostCredential {
-  return value.kind === 'oauth'
-    ? { kind: 'oauth', refreshToken: value.refreshToken, clientId: value.clientId, scopes: [...value.scopes], createdAt: value.createdAt }
-    : { kind: 'static', token: value.token, scopes: [...value.scopes], createdAt: value.createdAt };
+  switch (value.kind) {
+    case 'oauth':
+      return { kind: 'oauth', refreshToken: value.refreshToken, clientId: value.clientId, scopes: [...value.scopes], createdAt: value.createdAt };
+    case 'static':
+      return { kind: 'static', token: value.token, scopes: [...value.scopes], createdAt: value.createdAt };
+    case 'machine':
+      return {
+        kind: 'machine',
+        privateKey: value.privateKey,
+        enrollmentId: value.enrollmentId,
+        envId: value.envId,
+        serverPublicKey: value.serverPublicKey,
+        serverKeyId: value.serverKeyId,
+        scopes: [...value.scopes],
+        createdAt: value.createdAt,
+      };
+  }
 }
 
-/** The secret bytes this credential authenticates with — a refresh token (oauth) or the raw bearer token itself (static). Never the full value in a log/prefix context; callers should still only show `tokenPrefix(credentialSecret(c))`. */
+/** The secret bytes this credential authenticates with — a refresh token (oauth), the raw bearer token itself (static), or the machine's private key (machine). Never the full value in a log/prefix context; callers should still only show `tokenPrefix(credentialSecret(c))`. */
 export function credentialSecret(credential: HostCredential): string {
-  return credential.kind === 'oauth' ? credential.refreshToken : credential.token;
+  switch (credential.kind) {
+    case 'oauth':
+      return credential.refreshToken;
+    case 'static':
+      return credential.token;
+    case 'machine':
+      return credential.privateKey;
+  }
 }
 
 /**

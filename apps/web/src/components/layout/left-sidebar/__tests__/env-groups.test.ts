@@ -7,14 +7,30 @@ import { describe, it, expect } from 'vitest';
 import { partitionSessionsByEnv } from '../env-groups';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 
-const env = (over: Partial<DriveEnvDTO> & { id: string; name: string }): DriveEnvDTO => ({
+type SpriteEnvDTO = Extract<DriveEnvDTO, { substrate: 'sprite' }>;
+
+/** A Sprite env DTO; the partition is substrate-agnostic, so Sprite is a fine default. */
+const env = (over: Partial<SpriteEnvDTO> & { id: string; name: string }): DriveEnvDTO => ({
   driveId: 'drive-1',
+  substrate: 'sprite',
   status: 'none',
   createdAt: '2026-08-01T00:00:00.000Z',
   ...over,
 });
 
 const session = (workspaceId: string, envId: string | null) => ({ workspaceId, envId });
+
+describe('partitionSessionsByEnv — the substrate rides along', () => {
+  it('given a local env, should carry substrate local on its group so the row can withhold Sprite-only actions; an orphan carries null', () => {
+    const local: DriveEnvDTO = { id: 'env-l', driveId: 'drive-1', name: 'mac', substrate: 'local', status: 'disconnected', label: 'jono-macstudio', createdAt: '2026-08-01T00:00:00.000Z' };
+    const r = partitionSessionsByEnv([session('x', 'env-ghost')], [env({ id: 'env-s', name: 'cloud' }), local]);
+    expect(r.envGroups.map((g) => [g.envId, g.substrate])).toEqual([
+      ['env-s', 'sprite'],
+      ['env-l', 'local'],
+      ['env-ghost', null],
+    ]);
+  });
+});
 
 describe('partitionSessionsByEnv', () => {
   it('given an environment with no sessions, should still render a group — infrastructure is not ephemera', () => {
