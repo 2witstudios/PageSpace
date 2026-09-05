@@ -56,28 +56,30 @@ export function HeroSection() {
               <div className="aw-nav"><Ico name="task" size="i14" />Tasks</div>
               <div className="aw-nav"><svg className="i i14" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="18" rx="2" /><path d="M16 2v4M8 2v4M3 10h18" /></svg>Calendar</div>
               <div className="aw-nav"><Ico name="bot" size="i14" />Agents</div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "10px 0 6px" }}>
-                <div style={{ position: "relative", flex: 1 }}>
-                  <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ position: "absolute", left: 9, top: "50%", transform: "translateY(-50%)", color: "var(--muted-foreground)" }}><circle cx="11" cy="11" r="8" /><path d="m21 21-4.3-4.3" /></svg>
-                  <div style={{ height: 30, border: "1px solid var(--border)", borderRadius: 8, background: "var(--background)", paddingLeft: 30, display: "flex", alignItems: "center", fontSize: 12, color: "var(--muted-foreground)" }}>Search pages…</div>
-                </div>
-                <span style={{ width: 30, height: 30, border: "1px solid var(--border)", borderRadius: 8, display: "grid", placeItems: "center", color: "var(--muted-foreground)", flex: "0 0 auto" }}><Ico name="plus" size="i14" /></span>
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 6px 4px", fontSize: 10, fontWeight: 600, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--muted-foreground)" }}>
+                Pages
+                <span style={{ display: "grid", placeItems: "center", color: "var(--muted-foreground)" }}><Ico name="plus" size="i14" /></span>
               </div>
-              <div className="aw-tree on">
-                <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ opacity: 0.5, transform: "rotate(90deg)" }}><path d="m9 18 6-6-6-6" /></svg>
-                <Ico name="file" size="i14" />Q1 Planning
-              </div>
-              <div className="aw-tree" style={{ paddingLeft: 20 }}><Ico name="file" size="i14" />Product Roadmap<span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--primary)", marginLeft: 2 }} /></div>
               <div className="aw-tree pri">
-                <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ opacity: 0.5 }}><path d="m9 18 6-6-6-6" /></svg>
+                <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ opacity: 0.5, transform: "rotate(90deg)" }}><path d="m9 18 6-6-6-6" /></svg>
                 <Ico name="folder" size="i14" />Product Launch
+              </div>
+              <div className="aw-tree" style={{ paddingLeft: 22 }}><Ico name="fileText" size="i14" />Spec</div>
+              <div className="aw-tree on" style={{ paddingLeft: 22 }}><Ico name="fileText" size="i14" />Launch Plan</div>
+              <div className="aw-tree" style={{ paddingLeft: 22 }}><Ico name="task" size="i14" />Launch Tasks</div>
+              <div className="aw-tree" style={{ paddingLeft: 22 }}><Ico name="sheet" size="i14" />Budget</div>
+              <div className="aw-tree" style={{ paddingLeft: 22 }}><Ico name="channel" size="i14" />product-launch<span style={{ width: 6, height: 6, borderRadius: "50%", background: "var(--primary)", marginLeft: 2 }} /></div>
+              <div className="aw-tree" style={{ paddingLeft: 22 }}><Ico name="bot" size="i14" />Launch AI</div>
+              <div className="aw-tree">
+                <svg className="i i13" viewBox="0 0 24 24" aria-hidden="true" style={{ opacity: 0.5 }}><path d="m9 18 6-6-6-6" /></svg>
+                <Ico name="folder" size="i14" />Engineering
               </div>
             </div>
 
             <div className="aw-main">
               <div className="aw-head">
-                <div className="aw-crumb">My Workspace<Ico name="chevR" size="i13" /><span style={{ color: "var(--foreground)" }}>Q1 Planning</span></div>
-                <div className="aw-title"><div className="h3">Q1 Planning</div><span className="aw-saved"><span className="g" />Saved</span></div>
+                <div className="aw-crumb">Product Launch<Ico name="chevR" size="i13" /><span style={{ color: "var(--foreground)" }}>Launch Plan</span></div>
+                <div className="aw-title"><div className="h3">Launch Plan</div><span className="aw-saved"><span className="g" />Saved</span></div>
               </div>
               <div className="aw-toolbar">
                 <span className="aw-tb"><Ico name="bold" size="i13" /></span>
@@ -99,15 +101,15 @@ export function HeroSection() {
                 <span className="selchip" style={{ height: 26 }}>16px<Ico name="chevD" size="i13" /></span>
               </div>
               <div className="aw-doc">
-                <div className="h1">Q1 Planning</div>
-                <p>This document outlines our strategic priorities, key objectives, and execution timeline for the first quarter.</p>
-                <div className="h2">Key Objectives</div>
+                <div className="h1">Launch Plan</div>
+                <p>Everything for next week&rsquo;s launch — owners, timeline, and the checklist the team runs from. The AI drafted this from the spec and keeps it in sync.</p>
+                <div className="h2">Launch week</div>
                 <ul>
-                  <li>Launch the redesigned onboarding flow and measure activation</li>
-                  <li>Expand AI agent capabilities with multi-model support</li>
-                  <li>Achieve 95% uptime SLA and reduce p99 latency below 200ms</li>
+                  <li>Finalize positioning and the announcement copy</li>
+                  <li>Ship the redesigned onboarding and instrument activation</li>
+                  <li>Publish the launch post, send the email, and brief support</li>
                 </ul>
-                <blockquote>Focus is about saying no to the hundred other good ideas.</blockquote>
+                <blockquote>A launch is a promise you keep on a deadline.</blockquote>
               </div>
             </div>
 
@@ -119,11 +121,12 @@ export function HeroSection() {
               </div>
               <div className="aw-conv">
                 <div className="aw-you"><span className="n">You</span><p>Prep next week&rsquo;s launch from the spec.</p></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">create_task</span><span className="ds">6 items</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">read_page</span><span className="ds">Spec</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">create_task</span><span className="ds">Launch Tasks · 6</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
                 <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">replace_lines</span><span className="ds">Launch Plan</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
                 <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">gh_issue</span><span className="ds">#214</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
                 <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">edit_sheet</span><span className="ds">Budget · B5</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
-                <div className="aw-done">Done — created the checklist, updated the plan, filed the issue, and balanced the budget.</div>
+                <div className="aw-done">Done — read the spec, built the task list, wrote this plan, filed the issue, and balanced the budget.</div>
               </div>
               <div className="aw-composer">
                 <div className="r">Ask about this page…</div>
