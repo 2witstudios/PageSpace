@@ -27,7 +27,7 @@ export function AskAutomateSection() {
         <div className="pal-two">
           <div className="palette">
             <div className="pal-hd"><b>Ask</b><span className="muted">plain words</span></div>
-            <div className="pal-search"><Ico name="search" /><span className="q">Ask PageSpace to…</span><kbd>⌘K</kbd></div>
+            <div className="pal-search"><Ico name="search" /><span className="q">Ask PageSpace to…</span></div>
             <div className="pal-list">
               {askRows.map((r, i) => (
                 <div className={`pal-row${r.sel ? " sel" : ""}`} key={i}>
