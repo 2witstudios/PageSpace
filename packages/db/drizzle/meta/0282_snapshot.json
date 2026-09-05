@@ -1,5 +1,5 @@
 {
-  "id": "1716a816-9e9b-499e-8efb-ccf91a70b929",
+  "id": "1b0f6295-a4bc-4841-a428-56fbf83228d2",
   "prevId": "4443181b-446c-4c04-bf00-1d385727d5d2",
   "version": "7",
   "dialect": "postgresql",
@@ -23103,6 +23103,12 @@
           "notNull": true,
           "default": "'local'"
         },
+        "ownerId": {
+          "name": "ownerId",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
         "label": {
           "name": "label",
           "type": "text",
@@ -23185,8 +23191,37 @@
           "notNull": true
         }
       },
-      "indexes": {},
+      "indexes": {
+        "drive_env_local_owner_id_idx": {
+          "name": "drive_env_local_owner_id_idx",
+          "columns": [
+            {
+              "expression": "ownerId",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
+        }
+      },
       "foreignKeys": {
+        "drive_env_local_ownerId_users_id_fk": {
+          "name": "drive_env_local_ownerId_users_id_fk",
+          "tableFrom": "drive_env_local",
+          "tableTo": "users",
+          "columnsFrom": [
+            "ownerId"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "cascade",
+          "onUpdate": "no action"
+        },
         "drive_env_local_envId_substrate_drive_envs_id_substrate_fk": {
           "name": "drive_env_local_envId_substrate_drive_envs_id_substrate_fk",
           "tableFrom": "drive_env_local",

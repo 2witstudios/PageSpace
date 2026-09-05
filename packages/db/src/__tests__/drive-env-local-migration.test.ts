@@ -88,6 +88,12 @@ describe('drizzle/0281 + 0282 local environments (substrate, then drive_env_loca
       expect(second.code).toMatch(/UNIQUE\("enrollmentId"\)/);
     });
 
+    it('should carry ownerId NOT NULL with a cascading FK to users and an index on it', () => {
+      expect(second.code).toMatch(/"ownerId" text NOT NULL/);
+      expect(second.code).toMatch(/FOREIGN KEY \("ownerId"\) REFERENCES "public"\."users"\("id"\) ON DELETE cascade/);
+      expect(second.code).toMatch(/CREATE INDEX "drive_env_local_owner_id_idx" ON "drive_env_local" USING btree \("ownerId"\)/);
+    });
+
     it("should default bindPolicy to 'owner' and serverPolicy to a deny-by-default object", () => {
       expect(second.code).toMatch(/"bindPolicy" text DEFAULT 'owner' NOT NULL/);
       expect(second.code).toMatch(/"serverPolicy" jsonb DEFAULT '\{"ops":\[\],"checkpoint":false\}'::jsonb NOT NULL/);

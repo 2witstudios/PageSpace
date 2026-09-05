@@ -90,6 +90,15 @@ describe('drive_env_local — the 1:1 sibling holding a local env\'s connection 
     expect(pkg.exports['./schema/drive-env-local']).toBeDefined();
   });
 
+  it("carries the machine OWNER (ownerId → users, cascade): bindPolicy 'owner' keys on it, Art 15 export selects by it, and Art 17 erasure of the user takes the machine's identity facts with it", () => {
+    expect(localColumns.ownerId.notNull).toBe(true);
+    const fk = localConfig.foreignKeys.find((f) => f.reference().columns.length === 1 && f.reference().columns[0]?.name === 'ownerId');
+    expect(fk, 'FK on ownerId').toBeDefined();
+    expect(getTableConfig(fk!.reference().foreignTable).name).toBe('users');
+    expect(fk!.onDelete).toBe('cascade');
+    expect(localConfig.indexes.find((i) => i.config.name === 'drive_env_local_owner_id_idx')).toBeDefined();
+  });
+
   it('has a UNIQUE enrollmentId — the wire identity the daemon presents', () => {
     expect(localColumns.enrollmentId.notNull).toBe(true);
     const unique = localConfig.uniqueConstraints.find((u) => u.columns.some((c) => c.name === 'enrollmentId'))

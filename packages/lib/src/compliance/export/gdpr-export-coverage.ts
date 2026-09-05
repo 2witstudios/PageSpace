@@ -104,6 +104,10 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // witness — migration 0256 dropped that column, so the table is not merely
   // the better source, it is the only one.
   agent_workspace_nodes: 'agentWorkspaces',
+  // A machine the subject enrolled as a local environment: THEIR device (label, public
+  // key, fingerprint, connection times), selected by ownerId. The env it backs stays
+  // excluded below as the drive's infrastructure; the device is the subject's.
+  drive_env_local: 'localEnvironments',
   ai_stream_sessions: 'streamState',
   // The durable frame log — the same generated content `ai_stream_sessions.parts`
   // holds, in the form that replaces it once the frame-log writer lands and that

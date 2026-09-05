@@ -1,5 +1,6 @@
-import { pgTable, text, timestamp, jsonb, check, unique, foreignKey } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, jsonb, check, unique, foreignKey, index } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
+import { users } from './auth';
 import { driveEnvs, DRIVE_ENV_SUBSTRATES } from './drive-envs';
 
 export { DRIVE_ENV_SUBSTRATES };
@@ -21,6 +22,8 @@ export { DRIVE_ENV_SUBSTRATES };
  *   reference), and a local env can never be flipped to `'sprite'` while its
  *   sibling exists (the referencing row would dangle — 23503). No trigger to
  *   forget, and deleting the env still cascades.
+ * - **The machine has an OWNER (`ownerId`).** The enrolling user, as a real FK
+ *   with cascade — see the column docblock for the three things that key on it.
  * - **Identity is MACHINE-HELD.** The daemon generates an Ed25519 keypair at
  *   enrollment; the private key never leaves the machine's keychain. This row
  *   stores only the PUBLIC key, its fingerprint (pinned on every handshake),
@@ -72,6 +75,18 @@ export const driveEnvLocal = pgTable('drive_env_local', {
    */
   substrate: text('substrate').notNull().default('local'),
 
+  /**
+   * The user whose MACHINE this is — the one who enrolled it. NOT audit-only,
+   * unlike `drive_envs.createdBy`: `bindPolicy = 'owner'` keys on it
+   * (`decideBind`), the Art 15 export selects the subject's machines by it,
+   * and Art 17 erasure of the user cascades the machine's identity facts away
+   * with them. The env row itself survives as a dead local env (it belongs to
+   * the drive), which is the same shape as a Sprite env whose VM is gone.
+   */
+  ownerId: text('ownerId')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+
   /** Human name of the machine ("jono-macstudio"). A label, never an address. */
   label: text('label').notNull(),
 
@@ -122,6 +137,9 @@ export const driveEnvLocal = pgTable('drive_env_local', {
   /** This row is local by definition; the column exists for the FK. */
   substrateCheck: check('drive_env_local_substrate_check', sql`${table.substrate} = 'local'`),
 
+  /** Art 15 export and the sidebar both select a user's machines by owner. */
+  ownerIdIdx: index('drive_env_local_owner_id_idx').on(table.ownerId),
+
   /** The wire identity must name exactly one env. */
   enrollmentIdUnique: unique('drive_env_local_enrollment_id_unique').on(table.enrollmentId),
 
@@ -133,6 +151,10 @@ export const driveEnvLocalRelations = relations(driveEnvLocal, ({ one }) => ({
   env: one(driveEnvs, {
     fields: [driveEnvLocal.envId],
     references: [driveEnvs.id],
+  }),
+  owner: one(users, {
+    fields: [driveEnvLocal.ownerId],
+    references: [users.id],
   }),
 }));
 
