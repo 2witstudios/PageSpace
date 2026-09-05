@@ -19,3 +19,6 @@ export * from './bridge-session';
 export * from './resolve-timeout';
 export * from './decide-bind';
 export * from './plan-local-provision';
+export * from './enrollment';
+export * from './challenge';
+export * from './server-signing-key';

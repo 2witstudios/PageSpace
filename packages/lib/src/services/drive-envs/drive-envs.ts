@@ -42,7 +42,11 @@ import {
 } from '../sandbox/quota';
 import type { SubscriptionTier } from '../subscription-utils';
 import type { EnsureSpriteHolderSandboxResult } from '../agent-workspaces/agent-workspace-sprite';
-import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
+import type { DriveEnvRecord, DriveEnvStore, DriveEnvLocalRecord } from './drive-envs-store';
+import { issueEnrollmentCode, verifyEnrollmentCode, type RandomBytes, type EnrollmentCodeDenyReason } from '../../env-bridge/enrollment';
+import { issueChallenge, verifyChallengeResponse, type ChallengeDenyReason } from '../../env-bridge/challenge';
+import { decodeBase64, type Ed25519Verify, type HashBytes } from '../../env-bridge/grant';
+import { getEnvBridgeTokenPolicy, type EnvBridgeTokenPolicy } from '../../auth/token-lifecycle-policy';
 
 /**
  * Row → `DriveEnvStatus`, as a pure function (the ONE place the mapping exists)
@@ -115,6 +119,24 @@ export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): Drive
 // Create
 // ---------------------------------------------------------------------------
 
+/**
+ * The primitives the local-environment identity flow needs, injected so the
+ * service stays as testable as the pure gates it composes (`env-bridge/`).
+ */
+export interface LocalEnvIdentityDeps {
+  random: RandomBytes;
+  /** Hash for the one-time code (SHA3-256 in production, matching `secureCompare` / tokens at rest). */
+  hash: HashBytes;
+  /** Fingerprint of a machine public key (SPKI bytes → `sha256:<hex>`). */
+  fingerprint: HashBytes;
+  /** Is this SPKI DER a usable Ed25519 public key? */
+  isEd25519PublicKey: (spki: Uint8Array) => boolean;
+  verify: Ed25519Verify;
+  newEnrollmentId: () => string;
+  /** The server signing key the daemon will pin — its id and PUBLIC half only. */
+  signingKey: { keyId: string; publicKey: Uint8Array };
+}
+
 export interface CreateDriveEnvDeps {
   store: Pick<DriveEnvStore, 'createIfUnderLimit' | 'countEnvsOwnedBy'>;
   /**
@@ -124,10 +146,19 @@ export interface CreateDriveEnvDeps {
    */
   resolvePayer: (driveId: string) => Promise<{ payerId: string; tier: SubscriptionTier } | null>;
   now: () => Date;
+  /** Required only for a LOCAL create (the one-time code needs randomness and a hash). */
+  identity?: Pick<LocalEnvIdentityDeps, 'random' | 'hash' | 'newEnrollmentId'>;
+}
+
+/** What a local create hands back ONCE: the code is shown to the user and never stored. */
+export interface LocalEnvEnrollmentIssue {
+  enrollmentId: string;
+  code: string;
+  expiresAt: Date;
 }
 
 export type CreateDriveEnvResult =
-  | { ok: true; env: DriveEnvRecord }
+  | { ok: true; env: DriveEnvRecord; enrollment?: LocalEnvEnrollmentIssue }
   /** The drive does not exist (so there is no payer to meter, and no drive to own the env). */
   | { ok: false; reason: 'drive_not_found' }
   /** `(driveId, name)` is taken — the database refused, which is how concurrent creates are resolved. */
@@ -164,6 +195,7 @@ export async function createDriveEnv({
   driveId,
   name,
   createdBy,
+  local,
   deps,
 }: {
   driveId: string;
@@ -171,8 +203,16 @@ export async function createDriveEnv({
   name: string;
   /** AUDIT ONLY: who asked. Never consulted for permission, payment or lifecycle. */
   createdBy: string | null;
+  /**
+   * Present for a LOCAL env: the machine's human label and its OWNER (the
+   * enrolling user — the one `bindPolicy = 'owner'` keys on). The env row and
+   * its `drive_env_local` sibling are minted in ONE store step, with a one-time
+   * enrollment code whose hash is stored and whose value is returned once.
+   */
+  local?: { label: string; ownerId: string };
   deps: CreateDriveEnvDeps;
 }): Promise<CreateDriveEnvResult> {
+  if (local && !deps.identity) throw new Error('createDriveEnv: a local env needs identity deps (random, hash, newEnrollmentId)');
   const payer = await deps.resolvePayer(driveId);
   if (!payer) return { ok: false, reason: 'drive_not_found' };
 
@@ -185,13 +225,23 @@ export async function createDriveEnv({
     return { ok: false, reason: 'quota_exceeded', denial: allowance.reason, limit: allowance.limit };
   }
 
+  const now = deps.now();
+  const issued =
+    local && deps.identity
+      ? { ...issueEnrollmentCode({ random: deps.identity.random, hash: deps.identity.hash, now: now.getTime() }), enrollmentId: deps.identity.newEnrollmentId() }
+      : null;
+
   const created = await deps.store.createIfUnderLimit({
     driveId,
     name,
     createdBy,
-    now: deps.now(),
+    now,
     payerId: payer.payerId,
     maxEnvs: getDriveEnvLimit(payer.tier),
+    local:
+      local && issued
+        ? { ownerId: local.ownerId, label: local.label, enrollmentId: issued.enrollmentId, enrollmentCodeHash: issued.codeHash, enrollmentCodeExpiresAt: new Date(issued.exp) }
+        : undefined,
   });
   if (!created.ok) {
     if (created.reason === 'name_taken') return { ok: false, reason: 'name_taken' };
@@ -205,7 +255,211 @@ export async function createDriveEnv({
       limit: getDriveEnvLimit(payer.tier),
     };
   }
-  return { ok: true, env: created.env };
+  if (!issued) return { ok: true, env: created.env };
+  return { ok: true, env: created.env, enrollment: { enrollmentId: issued.enrollmentId, code: issued.code, expiresAt: new Date(issued.exp) } };
+}
+
+// ---------------------------------------------------------------------------
+// Local env identity: enroll → challenge → redeem
+// ---------------------------------------------------------------------------
+
+export interface LocalEnvIdentityServiceDeps {
+  store: Pick<DriveEnvStore, 'findLocalByEnrollmentId' | 'pinMachineKey' | 'setChallenge' | 'consumeChallenge'>;
+  now: () => Date;
+  identity: LocalEnvIdentityDeps;
+  /**
+   * Mint the socket token for a proven machine. The policy is the whole
+   * contract; the row facts say WHOSE token it is (the machine's owner) and
+   * which drive it serves. The store of tokens is the caller's.
+   */
+  mintToken: (policy: EnvBridgeTokenPolicy, machine: { envId: string; driveId: string; ownerId: string; enrollmentId: string }) => Promise<string>;
+}
+
+export type EnrollLocalDriveEnvResult =
+  | { ok: true; envId: string; enrollmentId: string; serverKeyId: string; serverPublicKey: string }
+  | { ok: false; reason: 'not_found' | 'revoked' | 'already_enrolled' | 'bad_public_key' | 'race' | EnrollmentCodeDenyReason };
+
+/**
+ * The machine presents the one-time code and its freshly generated PUBLIC key;
+ * the server pins the key and hands back its own public key for the machine to
+ * pin (invariants 2 and 3). Order: find → revoked → already enrolled → key
+ * shape → code (the pure gate) → compare-and-set. The key is validated BEFORE
+ * the code is checked so a malformed key never consumes a valid code.
+ */
+export async function enrollLocalDriveEnv({
+  enrollmentId,
+  code,
+  machinePublicKey,
+  deps,
+}: {
+  enrollmentId: string;
+  code: unknown;
+  /** Base64 SPKI DER, as the daemon sent it. */
+  machinePublicKey: unknown;
+  deps: Pick<LocalEnvIdentityServiceDeps, 'store' | 'now' | 'identity'>;
+}): Promise<EnrollLocalDriveEnvResult> {
+  const row = await deps.store.findLocalByEnrollmentId(enrollmentId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.enrolledAt !== null || row.enrollmentCodeUsedAt !== null) return { ok: false, reason: 'used' };
+  if (row.enrollmentCodeHash === null || row.enrollmentCodeExpiresAt === null) return { ok: false, reason: 'not_found' };
+
+  const spki = typeof machinePublicKey === 'string' ? decodeBase64(machinePublicKey) : null;
+  if (spki === null || !deps.identity.isEd25519PublicKey(spki)) return { ok: false, reason: 'bad_public_key' };
+
+  const now = deps.now();
+  const verdict = verifyEnrollmentCode({
+    presented: code,
+    storedHash: row.enrollmentCodeHash,
+    exp: row.enrollmentCodeExpiresAt.getTime(),
+    // Established null by the `used` guard above; the pure gate re-checks it anyway.
+    usedAt: null,
+    now: now.getTime(),
+    hash: deps.identity.hash,
+  });
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+
+  const pinned = await deps.store.pinMachineKey({
+    envId: row.envId,
+    machinePublicKey: machinePublicKey as string,
+    machineKeyFingerprint: deps.identity.fingerprint(spki),
+    serverKeyId: deps.identity.signingKey.keyId,
+    now,
+  });
+  // The CAS lost: a concurrent enrollment (or revoke) landed between the read
+  // and the write. Honest answer, nothing pinned twice.
+  if (!pinned) return { ok: false, reason: 'race' };
+
+  return {
+    ok: true,
+    envId: row.envId,
+    enrollmentId: row.enrollmentId,
+    serverKeyId: deps.identity.signingKey.keyId,
+    serverPublicKey: Buffer.from(deps.identity.signingKey.publicKey).toString('base64'),
+  };
+}
+
+export type IssueLocalEnvChallengeResult =
+  | { ok: true; nonce: string; expiresAt: Date }
+  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' };
+
+/** A fresh nonce for the machine to sign. Replaces any outstanding one — one handshake at a time. */
+export async function issueLocalEnvChallenge({
+  enrollmentId,
+  deps,
+}: {
+  enrollmentId: string;
+  deps: Pick<LocalEnvIdentityServiceDeps, 'store' | 'now' | 'identity'>;
+}): Promise<IssueLocalEnvChallengeResult> {
+  const row = await deps.store.findLocalByEnrollmentId(enrollmentId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.enrolledAt === null) return { ok: false, reason: 'not_enrolled' };
+  const now = deps.now();
+  const challenge = issueChallenge({ random: deps.identity.random, now: now.getTime(), enrollmentId });
+  const expiresAt = new Date(challenge.exp);
+  const stored = await deps.store.setChallenge({ envId: row.envId, nonce: challenge.nonce, expiresAt, now });
+  if (!stored) return { ok: false, reason: 'revoked' };
+  return { ok: true, nonce: challenge.nonce, expiresAt };
+}
+
+export type RedeemLocalEnvChallengeResult =
+  | { ok: true; token: string; expiresInMs: number; envId: string }
+  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' | 'no_challenge' | 'race' | ChallengeDenyReason };
+
+/**
+ * The machine's signature over the outstanding nonce → an `env:bridge` token.
+ * The pure gate decides; the store's compare-and-set consumes the nonce (and
+ * records the heartbeat) only on ok; the token is minted only after the CAS
+ * won — so a replay, a race, or a forged signature mints nothing.
+ */
+export async function redeemLocalEnvChallenge({
+  enrollmentId,
+  response,
+  deps,
+}: {
+  enrollmentId: string;
+  response: unknown;
+  deps: LocalEnvIdentityServiceDeps;
+}): Promise<RedeemLocalEnvChallengeResult> {
+  const row = await deps.store.findLocalByEnrollmentId(enrollmentId);
+  if (!row) return { ok: false, reason: 'not_found' };
+  if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
+  if (row.enrolledAt === null || row.machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
+  if (row.challengeNonce === null || row.challengeExpiresAt === null) return { ok: false, reason: 'no_challenge' };
+
+  const machinePublicKey = decodeBase64(row.machinePublicKey);
+  if (machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
+
+  const now = deps.now();
+  const verdict = verifyChallengeResponse({
+    challenge: {
+      nonce: row.challengeNonce,
+      enrollmentId: row.enrollmentId,
+      iat: row.challengeExpiresAt.getTime(),
+      exp: row.challengeExpiresAt.getTime(),
+      usedAt: row.challengeUsedAt?.getTime() ?? null,
+    },
+    response,
+    machinePublicKey,
+    verify: deps.identity.verify,
+    now: now.getTime(),
+  });
+  if (!verdict.ok) return { ok: false, reason: verdict.reason };
+
+  const consumed = await deps.store.consumeChallenge({ envId: row.envId, nonce: row.challengeNonce, now });
+  if (!consumed) return { ok: false, reason: 'race' };
+
+  const policy = getEnvBridgeTokenPolicy({ envId: row.envId, enrollmentId: row.enrollmentId });
+  const token = await deps.mintToken(policy, { envId: row.envId, driveId: row.driveId, ownerId: row.ownerId, enrollmentId: row.enrollmentId });
+  return { ok: true, token, expiresInMs: policy.ttlMs, envId: row.envId };
+}
+
+// ---------------------------------------------------------------------------
+// Derived connection status
+// ---------------------------------------------------------------------------
+
+/**
+ * How stale a heartbeat may be before a machine no other replica can vouch for
+ * is reported disconnected. The daemon pings well inside this.
+ */
+export const LOCAL_ENV_HEARTBEAT_WINDOW_MS = 90 * 1000;
+
+/**
+ * A local env's status is a READING, never stored: the live socket registry
+ * on this replica wins; otherwise a recent heartbeat (written by whichever
+ * replica holds the socket) counts; a row that never enrolled or was revoked
+ * is disconnected whatever the socket says.
+ */
+export function deriveLocalEnvStatus({
+  enrolledAt,
+  revokedAt,
+  lastSeenAt,
+  liveConnection,
+  now,
+}: {
+  enrolledAt: Date | null;
+  revokedAt: Date | null;
+  lastSeenAt: Date | null;
+  liveConnection: 'connecting' | 'connected' | null;
+  now: number;
+}): DriveEnvLocalStatus {
+  if (enrolledAt === null || revokedAt !== null) return 'disconnected';
+  if (liveConnection !== null) return liveConnection;
+  if (lastSeenAt !== null && now - lastSeenAt.getTime() <= LOCAL_ENV_HEARTBEAT_WINDOW_MS) return 'connected';
+  return 'disconnected';
+}
+
+/** The listing's projection of a sibling row (or its absence) into the DTO's local facts. */
+function localFactsFor(row: DriveEnvRecord, sibling: DriveEnvLocalRecord | undefined, liveConnection: 'connecting' | 'connected' | null, now: number): LocalEnvFacts {
+  // No sibling: the owner was erased (Art 17 cascades the machine's identity
+  // facts) and the env row survives as the drive's dead local env. It is
+  // listed — disconnected, under its own name — rather than hidden or thrown.
+  if (!sibling) return { label: row.name, status: 'disconnected' };
+  return {
+    label: sibling.label,
+    status: deriveLocalEnvStatus({ enrolledAt: sibling.enrolledAt, revokedAt: sibling.revokedAt, lastSeenAt: sibling.lastSeenAt, liveConnection, now }),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -213,7 +467,10 @@ export async function createDriveEnv({
 // ---------------------------------------------------------------------------
 
 export interface ListDriveEnvsDeps {
-  store: Pick<DriveEnvStore, 'list'>;
+  store: Pick<DriveEnvStore, 'list' | 'listLocalFacts'>;
+  now: () => Date;
+  /** This replica's live bridge-socket registry: what it knows about `envId` right now. */
+  liveConnection: (envId: string) => 'connecting' | 'connected' | null;
 }
 
 /**
@@ -230,10 +487,12 @@ export async function listDriveEnvs({
   driveId: string;
   deps: ListDriveEnvsDeps;
 }): Promise<DriveEnvDTO[]> {
-  const rows = await deps.store.list(driveId);
-  // Explicit lambda: `map` would otherwise hand the array INDEX to the `local`
-  // facts parameter. Listing carries no local facts yet (t13 joins them).
-  return rows.map((row) => toDriveEnvDTO(row));
+  const [rows, locals] = await Promise.all([deps.store.list(driveId), deps.store.listLocalFacts(driveId)]);
+  const siblings = new Map(locals.map((sibling) => [sibling.envId, sibling]));
+  const now = deps.now().getTime();
+  return rows.map((row) =>
+    row.substrate === 'local' ? toDriveEnvDTO(row, localFactsFor(row, siblings.get(row.id), deps.liveConnection(row.id), now)) : toDriveEnvDTO(row),
+  );
 }
 
 export interface RenameDriveEnvDeps {

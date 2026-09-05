@@ -116,6 +116,33 @@ export function getWsTokenPolicy(): WsTokenPolicy {
 }
 
 // ---------------------------------------------------------------------------
+// env:bridge — the socket token an enrolled machine earns per connection
+// ---------------------------------------------------------------------------
+
+/**
+ * Minutes, not days: the daemon re-proves key possession on every connect
+ * (challenge/response), so a token only has to outlive one handshake. The TTL
+ * is the hard ceiling on a leaked token's blast radius.
+ */
+export const ENV_BRIDGE_TOKEN_TTL_MS = 10 * 60 * 1000;
+
+/** Scope no other route accepts — distinct from the desktop ws scope and outside the `mcp:*` family. */
+export const ENV_BRIDGE_SCOPE = 'env:bridge';
+
+export interface EnvBridgeTokenPolicy {
+  /** User-scoped, NOT `'service'`, for the same reason as the ws-token. */
+  type: 'mcp';
+  scopes: [typeof ENV_BRIDGE_SCOPE];
+  ttlMs: number;
+  /** Bound to ONE env and ONE enrollment; the socket route checks both. */
+  claims: { envId: string; enrollmentId: string };
+}
+
+export function getEnvBridgeTokenPolicy({ envId, enrollmentId }: { envId: string; enrollmentId: string }): EnvBridgeTokenPolicy {
+  return { type: 'mcp', scopes: [ENV_BRIDGE_SCOPE], ttlMs: ENV_BRIDGE_TOKEN_TTL_MS, claims: { envId, enrollmentId } };
+}
+
+// ---------------------------------------------------------------------------
 // M9 — logout device-token revocation plan
 // ---------------------------------------------------------------------------
 

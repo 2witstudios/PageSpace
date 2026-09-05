@@ -481,7 +481,7 @@ export interface AllUserData {
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
   contentTags: UserContentTagExport[];
-  /** Machines the subject enrolled as local environments — their own devices (Local Environments epic, t05). */
+  /** Machines the subject enrolled as local environments — their own devices. */
   localEnvironments: UserLocalEnvironmentExport[];
 }
 
@@ -1519,9 +1519,10 @@ export interface UserLocalEnvironmentExport {
   driveId: string;
   envName: string;
   label: string;
-  machinePublicKey: string;
-  machineKeyFingerprint: string;
-  serverKeyId: string;
+  /** NULL until the machine enrolled (the row exists from creation, with only the label and owner). */
+  machinePublicKey: string | null;
+  machineKeyFingerprint: string | null;
+  serverKeyId: string | null;
   bindPolicy: string;
   capabilities: DriveEnvLocalCapabilities | null;
   enrolledAt: Date | null;
@@ -1552,8 +1553,9 @@ export async function collectUserLocalEnvironments(database: DB, userId: string)
     .from(driveEnvLocal)
     .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
     .where(eq(driveEnvLocal.ownerId, userId));
-  // Ordered in JS, like the other collectors: deterministic output without a
-  // query-builder call the unit test's chain mock does not model.
+  // Ordered in JS rather than by `orderBy`: the unit suite's query-chain mock
+  // does not model `orderBy`, and this collector's rows are few (one per
+  // enrolled machine), so sorting after the fetch costs nothing.
   return rows
     .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
     .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
