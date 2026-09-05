@@ -46,6 +46,20 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
+import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
+import { createId } from '@paralleldrive/cuid2';
+import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
+import { sessionService } from '@pagespace/lib/auth/session-service';
+import {
+  enrollLocalDriveEnv,
+  issueLocalEnvChallenge,
+  redeemLocalEnvChallenge,
+  type LocalEnvIdentityDeps,
+  type LocalEnvIdentityServiceDeps,
+  type EnrollLocalDriveEnvResult,
+  type IssueLocalEnvChallengeResult,
+  type RedeemLocalEnvChallengeResult,
+} from '@pagespace/lib/services/drive-envs/drive-envs';
 
 export { toDriveEnvDTO };
 export type { DriveEnvDTO };
@@ -106,18 +120,102 @@ export async function resolveEnvInDrive(envId: string, driveId: string): Promise
   return env;
 }
 
+// ---------------------------------------------------------------------------
+// Local-env identity: this process's cryptographic primitives, injected into
+// the pure gates. Built lazily and ONLY on a local-env path, because loading
+// the server signing key throws when ENV_BRIDGE_SIGNING_KEY is unset (fail
+// closed, invariant 3) — and a Sprite-only deployment must never trip on it.
+// ---------------------------------------------------------------------------
+
+let identityDeps: LocalEnvIdentityDeps | null = null;
+
+function envBridgeIdentity(): LocalEnvIdentityDeps {
+  if (identityDeps) return identityDeps;
+  const signingKey = loadServerSigningKey();
+  identityDeps = {
+    random: (length) => new Uint8Array(randomBytes(length)),
+    // SHA3-256, matching how tokens are hashed at rest (`secureCompare` / `hashToken`).
+    hash: (bytes) => createHash('sha3-256').update(bytes).digest('hex'),
+    fingerprint: (bytes) => `sha256:${createHash('sha256').update(bytes).digest('hex')}`,
+    isEd25519PublicKey: (spki) => {
+      try {
+        return createPublicKey({ key: Buffer.from(spki), type: 'spki', format: 'der' }).asymmetricKeyType === 'ed25519';
+      } catch {
+        return false;
+      }
+    },
+    verify: (message, signature, publicKey) => {
+      try {
+        return nodeVerify(null, message, createPublicKey({ key: Buffer.from(publicKey), type: 'spki', format: 'der' }), signature);
+      } catch {
+        return false;
+      }
+    },
+    newEnrollmentId: () => `enr_${createId()}`,
+    signingKey: { keyId: signingKey.keyId, publicKey: signingKey.publicKey },
+  };
+  return identityDeps;
+}
+
+async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDeps> {
+  const store = await getDriveEnvStore();
+  return {
+    store,
+    now: () => new Date(),
+    identity: envBridgeIdentity(),
+    // The socket token is the machine OWNER's, bound to this env (resourceId)
+    // and drive; the env-bridge socket route checks scope, resource and the
+    // enrollment before accepting it. Type 'mcp' so no generic web route
+    // (which validates `expectedType: 'user'`) will ever accept it.
+    mintToken: (policy, machine) =>
+      sessionService.createSession({
+        userId: machine.ownerId,
+        type: policy.type,
+        scopes: policy.scopes,
+        expiresInMs: policy.ttlMs,
+        resourceType: 'drive_env',
+        resourceId: machine.envId,
+        driveId: machine.driveId,
+        createdByService: 'env-bridge',
+      }),
+  };
+}
+
 export async function createEnvInDrive(input: {
   driveId: string;
   name: string;
   createdBy: string;
+  /** Present for a LOCAL env: the machine label and its owner (the creating user). */
+  local?: { label: string; ownerId: string };
 }): Promise<CreateDriveEnvResult> {
   const store = await getDriveEnvStore();
   return createDriveEnv({
     driveId: input.driveId,
     name: input.name,
     createdBy: input.createdBy,
-    deps: { store, resolvePayer: resolveDriveEnvPayer, now: () => new Date() },
+    local: input.local,
+    deps: {
+      store,
+      resolvePayer: resolveDriveEnvPayer,
+      now: () => new Date(),
+      identity: input.local ? envBridgeIdentity() : undefined,
+    },
   });
+}
+
+export async function enrollLocalEnv(input: { enrollmentId: string; code: unknown; machinePublicKey: unknown }): Promise<EnrollLocalDriveEnvResult> {
+  const deps = await localEnvIdentityServiceDeps();
+  return enrollLocalDriveEnv({ enrollmentId: input.enrollmentId, code: input.code, machinePublicKey: input.machinePublicKey, deps });
+}
+
+export async function issueEnvChallenge(input: { enrollmentId: string }): Promise<IssueLocalEnvChallengeResult> {
+  const deps = await localEnvIdentityServiceDeps();
+  return issueLocalEnvChallenge({ enrollmentId: input.enrollmentId, deps });
+}
+
+export async function redeemEnvChallenge(input: { enrollmentId: string; response: unknown }): Promise<RedeemLocalEnvChallengeResult> {
+  const deps = await localEnvIdentityServiceDeps();
+  return redeemLocalEnvChallenge({ enrollmentId: input.enrollmentId, response: input.response, deps });
 }
 
 export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {

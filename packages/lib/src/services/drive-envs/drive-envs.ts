@@ -267,8 +267,12 @@ export interface LocalEnvIdentityServiceDeps {
   store: Pick<DriveEnvStore, 'findLocalByEnrollmentId' | 'pinMachineKey' | 'setChallenge' | 'consumeChallenge'>;
   now: () => Date;
   identity: LocalEnvIdentityDeps;
-  /** Mint the socket token for a proven machine. The policy is the whole contract; the store of tokens is the caller's. */
-  mintToken: (policy: EnvBridgeTokenPolicy) => Promise<string>;
+  /**
+   * Mint the socket token for a proven machine. The policy is the whole
+   * contract; the row facts say WHOSE token it is (the machine's owner) and
+   * which drive it serves. The store of tokens is the caller's.
+   */
+  mintToken: (policy: EnvBridgeTokenPolicy, machine: { envId: string; driveId: string; ownerId: string; enrollmentId: string }) => Promise<string>;
 }
 
 export type EnrollLocalDriveEnvResult =
@@ -406,7 +410,7 @@ export async function redeemLocalEnvChallenge({
   if (!consumed) return { ok: false, reason: 'race' };
 
   const policy = getEnvBridgeTokenPolicy({ envId: row.envId, enrollmentId: row.enrollmentId });
-  const token = await deps.mintToken(policy);
+  const token = await deps.mintToken(policy, { envId: row.envId, driveId: row.driveId, ownerId: row.ownerId, enrollmentId: row.enrollmentId });
   return { ok: true, token, expiresInMs: policy.ttlMs, envId: row.envId };
 }
 

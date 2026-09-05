@@ -179,6 +179,19 @@ export const createDriveEnvRequestSchema = z
 
 export type CreateDriveEnvRequest = z.infer<typeof createDriveEnvRequestSchema>;
 
+/**
+ * What a LOCAL create returns alongside the env, ONCE: the one-time enrollment
+ * code the user carries to their machine (`pagespace env enroll <code>`), the
+ * enrollment id the daemon will present, and when the code stops working. The
+ * server keeps only the code's hash, so this is the only time the code exists
+ * on the wire.
+ */
+export const localEnvEnrollmentIssueSchema = z.object({
+  enrollmentId: z.string().min(1),
+  code: z.string().min(1),
+  expiresAt: isoTimestamp,
+});
+
 /** PATCH body for renaming an environment. */
 export const renameDriveEnvRequestSchema = z.object({
   name: driveEnvNameSchema,

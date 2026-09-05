@@ -28,6 +28,7 @@ import {
   isPrincipalDriveMember,
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
@@ -103,14 +104,14 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     }
 
     // Local environments (the user's own machine via the zero-trust bridge)
-    // are created through ENROLLMENT, which a later slice adds. Until then a
-    // local request must be refused outright — never quietly minted as a Sprite
-    // env in its place.
-    if (parsed.data.substrate === 'local') {
-      return NextResponse.json({ error: 'Local environments are not available yet' }, { status: 501 });
+    // are a cloud OPT-IN: never minted — and never a Sprite env in their
+    // place — unless the deployment turned them on.
+    if (parsed.data.substrate === 'local' && !isLocalEnvsEnabled()) {
+      return NextResponse.json({ error: 'Local environments are not enabled on this deployment' }, { status: 501 });
     }
 
-    const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId });
+    const local = parsed.data.substrate === 'local' ? { label: parsed.data.label, ownerId: auth.userId } : undefined;
+    const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId, local });
     if (!result.ok) {
       if (result.reason === 'drive_not_found') {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -147,9 +148,20 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       userId: auth.userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { route: 'drive-envs', operation: 'create', envId: result.env.id, name: result.env.name },
+      details: { route: 'drive-envs', operation: 'create', envId: result.env.id, name: result.env.name, substrate: result.env.substrate },
     });
 
+    // A local env is born disconnected (no machine has enrolled yet) and the
+    // one-time code rides the response ONCE — the server keeps only its hash.
+    if (local && result.enrollment) {
+      return NextResponse.json(
+        {
+          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected' }),
+          enrollment: { enrollmentId: result.enrollment.enrollmentId, code: result.enrollment.code, expiresAt: result.enrollment.expiresAt.toISOString() },
+        },
+        { status: 201 },
+      );
+    }
     return NextResponse.json({ env: toDriveEnvDTO(result.env) }, { status: 201 });
   } catch (error) {
     loggers.api.error('Failed to create drive environment', error instanceof Error ? error : new Error(String(error)));

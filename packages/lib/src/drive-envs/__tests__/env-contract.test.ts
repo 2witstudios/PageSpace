@@ -7,6 +7,7 @@ import {
   DRIVE_ENV_STATUSES,
   DRIVE_ENV_SUBSTRATES,
   driveEnvSubstrateSchema,
+  localEnvEnrollmentIssueSchema,
 } from '../env-contract';
 
 const BASE_DTO = { id: 'env_1', driveId: 'drive_1', name: 'dev', substrate: 'sprite', status: 'none', createdAt: '2026-09-04T00:00:00.000Z' };
@@ -47,6 +48,14 @@ describe('drive-env contract — the substrate axis (Local Environments epic)', 
     it('given a blank or over-long label for a local env, should reject', () => {
       expect(createDriveEnvRequestSchema.safeParse({ name: 'x', substrate: 'local', label: '   ' }).success).toBe(false);
       expect(createDriveEnvRequestSchema.safeParse({ name: 'x', substrate: 'local', label: 'a'.repeat(200) }).success).toBe(false);
+    });
+  });
+
+  describe('localEnvEnrollmentIssueSchema — the one-time code on the wire', () => {
+    it('should carry the enrollment id, the code, and an ISO expiry; nothing may be blank', () => {
+      expect(localEnvEnrollmentIssueSchema.safeParse({ enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt: '2026-09-05T10:00:00.000Z' }).success).toBe(true);
+      expect(localEnvEnrollmentIssueSchema.safeParse({ enrollmentId: 'enr_1', code: '', expiresAt: '2026-09-05T10:00:00.000Z' }).success).toBe(false);
+      expect(localEnvEnrollmentIssueSchema.safeParse({ enrollmentId: 'enr_1', code: 'x', expiresAt: 'tomorrow' }).success).toBe(false);
     });
   });
 
