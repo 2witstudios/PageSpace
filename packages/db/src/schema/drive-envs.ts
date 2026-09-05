@@ -1,4 +1,4 @@
-import { pgTable, text, timestamp, bigint, index, uniqueIndex } from 'drizzle-orm/pg-core';
+import { pgTable, text, timestamp, bigint, index, uniqueIndex, unique, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 import { users } from './auth';
@@ -40,13 +40,27 @@ import { drives } from './core';
  * forced every new use case through a migration and an `ALTER TYPE`, to buy
  * nothing the name does not already say.
  *
- * The corollary matters more: **every env is Sprite-backed, uniformly.** There
- * is no substrate to derive, no `substrateForBoxKind`-style mapping, and no
- * branch in the provisioner. When the Fly serving tier arrives it attaches as
- * a `published_apps.envId` hosting row pointing AT an env; it never puts Fly
- * pointers on this row. So the Sprite columns below are unconditional, the
- * reclaim trigger needs no `WHEN kind = ...` guard, and `machine_sprite_reclaims`
- * is the only outbox this table can ever feed.
+ * **`substrate` is a different axis, and it was reserved.** A use case can be
+ * expressed by a name; WHAT RUNS THE ENV cannot. The founder's 2026-08-18
+ * ratification anticipated exactly this ("onprem later via a local bridge to
+ * the user's own shell"; "envs will need a size/class attribute eventually —
+ * billing language must never change when substrate does"), so `substrate`
+ * is that attribute: `'sprite'` (the default, every pre-existing row) or
+ * `'local'` — the user's own machine, reached through the zero-trust bridge
+ * (`packages/lib/src/env-bridge/`), with its connection facts in the 1:1
+ * sibling `drive_env_local`. It is NOT a revival of the use-case kind: it
+ * changes the provisioner branch, never the product vocabulary.
+ *
+ * The corollary still holds, and the CHECK below is what keeps it true:
+ * **every env that carries a Sprite pointer is a Sprite env.** A local env is
+ * CHECK-forbidden (`drive_envs_local_no_sprite_check`) from holding
+ * `spriteKey`, `sandboxId` or `spriteInstanceId`, so it is STRUCTURALLY
+ * outside every predicate that keys off `sandboxId IS NOT NULL` — the reclaim
+ * trigger, `machine_sprite_reclaims`, `sandbox-storage-billing`'s row source,
+ * the live-sprite index, orphan reconcile — with no `WHEN substrate = ...`
+ * guard anywhere. When the Fly serving tier arrives it still attaches as a
+ * `published_apps.envId` hosting row pointing AT an env; it never puts Fly
+ * pointers on this row.
  *
  * **No stored status.** Derived the way `workspace-status.ts` derives a
  * session's, from the pointer columns below. Status is a reading of the
@@ -89,6 +103,15 @@ export const driveEnvs = pgTable('drive_envs', {
    * else a team finds useful). See the table docblock.
    */
   name: text('name').notNull(),
+
+  /**
+   * What runs this env: `'sprite'` (default — every pre-existing row) or
+   * `'local'` (the user's own machine via the bridge; connection facts live in
+   * `drive_env_local`). The default is what lets the CHECKs below ship VALID
+   * on a populated table without a backfill. See the table docblock for why
+   * this is the reserved substrate axis and not the deleted use-case kind.
+   */
+  substrate: text('substrate').notNull().default('sprite'),
 
   /**
    * AUDIT ONLY: who created the env. `set null` because the env is
@@ -170,7 +193,35 @@ export const driveEnvs = pgTable('drive_envs', {
   liveSpriteIdx: index('drive_envs_live_sprite_idx')
     .on(table.sandboxId, table.spriteTornDownAt)
     .where(sql`${table.sandboxId} IS NOT NULL AND ${table.spriteTornDownAt} IS NULL`),
+
+  /** The closed substrate set, enforced at the row. */
+  substrateCheck: check('drive_envs_substrate_check', sql`${table.substrate} IN ('sprite', 'local')`),
+
+  /**
+   * Redundant with the PK on purpose: it is the TARGET of `drive_env_local`'s
+   * composite FK `(envId, substrate) → (id, substrate)`. That FK is what makes
+   * the sibling relationship a database fact in BOTH write directions — a
+   * sibling cannot attach to a Sprite env, and a local env cannot be flipped
+   * to `'sprite'` while its sibling exists — with no trigger to forget.
+   */
+  idSubstrateUnique: unique('drive_envs_id_substrate_unique').on(table.id, table.substrate),
+
+  /**
+   * A local env may hold NO Sprite pointer. This is what makes a local row
+   * structurally invisible to every `sandboxId IS NOT NULL` predicate — the
+   * same shape `agent_workspaces_env_no_sprite_check` gives env-bound
+   * sessions. Ships VALID: the `'sprite'` default makes it vacuously true of
+   * every row that existed before the column did.
+   */
+  localNoSpriteCheck: check(
+    'drive_envs_local_no_sprite_check',
+    sql`${table.substrate} = 'sprite' OR (${table.spriteKey} IS NULL AND ${table.sandboxId} IS NULL AND ${table.spriteInstanceId} IS NULL)`,
+  ),
 }));
+
+/** The closed substrate set. `DRIVE_ENV_SUBSTRATES[0]` is the column default. */
+export const DRIVE_ENV_SUBSTRATES = ['sprite', 'local'] as const;
+export type DriveEnvSubstrate = (typeof DRIVE_ENV_SUBSTRATES)[number];
 
 export const driveEnvsRelations = relations(driveEnvs, ({ one }) => ({
   drive: one(drives, {

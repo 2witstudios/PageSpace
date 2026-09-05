@@ -23,7 +23,14 @@ import { SandboxProvisionError } from '../../sandbox-options';
 import { SANDBOX_EGRESS_ALLOWLIST } from '../../execution-policy';
 import { hashSandboxEgressPolicy, egressLockdownToken } from '../../egress-lockdown';
 import { SANDBOX_ROOT } from '../../sandbox-paths';
-import { parentDir, fsRecoveryExec, spawnWithSelfHealingCwd } from '../sprites';
+import {
+  parentDir,
+  fsRecoveryExec,
+  spawnWithSelfHealingCwd,
+  readPortNotification,
+  serviceLogErrorMessage,
+  drainServiceLogStream,
+} from '../sprites';
 
 const options = { egressAllowlist: SANDBOX_EGRESS_ALLOWLIST };
 
@@ -158,6 +165,12 @@ function fakeSprite(
     createCheckpoint: async () => fakeCheckpointStream(),
     destroy: async () => {},
     killSession: async () => {},
+    updateURLSettings: async () => {},
+    listServices: async () => [],
+    createService: async () => ({ processAll: async () => {}, close: () => {} }),
+    startService: async () => ({ processAll: async () => {}, close: () => {} }),
+    stopService: async () => ({ processAll: async () => {}, close: () => {} }),
+    deleteService: async () => {},
     ...over,
   };
 }
@@ -291,6 +304,81 @@ describe('fsRecoveryExec (pure)', () => {
     should: 'keep it a positional arg, so it can never be evaluated as script',
     actual: fsRecoveryExec(['/workspace/$(touch pwned)'])[1],
     expected: ['-c', 'mkdir -p "$@" 2>/dev/null || :', 'sh', '/workspace/$(touch pwned)'],
+  });
+});
+
+describe('readPortNotification (pure)', () => {
+  it('given a well-formed port_opened frame, should parse it', () => {
+    expect(readPortNotification({ type: 'port_opened', port: 8124, address: '10.0.0.1', pid: 383 })).toEqual({
+      type: 'port_opened',
+      port: 8124,
+      address: '10.0.0.1',
+      pid: 383,
+    });
+  });
+
+  it('given a port_closed frame with no address/pid, should parse the required fields only', () => {
+    expect(readPortNotification({ type: 'port_closed', port: 3000 })).toEqual({ type: 'port_closed', port: 3000 });
+  });
+
+  it('given a session_info frame, should return undefined — not every control frame is a port event', () => {
+    expect(readPortNotification({ type: 'session_info', session_id: '1' })).toBeUndefined();
+  });
+
+  it('given a frame with a non-numeric port, should return undefined rather than trust the wire', () => {
+    expect(readPortNotification({ type: 'port_opened', port: '8124' })).toBeUndefined();
+  });
+
+  it('given a non-object message, should return undefined', () => {
+    expect(readPortNotification('raw text output')).toBeUndefined();
+    expect(readPortNotification(null)).toBeUndefined();
+  });
+});
+
+describe('serviceLogErrorMessage (pure)', () => {
+  it('given a non-error event, should return undefined', () => {
+    expect(serviceLogErrorMessage({ type: 'started' })).toBeUndefined();
+    expect(serviceLogErrorMessage({ type: 'complete' })).toBeUndefined();
+  });
+
+  it('given an error event with data, should return the data', () => {
+    expect(serviceLogErrorMessage({ type: 'error', data: 'boom' })).toBe('boom');
+  });
+
+  it('given an error event with no data, should fall back to a generic message', () => {
+    expect(serviceLogErrorMessage({ type: 'error' })).toBe('service log stream reported an error');
+  });
+});
+
+describe('drainServiceLogStream (pure-ish: fake stream, no network)', () => {
+  function fakeStream(events: Array<{ type: string; data?: string }>) {
+    let closed = false;
+    return {
+      processAll: async (handler: (event: { type: string; data?: string }) => void | Promise<void>) => {
+        for (const event of events) await handler(event);
+      },
+      close: () => { closed = true; },
+      wasClosed: () => closed,
+    };
+  }
+
+  it('given a stream with no error event, should resolve', async () => {
+    const stream = fakeStream([{ type: 'started' }, { type: 'complete' }]);
+    await expect(drainServiceLogStream(stream)).resolves.toBeUndefined();
+  });
+
+  it('given a stream with an error event, should reject with its message', async () => {
+    const stream = fakeStream([{ type: 'started' }, { type: 'error', data: 'port already bound' }]);
+    await expect(drainServiceLogStream(stream)).rejects.toThrow(/port already bound/);
+  });
+
+  it('given a stream whose processAll never settles (close() does not force it to), should still reject on timeout rather than hang forever', async () => {
+    const stream = {
+      processAll: () => new Promise<void>(() => {}), // never resolves, even after close()
+      close: vi.fn(),
+    };
+    await expect(drainServiceLogStream(stream, 5)).rejects.toThrow(/timed out/);
+    expect(stream.close).toHaveBeenCalled();
   });
 });
 

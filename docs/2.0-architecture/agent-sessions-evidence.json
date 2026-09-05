@@ -227,16 +227,11 @@
         },
         {
           "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
-          "name": "getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order",
-          "suite": "web-unit"
-        },
-        {
-          "file": "apps/web/src/lib/repositories/__tests__/message-order-stability.integration.test.ts",
           "name": "repeated reads of the same tied rows agree with each other",
           "suite": "web-unit"
         }
       ],
-      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window citation is the non-obvious one: a DESC reader must tiebreak DESC or LIMIT n selects a deterministic ordering of a nondeterministic set of rows."
+      "notes": "ORDER BY \"createdAt\" alone is a PARTIAL order: the column is a millisecond timestamp, and a burst inside one millisecond (a user turn and its tool rows, an interrupt and the row that replaces it) leaves Postgres free to return heap order on one call and index order on the next. Consumers treat the result as a transcript — the pane renders it in returned order and the AI history is replayed into a prompt in returned order — so an unstable read is a different prompt, not a cosmetic defect. It surfaced as a rare unreproducible failure in chat-mutation-matrix.integration.test.ts > interrupt and resume; the nondeterminism was in the reader. The DESC-window case \u2014 a DESC reader must tiebreak DESC, or LIMIT n selects a deterministic ordering of a NONDETERMINISTIC SET of rows \u2014 no longer has an instance to cite: its only reader was getRecentPageMessagesForUser, the consult route's cross-conversation fallback, removed when that route stopped reading outside the conversation it writes to. The hazard is recorded here rather than dropped with the test, because it is invisible until someone adds the next DESC+LIMIT transcript reader. recomputeLastMessageAt is DESC+LIMIT 1 but is NOT one: it reads a single max timestamp, where tied rows are interchangeable by definition."
     },
     {
       "id": "no-wider-audience-than-pre-epic",

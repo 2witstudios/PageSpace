@@ -62,6 +62,7 @@ export * from './schema/page-webhooks';
 export * from './schema/agent-workspaces';
 export * from './schema/agent-workspace-nodes';
 export * from './schema/drive-envs';
+export * from './schema/drive-env-local';
 
 import * as auth from './schema/auth';
 import * as sessions from './schema/sessions';
@@ -126,6 +127,7 @@ import * as pageWebhooks from './schema/page-webhooks';
 import * as agentWorkspaces from './schema/agent-workspaces';
 import * as agentWorkspaceNodes from './schema/agent-workspace-nodes';
 import * as driveEnvs from './schema/drive-envs';
+import * as driveEnvLocal from './schema/drive-env-local';
 
 export const schema = {
   ...auth,
@@ -191,4 +193,5 @@ export const schema = {
   ...agentWorkspaces,
   ...agentWorkspaceNodes,
   ...driveEnvs,
+  ...driveEnvLocal,
 };

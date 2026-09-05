@@ -1,0 +1,4 @@
+ALTER TABLE "drive_envs" ADD COLUMN "substrate" text DEFAULT 'sprite' NOT NULL;--> statement-breakpoint
+ALTER TABLE "drive_envs" ADD CONSTRAINT "drive_envs_id_substrate_unique" UNIQUE("id","substrate");--> statement-breakpoint
+ALTER TABLE "drive_envs" ADD CONSTRAINT "drive_envs_substrate_check" CHECK ("drive_envs"."substrate" IN ('sprite', 'local'));--> statement-breakpoint
+ALTER TABLE "drive_envs" ADD CONSTRAINT "drive_envs_local_no_sprite_check" CHECK ("drive_envs"."substrate" = 'sprite' OR ("drive_envs"."spriteKey" IS NULL AND "drive_envs"."sandboxId" IS NULL AND "drive_envs"."spriteInstanceId" IS NULL));

@@ -229,5 +229,5 @@ export { DEFAULT_RETRY_POLICY } from './retry.js';
 export type { Jitter, RetryPolicy } from './retry.js';
 
 // The facade.
-export { PageSpaceClient } from './client.js';
+export { PageSpaceClient, resolveTimeoutMs } from './client.js';
 export type { ClientNamespaces, PageSpaceClientOptions } from './client.js';

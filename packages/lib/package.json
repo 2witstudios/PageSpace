@@ -43,6 +43,16 @@
       "import": "./dist/onboarding/home-drive.js",
       "require": "./dist/onboarding/home-drive.js"
     },
+    "./onboarding/onboarding-memory": {
+      "types": "./dist/onboarding/onboarding-memory.d.ts",
+      "import": "./dist/onboarding/onboarding-memory.js",
+      "require": "./dist/onboarding/onboarding-memory.js"
+    },
+    "./onboarding/onboarding-state": {
+      "types": "./dist/onboarding/onboarding-state.d.ts",
+      "import": "./dist/onboarding/onboarding-state.js",
+      "require": "./dist/onboarding/onboarding-state.js"
+    },
     "./db/bounded-query": {
       "types": "./dist/db/bounded-query.d.ts",
       "import": "./dist/db/bounded-query.js",
@@ -132,6 +142,66 @@
       "types": "./dist/drive-envs/env-sprite-key.d.ts",
       "import": "./dist/drive-envs/env-sprite-key.js",
       "require": "./dist/drive-envs/env-sprite-key.js"
+    },
+    "./env-bridge": {
+      "types": "./dist/env-bridge/index.d.ts",
+      "import": "./dist/env-bridge/index.js",
+      "require": "./dist/env-bridge/index.js"
+    },
+    "./env-bridge/grant": {
+      "types": "./dist/env-bridge/grant.d.ts",
+      "import": "./dist/env-bridge/grant.js",
+      "require": "./dist/env-bridge/grant.js"
+    },
+    "./env-bridge/policy-types": {
+      "types": "./dist/env-bridge/policy-types.d.ts",
+      "import": "./dist/env-bridge/policy-types.js",
+      "require": "./dist/env-bridge/policy-types.js"
+    },
+    "./env-bridge/intersect-capabilities": {
+      "types": "./dist/env-bridge/intersect-capabilities.d.ts",
+      "import": "./dist/env-bridge/intersect-capabilities.js",
+      "require": "./dist/env-bridge/intersect-capabilities.js"
+    },
+    "./env-bridge/scrub-env": {
+      "types": "./dist/env-bridge/scrub-env.d.ts",
+      "import": "./dist/env-bridge/scrub-env.js",
+      "require": "./dist/env-bridge/scrub-env.js"
+    },
+    "./env-bridge/confine-path": {
+      "types": "./dist/env-bridge/confine-path.d.ts",
+      "import": "./dist/env-bridge/confine-path.js",
+      "require": "./dist/env-bridge/confine-path.js"
+    },
+    "./env-bridge/decide-execution": {
+      "types": "./dist/env-bridge/decide-execution.d.ts",
+      "import": "./dist/env-bridge/decide-execution.js",
+      "require": "./dist/env-bridge/decide-execution.js"
+    },
+    "./env-bridge/frame-codec": {
+      "types": "./dist/env-bridge/frame-codec.d.ts",
+      "import": "./dist/env-bridge/frame-codec.js",
+      "require": "./dist/env-bridge/frame-codec.js"
+    },
+    "./env-bridge/bridge-session": {
+      "types": "./dist/env-bridge/bridge-session.d.ts",
+      "import": "./dist/env-bridge/bridge-session.js",
+      "require": "./dist/env-bridge/bridge-session.js"
+    },
+    "./env-bridge/resolve-timeout": {
+      "types": "./dist/env-bridge/resolve-timeout.d.ts",
+      "import": "./dist/env-bridge/resolve-timeout.js",
+      "require": "./dist/env-bridge/resolve-timeout.js"
+    },
+    "./env-bridge/decide-bind": {
+      "types": "./dist/env-bridge/decide-bind.d.ts",
+      "import": "./dist/env-bridge/decide-bind.js",
+      "require": "./dist/env-bridge/decide-bind.js"
+    },
+    "./env-bridge/plan-local-provision": {
+      "types": "./dist/env-bridge/plan-local-provision.d.ts",
+      "import": "./dist/env-bridge/plan-local-provision.js",
+      "require": "./dist/env-bridge/plan-local-provision.js"
     },
     "./agent-workspaces/credential-scope": {
       "types": "./dist/agent-workspaces/credential-scope.d.ts",

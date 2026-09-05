@@ -34,7 +34,7 @@ import {
   type SpriteHolderLifecycleRow,
 } from '../../agent-workspaces/plan-workspace-lifecycle';
 import { planEnvDelete } from '../../drive-envs/plan-env-delete';
-import type { DriveEnvDTO, DriveEnvStatus } from '../../drive-envs/env-contract';
+import type { DriveEnvDTO, DriveEnvSpriteStatus, DriveEnvLocalStatus } from '../../drive-envs/env-contract';
 import {
   checkDriveEnvAllowance,
   getDriveEnvLimit,
@@ -67,7 +67,7 @@ export interface DriveEnvStatusColumns {
   spriteTornDownAt: Date | null;
 }
 
-export function deriveDriveEnvStatus(row: DriveEnvStatusColumns): DriveEnvStatus {
+export function deriveDriveEnvStatus(row: DriveEnvStatusColumns): DriveEnvSpriteStatus {
   if (row.spriteTornDownAt !== null) return 'stopped';
   if (row.sandboxId !== null) return 'running';
   return 'none';
@@ -80,14 +80,35 @@ export function deriveDriveEnvStatus(row: DriveEnvStatusColumns): DriveEnvStatus
  * pointer, egress token or storage measurement is projected at all — see
  * `env-contract.ts` for why the DTO is deliberately narrow.
  */
-export function toDriveEnvDTO(row: DriveEnvRecord): DriveEnvDTO {
-  return {
+/**
+ * The facts only a LOCAL env has, read from `drive_env_local` and the live
+ * bridge-socket registry by the caller. A Sprite row never needs them (and
+ * ignores them if given); a local row cannot be projected without them.
+ */
+export interface LocalEnvFacts {
+  /** Human name of the machine (`drive_env_local.label`). */
+  label: string;
+  /** Derived from `lastSeenAt` + the socket registry — never stored. */
+  status: DriveEnvLocalStatus;
+}
+
+export function toDriveEnvDTO(row: DriveEnvRecord, local?: LocalEnvFacts): DriveEnvDTO {
+  const base = {
     id: row.id,
     driveId: row.driveId,
     name: row.name,
-    status: deriveDriveEnvStatus(row),
     createdAt: row.createdAt.toISOString(),
   };
+  if (row.substrate === 'local') {
+    // Fail LOUD rather than invent a label or a status: a local DTO without its
+    // facts would be a lie on the sidebar, and this branch is unreachable until
+    // the enrollment path that creates local rows also supplies them.
+    if (local === undefined) {
+      throw new Error(`drive env ${row.id} is local but no drive_env_local facts were supplied to toDriveEnvDTO`);
+    }
+    return { ...base, substrate: 'local', status: local.status, label: local.label };
+  }
+  return { ...base, substrate: 'sprite', status: deriveDriveEnvStatus(row) };
 }
 
 // ---------------------------------------------------------------------------
@@ -210,7 +231,9 @@ export async function listDriveEnvs({
   deps: ListDriveEnvsDeps;
 }): Promise<DriveEnvDTO[]> {
   const rows = await deps.store.list(driveId);
-  return rows.map(toDriveEnvDTO);
+  // Explicit lambda: `map` would otherwise hand the array INDEX to the `local`
+  // facts parameter. Listing carries no local facts yet (t13 joins them).
+  return rows.map((row) => toDriveEnvDTO(row));
 }
 
 export interface RenameDriveEnvDeps {

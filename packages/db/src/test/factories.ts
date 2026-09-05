@@ -33,6 +33,19 @@ export const factories = {
       currentAiModel: 'z-ai/glm-5.3-flash',
       storageUsedBytes: 0,
       subscriptionTier: 'free',
+      /**
+       * Seeded users are ESTABLISHED accounts by default, not brand-new ones.
+       *
+       * A NULL stamp means "show first-run onboarding", so leaving it unset
+       * pops the onboarding modal over every dashboard page in the E2E suite —
+       * which then blocks the UI and times out suites that have nothing to do
+       * with onboarding (the send button is unreachable behind the dialog).
+       *
+       * A test that actually wants the first-run flow passes
+       * `onboardingCompletedAt: null` explicitly, which reads as the deliberate
+       * choice it is.
+       */
+      onboardingCompletedAt: new Date(),
       createdAt: new Date(),
       updatedAt: new Date(),
       ...overrides,

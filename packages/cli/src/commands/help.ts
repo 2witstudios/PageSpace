@@ -47,7 +47,7 @@ const GROUP_DEFINITIONS: readonly GroupDefinition[] = [
   { key: 'pages', title: 'Pages', example: 'pagespace pages read <pageId>', resources: ['pages', 'sheets'] },
   { key: 'search', title: 'Search', example: 'pagespace search text <query> --drive <id>', resources: ['search'] },
   { key: 'tasks', title: 'Tasks', example: 'pagespace tasks create <pageId> --title <title>', resources: ['tasks'] },
-  { key: 'agents', title: 'Agents', example: 'pagespace agents ask <agentPageId> <message>', resources: ['agents', 'models'] },
+  { key: 'agents', title: 'Agents', example: 'pagespace agents ask <agentPageId> <message>', resources: ['agents', 'models', 'conversations'] },
   { key: 'keys', title: 'Keys', example: 'pagespace keys', resources: ['keys'] },
   { key: 'mcp', title: 'MCP', example: 'pagespace mcp', resources: ['mcp'] },
   { key: 'other', title: 'Other', example: 'pagespace activity <driveId>', resources: [] },

@@ -2,6 +2,8 @@ import { eq, inArray, or, and, ne, isNull, gte, asc } from 'drizzle-orm';
 import type { NodePgDatabase } from 'drizzle-orm/node-postgres';
 import { users } from '@pagespace/db/schema/auth';
 import { agentWorkspaces, agentWorkspaceShells } from '@pagespace/db/schema/agent-workspaces';
+import { driveEnvs } from '@pagespace/db/schema/drive-envs';
+import { driveEnvLocal, type DriveEnvLocalCapabilities } from '@pagespace/db/schema/drive-env-local';
 import { agentWorkspaceNodes } from '@pagespace/db/schema/agent-workspace-nodes';
 import { aiStreamSessions, aiStreamFrames } from '@pagespace/db/schema/ai-streams';
 import { drives, pages, tags } from '@pagespace/db/schema/core';
@@ -479,6 +481,8 @@ export interface AllUserData {
   agentWorkspaces: UserAgentWorkspaceExport[];
   streamState: UserStreamStateExport[];
   contentTags: UserContentTagExport[];
+  /** Machines the subject enrolled as local environments — their own devices (Local Environments epic, t05). */
+  localEnvironments: UserLocalEnvironmentExport[];
 }
 
 export async function collectUserProfile(database: DB, userId: string): Promise<UserProfileExport | null> {
@@ -1500,6 +1504,61 @@ export async function collectUserContentTags(
     .where(and(eq(contentTags.createdBy, userId), inArray(pages.driveId, driveIds)));
 }
 
+/**
+ * A machine the subject enrolled as a local environment (`drive_env_local`,
+ * selected by `ownerId`). This is the subject's OWN device — a label they
+ * chose, their machine's public key and fingerprint, when it enrolled and was
+ * last seen — so it is carried whole, including revoked enrollments (a
+ * revocation is a fact about their machine, not a reason to hide it). The env
+ * it backs is drive-owned and excluded (`drive_envs`); only its name and drive
+ * ride along as the address the subject would recognise. No private material
+ * exists to export: the row never held any (epic invariant 2).
+ */
+export interface UserLocalEnvironmentExport {
+  envId: string;
+  driveId: string;
+  envName: string;
+  label: string;
+  machinePublicKey: string;
+  machineKeyFingerprint: string;
+  serverKeyId: string;
+  bindPolicy: string;
+  capabilities: DriveEnvLocalCapabilities | null;
+  enrolledAt: Date | null;
+  lastSeenAt: Date | null;
+  revokedAt: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export async function collectUserLocalEnvironments(database: DB, userId: string): Promise<UserLocalEnvironmentExport[]> {
+  const rows = await database
+    .select({
+      envId: driveEnvLocal.envId,
+      driveId: driveEnvs.driveId,
+      envName: driveEnvs.name,
+      label: driveEnvLocal.label,
+      machinePublicKey: driveEnvLocal.machinePublicKey,
+      machineKeyFingerprint: driveEnvLocal.machineKeyFingerprint,
+      serverKeyId: driveEnvLocal.serverKeyId,
+      bindPolicy: driveEnvLocal.bindPolicy,
+      capabilities: driveEnvLocal.capabilities,
+      enrolledAt: driveEnvLocal.enrolledAt,
+      lastSeenAt: driveEnvLocal.lastSeenAt,
+      revokedAt: driveEnvLocal.revokedAt,
+      createdAt: driveEnvLocal.createdAt,
+      updatedAt: driveEnvLocal.updatedAt,
+    })
+    .from(driveEnvLocal)
+    .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+    .where(eq(driveEnvLocal.ownerId, userId));
+  // Ordered in JS, like the other collectors: deterministic output without a
+  // query-builder call the unit test's chain mock does not model.
+  return rows
+    .map((row) => ({ ...row, capabilities: row.capabilities ?? null }))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+}
+
 export async function collectAllUserData(database: DB, userId: string): Promise<AllUserData | null> {
   const profile = await collectUserProfile(database, userId);
   if (!profile) return null;
@@ -1510,7 +1569,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
   // Positional: this destructuring order must exactly match the Promise.all array
   // order below (each collector returns a differently-shaped array, so TypeScript
   // cannot catch a reorder/insert mismatch here).
-  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags] = await Promise.all([
+  const [userPages, userSheets, userMessages, userFiles, activity, userSystemLogs, userApiMetrics, userErrorLogs, aiUsage, tasks, userSessions, userNotifications, userDisplayPreferences, userSettings, userPersonalizationData, userPersonalizationCandidates, userAgentWorkspaces, userStreamState, userContentTags, userLocalEnvironments] = await Promise.all([
     collectUserPages(database, userId, driveIds),
     collectUserSheets(database, userId, driveIds),
     collectUserMessages(database, userId),
@@ -1530,6 +1589,7 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     collectUserAgentWorkspaces(database, userId),
     collectUserStreamState(database, userId),
     collectUserContentTags(database, userId, driveIds),
+    collectUserLocalEnvironments(database, userId),
   ]);
 
   return {
@@ -1554,5 +1614,6 @@ export async function collectAllUserData(database: DB, userId: string): Promise<
     agentWorkspaces: userAgentWorkspaces,
     streamState: userStreamState,
     contentTags: userContentTags,
+    localEnvironments: userLocalEnvironments,
   };
 }

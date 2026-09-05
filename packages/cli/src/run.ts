@@ -24,7 +24,7 @@ import { keysUseHandler } from './commands/keys/use.js';
 import { keysHandler } from './commands/keys/wizard.js';
 import { versionHandler } from './commands/version.js';
 import { whoamiHandler } from './commands/whoami.js';
-import { resolveConfig } from './config/resolve.js';
+import { resolveConfig, resolveTimeoutSetting } from './config/resolve.js';
 import { createNullActiveKeyStore, type ActiveKeyStore } from './credentials/active-key.js';
 import type { CredentialStore } from './credentials/store.js';
 import { EXIT_RUNTIME_ERROR, EXIT_USAGE_ERROR, type ExitCode } from './exit-codes.js';
@@ -133,6 +133,8 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
     credential: null,
   });
 
+  const timeoutMs = resolveTimeoutSetting(parsed.flags.timeoutMs, deps.env);
+
   const envToken = resolveEnvToken(deps.env);
   if (envToken.deprecationNotice) {
     deps.stderr.write(`${envToken.deprecationNotice}\n`);
@@ -190,7 +192,11 @@ export async function run(deps: RunDependencies): Promise<ExitCode> {
   });
 
   const ctx: HandlerContext = {
-    sdk: new PageSpaceClient({ baseUrl: host, auth }),
+    // `timeoutMs` is passed only when the caller actually asked for one:
+    // supplying it unconditionally would make it EXPLICIT for every command
+    // and so beat every operation's own declared default (see the SDK's
+    // `resolveTimeoutMs`), silently dropping `agents.ask` from 120s to 30s.
+    sdk: new PageSpaceClient({ baseUrl: host, auth, ...(timeoutMs === undefined ? {} : { timeoutMs }) }),
     stdout: deps.stdout,
     stderr: deps.stderr,
     env: deps.env,

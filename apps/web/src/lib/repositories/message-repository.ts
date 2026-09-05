@@ -1320,43 +1320,6 @@ export const messageRepository = {
   },
 
   /**
-   * ONE USER'S most recent durable messages on a page, oldest-first — the
-   * consult route's no-conversationId fallback context. Ordered DESC then
-   * reversed, because ordering ASC under a LIMIT would return that user's
-   * FIRST n messages ever.
-   *
-   * The owner predicate is not optional and there is deliberately no unscoped
-   * variant. `unifiedPageScope` answers "which page", never "whose", so the
-   * page-scoped-only version of this read handed the caller the 10 most recent
-   * messages on a SHARED agent page across every user — a cross-user
-   * transcript leak straight into the model context, on a route whose only
-   * gate was `canPrincipalViewPage` ("may you use this agent"). Scoped to the
-   * caller's own conversations rather than also including `isShared` ones:
-   * this is background context for a one-shot consult, so the narrow answer is
-   * the right default, and a caller who wants a specific shared thread can
-   * name it (that path runs `authorizePageConversation`).
-   */
-  async getRecentPageMessagesForUser(
-    pageId: string,
-    userId: string,
-    limit: number,
-  ): Promise<UnifiedPageMessageRow[]> {
-    const rows = await db
-      .select({ ...unifiedColumns, pageId: derivedPageId() })
-      .from(messages)
-      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-      .where(and(
-        unifiedPageScope(pageId),
-        eq(conversations.userId, userId),
-        eq(messages.isActive, true),
-        ne(messages.status, 'streaming'),
-      ))
-      .orderBy(desc(messages.createdAt), desc(messages.id))
-      .limit(limit);
-    return rows.reverse();
-  },
-
-  /**
    * One message by id, with its page derived — the edit/delete routes' read.
    * The unified replacement for `chatMessageRepository.getMessageById`.
    *
