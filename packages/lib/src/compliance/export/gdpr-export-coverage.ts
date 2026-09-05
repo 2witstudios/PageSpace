@@ -229,6 +229,19 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // evidenced — this table is how we priced the drive's machine, not a record
     // of anything the subject did.
     'published_app_machine_events',
+    // The dev-preview RELAY state of a sandbox Sprite: which port a dev server
+    // was detected on, the name of the in-sprite relay service bound to 8080,
+    // and the Sprite INSTANCE it all belongs to. Every column is fleet
+    // plumbing — a VM identity, a port number, a process name, a stop flag —
+    // and none of it is authored by or about the subject. The honest
+    // objection is that the row exists BECAUSE the subject ran a dev server
+    // and PageSpace noticed; but the fact of that activity is already carried
+    // under `agentWorkspaces` (the session it happened in, its shells and
+    // their scrollback), and this row adds only how OUR proxy reaches it. It
+    // keys on the session or env (`workspaceId` / `envId`) the way
+    // `published_app_machine_events` keys on an app: the holder is the
+    // subject's record; this is our infrastructure's note about the holder.
+    'dev_preview_services',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',
