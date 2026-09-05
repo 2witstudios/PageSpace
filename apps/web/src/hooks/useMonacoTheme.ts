@@ -21,11 +21,11 @@ export function useMonacoTheme(monaco: Monaco | null): string {
     const fallbackPalette = isDark
       ? {
           ...THEME_FALLBACK.dark,
-          border: '#373737',
-          muted: '#353535',
-          mutedForeground: '#737373',
-          card: '#2b2b2b',
-          input: '#373737',
+          border: '#333333',
+          muted: '#292929',
+          mutedForeground: '#9e9e9e',
+          card: '#1d1d1d',
+          input: '#333333',
         }
       : {
           ...THEME_FALLBACK.light,
