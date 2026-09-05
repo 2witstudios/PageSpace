@@ -79,7 +79,9 @@ export function GoogleOneTap() {
 
     let idleId: number | undefined;
     let timeoutId: number | undefined;
-    if ("requestIdleCallback" in window) {
+    // typeof, not `in`: with lib.dom declaring requestIdleCallback the `in`
+    // guard narrows `window` to `never` in the else branch (TS2339 in CI).
+    if (typeof window.requestIdleCallback === "function") {
       idleId = window.requestIdleCallback(load, { timeout: 4000 });
     } else {
       timeoutId = window.setTimeout(load, 2500);
