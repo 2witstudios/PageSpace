@@ -117,6 +117,13 @@ describe('applyPageMutation re-anchors content tags', () => {
   beforeEach(() => {
     mockReanchor.mockClear();
     mockLogError.mockClear();
+    // `transaction.transaction` is a module-level spy, so its call count
+    // ACCUMULATES across cases. Without this clear, the savepoint assertion
+    // below ("called exactly once") holds only while its test happens to run
+    // first — a case added above it, or randomised order, would fail it for a
+    // reason that has nothing to do with the savepoint.
+    transaction.transaction.mockClear();
+    savepointRolledBack.value = false;
   });
 
   it('sweeps with BOTH revisions and the caller transaction', async () => {
