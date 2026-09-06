@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import * as Y from 'yjs';
 import { clientExtensions } from '../client-schema';
-import { STARTER_KIT_SCHEMA_OPTIONS } from '../collab-schema';
+import { STARTER_KIT_SCHEMA_OPTIONS } from '@pagespace/editor/collab-schema';
 
 function starterKitOptions(extensions: ReturnType<typeof clientExtensions>): { undoRedo?: unknown; heading?: unknown; link?: unknown; codeBlock?: unknown } {
   const starterKit = extensions.find((ext) => ext.name === 'starterKit');

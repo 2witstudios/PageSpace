@@ -7,7 +7,7 @@ import type { EditorView } from '@tiptap/pm/view';
 import { tokenizeCode, type ShikiTheme } from './shiki-highlighter';
 import { tokensToDecorationSpecs, specsToDecorations } from './token-decorations';
 import { LanguageSelector } from './LanguageSelector';
-import { CodeBlockNode } from './CodeBlockNode';
+import { CodeBlockNode } from '@pagespace/editor/code-block-node';
 
 const highlightPluginKey = new PluginKey('codeBlockShikiHighlight');
 const DEBOUNCE_MS = 300;

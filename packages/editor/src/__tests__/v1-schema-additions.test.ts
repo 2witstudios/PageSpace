@@ -7,7 +7,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { getSchema, generateHTML, generateJSON } from '@tiptap/core';
-import { collabExtensions } from '../collab-schema';
+import { collabExtensions } from '../collab-schema.js';
 
 const extensions = collabExtensions();
 const schema = getSchema(extensions);

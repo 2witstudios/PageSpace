@@ -9,7 +9,7 @@ import { describe, it, expect } from 'vitest';
 import { getSchema } from '@tiptap/core';
 import { DOMParser as PMDOMParser } from '@tiptap/pm/model';
 import StarterKit from '@tiptap/starter-kit';
-import { ImageNode } from '../image-node';
+import { ImageNode } from '../image-node.js';
 
 function parseAlt(html: string): unknown {
   const schema = getSchema([StarterKit, ImageNode]);

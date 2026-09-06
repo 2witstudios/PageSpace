@@ -7,7 +7,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TAB_TYPES, type TabType } from '@/components/mentions/MentionPicker';
-import { PageMentionNode, getMentionAttrs } from '@/lib/editor/page-mention-node';
+import { PageMentionNode, getMentionAttrs } from '@pagespace/editor/page-mention-node';
 
 interface SuggestionListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;

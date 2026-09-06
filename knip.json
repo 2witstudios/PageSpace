@@ -536,6 +536,23 @@
         "@types/xlsx"
       ]
     },
+    "packages/editor": {
+      "entry": [
+        "src/block-id.ts",
+        "src/code-block-node.ts",
+        "src/collab-marks.ts",
+        "src/collab-schema.ts",
+        "src/image-node.ts",
+        "src/page-mention-node.ts",
+        "src/simple-data-attr.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
+      ]
+    },
     "apps/android": {
       "ignoreDependencies": [
         "@capacitor/app",

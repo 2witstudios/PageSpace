@@ -23,6 +23,7 @@ const packages = [
   { name: 'apps/realtime', config: 'apps/realtime/vitest.config.ts', summary: 'apps/realtime/coverage/coverage-summary.json' },
   { name: 'packages/db', config: 'packages/db/vitest.config.ts', summary: 'packages/db/coverage/coverage-summary.json' },
   { name: 'packages/lib', config: 'packages/lib/vitest.config.ts', summary: 'packages/lib/coverage/coverage-summary.json' },
+  { name: 'packages/editor', config: 'packages/editor/vitest.config.ts', summary: 'packages/editor/coverage/coverage-summary.json' },
 ];
 
 let updated = 0;

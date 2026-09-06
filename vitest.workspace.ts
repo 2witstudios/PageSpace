@@ -20,6 +20,14 @@ export default defineWorkspace([
     },
   },
   {
+    test: {
+      name: '@pagespace/editor',
+      root: './packages/editor',
+      environment: 'jsdom',
+      globals: true,
+    },
+  },
+  {
     resolve: {
       alias: {
         '@': path.resolve(__dirname, 'apps/web/src'),

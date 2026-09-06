@@ -13,8 +13,9 @@ import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 // before this file is evaluated, so both conditions are satisfied there.
 const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
 const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
+const editorDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/editor/dist"));
 const workspaceDistReady =
-  process.env.NODE_ENV === "production" && dbDistExists && libDistExists;
+  process.env.NODE_ENV === "production" && dbDistExists && libDistExists && editorDistExists;
 
 type ExternalsFn = (
   data: { context: string; request: string; contextInfo?: { issuer?: string } },
@@ -79,7 +80,7 @@ const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
 export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib"],
+  transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib", "@pagespace/editor"],
   // Preserve RFC 8252 loopback redirect_uri query values; NextRequest URL
   // normalization rewrites percent-encoded 127.0.0.1 to localhost otherwise.
   skipMiddlewareUrlNormalize: true,
@@ -92,6 +93,17 @@ export const nextConfig: NextConfig = {
   // it is a direct dependency of apps/web so webpack bundles it as a server chunk.
   serverExternalPackages: ["pg"],
   webpack: (config, { isServer, nextRuntime }) => {
+    // @pagespace/editor is an ESM package (its dist is loaded natively by
+    // Node, so its relative imports carry the mandatory `.js` extension).
+    // When webpack compiles it from SOURCE via the tsconfig `paths` alias
+    // (dev, and any build where workspaceDistReady is false) those `.js`
+    // specifiers must resolve to the sibling `.ts` file — the standard
+    // webpack setting for TypeScript ESM. A no-op for every other module.
+    config.resolve.extensionAlias = {
+      ...(config.resolve.extensionAlias ?? {}),
+      '.js': ['.ts', '.tsx', '.js'],
+    };
+
     // Externalization emits `require()` calls, which only the Node.js runtime
     // can execute. The edge compile (middleware) has no require(): it must
     // bundle everything from source so Next's edge static analysis fails the
@@ -100,8 +112,9 @@ export const nextConfig: NextConfig = {
     // "Native module not found: @pagespace/lib/logging/logger-config").
     if (isServer && nextRuntime === 'nodejs') {
       // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
-      // When workspaceDistReady, also externalize @pagespace/db and @pagespace/lib
-      // so Next emits require('@pagespace/...') calls resolved to their dist/.
+      // When workspaceDistReady, also externalize @pagespace/db, @pagespace/lib
+      // and @pagespace/editor so Next emits require('@pagespace/...') calls
+      // resolved to their dist/.
       const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
@@ -111,7 +124,8 @@ export const nextConfig: NextConfig = {
           request === 'pg-native' ||
           (workspaceDistReady && (
             request.startsWith('@pagespace/db') ||
-            request.startsWith('@pagespace/lib')
+            request.startsWith('@pagespace/lib') ||
+            request.startsWith('@pagespace/editor')
           ))
         ) {
           return callback(null, `commonjs ${request}`);

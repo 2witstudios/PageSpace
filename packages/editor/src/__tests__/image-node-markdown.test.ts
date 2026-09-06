@@ -13,7 +13,7 @@ import { describe, it, expect } from 'vitest';
 import { Editor } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
 import { Markdown } from 'tiptap-markdown';
-import { ImageNode } from '../image-node';
+import { ImageNode } from '../image-node.js';
 
 type MarkdownStorage = { getMarkdown(): string };
 type EditorStorageWithMarkdown = { markdown: MarkdownStorage };

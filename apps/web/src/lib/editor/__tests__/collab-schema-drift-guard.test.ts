@@ -20,7 +20,7 @@ import {
   hashProjection,
   SCHEMA_HASH,
   COLLAB_SCHEMA_VERSION,
-} from '../collab-schema';
+} from '@pagespace/editor/collab-schema';
 import { clientExtensions } from '../client-schema';
 
 const EDITOR_DIR = join(dirname(fileURLToPath(import.meta.url)), '..');

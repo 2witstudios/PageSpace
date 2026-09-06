@@ -1,5 +1,5 @@
 import { Node, mergeAttributes } from '@tiptap/core';
-import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
+import { simpleDataAttr } from './simple-data-attr.js';
 
 /**
  * The `image` node — included in v1 despite the census finding only 9
