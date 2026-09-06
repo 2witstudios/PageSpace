@@ -19,9 +19,24 @@ import type { TextAnchor } from './types';
 /** How much surrounding text a TextAnchor carries on each side. ~64 bytes total. */
 export const ANCHOR_CONTEXT_LENGTH = 32;
 
-const FNV_OFFSET_BASIS = 0xcbf29ce484222325n;
-const FNV_PRIME = 0x100000001b3n;
-const FNV_MASK = 0xffffffffffffffffn;
+/*
+ * BigInt CALLS, not BigInt literals.
+ *
+ * `0xcbf29ce484222325n` requires an ES2020 target. This module is pure and was
+ * only ever imported by other lib code until `tag-service` reached it, and
+ * `apps/web` compiles at ES2018 — so the moment anything in the web app pulled
+ * this file in transitively, `web#build` failed with "BigInt literals are not
+ * available when targeting lower than ES2020". The literal was latent, not
+ * safe.
+ *
+ * `BigInt('0x…')` is a runtime call rather than literal syntax, compiles at
+ * ES2018, and produces the identical value — so `hashText` output is unchanged
+ * and every anchor already stored still verifies. Raising the web app's target
+ * would also work, but that is a build-wide change to fix one constant here.
+ */
+const FNV_OFFSET_BASIS = BigInt('0xcbf29ce484222325');
+const FNV_PRIME = BigInt('0x100000001b3');
+const FNV_MASK = BigInt('0xffffffffffffffff');
 
 /**
  * FNV-1a over the UTF-16 code units of `text`, as 16 lowercase hex chars.

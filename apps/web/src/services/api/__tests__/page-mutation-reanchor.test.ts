@@ -53,6 +53,9 @@ function queryBuilder(rows: unknown[]) {
   return chain;
 }
 
+/** The nested executor the sweep receives — a SAVEPOINT, not the outer tx. */
+const savepoint = { __savepoint: true } as unknown as Record<string, unknown>;
+
 /**
  * The transaction handed to the mutation body.
  *
@@ -61,7 +64,21 @@ function queryBuilder(rows: unknown[]) {
  * identity check rather than a shape check. A shape check would pass for the db
  * singleton too, which is the bug being guarded against.
  */
-const transaction = queryBuilder([currentPage]);
+const transaction = queryBuilder([currentPage]) as Record<string, unknown> & {
+  transaction: ReturnType<typeof vi.fn>;
+};
+/** Records whether the savepoint body threw, i.e. whether it would have rolled back. */
+const savepointRolledBack = { value: false };
+transaction.transaction = vi.fn(async (fn: (sp: unknown) => Promise<unknown>) => {
+  savepointRolledBack.value = false;
+  try {
+    return await fn(savepoint);
+  } catch (error) {
+    // A real SAVEPOINT unwinds here, clearing the aborted transaction state.
+    savepointRolledBack.value = true;
+    throw error;
+  }
+});
 
 vi.mock('@pagespace/db/db', () => ({
   db: {
@@ -110,9 +127,12 @@ describe('applyPageMutation re-anchors content tags', () => {
     expect(pageId).toBe('page-1');
     expect(oldContent).toBe('the original content');
     expect(newContent).toBe('the edited content');
-    // Identity check, not a truthiness check: the sweep must run on the SAME
-    // transaction as the content write, not on the db singleton.
-    expect(options.executor).toBe(transaction);
+    // The sweep runs on the SAVEPOINT, not the outer transaction and not the db
+    // singleton. A savepoint is still inside the caller's transaction — so the
+    // anchors commit with the content — but a failure inside it can be rolled
+    // back without poisoning the outer one.
+    expect(options.executor).toBe(savepoint);
+    expect(transaction.transaction).toHaveBeenCalledTimes(1);
   });
 
   it('passes the PRE-update mode as the old one across a conversion', async () => {
@@ -135,16 +155,18 @@ describe('applyPageMutation re-anchors content tags', () => {
     expect(mockReanchor).not.toHaveBeenCalled();
   });
 
-  it('logs a failed sweep instead of failing the save', async () => {
-    // Degraded anchors are recoverable by a later repair pass; a refused page
-    // save is not. reanchorPageTags returns a result rather than throwing, so
-    // it cannot roll the caller's transaction back.
+  it('rolls the savepoint back on a failed sweep and still completes the save', async () => {
+    // Catching the exception is NOT enough on its own: Postgres marks the whole
+    // transaction aborted on any statement error, so a failed UPDATE inside the
+    // sweep would make every LATER statement fail and roll back the page edit.
+    // The savepoint has to unwind for the outer transaction to stay usable.
     mockReanchor.mockResolvedValueOnce({ ok: false as const, error: 'internal_error' } as never);
 
     await expect(
       applyPageMutation({ ...baseInput, updates: { content: 'still saves' } } as never),
     ).resolves.toBeDefined();
 
+    expect(savepointRolledBack.value, 'the savepoint must unwind so the outer tx survives').toBe(true);
     expect(mockLogError).toHaveBeenCalled();
   });
 });
