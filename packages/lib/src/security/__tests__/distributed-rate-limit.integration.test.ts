@@ -205,7 +205,10 @@ describe('distributed-rate-limit integration (Postgres)', () => {
 
     const total = rows.reduce((s, r) => s + r.count, 0);
     expect(total).toBe(N);
-  });
+    // 50 upserts contend for one row lock and serialize, and the bucket-edge
+    // guard above can sleep up to ~1s; on a loaded CI runner that legitimately
+    // exceeds vitest's 5s default. This test asserts atomicity, not latency.
+  }, 30_000);
 
   it('resetDistributedRateLimit clears counters for the identifier', async () => {
     if (!dbAvailable) return;
