@@ -93,7 +93,7 @@ function ChatMock() {
           <div className="who"><span className="n">Product AI</span><span className="agent-badge">agent</span></div>
           <div className="mbody2" style={{ marginBottom: 8 }}>On it — reading the spec, then I&rsquo;ll create the plan.</div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-            <div className="toolcard"><Ico name="checkCircle" size="ok" />read_page <span className="mono">Requirements</span></div>
+            <div className="toolcard"><Ico name="checkCircle" size="ok" />Read Page <span className="mono">Requirements</span></div>
             <div className="toolcard"><Ico name="checkCircle" size="ok" />create_page <span className="mono">Launch Plan</span></div>
           </div>
         </div>

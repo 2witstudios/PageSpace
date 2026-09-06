@@ -5,6 +5,9 @@ const nextConfig: NextConfig = {
   assetPrefix: '/_marketing',
   images: {
     path: '/_marketing/_next/image',
+    // AVIF first: the hero backdrop is a full-bleed photo and AVIF lands it
+    // ~30-40% smaller than WebP at the same quality.
+    formats: ['image/avif', 'image/webp'],
   },
   async redirects() {
     return [

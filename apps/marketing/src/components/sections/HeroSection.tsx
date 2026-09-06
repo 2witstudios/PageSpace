@@ -1,3 +1,4 @@
+import Image from "next/image";
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
 import { APP_URL } from "@/lib/metadata";
@@ -12,6 +13,21 @@ import { ScaledAppWindow } from "./landing/ScaledAppWindow";
 export function HeroSection() {
   return (
     <section className="hero">
+      {/* Space backdrop. next/image negotiates AVIF/WebP and picks a width for
+          the viewport (~70-280 KB at q90); `priority` preloads it since it is
+          the LCP candidate. The inline blur paints the dark field instantly. */}
+      <Image
+        className="hero-bg"
+        src="/hero-space.webp"
+        alt=""
+        fill
+        priority
+        fetchPriority="high"
+        sizes="100vw"
+        quality={90}
+        placeholder="blur"
+        blurDataURL="data:image/webp;base64,UklGRnIAAABXRUJQVlA4IGYAAAAQBACdASoYAAoAPtFapEwoJSOiMAgBABoJZACdMoAKOILPbRUwIYbwsAD+/re+Pv0MN+A1bR7I/7yCzqImeck6gy0aV0OsD81MyQafLMicOSPnAvKKaENGBgRjKZhqKF8e1s+QAAA="
+      />
       <div className="hero-in">
         <div className="hero-cap">
           <h1 className="hero-h">The AI for working</h1>
@@ -121,11 +137,11 @@ export function HeroSection() {
               </div>
               <div className="aw-conv">
                 <div className="aw-you"><span className="n">You</span><p>Prep next week&rsquo;s launch from the spec.</p></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">read_page</span><span className="ds">Spec</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">create_task</span><span className="ds">Launch Tasks · 6</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">replace_lines</span><span className="ds">Launch Plan</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">gh_issue</span><span className="ds">#214</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
-                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">edit_sheet</span><span className="ds">Budget · B5</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">Read Page</span><span className="ds">Spec</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">Create Task</span><span className="ds">Launch Tasks · 6</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">Replace Lines</span><span className="ds">Launch Plan</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">GitHub Issue</span><span className="ds">#214</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
+                <div className="aw-tool"><Ico name="chevR" size="i13" style={{ color: "var(--muted-foreground)" }} /><span className="nm">Edit Sheet</span><span className="ds">Budget · B5</span><svg className="i i13 ok" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg></div>
                 <div className="aw-done">Done — read the spec, built the task list, wrote this plan, filed the issue, and balanced the budget.</div>
               </div>
               <div className="aw-composer">
