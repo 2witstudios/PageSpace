@@ -329,7 +329,8 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
   comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
   "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
-  "Renews" date.
+  "Renews" date. Every Free account receives a one-time email explaining the change, quoting
+  the exact balance they keep, and pointing to top-ups and the Pro plan.
 
 - **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
   sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
