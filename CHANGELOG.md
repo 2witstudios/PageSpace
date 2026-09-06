@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
+  enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
+  keeps a live, outbound-only connection to PageSpace and answers requests to run a command or
+  read/write a file, but only after each request's server-signed grant verifies on the machine
+  and the machine owner's own local policy file allows it: who may drive the machine, which
+  operations, inside which directories, with which environment variables, and with what output
+  and time caps. Without a policy file the machine connects but denies everything. A prompt mode
+  asks the owner in their terminal before an unlisted operation runs. Every decision is written to
+  a local audit log carrying the same grant id PageSpace records, so the two sides can be
+  compared. Deleting the Environment revokes the machine: its key is deleted on the spot and it
+  stops reconnecting. Terminal (PTY) sessions on local machines are not served yet. Still off by
+  default (`LOCAL_ENVS_ENABLED`).
 - **Local Environments: your enrolled computer can now hold a live connection, and you can
   revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
   addressed to its Environment, proves it is the machine you enrolled with a signed hello
