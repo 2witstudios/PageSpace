@@ -97,7 +97,7 @@ describe('forwardPreviewRequest', () => {
 
   it('cuts a response that exceeds the byte cap', async () => {
     const { fetchImpl } = await upstream((_req, res) => { res.writeHead(200); res.end(Buffer.alloc(2048, 1)); });
-    const limits = { ...PREVIEW_PROXY_LIMITS, maxResponseBodyBytes: 1024 };
+    const limits = Object.freeze({ ...PREVIEW_PROXY_LIMITS, maxResponseBodyBytes: 1024 });
     const outcome = await forwardPreviewRequest({ request: new Request('https://x/big'), pathAndQuery: '/big', spriteUrl: SPRITE, token: 't', appOrigin: null, fetchImpl, limits });
     expect(outcome.kind).toBe('response');
     if (outcome.kind !== 'response') return;
@@ -106,7 +106,7 @@ describe('forwardPreviewRequest', () => {
 
   it('answers 504 when the upstream never sends headers within the bound, and 502 when it cannot be reached', async () => {
     const { fetchImpl } = await upstream(() => { /* never answers */ });
-    const limits = { ...PREVIEW_PROXY_LIMITS, upstreamHeadersTimeoutMs: 50 };
+    const limits = Object.freeze({ ...PREVIEW_PROXY_LIMITS, upstreamHeadersTimeoutMs: 50 });
     const slow = await forwardPreviewRequest({ request: new Request('https://x/'), pathAndQuery: '/', spriteUrl: SPRITE, token: 't', appOrigin: null, fetchImpl, limits });
     expect(slow).toMatchObject({ kind: 'upstream-error', status: 504 });
 

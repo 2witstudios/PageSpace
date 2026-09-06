@@ -72,7 +72,7 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview/open', () => {
     expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
   });
 
-  it.each([
+  it.each<Record<string, string>>([
     { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'iframe' },
     { 'sec-fetch-site': 'same-site', 'sec-fetch-dest': 'iframe' },
     { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'empty' },

@@ -46,8 +46,15 @@
  * Public exposure is a separate task with its own containment ruling.
  */
 
+export interface PreviewProxyLimits {
+  maxRequestBodyBytes: number;
+  maxResponseBodyBytes: number;
+  upstreamHeadersTimeoutMs: number;
+  streamIdleTimeoutMs: number;
+}
+
 /** Byte and time bounds on one proxied request. Named so the log can say which one fired. */
-export const PREVIEW_PROXY_LIMITS = Object.freeze({
+export const PREVIEW_PROXY_LIMITS: Readonly<PreviewProxyLimits> = Object.freeze({
   /** A dev server takes form posts and uploads, not bulk data. */
   maxRequestBodyBytes: 32 * 1024 * 1024,
   /** Source maps and unbundled dev assets are big; whole-app bundles are not served here. */

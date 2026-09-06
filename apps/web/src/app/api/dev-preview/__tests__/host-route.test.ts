@@ -40,20 +40,21 @@ import { getPreviewCookieKey, getPreviewGrantsStore, resolvePreviewOpenPath, res
 const APEX = 'pagespace-preview.app';
 const KEY = derivePreviewCookieKey('s'.repeat(40));
 const HOST = `env-env1.preview.${APEX}`;
-const HOLDER = { kind: 'env', id: 'env1' } as const;
+type Holder = { kind: 'workspace' | 'env'; id: string };
+const HOLDER: Holder = { kind: 'env', id: 'env1' };
 const consume = vi.fn();
 
-function cookie(holder = HOLDER, expiresAt = Date.now() + 60_000): string {
+function cookie(holder: Holder = HOLDER, expiresAt = Date.now() + 60_000): string {
   return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', expiresAt }, KEY)}`;
 }
 
-function req(path: string, init: RequestInit & { host?: string } = {}): NextRequest {
-  const { host = HOST, ...rest } = init;
-  const headers = new Headers(rest.headers);
+function req(path: string, init: { host?: string; method?: string; body?: string; headers?: Record<string, string> } = {}): NextRequest {
+  const { host = HOST, method, body, headers: given } = init;
+  const headers = new Headers(given);
   headers.set('host', host);
-  return new NextRequest(`https://${host}/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}${path}`, { ...rest, headers });
+  return new NextRequest(`https://${host}/api/dev-preview/host/${HOLDER.kind}/${HOLDER.id}${path}`, { method, body, headers });
 }
-const ctx = (kind = HOLDER.kind, holderId = HOLDER.id) => ({ params: Promise.resolve({ kind, holderId }) });
+const ctx = (kind: string = HOLDER.kind, holderId: string = HOLDER.id) => ({ params: Promise.resolve({ kind, holderId }) });
 
 beforeEach(() => {
   vi.clearAllMocks();

@@ -28,6 +28,7 @@ import {
   selectForwardableRequestHeaders,
   selectForwardableResponseHeaders,
   type HeaderMap,
+  type PreviewProxyLimits,
 } from '@pagespace/lib/services/sandbox/preview/preview-proxy-policy';
 import { sanitizeUpstreamSetCookie } from '@pagespace/lib/services/sandbox/preview/preview-grant';
 
@@ -39,7 +40,7 @@ export interface ForwardPreviewRequestInput {
   token: string;
   appOrigin: string | null;
   fetchImpl?: typeof fetch;
-  limits?: typeof PREVIEW_PROXY_LIMITS;
+  limits?: Readonly<PreviewProxyLimits>;
 }
 
 export type ForwardPreviewOutcome =
