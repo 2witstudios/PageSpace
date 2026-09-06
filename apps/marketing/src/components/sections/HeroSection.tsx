@@ -14,7 +14,7 @@ export function HeroSection() {
   return (
     <section className="hero">
       {/* Space backdrop. next/image negotiates AVIF/WebP and picks a width for
-          the viewport (~25-145 KB at q60); `priority` preloads it since it is
+          the viewport (~70-280 KB at q90); `priority` preloads it since it is
           the LCP candidate. The inline blur paints the dark field instantly. */}
       <Image
         className="hero-bg"
@@ -24,9 +24,9 @@ export function HeroSection() {
         priority
         fetchPriority="high"
         sizes="100vw"
-        quality={60}
+        quality={90}
         placeholder="blur"
-        blurDataURL="data:image/webp;base64,UklGRnAAAABXRUJQVlA4IGQAAAAQBACdASoYAAoAPtFYpkwoJSOiMAgBABoJZACdMoAKQw9BMKr6iiDlWAD+/re+PbanR8qjsEn7npIBrBQK6sYqQ/B9PGByqwbKUI8AAKlsNvwoEd4Tj6Xm/xI/jzT7gXAXAIAA"
+        blurDataURL="data:image/webp;base64,UklGRnIAAABXRUJQVlA4IGYAAAAQBACdASoYAAoAPtFapEwoJSOiMAgBABoJZACdMoAKOILPbRUwIYbwsAD+/re+Pv0MN+A1bR7I/7yCzqImeck6gy0aV0OsD81MyQafLMicOSPnAvKKaENGBgRjKZhqKF8e1s+QAAA="
       />
       <div className="hero-in">
         <div className="hero-cap">
