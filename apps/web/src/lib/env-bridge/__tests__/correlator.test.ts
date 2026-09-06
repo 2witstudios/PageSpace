@@ -150,6 +150,14 @@ describe('RequestCorrelator', () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it('should name the group a pending id belongs to, and nothing once it is answered', async () => {
+    correlator.open({ id: 'r1', group: 'env-a', timeoutMs: 1_000, send: () => {} }).catch(() => {});
+    expect(correlator.groupOf('r1')).toBe('env-a');
+    expect(correlator.groupOf('nope')).toBeUndefined();
+    correlator.resolve('r1', 'done');
+    expect(correlator.groupOf('r1')).toBeUndefined();
+  });
+
   it('given an id already pending, should reject the second open as duplicate_id and leave the first untouched', async () => {
     const first = settled(correlator.open({ id: 'r1', group: 'g', timeoutMs: 1_000, send: () => {} }));
     const send = vi.fn();

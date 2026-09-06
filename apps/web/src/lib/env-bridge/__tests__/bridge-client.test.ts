@@ -43,6 +43,9 @@ function socket(): FakeSocket {
 }
 
 const principal = { userId: 'user-1', sessionId: 'sess-1', conversationId: 'conv-1' };
+const flushPromises = async () => {
+  for (let i = 0; i < 5; i += 1) await Promise.resolve();
+};
 
 /** Distributive: `Omit` over the union would collapse it to the common keys. */
 type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'> : never;
@@ -152,16 +155,33 @@ describe('EnvBridgeClient', () => {
     expect(client.handleMachineResult(socket(), result)).toBe('dropped_unregistered_socket');
   });
 
-  it('given a result arriving on ANOTHER env\'s socket, should verify under THAT socket\'s pinned key — a machine cannot answer for another machine', async () => {
+  it('given env B signs a result for env A\'s pending grant WITH ITS OWN pinned key and sends it on its own socket, should refuse it before crypto and leave A\'s request pending (Codex P1: the sending socket must be the env that owns the grant)', async () => {
     const wsA = connect('env-a');
-    connect('env-b', { machinePublicKey: rogue.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
-    const wsB = sockets.get('env-b')!;
+    const wsB = connect('env-b', { machinePublicKey: rogue.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
     const pending = client.sendGrant({ envId: 'env-a', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
-    const result = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false });
-    // Signed by env-a's machine but delivered over env-b's socket: env-b's key does not verify it.
-    expect(client.handleMachineResult(wsB, result)).toBe('unverified');
-    await expect(pending).rejects.toMatchObject({ kind: 'unverified_result' });
-    expect(wsA.sent).toHaveLength(1);
+    let state = 'pending';
+    pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
+    // B's key is the one pinned for B's socket — this WOULD verify if the socket's key were the only check.
+    const forgedByB = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: 'cHduZWQ=', stderrB64: '', truncated: false }, rogue);
+    expect(client.handleMachineResult(wsB, forgedByB)).toBe('dropped_wrong_env');
+    await flushPromises();
+    expect(state).toBe('pending');
+    expect(client.pendingCountForEnv('env-a')).toBe(1);
+    expect(unverified).toEqual([{ envId: 'env-b', grantId: 'g-1', reason: 'wrong_env' }]);
+    // The real owner can still answer.
+    const genuine = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: 'b2s=', stderrB64: '', truncated: false });
+    expect(client.handleMachineResult(wsA, genuine)).toBe('delivered');
+    await expect(pending).resolves.toEqual(genuine);
+  });
+
+  it('given a result for env A\'s pending grant arriving on env B\'s socket but signed with A\'s key, should still be refused as wrong env (the socket, not the signature, names the sender)', async () => {
+    connect('env-a');
+    const wsB = connect('env-b', { machinePublicKey: rogue.publicKey.export({ type: 'spki', format: 'der' }).toString('base64') });
+    const pending = client.sendGrant({ envId: 'env-a', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+    pending.catch(() => {});
+    const signedByA = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false });
+    expect(client.handleMachineResult(wsB, signedByA)).toBe('dropped_wrong_env');
+    expect(client.pendingCountForEnv('env-a')).toBe(1);
   });
 
   it('given no authorized socket for the env, should fail typed not_connected and send nothing', async () => {

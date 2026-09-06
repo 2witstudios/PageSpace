@@ -56,7 +56,7 @@ export interface EnvBridgeClientDeps {
   readonly onUnverified?: (info: { envId: string; grantId: string; frameType: MachineResultFrame['type']; reason: string }) => void;
 }
 
-export type MachineResultDisposition = 'delivered' | 'unverified' | 'dropped_unknown_grant' | 'dropped_unregistered_socket';
+export type MachineResultDisposition = 'delivered' | 'unverified' | 'dropped_unknown_grant' | 'dropped_unregistered_socket' | 'dropped_wrong_env';
 
 export class EnvBridgeClient {
   private readonly log = logger.child({ component: 'env-bridge-client' });
@@ -100,9 +100,16 @@ export class EnvBridgeClient {
 
   /**
    * A result frame arrived on `ws`. Cheap checks first (is the socket ours, is
-   * the grant pending), THEN the signature, and only a verified result is
-   * delivered. An unverified result fails the pending request with
-   * `unverified_result` — the agent never sees its contents.
+   * the grant pending, is THIS socket's env the env that owns the pending
+   * request), THEN the signature, and only a verified result is delivered.
+   *
+   * The env binding is load-bearing (Codex P1 on #2543): verification runs
+   * under the SENDING socket's pinned key, so without it an authorized env B
+   * that learned env A's pending grantId could sign a result with its own key,
+   * verify, and answer A's request. A result from any env other than the
+   * request's owner is refused before crypto and the request stays pending
+   * for its real owner. An unverified result from the owning env fails the
+   * request with `unverified_result` — the agent never sees its contents.
    */
   handleMachineResult(ws: WebSocket, frame: MachineResultFrame): MachineResultDisposition {
     const facts = this.deps.getSocketFacts(ws);
@@ -110,9 +117,15 @@ export class EnvBridgeClient {
       this.log.warn('Result frame from an unregistered socket dropped', { grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unregistered_socket';
     }
-    if (!this.deps.correlator.has(frame.grantId)) {
+    const owner = this.deps.correlator.groupOf(frame.grantId);
+    if (owner === undefined) {
       this.log.warn('Result frame for an unknown grant dropped', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unknown_grant';
+    }
+    if (owner !== facts.envId) {
+      this.log.error('Result frame from an env that does not own the grant refused — request stays pending for its owner', { envId: facts.envId, ownerEnvId: owner, grantId: frame.grantId, frameType: frame.type, action: 'result_wrong_env' });
+      this.deps.onUnverified?.({ envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: 'wrong_env' });
+      return 'dropped_wrong_env';
     }
     const verified = verifyResultFromMachine({ frame, machinePublicKey: facts.machinePublicKey });
     if (!verified.ok) {

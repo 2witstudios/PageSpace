@@ -482,6 +482,24 @@ describe('env-bridge ws route', () => {
       expect(events()).toContain('env_bridge_result_unverified');
     });
 
+    it('given env B answers env A\'s pending grant on its own socket with its own key, should refuse it, audit at high risk, and leave A\'s request pending', async () => {
+      const wsA = await connectAuthorized();
+      vi.mocked(sessionService.validateSession).mockResolvedValue(claimsFor({ resourceId: ENV_B, sessionId: 'sess-2' }) as never);
+      const wsB = await connectAuthorized(ENV_B, machineB);
+      const pending = getEnvBridgeClient().sendGrant({ envId: ENV, frame: { type: 'grant_exec', cmd: 'ls' }, principal });
+      let state = 'pending';
+      pending.then(() => (state = 'resolved'), () => (state = 'rejected'));
+      const grantFrame = lastSent(wsA);
+      if (grantFrame.type !== 'grant_exec') throw new Error('grant not sent');
+      const grantId = (grantFrame.grant as { grantId: string }).grantId;
+      wsB.emit('message', Buffer.from(signedResult({ type: 'exec_result', grantId, exitCode: 0, stdoutB64: 'cHduZWQ=', stderrB64: '', truncated: false }, machineB)));
+      await flush();
+      expect(state).toBe('pending');
+      expect(events()).toContain('env_bridge_result_wrong_env');
+      wsA.emit('message', Buffer.from(signedResult({ type: 'exec_result', grantId, exitCode: 0, stdoutB64: 'b2s=', stderrB64: '', truncated: false })));
+      await expect(pending).resolves.toMatchObject({ exitCode: 0, stdoutB64: 'b2s=' });
+    });
+
     it('given a result for a grant nothing is waiting on, should drop it and audit', async () => {
       const ws = await connectAuthorized();
       ws.emit('message', Buffer.from(signedResult({ type: 'grant_denied', grantId: 'g-nobody', reason: 'x' })));

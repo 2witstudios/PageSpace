@@ -378,6 +378,8 @@ export async function UPGRADE(client: WebSocket, server: WebSocketServer, reques
       const disposition = getEnvBridgeClient().handleMachineResult(client, frame);
       if (disposition === 'unverified') {
         dropFrame('env_bridge_result_unverified', { grantId: frame.grantId, frameType: frame.type }, 0.8);
+      } else if (disposition === 'dropped_wrong_env') {
+        dropFrame('env_bridge_result_wrong_env', { grantId: frame.grantId, frameType: frame.type }, 0.8);
       } else if (disposition !== 'delivered') {
         dropFrame('env_bridge_result_dropped', { grantId: frame.grantId, frameType: frame.type, disposition }, 0.3);
       }

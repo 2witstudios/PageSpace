@@ -161,6 +161,11 @@ export class RequestCorrelator<T> {
     return this.pending.has(id);
   }
 
+  /** The group a pending id belongs to — the env that OWNS the request; undefined when nothing is pending under `id`. */
+  groupOf(id: string): string | undefined {
+    return this.pending.get(id)?.group;
+  }
+
   pendingCount(): number {
     return this.pending.size;
   }
