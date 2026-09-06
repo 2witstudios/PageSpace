@@ -446,9 +446,8 @@ export function checkEnvConnectionHealth(ws: WebSocket): EnvConnectionHealthChec
   return { isHealthy: true, readyState: ws.readyState, lastPing: metadata.lastPing, connectedDuration: Date.now() - metadata.connectedAt.getTime() };
 }
 
-/** @internal testing only */
+/** @internal testing only — clears connection STATE; lost listeners are module wiring (the bridge client subscribes once) and stay. */
 export function clearAllEnvConnectionsForTesting(): void {
   connections.clear();
   connectionMetadata.clear();
-  lostListeners.clear();
 }

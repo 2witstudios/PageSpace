@@ -48,6 +48,7 @@ import {
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
+import { readEnvLiveConnection } from '@/lib/websocket/ws-env-connections';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -226,10 +227,10 @@ export async function redeemEnvChallenge(input: { enrollmentId: string; response
 
 export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
   const store = await getDriveEnvStore();
-  // `liveConnection` is this replica's bridge-socket registry. Until the
-  // env-bridge socket route lands there is no registry, so a local env's status
-  // is derived from its heartbeat alone (`deriveLocalEnvStatus`).
-  return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection: () => null } });
+  // `liveConnection` is THIS replica's bridge-socket registry (t07): a socket
+  // held here wins; otherwise a local env's status derives from its heartbeat
+  // (`deriveLocalEnvStatus`), which whichever replica holds the socket writes.
+  return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection: readEnvLiveConnection } });
 }
 
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
@@ -261,7 +262,7 @@ export async function ensureEnvSandboxForSession(input: {
     envId: input.envId,
     intent: input.intent,
     requesterId: input.requesterId,
-    deps: { store, host, resolvePayer: resolveDriveEnvPayer },
+    deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection },
   });
 }
 
@@ -277,7 +278,7 @@ export async function gateLocalEnvBind(input: { envId: string; requesterId: stri
   const store = await getDriveEnvStore();
   const row = await store.findById(input.envId);
   if (!row) return { ok: false, refusal: 'revoked' };
-  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer } });
+  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection } });
 }
 
 /**
@@ -305,7 +306,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
           requesterId: input.requesterId,
-          deps: { store, host, resolvePayer: resolveDriveEnvPayer },
+          deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection },
         }),
     },
   });

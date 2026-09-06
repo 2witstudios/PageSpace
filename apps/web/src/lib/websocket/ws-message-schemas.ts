@@ -2,9 +2,25 @@
  * WebSocket Message Validation Schemas
  * Zod schemas for all WebSocket message types (MCP bridge + fetch bridge)
  * Provides runtime validation and type safety
+ *
+ * The ENV BRIDGE's closed frame set is registered here BY IMPORT from the pure
+ * core (`@pagespace/lib/env-bridge/frame-codec`) — never duplicated: the daemon
+ * and the server must decode the same schema, and there is exactly one.
  */
 
 import { z } from 'zod';
+
+export {
+  decodeFrame as decodeEnvBridgeFrame,
+  encodeFrame as encodeEnvBridgeFrame,
+  isMachineToServerFrame as isEnvBridgeMachineFrame,
+  FRAME_TYPES as ENV_BRIDGE_FRAME_TYPES,
+  type Frame as EnvBridgeFrame,
+  type FrameLimits as EnvBridgeFrameLimits,
+} from '@pagespace/lib/env-bridge/frame-codec';
+
+/** One frame may be at most the socket's message ceiling (`MAX_MESSAGE_SIZE` in ws-security, 1 MiB), checked in BYTES before parsing. */
+export const ENV_BRIDGE_FRAME_LIMITS = { maxFrameBytes: 1024 * 1024 } as const;
 
 /**
  * Base message schema with common fields
