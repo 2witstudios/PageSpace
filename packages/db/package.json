@@ -295,6 +295,14 @@
       "types": "./dist/schema/drive-envs.d.ts",
       "default": "./dist/schema/drive-envs.js"
     },
+    "./schema/dev-preview-services": {
+      "types": "./dist/schema/dev-preview-services.d.ts",
+      "default": "./dist/schema/dev-preview-services.js"
+    },
+    "./schema/dev-preview-grants": {
+      "types": "./dist/schema/dev-preview-grants.d.ts",
+      "default": "./dist/schema/dev-preview-grants.js"
+    },
     "./schema/drive-env-local": {
       "types": "./dist/schema/drive-env-local.d.ts",
       "default": "./dist/schema/drive-env-local.js"

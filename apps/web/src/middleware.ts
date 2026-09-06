@@ -14,6 +14,8 @@ import {
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { parsePreviewHost, rewritePreviewHostPath } from '@pagespace/lib/services/sandbox/preview/preview-host';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -133,6 +135,25 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     if (isPublishedSiteHost(req.headers.get('host'))) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
       return new NextResponse(null, { status: 404, headers: response.headers });
+    }
+
+    // Dev-server preview hosts (`<kind>-<holderId>.preview.<apex>`): the
+    // request is for a holder's proxied dev server, not for the dashboard.
+    // Rewrite it onto the host route — the holder rides in the path, the
+    // original pathname rides along verbatim — and let NOTHING else in this
+    // middleware touch it: no session redirect (the preview host authenticates
+    // with its own host-only cookie, checked in the route), no origin
+    // validation (the caller IS a foreign origin by design), and no security
+    // headers (the app's `X-Frame-Options: DENY` and API CSP would blank the
+    // frame; the route sets the preview's own headers). Only when the feature
+    // is enabled AND an apex is configured — otherwise these hosts do not
+    // exist and the request falls through to the normal 404.
+    const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+    const previewHolder = previewApex === null ? null : parsePreviewHost(req.headers.get('host'), previewApex);
+    if (previewHolder !== null) {
+      const rewritten = new URL(req.url);
+      rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
+      return NextResponse.rewrite(rewritten);
     }
 
     // Non-cloud route blocking (defense-in-depth)
@@ -464,6 +485,19 @@ export const config = {
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },
       ],
+    },
+    // Dev-preview hosts (`<kind>-<id>.preview.<apex>`): EVERY request must reach
+    // the middleware so it is rewritten onto the preview route — including
+    // `/_next/static/*` and `/_next/image` (a proxied Next dev server serves
+    // its own `/_next/*`, and PageSpace's own chunks/optimizer must never be
+    // reachable on a preview origin) and including prefetches (a sandbox's
+    // HTML could carry `<link rel=prefetch>`, and a request that skipped the
+    // rewrite would reach App Router routes on the preview apex, defeating
+    // host confinement). Hence a second entry with no exclusions and no
+    // `missing`, keyed on the host shape; the route still validates the apex.
+    {
+      source: '/:path*',
+      has: [{ type: 'host', value: '.*\\.preview\\..*' }],
     },
   ],
 };

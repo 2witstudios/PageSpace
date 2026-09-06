@@ -73,6 +73,8 @@ import {
 import { MAX_ACTIVE_WORKSPACES_PER_OWNER, type AgentSessionDTO } from '@pagespace/lib/agent-workspaces/session-contract';
 import { decideAgentSessionAccess } from '@pagespace/lib/agent-workspaces/decide-workspace-access';
 import { MAX_SESSION_CONVERSATIONS } from '@pagespace/lib/agent-workspaces/plan-spawn-worker';
+import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { requestDevPreviewWatch } from '@/lib/dev-preview/detection-trigger';
 import { conversationRepository } from '@/lib/repositories/conversation-repository';
 import { emitConversationLifecycle, type BumpedConversationRow } from '@/lib/repositories/conversation-rev';
 import { resolveOrCreateConversation } from '@/lib/repositories/resolve-or-create-conversation';
@@ -1141,7 +1143,7 @@ export async function provisionSessionSandbox(
     return { ok: false, reason: 'provision_failed', detail: tenant.reason };
   }
 
-  return ensureAgentSessionSandbox({
+  const result = await ensureAgentSessionSandbox({
     row: { ...row, workspaceId: row.id },
     intent: 'ensure',
     actor: { userId: requesterId, tenantId: tenant.tenantId },
@@ -1208,6 +1210,11 @@ export async function provisionSessionSandbox(
       now: () => new Date(),
     },
   });
+  // The sprite is up: ask realtime to watch it for dev servers (dark unless
+  // the preview feature is configured; fire-and-forget). The HOLDER is the
+  // env for an env-bound session — whoever owns the sprite pointer.
+  if (result.ok) requestDevPreviewWatch({ holder: resolveDevPreviewHolder(row) });
+  return result;
 }
 
 /**

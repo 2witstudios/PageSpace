@@ -22,6 +22,7 @@ import {
   type SandboxHandle,
   type SandboxHost,
   type SandboxPortEvent,
+  type SandboxPowerState,
   type SandboxServiceInfo,
   type SandboxServiceStatus,
   type SandboxServicesApi,
@@ -154,6 +155,19 @@ export function normalizeSpriteService(record: SpriteServiceRecordLike): Sandbox
  */
 export function normalizeSpriteUrlAuth(auth: string | undefined): SandboxUrlAuth {
   return auth === 'public' || auth === 'sprite' ? auth : 'unknown';
+}
+
+/**
+ * Pure: map the wire's sprite `status` onto the closed power-state union.
+ * `'running'` is awake; `'warm'` and `'cold'` are the two hibernated forms
+ * observed live (spike §1 — a fresh create reports `cold`; §6 — idle takes a
+ * running sprite to `warm`). Anything else — including an absent value —
+ * is `'unknown'`, which every consumer must treat as a possible wake.
+ */
+export function normalizeSpritePowerState(status: string | undefined): SandboxPowerState {
+  if (status === 'running') return 'running';
+  if (status === 'warm' || status === 'cold') return 'paused';
+  return 'unknown';
 }
 
 function wrapSpriteServices(getSprite: () => Promise<SpriteInstanceLike>): SandboxServicesApi {
@@ -441,6 +455,11 @@ function wrapSpriteHandle({
     async setUrlAuth(auth): Promise<void> {
       const sprite = await sdk.getSprite(exec.sandboxId);
       await sprite.updateURLSettings({ auth });
+    },
+
+    async powerState(): Promise<SandboxPowerState> {
+      const sprite = await sdk.getSprite(exec.sandboxId);
+      return normalizeSpritePowerState(sprite.status);
     },
   };
 }

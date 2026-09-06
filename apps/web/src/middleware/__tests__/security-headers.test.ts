@@ -118,6 +118,25 @@ describe('Security Headers', () => {
       expect(csp).toContain("frame-ancestors 'none'");
     });
 
+    it('widens frame-src to exactly the preview wildcard ONLY when the flag is on AND an apex is configured', () => {
+      const env = { ...process.env };
+      try {
+        delete process.env.DEV_PREVIEW_ENABLED;
+        delete process.env.DEV_PREVIEW_APEX;
+        const dark = buildCSPPolicy('n');
+        process.env.DEV_PREVIEW_APEX = 'pagespace-preview.app';
+        // Apex set, flag off: byte-identical to dark.
+        expect(buildCSPPolicy('n')).toBe(dark);
+        process.env.DEV_PREVIEW_ENABLED = 'true';
+        const on = buildCSPPolicy('n');
+        expect(on).toContain('https://*.preview.pagespace-preview.app');
+        expect(on).not.toContain('sprites.app');
+        expect(on.replace(' https://*.preview.pagespace-preview.app', '')).toBe(dark);
+      } finally {
+        process.env = { ...env };
+      }
+    });
+
     it('includes base-uri self for base tag protection', () => {
       const csp = buildCSPPolicy('test-nonce');
 

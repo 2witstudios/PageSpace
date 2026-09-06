@@ -12,6 +12,21 @@
  * Everything here is pure and dependency-free so the security logic is exhaustively
  * unit-tested; the operational side — actually executing the probes inside a Sprite
  * against the live backing topology — is a thin shell + an enablement-gate G-check.
+ *
+ * THE INBOUND MODEL — a boundary this module does NOT verify, stated so nobody
+ * assumes it does. Containment is an OUTBOUND property: it proves a Sprite cannot
+ * reach the internal surface. The dev-preview proxy
+ * (`preview/preview-proxy-policy.ts`) makes a Sprite INBOUND-reachable, and an
+ * inbound-reachable open-egress machine is the shape of an open relay. The proxy's
+ * own rules keep it from being one: the upstream is derived from an authorized row
+ * (a holder's dedicated preview origin names the holder; the client never names a
+ * host), exactly one port is reachable (the sprite URL's 8080), the org token stays
+ * server-side, bodies and time are bounded, every request is attributed to a user
+ * and a holder, and the sandbox's code runs on a throwaway origin that shares no
+ * registrable domain with the app. What stays TRUE regardless of the proxy: the
+ * sprite URL is `auth: 'sprite'` (org-token-only — nobody reaches a Sprite except
+ * through PageSpace's gate), and nothing here grants PUBLIC exposure; that is a
+ * separate task with its own gate and its own containment ruling.
  */
 
 /** A single raw probe result: the exit + captured streams of a connectivity attempt. */

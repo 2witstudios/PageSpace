@@ -365,6 +365,7 @@ export function makeHandle(
     },
     urlInfo: async () => ({ url: null, auth: 'unknown' }),
     setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
   };
 }
 

@@ -198,6 +198,16 @@ export interface SandboxUrlInfo {
 }
 
 /**
+ * Whether the machine is currently awake, provider-neutral. `'running'` = a
+ * request reaches it without waking anything; `'paused'` = hibernated (Sprite
+ * `warm`/`cold`), so an inbound URL request, an exec, or a stream open WAKES
+ * it — and a wake is billed (spike §6); `'unknown'` = the backend reported
+ * nothing this seam recognizes. Consumers MUST treat `'unknown'` as "might be
+ * a wake" (fail closed on the billing question), never as awake.
+ */
+export type SandboxPowerState = 'running' | 'paused' | 'unknown';
+
+/**
  * Runtime-managed services on a machine (dev servers — the preview workstream;
  * agent terminals stay exec sessions, per the standing design decision).
  * Verified operations only; every mutation resolves after the backend's own
@@ -278,6 +288,14 @@ export interface SandboxHandle {
    * until the next attach — read it BEFORE mutating, or re-attach to confirm.
    */
   urlInfo(): Promise<SandboxUrlInfo>;
+  /**
+   * The machine's power state, as a CONTROL-PLANE read that does not wake it
+   * (see {@link SandboxPowerState}). The dev-preview proxy asks this before
+   * forwarding: a request to a `'paused'` machine is a wake, and the wake is
+   * gated on the same code-execution posture as a session ensure. Same
+   * per-call `getSprite` pattern as `urlInfo`.
+   */
+  powerState(): Promise<SandboxPowerState>;
   /**
    * Set the machine URL's auth mode. This is a CAPABILITY, not a policy:
    * v1 preview keeps every machine on `'sprite'` (org-token-only), and the

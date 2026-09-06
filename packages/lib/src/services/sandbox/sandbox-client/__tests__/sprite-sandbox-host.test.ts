@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { createSpriteSandboxHost } from '../sprite-sandbox-host';
+import { createSpriteSandboxHost, normalizeSpritePowerState } from '../sprite-sandbox-host';
 import { SandboxSpriteReplacedError, SandboxStreamOpenTimeoutError } from '../../sandbox-host';
 import {
   createSpritesSandboxClient,
@@ -719,6 +719,34 @@ describe('createSpriteSandboxHost', () => {
       const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
 
       await expect(handle.urlInfo()).resolves.toEqual({ url: null, auth: 'unknown' });
+    });
+
+    it('given powerState on a running sprite, should report running', async () => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ status: 'running' }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.powerState()).resolves.toBe('running');
+    });
+
+    it.each(['warm', 'cold'])('given powerState on a %s sprite, should report paused — a request to it is a wake', async (status) => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ status }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.powerState()).resolves.toBe('paused');
+    });
+
+    it('given powerState on a sprite reporting no/unrecognized status, should report unknown — never awake by default', async () => {
+      const { sdk } = makeSdk({ getSprite: async () => fakeSprite({ status: undefined }) });
+      const client = createSpritesSandboxClient({ sdk });
+      const host = createSpriteSandboxHost({ sdk, client });
+      const handle = await host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+
+      await expect(handle.powerState()).resolves.toBe('unknown');
+      expect(normalizeSpritePowerState('suspended')).toBe('unknown');
     });
 
     it('given setUrlAuth, should call updateURLSettings with the requested mode', async () => {
