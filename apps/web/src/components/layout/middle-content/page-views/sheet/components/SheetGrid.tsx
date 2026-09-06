@@ -269,6 +269,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
               wraps={!!format?.wrap}
               isReadOnly={isReadOnly}
               formatStyle={cellFormatToStyle(format) as React.CSSProperties}
+              bar={evaluation.bars?.[address]}
               handlers={handlers}
             />,
           );
@@ -301,6 +302,7 @@ export const SheetGrid: React.FC<SheetGridProps> = ({
       currentSelection.row,
       editingCell,
       evaluation.byAddress,
+      evaluation.bars,
       findAddressSet,
       handlers,
       isReadOnly,

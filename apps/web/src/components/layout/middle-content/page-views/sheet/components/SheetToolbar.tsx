@@ -15,6 +15,7 @@ import {
   PaintBucket,
   Percent,
   Redo2,
+  Palette,
   Snowflake,
   Strikethrough,
   Underline,
@@ -101,6 +102,10 @@ export interface SheetToolbarProps {
   onRedo: () => void;
   onFreezeRows: (rows: number) => void;
   onFreezeColumns: (columns: number) => void;
+  /** Open the conditional-formatting panel. */
+  onOpenConditional: () => void;
+  conditionalOpen: boolean;
+  conditionalCount: number;
   /**
    * Return focus to the grid after a menu or popover closes. Radix hands focus
    * back to the trigger by default, which leaves it on a toolbar button and
@@ -129,6 +134,9 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
   onRedo,
   onFreezeRows,
   onFreezeColumns,
+  onOpenConditional,
+  conditionalOpen,
+  conditionalCount,
   onRefocusGrid,
 }) => {
   const numberKind = format.number?.kind ?? 'auto';
@@ -363,6 +371,18 @@ export const SheetToolbar: React.FC<SheetToolbarProps> = ({
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
+
+        <ToolButton
+          onClick={onOpenConditional}
+          isActive={conditionalOpen}
+          label={
+            conditionalCount > 0
+              ? `Conditional formatting (${conditionalCount} rules)`
+              : 'Conditional formatting'
+          }
+        >
+          <Palette size={16} />
+        </ToolButton>
 
         <ToolButton
           onClick={() => onCommand({ kind: 'clear' })}

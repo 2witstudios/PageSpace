@@ -2,7 +2,9 @@ import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/react';
 import {
+  MAX_CONDITIONAL_RULES,
   createEmptySheet,
+  parseSheetContent,
   serializeSheetContent,
   setCellFormats,
   setColumnFormat,
@@ -213,6 +215,253 @@ describe('SheetView', () => {
     render(<SheetView page={makePage(content)} />);
 
     expect(cellAt('B4').style.backgroundColor).toBe('rgb(254, 226, 226)');
+  });
+
+  it('paints a conditional rule without the grid knowing about rules', () => {
+    // Rules are folded in by the evaluator, so the grid renders them through
+    // the same `cell.format` it already used. This pins that: if the evaluator
+    // ever stopped resolving them, the grid would quietly go back to plain.
+    const sheet = createEmptySheet();
+    sheet.cells.A1 = '150';
+    sheet.conditionalFormats = [
+      {
+        id: 'over-100',
+        kind: 'cell',
+        ranges: ['A1:A9'],
+        condition: { operator: 'greaterThan', value: '100' },
+        format: { background: '#fee2e2' },
+      },
+    ];
+    const content = serializeSheetContent(sheet);
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    expect(cellAt('A1').style.backgroundColor).toBe('rgb(254, 226, 226)');
+    // A cell the rule does not match stays unpainted.
+    expect(cellAt('A2').style.backgroundColor).toBe('');
+  });
+
+  it('draws a data bar behind the value, not instead of it', () => {
+    // A data bar has no CellFormat field to live in, so it travels separately
+    // on the evaluation and is drawn as its own layer. The value must stay
+    // readable — that is the whole reason a bar beats a fill.
+    const sheet = createEmptySheet();
+    Object.assign(sheet.cells, { A1: '0', A2: '10' });
+    sheet.conditionalFormats = [
+      { id: 'bar', kind: 'dataBar', ranges: ['A1:A2'], color: '#3b82f6' },
+    ];
+    const content = serializeSheetContent(sheet);
+    documentState.current = { content, isDirty: false };
+
+    render(<SheetView page={makePage(content)} />);
+
+    const full = cellAt('A2').querySelector('[aria-hidden="true"]') as HTMLElement;
+    expect(full).not.toBeNull();
+    expect(full.style.width).toBe('100%');
+    expect(cellAt('A2').textContent).toContain('10');
+
+    // A zero-length bar is not drawn at all, rather than a zero-width sliver.
+    expect(cellAt('A1').querySelector('[aria-hidden="true"]')).toBeNull();
+  });
+
+  describe('the conditional formatting panel', () => {
+    const openPanel = () => fireEvent.click(screen.getByLabelText(/^Conditional formatting/));
+
+    it('creates a rule that immediately paints the grid', async () => {
+      // The whole point of the panel: a rule made here has to reach the
+      // evaluator and come back as a painted cell, not just sit in state.
+      const sheet = createEmptySheet();
+      Object.assign(sheet.cells, { A1: '150', A2: '10' });
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+
+      // Select A1:A2 so the new rule defaults to that range.
+      fireEvent.mouseDown(cellAt('A1'));
+      fireEvent.mouseDown(cellAt('A2'), { shiftKey: true });
+
+      openPanel();
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      // A fresh single-colour rule compares "greater than" an empty value,
+      // which matches nothing until a value is set — so set one.
+      fireEvent.click(screen.getByRole('button', { name: /^Edit rule:/ }));
+      const value = screen.getByLabelText('Comparison value');
+      fireEvent.blur(value, { target: { value: '100' } });
+
+      expect(cellAt('A1').style.backgroundColor).toBe('rgb(254, 226, 226)');
+      expect(cellAt('A2').style.backgroundColor).toBe('');
+    });
+
+    it('shows the rules already on the sheet, in application order', () => {
+      const sheet = createEmptySheet();
+      sheet.conditionalFormats = [
+        {
+          id: 'first', kind: 'cell', ranges: ['A1:A9'],
+          condition: { operator: 'isNotEmpty' }, format: { bold: true },
+        },
+        { id: 'second', kind: 'dataBar', ranges: ['B1:B9'], color: '#3b82f6' },
+      ];
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      openPanel();
+
+      const rows = screen.getAllByRole('button', { name: /Move .* (earlier|later)/ });
+      // Two rules, each with an up and a down control.
+      expect(rows).toHaveLength(4);
+      expect(screen.getByText(/Cell is not empty/)).toBeTruthy();
+      expect(screen.getByText(/Data bar/)).toBeTruthy();
+    });
+
+    it('reorders rules, which is what decides who wins', () => {
+      // Two rules over the same cell setting the same field: the later one
+      // paints. Moving it changes the colour, which is the observable proof
+      // that order is precedence.
+      const sheet = createEmptySheet();
+      sheet.cells.A1 = 'x';
+      sheet.conditionalFormats = [
+        {
+          id: 'red', kind: 'cell', ranges: ['A1'],
+          condition: { operator: 'isNotEmpty' }, format: { background: '#fee2e2' },
+        },
+        {
+          id: 'green', kind: 'cell', ranges: ['A1'],
+          condition: { operator: 'isNotEmpty' }, format: { background: '#dcfce7' },
+        },
+      ];
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      expect(cellAt('A1').style.backgroundColor).toBe('rgb(220, 252, 231)');
+
+      openPanel();
+      fireEvent.click(screen.getAllByRole('button', { name: /Move .* later/ })[0]);
+
+      expect(cellAt('A1').style.backgroundColor).toBe('rgb(254, 226, 226)');
+    });
+
+    it('deletes a rule and stops painting', () => {
+      const sheet = createEmptySheet();
+      sheet.cells.A1 = 'x';
+      sheet.conditionalFormats = [
+        {
+          id: 'r', kind: 'cell', ranges: ['A1'],
+          condition: { operator: 'isNotEmpty' }, format: { background: '#fee2e2' },
+        },
+      ];
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      expect(cellAt('A1').style.backgroundColor).toBe('rgb(254, 226, 226)');
+
+      openPanel();
+      fireEvent.click(screen.getByRole('button', { name: /^Delete/ }));
+
+      expect(cellAt('A1').style.backgroundColor).toBe('');
+    });
+
+    it('says why a rule was refused, rather than losing it silently', () => {
+      // Past the ceiling the parser drops the rule on the next load. Accepting
+      // it here would look like it worked and then lose it, so the panel has to
+      // say no out loud.
+      const sheet = createEmptySheet();
+      sheet.conditionalFormats = Array.from({ length: MAX_CONDITIONAL_RULES }, (_, i) => ({
+        id: `r${i}`,
+        kind: 'cell' as const,
+        ranges: ['A1'],
+        condition: { operator: 'isNotEmpty' as const },
+        format: { bold: true },
+      }));
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      openPanel();
+
+      expect(screen.queryByRole('alert')).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      const alert = screen.getByRole('alert');
+      expect(alert.textContent).toContain(String(MAX_CONDITIONAL_RULES));
+      // ...and nothing was added.
+      expect(screen.getAllByRole('button', { name: /^Delete/ })).toHaveLength(
+        MAX_CONDITIONAL_RULES
+      );
+    });
+
+    it('refuses to widen a rule past the ceiling by editing it', () => {
+      // Otherwise editing is a way around the limit that adding refuses.
+      const sheet = createEmptySheet();
+      sheet.cells.A1 = 'x';
+      sheet.conditionalFormats = [
+        {
+          id: 'r', kind: 'cell', ranges: ['A1:A9'],
+          condition: { operator: 'isNotEmpty' }, format: { background: '#fee2e2' },
+        },
+      ];
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      openPanel();
+      fireEvent.click(screen.getByRole('button', { name: /^Edit rule:/ }));
+
+      fireEvent.blur(screen.getByLabelText('Ranges this rule applies to'), {
+        target: { value: 'A1:ZZZ5000000' },
+      });
+
+      // The rule kept the ranges it had — the row still names them...
+      expect(screen.getByRole('button', { name: /^Edit rule:/ })).toBeTruthy();
+      expect(screen.getByText('A1:A9')).toBeTruthy();
+      // ...and the panel says why, rather than silently restoring the old value.
+      expect(screen.getByRole('alert').textContent).toBeTruthy();
+      // The field resynchronises too, instead of keeping the rejected text and
+      // reapplying it on the next blur.
+      expect((screen.getByLabelText('Ranges this rule applies to') as HTMLInputElement).value)
+        .toBe('A1:A9');
+    });
+
+    it('creates a custom-formula rule that survives a reload', () => {
+      // Adding one with a blank formula produced a rule the parser drops on
+      // load: visible now, gone next time the page opened.
+      const sheet = createEmptySheet();
+      sheet.cells.B2 = '5';
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      fireEvent.mouseDown(cellAt('B2'));
+      openPanel();
+
+      fireEvent.click(screen.getByLabelText('New rule type'));
+      fireEvent.click(screen.getByRole('option', { name: /Custom formula/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      // Round-trip the rule the panel just made through the parser: a blank
+      // formula comes back as no rule at all.
+      const written = vi.mocked(serializeSheetContent).mock.calls.at(-1)?.[0];
+      expect(written).toBeTruthy();
+      expect(parseSheetContent(serializeSheetContent(written!)).conditionalFormats)
+        .toHaveLength(1);
+    });
+
+    it('is read-only for a viewer', () => {
+      lacksEditPermission.current = true;
+      const sheet = createEmptySheet();
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      openPanel();
+
+      expect(screen.getByRole('button', { name: /^Add$/ }).hasAttribute('disabled')).toBe(true);
+    });
   });
 
   it('extends the selection on shift-click', () => {
