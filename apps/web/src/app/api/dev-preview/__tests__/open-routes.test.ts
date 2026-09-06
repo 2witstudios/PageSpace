@@ -27,7 +27,7 @@ vi.mock('@/lib/agent-workspaces/workspace-unavailable-response', () => ({
 }));
 vi.mock('@/lib/dev-preview/preview-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/dev-preview/preview-runtime')>('@/lib/dev-preview/preview-runtime');
-  return { isSameOriginFetch: actual.isSameOriginFetch, openPreviewForUser: vi.fn() };
+  return { isAllowedPreviewOpen: actual.isAllowedPreviewOpen, openPreviewForUser: vi.fn() };
 });
 
 import { GET as openEnv } from '../../drives/[driveId]/envs/[envId]/preview/open/route';
@@ -73,10 +73,22 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview/open', () => {
     expect(authenticateRequestWithOptions).not.toHaveBeenCalled();
   });
 
-  it.each([{ 'sec-fetch-site': 'cross-site' }, { 'sec-fetch-site': 'same-site' }, {}])('refuses a non-same-origin open (%o) and audits it', async (headers) => {
+  it.each([
+    { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'iframe' },
+    { 'sec-fetch-site': 'same-site', 'sec-fetch-dest': 'iframe' },
+    { 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'empty' },
+    {},
+  ])('refuses a cross-site embed / headerless open (%o) and audits it', async (headers) => {
     expect((await openEnv(req(headers), envCtx)).status).toBe(403);
-    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ reason: 'cross-site-open' }) }));
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ reason: 'cross-site-embed' }) }));
     expect(openPreviewForUser).not.toHaveBeenCalled();
+  });
+
+  it('OPEN IN A NEW TAB: a cross-site TOP-LEVEL navigation (the preview host re-minting after a cookie-less top-level visit) is admitted and mints a fresh grant', async () => {
+    const res = await openEnv(req({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document', 'sec-fetch-mode': 'navigate' }), envCtx);
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe(REDIRECT);
+    expect(openPreviewForUser).toHaveBeenCalledTimes(1);
   });
 
   it('403s a non-member and 404s an env outside the drive', async () => {
@@ -125,6 +137,8 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview/open', () => {
     vi.mocked(isDevPreviewConfigured).mockReturnValueOnce(false);
     expect((await openSession(req(), wsCtx)).status).toBe(404);
     expect((await openSession(req({}), wsCtx)).status).toBe(403);
+    expect((await openSession(req({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'iframe' }), wsCtx)).status).toBe(403);
+    expect((await openSession(req({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' }), wsCtx)).status).toBe(302);
     vi.mocked(findSessionRecord).mockRejectedValueOnce(new Error('boom'));
     expect((await openSession(req(), wsCtx)).status).toBe(500);
   });

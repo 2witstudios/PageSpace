@@ -10,12 +10,15 @@
  * dedicated preview origin, whose auth endpoint consumes it and installs the
  * host-only cookie (`preview-grant.ts`).
  *
- * SAME-ORIGIN ONLY. The dashboard frames this URL; a foreign page must not be
- * able to run the handshake inside its own frame and end up with a preview
- * cookie partitioned under ITS top-level site. `Sec-Fetch-Site` decides:
- * anything but `same-origin`/`none` is refused, and a browser too old to
- * send the header is refused too (fail closed — the header has shipped in
- * every engine since 2023).
+ * SAME-ORIGIN, OR A TOP-LEVEL NAVIGATION. The dashboard frames this URL; a
+ * foreign page must not be able to run the handshake inside its own frame
+ * and end up with a preview cookie partitioned under ITS top-level site.
+ * `Sec-Fetch-Site`/`Sec-Fetch-Dest` decide (`isAllowedPreviewOpen`): a
+ * same-origin request or a top-level `document` navigation (open in a new
+ * tab — the preview host sends a cookie-less top-level visit here to re-mint,
+ * because a partitioned cookie does not travel to top-level) is admitted; a
+ * cross-site embed is refused, and a browser too old to send the headers is
+ * refused too (fail closed — they have shipped in every engine since 2023).
  *
  * Dark unless `DEV_PREVIEW_ENABLED=true` and `DEV_PREVIEW_APEX` is set: 404,
  * indistinguishable from a route that does not exist.
@@ -27,7 +30,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { isSameOriginFetch, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
+import { isAllowedPreviewOpen, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview/open';
@@ -39,8 +42,8 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
-    if (!isSameOriginFetch(request)) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: 'cross-site-open' }, riskScore: 0.6 });
+    if (!isAllowedPreviewOpen(request)) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });
       return NextResponse.json({ error: 'The preview can only be opened from PageSpace.' }, { status: 403 });
     }
     if (!(await isPrincipalDriveMember(auth, driveId))) {

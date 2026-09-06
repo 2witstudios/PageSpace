@@ -1,3 +1,4 @@
+// @vitest-environment node
 /**
  * The HTTP forwarder against a REAL local upstream (a fake sprite over
  * `http://127.0.0.1`), driven through an injected `fetch` that re-homes the
@@ -55,7 +56,7 @@ describe('forwardPreviewRequest', () => {
     expect(seen?.headers.authorization).toBe('Bearer org');
     expect(seen?.headers.cookie).toBeUndefined();
     expect(seen?.headers.origin).toBeUndefined();
-    expect(seen?.headers['accept-encoding']).toBeUndefined();
+    expect(seen?.headers['accept-encoding']).toBe('identity');
     expect(seen?.headers.accept).toBe('text/html');
 
     const { response } = outcome;

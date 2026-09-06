@@ -100,6 +100,10 @@ export async function forwardPreviewRequest({
 
   const headers = new Headers(selectForwardableRequestHeaders(flatten(request.headers)));
   headers.set('authorization', `Bearer ${token}`);
+  // Pinned, not merely omitted: undici adds `gzip, deflate` on its own and
+  // decodes transparently, so the only way the relayed body and the relayed
+  // headers describe the same bytes is to ask upstream for identity.
+  headers.set('accept-encoding', 'identity');
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD' && request.body !== null;
   const body = hasBody

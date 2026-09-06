@@ -26,6 +26,7 @@ import {
 import {
   buildPreviewAuthRedirect,
   buildPreviewHost,
+  buildPreviewOpenPath,
   derivePreviewCookieKey,
 } from '@pagespace/lib/services/sandbox/preview/preview-grant';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
@@ -97,14 +98,35 @@ export function resolvePreviewTargetForRequest(holder: DevPreviewHolderRef, user
 }
 
 /**
- * Pure: is this request a same-origin fetch/navigation? `Sec-Fetch-Site` is
- * the browser's own attestation; `none` is a user-typed navigation. Absent
- * (a pre-2023 engine, or a non-browser client) fails closed — the handshake
- * must never run inside a foreign page's frame (see the open routes).
+ * Pure: may this request run the open handshake? Two shapes are admitted:
+ *  - a same-origin request (`Sec-Fetch-Site: same-origin`, or `none` for a
+ *    user-typed navigation) — the dashboard framing the preview;
+ *  - a TOP-LEVEL document navigation from anywhere (`Sec-Fetch-Dest:
+ *    document`) — "open in a new tab", where the partitioned cookie does not
+ *    travel and the preview host sends the browser here to re-mint. A
+ *    foreign page can only `window.open` this, which lands the user on the
+ *    app origin exactly as typing the URL would.
+ * A cross-site EMBED (`iframe`/`frame`/`embed` from another site) is refused:
+ * the handshake must never run inside a foreign page's frame, where the
+ * resulting cookie would be partitioned under that page's site. Absent
+ * headers (a pre-2023 engine, a non-browser client) fail closed.
  */
-export function isSameOriginFetch(request: Request): boolean {
+export function isAllowedPreviewOpen(request: Request): boolean {
   const site = request.headers.get('sec-fetch-site');
-  return site === 'same-origin' || site === 'none';
+  if (site === 'same-origin' || site === 'none') return true;
+  return request.headers.get('sec-fetch-dest') === 'document';
+}
+
+/**
+ * The app-origin route that re-opens a holder's preview — where the preview
+ * host sends a cookie-less top-level navigation. An env's route needs the
+ * drive id, read from the env row (a lookup that reveals nothing: the app
+ * origin enforces authentication before anything else).
+ */
+export async function resolvePreviewOpenPath(holder: DevPreviewHolderRef): Promise<string | null> {
+  if (holder.kind === 'workspace') return buildPreviewOpenPath(holder, null);
+  const env = await (await getDriveEnvStore()).findById(holder.id);
+  return env ? buildPreviewOpenPath(holder, env.driveId) : null;
 }
 
 export type OpenPreviewResult =

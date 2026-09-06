@@ -125,8 +125,10 @@ const HOP_BY_HOP = new Set([
  * the client's `Cookie` (PageSpace's session) and `Authorization` must never
  * reach untrusted code, `Origin`/`Referer` would leak PageSpace URLs, and
  * `Accept-Encoding` is deliberately absent — the web tier's `fetch`
- * transparently decompresses, so asking for an encoding would hand the
- * client a decoded body under an encoded header.
+ * transparently decompresses, so the forwarder PINS it to `identity` rather
+ * than relaying the client's, and the response policy drops
+ * `Content-Encoding`, so the relayed body and headers always describe the
+ * same bytes.
  */
 const FORWARDABLE_REQUEST_HEADERS = new Set([
   'accept', 'accept-language', 'content-type', 'content-length', 'cache-control', 'pragma',

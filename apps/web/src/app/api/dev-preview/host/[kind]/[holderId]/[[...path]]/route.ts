@@ -43,7 +43,6 @@ import {
   PREVIEW_GRANT_QUERY_PARAM,
   buildClearPreviewCookieHeader,
   buildPreviewCookieHeader,
-  buildPreviewOpenPath,
   readPreviewCookie,
   signPreviewCookie,
   verifyPreviewCookie,
@@ -52,7 +51,7 @@ import { buildPreviewAccessLog, extractPreviewPath } from '@pagespace/lib/servic
 import { resolveSpritesToken } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { forwardPreviewRequest } from '@/lib/dev-preview/preview-forward';
-import { getPreviewCookieKey, getPreviewGrantsStore, resolveAppOrigin, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
+import { getPreviewCookieKey, getPreviewGrantsStore, resolveAppOrigin, resolvePreviewOpenPath, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
 
 type RouteContext = { params: Promise<{ kind: string; holderId: string; path?: string[] }> };
 
@@ -125,12 +124,11 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
   if (verified === null || !verified.ok || !sameHolder(verified.claims.holder, holder)) {
     const reason = verified === null ? 'no-cookie' : verified.ok ? 'cookie-holder-mismatch' : verified.reason;
     if (isNavigation(request)) {
-      // Send the frame back to the app origin to re-mint. The app origin is
-      // the only place a session lives; the drive id for an env holder is not
-      // known here, so an env navigation with no cookie can only re-open
-      // through the dashboard.
-      const appOrigin = resolveAppOrigin();
-      const openPath = holder.kind === 'workspace' ? buildPreviewOpenPath(holder, null) : null;
+      // Send the navigation back to the app origin to re-mint: the framed
+      // case after the cookie expired, and "open in a new tab", where a
+      // partitioned cookie does not travel to top-level at all. The app
+      // origin is the only place a session lives; it mints a FRESH grant.
+      const [appOrigin, openPath] = [resolveAppOrigin(), await resolvePreviewOpenPath(holder)];
       if (appOrigin !== null && openPath !== null) {
         return new NextResponse(null, { status: 302, headers: { location: `${appOrigin}${openPath}`, 'set-cookie': buildClearPreviewCookieHeader(), 'cache-control': 'no-store' } });
       }

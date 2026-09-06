@@ -47,7 +47,26 @@
  *    (CHIPS) is the stronger control for this shape: the cookie jar is keyed
  *    by the TOP-LEVEL site, so the cookie exists only while the preview is
  *    embedded under the app (or opened top-level on its own host), and is
- *    invisible to any other embedder.
+ *    invisible to any other embedder. Ruled approved ([A-preview-proxy]).
+ *  - DEGRADATION, stated plainly: a browser without CHIPS support ignores
+ *    the `Partitioned` attribute and keeps a plain `SameSite=None` cookie —
+ *    still `__Host-`, HttpOnly, Secure, short-lived, but sendable from any
+ *    embedding of the preview host. That is acceptable ONLY because the
+ *    cookie is never the authority: it AUTHENTICATES a (holder, user) claim,
+ *    and the per-request drive/session gate (`preview-access.ts` →
+ *    `decidePreviewForward`) AUTHORIZES every request from database rows.
+ *    A cookie replayed from a foreign embedding still only reaches what its
+ *    user may reach, and stops reaching it the moment that access is
+ *    revoked. The preview response's own `frame-ancestors <app-origin>`
+ *    keeps a foreign page from rendering the frame at all.
+ *  - OPEN IN A NEW TAB: a partitioned jar does not travel to a top-level
+ *    navigation, so the preview host sees no cookie. The host route sends a
+ *    top-level document navigation back to the app origin's `/preview/open`
+ *    route, which mints a FRESH grant (the previous one is spent) and runs
+ *    the handshake again in that top-level context. The open routes admit a
+ *    top-level navigation from any site for exactly this reason, and refuse
+ *    a cross-site EMBED (`Sec-Fetch-Dest: iframe` from another site) so a
+ *    foreign page cannot run the handshake inside its own frame.
  *  - Signed, stateless, short-lived: an HMAC over (holder, user, expiry) under
  *    a key DERIVED from the server-held sandbox secret with a fixed label, so
  *    the web tier (which mints) and the realtime tier (which verifies for

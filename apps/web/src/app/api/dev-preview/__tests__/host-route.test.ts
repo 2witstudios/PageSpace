@@ -25,6 +25,8 @@ vi.mock('@/lib/dev-preview/preview-runtime', () => ({
   getPreviewCookieKey: vi.fn(),
   getPreviewGrantsStore: vi.fn(),
   resolveAppOrigin: vi.fn(() => 'https://app.pagespace.ai'),
+  resolvePreviewOpenPath: vi.fn(async (holder: { kind: string; id: string }) =>
+    holder.kind === 'workspace' ? `/api/agent-workspaces/${holder.id}/preview/open` : `/api/drives/d1/envs/${holder.id}/preview/open`),
   resolvePreviewTargetForRequest: vi.fn(),
 }));
 
@@ -33,7 +35,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewEnabled } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { forwardPreviewRequest } from '@/lib/dev-preview/preview-forward';
-import { getPreviewCookieKey, getPreviewGrantsStore, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
+import { getPreviewCookieKey, getPreviewGrantsStore, resolvePreviewOpenPath, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
 
 const APEX = 'pagespace-preview.app';
 const KEY = derivePreviewCookieKey('s'.repeat(40));
@@ -114,7 +116,7 @@ describe('the handshake: /__pagespace/auth', () => {
 });
 
 describe('the cookie authenticates', () => {
-  it('a navigation without a cookie is sent back to the app origin to re-mint (workspace holder) — env holders get 401', async () => {
+  it('a framed navigation without a cookie is sent back to the app origin to re-mint, for both holder kinds', async () => {
     const host = `ws-ws1.preview.${APEX}`;
     const nav = new NextRequest(`https://${host}/api/dev-preview/host/workspace/ws1/`, { headers: { host, 'sec-fetch-dest': 'iframe' } });
     const res = await GET(nav, ctx('workspace', 'ws1'));
@@ -123,7 +125,20 @@ describe('the cookie authenticates', () => {
     expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
 
     const envNav = await GET(req('/', { headers: { 'sec-fetch-dest': 'iframe' } }), ctx());
-    expect(envNav.status).toBe(401);
+    expect(envNav.status).toBe(302);
+    expect(envNav.headers.get('location')).toBe('https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open');
+  });
+
+  it('OPEN IN A NEW TAB: a top-level document navigation carries no partitioned cookie, so it is sent to the app origin to mint a fresh grant', async () => {
+    const res = await GET(req('/some/deep/link', { headers: { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } }), ctx());
+    expect(res.status).toBe(302);
+    expect(res.headers.get('location')).toBe('https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open');
+    expect(resolvePreviewTargetForRequest).not.toHaveBeenCalled();
+  });
+
+  it('a navigation whose holder cannot be resolved to an open route gets 401 rather than a dangling redirect', async () => {
+    vi.mocked(resolvePreviewOpenPath).mockResolvedValueOnce(null);
+    expect((await GET(req('/', { headers: { 'sec-fetch-dest': 'document' } }), ctx())).status).toBe(401);
   });
 
   it('a subresource without a cookie, with a bad cookie, an expired cookie, or another holder\'s cookie is 401 — and the gather is never asked', async () => {

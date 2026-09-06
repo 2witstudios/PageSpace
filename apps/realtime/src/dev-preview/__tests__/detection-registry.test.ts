@@ -114,12 +114,13 @@ describe('createDetectionRegistry', () => {
     await new Promise((r) => setImmediate(r));
     expect(h.waits).toEqual([1000]);
     expect(h.sockets).toHaveLength(2);
-    // Second and third never open: 1s, 2s, then give up.
+    // The second never opens: one more try after 2s; the third never opens
+    // either, and the budget (2) is spent — give up, no fourth socket.
     h.sockets[1].emit('close', { code: 1002 });
     await new Promise((r) => setImmediate(r));
     h.sockets[2].emit('close', { code: 1002 });
     await new Promise((r) => setImmediate(r));
-    expect(h.waits).toEqual([1000, 1000, 2000]);
+    expect(h.waits).toEqual([1000, 2000]);
     expect(h.sockets).toHaveLength(3);
     expect(registry.watching()).toEqual([]);
     expect(h.logs.some((l) => l.startsWith('warn:dev-preview: watch channel gone'))).toBe(true);

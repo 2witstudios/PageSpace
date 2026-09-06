@@ -24,7 +24,7 @@ import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
-import { isSameOriginFetch, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
+import { isAllowedPreviewOpen, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/open';
@@ -36,8 +36,8 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return auth.error;
 
-    if (!isSameOriginFetch(request)) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `workspace:${workspaceId}`, details: { route: ROUTE, reason: 'cross-site-open' }, riskScore: 0.6 });
+    if (!isAllowedPreviewOpen(request)) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `workspace:${workspaceId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });
       return NextResponse.json({ error: 'The preview can only be opened from PageSpace.' }, { status: 403 });
     }
 
