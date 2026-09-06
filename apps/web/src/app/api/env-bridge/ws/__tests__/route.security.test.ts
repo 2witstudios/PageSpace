@@ -106,7 +106,10 @@ function signedHello(envId = ENV, key = machine, over: Partial<{ capabilities: t
   return encodeFrame({ type: 'hello', ...body, sig: Buffer.from(nodeSign(null, encodeHelloForSigning(body), key.privateKey)).toString('base64') });
 }
 
-function signedResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): string {
+/** Distributive: `Omit` over the union would collapse it to the common keys. */
+type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'> : never;
+
+function signedResult(body: UnsignedResult, key = machine): string {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
   return encodeFrame({ ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame);
 }

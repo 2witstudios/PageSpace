@@ -44,7 +44,10 @@ function socket(): FakeSocket {
 
 const principal = { userId: 'user-1', sessionId: 'sess-1', conversationId: 'conv-1' };
 
-function signedResult(body: Omit<MachineResultFrame, 'sig'>, key = machine): MachineResultFrame {
+/** Distributive: `Omit` over the union would collapse it to the common keys. */
+type UnsignedResult<T = MachineResultFrame> = T extends unknown ? Omit<T, 'sig'> : never;
+
+function signedResult(body: UnsignedResult, key = machine): MachineResultFrame {
   const resultHash = resultHashForFrame({ ...body, sig: '' } as MachineResultFrame, envBridgeHash);
   return { ...body, sig: Buffer.from(nodeSign(null, encodeResultForSigning({ grantId: body.grantId, resultHash }), key.privateKey)).toString('base64') } as MachineResultFrame;
 }
@@ -128,7 +131,7 @@ describe('EnvBridgeClient', () => {
   it('given a correctly signed result whose payload was edited in flight, should NOT deliver it either (every field is under the hash)', async () => {
     const ws = connect('env-1');
     const pending = client.sendGrant({ envId: 'env-1', frame: { type: 'grant_exec', cmd: 'ls' }, principal });
-    const genuine = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 1, stdoutB64: '', stderrB64: 'ZGVuaWVk', truncated: false });
+    const genuine = signedResult({ type: 'exec_result', grantId: 'g-1', exitCode: 1, stdoutB64: '', stderrB64: 'ZGVuaWVk', truncated: false }) as Extract<MachineResultFrame, { type: 'exec_result' }>;
     expect(client.handleMachineResult(ws, { ...genuine, exitCode: 0 })).toBe('unverified');
     await expect(pending).rejects.toMatchObject({ kind: 'unverified_result' });
   });

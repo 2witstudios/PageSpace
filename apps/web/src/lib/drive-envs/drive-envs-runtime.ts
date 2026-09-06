@@ -47,6 +47,7 @@ import {
   type RebuildDriveEnvResult,
 } from '@pagespace/lib/services/drive-envs/drive-envs';
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
+import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
 import { readEnvLiveConnection } from '@/lib/websocket/ws-env-connections';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
@@ -236,6 +237,16 @@ export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
   const store = await getDriveEnvStore();
   return renameDriveEnv({ envId: input.envId, name: input.name, deps: { store, now: () => new Date() } });
+}
+
+/**
+ * Revoke a LOCAL env's machine (Codex C4, all three legs) — the button the M1
+ * exit gate presses through DELETE. Re-exported from the env-bridge adapter so
+ * the route has one seam to mock.
+ */
+export async function revokeEnv(input: { envId: string; reason: string }): Promise<RevokeLocalDriveEnvResult> {
+  const { revokeLocalEnv } = await import('@/lib/env-bridge/revoke');
+  return revokeLocalEnv(input);
 }
 
 export async function deleteEnv(input: { envId: string; force: boolean }): Promise<DeleteDriveEnvResult> {

@@ -11,6 +11,13 @@
  * 404 rather than 403: telling a stranger that an id exists elsewhere is itself
  * the leak.
  *
+ * **DELETE on a LOCAL env revokes the machine first** (Local Environments epic,
+ * Codex C4): `revokedAt` stamped, every `env:bridge` session for the env
+ * revoked, the daemon sent a signed `revoke` frame and closed 1008 — then the
+ * row is deleted as for any env. Owner/admin only, through the same
+ * centralized check as every other DELETE here; the revoke's three legs are
+ * audited on the drive with `operation: 'revoke'`.
+ *
  * **DELETE is the destructive verb.** It refuses while sessions are live inside
  * the env (409) unless `?force=true`, because deleting the row CASCADES those
  * sessions away — see `deleteDriveEnv`, which owns the ordering: guard → delete
@@ -38,6 +45,7 @@ import {
   deleteEnv,
   renameEnv,
   resolveEnvInDrive,
+  revokeEnv,
   toDriveEnvDTO,
 } from '@/lib/drive-envs/drive-envs-runtime';
 
@@ -145,8 +153,27 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
       return NextResponse.json({ error: 'Only drive owners and admins can delete environments' }, { status: 403 });
     }
 
-    if (!(await resolveEnvInDrive(envId, driveId))) {
+    const env = await resolveEnvInDrive(envId, driveId);
+    if (!env) {
       return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+    }
+
+    // A local env's machine is revoked BEFORE the row goes: the stamp, the
+    // sessions and the socket (C4). The row deletion below then cascades the
+    // sibling away; a later token mint finds nothing and fails either way.
+    let revoked: { sessionsRevoked: number; machine: string; alreadyRevoked: boolean } | null = null;
+    if (env.substrate === 'local') {
+      const revocation = await revokeEnv({ envId, reason: 'owner_revoked' });
+      if (revocation.ok) {
+        revoked = { sessionsRevoked: revocation.sessionsRevoked, machine: revocation.machine, alreadyRevoked: revocation.alreadyRevoked };
+        auditRequest(request, {
+          eventType: 'auth.token.revoked',
+          userId: auth.userId,
+          resourceType: 'drive_env',
+          resourceId: envId,
+          details: { route: 'drive-envs', operation: 'revoke', driveId, ...revoked },
+        });
+      }
     }
 
     // Opt-in by exact value: any other spelling reads as "not forced", so a
@@ -175,10 +202,10 @@ export async function DELETE(request: Request, context: { params: Promise<{ driv
       userId: auth.userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { route: 'drive-envs', operation: 'delete', envId, force, spriteTornDown: result.spriteTornDown },
+      details: { route: 'drive-envs', operation: 'delete', envId, force, spriteTornDown: result.spriteTornDown, revoked },
     });
 
-    return NextResponse.json({ deleted: true, spriteTornDown: result.spriteTornDown });
+    return NextResponse.json({ deleted: true, spriteTornDown: result.spriteTornDown, ...(revoked && { revoked }) });
   } catch (error) {
     loggers.api.error('Failed to delete drive environment', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to delete environment' }, { status: 500 });
