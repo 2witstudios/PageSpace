@@ -100,9 +100,14 @@ export function buildPreviewUpstreamUrl(spriteUrl: string, pathAndQuery: string)
   // `/`, never resolved as a URL of its own: `new URL('//evil', origin)` would
   // re-home the request, and a control character or whitespace has no place in
   // a request target. Dot segments are then resolved against the fixed host.
-  const suffix = pathAndQuery.replace(/^\/+/, '');
-  if (/[\s\u0000-\u001f\u007f]/.test(suffix)) throw new Error('preview path contains a control character — refusing to forward');
-  const upstream = new URL(`${base.origin}/${suffix}`);
+  if (/[\s\u0000-\u001f\u007f]/.test(pathAndQuery)) throw new Error('preview path contains a control character — refusing to forward');
+  // Split the client's path+query with a throwaway parser, then ASSIGN only
+  // the path and query onto a URL built from the sprite origin alone. The
+  // host is never composed from client input, so it cannot be re-homed.
+  const parts = new URL(`/${pathAndQuery.replace(/^\/+/, '')}`, 'http://path.invalid');
+  const upstream = new URL(base.origin);
+  upstream.pathname = parts.pathname;
+  upstream.search = parts.search;
   if (upstream.origin !== base.origin) throw new Error('preview path escaped the sprite origin — refusing to forward');
   return upstream;
 }

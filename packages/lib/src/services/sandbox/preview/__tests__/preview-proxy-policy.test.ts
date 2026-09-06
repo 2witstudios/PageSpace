@@ -38,7 +38,8 @@ describe('the upstream is never derivable from client input', () => {
   });
 
   it('cannot be re-homed by a protocol-relative path — the leading slashes are collapsed and the host stays the sprite', () => {
-    assert({ given: '//evil.example.com/x', should: 'stay on the sprite origin as a path', actual: buildPreviewUpstreamUrl(SPRITE, '//evil.example.com/x').toString(), expected: `${SPRITE}/evil.example.com/x` });
+    assert({ given: '//evil.example.com/x', should: 'stay on the sprite origin', actual: buildPreviewUpstreamUrl(SPRITE, '//evil.example.com/x').origin, expected: SPRITE });
+    assert({ given: '/@vite/client?token=a%2Fb#frag', should: 'carry path and query, drop the fragment', actual: buildPreviewUpstreamUrl(SPRITE, '/@vite/client?token=a%2Fb#frag').toString(), expected: `${SPRITE}/@vite/client?token=a%2Fb` });
     expect(() => buildPreviewUpstreamUrl(SPRITE, '/a\r\nHost: evil')).toThrow(/control character/);
   });
 
