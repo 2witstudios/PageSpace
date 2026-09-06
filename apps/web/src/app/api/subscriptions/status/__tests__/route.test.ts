@@ -253,6 +253,28 @@ describe('GET /api/subscriptions/status', () => {
     });
   });
 
+  describe('Tier coercion', () => {
+    it.each([null, '', 'enterprise-legacy'])(
+      'should coerce a stored tier of %j to free instead of passing it through',
+      async (stored) => {
+        mockSelectWhere.mockResolvedValueOnce([
+          { ...mockUser(), subscriptionTier: stored as unknown as string },
+        ]);
+
+        const request = new Request('https://example.com/api/subscriptions/status', {
+          method: 'GET',
+        }) as unknown as import('next/server').NextRequest;
+
+        const response = await GET(request);
+        const body = await response.json();
+
+        expect(response.status).toBe(200);
+        expect(body.subscriptionTier).toBe('free');
+        expect(body.storage.tier).toBe('free');
+      },
+    );
+  });
+
   describe('Error handling', () => {
     it('should return 404 when user not found', async () => {
       mockSelectWhere.mockResolvedValueOnce([]);

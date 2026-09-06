@@ -332,6 +332,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Fixed
 
+- **The account menu no longer labels free accounts "Billing (Business)"** — the plan name in the
+  avatar dropdown fell through to "Business" whenever the subscription lookup had not answered yet
+  (every first paint, and permanently if the request failed), so a brand-new free user saw a paid
+  plan the moment they signed in. It also mislabelled Founder accounts as Business. The label now
+  comes from the canonical tier table, starts from the tier your session already knows, and treats
+  anything unrecognised as Free. The subscription status endpoint returns the same normalised tier.
+
 - **Every pane in an AI page's split grid now offers Chat/History/Settings from its own bar** — the
   "host" pane (the one showing the same conversation the page's own header already tracks) used to
   collapse to a bare name label with no way to reach History or Settings from that pane, unlike
