@@ -38,6 +38,32 @@ describe('newRule', () => {
     });
   });
 
+  it('starts a formula rule with a formula the parser will accept', () => {
+    // A blank formula is rejected on load, so persisting one creates a rule
+    // that shows up now and is gone after a reload.
+    const rule = newRule('formula', ['B2:B20']);
+    expect(rule.kind === 'formula' && rule.formula).toBe('=B2>0');
+  });
+
+  it('anchors that formula to the range top-left, however the range is written', () => {
+    expect(newRule('formula', ['D9:B2']).kind === 'formula'
+      && (newRule('formula', ['D9:B2']) as { formula: string }).formula).toBe('=B2>0');
+  });
+
+  it('still produces a valid formula when the range is unusable', () => {
+    // Defensive: the rule is refused later for its range, but it must not be
+    // refused for having no formula as well.
+    const rule = newRule('formula', ['nonsense']);
+    expect(rule.kind === 'formula' && rule.formula).toBe('=A1>0');
+  });
+
+  it('still produces a valid formula when given no range at all', () => {
+    // The rule is refused later for having no range, but it must not be refused
+    // for having no formula on top of that — and this must not throw.
+    expect(newRule('formula', []).kind === 'formula'
+      && (newRule('formula', []) as { formula: string }).formula).toBe('=A1>0');
+  });
+
   it('starts a colour scale with both end colours set', () => {
     // Without both, the rule parses to nothing and the scale is invisible.
     const rule = newRule('colorScale', ['A1:A9']);

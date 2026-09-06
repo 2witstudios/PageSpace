@@ -4,6 +4,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import {
   MAX_CONDITIONAL_RULES,
   createEmptySheet,
+  parseSheetContent,
   serializeSheetContent,
   setCellFormats,
   setColumnFormat,
@@ -415,9 +416,39 @@ describe('SheetView', () => {
         target: { value: 'A1:ZZZ5000000' },
       });
 
-      // The rule kept the ranges it had — the row still names them.
+      // The rule kept the ranges it had — the row still names them...
       expect(screen.getByRole('button', { name: /^Edit rule:/ })).toBeTruthy();
       expect(screen.getByText('A1:A9')).toBeTruthy();
+      // ...and the panel says why, rather than silently restoring the old value.
+      expect(screen.getByRole('alert').textContent).toBeTruthy();
+      // The field resynchronises too, instead of keeping the rejected text and
+      // reapplying it on the next blur.
+      expect((screen.getByLabelText('Ranges this rule applies to') as HTMLInputElement).value)
+        .toBe('A1:A9');
+    });
+
+    it('creates a custom-formula rule that survives a reload', () => {
+      // Adding one with a blank formula produced a rule the parser drops on
+      // load: visible now, gone next time the page opened.
+      const sheet = createEmptySheet();
+      sheet.cells.B2 = '5';
+      const content = serializeSheetContent(sheet);
+      documentState.current = { content, isDirty: false };
+
+      render(<SheetView page={makePage(content)} />);
+      fireEvent.mouseDown(cellAt('B2'));
+      openPanel();
+
+      fireEvent.click(screen.getByLabelText('New rule type'));
+      fireEvent.click(screen.getByRole('option', { name: /Custom formula/ }));
+      fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
+
+      // Round-trip the rule the panel just made through the parser: a blank
+      // formula comes back as no rule at all.
+      const written = vi.mocked(serializeSheetContent).mock.calls.at(-1)?.[0];
+      expect(written).toBeTruthy();
+      expect(parseSheetContent(serializeSheetContent(written!)).conditionalFormats)
+        .toHaveLength(1);
     });
 
     it('is read-only for a viewer', () => {

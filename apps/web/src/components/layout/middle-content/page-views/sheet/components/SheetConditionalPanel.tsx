@@ -30,6 +30,12 @@ export interface SheetConditionalPanelProps {
   disabled: boolean;
   /** Set when the last attempt was refused, e.g. past a ceiling. */
   refusal: string | null;
+  /**
+   * Bumped on every refusal. A refused edit leaves the rule unchanged, so a key
+   * derived from the rule alone would not remount the field, and it would go on
+   * showing the rejected text — and reapply it on the next blur.
+   */
+  resetToken: number;
   onAdd: (kind: RuleKind, ranges: string[]) => void;
   onUpdate: (id: string, patch: Partial<ConditionalRule>) => void;
   onRemove: (id: string) => void;
@@ -51,17 +57,29 @@ const rangesToText = (ranges: readonly string[]): string => ranges.join(', ');
 const textToRanges = (text: string): string[] =>
   text.split(',').map((part) => part.trim()).filter((part) => part !== '');
 
+/**
+ * Text fields commit on blur rather than per keystroke, because half-typed
+ * "B2:B" is not a range and rejecting it mid-word would fight the person
+ * typing. That means they are uncontrolled — and an uncontrolled input keeps
+ * its own DOM value, so after an undo, a redo, or a refused edit it would go on
+ * showing a value the rule does not have, and merely focusing and blurring it
+ * would reapply that stale value.
+ *
+ * Keying each field on the value it is editing remounts it whenever the rule
+ * changes underneath, which resynchronises without taking the on-blur commit
+ * away.
+ */
 const RuleEditor: React.FC<{
   rule: ConditionalRule;
   disabled: boolean;
+  resetToken: number;
   onUpdate: (patch: Partial<ConditionalRule>) => void;
-}> = ({ rule, disabled, onUpdate }) => (
+}> = ({ rule, disabled, resetToken, onUpdate }) => (
   <div className="flex flex-col gap-3 border-t border-[var(--separator)] px-3 py-3">
     <Field label="Applies to">
       <Input
+        key={`ranges:${resetToken}:${rangesToText(rule.ranges)}`}
         defaultValue={rangesToText(rule.ranges)}
-        // On blur rather than per keystroke: half-typed "B2:B" is not a range,
-        // and rejecting it mid-word would fight the person typing it.
         onBlur={(event) => onUpdate({ ranges: textToRanges(event.target.value) })}
         disabled={disabled}
         className="h-8 font-mono text-xs"
@@ -99,6 +117,7 @@ const RuleEditor: React.FC<{
           <div className="flex gap-2">
             <Field label="Value">
               <Input
+                key={`value:${resetToken}:${rule.condition.value ?? ''}`}
                 defaultValue={rule.condition.value ?? ''}
                 onBlur={(event) =>
                   onUpdate({
@@ -113,6 +132,7 @@ const RuleEditor: React.FC<{
             {RANGE_OPERATORS.has(rule.condition.operator) && (
               <Field label="And">
                 <Input
+                  key={`value2:${resetToken}:${rule.condition.value2 ?? ''}`}
                   defaultValue={rule.condition.value2 ?? ''}
                   onBlur={(event) =>
                     onUpdate({
@@ -133,6 +153,7 @@ const RuleEditor: React.FC<{
     {rule.kind === 'formula' && (
       <Field label="Formula is true">
         <Input
+          key={`formula:${resetToken}:${rule.formula}`}
           defaultValue={rule.formula}
           onBlur={(event) => onUpdate({ formula: event.target.value } as Partial<ConditionalRule>)}
           disabled={disabled}
@@ -228,6 +249,7 @@ export const SheetConditionalPanel: React.FC<SheetConditionalPanelProps> = ({
   defaultRange,
   disabled,
   refusal,
+  resetToken,
   onAdd,
   onUpdate,
   onRemove,
@@ -304,6 +326,7 @@ export const SheetConditionalPanel: React.FC<SheetConditionalPanelProps> = ({
               <RuleEditor
                 rule={rule}
                 disabled={disabled}
+                resetToken={resetToken}
                 onUpdate={(patch) => onUpdate(rule.id, patch)}
               />
             )}

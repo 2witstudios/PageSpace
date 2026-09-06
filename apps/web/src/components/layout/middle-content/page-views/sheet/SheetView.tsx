@@ -165,6 +165,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
   // was refused (a ceiling, an unusable range) so the panel can say so.
   const [conditionalOpen, setConditionalOpen] = useState(false);
   const [conditionalRefusal, setConditionalRefusal] = useState<string | null>(null);
+  // Bumped on each refusal so the panel's uncontrolled fields resynchronise to
+  // the rule rather than keeping text that was just rejected.
+  const [conditionalResetToken, setConditionalResetToken] = useState(0);
   const [columnResize, setColumnResize] = useState<SizeOverride | undefined>(undefined);
   const [rowResize, setRowResize] = useState<SizeOverride | undefined>(undefined);
 
@@ -1186,21 +1189,19 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         return;
       }
 
-      // `addRule` refuses rather than handing back a sheet the parser would
-      // quietly truncate on the next load, so the reason is surfaced instead of
-      // the rule silently going missing.
-      let refusal: string | null = null;
-      applySheetUpdate((previous) => {
-        const result = addRule(previous, newRule(kind, ranges));
-        if (!result.ok) {
-          refusal = result.reason;
-          return previous;
-        }
-        return result.sheet;
-      });
-      setConditionalRefusal(refusal);
+      // Decided BEFORE scheduling the state update, not inside the updater:
+      // `setSheet` defers the updater to React, so reading a variable it
+      // assigns would race the alert and usually show nothing.
+      const result = addRule(sheet, newRule(kind, ranges));
+      if (!result.ok) {
+        setConditionalRefusal(result.reason);
+        setConditionalResetToken((token) => token + 1);
+        return;
+      }
+      setConditionalRefusal(null);
+      applySheetUpdate(() => result.sheet);
     },
-    [applySheetUpdate, isReadOnly, readOnlyReason]
+    [applySheetUpdate, isReadOnly, readOnlyReason, sheet]
   );
 
   const handleUpdateRule = useCallback(
@@ -1209,10 +1210,18 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         toast.error(readOnlyReason);
         return;
       }
+      // Same as adding: a refused edit has to say why, or the panel silently
+      // restores the old value and looks broken.
+      const result = updateRule(sheet, id, patch);
+      if (!result.ok) {
+        setConditionalRefusal(result.reason);
+        setConditionalResetToken((token) => token + 1);
+        return;
+      }
       setConditionalRefusal(null);
-      applySheetUpdate((previous) => updateRule(previous, id, patch));
+      applySheetUpdate(() => result.sheet);
     },
-    [applySheetUpdate, isReadOnly, readOnlyReason]
+    [applySheetUpdate, isReadOnly, readOnlyReason, sheet]
   );
 
   const handleRemoveRule = useCallback(
@@ -1404,6 +1413,7 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               defaultRange={defaultRuleRange(selection)}
               disabled={isReadOnly}
               refusal={conditionalRefusal}
+              resetToken={conditionalResetToken}
               onAdd={handleAddRule}
               onUpdate={handleUpdateRule}
               onRemove={handleRemoveRule}

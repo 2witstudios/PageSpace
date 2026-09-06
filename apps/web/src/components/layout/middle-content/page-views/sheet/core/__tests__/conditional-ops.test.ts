@@ -98,15 +98,33 @@ describe('validateRanges', () => {
   });
 });
 
+/** updateRule refuses with a reason now, so unwrap where it should succeed. */
+const updated = (sheet: SheetData, id: string, patch: Partial<ConditionalRule>): SheetData => {
+  const result = updateRule(sheet, id, patch);
+  if (!result.ok) throw new Error(`expected the patch to be accepted: ${result.reason}`);
+  return result.sheet;
+};
+
 describe('updateRule', () => {
   it('refuses a patch that widens the ranges past the ceiling', () => {
     // Otherwise editing is a way around the limit that adding refuses.
-    const sheet = sheetWith(rule('a'));
-    expect(updateRule(sheet, 'a', { ranges: ['A1:ZZZ5000000'] })).toBe(sheet);
+    const result = updateRule(sheetWith(rule('a')), 'a', { ranges: ['A1:ZZZ5000000'] });
+    expect(result.ok).toBe(false);
+    // ...and says why, so the panel is not left silently restoring the old value.
+    expect(result.ok === false && result.reason).toBeTruthy();
+  });
+
+  it('refuses a blank formula, which would be dropped on the next load', () => {
+    const formulaRule: ConditionalRule = {
+      id: 'f', kind: 'formula', ranges: ['A1:A9'], formula: '=A1>0', format: { bold: true },
+    };
+    const result = updateRule(sheetWith(formulaRule), 'f', { formula: '   ' });
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reason).toContain('formula');
   });
 
   it('replaces a rule in place, keeping its precedence', () => {
-    const next = updateRule(sheetWith(rule('a'), rule('b')), 'a', { ranges: ['B1:B9'] });
+    const next = updated(sheetWith(rule('a'), rule('b')), 'a', { ranges: ['B1:B9'] });
     expect(next.conditionalFormats?.[0].ranges).toEqual(['B1:B9']);
     expect(next.conditionalFormats?.map((r) => r.id)).toEqual(['a', 'b']);
   });
@@ -114,7 +132,7 @@ describe('updateRule', () => {
   it('refuses to let a patch change identity', () => {
     // Changing `id` or `kind` under the panel would detach the rule from the
     // row being edited, and `kind` decides which fields even apply.
-    const next = updateRule(sheetWith(rule('a')), 'a', {
+    const next = updated(sheetWith(rule('a')), 'a', {
       id: 'hijacked',
       kind: 'dataBar',
     } as Partial<ConditionalRule>);
@@ -122,9 +140,8 @@ describe('updateRule', () => {
     expect(next.conditionalFormats?.[0].kind).toBe('cell');
   });
 
-  it('returns the sheet untouched for an id it does not hold', () => {
-    const sheet = sheetWith(rule('a'));
-    expect(updateRule(sheet, 'missing', { ranges: ['Z1'] })).toBe(sheet);
+  it('refuses an id it does not hold', () => {
+    expect(updateRule(sheetWith(rule('a')), 'missing', { ranges: ['Z1'] }).ok).toBe(false);
   });
 });
 
@@ -195,9 +212,8 @@ describe('a sheet with no rules at all', () => {
   // an absent list.
   const empty = () => sheetWith();
 
-  it('update is a no-op', () => {
-    const sheet = empty();
-    expect(updateRule(sheet, 'anything', { ranges: ['A1'] })).toBe(sheet);
+  it('update refuses rather than throwing on an absent list', () => {
+    expect(updateRule(empty(), 'anything', { ranges: ['A1'] }).ok).toBe(false);
   });
 
   it('remove is a no-op', () => {

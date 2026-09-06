@@ -11,6 +11,8 @@ import type {
   ConditionalCondition,
 } from '@pagespace/lib/sheets/sheet';
 import { newRuleId } from './conditional-ops';
+import { rangeAnchor } from '@pagespace/lib/sheets/sheet';
+import { encodeCellAddress } from '@pagespace/lib/sheets/sheet';
 
 /** Operators, in the order a panel should list them, with plain-language labels. */
 export const OPERATOR_LABELS: ReadonlyArray<{ value: ConditionalOperator; label: string }> = [
@@ -55,8 +57,16 @@ export function newRule(kind: RuleKind, ranges: string[]): ConditionalRule {
   const id = newRuleId();
 
   switch (kind) {
-    case 'formula':
-      return { id, kind, ranges, formula: '', format: { background: '#fef3c7' } };
+    case 'formula': {
+      // A blank formula is REJECTED by parseConditionalRule, so persisting one
+      // creates a rule that shows up now and is gone after a reload — the exact
+      // disappearance the ceilings elsewhere refuse to allow. Start from a
+      // valid formula anchored to the range's top-left, which is both
+      // immediately meaningful and obviously the thing to edit.
+      const anchor = rangeAnchor(ranges[0] ?? '') ?? { row: 0, column: 0 };
+      const cell = encodeCellAddress(anchor.row, anchor.column);
+      return { id, kind, ranges, formula: `=${cell}>0`, format: { background: '#fef3c7' } };
+    }
     case 'colorScale':
       return {
         id,

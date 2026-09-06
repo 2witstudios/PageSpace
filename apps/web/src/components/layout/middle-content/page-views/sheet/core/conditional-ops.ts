@@ -95,16 +95,22 @@ export const updateRule = (
   sheet: SheetData,
   id: string,
   patch: Partial<ConditionalRule>,
-): SheetData => {
+): RuleResult => {
   const rules = sheet.conditionalFormats ?? [];
   const index = rules.findIndex((rule) => rule.id === id);
-  if (index === -1) return sheet;
+  if (index === -1) return { ok: false, reason: 'That rule is no longer on the sheet.' };
 
   // A patch that widens the ranges has to clear the same bar as a new rule,
   // or editing is a way around the limit that adding refuses.
   if (patch.ranges) {
     const ranges = validateRanges(patch.ranges);
-    if (!ranges.ok) return sheet;
+    if (!ranges.ok) return ranges;
+  }
+
+  // A blank formula is rejected on load, so accepting one here would silently
+  // delete the rule at the next reload.
+  if ('formula' in patch && typeof patch.formula === 'string' && patch.formula.trim() === '') {
+    return { ok: false, reason: 'A custom-formula rule needs a formula.' };
   }
 
   const next = [...rules];
@@ -120,7 +126,7 @@ export const updateRule = (
     id: next[index].id,
     kind: next[index].kind,
   } as ConditionalRule;
-  return withRules(sheet, next);
+  return { ok: true, sheet: withRules(sheet, next) };
 };
 
 export const removeRule = (sheet: SheetData, id: string): SheetData => {
