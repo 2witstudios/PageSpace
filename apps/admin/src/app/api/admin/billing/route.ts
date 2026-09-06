@@ -24,6 +24,7 @@ import {
 import {
   MARKUP_BPS,
   TIER_MONTHLY_ALLOWANCE_CENTS,
+  TIER_ALLOWANCE_REFILLS,
 } from '@pagespace/lib/billing/credit-pricing';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { toCsv } from '@/lib/csv';
@@ -97,6 +98,8 @@ export const GET = withAdminAuth(async (_adminUser, request) => {
       enabled: true,
       markupBps: MARKUP_BPS,
       tierAllowanceCents: TIER_MONTHLY_ALLOWANCE_CENTS,
+      // false = one-time starter grant (free); true = re-granted each renewal.
+      tierAllowanceRefills: TIER_ALLOWANCE_REFILLS,
     };
 
     // Top-up revenue is real cash; monthly grants are allowance, never summed
