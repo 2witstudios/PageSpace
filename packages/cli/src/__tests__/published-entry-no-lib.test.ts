@@ -47,7 +47,8 @@ describe('published dist never references @pagespace/lib at runtime', () => {
     expect(core).toMatch(/function verifyGrant\(/);
     expect(core).toMatch(/function decideExecution\(/);
     const external = edges(join(DIST, 'env-bridge', 'lib-core.js')).filter((spec) => !spec.startsWith('.'));
-    expect(new Set(external.map((spec) => spec.replace(/^node:/, 'node:')))).toEqual(new Set(['zod', 'node:path']));
+    // The bundle inlines the pure core; the only externals left are zod (a CLI dep) and node builtins.
+    expect(new Set(external)).toEqual(new Set(['zod', 'node:path']));
   });
 
   it('walks every static edge from dist/index.js (the entry point is proven, not grepped)', () => {
