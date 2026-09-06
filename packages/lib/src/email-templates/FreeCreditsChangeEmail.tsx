@@ -141,6 +141,10 @@ export function FreeCreditsChangeEmail({
               month. The grant is added the first time you use AI and is not
               renewed.
             </Text>
+            <Text style={emailStyles.paragraph}>
+              This lets us keep the Free plan available and put more into the
+              product for the people using it.
+            </Text>
 
             <Section style={keepCard}>
               <Text style={{ ...calloutText, fontWeight: typography.semibold, color: colors.heading }}>

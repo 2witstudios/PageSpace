@@ -23,6 +23,7 @@ describe('FreeCreditsChangeEmail', () => {
     expect(html).toContain('one-time grant');
     expect(html).toContain('is not renewed');
     expect(html).not.toContain('/month');
+    expect(html).toContain('keep the Free plan available');
   });
 
   it('given a current balance, should tell the recipient exactly what they keep', async () => {
