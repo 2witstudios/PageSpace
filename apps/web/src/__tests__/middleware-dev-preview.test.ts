@@ -77,7 +77,7 @@ describe('middleware — preview host branch', () => {
   });
 
   it('rewrites a prefetch on a preview host too — attacker-controlled <link rel=prefetch> never reaches app routes', async () => {
-    for (const headers of [{ purpose: 'prefetch' }, { 'next-router-prefetch': '1' }]) {
+    for (const headers of [{ purpose: 'prefetch' }, { 'next-router-prefetch': '1' }] as Record<string, string>[]) {
       const res = await middleware(request('/dashboard', headers), undefined as unknown as NextFetchEvent);
       expect(rewriteTarget(res)).toBe('/api/dev-preview/host/env/env1/dashboard');
     }
