@@ -188,3 +188,26 @@ describe('defaultRuleRange', () => {
     expect(defaultRuleRange({ type: 'single', cell: { row: 2, column: 1 } })).toBe('B3');
   });
 });
+
+describe('a sheet with no rules at all', () => {
+  // Not a contrived case: the panel can be open on a sheet whose last rule was
+  // just deleted, and every one of these has to be a no-op rather than throw on
+  // an absent list.
+  const empty = () => sheetWith();
+
+  it('update is a no-op', () => {
+    const sheet = empty();
+    expect(updateRule(sheet, 'anything', { ranges: ['A1'] })).toBe(sheet);
+  });
+
+  it('remove is a no-op', () => {
+    const sheet = empty();
+    expect(removeRule(sheet, 'anything')).toBe(sheet);
+  });
+
+  it('move is a no-op', () => {
+    const sheet = empty();
+    expect(moveRule(sheet, 'anything', 1)).toBe(sheet);
+    expect(moveRule(sheet, 'anything', -1)).toBe(sheet);
+  });
+});
