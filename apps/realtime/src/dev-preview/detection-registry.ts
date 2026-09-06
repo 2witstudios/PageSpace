@@ -44,13 +44,18 @@ export interface DetectionRegistry {
   /** Watch the holder's live sprite (re-derived from the holder's row). Idempotent per sprite. */
   ensure(input: { holder: DevPreviewHolderRef }): Promise<void>;
   /**
-   * The listener snapshot the holder's watcher has ACCUMULATED so far, or
-   * `null` when this process holds no watcher for the holder's live sprite
-   * (never watched, dropped past the reconnect budget, or the sprite is on
-   * another instance's channel). This is the ONLY listener source a status
-   * render may use — it is already in hand, so answering costs the sprite
-   * nothing (the never-probe-to-render rule). `null` is a legitimate answer
-   * the UI renders as "slot unknown", never as "free".
+   * The listener snapshot the holder's watcher holds for its CURRENT
+   * connection, or `null` when there is no such snapshot: no watcher for the
+   * holder's live sprite (never watched, dropped past the reconnect budget,
+   * or the sprite is on another instance's channel), a connection that has
+   * not yet delivered its initial `port_list`, or a dropped connection
+   * waiting out the reconnect backoff. In those last two windows the
+   * detector's array is stale or merely empty, and handing it out as a KNOWN
+   * snapshot would let a render call 8080 free (and a resume start a relay
+   * onto an occupied port); "unknown" is the honest answer there. This is
+   * the ONLY listener source a status render may use — it is already in
+   * hand, so answering costs the sprite nothing (the never-probe-to-render
+   * rule). `null` renders as "slot unknown", never as "free".
    */
   listeners(input: { holder: DevPreviewHolderRef }): Promise<ListeningPort[] | null>;
   /** Sprites currently watched — for tests and for a status line. */
@@ -65,8 +70,13 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
   const watchers = new Map<string, { close(): void }>();
-  /** The live detector per watched sprite — the snapshot source for `listeners()`. Set once the channel is opening, cleared with the watcher. */
-  const detectors = new Map<string, DevPreviewDetector>();
+  /**
+   * The live detector per watched sprite — the snapshot source for
+   * `listeners()` — with whether the CURRENT connection has delivered its
+   * `port_list` (`fresh`). Set once the channel is opening, `fresh` flips on
+   * the snapshot frame and off on every close, cleared with the watcher.
+   */
+  const detectors = new Map<string, { detector: DevPreviewDetector; fresh: boolean }>();
 
   async function start(holder: DevPreviewHolderRef, sandboxId: string): Promise<void> {
     const reservation = watchers.get(sandboxId);
@@ -80,7 +90,8 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       return;
     }
     const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log });
-    detectors.set(sandboxId, detector);
+    const entry = { detector, fresh: false };
+    detectors.set(sandboxId, entry);
     const url = buildPortsWatchUrl(deps.spritesApiBaseUrl(), sandboxId);
     let stopped = false;
     let current: PortsWatchHandle | null = null;
@@ -91,9 +102,16 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
         url,
         token: deps.spritesToken(),
         createSocket: deps.createSocket,
-        onFrame: (frame) => { void detector.onFrame(frame); },
+        onFrame: (frame) => {
+          // The platform's first frame on a connection is the full `port_list`
+          // (ports-watch.ts); from then until the socket drops, the detector's
+          // accumulated set describes THIS connection and may be handed out.
+          if (frame.type === 'port_list') entry.fresh = true;
+          void detector.onFrame(frame);
+        },
         onClose: (info) => {
           current = null;
+          entry.fresh = false;
           if (stopped) return;
           if (info.opened) attempts = 0;
           if (info.reason === 'no-token' || attempts >= maxReconnects) {
@@ -145,7 +163,8 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       // Same rule as `ensure`: the sprite is the holder's ROW's, never a claim.
       const sandboxId = await deps.resolveHolderSandboxId(holder);
       if (sandboxId === null) return null;
-      return detectors.get(sandboxId)?.listeners() ?? null;
+      const entry = detectors.get(sandboxId);
+      return entry !== undefined && entry.fresh ? entry.detector.listeners() : null;
     },
     watching: () => [...watchers.keys()],
     stopAll() {
