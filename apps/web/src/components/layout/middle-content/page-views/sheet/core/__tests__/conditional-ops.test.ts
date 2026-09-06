@@ -1,12 +1,17 @@
 import { describe, it, expect } from 'vitest';
 import { createEmptySheet, type ConditionalRule, type SheetData } from '@pagespace/lib/sheets/sheet';
 import {
+  MAX_CONDITIONAL_RANGES_PER_RULE,
+  MAX_CONDITIONAL_RULES,
+} from '@pagespace/lib/sheets/sheet';
+import {
   addRule,
   defaultRuleRange,
   moveRule,
   newRuleId,
   removeRule,
   updateRule,
+  validateRanges,
 } from '../conditional-ops';
 
 const rule = (id: string, over = '10'): ConditionalRule => ({
@@ -22,23 +27,84 @@ const sheetWith = (...rules: ConditionalRule[]): SheetData => ({
   ...(rules.length > 0 ? { conditionalFormats: rules } : {}),
 });
 
+/** addRule refuses rather than returning a sheet, so unwrap where it succeeds. */
+const added = (sheet: SheetData, r: ConditionalRule): SheetData => {
+  const result = addRule(sheet, r);
+  if (!result.ok) throw new Error(`expected the rule to be accepted: ${result.reason}`);
+  return result.sheet;
+};
+
 describe('addRule', () => {
   it('appends, so a new rule layers over what is already there', () => {
-    const next = addRule(sheetWith(rule('a')), rule('b'));
-    expect(next.conditionalFormats?.map((r) => r.id)).toEqual(['a', 'b']);
+    expect(added(sheetWith(rule('a')), rule('b')).conditionalFormats?.map((r) => r.id))
+      .toEqual(['a', 'b']);
   });
 
   it('starts the list on a sheet that had none', () => {
-    expect(addRule(sheetWith(), rule('a')).conditionalFormats).toHaveLength(1);
+    expect(added(sheetWith(), rule('a')).conditionalFormats).toHaveLength(1);
   });
 
   it('bumps the version so the change is persisted', () => {
     const sheet = sheetWith();
-    expect(addRule(sheet, rule('a')).version).toBe(sheet.version + 1);
+    expect(added(sheet, rule('a')).version).toBe(sheet.version + 1);
+  });
+
+  it('refuses past the rule ceiling, with a reason worth showing', () => {
+    // The parser drops rules past this on the next load. Returning a sheet here
+    // would make the panel look like it worked, and the rule would be gone the
+    // next time the page opened.
+    const full = sheetWith(...Array.from({ length: MAX_CONDITIONAL_RULES }, (_, i) => rule(`r${i}`)));
+    const result = addRule(full, rule('one-too-many'));
+    expect(result.ok).toBe(false);
+    expect(result.ok === false && result.reason).toContain(String(MAX_CONDITIONAL_RULES));
+  });
+
+  it('accepts the last rule that fits', () => {
+    const nearlyFull = sheetWith(
+      ...Array.from({ length: MAX_CONDITIONAL_RULES - 1 }, (_, i) => rule(`r${i}`))
+    );
+    expect(addRule(nearlyFull, rule('last')).ok).toBe(true);
+  });
+
+  it.each([
+    ['an empty range list', []],
+    ['an unparseable range', ['not-a-range']],
+    ['a range beyond the cell ceiling', ['A1:ZZZ5000000']],
+  ])('refuses %s', (_label, ranges) => {
+    const result = addRule(sheetWith(), { ...rule('a'), ranges });
+    expect(result.ok).toBe(false);
+  });
+});
+
+describe('validateRanges', () => {
+  it('accepts an ordinary range', () => {
+    expect(validateRanges(['B2:B20']).ok).toBe(true);
+  });
+
+  it('names the offending range, so the panel can point at it', () => {
+    const result = validateRanges(['A1:A9', 'nonsense']);
+    expect(result.ok === false && result.reason).toContain('nonsense');
+  });
+
+  it('refuses more ranges than one rule may hold', () => {
+    const many = Array.from({ length: MAX_CONDITIONAL_RANGES_PER_RULE + 1 }, () => 'A1');
+    expect(validateRanges(many).ok).toBe(false);
+  });
+
+  it('refuses ranges that are individually fine but too big together', () => {
+    // The per-range ceiling would pass each one; the sum is what evaluation pays.
+    const chunky = Array.from({ length: 3 }, (_, i) => `A${i * 200000 + 1}:A${(i + 1) * 200000}`);
+    expect(validateRanges(chunky).ok).toBe(false);
   });
 });
 
 describe('updateRule', () => {
+  it('refuses a patch that widens the ranges past the ceiling', () => {
+    // Otherwise editing is a way around the limit that adding refuses.
+    const sheet = sheetWith(rule('a'));
+    expect(updateRule(sheet, 'a', { ranges: ['A1:ZZZ5000000'] })).toBe(sheet);
+  });
+
   it('replaces a rule in place, keeping its precedence', () => {
     const next = updateRule(sheetWith(rule('a'), rule('b')), 'a', { ranges: ['B1:B9'] });
     expect(next.conditionalFormats?.[0].ranges).toEqual(['B1:B9']);

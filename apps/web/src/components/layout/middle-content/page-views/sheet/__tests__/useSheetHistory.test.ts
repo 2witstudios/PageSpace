@@ -304,3 +304,70 @@ describe('useSheetHistory presentation changes', () => {
     expect(result.current.canUndo).toBe(false);
   });
 });
+
+describe('every persisted field counts as a change', () => {
+  /**
+   * A field this comparator does not know about is saved to the server and then
+   * dropped from memory, and the next edit writes the stale value back over it.
+   * That already happened once for `formats`, and again for `conditionalFormats`
+   * — which shipped with the engine and was only reachable once a panel could
+   * create a rule.
+   *
+   * So this enumerates the persisted keys rather than listing them by hand: a
+   * new one fails here until the comparator is taught about it.
+   */
+  const CHANGES: Record<string, (sheet: SheetData) => SheetData> = {
+    rowCount: (s) => ({ ...s, rowCount: s.rowCount + 1 }),
+    columnCount: (s) => ({ ...s, columnCount: s.columnCount + 1 }),
+    cells: (s) => ({ ...s, cells: { ...s.cells, ZZ99: 'new' } }),
+    formats: (s) => ({ ...s, formats: { A1: { bold: true } } }),
+    columnFormats: (s) => ({ ...s, columnFormats: { A: { italic: true } } }),
+    columnWidths: (s) => ({ ...s, columnWidths: { A: 200 } }),
+    rowHeights: (s) => ({ ...s, rowHeights: { '1': 40 } }),
+    frozenRows: (s) => ({ ...s, frozenRows: 1 }),
+    frozenColumns: (s) => ({ ...s, frozenColumns: 1 }),
+    sheetName: (s) => ({ ...s, sheetName: 'Renamed' }),
+    ranges: (s) => ({ ...s, ranges: { myRange: { ref: 'A1:B2' } } }),
+    conditionalFormats: (s) => ({
+      ...s,
+      conditionalFormats: [
+        {
+          id: 'r', kind: 'cell', ranges: ['A1'],
+          condition: { operator: 'isNotEmpty' }, format: { bold: true },
+        },
+      ],
+    }),
+    extraSheets: (s) => ({
+      ...s,
+      extraSheets: [
+        { name: 'Second', order: 1, meta: { rowCount: 5, columnCount: 5 }, columns: {}, cells: {}, ranges: {}, dependencies: {} },
+      ],
+    }),
+  };
+
+  /** Persisted keys of SheetData, minus the ones that are not user state. */
+  const IGNORED = new Set(['version']);
+
+  it('covers every persisted field of SheetData', () => {
+    // If SheetData grows a field, this list has to grow with it — otherwise the
+    // case below is silently never exercised for the new one.
+    const sample: SheetData = {
+      ...createTestSheet(),
+      ...Object.values(CHANGES).reduce((acc, change) => change(acc), createTestSheet()),
+    };
+    const persisted = Object.keys(sample).filter((key) => !IGNORED.has(key));
+    for (const key of persisted) {
+      expect(Object.keys(CHANGES)).toContain(key);
+    }
+  });
+
+  it.each(Object.keys(CHANGES))('treats a change to %s as a change', (field) => {
+    const { result } = renderHook(() => useSheetHistory(createTestSheet()));
+
+    act(() => {
+      result.current.setSheet((previous) => CHANGES[field](previous));
+    });
+
+    expect(result.current.canUndo, `${field} was treated as a no-op`).toBe(true);
+  });
+});

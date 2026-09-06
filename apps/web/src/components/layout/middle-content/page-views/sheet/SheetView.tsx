@@ -81,6 +81,15 @@ import { SheetFormulaBar } from './components/SheetFormulaBar';
 import { SheetGrid } from './components/SheetGrid';
 import { SheetToolbar } from './components/SheetToolbar';
 import { SheetTabBar } from './components/SheetTabBar';
+import { SheetConditionalPanel } from './components/SheetConditionalPanel';
+import {
+  addRule,
+  defaultRuleRange,
+  moveRule,
+  removeRule,
+  updateRule,
+} from './core/conditional-ops';
+import { newRule, type RuleKind } from './core/rule-presets';
 import type { SheetCellHandlers } from './components/SheetCell';
 import {
   DENSITY_ROW_HEIGHTS,
@@ -152,6 +161,10 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
 
   // Row density, and the size currently being dragged but not yet committed.
   const [density, setDensity] = useState<GridDensity>('normal');
+  // Conditional-formatting panel: open state, and the reason the last attempt
+  // was refused (a ceiling, an unusable range) so the panel can say so.
+  const [conditionalOpen, setConditionalOpen] = useState(false);
+  const [conditionalRefusal, setConditionalRefusal] = useState<string | null>(null);
   const [columnResize, setColumnResize] = useState<SizeOverride | undefined>(undefined);
   const [rowResize, setRowResize] = useState<SizeOverride | undefined>(undefined);
 
@@ -1162,6 +1175,67 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
     setFormulaValue('');
   }, [applySheetUpdate, isReadOnly, readOnlyReason, selection]);
 
+  // ---- Conditional formatting -------------------------------------------
+
+  const conditionalRules = sheet.conditionalFormats ?? [];
+
+  const handleAddRule = useCallback(
+    (kind: RuleKind, ranges: string[]) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
+      }
+
+      // `addRule` refuses rather than handing back a sheet the parser would
+      // quietly truncate on the next load, so the reason is surfaced instead of
+      // the rule silently going missing.
+      let refusal: string | null = null;
+      applySheetUpdate((previous) => {
+        const result = addRule(previous, newRule(kind, ranges));
+        if (!result.ok) {
+          refusal = result.reason;
+          return previous;
+        }
+        return result.sheet;
+      });
+      setConditionalRefusal(refusal);
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
+
+  const handleUpdateRule = useCallback(
+    (id: string, patch: Partial<(typeof conditionalRules)[number]>) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
+      }
+      setConditionalRefusal(null);
+      applySheetUpdate((previous) => updateRule(previous, id, patch));
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
+
+  const handleRemoveRule = useCallback(
+    (id: string) => {
+      if (isReadOnly) {
+        toast.error(readOnlyReason);
+        return;
+      }
+      setConditionalRefusal(null);
+      applySheetUpdate((previous) => removeRule(previous, id));
+    },
+    [applySheetUpdate, isReadOnly, readOnlyReason]
+  );
+
+  const handleMoveRule = useCallback(
+    (id: string, direction: -1 | 1) => {
+      if (isReadOnly) return;
+      setConditionalRefusal(null);
+      applySheetUpdate((previous) => moveRule(previous, id, direction));
+    },
+    [applySheetUpdate, isReadOnly]
+  );
+
   /**
    * One stable object for every per-cell handler. Passing these individually
    * would change a cell's props on every render of the view and defeat the
@@ -1226,6 +1300,9 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
           onRedo={handleRedo}
           onFreezeRows={handleFreezeRows}
           onFreezeColumns={handleFreezeColumns}
+          onOpenConditional={() => setConditionalOpen((open) => !open)}
+          conditionalOpen={conditionalOpen}
+          conditionalCount={conditionalRules.length}
           onRefocusGrid={focusGrid}
         />
       </motion.div>
@@ -1275,7 +1352,11 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
         {/* The grid sits in a rounded, hairline-bordered shell so the surface
             reads as a panel in the product rather than a full-bleed mesh of
             borders. `overflow-hidden` keeps the cells square inside the radius. */}
-        <div className="h-full px-4 pb-2">
+        {/* The panel is a sibling of the grid rather than an overlay: it has to
+            coexist with the sheet so a rule's effect is visible while it is
+            being edited. */}
+        <div className="flex h-full gap-0 px-4 pb-2">
+          <div className="min-w-0 flex-1">
           <ContextMenu>
             <ContextMenuTrigger asChild>
               <div className="h-full overflow-hidden rounded-lg border border-[var(--separator)] bg-background">
@@ -1315,6 +1396,21 @@ const SheetViewComponent: React.FC<SheetViewProps> = ({ page }) => {
               onClearFormatting={() => runFormatCommand({ kind: 'clear' })}
             />
           </ContextMenu>
+          </div>
+
+          {conditionalOpen && (
+            <SheetConditionalPanel
+              rules={conditionalRules}
+              defaultRange={defaultRuleRange(selection)}
+              disabled={isReadOnly}
+              refusal={conditionalRefusal}
+              onAdd={handleAddRule}
+              onUpdate={handleUpdateRule}
+              onRemove={handleRemoveRule}
+              onMove={handleMoveRule}
+              onClose={() => setConditionalOpen(false)}
+            />
+          )}
         </div>
       </PullToRefresh>
 

@@ -23,6 +23,7 @@ const isSameSheetState = (a: SheetData, b: SheetData): boolean =>
   JSON.stringify(a.columnWidths) === JSON.stringify(b.columnWidths) &&
   JSON.stringify(a.rowHeights) === JSON.stringify(b.rowHeights) &&
   JSON.stringify(a.ranges) === JSON.stringify(b.ranges) &&
+  JSON.stringify(a.conditionalFormats) === JSON.stringify(b.conditionalFormats) &&
   JSON.stringify(a.extraSheets) === JSON.stringify(b.extraSheets);
 
 interface HistoryState {
