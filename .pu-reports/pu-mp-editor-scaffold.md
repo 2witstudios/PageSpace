@@ -178,6 +178,24 @@ invocation (changes deploy behaviour in four images; out of scope for a move); d
 duplicated coverage-script package arrays (pre-existing); a shared ESM tsconfig base for
 `sdk`+`editor` (two consumers is not yet worth a base).
 
+## CI and the Docker proof
+
+CI (Test Suite workflow) is green on both commits: Lint & TypeScript Check (includes `knip:check`,
+confirming the worktree-only knip discrepancy), Unit Tests (the Postgres-backed suites I could not
+run locally), and E2E. The Docker Images workflow only runs on pushes to `master` (and
+`workflow_dispatch`, which also pushes images to ghcr for any ref, so I did not trigger it).
+Instead I reproduced the deps stage locally: copied exactly the files `apps/web/Dockerfile`
+COPYs before `bun install --frozen-lockfile` (root manifest + lockfile + every workspace
+`package.json`) into a scratch dir and installed — 4320 packages, success. Negative control:
+the same set minus `packages/editor/package.json` fails with
+`error: @pagespace/editor@workspace:* failed to resolve`, which is precisely the image-build-time
+failure the 9 COPY sites prevent. All 8 Dockerfiles copy the same manifest set (guarded by the
+derived test), so the result applies to every image.
+
+Codex's one comment (P2, `test:unit` did not build the editor) was verified and fixed; the
+thread is replied to with evidence and resolved. CodeRabbit was rate-limited at PR open and
+has not yet posted a real review.
+
 ## Not done / for the next agent
 
 - `apps/collab` does not exist yet; the package is ready for it to import
