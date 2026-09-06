@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { API_CONTRACT_VERSION } from '@pagespace/lib/api-contract-version';
-import { resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { previewFrameSrcEntry } from '@pagespace/lib/services/sandbox/preview/preview-host';
 import { HANDOFF_BRIDGE_ROUTE_PATHS } from '@/app/api/auth/_shared/handoffBridgeRoutes';
 
@@ -164,7 +164,7 @@ export const buildCSPPolicy = (nonce: string): string => {
   // origin (`<kind>-<id>.preview.<apex>`, a PageSpace-owned apex — never
   // `*.sprites.app`). Exactly the wildcard, only when the feature is
   // configured; a dark deployment's policy is byte-identical to before.
-  const previewApex = resolveDevPreviewApex();
+  const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
   if (previewApex !== null) frameSrc.push(previewFrameSrcEntry(previewApex));
 
   // Cloud-only: Google and Stripe external origins

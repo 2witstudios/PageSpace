@@ -74,7 +74,10 @@ export function formatSocketHttpError(status: number, reason: string): string {
 
 /** Pure: the `101` response line + relayed headers for the client. */
 export function formatUpgradeResponse(headers: HeaderMap): string {
-  const lines = Object.entries(headers).map(([name, value]) => `${name}: ${value}`);
+  // Defence in depth: Node's parser already rejects a bare CR/LF in an
+  // upstream header value, but these lines are written raw, so strip any
+  // that would otherwise split a header (response splitting).
+  const lines = Object.entries(headers).map(([name, value]) => `${name.replace(/[\r\n]/g, '')}: ${value.replace(/[\r\n]/g, '')}`);
   return ['HTTP/1.1 101 Switching Protocols', 'Connection: Upgrade', 'Upgrade: websocket', ...lines, '', ''].join('\r\n');
 }
 

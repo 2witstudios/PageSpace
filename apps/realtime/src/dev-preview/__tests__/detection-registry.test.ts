@@ -49,6 +49,7 @@ function deps(over: Partial<DetectionRegistryDeps> = {}) {
   const upserts: unknown[] = [];
   const d: DetectionRegistryDeps = {
     featureEnabled: () => true,
+    resolveHolderSandboxId: async (holder) => (holder.id === 'gone-holder' ? null : `sbx-${holder.id}`),
     attach: async () => fakeHandle(),
     store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); } },
     createSocket: factory.createSocket,
@@ -68,7 +69,7 @@ describe('createDetectionRegistry', () => {
   it('does nothing while the feature is dark', async () => {
     const h = deps({ featureEnabled: () => false });
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     expect(h.sockets).toHaveLength(0);
     expect(registry.watching()).toEqual([]);
   });
@@ -76,18 +77,18 @@ describe('createDetectionRegistry', () => {
   it('opens ONE watch per sprite, at the ports/watch endpoint with the bearer token, and is idempotent', async () => {
     const h = deps();
     const registry = createDetectionRegistry(h.deps);
-    await Promise.all([registry.ensure({ holder: HOLDER, sandboxId: 'sbx' }), registry.ensure({ holder: HOLDER, sandboxId: 'sbx' })]);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await Promise.all([registry.ensure({ holder: HOLDER }), registry.ensure({ holder: HOLDER })]);
+    await registry.ensure({ holder: HOLDER });
     expect(h.sockets).toHaveLength(1);
-    expect(h.sockets[0].url).toBe('wss://api.sprites.dev/v1/sprites/sbx/ports/watch');
+    expect(h.sockets[0].url).toBe('wss://api.sprites.dev/v1/sprites/sbx-env1/ports/watch');
     expect(h.sockets[0].headers).toEqual({ Authorization: 'Bearer tok' });
-    expect(registry.watching()).toEqual(['sbx']);
+    expect(registry.watching()).toEqual(['sbx-env1']);
   });
 
   it('feeds frames to the detector, which plans through the core and writes the row', async () => {
     const h = deps();
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     h.sockets[0].emit('open');
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_opened', port: 5173, pid: 3 }) });
     await new Promise((r) => setTimeout(r, 10));
@@ -95,10 +96,18 @@ describe('createDetectionRegistry', () => {
     expect(h.upserts[0]).toMatchObject({ holder: HOLDER, targetPort: 5173, spriteInstanceId: 'inst' });
   });
 
+  it('watches nothing for a holder whose row has no live sprite — the caller never names the sprite', async () => {
+    const h = deps();
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: { kind: 'env', id: 'gone-holder' } });
+    expect(h.sockets).toHaveLength(0);
+    expect(registry.watching()).toEqual([]);
+  });
+
   it('drops a sprite the platform no longer has, without opening a socket', async () => {
     const h = deps({ attach: async () => null });
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'gone' });
+    await registry.ensure({ holder: HOLDER });
     expect(h.sockets).toHaveLength(0);
     expect(registry.watching()).toEqual([]);
     expect(h.logs.some((l) => l.startsWith('warn:dev-preview: sprite not attachable'))).toBe(true);
@@ -107,7 +116,7 @@ describe('createDetectionRegistry', () => {
   it('reconnects with backoff after a drop, resets the budget once a connection opened, and stops after the budget', async () => {
     const h = deps({ maxReconnects: 2 });
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     // First socket connects then drops: budget reset, reconnect after 1s.
     h.sockets[0].emit('open');
     h.sockets[0].emit('close', { code: 1006 });
@@ -125,14 +134,14 @@ describe('createDetectionRegistry', () => {
     expect(registry.watching()).toEqual([]);
     expect(h.logs.some((l) => l.startsWith('warn:dev-preview: watch channel gone'))).toBe(true);
     // A later ensure starts fresh.
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     expect(h.sockets).toHaveLength(4);
   });
 
   it('never opens a channel without a token (fail closed), and stops at once', async () => {
     const h = deps({ spritesToken: () => '' });
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     await new Promise((r) => setImmediate(r));
     expect(h.sockets).toHaveLength(0);
     expect(registry.watching()).toEqual([]);
@@ -142,8 +151,8 @@ describe('createDetectionRegistry', () => {
   it('stopAll closes every socket and forgets every sprite; a close after stop does not reconnect', async () => {
     const h = deps();
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'a' });
-    await registry.ensure({ holder: { kind: 'workspace', id: 'w' }, sandboxId: 'b' });
+    await registry.ensure({ holder: HOLDER });
+    await registry.ensure({ holder: { kind: 'workspace', id: 'w' } });
     registry.stopAll();
     expect(h.sockets.map((s) => s.closes)).toEqual([1, 1]);
     expect(registry.watching()).toEqual([]);
@@ -155,7 +164,7 @@ describe('createDetectionRegistry', () => {
   it('a throwing attach is logged and the slot released', async () => {
     const h = deps({ attach: async () => { throw new Error('boom'); } });
     const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+    await registry.ensure({ holder: HOLDER });
     expect(registry.watching()).toEqual([]);
     expect(h.logs.some((l) => l.startsWith('error:dev-preview: watcher failed to start'))).toBe(true);
   });
@@ -165,7 +174,7 @@ describe('createDetectionRegistry', () => {
     try {
       const h = deps({ wait: undefined, maxReconnects: 1 });
       const registry = createDetectionRegistry(h.deps);
-      await registry.ensure({ holder: HOLDER, sandboxId: 'sbx' });
+      await registry.ensure({ holder: HOLDER });
       h.sockets[0].emit('close', { code: 1006 });
       await vi.advanceTimersByTimeAsync(1000);
       expect(h.sockets).toHaveLength(2);

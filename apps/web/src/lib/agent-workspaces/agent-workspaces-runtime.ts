@@ -1213,7 +1213,7 @@ export async function provisionSessionSandbox(
   // The sprite is up: ask realtime to watch it for dev servers (dark unless
   // the preview feature is configured; fire-and-forget). The HOLDER is the
   // env for an env-bound session — whoever owns the sprite pointer.
-  if (result.ok) requestDevPreviewWatch({ holder: resolveDevPreviewHolder(row), sandboxId: result.sandboxId });
+  if (result.ok) requestDevPreviewWatch({ holder: resolveDevPreviewHolder(row) });
   return result;
 }
 

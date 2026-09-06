@@ -154,5 +154,6 @@ describe('tunnelWebSocketUpgrade', () => {
   it('formats socket-level responses without a body', () => {
     expect(formatSocketHttpError(502, 'Bad Gateway')).toBe('HTTP/1.1 502 Bad Gateway\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
     expect(formatUpgradeResponse({ 'sec-websocket-accept': 'a' })).toBe('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nsec-websocket-accept: a\r\n\r\n');
+    expect(formatUpgradeResponse({ 'x-dev': 'a\r\nset-cookie: injected' })).toBe('HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nx-dev: aset-cookie: injected\r\n\r\n');
   });
 });

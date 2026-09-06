@@ -2,8 +2,8 @@
  * One `ports/watch` watcher per live sprite, for as long as the channel
  * lives — the realtime tier's half of dev-server detection.
  *
- * `ensure({ holder, sandboxId })` is idempotent: a sprite already being
- * watched is left alone (the web tier's trigger and the shell bridge both
+ * `ensure({ holder })` is idempotent: a sprite already being watched is
+ * left alone (the web tier's trigger and the shell bridge both
  * call it freely). A watcher attaches to the sprite (a control-plane read —
  * the caller has just ensured or opened a shell on it, so it is awake),
  * opens the watch channel, and feeds every frame to a detector
@@ -26,6 +26,8 @@ import { buildPortsWatchUrl, openPortsWatch, type PortsWatchHandle, type PortsWa
 
 export interface DetectionRegistryDeps {
   featureEnabled(): boolean;
+  /** The holder's LIVE sprite name from its own row (session or env), or null — the caller's claim is never trusted. */
+  resolveHolderSandboxId(holder: DevPreviewHolderRef): Promise<string | null>;
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   store: DevPreviewStore;
   createSocket: PortsWatchSocketFactory;
@@ -39,7 +41,8 @@ export interface DetectionRegistryDeps {
 }
 
 export interface DetectionRegistry {
-  ensure(input: { holder: DevPreviewHolderRef; sandboxId: string }): Promise<void>;
+  /** Watch the holder's live sprite (re-derived from the holder's row). Idempotent per sprite. */
+  ensure(input: { holder: DevPreviewHolderRef }): Promise<void>;
   /** Sprites currently watched — for tests and for a status line. */
   watching(): string[];
   stopAll(): void;
@@ -101,8 +104,13 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   }
 
   return {
-    async ensure({ holder, sandboxId }) {
+    async ensure({ holder }) {
       if (!deps.featureEnabled()) return;
+      // The sprite is re-derived from the holder's ROW, never taken from the
+      // caller: a signed trigger names a holder, and the row says which VM (if
+      // any) that holder is on right now.
+      const sandboxId = await deps.resolveHolderSandboxId(holder);
+      if (sandboxId === null) return;
       if (watchers.has(sandboxId)) return;
       // Reserve the slot synchronously so two concurrent ensures start one watcher.
       watchers.set(sandboxId, { close() { watchers.delete(sandboxId); } });

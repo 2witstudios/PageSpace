@@ -195,8 +195,12 @@ export function buildPreviewResponseHeaders(appOrigin: string | null): ReadonlyA
  * Pure: a dev server's `Location`, made safe to relay. A redirect back to the
  * sprite's own origin becomes origin-relative (the browser stays on the
  * preview host and the sprite URL never reaches the client); any other
- * absolute target is relayed as-is — it is the dev server's choice to send
- * the user elsewhere, and it leaks nothing of ours.
+ * absolute target is relayed as-is. That is an INTENTIONAL open redirect on
+ * the preview origin: the origin belongs to the user's own sandbox, the dev
+ * server is the user's (or their agent's) code, and an OAuth flow under
+ * development legitimately bounces to a third party. Nothing on the app
+ * origin trusts a preview-origin redirect, so it cannot launder a link into
+ * PageSpace.
  */
 export function rewriteUpstreamLocation(location: string, spriteOrigin: string): string {
   try {

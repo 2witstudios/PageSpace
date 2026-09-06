@@ -20,11 +20,11 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 
-export const DEV_PREVIEW_WATCH_ROUTE = '/api/dev-preview/watch';
+const DEV_PREVIEW_WATCH_ROUTE = '/api/dev-preview/watch';
 
-export interface DevPreviewWatchRequest {
+interface DevPreviewWatchRequest {
+  /** Only the holder travels; realtime re-derives the sprite from the holder's row. */
   holder: DevPreviewHolderRef;
-  sandboxId: string;
 }
 
 export function requestDevPreviewWatch(input: DevPreviewWatchRequest, fetchImpl: typeof fetch = fetch): void {

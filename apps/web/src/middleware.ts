@@ -151,7 +151,7 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
     const previewHolder = previewApex === null ? null : parsePreviewHost(req.headers.get('host'), previewApex);
     if (previewHolder !== null) {
-      const rewritten = req.nextUrl.clone();
+      const rewritten = new URL(req.url);
       rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
       return NextResponse.rewrite(rewritten);
     }
@@ -485,6 +485,19 @@ export const config = {
         { type: 'header', key: 'next-router-prefetch' },
         { type: 'header', key: 'purpose', value: 'prefetch' },
       ],
+    },
+    // Dev-preview hosts (`<kind>-<id>.preview.<apex>`): EVERY request must reach
+    // the middleware so it is rewritten onto the preview route — including
+    // `/_next/static/*` and `/_next/image` (a proxied Next dev server serves
+    // its own `/_next/*`, and PageSpace's own chunks/optimizer must never be
+    // reachable on a preview origin) and including prefetches (a sandbox's
+    // HTML could carry `<link rel=prefetch>`, and a request that skipped the
+    // rewrite would reach App Router routes on the preview apex, defeating
+    // host confinement). Hence a second entry with no exclusions and no
+    // `missing`, keyed on the host shape; the route still validates the apex.
+    {
+      source: '/:path*',
+      has: [{ type: 'host', value: '.*\\.preview\\..*' }],
     },
   ],
 };

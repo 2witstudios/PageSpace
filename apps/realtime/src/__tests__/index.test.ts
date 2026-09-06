@@ -273,6 +273,7 @@ vi.mock('../dev-preview/detection-registry', () => ({
 }));
 vi.mock('../dev-preview/preview-runtime', () => ({
   buildRealtimePreviewAccessDeps: vi.fn(),
+  resolveHolderSandboxId: vi.fn(),
   createConnectScopedSandboxHost: vi.fn(),
   getRealtimePreviewCookieKey: vi.fn(() => Buffer.alloc(0)),
   getRealtimePreviewStore: vi.fn(() => ({ findByHolder: vi.fn(), upsert: vi.fn() })),
@@ -2487,7 +2488,7 @@ describe('requestListener - /api/dev-preview/watch', () => {
 
   it('given a valid signature and a well-formed body, should accept and hand the holder + sprite to the detection registry', async () => {
     vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
-    const body = JSON.stringify({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'sbx-1' });
+    const body = JSON.stringify({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'ignored-caller-claim' });
     const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });
     const res = createMockRes();
 
@@ -2496,7 +2497,7 @@ describe('requestListener - /api/dev-preview/watch', () => {
     req._emit('end');
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    expect(mockRegistryEnsure).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'sbx-1' });
+    expect(mockRegistryEnsure).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' } });
     expect(res.writeHead).toHaveBeenCalledWith(202, { 'Content-Type': 'application/json' });
     expect(res.end).toHaveBeenCalledWith(JSON.stringify({ accepted: true }));
   });
@@ -2519,8 +2520,8 @@ describe('requestListener - /api/dev-preview/watch', () => {
     'not json',
     JSON.stringify({ holder: { kind: 'drive', id: 'x' }, sandboxId: 's' }),
     JSON.stringify({ holder: { kind: 'env', id: '' }, sandboxId: 's' }),
-    JSON.stringify({ holder: { kind: 'env', id: 'e' } }),
-    JSON.stringify({ holder: { kind: 'env', id: 'e' }, sandboxId: 7 }),
+    JSON.stringify({ holder: { kind: 'env' } }),
+    JSON.stringify({ sandboxId: 's' }),
   ])('given a signed but malformed body (%s), should 400 without touching the registry', async (body) => {
     vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
     const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });

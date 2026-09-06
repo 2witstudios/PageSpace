@@ -96,8 +96,15 @@ export const PREVIEW_AUTH_PATH = '/__pagespace/auth';
 export const PREVIEW_GRANT_QUERY_PARAM = 'grant';
 /** How long a minted grant may go unredeemed. One redirect hop; a minute is generous. */
 export const PREVIEW_GRANT_TTL_MS = 60_000;
-/** How long a redeemed cookie authenticates before the frame must re-open. */
-export const PREVIEW_COOKIE_TTL_MS = 8 * 60 * 60 * 1000;
+/**
+ * How long a redeemed cookie authenticates before the frame must re-open.
+ * MINUTES, not hours: the cookie is not yet bound to the PageSpace session
+ * that minted it (see {@link PreviewCookieClaims}), so its lifetime is the
+ * window in which a logged-out user's preview keeps answering. The re-mint
+ * path (a cookie-less navigation is sent back to `/preview/open`) makes an
+ * expiry an invisible re-handshake, so short is cheap.
+ */
+export const PREVIEW_COOKIE_TTL_MS = 10 * 60 * 1000;
 
 const COOKIE_KEY_LABEL = 'pagespace:dev-preview-cookie:v1';
 const TOKEN_VERSION = 'v1';
@@ -107,6 +114,17 @@ const HOLDER_ID_SHAPE = /^[a-z0-9]{1,64}$/;
 // Cookie token
 // -----------------------------------------------------------------------------
 
+/**
+ * What the cookie asserts. KNOWN GAP, stated here: the claims name the user
+ * but NOT the PageSpace session that minted the grant, so logging out (or
+ * revoking that session) does not invalidate a live preview cookie — only
+ * its expiry ({@link PREVIEW_COOKIE_TTL_MS}, minutes) or a change in the
+ * user's drive access (re-checked on every request) does. The follow-up is
+ * to carry the minting session id here and have the per-request gather
+ * check it is still valid. Key rotation: rotating `SANDBOX_SESSION_SECRET`
+ * invalidates every live cookie at once (the derived key changes), which
+ * self-heals through the same re-mint path — there is no rotation window.
+ */
 export interface PreviewCookieClaims {
   holder: DevPreviewHolderRef;
   userId: string;

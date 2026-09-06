@@ -20,6 +20,8 @@ import { isDevPreviewEnabled } from '@pagespace/lib/services/sandbox/preview/dev
 import { createDbDevPreviewStore, type DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
 import type { PreviewAccessDeps } from '@pagespace/lib/services/sandbox/preview/preview-access';
 import { derivePreviewCookieKey } from '@pagespace/lib/services/sandbox/preview/preview-grant';
+import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { resolveLiveSandboxId } from '@pagespace/lib/services/agent-workspaces/workspace-status';
 import { getRealtimeSpritesSdk } from '../terminal/realtime-sprites-client';
 
 let previewStore: DevPreviewStore | null = null;
@@ -66,4 +68,17 @@ export function buildRealtimePreviewAccessDeps(): PreviewAccessDeps {
     featureEnabled: isDevPreviewEnabled,
     now: () => new Date(),
   };
+}
+
+/** The holder's live sprite from its own row — what the detection registry watches. Never a caller's claim. */
+export async function resolveHolderSandboxId(holder: DevPreviewHolderRef): Promise<string | null> {
+  if (holder.kind === 'env') {
+    const env = await (await envStorePromise).findById(holder.id);
+    return env === null || env.substrate !== 'sprite' ? null : resolveLiveSandboxId({ sandboxId: env.sandboxId, spriteTornDownAt: env.spriteTornDownAt }, null);
+  }
+  const session = await (await sessionStorePromise).findById(holder.id);
+  if (!session || session.endedAt !== null) return null;
+  const env = session.envId === null ? null : await (await envStorePromise).findById(session.envId);
+  if (session.envId !== null && env === null) return null;
+  return resolveLiveSandboxId(session, env);
 }

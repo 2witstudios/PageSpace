@@ -61,6 +61,7 @@ import {
   createConnectScopedSandboxHost,
   getRealtimePreviewCookieKey,
   getRealtimePreviewStore,
+  resolveHolderSandboxId,
 } from './dev-preview/preview-runtime';
 import { resolvePreviewTarget } from '@pagespace/lib/services/sandbox/preview/preview-access';
 import { tunnelWebSocketUpgrade } from '@pagespace/lib/services/sandbox/preview/preview-ws-tunnel';
@@ -150,6 +151,7 @@ const dbSessionShellStorePromise = createDbSessionShellStore();
 // TTY-only and a watcher must exist for AGENT-launched servers too.
 const devPreviewRegistry = createDetectionRegistry({
   featureEnabled: isDevPreviewEnabled,
+  resolveHolderSandboxId,
   attach: async (sandboxId) => (await createConnectScopedSandboxHost()).attach({ sandboxId }).catch(() => null),
   store: getRealtimePreviewStore(),
   createSocket: nodeWebSocketFactory,
@@ -324,7 +326,7 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
 
   // The sprite is awake (it was just ensured for a shell): attach the
   // dev-server watcher for its HOLDER — the env for an env-bound session.
-  void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row), sandboxId: result.sandboxId });
+  void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row) });
 
   return { ok: true, sandboxId: result.sandboxId };
 }
@@ -1021,9 +1023,10 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         });
     } else if (req.method === 'POST' && req.url === '/api/dev-preview/watch') {
         // The web tier just ensured a sprite (a session provision) and asks for a
-        // dev-server watcher on it. Signed like every other web→realtime call;
-        // the body names a holder and a sprite, both of which the watcher
-        // re-derives from rows and the control plane before acting.
+        // dev-server watcher on its HOLDER. Signed like every other web→realtime
+        // call; the body names only a holder — which sprite that holder is on
+        // is re-derived from the holder's own row inside the registry, so a
+        // signed-but-wrong sprite name can never be watched.
         readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
@@ -1031,7 +1034,7 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ error: 'Authentication failed' }));
                 return;
             }
-            let parsed: { holder?: { kind?: unknown; id?: unknown }; sandboxId?: unknown };
+            let parsed: { holder?: { kind?: unknown; id?: unknown } };
             try {
                 parsed = JSON.parse(body);
             } catch {
@@ -1041,13 +1044,12 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
             }
             const kind = parsed?.holder?.kind;
             const id = parsed?.holder?.id;
-            const sandboxId = parsed?.sandboxId;
-            if ((kind !== 'workspace' && kind !== 'env') || typeof id !== 'string' || id.length === 0 || typeof sandboxId !== 'string' || sandboxId.length === 0) {
+            if ((kind !== 'workspace' && kind !== 'env') || typeof id !== 'string' || id.length === 0) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Malformed body' }));
                 return;
             }
-            void devPreviewRegistry.ensure({ holder: { kind, id }, sandboxId });
+            void devPreviewRegistry.ensure({ holder: { kind, id } });
             res.writeHead(202, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ accepted: true }));
         });

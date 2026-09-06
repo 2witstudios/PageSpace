@@ -168,4 +168,12 @@ describe('redirect targets', () => {
     assert({ given: 'env with drive', should: 'env route', actual: buildPreviewOpenPath({ kind: 'env', id: 'e' }, 'd'), expected: '/api/drives/d/envs/e/preview/open' });
     assert({ given: 'env without drive', should: 'null', actual: buildPreviewOpenPath({ kind: 'env', id: 'e' }, null), expected: null });
   });
+
+});
+
+describe('cookie lifetime', () => {
+  it('is minutes, not hours — the cookie is not session-bound, so its TTL is the logged-out exposure window', async () => {
+    const { PREVIEW_COOKIE_TTL_MS } = await import('../preview-grant');
+    expect(PREVIEW_COOKIE_TTL_MS).toBeLessThanOrEqual(15 * 60 * 1000);
+  });
 });

@@ -148,4 +148,27 @@ describe('buildPreviewUpgradeHandler', () => {
     expect(await buildPreviewUpgradeHandler(d.deps)(request, s.socket, Buffer.alloc(0))).toBe(true);
     expect(d.logs[0]?.context).toMatchObject({ path: '/' });
   });
+
+  it('refuses a cross-origin websocket handshake (frame-ancestors does not govern WebSocket) and records it; admits its own origin and no Origin', async () => {
+    const d = deps();
+    const handler = buildPreviewUpgradeHandler(d.deps);
+    const foreign = fakeSocket();
+    expect(await handler(req({ cookie: cookieFor(), extra: { origin: 'https://evil.example.com' } }), foreign.socket, Buffer.alloc(0))).toBe(true);
+    expect(foreign.written.join('')).toMatch(/^HTTP\/1\.1 403 Forbidden\r\n/);
+    expect(d.logs[0]).toMatchObject({ level: 'warn', message: 'dev-preview: cross-origin websocket refused', context: { origin: 'https://evil.example.com', audit: 'authz.access.denied' } });
+    expect(d.tunnelled).toHaveLength(0);
+
+    const own = fakeSocket();
+    expect(await handler(req({ cookie: cookieFor(), extra: { origin: `https://ENV-env1.preview.${APEX}` } }), own.socket, Buffer.alloc(0))).toBe(true);
+    const none = fakeSocket();
+    expect(await handler(req({ cookie: cookieFor() }), none.socket, Buffer.alloc(0))).toBe(true);
+    expect(d.tunnelled).toHaveLength(2);
+  });
+
+  it('leaves /socket.io/ upgrades to engine.io even on a preview host', async () => {
+    const d = deps();
+    const s = fakeSocket();
+    expect(await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor(), url: '/socket.io/?EIO=4&transport=websocket' }), s.socket, Buffer.alloc(0))).toBe(false);
+    expect(s.destroyed()).toBe(false);
+  });
 });

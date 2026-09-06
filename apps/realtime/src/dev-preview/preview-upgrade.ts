@@ -54,11 +54,28 @@ function refuse(socket: Duplex, status: number, reason: string): void {
 
 export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
   return async (req: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> => {
+    const path = req.url ?? '/';
+    // engine.io's own upgrade lives at /socket.io/ and is never a preview,
+    // whatever host it arrives on — leave it to engine.io without parsing.
+    if (path.startsWith('/socket.io/')) return false;
     const apex = deps.resolveApex();
     const holder = apex === null ? null : parsePreviewHost(req.headers.host, apex);
     if (holder === null) return false;
 
-    const path = req.url ?? '/';
+    // `frame-ancestors` does not govern `new WebSocket()`, and a non-CHIPS
+    // browser sends a plain SameSite=None cookie from any page, so a foreign
+    // page could open a socket to a preview host with the user's cookie. The
+    // browser's `Origin` on a WebSocket handshake is unforgeable from script:
+    // it must be absent (a non-browser client, which then still needs the
+    // cookie) or the preview host's own origin. Anything else is refused and
+    // recorded.
+    const origin = req.headers.origin;
+    const ownOrigin = `https://${(req.headers.host ?? '').split(':')[0].toLowerCase()}`;
+    if (origin !== undefined && origin.toLowerCase() !== ownOrigin) {
+      deps.log.warn('dev-preview: cross-origin websocket refused', { holderKind: holder.kind, holderId: holder.id, origin, audit: 'authz.access.denied' });
+      refuse(socket, 403, 'Forbidden');
+      return true;
+    }
     const token = readPreviewCookie(req.headers.cookie);
     const verified = token === null ? null : verifyPreviewCookie(token, deps.cookieKey(), deps.now());
     if (verified === null || !verified.ok || verified.claims.holder.kind !== holder.kind || verified.claims.holder.id !== holder.id) {
