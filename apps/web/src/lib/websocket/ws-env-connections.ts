@@ -371,7 +371,7 @@ export function startEnvCleanupInterval(): void {
   wsLogger.info('Started env cleanup interval', { intervalMinutes: CLEANUP_INTERVAL_MS / 60000, action: 'start_cleanup_interval', status: 'started' });
 }
 
-export function stopEnvCleanupInterval(): void {
+function stopEnvCleanupInterval(): void {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
@@ -446,8 +446,9 @@ export function checkEnvConnectionHealth(ws: WebSocket): EnvConnectionHealthChec
   return { isHealthy: true, readyState: ws.readyState, lastPing: metadata.lastPing, connectedDuration: Date.now() - metadata.connectedAt.getTime() };
 }
 
-/** @internal testing only — clears connection STATE; lost listeners are module wiring (the bridge client subscribes once) and stay. */
+/** @internal testing only — clears connection STATE and stops the sweep; lost listeners are module wiring (the bridge client subscribes once) and stay. */
 export function clearAllEnvConnectionsForTesting(): void {
+  stopEnvCleanupInterval();
   connections.clear();
   connectionMetadata.clear();
 }
