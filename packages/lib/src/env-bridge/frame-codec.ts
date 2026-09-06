@@ -100,6 +100,23 @@ export const FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
   'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
 ]);
 
+/**
+ * The closed set split by DIRECTION. A socket end only ever accepts frames
+ * from the other direction: the server drops a `grant_exec` arriving from a
+ * machine (nobody grants the server anything) and the daemon drops an
+ * `exec_result` arriving from the server. Every frame type is in exactly one.
+ */
+export const MACHINE_TO_SERVER_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
+  'hello', 'exec_result', 'fs_read_result', 'fs_write_result', 'grant_denied', 'pty_opened', 'pty_data', 'pty_exit', 'pong',
+]);
+export const SERVER_TO_MACHINE_FRAME_TYPES: ReadonlySet<FrameType> = new Set<FrameType>([
+  'grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open', 'pty_input', 'pty_resize', 'pty_kill', 'revoke', 'ping',
+]);
+
+export function isMachineToServerFrame(frame: Frame): boolean {
+  return MACHINE_TO_SERVER_FRAME_TYPES.has(frame.type);
+}
+
 export type DecodeFrameReason = 'oversized' | 'malformed' | 'unknown_type' | 'bad_base64';
 export type DecodeFrameVerdict = { readonly ok: true; readonly frame: Frame } | { readonly ok: false; readonly reason: DecodeFrameReason };
 
