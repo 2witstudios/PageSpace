@@ -145,6 +145,19 @@ export function fsReadContentCeiling(limits: FrameLimits): number {
   return forContent <= 0 ? 0 : Math.floor(forContent / 4) * 3;
 }
 
+/**
+ * The largest RAW stdout+stderr total an `exec_result` can carry and still
+ * decode under `limits.maxFrameBytes`. Both streams are base64 (3 → 4) and
+ * share the frame with the signed envelope, so the daemon must clamp the
+ * command's captured-output cap to this BEFORE running — a policy `maxBytes`
+ * near or above the frame limit would otherwise produce a completed reply the
+ * server rejects as oversized. Same allowance as `fsReadContentCeiling`; the
+ * exec envelope's extra field name and `exitCode`/`truncated` fit inside it.
+ */
+export function execOutputCeiling(limits: FrameLimits): number {
+  return fsReadContentCeiling(limits);
+}
+
 function reject(reason: DecodeFrameReason): DecodeFrameVerdict {
   return { ok: false, reason };
 }
