@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import type { PortsWatchSocketLike } from '@pagespace/lib/services/sandbox/preview/ports-watch';
-import { createDetectionRegistry, type DetectionRegistryDeps } from '../detection-registry';
+import { createDetectionRegistry, nodeWebSocketFactory, type DetectionRegistryDeps } from '../detection-registry';
 
 type Listener = (event: never) => void;
 
@@ -161,12 +161,14 @@ describe('createDetectionRegistry', () => {
     expect(h.sockets).toHaveLength(2);
   });
 
-  it('a throwing attach is logged and the slot released', async () => {
-    const h = deps({ attach: async () => { throw new Error('boom'); } });
-    const registry = createDetectionRegistry(h.deps);
-    await registry.ensure({ holder: HOLDER });
-    expect(registry.watching()).toEqual([]);
-    expect(h.logs.some((l) => l.startsWith('error:dev-preview: watcher failed to start'))).toBe(true);
+  it('a throwing attach is logged (Error or not) and the slot released', async () => {
+    for (const thrown of [new Error('boom'), 'string boom']) {
+      const h = deps({ attach: async () => { throw thrown; } });
+      const registry = createDetectionRegistry(h.deps);
+      await registry.ensure({ holder: HOLDER });
+      expect(registry.watching()).toEqual([]);
+      expect(h.logs.some((l) => l.startsWith('error:dev-preview: watcher failed to start'))).toBe(true);
+    }
   });
 
   it('uses a real timer when no wait seam is given', async () => {
@@ -180,6 +182,18 @@ describe('createDetectionRegistry', () => {
       expect(h.sockets).toHaveLength(2);
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it('nodeWebSocketFactory hands the runtime WebSocket the url and the headers option', () => {
+    const seen: unknown[] = [];
+    class FakeWebSocket { constructor(url: string, options: unknown) { seen.push(url, options); } addEventListener() {} close() {} }
+    vi.stubGlobal('WebSocket', FakeWebSocket);
+    try {
+      nodeWebSocketFactory('wss://x/ports/watch', { Authorization: 'Bearer t' });
+      expect(seen).toEqual(['wss://x/ports/watch', { headers: { Authorization: 'Bearer t' } }]);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });

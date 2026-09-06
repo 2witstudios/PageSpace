@@ -47,6 +47,10 @@ function flatten(headers: IncomingMessage['headers']): HeaderMap {
   return out;
 }
 
+function asError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error));
+}
+
 function refuse(socket: Duplex, status: number, reason: string): void {
   if (socket.writable) socket.write(formatSocketHttpError(status, reason));
   socket.destroy();
@@ -70,7 +74,7 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
     // cookie) or the preview host's own origin. Anything else is refused and
     // recorded.
     const origin = req.headers.origin;
-    const ownOrigin = `https://${(req.headers.host ?? '').split(':')[0].toLowerCase()}`;
+    const ownOrigin = `https://${String(req.headers.host).split(':')[0].toLowerCase()}`;
     if (origin !== undefined && origin.toLowerCase() !== ownOrigin) {
       deps.log.warn('dev-preview: cross-origin websocket refused', { holderKind: holder.kind, holderId: holder.id, origin, audit: 'authz.access.denied' });
       refuse(socket, 403, 'Forbidden');
@@ -88,7 +92,7 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
     try {
       target = await deps.resolveTarget(holder, userId);
     } catch (error) {
-      deps.log.error('dev-preview: upgrade gather failed', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
+      deps.log.error('dev-preview: upgrade gather failed', asError(error), { holderKind: holder.kind, holderId: holder.id });
       refuse(socket, 502, 'Bad Gateway');
       return true;
     }
@@ -103,7 +107,7 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
     try {
       upstreamUrl = buildPreviewUpstreamUrl(target.spriteUrl, path);
     } catch (error) {
-      deps.log.error('dev-preview: refused upstream', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
+      deps.log.error('dev-preview: refused upstream', asError(error), { holderKind: holder.kind, holderId: holder.id });
       refuse(socket, 502, 'Bad Gateway');
       return true;
     }

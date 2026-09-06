@@ -171,4 +171,25 @@ describe('buildPreviewUpgradeHandler', () => {
     expect(await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor(), url: '/socket.io/?EIO=4&transport=websocket' }), s.socket, Buffer.alloc(0))).toBe(false);
     expect(s.destroyed()).toBe(false);
   });
+
+  it('flattens array-valued and undefined request headers, and reports non-Error throws', async () => {
+    const d = deps();
+    const s = fakeSocket();
+    const request = req({ cookie: cookieFor() });
+    (request.headers as Record<string, unknown>)['sec-websocket-extensions'] = ['a', 'b'];
+    (request.headers as Record<string, unknown>)['x-undefined'] = undefined;
+    expect(await buildPreviewUpgradeHandler(d.deps)(request, s.socket, Buffer.alloc(0))).toBe(true);
+    expect(d.tunnelled[0].requestHeaders['sec-websocket-extensions']).toBe('a, b');
+    expect('x-undefined' in d.tunnelled[0].requestHeaders).toBe(false);
+
+    const thrower = deps({ resolveTarget: async () => { throw 'string failure'; } });
+    const t = fakeSocket();
+    expect(await buildPreviewUpgradeHandler(thrower.deps)(req({ cookie: cookieFor() }), t.socket, Buffer.alloc(0))).toBe(true);
+    expect(thrower.logs[0]).toMatchObject({ level: 'error', message: 'dev-preview: upgrade gather failed' });
+
+    const badUrl = deps({ resolveTarget: async () => ({ ...forward, spriteUrl: 'not a url' }) });
+    const b = fakeSocket();
+    expect(await buildPreviewUpgradeHandler(badUrl.deps)(req({ cookie: cookieFor() }), b.socket, Buffer.alloc(0))).toBe(true);
+    expect(b.written.join('')).toMatch(/^HTTP\/1\.1 502 Bad Gateway\r\n/);
+  });
 });
