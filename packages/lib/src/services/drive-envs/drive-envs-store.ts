@@ -227,6 +227,21 @@ export interface DriveEnvStore {
    */
   consumeChallenge(input: { envId: string; nonce: string; now: Date }): Promise<boolean>;
   /**
+   * On an AUTHORIZED hello (signature verified by the socket route): persist
+   * the machine's advertised capabilities and a heartbeat, IFF enrolled and
+   * not revoked — a revoked machine's hello changes nothing.
+   */
+  recordHello(input: { envId: string; capabilities: NonNullable<DriveEnvLocalRecord['capabilities']>; now: Date }): Promise<boolean>;
+  /** Heartbeat from the live socket (throttled by the route to once per heartbeat window). Same CAS as `recordHello`. */
+  recordHeartbeat(input: { envId: string; now: Date }): Promise<boolean>;
+  /**
+   * Revoke: stamp `revokedAt` IFF `revokedAt IS NULL` (Codex C4). False means
+   * it was already revoked — the caller still completes the other two legs
+   * (sessions, socket), because a half-finished earlier revoke is the case
+   * this guards.
+   */
+  revokeLocal(input: { envId: string; now: Date }): Promise<boolean>;
+  /**
    * Rename, subject to the same unique constraint — and reporting the same
    * `name_taken` answer for the same reason. `not_found` distinguishes a
    * vanished env from a refused one, which the caller needs to choose 404 vs 409.
@@ -657,6 +672,33 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
         // a revocation landing between the service's read and this write must
         // win, or a revoked machine mints one last token.
         .where(and(eq(driveEnvLocal.envId, envId), eq(driveEnvLocal.challengeNonce, nonce), isNull(driveEnvLocal.challengeUsedAt), isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async recordHello({ envId, capabilities, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ capabilities, lastSeenAt: at, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async recordHeartbeat({ envId, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ lastSeenAt: at, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
+        .returning({ envId: driveEnvLocal.envId });
+      return updated.length === 1;
+    },
+
+    async revokeLocal({ envId, now: at }) {
+      const updated = await db
+        .update(driveEnvLocal)
+        .set({ revokedAt: at, updatedAt: at })
+        .where(and(eq(driveEnvLocal.envId, envId), isNull(driveEnvLocal.revokedAt)))
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },
