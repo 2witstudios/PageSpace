@@ -62,28 +62,35 @@ describe('fs-runner on the real filesystem (Codex C9: open via the confined path
   it('given a write, should create the file with the requested mode (no O_TRUNC at open; ftruncate after verification) and answer ok', async () => {
     const file = join(root, 'new.txt');
     expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('written').toString('base64'), mode: 0o600 }], WRITE)).toEqual({ kind: 'write', ok: true });
-    // One handle, inspected through the fd only (no check-then-use on the pathname).
-    const first = openSync(file, 'r');
+    // The path is opened exactly once here; mode and content are read through the fd.
+    const fd = openSync(file, 'r');
     try {
-      expect(readFileSync(first, 'utf8')).toBe('written');
-      expect(fstatSync(first).mode & 0o777).toBe(0o600);
+      expect(readFileSync(fd, 'utf8')).toBe('written');
+      expect(fstatSync(fd).mode & 0o777).toBe(0o600);
     } finally {
-      closeSync(first);
-    }
-    expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('shorter').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
-    const second = openSync(file, 'r');
-    try {
-      expect(readFileSync(second, 'utf8')).toBe('shorter');
-    } finally {
-      closeSync(second);
+      closeSync(fd);
     }
   });
 
+  it('given a second, shorter write to an existing file, the verified-handle ftruncate leaves no tail behind', async () => {
+    const file = join(root, 'overwrite.txt');
+    expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('a much longer first content').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
+    expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('shorter').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
+    expect(await runner.read(request('fs_read', [file]), READ)).toEqual({ kind: 'read', found: true, contentB64: Buffer.from('shorter').toString('base64') });
+  });
+
   it('given a write whose target is a symlink, should refuse (O_NOFOLLOW) and answer ok:false — nothing written through the link', async () => {
-    writeFileSync(join(root, 'target'), 'keep');
-    symlinkSync(join(root, 'target'), join(root, 'wlink'));
-    expect(await runner.write(request('fs_write', [join(root, 'wlink')]), [{ contentB64: Buffer.from('evil').toString('base64'), mode: null }], WRITE)).toMatchObject({ kind: 'write', ok: false });
-    expect(readFileSync(join(root, 'target'), 'utf8')).toBe('keep');
+    const target = join(root, 'target');
+    expect(await runner.write(request('fs_write', [target]), [{ contentB64: Buffer.from('keep').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
+    symlinkSync(target, join(root, 'wlink'));
+    // Hold the target open BEFORE the attack; afterwards its content is read through this fd only.
+    const fd = openSync(target, 'r');
+    try {
+      expect(await runner.write(request('fs_write', [join(root, 'wlink')]), [{ contentB64: Buffer.from('evil').toString('base64'), mode: null }], WRITE)).toMatchObject({ kind: 'write', ok: false });
+      expect(readFileSync(fd, 'utf8')).toBe('keep');
+    } finally {
+      closeSync(fd);
+    }
   });
 
   it('given a files list whose length differs from the confined paths, should refuse before touching the disk', async () => {
@@ -97,7 +104,8 @@ describe('fs-runner on the real filesystem (Codex C9: open via the confined path
     const hooked = createFsRunner(primitives);
     const outcome = await hooked.write(request('fs_write', [join(dir, 'f')]), [{ contentB64: 'aGk=', mode: null }], WRITE);
     expect(outcome).toMatchObject({ kind: 'write', ok: false });
-    expect(() => statSync(join(root, 'moved', 'f'))).toThrow();
+    // Nothing landed under the moved directory: asked through the runner itself, not by re-touching the path.
+    expect(await runner.read(request('fs_read', [join(root, 'moved', 'f')]), READ)).toEqual({ kind: 'read', found: false });
   });
 
   it('cleanup', () => {
