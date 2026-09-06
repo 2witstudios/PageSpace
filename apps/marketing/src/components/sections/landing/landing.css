@@ -482,11 +482,30 @@
 }
 
 @media (min-width: 900px) {
+  .lp .byo-grid { grid-template-columns: 1fr 1fr; }
+}
+
+/* Side-by-side hero from 1100px. Below that the caption stacks above a
+   full-width window (a 13" laptop at 900-1100 would otherwise get a window
+   scaled under 0.5). */
+@media (min-width: 1100px) {
   .lp .hero-in { display: grid; grid-template-columns: minmax(320px, 440px) minmax(0, 1fr); align-items: center; gap: 44px; }
   .lp .hero-cap { max-width: none; margin-bottom: 0; }
   .lp .appwin { width: 960px; justify-self: start; }
   .lp .aw-body { height: 548px; }
-  .lp .byo-grid { grid-template-columns: 1fr 1fr; }
+  /* The window is laid out at 960x595 and scaled to fit between its column's
+     left edge and the viewport (16px gutter) instead of bleeding off the right.
+     Its left edge sits 32 (container padding) + 440 (caption column) + 44 (gap)
+     = 516px from the container's left edge, and the 1280px container is
+     centred, so the room to the viewport edge is 100vw - 532px up to 1280px
+     and 50vw + 108px beyond. Reserve exactly that box in CSS so the server
+     HTML is already the final size (no CLS); ScaledAppWindow only adds the
+     matching transform. Keep 595 in sync with the mock's chrome + 548 body. */
+  .lp .appwin-outer { width: min(960px, calc(100vw - 532px)); aspect-ratio: 960 / 595; overflow: hidden; }
+  .lp .appwin-inner { width: 960px; transform-origin: top left; }
+}
+@media (min-width: 1280px) {
+  .lp .appwin-outer { width: min(960px, calc(50vw + 108px)); }
 }
 
 @media (min-width: 820px) {
@@ -509,9 +528,9 @@
   .lp .appwin-inner { width: 760px; transform-origin: top left; }
 }
 
-/* The hero app window keeps all three panes on every screen; below 900px the
-   ScaledAppWindow wrapper scales the whole window down to fit (see the wrapper
-   component). Grid-item guard so the wide window bleeds/scales instead of
+/* The hero app window keeps all three panes on every screen; the
+   ScaledAppWindow wrapper scales the whole window down to fit its reserved box
+   (see the wrapper component and the two reservation blocks above). Grid-item guard so the wide window bleeds/scales instead of
    forcing its track wide. */
 .lp .appwin-outer { min-width: 0; }
 

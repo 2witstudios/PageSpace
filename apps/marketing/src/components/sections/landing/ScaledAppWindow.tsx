@@ -3,13 +3,22 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 /**
- * Keeps the hero app window whole on small screens. On desktop (>=900px) it
- * renders the window as-is (it bleeds off the right by design). Below that it
- * lays the window out at a fixed design width so all three panes stay visible,
- * then scales it down to fit the container — so mobile shows the full product,
- * not just the document pane.
+ * Keeps the hero app window whole on every screen. The window is laid out at a
+ * fixed design width (960px side-by-side from 1100px, 760px stacked below) so
+ * all three panes stay visible, then scaled down to fit the box landing.css
+ * reserves for it — so a 13" laptop and a phone both show the full product,
+ * not a window cut off at the chat pane. The CSS reservation means the server
+ * HTML already has the final height; this component only adds the transform.
  */
-export function ScaledAppWindow({ children, designWidth = 760 }: { children: ReactNode; designWidth?: number }) {
+export function ScaledAppWindow({
+  children,
+  designWidth = 760,
+  desktopDesignWidth = 960,
+}: {
+  children: ReactNode;
+  designWidth?: number;
+  desktopDesignWidth?: number;
+}) {
   const outerRef = useRef<HTMLDivElement>(null);
   const innerRef = useRef<HTMLDivElement>(null);
   const [scale, setScale] = useState(1);
@@ -19,18 +28,14 @@ export function ScaledAppWindow({ children, designWidth = 760 }: { children: Rea
     const outer = outerRef.current;
     const inner = innerRef.current;
     if (!outer || !inner) return;
-    const desktop = window.matchMedia("(min-width: 900px)");
+    const desktop = window.matchMedia("(min-width: 1100px)");
 
     const compute = () => {
-      if (desktop.matches) {
-        setScale(1);
-        setOuterHeight(undefined);
-        return;
-      }
+      const design = desktop.matches ? desktopDesignWidth : designWidth;
       const available = outer.clientWidth;
-      const next = Math.min(1, available / designWidth);
+      const next = Math.min(1, available / design);
       setScale(next);
-      setOuterHeight(inner.offsetHeight * next);
+      setOuterHeight(next < 1 ? inner.offsetHeight * next : undefined);
     };
 
     const ro = new ResizeObserver(compute);
@@ -42,7 +47,7 @@ export function ScaledAppWindow({ children, designWidth = 760 }: { children: Rea
       ro.disconnect();
       desktop.removeEventListener("change", compute);
     };
-  }, [designWidth]);
+  }, [designWidth, desktopDesignWidth]);
 
   const scaled = scale !== 1;
 
@@ -51,7 +56,15 @@ export function ScaledAppWindow({ children, designWidth = 760 }: { children: Rea
       <div
         ref={innerRef}
         className="appwin-inner"
-        style={scaled ? { width: designWidth, transformOrigin: "top left", transform: `scale(${scale})` } : undefined}
+        style={
+          scaled
+            ? {
+                width: window.matchMedia("(min-width: 1100px)").matches ? desktopDesignWidth : designWidth,
+                transformOrigin: "top left",
+                transform: `scale(${scale})`,
+              }
+            : undefined
+        }
       >
         {children}
       </div>
