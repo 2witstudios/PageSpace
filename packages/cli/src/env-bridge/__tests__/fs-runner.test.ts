@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { constants as fsConstants, mkdtempSync, mkdirSync, realpathSync, writeFileSync, symlinkSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs';
+import { closeSync, constants as fsConstants, fstatSync, mkdtempSync, mkdirSync, openSync, realpathSync, writeFileSync, symlinkSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
@@ -62,10 +62,21 @@ describe('fs-runner on the real filesystem (Codex C9: open via the confined path
   it('given a write, should create the file with the requested mode (no O_TRUNC at open; ftruncate after verification) and answer ok', async () => {
     const file = join(root, 'new.txt');
     expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('written').toString('base64'), mode: 0o600 }], WRITE)).toEqual({ kind: 'write', ok: true });
-    expect(readFileSync(file, 'utf8')).toBe('written');
-    expect(statSync(file).mode & 0o777).toBe(0o600);
+    // One handle, inspected through the fd only (no check-then-use on the pathname).
+    const first = openSync(file, 'r');
+    try {
+      expect(readFileSync(first, 'utf8')).toBe('written');
+      expect(fstatSync(first).mode & 0o777).toBe(0o600);
+    } finally {
+      closeSync(first);
+    }
     expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('shorter').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
-    expect(readFileSync(file, 'utf8')).toBe('shorter');
+    const second = openSync(file, 'r');
+    try {
+      expect(readFileSync(second, 'utf8')).toBe('shorter');
+    } finally {
+      closeSync(second);
+    }
   });
 
   it('given a write whose target is a symlink, should refuse (O_NOFOLLOW) and answer ok:false — nothing written through the link', async () => {
