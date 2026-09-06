@@ -29,6 +29,7 @@ function fakeHandle(over: Partial<SandboxHandle> = {}): SandboxHandle {
     },
     urlInfo: async () => ({ url: null, auth: 'unknown' }),
     setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
     ...over,
   };
 }

@@ -45,6 +45,7 @@ function makeHandle(overrides: {
     },
     urlInfo: async () => ({ url: null, auth: 'unknown' }),
     setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
   };
 }
 

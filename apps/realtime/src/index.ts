@@ -54,6 +54,20 @@ import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-handler';
 import { handleShellActivityRequest } from './terminal/shell-activity';
+import { buildPreviewUpgradeHandler } from './dev-preview/preview-upgrade';
+import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
+import {
+  buildRealtimePreviewAccessDeps,
+  createConnectScopedSandboxHost,
+  getRealtimePreviewCookieKey,
+  getRealtimePreviewStore,
+} from './dev-preview/preview-runtime';
+import { resolvePreviewTarget } from '@pagespace/lib/services/sandbox/preview/preview-access';
+import { tunnelWebSocketUpgrade } from '@pagespace/lib/services/sandbox/preview/preview-ws-tunnel';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { resolveSpritesApiBaseUrl } from '@pagespace/lib/services/sandbox/preview/ports-watch';
+import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { resolveSpritesToken } from '@pagespace/lib/services/sandbox/sandbox-client/sprites';
 import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
 import { handleRealtimeAttachRequest, defaultAttachHandlerDeps } from './voice/attach-handler';
 import { checkAgentSessionAccess } from '@pagespace/lib/services/agent-workspaces/agent-workspace-access';
@@ -128,6 +142,22 @@ const dbAgentSessionStorePromise = createDbAgentSessionStore();
 // tool call does, through the same shared core.
 const dbDriveEnvStorePromise = createDbDriveEnvStore();
 const dbSessionShellStorePromise = createDbSessionShellStore();
+
+// Dev-server detection: one `ports/watch` watcher per live sprite (dark unless
+// DEV_PREVIEW_ENABLED). Asserted from two places — the web tier's signed
+// trigger (`/api/dev-preview/watch`, after a session ensure) and this
+// process's own shell open below — because the exec-WS port channel is
+// TTY-only and a watcher must exist for AGENT-launched servers too.
+const devPreviewRegistry = createDetectionRegistry({
+  featureEnabled: isDevPreviewEnabled,
+  attach: async (sandboxId) => (await createConnectScopedSandboxHost()).attach({ sandboxId }).catch(() => null),
+  store: getRealtimePreviewStore(),
+  createSocket: nodeWebSocketFactory,
+  spritesToken: resolveSpritesToken,
+  spritesApiBaseUrl: resolveSpritesApiBaseUrl,
+  log: loggers.realtime,
+  now: () => new Date(),
+});
 
 /**
  * Decrypt PII at the edge (GDPR #965): actorEmail is denormalized into a
@@ -291,6 +321,10 @@ async function ensureShellSessionSandbox({ workspaceId, userId }: { workspaceId:
   // do. Suppressing it needs the provisioner to report whether it measured,
   // which is a change to the shared holder core.
   void measureWarmSessionStorageOnResume(row.id, result.sandboxId);
+
+  // The sprite is awake (it was just ensured for a shell): attach the
+  // dev-server watcher for its HOLDER — the env for an env-bound session.
+  void devPreviewRegistry.ensure({ holder: resolveDevPreviewHolder(row), sandboxId: result.sandboxId });
 
   return { ok: true, sandboxId: result.sandboxId };
 }
@@ -985,6 +1019,38 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
+    } else if (req.method === 'POST' && req.url === '/api/dev-preview/watch') {
+        // The web tier just ensured a sprite (a session provision) and asks for a
+        // dev-server watcher on it. Signed like every other web→realtime call;
+        // the body names a holder and a sprite, both of which the watcher
+        // re-derives from rows and the control plane before acting.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+            let parsed: { holder?: { kind?: unknown; id?: unknown }; sandboxId?: unknown };
+            try {
+                parsed = JSON.parse(body);
+            } catch {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Malformed body' }));
+                return;
+            }
+            const kind = parsed?.holder?.kind;
+            const id = parsed?.holder?.id;
+            const sandboxId = parsed?.sandboxId;
+            if ((kind !== 'workspace' && kind !== 'env') || typeof id !== 'string' || id.length === 0 || typeof sandboxId !== 'string' || sandboxId.length === 0) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Malformed body' }));
+                return;
+            }
+            void devPreviewRegistry.ensure({ holder: { kind, id }, sandboxId });
+            res.writeHead(202, { 'Content-Type': 'application/json' });
+            res.end(JSON.stringify({ accepted: true }));
+        });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation
         readCappedBody(body => {
@@ -1030,7 +1096,35 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
 };
 
 const httpServer = createServer(requestListener);
+
+// The WebSocket half of the dev-preview proxy (HMR sockets) — see
+// `preview-ws-tunnel.ts` for why it lives here and not in the web tier. A
+// preview-host upgrade is tunnelled; a socket.io upgrade is left to engine.io
+// (whose own listener follows); anything else is closed here, because
+// `destroyUpgrade` is turned off below and this listener owns that hygiene.
+const previewUpgrade = buildPreviewUpgradeHandler({
+  resolveApex: () => (isDevPreviewEnabled() ? resolveDevPreviewApex() : null),
+  cookieKey: getRealtimePreviewCookieKey,
+  resolveTarget: (holder, userId) => resolvePreviewTarget({ holder, userId, deps: buildRealtimePreviewAccessDeps() }),
+  tunnel: tunnelWebSocketUpgrade,
+  spritesToken: resolveSpritesToken,
+  log: loggers.realtime,
+  now: () => new Date(),
+});
+httpServer.on('upgrade', (req, socket, head) => {
+  void previewUpgrade(req, socket, head).then((handled) => {
+    if (handled) return;
+    if ((req.url ?? '').startsWith('/socket.io/')) return;
+    socket.destroy();
+  });
+});
+
 const io = new Server(httpServer, {
+  // engine.io would otherwise destroy any upgrade socket that has not been
+  // written to within 1s of arriving — a preview tunnel writes its 101 only
+  // once the sprite answers, which after a hibernation wake takes longer.
+  // The upgrade listener above closes non-socket.io, non-preview sockets.
+  destroyUpgrade: false,
   cors: {
     origin: (origin, callback) => {
       if (!origin) return callback(null, true);

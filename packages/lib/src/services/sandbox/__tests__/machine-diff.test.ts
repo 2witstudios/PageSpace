@@ -95,6 +95,7 @@ function makeHandle(files: Record<string, string>): { handle: SandboxHandle; rea
     },
     urlInfo: async () => ({ url: null, auth: 'unknown' }),
     setUrlAuth: async () => {},
+    powerState: async () => 'unknown' as const,
   };
   return { handle, reads };
 }

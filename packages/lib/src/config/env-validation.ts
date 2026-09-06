@@ -178,6 +178,13 @@ export const serverEnvSchema = z
     // validation; isAppHostingEnabled() enables only on the exact value 'true'.
     APP_HOSTING_ENABLED: z.string().optional(),
 
+    // Dev-server preview (dark). Same contract as APP_HOSTING_ENABLED — only the
+    // exact string 'true' enables (isDevPreviewEnabled()). DEV_PREVIEW_APEX is
+    // the DEDICATED registrable domain preview hosts live under; no default,
+    // and the feature behaves as off until it is set (resolveDevPreviewApex()).
+    DEV_PREVIEW_ENABLED: z.string().optional(),
+    DEV_PREVIEW_APEX: z.string().optional(),
+
     // Fly Machines org token (Bearer) for the published-app provisioner. Optional:
     // a blank value disables provisioning (the flaps client fails closed with an
     // auth error surfaced as a provisioning failure) rather than failing app-wide

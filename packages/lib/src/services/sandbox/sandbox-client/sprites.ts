@@ -480,6 +480,18 @@ export interface SpriteInstanceLike {
    * Sprite, skip it".
    */
   readonly id?: string;
+  /**
+   * The sprite's POWER state as the control plane last reported it —
+   * `'running'`, `'warm'` (paused with memory snapshot) or `'cold'` (paused,
+   * fresh boot on wake) were observed live (spike §1, §6); the wire types it
+   * as an open string. A control-plane read (`getSprite`) does NOT wake the
+   * sprite (spike §6: `listServices` and `getSprite` both answered while
+   * paused), which is what lets the preview proxy ask "would forwarding this
+   * request be a wake?" without causing one. Optional for the same reason
+   * {@link id} is; a missing value normalizes to `'unknown'`, never to a
+   * claim (see `normalizeSpritePowerState`).
+   */
+  readonly status?: string;
   spawn(
     file: string,
     args?: string[],

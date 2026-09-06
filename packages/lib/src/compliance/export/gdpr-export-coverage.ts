@@ -242,6 +242,14 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `published_app_machine_events` keys on an app: the holder is the
     // subject's record; this is our infrastructure's note about the holder.
     'dev_preview_services',
+    // The dev-preview single-use GRANT ledger: a random capability id, the
+    // holder it opens, the user it was minted for and three timestamps, alive
+    // for a one-minute redemption window and swept after. It is the handoff
+    // between two of OUR origins — a fact about our ingress, not a record of
+    // anything the subject did (the preview they viewed is the holder's
+    // session/env, already exported under `agentWorkspaces`). Same shape and
+    // reasoning as `dev_preview_services` above; cascades with the user.
+    'dev_preview_grants',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',

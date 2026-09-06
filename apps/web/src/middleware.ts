@@ -14,6 +14,8 @@ import {
   shouldDisableCOEP,
 } from '@/middleware/security-headers';
 import { isCanvasPreviewRoute } from '@/app/api/canvas/_shared/previewRoute';
+import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { parsePreviewHost, rewritePreviewHostPath } from '@pagespace/lib/services/sandbox/preview/preview-host';
 import { isSafeNextPath, SIGNIN_NEXT_ALLOWED_PREFIXES } from '@/lib/auth/url-utils';
 import { logSecurityEvent } from '@/lib/logging/edge-logger';
 import {
@@ -133,6 +135,25 @@ export async function middleware(req: NextRequest, event?: NextFetchEvent) {
     if (isPublishedSiteHost(req.headers.get('host'))) {
       const { response } = createSecureResponse(isProduction, req, { isAPIRoute });
       return new NextResponse(null, { status: 404, headers: response.headers });
+    }
+
+    // Dev-server preview hosts (`<kind>-<holderId>.preview.<apex>`): the
+    // request is for a holder's proxied dev server, not for the dashboard.
+    // Rewrite it onto the host route — the holder rides in the path, the
+    // original pathname rides along verbatim — and let NOTHING else in this
+    // middleware touch it: no session redirect (the preview host authenticates
+    // with its own host-only cookie, checked in the route), no origin
+    // validation (the caller IS a foreign origin by design), and no security
+    // headers (the app's `X-Frame-Options: DENY` and API CSP would blank the
+    // frame; the route sets the preview's own headers). Only when the feature
+    // is enabled AND an apex is configured — otherwise these hosts do not
+    // exist and the request falls through to the normal 404.
+    const previewApex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
+    const previewHolder = previewApex === null ? null : parsePreviewHost(req.headers.get('host'), previewApex);
+    if (previewHolder !== null) {
+      const rewritten = req.nextUrl.clone();
+      rewritten.pathname = rewritePreviewHostPath(previewHolder, pathname);
+      return NextResponse.rewrite(rewritten);
     }
 
     // Non-cloud route blocking (defense-in-depth)

@@ -908,6 +908,66 @@
       "import": "./dist/services/sandbox/preview/dev-preview-core.js",
       "require": "./dist/services/sandbox/preview/dev-preview-core.js"
     },
+    "./services/sandbox/preview/dev-preview-env": {
+      "types": "./dist/services/sandbox/preview/dev-preview-env.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-env.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-env.js"
+    },
+    "./services/sandbox/preview/preview-forward-gate": {
+      "types": "./dist/services/sandbox/preview/preview-forward-gate.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-forward-gate.js",
+      "require": "./dist/services/sandbox/preview/preview-forward-gate.js"
+    },
+    "./services/sandbox/preview/preview-proxy-policy": {
+      "types": "./dist/services/sandbox/preview/preview-proxy-policy.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-proxy-policy.js",
+      "require": "./dist/services/sandbox/preview/preview-proxy-policy.js"
+    },
+    "./services/sandbox/preview/dev-preview-effects": {
+      "types": "./dist/services/sandbox/preview/dev-preview-effects.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-effects.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-effects.js"
+    },
+    "./services/sandbox/preview/dev-preview-store": {
+      "types": "./dist/services/sandbox/preview/dev-preview-store.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-store.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-store.js"
+    },
+    "./services/sandbox/preview/preview-host": {
+      "types": "./dist/services/sandbox/preview/preview-host.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-host.js",
+      "require": "./dist/services/sandbox/preview/preview-host.js"
+    },
+    "./services/sandbox/preview/preview-access": {
+      "types": "./dist/services/sandbox/preview/preview-access.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-access.js",
+      "require": "./dist/services/sandbox/preview/preview-access.js"
+    },
+    "./services/sandbox/preview/preview-grant": {
+      "types": "./dist/services/sandbox/preview/preview-grant.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-grant.js",
+      "require": "./dist/services/sandbox/preview/preview-grant.js"
+    },
+    "./services/sandbox/preview/dev-preview-grants-store": {
+      "types": "./dist/services/sandbox/preview/dev-preview-grants-store.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-grants-store.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-grants-store.js"
+    },
+    "./services/sandbox/preview/ports-watch": {
+      "types": "./dist/services/sandbox/preview/ports-watch.d.ts",
+      "import": "./dist/services/sandbox/preview/ports-watch.js",
+      "require": "./dist/services/sandbox/preview/ports-watch.js"
+    },
+    "./services/sandbox/preview/dev-preview-detection": {
+      "types": "./dist/services/sandbox/preview/dev-preview-detection.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-detection.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-detection.js"
+    },
+    "./services/sandbox/preview/preview-ws-tunnel": {
+      "types": "./dist/services/sandbox/preview/preview-ws-tunnel.d.ts",
+      "import": "./dist/services/sandbox/preview/preview-ws-tunnel.js",
+      "require": "./dist/services/sandbox/preview/preview-ws-tunnel.js"
+    },
     "./services/sandbox/sandbox-paths": {
       "types": "./dist/services/sandbox/sandbox-paths.d.ts",
       "import": "./dist/services/sandbox/sandbox-paths.js",

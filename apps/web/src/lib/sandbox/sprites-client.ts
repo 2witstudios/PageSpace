@@ -13,6 +13,7 @@
 import { SpritesClient } from '@fly/sprites';
 import {
   createSpritesSandboxClient,
+  createSpriteHandleCache,
   withKillSession,
   resolveSpritesToken,
   type SpritesSdk,
@@ -52,6 +53,24 @@ export async function createProductionSpritesSandboxClient(): Promise<ExecSandbo
  */
 export async function createProductionSandboxHost(): Promise<SandboxHost> {
   const sdk = await getSpritesSDK();
+  const client = createSpritesSandboxClient({ sdk });
+  return createSpriteSandboxHost({ sdk, client });
+}
+
+/**
+ * A `SandboxHost` whose control-plane reads are collapsed for ONE request.
+ *
+ * `createSpriteSandboxHost`'s per-call methods (`services.get`, `urlInfo`,
+ * `powerState`, `attach`) each do their own `getSprite`, and the dev-preview
+ * proxy asks all four on every request — four control-plane round trips
+ * where one will do. Wrapping the SDK in `createSpriteHandleCache` (the same
+ * cache the realtime tier applies per connect) makes them one. Request-scoped
+ * ON PURPOSE: the cache never expires, so a process-wide one would hand every
+ * later request a sprite handle frozen at first sight (stale `status`, stale
+ * `url`). Build one per request, drop it with the request.
+ */
+export async function createRequestScopedSandboxHost(): Promise<SandboxHost> {
+  const sdk = createSpriteHandleCache(await getSpritesSDK());
   const client = createSpritesSandboxClient({ sdk });
   return createSpriteSandboxHost({ sdk, client });
 }

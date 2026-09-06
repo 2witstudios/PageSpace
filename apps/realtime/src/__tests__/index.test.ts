@@ -254,9 +254,29 @@ let capturedRequestListener: ((req: unknown, res: unknown) => void) | null = nul
 let capturedIoUseCallback: ((socket: unknown, next: (err?: Error) => void) => Promise<void>) | null = null;
 let capturedIoConnectionCallback: ((socket: unknown) => void) | null = null;
 
+let capturedUpgradeListener: ((req: unknown, socket: unknown, head: unknown) => void) | null = null;
 const mockHttpServer = {
   listen: vi.fn((port: unknown, cb: () => void) => { if (cb) cb(); }),
+  on: vi.fn((event: string, cb: (req: unknown, socket: unknown, head: unknown) => void) => {
+    if (event === 'upgrade') capturedUpgradeListener = cb;
+  }),
 };
+
+const mockPreviewUpgrade = vi.fn<(req: unknown, socket: unknown, head: unknown) => Promise<boolean>>().mockResolvedValue(false);
+vi.mock('../dev-preview/preview-upgrade', () => ({
+  buildPreviewUpgradeHandler: () => mockPreviewUpgrade,
+}));
+const mockRegistryEnsure = vi.fn<(input: unknown) => Promise<void>>().mockResolvedValue(undefined);
+vi.mock('../dev-preview/detection-registry', () => ({
+  createDetectionRegistry: () => ({ ensure: mockRegistryEnsure, watching: () => [], stopAll: vi.fn() }),
+  nodeWebSocketFactory: vi.fn(),
+}));
+vi.mock('../dev-preview/preview-runtime', () => ({
+  buildRealtimePreviewAccessDeps: vi.fn(),
+  createConnectScopedSandboxHost: vi.fn(),
+  getRealtimePreviewCookieKey: vi.fn(() => Buffer.alloc(0)),
+  getRealtimePreviewStore: vi.fn(() => ({ findByHolder: vi.fn(), upsert: vi.fn() })),
+}));
 
 vi.mock('http', () => ({
   createServer: vi.fn((listener: (req: unknown, res: unknown) => void) => {
@@ -2457,5 +2477,95 @@ describe('requestListener - shell bridge wiring', () => {
     const deps = capturedShellIoDeps[0];
     expect(typeof deps.startSession).toBe('function');
     expect(typeof deps.rearmIdleReap).toBe('function');
+  });
+});
+
+describe('requestListener - /api/dev-preview/watch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given a valid signature and a well-formed body, should accept and hand the holder + sprite to the detection registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const body = JSON.stringify({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'sbx-1' });
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockRegistryEnsure).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, sandboxId: 'sbx-1' });
+    expect(res.writeHead).toHaveBeenCalledWith(202, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ accepted: true }));
+  });
+
+  it('given a bad signature, should 401 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from('{}'));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockRegistryEnsure).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    'not json',
+    JSON.stringify({ holder: { kind: 'drive', id: 'x' }, sandboxId: 's' }),
+    JSON.stringify({ holder: { kind: 'env', id: '' }, sandboxId: 's' }),
+    JSON.stringify({ holder: { kind: 'env', id: 'e' } }),
+    JSON.stringify({ holder: { kind: 'env', id: 'e' }, sandboxId: 7 }),
+  ])('given a signed but malformed body (%s), should 400 without touching the registry', async (body) => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/watch', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(mockRegistryEnsure).not.toHaveBeenCalled();
+  });
+});
+
+describe('http upgrade listener - dev-preview tunnel vs socket.io vs strays', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('should register exactly one upgrade listener on the http server', () => {
+    expect(capturedUpgradeListener).not.toBeNull();
+  });
+
+  it('given a preview-host upgrade the handler takes, should leave the socket to the tunnel', async () => {
+    mockPreviewUpgrade.mockResolvedValueOnce(true);
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url: '/ws', headers: {} }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).not.toHaveBeenCalled();
+  });
+
+  it('given a socket.io upgrade, should leave the socket to engine.io', async () => {
+    mockPreviewUpgrade.mockResolvedValueOnce(false);
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url: '/socket.io/?EIO=4&transport=websocket', headers: {} }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).not.toHaveBeenCalled();
+  });
+
+  it.each(['/anything-else', undefined])('given a stray upgrade (%s), should destroy the socket — destroyUpgrade is off, so this listener owns the hygiene', async (url) => {
+    mockPreviewUpgrade.mockResolvedValueOnce(false);
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url, headers: {} }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
   });
 });
