@@ -57,7 +57,7 @@ export function SiteFooter() {
             <Link href="/" className="flex items-center gap-2">
               <Image
                 src="/android-chrome-192x192.png"
-                alt="PageSpace"
+                alt=""
                 width={20}
                 height={20}
                 className="rounded"

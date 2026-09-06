@@ -262,7 +262,9 @@
   /* Emphasis via opacity only — scaling inactive slides made the edge-to-edge
      gaps look uneven (a shrunk neighbor reads as a wider gap). Uniform size keeps
      every gap identical. */
-  & .slide { transition: opacity .3s ease; opacity: 0.5; }
+  /* 0.90 is the lowest opacity at which muted 12px text inside a dimmed slide
+     still clears 4.5:1 on the card (axe blends slide opacity into the text). */
+  & .slide { transition: opacity .3s ease; opacity: 0.90; }
   & .slide[data-active="true"] { opacity: 1; }
   /* Reserve two lines so captions of different lengths don't shift the page. */
   & .caption { text-align: center; margin-top: 12px; color: var(--muted-foreground); font-size: var(--t-body); line-height: 1.5; max-width: 600px; margin-left: auto; margin-right: auto; min-height: 48px; }
@@ -340,6 +342,7 @@
   & .doc .h3 { font-size: 22px; font-weight: 700; margin: 0 0 10px; letter-spacing: -0.01em; }
   & .doc p { font-size: 14px; line-height: 1.65; color: var(--muted-foreground); margin: 0 0 10px; }
   & .doc p .fg { color: var(--foreground); }
+  & .doc ul { margin: 0; padding: 0; list-style: disc; }
   & .doc li { font-size: 14px; color: var(--muted-foreground); margin-left: 20px; line-height: 1.6; }
   & .stream { display: flex; flex-direction: column; gap: 14px; height: 100%; padding: 18px 20px; }
   & .msg { display: flex; gap: 11px; align-items: flex-start; }
@@ -487,6 +490,14 @@
 
 @media (max-width: 820px) {
   .lp .aw-body { height: 500px; }
+  /* Below 820px the hero window always lays out at ScaledAppWindow's 760px
+     design width, which with the 500px body above makes it 547px tall, and is
+     then scaled to fit. Reserve exactly that scaled box (width x 547/760) in
+     CSS so the server HTML is already the right height; the client effect only
+     adds the transform. Without this the window shrank ~270px on hydration
+     (mobile CLS 0.20). Keep the ratio in sync with the mock's chrome height. */
+  .lp .appwin-outer { aspect-ratio: 760 / 547; overflow: hidden; }
+  .lp .appwin-inner { width: 760px; transform-origin: top left; }
 }
 
 /* The hero app window keeps all three panes on every screen; below 900px the

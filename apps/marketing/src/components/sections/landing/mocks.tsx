@@ -72,7 +72,9 @@ function DocMock() {
         <div className="h3">Q1 Planning</div>
         <p>A rich-text editor built on TipTap with markdown shortcuts and code blocks. Write naturally — the toolbar stays out of your way.</p>
         <p><span className="fg">AI edits your document directly.</span> Ask the sidebar chat to rewrite a paragraph and changes appear inline.</p>
-        <li>Real-time collaboration &amp; version history</li>
+        <ul>
+          <li>Real-time collaboration &amp; version history</li>
+        </ul>
       </div>
     </>
   );
@@ -159,7 +161,7 @@ function TaskMock() {
       <table className="tl">
         <thead>
           <tr>
-            <th style={{ width: 34 }} />
+            <th style={{ width: 34 }}><span className="sr-only">Done</span></th>
             <th>Task</th>
             <th style={{ width: 104 }}>Status</th>
             <th style={{ width: 88 }}>Priority</th>

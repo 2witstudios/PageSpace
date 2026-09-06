@@ -98,7 +98,7 @@ export function PageTypeCarouselSection() {
         >
           <CarouselContent className="carousel-track -ml-6">
             {PAGE_TYPES.map((t, i) => (
-              <CarouselItem key={t.id} className="slide basis-[86%] max-w-[720px] pl-6" data-active={i === current} aria-label={t.label}>
+              <CarouselItem key={t.id} className="slide basis-[86%] max-w-[720px] pl-6" data-active={i === current} aria-hidden={i !== current} aria-label={t.label}>
                 <ScaledFrame designWidth={CARD_W} designHeight={CARD_H}>
                   <MockCard type={t} />
                 </ScaledFrame>

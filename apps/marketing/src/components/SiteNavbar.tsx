@@ -26,7 +26,7 @@ export function SiteNavbar() {
           >
             <Image
               src="/android-chrome-192x192.png"
-              alt="PageSpace"
+              alt=""
               width={20}
               height={20}
               className="rounded"
