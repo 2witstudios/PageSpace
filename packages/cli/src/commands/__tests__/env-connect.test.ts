@@ -220,6 +220,32 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(new Set(h.pidWrites.map((w) => JSON.stringify(w.record))).size).toBe(1);
   });
 
+  it('C: a pid write in flight when disconnect fires completes BEFORE the file is removed, so it cannot recreate a stale pid file', async () => {
+    const order: string[] = [];
+    let releaseWrite: (() => void) | null = null;
+    const h = harness({
+      pidFile: {
+        write: async () => {
+          await new Promise<void>((resolve) => { releaseWrite = resolve; });
+          order.push('write');
+        },
+        remove: async () => { order.push('remove'); },
+      },
+    });
+    const c = ctx(false);
+    // Don't await: the first writePid blocks on releaseWrite.
+    void h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    await flush();
+    h.signals[0]!('SIGINT');
+    await flush();
+    // Shutdown is awaiting the in-flight write; nothing removed yet.
+    expect(order).toEqual([]);
+    releaseWrite!();
+    await flush();
+    await flush();
+    expect(order).toEqual(['write', 'remove']);
+  });
+
   it('R8: Ctrl-C (SIGINT) closes the socket, kills every child process group, removes the pid file and exits 0', async () => {
     const h = harness();
     const c = ctx(false);

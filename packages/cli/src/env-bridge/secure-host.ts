@@ -10,10 +10,11 @@
  * A plaintext `--host pagespace.ai` or an RFC1918 address is refused, fail
  * closed, before anything leaves the machine.
  */
-const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
+// `URL.hostname` returns an IPv6 host in bracketed form (`[::1]`), never bare `::1`.
+const LOOPBACK_HOSTNAMES = new Set(['127.0.0.1', '[::1]', 'localhost']);
 
 export function isLoopbackHost(hostname: string): boolean {
-  return LOOPBACK_HOSTNAMES.has(hostname) || hostname === '[::1]';
+  return LOOPBACK_HOSTNAMES.has(hostname);
 }
 
 /** @returns the host unchanged when it is https, or http to a loopback host; throws otherwise. */

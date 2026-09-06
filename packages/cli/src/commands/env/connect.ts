@@ -182,13 +182,18 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
 
     const pidPath = pidFilePath(deps.homedir, enrollmentId);
     let exiting = false;
-    let shutdownCleanup = () => undefined as void;
+    // A pid write that a heartbeat tick already started; shutdown awaits it
+    // before removing the file, so an in-flight write can never recreate a
+    // stale pid file after disconnect.
+    let inFlightPidWrite: Promise<void> = Promise.resolve();
+    let stopHeartbeat = () => undefined as void;
     const shutdown = async (code: number, why: string) => {
       if (exiting) return;
       exiting = true;
-      shutdownCleanup();
+      stopHeartbeat();
       connection.stop(why);
       execRunner.killAll();
+      await inFlightPidWrite.catch(() => undefined);
       await deps.pidFile.remove(pidPath).catch(() => undefined);
       deps.exit(code);
     };
@@ -221,22 +226,19 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
     });
 
     const pidRecord: PidRecord = { pid: deps.pid, startedAt: deps.now(), argv0: deps.argv0 };
-    const writePid = async () => {
-      try {
-        await deps.pidFile.write(pidPath, pidRecord);
-      } catch (error) {
+    const writePid = (): Promise<void> => {
+      if (exiting) return Promise.resolve();
+      inFlightPidWrite = deps.pidFile.write(pidPath, pidRecord).catch((error) => {
         log(`could not write ${pidPath} (env disconnect will not find this daemon): ${error instanceof Error ? error.message : String(error)}`);
-      }
+      });
+      return inFlightPidWrite;
     };
     await writePid();
     // Refresh the record so its age proves the daemon is still alive (a crashed
     // daemon's file goes stale and env disconnect refuses to signal its pid).
     const pidTimer = setInterval(() => void writePid(), PID_HEARTBEAT_MS);
     if (typeof pidTimer.unref === 'function') pidTimer.unref();
-    const clearPidTimer = () => clearInterval(pidTimer);
-    deps.onSignal(clearPidTimer);
-    const priorShutdownCleanup = shutdownCleanup;
-    shutdownCleanup = () => { clearPidTimer(); priorShutdownCleanup(); };
+    stopHeartbeat = () => clearInterval(pidTimer);
 
     ctx.stderr.write(`Connecting environment ${credential.envId} (enrollment ${enrollmentId}) to ${host}. Audit log: ${auditPath}. Ctrl-C to disconnect.\n`);
     connection.start();

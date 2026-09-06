@@ -103,16 +103,21 @@ function readPidFile(path: string): ReadPidResult | null {
     if (codeOf(error) === 'ENOENT') return null;
     throw error;
   }
-  let record: PidRecord;
+  // A record that is not our shape — a legacy bare-integer pid file (valid JSON
+  // but not an object), a truncated write (JSON.parse throws), or a missing
+  // field — is reported with a sentinel the caller rejects (pid 0 fails
+  // isOurRecord), so a foreign or corrupt file is removed, never signalled.
+  const invalid: ReadPidResult = { record: { pid: 0, startedAt: 0, argv0: '' }, ageMs };
+  let parsed: unknown;
   try {
-    const parsed = JSON.parse(raw) as Partial<PidRecord>;
-    if (typeof parsed.pid !== 'number' || typeof parsed.startedAt !== 'number' || typeof parsed.argv0 !== 'string') return { record: { pid: 0, startedAt: 0, argv0: '' }, ageMs };
-    record = { pid: parsed.pid, startedAt: parsed.startedAt, argv0: parsed.argv0 };
+    parsed = JSON.parse(raw);
   } catch {
-    // An old pid-only file (a bare integer) is not our record: report it as one that fails validation.
-    return { record: { pid: 0, startedAt: 0, argv0: '' }, ageMs };
+    return invalid;
   }
-  return { record, ageMs };
+  if (typeof parsed !== 'object' || parsed === null) return invalid;
+  const { pid, startedAt, argv0 } = parsed as Partial<PidRecord>;
+  if (typeof pid !== 'number' || typeof startedAt !== 'number' || typeof argv0 !== 'string') return invalid;
+  return { record: { pid, startedAt, argv0 }, ageMs };
 }
 
 export const envDisconnectHandler: CommandHandler = createEnvDisconnectHandler({
