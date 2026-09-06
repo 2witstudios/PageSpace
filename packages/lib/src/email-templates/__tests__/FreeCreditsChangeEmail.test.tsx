@@ -13,7 +13,9 @@ const PROPS = {
   postalAddress: 'PageSpace, 1 Example St, Springfield, IL 62704',
 };
 
-const render = (props: Partial<typeof PROPS> = {}) =>
+type Props = Parameters<typeof FreeCreditsChangeEmail>[0];
+
+const render = (props: Partial<Props> = {}) =>
   renderEmailToHtml(FreeCreditsChangeEmail({ ...PROPS, ...props }));
 
 describe('FreeCreditsChangeEmail', () => {
