@@ -243,6 +243,21 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.socket().closed).toBeNull();
   });
 
+  it('P1: when the server closes with env_superseded (another daemon took over), should say so, keep the key, remove the pid file and exit 1 — never reconnect', async () => {
+    const h = harness();
+    const c = ctx(false);
+    await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']));
+    await flush();
+    h.socket().open();
+    h.socket().emit('close', 1000, Buffer.from('env_superseded'));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets).toHaveLength(1);
+    expect(c.err.text()).toMatch(/another daemon took over this environment/i);
+    expect(h.store.entries.size).toBe(1);
+    expect(h.pidRemoves).toEqual([pidFilePath(HOME, 'enr_1')]);
+    expect(h.exit).toHaveBeenCalledWith(EXIT_RUNTIME_ERROR);
+  });
+
   it('R9: after the server drops the socket, reconnects with a FRESH token and re-sends hello', async () => {
     const h = harness();
     const c = ctx(false);

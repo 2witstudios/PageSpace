@@ -158,6 +158,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       audit,
       ask,
       log,
+      limits: DEFAULT_FRAME_LIMITS,
     });
 
     const pidPath = pidFilePath(deps.homedir, enrollmentId);
@@ -179,6 +180,10 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       audit,
       createSocket: deps.createSocket,
       deleteKey: () => store.delete(host, profile),
+      onSuperseded: () => {
+        ctx.stderr.write(`Another daemon took over this environment (${credential.envId}); this one stops. Run "pagespace env disconnect ${enrollmentId}" on the other machine first if that was not intended.\n`);
+        void shutdown(EXIT_RUNTIME_ERROR, 'superseded');
+      },
       onRevoked: () => {
         ctx.stderr.write(`This machine's enrollment ${enrollmentId} was REVOKED by the server. The machine key has been deleted from the credential store; re-enroll to connect again.\n`);
         void shutdown(EXIT_RUNTIME_ERROR, 'revoked');

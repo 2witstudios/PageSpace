@@ -23,7 +23,7 @@
  * delayed by not being authorized yet.
  */
 import { decodeFrame, encodeFrame, type Frame, type FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
-import { initialBridgeSession, reduceBridgeSession, type BridgeEffect, type BridgeSessionState, type BridgeStatus, type HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
+import { initialBridgeSession, isSupersededClose, reduceBridgeSession, type BridgeEffect, type BridgeSessionState, type BridgeStatus, type HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
 import type { AuditLog } from './audit-log.js';
 import type { Dispatcher } from './dispatcher.js';
 
@@ -65,6 +65,8 @@ export interface BridgeConnectionDeps {
   /** The `deleteKey` effect: remove the machine credential from the store. */
   readonly deleteKey: () => Promise<void>;
   readonly onRevoked: () => void;
+  /** The server closed with its env_superseded contract: another daemon took over this env. Terminal. */
+  readonly onSuperseded: () => void;
   readonly log: (line: string) => void;
   readonly limits: FrameLimits;
   readonly backoff: BackoffPolicy;
@@ -243,6 +245,15 @@ export function createBridgeConnection(deps: BridgeConnectionDeps): BridgeConnec
       const reduction = reduceBridgeSession(session, { type: 'disconnect' });
       session = reduction.state;
       if (stopped || session.status === 'revoked') return;
+      if (isSupersededClose(code, reasonText)) {
+        // Another daemon connected for this env and the server chose it.
+        // Reconnecting would supersede IT and the two would fight forever.
+        stopped = true;
+        clearReconnect();
+        deps.log('another daemon took over this environment; not reconnecting');
+        deps.onSuperseded();
+        return;
+      }
       if (!reduction.effects.some((effect) => effect.type === 'schedule_reconnect')) return;
       if (EXPIRED_REASON_RE.test(reasonText)) {
         attempts = 0;

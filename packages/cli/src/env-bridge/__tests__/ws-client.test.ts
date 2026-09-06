@@ -1,6 +1,7 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { encodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
+import { ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON } from '@pagespace/lib/env-bridge/bridge-session';
 import type { HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
 import { createBridgeConnection, type BridgeConnectionDeps, type BridgeSocket } from '../ws-client.js';
 import type { AuditEntry } from '../audit-log.js';
@@ -54,6 +55,7 @@ function harness(overrides: Partial<BridgeConnectionDeps> = {}) {
     createSocket: (url, headers) => { const s = new FakeSocket(url, headers); sockets.push(s); return s; },
     deleteKey: vi.fn(async () => undefined),
     onRevoked: vi.fn(),
+    onSuperseded: vi.fn(),
     log: () => undefined,
     limits: { maxFrameBytes: 1024 * 1024 },
     backoff: { initialMs: 1_000, maxMs: 30_000, expiredRetryMs: 500 },
@@ -206,6 +208,32 @@ describe('ws-client — lifted reconnect/backoff/heartbeat; state driven by redu
     expect(h.socket().terminated).toBe(false);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(h.socket().terminated).toBe(true);
+  });
+
+  it('P1: a close with the server\'s env_superseded contract (1000 + reason) is TERMINAL — no reconnect, no backoff, onSuperseded fires, status stopped', async () => {
+    const h = harness();
+    h.connection.start();
+    await flush();
+    h.socket().open();
+    h.socket().receive(PING);
+    await flush();
+    h.socket().drop(ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.sockets).toHaveLength(1);
+    expect(h.deps.mintToken).toHaveBeenCalledTimes(1);
+    expect(h.deps.onSuperseded).toHaveBeenCalledTimes(1);
+    expect(h.deps.deleteKey).not.toHaveBeenCalled();
+    expect(h.connection.status().stopped).toBe(true);
+  });
+
+  it('a plain 1000 close with another reason is still a failure to reconnect from (the contract is code AND reason)', async () => {
+    const h = harness();
+    h.connection.start();
+    await flush();
+    h.socket().drop(1000, 'going away');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(h.sockets).toHaveLength(2);
+    expect(h.deps.onSuperseded).not.toHaveBeenCalled();
   });
 
   it('a token mint failure schedules a backoff reconnect instead of crashing', async () => {

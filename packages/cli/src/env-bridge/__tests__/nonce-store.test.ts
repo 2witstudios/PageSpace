@@ -30,8 +30,10 @@ describe('nonce-store (Codex C6 — replay across a daemon restart)', () => {
     const store = createDaemonNonceStore();
     store.add('old', STARTED_AT + 1_000);
     store.add('live', STARTED_AT + 60_000);
+    expect(store.size()).toBe(2);
     store.evictExpired(STARTED_AT + 2_000);
     expect(store.has('old')).toBe(false);
     expect(store.has('live')).toBe(true);
+    expect(store.size()).toBe(1);
   });
 });

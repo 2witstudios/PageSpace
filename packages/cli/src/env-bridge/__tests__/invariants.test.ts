@@ -25,6 +25,9 @@ function sourceFiles(dir: string): string[] {
 }
 
 const daemonFiles = [...sourceFiles(HERE), ...sourceFiles(COMMANDS)];
+
+/** Escape EVERY RegExp metacharacter (backslash included) so a literal can be embedded in a pattern. */
+const escapeRegExp = (literal: string): string => literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const read = (path: string) => readFileSync(path, 'utf8');
 const name = (path: string) => relative(join(HERE, '..'), path);
 
@@ -61,10 +64,10 @@ describe('daemon structural invariants', () => {
 
   it('every decision is IMPORTED from @pagespace/lib/env-bridge — none is re-declared locally', () => {
     for (const [fn, module] of Object.entries(DECISIONS)) {
-      const importers = daemonFiles.filter((file) => new RegExp(`import[^;]*\\b${fn}\\b[^;]*from '${module.replace(/\//g, '\\/')}'`).test(read(file)));
+      const importers = daemonFiles.filter((file) => new RegExp(`import[^;]*\\b${escapeRegExp(fn)}\\b[^;]*from '${escapeRegExp(module)}'`).test(read(file)));
       expect(importers.length, `${fn} must be imported from ${module}`).toBeGreaterThan(0);
       for (const file of daemonFiles) {
-        expect(read(file), `${name(file)} re-declares ${fn}`).not.toMatch(new RegExp(`(function|const|let|var)\\s+${fn}\\b`));
+        expect(read(file), `${name(file)} re-declares ${fn}`).not.toMatch(new RegExp(`(function|const|let|var)\\s+${escapeRegExp(fn)}\\b`));
       }
     }
   });

@@ -4,7 +4,7 @@ import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type Grant } 
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
 import { encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
-import type { Frame } from '@pagespace/lib/env-bridge/frame-codec';
+import { fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
@@ -89,6 +89,7 @@ function harness(overrides: Partial<DispatcherDeps> = {}) {
     audit: { record: async (entry) => void audits.push(entry) },
     ask: null,
     log: () => undefined,
+    limits: { maxFrameBytes: 1024 * 1024 },
     ...overrides,
   };
   return { deps, audits, spawnRun, fsRunner, dispatcher: createDispatcher(deps) };
@@ -190,7 +191,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
   it('fs_read: given an allow, should read the CONFINED path through the fs runner and answer a signed fs_read_result', async () => {
     const h = harness();
     const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`] }));
-    expect(h.fsRunner.read).toHaveBeenCalledWith(expect.objectContaining({ op: 'fs_read', paths: [`${ROOT}/file`] }));
+    expect(h.fsRunner.read).toHaveBeenCalledWith(expect.objectContaining({ op: 'fs_read', paths: [`${ROOT}/file`] }), expect.objectContaining({ roots: [ROOT] }));
     expect(result).toMatchObject({ kind: 'reply', frame: { type: 'fs_read_result', found: true, contentB64: 'aGk=' } });
     expect(verified((result as { frame: Frame }).frame)).toMatchObject({ ok: true });
   });
@@ -198,7 +199,7 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
   it('fs_write: given an allow, should hand the runner the confined paths AND the signed file contents in order, and answer fs_write_result', async () => {
     const h = harness();
     const result = await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: 'aGk=', mode: 0o600 }] }));
-    expect(h.fsRunner.write).toHaveBeenCalledWith(expect.objectContaining({ paths: [`${ROOT}/file`] }), [{ contentB64: 'aGk=', mode: 0o600 }]);
+    expect(h.fsRunner.write).toHaveBeenCalledWith(expect.objectContaining({ paths: [`${ROOT}/file`] }), [{ contentB64: 'aGk=', mode: 0o600 }], { roots: [ROOT] });
     expect(result).toMatchObject({ kind: 'reply', frame: { type: 'fs_write_result', ok: true } });
   });
 
@@ -206,6 +207,31 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     const h = harness();
     (h.fsRunner.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: 'unsupported', reason: 'multi_path_read' });
     expect(await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`, `${ROOT}/file`] }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'unsupported_multi_path_read' } });
+  });
+
+  it('P2: given the fs runner reports too_large, should deny `too_large` (the codec has no truncation marker for reads)', async () => {
+    const h = harness();
+    (h.fsRunner.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: 'too_large', size: 5_000_000, maxContentBytes: 786_048 });
+    expect(await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`] }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'too_large' } });
+    expect(h.audits[0]?.verdict).toMatch(/^deny:too_large:5000000>786048$/);
+  });
+
+  it('P2: the fs runner receives the policy roots and a content ceiling derived from the frame limit', async () => {
+    const h = harness();
+    await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`] }));
+    expect(h.fsRunner.read).toHaveBeenCalledWith(expect.anything(), { roots: [ROOT], maxContentBytes: fsReadContentCeiling({ maxFrameBytes: 1024 * 1024 }) });
+    await h.dispatcher.handle(signedGrant({ type: 'grant_fs_write', files: [{ path: `${ROOT}/file`, contentB64: 'aGk=' }] }));
+    expect(h.fsRunner.write).toHaveBeenCalledWith(expect.anything(), expect.anything(), { roots: [ROOT] });
+  });
+
+  it('P2: expired nonces are evicted as part of grant processing, so the store stays bounded over a long-running daemon', async () => {
+    let now = NOW;
+    const h = harness({ now: () => now });
+    for (let i = 0; i < 20; i += 1) {
+      await h.dispatcher.handle(signedGrant({ type: 'grant_exec', cmd: 'tool' }, { iat: now - 1_000, exp: now + 5_000 }));
+      now += 10_000;
+    }
+    expect(h.deps.nonces.size()).toBeLessThanOrEqual(1);
   });
 
   it('given the runner throws (refused env), should deny `runner_refused` rather than crash', async () => {

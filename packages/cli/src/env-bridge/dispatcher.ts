@@ -32,7 +32,7 @@ import { decideExecution as libDecideExecution, type DecideExecutionInput, type 
 import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
-import type { Frame } from '@pagespace/lib/env-bridge/frame-codec';
+import { fsReadContentCeiling, type Frame, type FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
 import { signResultFrame, type UnsignedMachineResultFrame } from './result-signer.js';
@@ -75,6 +75,8 @@ export interface DispatcherDeps {
   /** `null` when the daemon cannot prompt (headless); an `ask` verdict is then a deny. */
   readonly ask: AskPrompter | null;
   readonly log: (line: string) => void;
+  /** The socket frame limit; bounds what an fs_read may return. */
+  readonly limits: FrameLimits;
   /** The pure-core gates; overridable ONLY so a test can count calls. */
   readonly gates?: DecisionGates;
 }
@@ -118,6 +120,8 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     const request = grantRequestForFrame(frame);
     if (frame.type === 'grant_pty_open') return denied(grantIdOf(frame), 'unsupported', { grant: null, op: request.op });
 
+    // Evict spent nonces first (synchronous, so has+add below stay atomic): the store is bounded by one TTL.
+    deps.nonces.evictExpired(deps.now());
     const verdict = gates.verifyGrant({
       grant: frame.grant,
       signature: frame.sig,
@@ -142,6 +146,7 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
       probe: deps.probe,
     };
     let decision = gates.decideExecution(decideInput);
+    const roots = decideInput.machinePolicy?.roots ?? [];
 
     if (decision.kind === 'ask') {
       if (deps.ask === null) return denied(grant.grantId, 'ask_unavailable', { grant, op: grant.op });
@@ -166,15 +171,16 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
           return reply({ type: 'exec_result', grantId: grant.grantId, exitCode: outcome.exitCode, stdoutB64: outcome.stdout.toString('base64'), stderrB64: outcome.stderr.toString('base64'), truncated: outcome.truncated });
         }
         case 'fs_read': {
-          const outcome = await deps.fsRunner.read(normalized);
+          const outcome = await deps.fsRunner.read(normalized, { roots, maxContentBytes: fsReadContentCeiling(deps.limits) });
           if (outcome.kind === 'unsupported') return denied(grant.grantId, `unsupported_${outcome.reason}`, { grant, op: grant.op });
+          if (outcome.kind === 'too_large') return denied(grant.grantId, 'too_large', { grant, op: grant.op, verdict: `deny:too_large:${outcome.size}>${outcome.maxContentBytes}` });
           if (outcome.kind === 'error') return denied(grant.grantId, 'fs_error', { grant, op: grant.op, verdict: `deny:fs_error:${outcome.error}` });
           await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_read_result', grantId: grant.grantId, found: outcome.found, ...(outcome.contentB64 !== undefined && { contentB64: outcome.contentB64 }) });
         }
         case 'fs_write': {
           const files = frame.type === 'grant_fs_write' ? frame.files.map((file) => ({ contentB64: file.contentB64, mode: file.mode ?? null })) : [];
-          const outcome = await deps.fsRunner.write(normalized, files);
+          const outcome = await deps.fsRunner.write(normalized, files, { roots });
           await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: outcome.ok ? 'allow' : `allow:write_failed:${outcome.error ?? ''}`, argsHash: grant.argsHash, exitCode: null });
           return reply({ type: 'fs_write_result', grantId: grant.grantId, ok: outcome.ok, ...(outcome.error !== undefined && { error: outcome.error }) });
         }

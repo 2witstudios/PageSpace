@@ -1,28 +1,65 @@
 /**
  * The fs runner — reads and writes ONLY the confined real paths a
- * `NormalizedRequest` carries (`confinePath` output, never a wire path), with
- * the Codex C9 mitigation: confinement resolved a PATHNAME, and a pathname
- * can be re-pointed between the check and the use. So every operation opens
- * the confined path with `O_NOFOLLOW` (the final component may not be a
- * symlink at open time) and then re-checks the OPEN HANDLE: `fstat` must say
- * a regular file, and its `dev`/`ino` must match an `lstat` of the pathname
- * taken after the open (`checkOpenHandle`). A handle that is not the inode
- * currently at that path, or that path having become a link, is refused and
- * nothing is read or written through it. Parent-directory swaps are covered
- * by the same inode identity check.
+ * `NormalizedRequest` carries (`confinePath` output, never a wire path), and
+ * proves, on the OPEN OBJECT, that what it holds is what confinement approved
+ * (Codex C9, and its P1 follow-up on PR #2546: an ancestor swap).
  *
- * Content crosses this boundary as base64 (the wire form); nothing here
- * interprets it. `fs_read` serves exactly ONE path: the `fs_read_result`
- * frame carries one content, so a multi-path read is refused as unsupported
- * rather than silently answered with the first file.
+ * WHY PATHNAMES ARE NOT ENOUGH. `confinePath` resolved a pathname. Between
+ * that and the `open`, any local process may retarget a component of it —
+ * the final one (a symlink swapped in) or an ANCESTOR (a directory renamed
+ * away and a symlink, or a bind mount, put in its place). `O_NOFOLLOW`
+ * covers only the final component, and a later `lstat(path)` walks the same
+ * replaced ancestor, so it agrees with the handle and proves nothing.
+ *
+ * WHAT THIS MODULE DOES (Node has no `openat`, so ancestry is verified by
+ * handle identity rather than by opening relative to a directory fd):
+ *
+ *  1. The root the path lies under is resolved (`realpath`) and every
+ *     directory from that root down to the file's parent is opened with
+ *     `O_DIRECTORY | O_NOFOLLOW`; the opened handle's `dev`/`ino` must equal
+ *     an `lstat` of that name, which must be a directory and not a link. A
+ *     symlinked or non-directory component is refused during the walk.
+ *  2. The target is opened with `O_NOFOLLOW` and NEVER `O_TRUNC`, then
+ *     re-checked on the handle: a regular file whose `dev`/`ino` equals a
+ *     post-open `lstat`.
+ *  3. Every ancestor is `lstat`ed AGAIN after the open and compared with the
+ *     identities recorded in step 1: an ancestor replaced at any point between
+ *     the walk and the open is detected here (`ancestor_replaced`) and the
+ *     handle is closed unused.
+ *  4. On Linux the final handle is resolved through `/proc/self/fd/<fd>` and
+ *     its real path must lie under the root (`escaped_root`).
+ *  5. Only now does a write `ftruncate` the VERIFIED handle and write to it.
+ *     Because `O_TRUNC` is never used, a handle that fails verification has
+ *     destroyed nothing.
+ *
+ * RESIDUAL, stated precisely. Steps 1–3 detect a swap because a replacement
+ * has a different inode. What they cannot detect is an ancestor swapped out
+ * AND swapped back so that step 3 sees the original again while the open in
+ * step 2 followed the replacement (two swaps inside the window between the
+ * walk and the re-walk). On Linux step 4 closes that too: the fd's own real
+ * path is asked from the kernel. On macOS the residual stands; the
+ * remaining cost to an attacker is winning a double race against a window
+ * of a few syscalls, and the payoff is bounded by the policy's `ask` /
+ * allowlist gate on who may request at all. A swap AFTER the final open
+ * changes nothing: every later byte moves through the verified fd.
+ *
+ * `fs_read` serves exactly ONE path (the `fs_read_result` frame carries one
+ * content) and refuses, from `fstat` size BEFORE reading, a file that could
+ * not fit the frame limit once base64-encoded (`too_large`). Content crosses
+ * this boundary as base64; nothing here interprets it. On Windows
+ * `O_NOFOLLOW` / `O_DIRECTORY` do not exist and the walk degrades to the
+ * identity checks alone.
  */
 import { promises as fsp, constants as fsConstants } from 'node:fs';
+import { dirname, posix } from 'node:path';
 import type { NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
 
 export interface HandleStats {
   readonly dev: number | bigint;
   readonly ino: number | bigint;
+  readonly size: number | bigint;
   isFile(): boolean;
+  isDirectory(): boolean;
 }
 
 export interface PathStats extends HandleStats {
@@ -30,18 +67,26 @@ export interface PathStats extends HandleStats {
 }
 
 export interface OpenHandle {
+  readonly fd: number;
   stat(): Promise<HandleStats>;
   readFile(): Promise<Buffer>;
   writeFile(data: Buffer): Promise<void>;
+  truncate(length: number): Promise<void>;
   close(): Promise<void>;
 }
 
 export interface FsPrimitives {
+  readonly platform: NodeJS.Platform | string;
   open(path: string, flags: number, mode?: number): Promise<OpenHandle>;
   lstat(path: string): Promise<PathStats>;
+  realpath(path: string): Promise<string>;
 }
 
-export type ReadOutcome = { readonly kind: 'read'; readonly found: boolean; readonly contentB64?: string } | { readonly kind: 'unsupported'; readonly reason: 'multi_path_read' } | { readonly kind: 'error'; readonly error: string };
+export type ReadOutcome =
+  | { readonly kind: 'read'; readonly found: boolean; readonly contentB64?: string }
+  | { readonly kind: 'unsupported'; readonly reason: 'multi_path_read' }
+  | { readonly kind: 'too_large'; readonly size: number; readonly maxContentBytes: number }
+  | { readonly kind: 'error'; readonly error: string };
 export type WriteOutcome = { readonly kind: 'write'; readonly ok: boolean; readonly error?: string };
 
 export interface FsWriteContent {
@@ -49,66 +94,179 @@ export interface FsWriteContent {
   readonly mode: number | null;
 }
 
-export interface FsRunner {
-  read(request: NormalizedRequest): Promise<ReadOutcome>;
-  write(request: NormalizedRequest, files: readonly FsWriteContent[]): Promise<WriteOutcome>;
+export interface FsReadOptions {
+  /** The policy roots; the path must lie under one of them (resolved). */
+  readonly roots: readonly string[];
+  /** Largest raw file that fits the frame limit once encoded (`fsReadContentCeiling`). */
+  readonly maxContentBytes: number;
 }
 
-export type HandleCheck = { readonly ok: true } | { readonly ok: false; readonly reason: 'not_regular_file' | 'handle_mismatch' | 'symlink' };
+export interface FsWriteOptions {
+  readonly roots: readonly string[];
+}
+
+export interface FsRunner {
+  read(request: NormalizedRequest, options: FsReadOptions): Promise<ReadOutcome>;
+  write(request: NormalizedRequest, files: readonly FsWriteContent[], options: FsWriteOptions): Promise<WriteOutcome>;
+}
 
 const NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
+const DIRECTORY = fsConstants.O_DIRECTORY ?? 0;
 const DEFAULT_WRITE_MODE = 0o644;
-
-/** C9: is the handle we hold the regular file currently at `path`? */
-export async function checkOpenHandle(handle: OpenHandle, path: string, primitives: FsPrimitives): Promise<HandleCheck> {
-  const held = await handle.stat();
-  if (!held.isFile()) return { ok: false, reason: 'not_regular_file' };
-  const now = await primitives.lstat(path);
-  if (now.isSymbolicLink()) return { ok: false, reason: 'symlink' };
-  if (held.dev !== now.dev || held.ino !== now.ino) return { ok: false, reason: 'handle_mismatch' };
-  return { ok: true };
-}
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
 const codeOf = (error: unknown): string | undefined => (typeof error === 'object' && error !== null && 'code' in error ? String((error as { code: unknown }).code) : undefined);
 
-export function createFsRunner(primitives: FsPrimitives = nodePrimitives()): FsRunner {
-  const withHandle = async <T>(path: string, flags: number, mode: number | undefined, use: (handle: OpenHandle) => Promise<T>): Promise<T> => {
-    const handle = await primitives.open(path, flags, mode);
-    try {
-      const check = await checkOpenHandle(handle, path, primitives);
-      if (!check.ok) throw new Error(`refusing ${path}: ${check.reason}`);
-      return await use(handle);
-    } finally {
-      await handle.close().catch(() => undefined);
-    }
-  };
+function isWithin(target: string, root: string): boolean {
+  return target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+}
 
+class VerificationError extends Error {
+  constructor(readonly reason: string, detail: string) {
+    super(`${reason}: ${detail}`);
+    this.name = 'VerificationError';
+  }
+}
+
+interface DirIdentity {
+  readonly dir: string;
+  readonly dev: number | bigint;
+  readonly ino: number | bigint;
+}
+
+/** Open `dir` as a directory, no link following, and prove the handle is the entry `lstat` named. */
+async function verifyDirectory(dir: string, primitives: FsPrimitives): Promise<DirIdentity> {
+  const named = await primitives.lstat(dir);
+  if (named.isSymbolicLink() || !named.isDirectory()) throw new VerificationError('ancestor_not_directory', dir);
+  const handle = await primitives.open(dir, fsConstants.O_RDONLY | DIRECTORY | NOFOLLOW);
+  try {
+    const held = await handle.stat();
+    if (!held.isDirectory()) throw new VerificationError('ancestor_not_directory', dir);
+    if (held.dev !== named.dev || held.ino !== named.ino) throw new VerificationError('handle_mismatch', dir);
+    return { dir, dev: held.dev, ino: held.ino };
+  } finally {
+    await handle.close().catch(() => undefined);
+  }
+}
+
+/** The directories to verify: the resolved root down to the target's parent. */
+function ancestorsBelow(rootReal: string, path: string): string[] {
+  const dirs: string[] = [];
+  let cursor = dirname(path);
+  while (isWithin(cursor, rootReal)) {
+    dirs.unshift(cursor);
+    if (cursor === rootReal) break;
+    const parent = dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  if (dirs[0] !== rootReal) dirs.unshift(rootReal);
+  return dirs;
+}
+
+/**
+ * Open `path` (a confined real path) with `flags` (never `O_TRUNC` — the
+ * caller truncates the verified handle) and return the handle only after its
+ * ancestry and identity verified. Throws `VerificationError` otherwise; the
+ * handle is closed before the throw. Exported for its own tests.
+ */
+export async function openVerified(path: string, flags: number, mode: number | undefined, roots: readonly string[], primitives: FsPrimitives): Promise<OpenHandle> {
+  if ((flags & fsConstants.O_TRUNC) !== 0) throw new VerificationError('o_trunc_forbidden', path);
+
+  let rootReal: string | null = null;
+  for (const root of roots) {
+    let real: string;
+    try {
+      real = posix.normalize(await primitives.realpath(root));
+    } catch {
+      continue;
+    }
+    if (isWithin(path, real)) {
+      rootReal = real;
+      break;
+    }
+  }
+  if (rootReal === null) throw new VerificationError('outside_root', path);
+
+  // 1. walk the ancestry, recording each verified directory's identity.
+  const recorded: DirIdentity[] = [];
+  for (const dir of ancestorsBelow(rootReal, path)) recorded.push(await verifyDirectory(dir, primitives));
+
+  // 2. open the target itself, never following a link, never truncating.
+  const handle = await primitives.open(path, flags | NOFOLLOW, mode);
+  try {
+    const held = await handle.stat();
+    if (!held.isFile()) throw new VerificationError('not_regular_file', path);
+    const named = await primitives.lstat(path);
+    if (named.isSymbolicLink()) throw new VerificationError('symlink', path);
+    if (held.dev !== named.dev || held.ino !== named.ino) throw new VerificationError('handle_mismatch', path);
+
+    // 3. every ancestor must still be the directory it was when walked.
+    for (const identity of recorded) {
+      const again = await primitives.lstat(identity.dir);
+      if (again.isSymbolicLink() || !again.isDirectory() || again.dev !== identity.dev || again.ino !== identity.ino) {
+        throw new VerificationError('ancestor_replaced', identity.dir);
+      }
+    }
+
+    // 4. Linux: ask the kernel where the fd really points.
+    if (primitives.platform === 'linux') {
+      const real = posix.normalize(await primitives.realpath(`/proc/self/fd/${handle.fd}`));
+      if (!isWithin(real, rootReal)) throw new VerificationError('escaped_root', `${path} -> ${real}`);
+    }
+    return handle;
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
+  }
+}
+
+export function createFsRunner(primitives: FsPrimitives = createFsRunner.nodePrimitives()): FsRunner {
   return {
-    async read(request) {
+    async read(request, options) {
       if (request.op !== 'fs_read') return { kind: 'error', error: 'not an fs_read request' };
       const [path, ...rest] = request.paths;
       if (path === undefined) return { kind: 'error', error: 'no path' };
       if (rest.length > 0) return { kind: 'unsupported', reason: 'multi_path_read' };
+      let handle: OpenHandle;
       try {
-        const content = await withHandle(path, fsConstants.O_RDONLY | NOFOLLOW, undefined, (handle) => handle.readFile());
-        return { kind: 'read', found: true, contentB64: content.toString('base64') };
+        handle = await openVerified(path, fsConstants.O_RDONLY, undefined, options.roots, primitives);
       } catch (error) {
         if (codeOf(error) === 'ENOENT') return { kind: 'read', found: false };
         return { kind: 'error', error: messageOf(error) };
       }
+      try {
+        const size = Number((await handle.stat()).size);
+        if (size > options.maxContentBytes) return { kind: 'too_large', size, maxContentBytes: options.maxContentBytes };
+        const content = await handle.readFile();
+        if (content.length > options.maxContentBytes) return { kind: 'too_large', size: content.length, maxContentBytes: options.maxContentBytes };
+        return { kind: 'read', found: true, contentB64: content.toString('base64') };
+      } catch (error) {
+        return { kind: 'error', error: messageOf(error) };
+      } finally {
+        await handle.close().catch(() => undefined);
+      }
     },
-    async write(request, files) {
+    async write(request, files, options) {
       if (request.op !== 'fs_write') return { kind: 'write', ok: false, error: 'not an fs_write request' };
       if (files.length !== request.paths.length) return { kind: 'write', ok: false, error: 'files/paths length mismatch' };
       for (let index = 0; index < files.length; index += 1) {
         const path = request.paths[index] as string;
         const file = files[index] as FsWriteContent;
+        let handle: OpenHandle;
         try {
-          const data = Buffer.from(file.contentB64, 'base64');
-          await withHandle(path, fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | NOFOLLOW, file.mode ?? DEFAULT_WRITE_MODE, (handle) => handle.writeFile(data));
+          handle = await openVerified(path, fsConstants.O_WRONLY | fsConstants.O_CREAT, file.mode ?? DEFAULT_WRITE_MODE, options.roots, primitives);
         } catch (error) {
           return { kind: 'write', ok: false, error: `${path}: ${messageOf(error)}` };
+        }
+        try {
+          // 5. the handle is verified: truncate IT, then write.
+          await handle.truncate(0);
+          await handle.writeFile(Buffer.from(file.contentB64, 'base64'));
+        } catch (error) {
+          return { kind: 'write', ok: false, error: `${path}: ${messageOf(error)}` };
+        } finally {
+          await handle.close().catch(() => undefined);
         }
       }
       return { kind: 'write', ok: true };
@@ -116,17 +274,22 @@ export function createFsRunner(primitives: FsPrimitives = nodePrimitives()): FsR
   };
 }
 
-function nodePrimitives(): FsPrimitives {
+/** The real primitives, exposed so a test can wrap them with a hook. */
+createFsRunner.nodePrimitives = function nodePrimitives(): FsPrimitives {
   return {
+    platform: process.platform,
     open: async (path, flags, mode) => {
       const handle = await fsp.open(path, flags, mode);
       return {
+        fd: handle.fd,
         stat: () => handle.stat(),
         readFile: () => handle.readFile(),
         writeFile: (data) => handle.writeFile(data),
+        truncate: (length) => handle.truncate(length),
         close: () => handle.close(),
       };
     },
     lstat: (path) => fsp.lstat(path),
+    realpath: (path) => fsp.realpath(path),
   };
-}
+};
