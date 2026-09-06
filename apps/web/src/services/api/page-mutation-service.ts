@@ -6,6 +6,7 @@ import { inferChangeGroupType, createChangeGroupId } from '@pagespace/lib/monito
 import { computePageStateHash, createPageVersion, type PageVersionSource } from '@pagespace/lib/services/page-version-service'
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { writePageContent } from '@pagespace/lib/services/page-content-store';
+import { reanchorPageTags } from '@pagespace/lib/tags/tag-service';
 import { detectPageContentFormat, type PageContentFormat } from '@pagespace/lib/content/page-content-format';
 import { hashWithPrefix } from '@pagespace/lib/utils/hash-utils';
 import { isSheetType } from '@pagespace/lib/sheets/sheet';
@@ -297,6 +298,52 @@ export async function applyPageMutation({
         mentionedByUserId: context.userId,
         driveId: currentPage.driveId,
       });
+
+      // FORWARD-PORT CONTENT TAG ANCHORS. This is the primary anchoring
+      // mechanism and this is its only call site: `previousContent` and
+      // `nextContent` exist together in exactly one place in the codebase, and
+      // that place is this transaction. Without the hook every edit falls
+      // through to quote repair, which is the accuracy floor rather than the
+      // target — tags on actively-edited pages would decay while tags on stale
+      // pages kept working, which is backwards for retrieval.
+      //
+      // IN the transaction, on `transaction`: the sweep must commit with the
+      // content it describes. Ported outside it, anchors can point at a
+      // revision that then rolls back, or the page can commit with only some
+      // of its anchors moved.
+      //
+      // A sweep failure does NOT fail the save. `reanchorPageTags` never throws
+      // — it returns a result — so it cannot roll this transaction back, and
+      // that is deliberate: degraded anchors are recoverable by a later repair
+      // pass, a refused page save is not. The failure is logged instead.
+      //
+      // BOTH MODES ARE PASSED EXPLICITLY, always. The `pages` row has already
+      // been updated by this point, so letting the service read the stored mode
+      // would give it the NEW mode for BOTH revisions — which is precisely the
+      // broken case for `convert-content-mode`: the old HTML then projects as
+      // raw text and every correctly built anchor fails its hash check.
+      //
+      // `currentPage` is a full row read before the update, so it still holds
+      // the old mode. For an ordinary edit the two are equal and the service
+      // treats it as a normal transition; when they differ it knows the change
+      // is a DECLARED conversion rather than the accidental format flip its
+      // guard exists to catch, and routes the anchors to quote repair.
+      const previousContentMode = currentPage.contentMode;
+      const nextContentMode =
+        typeof updates.contentMode === 'string' ? updates.contentMode : previousContentMode;
+
+      const reanchored = await reanchorPageTags(pageId, previousContent, nextContent, {
+        executor: transaction,
+        oldContentMode: previousContentMode,
+        newContentMode: nextContentMode,
+      });
+      if (!reanchored.ok) {
+        loggers.api.error(
+          'Failed to re-anchor content tags after a page mutation',
+          undefined,
+          { pageId, error: reanchored.error },
+        );
+      }
     }
 
     // Create page version BEFORE acquiring the activity chain lock,
