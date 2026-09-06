@@ -86,6 +86,7 @@ import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
 import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
+import { envConnectHandler, envDisconnectHandler, envPolicyHandler } from '../commands/env/lazy.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 
@@ -117,6 +118,11 @@ const OTHER_ROUTES: readonly RouteEntry[] = [
   { path: ['keys', 'use'], handler: keysUseHandler, summary: "Set this machine's active key (--device for a headless machine)" },
   { path: ['env', 'enroll'], handler: envEnrollHandler, summary: 'Enroll this machine as a local environment with a one-time code' },
   { path: ['env', 'token'], handler: envTokenHandler, summary: 'Prove this machine holds its key and receive a short-lived bridge token' },
+  // The bridge daemon: resolves once the first connect is under way and lives
+  // on the socket (the `mcp` pattern), so `bin.ts` must not force-exit it.
+  { path: ['env', 'connect'], handler: envConnectHandler, longRunning: true, summary: 'Run the bridge daemon: serve this machine as a local environment (exec + files)' },
+  { path: ['env', 'disconnect'], handler: envDisconnectHandler, summary: 'Stop a running env connect for an enrollment' },
+  { path: ['env', 'policy'], handler: envPolicyHandler, summary: "Print and validate this machine's local policy file" },
   { path: ['mcp'], handler: mcpHandler, longRunning: true, summary: 'Serve the full operation registry as an MCP stdio server' },
   { path: ['drives', 'list'], handler: drivesListHandler, summary: 'List drives' },
   { path: ['drives', 'create'], handler: drivesCreateHandler, summary: 'Create a drive' },

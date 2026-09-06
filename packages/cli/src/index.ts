@@ -370,6 +370,20 @@ export { createEnvEnrollHandler, createEnvTokenHandler, envEnrollHandler, envTok
 export type { EnvEnrollHandlerDeps, EnvTokenHandlerDeps } from './commands/env.js';
 export { encodeChallenge, generateMachineKeypair, signWithMachineKey } from './env-bridge/keypair.js';
 export type { GenerateMachineKeypair, MachineKeypair, SignWithMachineKey } from './env-bridge/keypair.js';
+// `pagespace env connect|disconnect|policy` — the bridge daemon (M1 · t08).
+export { createEnvConnectHandler, envConnectHandler, bridgeSocketUrl, pidFilePath } from './commands/env/connect.js';
+export type { EnvConnectHandlerDeps, PidFileStore } from './commands/env/connect.js';
+export { createEnvDisconnectHandler, envDisconnectHandler } from './commands/env/disconnect.js';
+export type { EnvDisconnectHandlerDeps } from './commands/env/disconnect.js';
+export { createEnvPolicyHandler, envPolicyHandler } from './commands/env/policy.js';
+export type { EnvPolicyHandlerDeps } from './commands/env/policy.js';
+export { loadMachinePolicy, defaultPolicyPath, describePolicyRefusal, POLICY_FILE_NAME, POLICY_PATH_ENV_VAR } from './env-bridge/policy.js';
+export type { LoadedPolicy, PolicyFileStat, PolicyLoadReason, PolicyLoaderDeps } from './env-bridge/policy.js';
+export { createAuditLog, defaultAuditPath, formatAuditLine, AUDIT_FILE_NAME, AUDIT_PATH_ENV_VAR } from './env-bridge/audit-log.js';
+export type { AuditEntry, AuditLog, AuditLogDeps } from './env-bridge/audit-log.js';
+export { mintBridgeToken, BridgeTokenError } from './env-bridge/token.js';
+export type { MintBridgeTokenInput, MintedBridgeToken } from './env-bridge/token.js';
+export { ENV_BRIDGE_HASH_ALGORITHM, ed25519Verify, envBridgeHash } from './env-bridge/crypto.js';
 
 // `pagespace keys use` — the per-machine active key (browser-approved
 // activation ceremony shared with the wizard's "Set active key").
