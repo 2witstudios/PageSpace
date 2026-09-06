@@ -173,6 +173,42 @@ function mockResetTransaction(
 }
 
 /**
+ * Mock the starter-grant transaction (free tier, existing row with no period). The
+ * ledger insert goes FIRST; `granted` controls whether `.returning()` reports a new
+ * row (false = the user-scoped key already existed, so the balance must not be
+ * touched). Captures the ledger values and the UPDATE's set payload.
+ */
+function mockStarterGrantTransaction(
+  sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {},
+  granted = true,
+) {
+  mockDb.transaction.mockImplementationOnce(async (cb: (tx: unknown) => Promise<unknown>) => {
+    const tx = {
+      insert: vi.fn(() => ({
+        values: (v: Record<string, unknown>) => {
+          sink.ledgerValues = v;
+          return {
+            onConflictDoNothing: () => ({
+              returning: () => Promise.resolve(granted ? [{ id: 'cl_1' }] : []),
+            }),
+          };
+        },
+      })),
+      update: vi.fn(() => {
+        sink.updateCalled = true;
+        return {
+          set: (v: Record<string, unknown>) => {
+            sink.set = v;
+            return { where: () => Promise.resolve(undefined) };
+          },
+        };
+      }),
+    };
+    return cb(tx);
+  });
+}
+
+/**
  * Wire mockDb.transaction to run its callback against a fake tx. `balRow` is the
  * locked balance read; `holds` controls the reserved/inFlight aggregate. Captures
  * any inserted hold values and returns a stubbed id.
@@ -439,15 +475,43 @@ describe('canConsumeAI', () => {
     expect(r.reason).toBe('ok');
   });
 
-  it('does NOT grant a free allowance when a top-up created the row without a period — top-up bucket alone is spendable', async () => {
-    mockDb.select.mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]));
+  it('grants the one-time starter credits to a free user whose row was created bare by a top-up (no period) — ledger-first, once', async () => {
+    // A top-up before the first AI call creates the row with no period. Free is
+    // excluded from the reset path, so the starter grant must land HERE, keyed on the
+    // user-scoped ledger row so it can never double-fund.
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    mockStarterGrantTransaction(sink, true);
+    mockTransaction({ monthlyRemainingCents: 500, topupRemainingCents: 2500, monthlyPeriodEnd: FUTURE }, { reserved: 0, inFlight: 0 });
+
+    const r = await canConsumeAI('u1', 'free');
+
+    expect(sink.ledgerValues).toMatchObject({ userId: 'u1', entryType: 'monthly_grant', bucket: 'monthly', amountCents: 500, stripeRef: 'free-init-u1', consumeStatus: 'applied' });
+    expect(sink.updateCalled).toBe(true);
+    expect(sink.set).toMatchObject({ monthlyAllowanceCents: 500 });
+    expect(sink.set?.monthlyPeriodEnd).toBeInstanceOf(Date);
+    // The remaining is a RELATIVE increment (sql fragment), not an absolute 500 — it
+    // must add on top of whatever a concurrent top-up already put in the row.
+    expect(sink.set?.monthlyRemainingCents).toMatchObject({ sql: true });
+    expect(mockDb.select).toHaveBeenCalledTimes(2); // pre-read + post-grant re-read; no subscription lookup
+    expect(r.allowed).toBe(true);
+  });
+
+  it('does NOT fund the starter grant twice: when the free-init ledger row already exists, the balance is left alone', async () => {
+    mockDb.select
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]))
+      .mockReturnValueOnce(selectReturning([{ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }]));
+    const sink: { set?: Record<string, unknown>; ledgerValues?: Record<string, unknown>; updateCalled?: boolean } = {};
+    mockStarterGrantTransaction(sink, false /* ledger insert conflicted: already granted */);
     mockTransaction({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null }, { reserved: 0, inFlight: 0 });
 
     const r = await canConsumeAI('u1', 'free');
 
-    expect(mockDb.update).not.toHaveBeenCalled();
-    expect(mockDb.transaction).toHaveBeenCalledTimes(1);
-    expect(r.allowed).toBe(true);
+    expect(sink.updateCalled).toBeFalsy();
+    expect(sink.set).toBeUndefined();
+    expect(r.allowed).toBe(true); // the top-up bucket alone is spendable
   });
 
   it('still gate-resets a comped paid user whose row was created bare by a top-up (null period)', async () => {

@@ -117,15 +117,30 @@ interface FundedBalanceRow {
  * never netted out (see the file header). Clamped at 0 only when there is no
  * debt — outstanding overage pulls the figure negative.
  */
+/**
+ * A non-refilling tier's row with no period stamped is a bare top-up row the gate has
+ * not yet funded with the one-time starter grant (see credit-gate's starter-grant
+ * branch, which stamps the period when it grants). Shared by the display read and the
+ * lean routing read so both pre-credit the same rows.
+ */
+function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boolean {
+  return TIER_ALLOWANCE_REFILLS[tier] === false && row.monthlyPeriodEnd === null;
+}
+
 function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
   // No row yet: the gate lazy-inits from the tier allowance on the first call.
   if (!row) return Math.max(0, allowanceFor(tier));
 
-  // Free is a one-time grant: no upcoming allowance is ever pre-credited, so the
-  // stored remaining is the whole story. (Historically the display pre-credited a
-  // lapsed free window with the next allowance the gate was about to add; the gate
-  // no longer rolls non-refilling tiers, so that projection would over-state.)
-  const monthlyRemaining = row.monthlyRemainingCents;
+  const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
+
+  // A non-refilling tier (free) never gets an upcoming allowance pre-credited — the
+  // stored remaining is the whole story — with ONE exception that mirrors the gate:
+  // a row that exists with NO period stamped is a bare top-up row whose one-time
+  // starter grant has not landed yet (the gate grants it on the next call, keyed on
+  // the ledger), so the pending grant is shown rather than reading the user as 0/5.
+  const monthlyRemaining = pendingStarterGrant(row, tier)
+    ? row.monthlyRemainingCents + allowance
+    : row.monthlyRemainingCents;
   const topupRemaining = row.topupRemainingCents;
   const debt = row.debtCents ?? 0;
   return debt > 0
@@ -235,8 +250,11 @@ export async function getCreditBalance(
   // in the gate and here) — a renewal adds the allowance and nets outstanding debt.
   // The period window never affects the displayed remaining: paid tiers carry forward
   // until invoice.paid / the gate roll lands, and free is a one-time grant with nothing
-  // upcoming to pre-credit. Debt is shown as-is.
-  const monthlyRemaining = row.monthlyRemainingCents;
+  // upcoming to pre-credit — except a bare top-up row whose starter grant is still
+  // pending (see pendingStarterGrant). Debt is shown as-is.
+  const monthlyRemaining = pendingStarterGrant(row, tier)
+    ? row.monthlyRemainingCents + allowance
+    : row.monthlyRemainingCents;
 
   const topupRemaining = row.topupRemainingCents;
   const debt = row.debtCents ?? 0;

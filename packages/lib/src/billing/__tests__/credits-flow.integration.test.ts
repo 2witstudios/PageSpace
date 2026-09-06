@@ -804,6 +804,27 @@ describe('credits flow — monthly reset', () => {
     expect(balanceOf('u1')!.monthlyRemainingCents).toBe(200); // untouched by any reset
   });
 
+  it('a FREE user who bought a top-up BEFORE their first AI call still gets the starter grant, once, on top of the top-up', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    // A credit-pack checkout creates the balance row bare: no period stamped.
+    await applyStripeFunding(creditPackCheckout('cs_1', 'cus_1', 2500));
+    expect(balanceOf('u1')).toMatchObject({ monthlyRemainingCents: 0, topupRemainingCents: 2500, monthlyPeriodEnd: null });
+
+    const first = await canConsumeAI('u1', 'free');
+    expect(first).toMatchObject({ allowed: true, reason: 'ok' });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(balanceOf('u1')!.topupRemainingCents).toBe(2500); // top-up untouched
+    expect(balanceOf('u1')!.monthlyPeriodEnd).not.toBeNull();
+    const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
+    expect(grants).toHaveLength(1);
+    expect(String(grants[0].stripeRef)).toBe('free-init-u1');
+
+    // Second call: nothing further.
+    await canConsumeAI('u1', 'free');
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
+  });
+
   it('a brand-new FREE user gets the one-time starter grant on first call, and only once', async () => {
     seedUser('u1', 'cus_1', 'free');
 

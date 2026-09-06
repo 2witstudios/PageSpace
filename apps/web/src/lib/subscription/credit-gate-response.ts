@@ -35,7 +35,7 @@ export function creditGatePayload(reason: GateResult['reason']): {
   return {
     status: 402,
     error: 'out_of_credits',
-    message: 'Your credit balance is too low. Add credits to get back to positive, or upgrade your plan for a monthly allowance.',
+    message: 'Your credit balance is too low. Add credits to get back to positive, or upgrade your plan. On a paid plan, your monthly allowance is also added at your next renewal.',
   };
 }
 

@@ -393,6 +393,46 @@ export async function canConsumeAI(
     });
   }
 
+  // Starter grant for a NON-refilling tier whose row already exists but was never
+  // granted. A top-up purchase before the user's first AI call (or a top-up racing
+  // the lazy-init above) creates a bare credit_balances row with no period stamped.
+  // A refilling tier gets such a row rolled by the reset path; free is excluded from
+  // that path, so without this branch a user who bought credits first would
+  // permanently miss the advertised starter grant. Eligibility is decided by the
+  // LEDGER, not by the row: the user-scoped `free-init-<userId>` key is inserted
+  // FIRST, and the balance is funded only when that insert actually lands — so a
+  // concurrent init, or a grant already recorded under the old monthly scheme, can
+  // never double-fund. The increment is one relative UPDATE, atomic against a
+  // concurrent top-up's own locked write to the same row.
+  if (row && row.monthlyPeriodEnd === null && tierHasAllowance && !tierRefills) {
+    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier];
+    await db.transaction(async (tx) => {
+      const granted = await tx
+        .insert(creditLedger)
+        .values({
+          userId,
+          entryType: 'monthly_grant',
+          bucket: 'monthly',
+          amountCents: monthly,
+          stripeRef: `free-init-${userId}`,
+          consumeStatus: 'applied',
+        })
+        .onConflictDoNothing(STRIPE_REF_ARBITER)
+        .returning({ id: creditLedger.id });
+      if (granted.length === 0) return;
+      await tx
+        .update(creditBalances)
+        .set({
+          monthlyRemainingCents: sql`${creditBalances.monthlyRemainingCents} + ${monthly}`,
+          monthlyAllowanceCents: monthly,
+          monthlyPeriodStart: now,
+          monthlyPeriodEnd: addOneMonth(now),
+        })
+        .where(eq(creditBalances.userId, userId));
+    });
+    row = await readBalance();
+  }
+
   const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
   // Free users are capped on concurrent in-flight calls; paid tiers are bounded by
   // credits alone UNLESS the caller supplies its own cap (voice passes one to bound

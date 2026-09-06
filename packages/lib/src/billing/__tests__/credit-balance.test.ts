@@ -269,6 +269,35 @@ describe('getCreditBalance', () => {
       expect(b.monthly.periodEnd).toBeNull();
     });
 
+    it('pre-credits the pending starter grant for a free bare top-up row (no period stamped) — the gate grants it on next call', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 0,
+          monthlyAllowanceCents: 0,
+          topupRemainingCents: 2500,
+          monthlyPeriodEnd: null,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.remaining).toBe(500);
+      expect(b.spendable).toBe(3000);
+      expect(await readSpendableCents('u1', 'free')).toBe(3000); // lean read agrees
+    });
+
+    it('does NOT pre-credit a free row whose period IS stamped (the grant already landed)', async () => {
+      balanceRows = [
+        {
+          monthlyRemainingCents: 120,
+          monthlyAllowanceCents: 500,
+          topupRemainingCents: 0,
+          monthlyPeriodEnd: past,
+        },
+      ];
+      const b = await getCreditBalance('u1', 'free');
+      expect(b.monthly.remaining).toBe(120);
+      expect(b.spendable).toBe(120);
+    });
+
     it('projects addOneMonth(now) for a paid user when no periodEnd has been stamped yet (null in DB)', async () => {
       balanceRows = [
         {
