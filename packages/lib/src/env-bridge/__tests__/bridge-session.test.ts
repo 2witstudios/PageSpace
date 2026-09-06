@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { reduceBridgeSession, initialBridgeSession, type BridgeSessionState, type BridgeEvent, type HelloFrame } from '../bridge-session';
+import { reduceBridgeSession, initialBridgeSession, ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON, isSupersededClose, type BridgeSessionState, type BridgeEvent, type HelloFrame } from '../bridge-session';
 import type { Frame } from '../frame-codec';
 
 const HELLO: HelloFrame = { type: 'hello', envId: 'e1', capabilities: { shell: true, pty: false, fs: true, checkpoint: false }, policyDigest: 'd', sig: 'AAAA' };
@@ -126,5 +126,15 @@ describe('reduceBridgeSession — the daemon connection lifecycle as a pure redu
     expect(step({ type: 'disconnect' })).toEqual([{ type: 'schedule_reconnect' }]);
     expect(step({ type: 'revoke_verified' })).toEqual([{ type: 'deleteKey' }]);
     expect(s).toEqual(at('revoked'));
+  });
+});
+
+describe('ENV_SUPERSEDED close contract — shared by the socket route (sender) and the daemon (receiver), so neither can drift', () => {
+  it('is code 1000 (normal) with reason env_superseded', () => {
+    expect(ENV_SUPERSEDED_CLOSE_CODE).toBe(1000);
+    expect(ENV_SUPERSEDED_CLOSE_REASON).toBe('env_superseded');
+    expect(isSupersededClose(1000, 'env_superseded')).toBe(true);
+    expect(isSupersededClose(1000, 'revoked')).toBe(false);
+    expect(isSupersededClose(1006, 'env_superseded')).toBe(false);
   });
 });

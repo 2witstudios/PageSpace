@@ -32,6 +32,21 @@ import type { Frame } from './frame-codec';
 
 export type BridgeStatus = 'disconnected' | 'connecting' | 'hello_sent' | 'authorized' | 'revoked';
 
+/**
+ * The close a SUPERSEDED socket receives when a second daemon connects for the
+ * same env: 1000 (normal) with this reason. Defined once, here, because both
+ * ends must agree — the socket route sends it, and the daemon must treat it
+ * as TERMINAL (another daemon took over; reconnecting would supersede the
+ * newer one and the two would fight forever) rather than as a failure to
+ * back off from.
+ */
+export const ENV_SUPERSEDED_CLOSE_CODE = 1000;
+export const ENV_SUPERSEDED_CLOSE_REASON = 'env_superseded';
+
+export function isSupersededClose(code: number, reason: string): boolean {
+  return code === ENV_SUPERSEDED_CLOSE_CODE && reason === ENV_SUPERSEDED_CLOSE_REASON;
+}
+
 /** The only frame that may open the handshake. */
 export type HelloFrame = Extract<Frame, { type: 'hello' }>;
 
