@@ -84,7 +84,8 @@ describe('hello — the machine-signed first frame', () => {
   });
 });
 
-const results: Record<MachineResultFrame['type'], Omit<MachineResultFrame, 'sig'>> = {
+type UnsignedResult = { [K in MachineResultFrame['type']]: Omit<Extract<MachineResultFrame, { type: K }>, 'sig'> };
+const results: UnsignedResult = {
   exec_result: { type: 'exec_result', grantId: 'g1', exitCode: 0, stdoutB64: 'b3V0', stderrB64: '', truncated: false },
   fs_read_result: { type: 'fs_read_result', grantId: 'g2', found: true, contentB64: 'ZGF0YQ==' },
   fs_write_result: { type: 'fs_write_result', grantId: 'g3', ok: true },
@@ -118,7 +119,7 @@ describe('results — machine-signed over {grantId, resultHash} (invariant 7)', 
     ['fs_write_result.ok', { ...results.fs_write_result, ok: false }],
     ['fs_write_result.error', { ...results.fs_write_result, error: 'disk full' }],
     ['grant_denied.reason', { ...results.grant_denied, reason: 'other' }],
-  ] as Array<[string, Omit<MachineResultFrame, 'sig'>]>)('given %s changed after signing, should deny bad_signature — every payload field is covered', (_label, tampered) => {
+  ] as Array<[string, UnsignedResult[keyof UnsignedResult]]>)('given %s changed after signing, should deny bad_signature — every payload field is covered', (_label, tampered) => {
     const original = results[tampered.type];
     const signed = signResult(original);
     const frame = { ...tampered, sig: signed.sig } as MachineResultFrame;

@@ -32,13 +32,14 @@
  * Pure: the Ed25519 `verify` and the `hash` primitives are injected.
  */
 import type { Frame } from './frame-codec';
+import type { HelloFrame } from './bridge-session';
 import { canonicalizeArgs, constantTimeEqual, decodeBase64, type Ed25519Verify, type HashBytes } from './grant';
 
 export const HELLO_SIGNING_DOMAIN = 'pagespace-env-bridge/hello/v1';
 export const RESULT_SIGNING_DOMAIN = 'pagespace-env-bridge/result/v1';
 export const REVOKE_SIGNING_DOMAIN = 'pagespace-env-bridge/revoke/v1';
 
-export type HelloFrame = Extract<Frame, { type: 'hello' }>;
+export type { HelloFrame };
 export type RevokeFrame = Extract<Frame, { type: 'revoke' }>;
 export type MachineResultFrame = Extract<Frame, { type: 'exec_result' | 'fs_read_result' | 'fs_write_result' | 'grant_denied' }>;
 export type MachineResultFrameType = MachineResultFrame['type'];
