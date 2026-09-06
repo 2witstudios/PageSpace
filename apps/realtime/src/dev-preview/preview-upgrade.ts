@@ -75,7 +75,7 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
       refuse(socket, 502, 'Bad Gateway');
       return true;
     }
-    if (target.decision.kind === 'refuse') {
+    if (!('spriteUrl' in target)) {
       deps.log.info('dev-preview.access', buildPreviewAccessLog({ userId, holder, method: 'GET', path, outcome: 'refused', reason: target.decision.reason, status: target.decision.status, transport: 'websocket' }));
       refuse(socket, target.decision.status, target.decision.reason);
       return true;

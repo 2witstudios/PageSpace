@@ -78,6 +78,11 @@ export function formatUpgradeResponse(headers: HeaderMap): string {
   return ['HTTP/1.1 101 Switching Protocols', 'Connection: Upgrade', 'Upgrade: websocket', ...lines, '', ''].join('\r\n');
 }
 
+function armIdleTimeout(stream: Duplex, ms: number, onIdle: () => void): void {
+  const setTimeoutFn = (stream as { setTimeout?: (timeout: number, callback: () => void) => unknown }).setTimeout;
+  if (typeof setTimeoutFn === 'function') setTimeoutFn.call(stream, ms, onIdle);
+}
+
 function flattenHeaders(headers: http.IncomingHttpHeaders): HeaderMap {
   const out: HeaderMap = {};
   for (const [name, value] of Object.entries(headers)) {
@@ -172,7 +177,10 @@ export function tunnelWebSocketUpgrade(input: TunnelWebSocketUpgradeInput): void
     };
     clientSocket.on('data', (chunk: Buffer) => { bytesToUpstream += chunk.length; });
     upstreamSocket.on('data', (chunk: Buffer) => { bytesToClient += chunk.length; });
-    clientSocket.setTimeout(idleTimeoutMs, closeBoth);
+    // The upgrade event types the client side as a `Duplex`; at runtime it is
+    // a `net.Socket` and carries `setTimeout`. Guarded so a non-socket Duplex
+    // (a test's PassThrough) simply has no idle cut.
+    armIdleTimeout(clientSocket, idleTimeoutMs, closeBoth);
     upstreamSocket.setTimeout(idleTimeoutMs, closeBoth);
     clientSocket.on('error', closeBoth);
     upstreamSocket.on('error', closeBoth);
