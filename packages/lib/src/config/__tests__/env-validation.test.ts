@@ -546,18 +546,39 @@ describe('env-validation', () => {
     // Turning local envs on without the key would let every local-env create
     // reach loadServerSigningKey() and answer a generic 500. Boot is where an
     // operator finds out, not the first user.
-    it('given LOCAL_ENVS_ENABLED=true and no ENV_BRIDGE_SIGNING_KEY, should refuse to boot naming the key', () => {
+    it('given LOCAL_ENVS_ENABLED=true and NEITHER ENV_BRIDGE_SIGNING_KEY nor ENV_BRIDGE_SIGNING_KEYS, should refuse to boot naming the key', () => {
       bootable();
       process.env.LOCAL_ENVS_ENABLED = 'true';
       delete process.env.ENV_BRIDGE_SIGNING_KEY;
-      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true/);
+      delete process.env.ENV_BRIDGE_SIGNING_KEYS;
+      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY \(or ENV_BRIDGE_SIGNING_KEYS for rotation\) must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    // The rotation contract (Codex C10, PR #2543): a deployment that follows it
+    // sets ONLY the plural variable, and boot must accept that exactly as the
+    // loader does — otherwise the documented rotation-only configuration cannot start.
+    it('given LOCAL_ENVS_ENABLED=true and ONLY ENV_BRIDGE_SIGNING_KEYS (rotation form), should boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      process.env.ENV_BRIDGE_SIGNING_KEYS = 'MC4CAQAwBQYDK2VwBCIEIA,MC4CAQAwBQYDK2VwBCIEIB';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true, a blank singular and a blank plural, should refuse to boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = '';
+      process.env.ENV_BRIDGE_SIGNING_KEYS = '  ';
+      expect(() => validateEnv()).toThrow(/must be set when LOCAL_ENVS_ENABLED=true/);
     });
 
     it('given LOCAL_ENVS_ENABLED=true and a blank key, should refuse to boot', () => {
       bootable();
       process.env.LOCAL_ENVS_ENABLED = 'true';
       process.env.ENV_BRIDGE_SIGNING_KEY = '   ';
-      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true/);
+      delete process.env.ENV_BRIDGE_SIGNING_KEYS;
+      expect(() => validateEnv()).toThrow(/must be set when LOCAL_ENVS_ENABLED=true/);
     });
 
     it('given LOCAL_ENVS_ENABLED=true and a key, should boot', () => {

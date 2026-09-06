@@ -158,6 +158,10 @@ export const serverEnvSchema = z
     // other optional secrets here; the superRefine below is what requires a
     // real value once the feature is on.
     ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional().or(z.literal('')),
+    // Rotation form (Codex C10): comma-separated keys, current first, previous
+    // after. EITHER variable satisfies the boot check below — the same rule the
+    // loader applies (`parseServerSigningKeyring`: KEYS wins when both are set).
+    ENV_BRIDGE_SIGNING_KEYS: z.string().min(1).optional().or(z.literal('')),
 
     // Server-held secret keying the sandbox session-key HMAC (see
     // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
@@ -283,17 +287,18 @@ export const serverEnvSchema = z
       });
     }
 
-    // Local environments sign every bridge grant with ENV_BRIDGE_SIGNING_KEY,
-    // and loadServerSigningKey() fails closed without it — which, at request
-    // time, is a generic 500 on the first local-env create. Boot is where an
-    // operator should learn the key is missing, and only once the feature is
-    // actually on: a deployment that never enables local envs must not be
-    // asked for a signing key.
-    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim()) {
+    // Local environments sign every bridge grant with the server signing key
+    // (ENV_BRIDGE_SIGNING_KEY, or the rotation list ENV_BRIDGE_SIGNING_KEYS),
+    // and loadServerSigningKeyring() fails closed without one — which, at
+    // request time, is a generic 500 on the first local-env create. Boot is
+    // where an operator should learn the key is missing, and only once the
+    // feature is actually on: a deployment that never enables local envs must
+    // not be asked for a signing key.
+    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim() && !data.ENV_BRIDGE_SIGNING_KEYS?.trim()) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          'ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
+          'ENV_BRIDGE_SIGNING_KEY (or ENV_BRIDGE_SIGNING_KEYS for rotation) must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
         path: ['ENV_BRIDGE_SIGNING_KEY'],
       });
     }
