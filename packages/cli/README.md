@@ -261,6 +261,21 @@ deletes the machine key. After a server restart it reconnects with exponential b
 In this release the daemon serves `exec`, `fs_read` and `fs_write`; PTY sessions are advertised as
 unsupported.
 
+**Platform:** `env connect` runs on macOS and Linux only. It relies on POSIX process groups to
+kill a timed-out command and on `O_NOFOLLOW` to open files safely, neither of which Windows
+provides, so on Windows it refuses to start with a clear message. `env enroll`, `env token`,
+`env disconnect` and `env policy` work everywhere.
+
+**Transport:** the host must be `https://` (the daemon sends this machine's proof of possession
+and a short-lived bearer token, and the socket is `wss://`). Plain `http://` is accepted only for
+the loopback hosts used in local development (`localhost`, `127.0.0.1`, `::1`), matching the CLI's
+OAuth loopback policy. Token redemption refuses to follow redirects.
+
+**Stopping it:** `env connect` writes its process identity (pid, start time, `argv0`) to
+`~/.pagespace/env-connect.<enrollmentId>.pid` and refreshes it periodically. `env disconnect`
+validates that record — it must be ours, recent, and the process must still be alive — before
+sending `SIGTERM`, and removes a stale file rather than risk signalling a reused pid.
+
 ### The policy file
 
 The daemon reads `~/.pagespace/env-policy.json` (or the path in `PAGESPACE_ENV_POLICY`). **You**

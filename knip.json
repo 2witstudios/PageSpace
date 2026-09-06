@@ -588,7 +588,8 @@
     "packages/cli": {
       "entry": [
         "src/bin.ts",
-        "src/bin-pagespace-mcp.ts"
+        "src/bin-pagespace-mcp.ts",
+        "scripts/bundle-lib-core.mjs"
       ],
       "project": [
         "src/**/*.ts"

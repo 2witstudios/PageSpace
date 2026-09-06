@@ -18,26 +18,28 @@
  * sees the policy and can never change it.
  */
 import { createHash } from 'node:crypto';
-import { parseMachinePolicy, type MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
+import { closeSync, constants as fsConstants, fstatSync, openSync, readFileSync } from 'node:fs';
+import { parseMachinePolicy, type MachinePolicy } from './lib-core.js';
 
 export const POLICY_FILE_NAME = 'env-policy.json';
 export const POLICY_PATH_ENV_VAR = 'PAGESPACE_ENV_POLICY';
 
 export type PolicyLoadReason = 'missing' | 'unreadable' | 'wrong_owner' | 'writable_by_others' | 'invalid_json' | 'invalid_schema';
 
-export interface PolicyFileStat {
+/** Owner, permission bits and content, ALL read from the SAME descriptor (CWE-367: no stat-then-read on the pathname). */
+export interface OpenedPolicyFile {
   readonly uid: number;
   /** The full st_mode; only the permission bits are inspected. */
   readonly mode: number;
+  readonly content: string;
 }
 
 export interface PolicyLoaderDeps {
   readonly path: string;
   /** The uid the daemon runs as; the file must be owned by it. */
   readonly uid: number;
-  /** `null` when the file does not exist; may throw on any other error (fails closed as `unreadable`). */
-  readonly stat: (path: string) => PolicyFileStat | null;
-  readonly readFile: (path: string) => string;
+  /** Open the file ONCE and return its fstat identity and content together; `null` when it does not exist; may throw (fails closed as `unreadable`). */
+  readonly open: (path: string) => OpenedPolicyFile | null;
 }
 
 export interface LoadedPolicy {
@@ -59,31 +61,50 @@ function refused(path: string, reason: PolicyLoadReason): LoadedPolicy {
 
 export function loadMachinePolicy(deps: PolicyLoaderDeps): LoadedPolicy {
   const { path } = deps;
-  let stat: PolicyFileStat | null;
+  let opened: OpenedPolicyFile | null;
   try {
-    stat = deps.stat(path);
+    opened = deps.open(path);
   } catch {
+    // ENOENT surfaces as null; any other open/fstat/read error fails closed.
     return refused(path, 'unreadable');
   }
-  if (stat === null) return refused(path, 'missing');
-  if (stat.uid !== deps.uid) return refused(path, 'wrong_owner');
-  if ((stat.mode & WRITABLE_BY_OTHERS_MASK) !== 0) return refused(path, 'writable_by_others');
+  if (opened === null) return refused(path, 'missing');
+  if (opened.uid !== deps.uid) return refused(path, 'wrong_owner');
+  if ((opened.mode & WRITABLE_BY_OTHERS_MASK) !== 0) return refused(path, 'writable_by_others');
 
-  let raw: string;
-  try {
-    raw = deps.readFile(path);
-  } catch {
-    return refused(path, 'unreadable');
-  }
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    parsed = JSON.parse(opened.content);
   } catch {
     return refused(path, 'invalid_json');
   }
   const policy = parseMachinePolicy(parsed);
   if (policy === null) return refused(path, 'invalid_schema');
-  return { path, policy, reason: null, digest: createHash('sha256').update(raw).digest('hex') };
+  return { path, policy, reason: null, digest: createHash('sha256').update(opened.content).digest('hex') };
+}
+
+/**
+ * The production adapter: open the policy path ONCE with `O_NOFOLLOW` (a
+ * symlink where the policy should be is refused, not followed), then read
+ * ownership, mode and content from that one descriptor via `fstat` + read.
+ * A local attacker who renames entries in the directory cannot swap the file
+ * between a check and a read, because there is no second lookup by name
+ * (CWE-367). `null` only for ENOENT; everything else throws (fail closed).
+ */
+export function openPolicyFile(path: string): OpenedPolicyFile | null {
+  let fd: number;
+  try {
+    fd = openSync(path, fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0));
+  } catch (error) {
+    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT') return null;
+    throw error;
+  }
+  try {
+    const stat = fstatSync(fd);
+    return { uid: stat.uid, mode: stat.mode, content: readFileSync(fd, 'utf8') };
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** `PAGESPACE_ENV_POLICY` wins; otherwise `~/.pagespace/env-policy.json`. */

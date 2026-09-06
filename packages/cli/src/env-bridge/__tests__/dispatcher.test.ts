@@ -4,7 +4,7 @@ import { canonicalizeArgs, decodeBase64, encodeGrant, verifyGrant, type Grant } 
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { decideExecution, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
 import { encodeRevokeForSigning, verifyMachineResult, type MachineResultFrame } from '@pagespace/lib/env-bridge/machine-signatures';
-import { fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
+import { execOutputCeiling, fsReadContentCeiling, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import type { MachinePolicy } from '@pagespace/lib/env-bridge/policy-types';
 import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
 import { createDispatcher, DAEMON_CAPABILITIES, type DispatcherDeps } from '../dispatcher.js';
@@ -207,6 +207,20 @@ describe('dispatcher — every grant: verifyGrant → decideExecution → runner
     const h = harness();
     (h.fsRunner.read as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ kind: 'unsupported', reason: 'multi_path_read' });
     expect(await h.dispatcher.handle(signedGrant({ type: 'grant_fs_read', paths: [`${ROOT}/file`, `${ROOT}/file`] }))).toMatchObject({ kind: 'reply', frame: { type: 'grant_denied', reason: 'unsupported_multi_path_read' } });
+  });
+
+  it('D: the runner\'s maxBytes is clamped to execOutputCeiling(frame limit) so a completed command\'s signed reply always decodes on the server', async () => {
+    const h = harness({ policy: () => ({ ...POLICY, maxBytes: 50 * 1024 * 1024 }), limits: { maxFrameBytes: 64 * 1024 } });
+    await h.dispatcher.handle(execFrame({ maxBytes: 50 * 1024 * 1024 }));
+    const request = h.spawnRun.mock.calls[0]![0];
+    expect(request.maxBytes).toBe(execOutputCeiling({ maxFrameBytes: 64 * 1024 }));
+    expect(request.clamped).toBe(true);
+  });
+
+  it('D: a policy cap already below the frame ceiling is left alone', async () => {
+    const h = harness();
+    await h.dispatcher.handle(execFrame());
+    expect(h.spawnRun.mock.calls[0]![0].maxBytes).toBe(4096);
   });
 
   it('P2: given the fs runner reports too_large, should deny `too_large` (the codec has no truncation marker for reads)', async () => {

@@ -467,6 +467,7 @@
       "devDependencies": {
         "@pagespace/lib": "workspace:*",
         "@types/ws": "^8.18.1",
+        "esbuild": "^0.25.12",
       },
     },
     "packages/db": {
@@ -561,9 +562,9 @@
     },
   },
   "trustedDependencies": [
-    "sharp",
-    "msw",
     "esbuild",
+    "msw",
+    "sharp",
     "electron-winstaller",
     "unrs-resolver",
     "tesseract.js",

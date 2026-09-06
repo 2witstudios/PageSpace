@@ -8,7 +8,7 @@
  * unreadable existing path be walked up and returned as a new-file write.
  */
 import { lstatSync, realpathSync } from 'node:fs';
-import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
+import type { PathProbe } from './lib-core.js';
 
 export interface ProbeFs {
   readonly realpath: (path: string) => string;

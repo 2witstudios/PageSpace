@@ -11,8 +11,8 @@
  * confirm; tests supply a function. A prompt that throws (stdin closed) is
  * a decline.
  */
-import type { GrantOp, GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
-import type { NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
+import type { GrantOp, GrantPrincipal } from './lib-core.js';
+import type { NormalizedRequest } from './lib-core.js';
 
 export interface AskInput {
   readonly grantId: string;

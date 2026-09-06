@@ -72,6 +72,18 @@ describe('fs-runner on the real filesystem (Codex C9: open via the confined path
     }
   });
 
+  it('F (CWE-732): a mode on a write to an EXISTING file is applied (inspected through one fd)', async () => {
+    const file = join(root, 'remode.txt');
+    expect(await runner.write(request('fs_write', [file]), [{ contentB64: 'aGk=', mode: 0o644 }], WRITE)).toEqual({ kind: 'write', ok: true });
+    expect(await runner.write(request('fs_write', [file]), [{ contentB64: 'aGk=', mode: 0o600 }], WRITE)).toEqual({ kind: 'write', ok: true });
+    const fd = openSync(file, 'r');
+    try {
+      expect(fstatSync(fd).mode & 0o777).toBe(0o600);
+    } finally {
+      closeSync(fd);
+    }
+  });
+
   it('given a second, shorter write to an existing file, the verified-handle ftruncate leaves no tail behind', async () => {
     const file = join(root, 'overwrite.txt');
     expect(await runner.write(request('fs_write', [file]), [{ contentB64: Buffer.from('a much longer first content').toString('base64'), mode: null }], WRITE)).toEqual({ kind: 'write', ok: true });
@@ -139,7 +151,7 @@ interface FakeEntry {
 }
 
 function fakeFs(table: Record<string, FakeEntry>, options: { platform?: string; procFdTarget?: string; onOpen?: (path: string, flags: number) => void } = {}) {
-  const calls = { opens: [] as Array<{ path: string; flags: number }>, reads: 0, writes: 0, truncates: 0 };
+  const calls = { opens: [] as Array<{ path: string; flags: number }>, reads: 0, writes: 0, truncates: 0, chmods: [] as number[] };
   const statsOf = (entry: FakeEntry): PathStats => ({ dev: 1, ino: entry.ino, size: entry.size ?? entry.content?.length ?? 0, isFile: () => entry.kind === 'file', isDirectory: () => entry.kind === 'dir', isSymbolicLink: () => entry.kind === 'symlink' });
   const missing = () => Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
   let nextFd = 10;
@@ -167,6 +179,7 @@ function fakeFs(table: Record<string, FakeEntry>, options: { platform?: string; 
         readFile: async () => { calls.reads += 1; return Buffer.from(entry.content ?? ''); },
         writeFile: async () => { calls.writes += 1; },
         truncate: async () => { calls.truncates += 1; },
+        chmod: async (mode: number) => { calls.chmods.push(mode); },
         close: async () => undefined,
       };
       return handle;
@@ -224,6 +237,15 @@ describe('fs-runner ancestry verification with a fake filesystem (the race a rea
     expect(fake.calls.truncates).toBe(0);
     expect(fake.calls.writes).toBe(0);
     for (const o of fake.calls.opens) expect(o.flags & fsConstants.O_TRUNC).toBe(0);
+  });
+
+  it('F (CWE-732): a requested mode is applied to an EXISTING file through the verified handle (chmod after verification, before the write); no mode ⇒ no chmod', async () => {
+    const fake = fakeFs({ ...BASE });
+    const runner = createFsRunner(fake.primitives);
+    await runner.write(request('fs_write', ['/root/proj/f']), [{ contentB64: 'aGk=', mode: 0o600 }], { roots: [ROOT] });
+    expect(fake.calls.chmods).toEqual([0o600]);
+    await runner.write(request('fs_write', ['/root/proj/f']), [{ contentB64: 'aGk=', mode: null }], { roots: [ROOT] });
+    expect(fake.calls.chmods).toEqual([0o600]);
   });
 
   it('CONTROL: an untouched write truncates AFTER verification and then writes', async () => {

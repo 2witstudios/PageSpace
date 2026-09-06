@@ -16,6 +16,7 @@
  */
 export interface CommandResolverDeps {
   readonly platform: NodeJS.Platform | string;
+  /** Reads PATH and (on Windows) PATHEXT. */
   readonly env: Readonly<Record<string, string | undefined>>;
   readonly isExecutableFile: (path: string) => boolean;
   readonly isDirectory: (path: string) => boolean;
@@ -90,13 +91,23 @@ export function resolveCommand(command: string, deps: CommandResolverDeps): stri
   const isAbsolute = command.startsWith('/') || /^[A-Za-z]:[\\/]/.test(command);
   if (isAbsolute) return command;
   if (command.includes('/') || command.includes('\\')) return null;
+  const suffixes = deps.platform === 'win32' ? windowsExtensions(deps) : [''];
   for (const dir of enhancedPathDirs(deps)) {
-    const candidate = `${dir}/${command}`;
-    try {
-      if (deps.isExecutableFile(candidate)) return candidate;
-    } catch {
-      // unreadable dir: keep looking
+    for (const suffix of suffixes) {
+      const candidate = `${dir}/${command}${suffix}`;
+      try {
+        if (deps.isExecutableFile(candidate)) return candidate;
+      } catch {
+        // unreadable dir: keep looking
+      }
     }
   }
   return null;
+}
+
+/** Extensions a bare Windows command may carry, from PATHEXT (a `node` request must find `node.exe`); a sensible default set when PATHEXT is unset. Always includes the empty suffix so an explicit `foo.exe` still matches. */
+function windowsExtensions(deps: CommandResolverDeps): string[] {
+  const fromEnv = (deps.env.PATHEXT ?? '').split(';').map((ext) => ext.trim()).filter((ext) => ext.length > 0);
+  const exts = fromEnv.length > 0 ? fromEnv : ['.COM', '.EXE', '.BAT', '.CMD'];
+  return ['', ...exts.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`)), ...exts.map((ext) => (ext.startsWith('.') ? ext : `.${ext}`).toLowerCase())];
 }

@@ -12,7 +12,7 @@
  * Signing with the machine key lives in `keypair.ts`.
  */
 import { createHash, createPublicKey, verify as nodeVerify } from 'node:crypto';
-import type { Ed25519Verify, HashBytes } from '@pagespace/lib/env-bridge/grant';
+import type { Ed25519Verify, HashBytes } from './lib-core.js';
 
 export const ENV_BRIDGE_HASH_ALGORITHM = 'sha256';
 

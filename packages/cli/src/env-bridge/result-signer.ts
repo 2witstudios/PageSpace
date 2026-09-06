@@ -19,8 +19,8 @@ import {
   type HelloFrame,
   type MachineResultFrame,
   type MachineResultFrameType,
-} from '@pagespace/lib/env-bridge/machine-signatures';
-import type { HashBytes } from '@pagespace/lib/env-bridge/grant';
+} from './lib-core.js';
+import type { HashBytes } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 
 /** A result frame before its signature is attached — what the runners produce. */

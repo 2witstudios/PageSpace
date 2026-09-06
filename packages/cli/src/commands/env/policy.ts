@@ -5,24 +5,21 @@
  * parser, same ownership and permission checks. Exit 0 with the policy in
  * force, exit 1 with the reason it would be treated as missing (deny-all).
  */
-import { readFileSync } from 'node:fs';
 import { homedir as osHomedir, userInfo } from 'node:os';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS } from '../../exit-codes.js';
 import type { CommandHandler } from '../../router/router.js';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, type PolicyFileStat } from '../../env-bridge/policy.js';
-import { statPolicyFile } from './connect.js';
+import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
 
 export interface EnvPolicyHandlerDeps {
   readonly homedir: string;
   readonly uid: number;
-  readonly statPolicy: (path: string) => PolicyFileStat | null;
-  readonly readPolicy: (path: string) => string;
+  readonly openPolicy: (path: string) => OpenedPolicyFile | null;
 }
 
 export function createEnvPolicyHandler(deps: EnvPolicyHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
     const path = defaultPolicyPath(ctx.env, deps.homedir);
-    const loaded = loadMachinePolicy({ path, uid: deps.uid, stat: deps.statPolicy, readFile: deps.readPolicy });
+    const loaded = loadMachinePolicy({ path, uid: deps.uid, open: deps.openPolicy });
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify({ path, policy: loaded.policy, reason: loaded.reason, digest: loaded.digest })}\n`);
       return loaded.policy === null ? EXIT_RUNTIME_ERROR : EXIT_SUCCESS;
@@ -52,6 +49,5 @@ export function createEnvPolicyHandler(deps: EnvPolicyHandlerDeps): CommandHandl
 export const envPolicyHandler: CommandHandler = createEnvPolicyHandler({
   homedir: osHomedir(),
   uid: userInfo().uid,
-  statPolicy: statPolicyFile,
-  readPolicy: (path) => readFileSync(path, 'utf8'),
+  openPolicy: openPolicyFile,
 });

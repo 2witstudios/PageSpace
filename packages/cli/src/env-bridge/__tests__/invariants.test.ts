@@ -32,18 +32,8 @@ const read = (path: string) => readFileSync(path, 'utf8');
 const name = (path: string) => relative(join(HERE, '..'), path);
 
 /** Every security decision the daemon relies on, and the lib module that owns it. */
-const DECISIONS: Record<string, string> = {
-  verifyGrant: '@pagespace/lib/env-bridge/grant',
-  decideExecution: '@pagespace/lib/env-bridge/decide-execution',
-  decodeFrame: '@pagespace/lib/env-bridge/frame-codec',
-  reduceBridgeSession: '@pagespace/lib/env-bridge/bridge-session',
-  verifyRevoke: '@pagespace/lib/env-bridge/machine-signatures',
-  parseMachinePolicy: '@pagespace/lib/env-bridge/policy-types',
-  grantRequestForFrame: '@pagespace/lib/env-bridge/grant-args',
-  encodeHelloForSigning: '@pagespace/lib/env-bridge/machine-signatures',
-  encodeResultForSigning: '@pagespace/lib/env-bridge/machine-signatures',
-  isHardDeniedEnvVar: '@pagespace/lib/env-bridge/scrub-env',
-};
+const DECISIONS: readonly string[] = ['verifyGrant', 'decideExecution', 'decodeFrame', 'reduceBridgeSession', 'verifyRevoke', 'parseMachinePolicy', 'grantRequestForFrame', 'encodeHelloForSigning', 'encodeResultForSigning', 'isHardDeniedEnvVar'];
+const LIB_CORE = join(HERE, 'lib-core.ts');
 
 describe('daemon structural invariants', () => {
   it('sees the daemon sources (sanity: the grep below is not vacuous)', () => {
@@ -62,14 +52,23 @@ describe('daemon structural invariants', () => {
     expect(importers).toEqual(['env-bridge/exec-runner.ts']);
   });
 
-  it('every decision is IMPORTED from @pagespace/lib/env-bridge — none is re-declared locally', () => {
-    for (const [fn, module] of Object.entries(DECISIONS)) {
-      const importers = daemonFiles.filter((file) => new RegExp(`import[^;]*\\b${escapeRegExp(fn)}\\b[^;]*from '${escapeRegExp(module)}'`).test(read(file)));
-      expect(importers.length, `${fn} must be imported from ${module}`).toBeGreaterThan(0);
+  it('every decision is IMPORTED through env-bridge/lib-core.ts (the bundled seam over @pagespace/lib/env-bridge) — none is re-declared locally', () => {
+    const core = read(LIB_CORE);
+    for (const fn of DECISIONS) {
+      expect(core, `${fn} must be re-exported by lib-core.ts`).toMatch(new RegExp(`export \\{[^}]*\\b${escapeRegExp(fn)}\\b[^}]*\\} from '@pagespace/lib/env-bridge/`));
+      const importers = daemonFiles.filter((file) => file !== LIB_CORE && new RegExp(`import[^;]*\\b${escapeRegExp(fn)}\\b[^;]*from '(\\./|\\.\\./\\.\\./env-bridge/)lib-core\\.js'`).test(read(file)));
+      expect(importers.length, `${fn} must be imported from lib-core.js`).toBeGreaterThan(0);
       for (const file of daemonFiles) {
         expect(read(file), `${name(file)} re-declares ${fn}`).not.toMatch(new RegExp(`(function|const|let|var)\\s+${escapeRegExp(fn)}\\b`));
       }
     }
+  });
+
+  it('lib-core.ts is the ONLY daemon file that names @pagespace/lib, and it contains nothing but re-exports', () => {
+    const importers = daemonFiles.filter((file) => /['"]@pagespace\/lib/.test(read(file))).map(name);
+    expect(importers).toEqual(['env-bridge/lib-core.ts']);
+    const statements = read(LIB_CORE).split('\n').filter((line) => line.length > 0 && !line.startsWith('/**') && !line.startsWith(' *'));
+    for (const line of statements) expect(line, line).toMatch(/^export (type )?\{[^}]*\} from '@pagespace\/lib\/env-bridge\/[a-z-]+';$/);
   });
 
   it('the dispatcher never imports anything that performs I/O directly (no node:fs, node:child_process, ws, node:net)', () => {

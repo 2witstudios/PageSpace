@@ -51,6 +51,14 @@ describe('command-resolver (lifted from apps/desktop command-resolver.ts; fs-onl
     expect(dirs[dirs.length - 1]).toBe('/custom/bin');
   });
 
+  it('F (win32): a bare name is probed with PATHEXT extensions (node → node.exe), default extensions when PATHEXT is unset', () => {
+    const win = deps({ 'C:\\Program Files\\nodejs/node.exe': 'x' }, { platform: 'win32', env: { PATH: 'C:\\tools', PATHEXT: '.COM;.EXE;.BAT' } });
+    expect(resolveCommand('node', win)).toBe('C:\\Program Files\\nodejs/node.exe');
+    const noPathext = deps({ 'C:\\tools/git.cmd': 'x' }, { platform: 'win32', env: { PATH: 'C:\\tools' } });
+    expect(resolveCommand('git', noPathext)).toBe('C:\\tools/git.cmd');
+    expect(resolveCommand('node', deps({ '/usr/local/bin/node.exe': 'x' }))).toBeNull();
+  });
+
   it('given a listDir that throws, should skip that dir rather than fail the resolution', () => {
     const d = deps({ '/home/me/.nvm/versions/node': 'd', '/custom/bin/tool': 'x' }, { listDir: () => { throw new Error('EACCES'); } });
     expect(resolveCommand('tool', d)).toBe('/custom/bin/tool');

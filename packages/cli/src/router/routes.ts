@@ -86,7 +86,9 @@ import { tokensListHandler } from '../commands/keys/list.js';
 import { tokensRevokeHandler } from '../commands/keys/revoke.js';
 import { keysUseHandler } from '../commands/keys/use.js';
 import { envEnrollHandler, envTokenHandler } from '../commands/env.js';
-import { envConnectHandler, envDisconnectHandler, envPolicyHandler } from '../commands/env/lazy.js';
+import { envConnectHandler } from '../commands/env/connect.js';
+import { envDisconnectHandler } from '../commands/env/disconnect.js';
+import { envPolicyHandler } from '../commands/env/policy.js';
 import { keysHandler } from '../commands/keys/wizard.js';
 import type { Route } from './router.js';
 

@@ -19,7 +19,7 @@
  * apart from a replay — so it is denied. The skew allowance is the same
  * constant the gate uses for the future direction.
  */
-import { GRANT_MAX_CLOCK_SKEW_MS, type NonceStore } from '@pagespace/lib/env-bridge/grant';
+import { GRANT_MAX_CLOCK_SKEW_MS, type NonceStore } from './lib-core.js';
 
 export interface DaemonNonceStore extends NonceStore {
   /** Forget nonces whose grants could no longer verify anyway. Called by the dispatcher before every verification. */

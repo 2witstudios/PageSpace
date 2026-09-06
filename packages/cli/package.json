@@ -28,7 +28,7 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.build.json && chmod +x dist/bin.js dist/bin-pagespace-mcp.js",
+    "build": "tsc -p tsconfig.build.json && node scripts/bundle-lib-core.mjs && chmod +x dist/bin.js dist/bin-pagespace-mcp.js",
     "prepack": "bun run build",
     "pretypecheck": "bun run build",
     "typecheck": "tsc --noEmit",
@@ -47,6 +47,7 @@
   },
   "devDependencies": {
     "@pagespace/lib": "workspace:*",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "esbuild": "^0.25.12"
   }
 }

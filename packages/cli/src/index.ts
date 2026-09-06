@@ -370,14 +370,20 @@ export { createEnvEnrollHandler, createEnvTokenHandler, envEnrollHandler, envTok
 export type { EnvEnrollHandlerDeps, EnvTokenHandlerDeps } from './commands/env.js';
 export { encodeChallenge, generateMachineKeypair, signWithMachineKey } from './env-bridge/keypair.js';
 export type { GenerateMachineKeypair, MachineKeypair, SignWithMachineKey } from './env-bridge/keypair.js';
-// `pagespace env connect|disconnect|policy` — the bridge daemon (M1 · t08) — is
-// deliberately NOT re-exported here: those modules runtime-import
-// `@pagespace/lib/env-bridge/*`, a devDependency the published package does
-// not ship, and an eager re-export would make `import '@pagespace/cli'` fail
-// with ERR_MODULE_NOT_FOUND for every consumer (Codex P1 on #2546). The
-// binaries reach them only through the dynamic imports in
-// `commands/env/lazy.ts`; `__tests__/published-entry-no-lib.test.ts` walks
-// the built dist to keep it that way. Lib-free helpers below stay exported.
+// `pagespace env connect|disconnect|policy` — the bridge daemon (M1 · t08).
+// Its pure decision core comes from `@pagespace/lib/env-bridge/*` through the
+// single seam `env-bridge/lib-core.ts`, which the build BUNDLES into dist
+// (`scripts/bundle-lib-core.mjs`), so the published package never resolves
+// `@pagespace/lib` at runtime (`__tests__/published-entry-no-lib.test.ts`).
+export { createEnvConnectHandler, envConnectHandler, pidFilePath } from './commands/env/connect.js';
+export { assertSecureHost, bridgeSocketUrl, isLoopbackHost } from './env-bridge/secure-host.js';
+export type { EnvConnectHandlerDeps, PidFileStore } from './commands/env/connect.js';
+export { createEnvDisconnectHandler, envDisconnectHandler } from './commands/env/disconnect.js';
+export type { EnvDisconnectHandlerDeps } from './commands/env/disconnect.js';
+export { createEnvPolicyHandler, envPolicyHandler } from './commands/env/policy.js';
+export type { EnvPolicyHandlerDeps } from './commands/env/policy.js';
+export { loadMachinePolicy, defaultPolicyPath, describePolicyRefusal } from './env-bridge/policy.js';
+export type { LoadedPolicy, PolicyLoadReason, PolicyLoaderDeps } from './env-bridge/policy.js';
 export { createAuditLog, defaultAuditPath, formatAuditLine } from './env-bridge/audit-log.js';
 export type { AuditEntry, AuditLog, AuditLogDeps } from './env-bridge/audit-log.js';
 export { mintBridgeToken, BridgeTokenError } from './env-bridge/token.js';

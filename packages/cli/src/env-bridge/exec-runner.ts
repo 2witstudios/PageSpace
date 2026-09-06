@@ -22,8 +22,8 @@
 import { spawn as nodeSpawn } from 'node:child_process';
 import { constants as osConstants } from 'node:os';
 import type { Readable } from 'node:stream';
-import type { NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
-import { isHardDeniedEnvVar } from '@pagespace/lib/env-bridge/scrub-env';
+import type { NormalizedRequest } from './lib-core.js';
+import { isHardDeniedEnvVar } from './lib-core.js';
 import { enhancedPath, resolveCommand, type CommandResolverDeps } from './command-resolver.js';
 
 /** The slice of `ChildProcess` the runner needs; a test fake is an EventEmitter with two PassThroughs. */

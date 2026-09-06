@@ -26,13 +26,13 @@
  * the machine policy and the advertised capabilities. A grant the server
  * should not have signed is still refused here by the owner's policy.
  */
-import { GRANT_OPS, verifyGrant as libVerifyGrant, type Ed25519Verify, type Grant, type GrantVerdict, type HashBytes, type VerifyGrantInput } from '@pagespace/lib/env-bridge/grant';
-import { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
-import { decideExecution as libDecideExecution, type DecideExecutionInput, type ExecutionVerdict, type NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
-import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from '@pagespace/lib/env-bridge/policy-types';
-import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
-import { verifyRevoke } from '@pagespace/lib/env-bridge/machine-signatures';
-import { fsReadContentCeiling, type Frame, type FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
+import { GRANT_OPS, verifyGrant as libVerifyGrant, type Ed25519Verify, type Grant, type GrantVerdict, type HashBytes, type VerifyGrantInput } from './lib-core.js';
+import { executionRequestForFrame, GRANT_FRAME_TYPES, grantRequestForFrame, type GrantFrame } from './lib-core.js';
+import { decideExecution as libDecideExecution, type DecideExecutionInput, type ExecutionVerdict, type NormalizedRequest } from './lib-core.js';
+import type { AdvertisedCapabilities, MachinePolicy, ServerPolicy } from './lib-core.js';
+import type { PathProbe } from './lib-core.js';
+import { verifyRevoke } from './lib-core.js';
+import { execOutputCeiling, fsReadContentCeiling, type Frame, type FrameLimits } from './lib-core.js';
 import type { SignWithMachineKey } from './keypair.js';
 import { grantPredatesDaemon, PREDATES_DAEMON_REASON, type DaemonNonceStore } from './nonce-store.js';
 import { signResultFrame, type UnsignedMachineResultFrame } from './result-signer.js';
@@ -166,7 +166,11 @@ export function createDispatcher(deps: DispatcherDeps): Dispatcher {
     try {
       switch (normalized.op) {
         case 'exec': {
-          const outcome = await deps.execRunner.run(normalized);
+          // Clamp the captured-output cap so the signed exec_result always
+          // decodes under the frame limit, however high the policy maxBytes.
+          const ceiling = execOutputCeiling(deps.limits);
+          const bounded = normalized.maxBytes > ceiling ? { ...normalized, maxBytes: ceiling, clamped: true } : normalized;
+          const outcome = await deps.execRunner.run(bounded);
           await deps.audit.record({ grantId: grant.grantId, principal: grant.principal, op: grant.op, verdict: 'allow', argsHash: grant.argsHash, exitCode: outcome.exitCode });
           return reply({ type: 'exec_result', grantId: grant.grantId, exitCode: outcome.exitCode, stdoutB64: outcome.stdout.toString('base64'), stderrB64: outcome.stderr.toString('base64'), truncated: outcome.truncated });
         }

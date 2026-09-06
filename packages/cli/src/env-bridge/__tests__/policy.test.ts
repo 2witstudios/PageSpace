@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, type PolicyFileStat, type PolicyLoaderDeps } from '../policy.js';
+import { chmodSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir, userInfo } from 'node:os';
+import { join } from 'node:path';
+import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile, type PolicyLoaderDeps } from '../policy.js';
 
 const VALID = {
   mode: 'allowlist',
@@ -15,23 +18,25 @@ const UID = 501;
 
 interface Overrides {
   readonly content?: string | null;
-  readonly stat?: PolicyFileStat | null | (() => PolicyFileStat | null);
-  readonly readFile?: PolicyLoaderDeps['readFile'];
+  readonly stat?: { uid: number; mode: number } | null | (() => { uid: number; mode: number } | null);
+  readonly readFile?: () => string;
 }
 
+/** Models the ONE-fd adapter: the file is opened once; owner/mode and content come from that open. */
 function deps(overrides: Overrides = {}): PolicyLoaderDeps {
-  const { content: contentOverride, stat: statOverride, ...rest } = overrides;
+  const { content: contentOverride, stat: statOverride, readFile } = overrides;
   const content = contentOverride === undefined ? JSON.stringify(VALID) : contentOverride;
   const statValue = statOverride === undefined ? { uid: UID, mode: 0o100600 } : statOverride;
   return {
     path: '/home/me/.pagespace/env-policy.json',
     uid: UID,
-    stat: typeof statValue === 'function' ? statValue : () => statValue,
-    readFile: () => {
-      if (content === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      return content;
+    open: (): OpenedPolicyFile | null => {
+      const stat = typeof statValue === 'function' ? statValue() : statValue;
+      if (stat === null) return null;
+      const text = readFile ? readFile() : content;
+      if (text === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+      return { uid: stat.uid, mode: stat.mode, content: text };
     },
-    ...rest,
   };
 }
 
@@ -70,13 +75,7 @@ describe('loadMachinePolicy — ~/.pagespace/env-policy.json → MachinePolicy |
   });
 
   it('given a stat that throws (EACCES), should fail closed as "unreadable", never as a policy', () => {
-    const loaded = loadMachinePolicy(
-      deps({
-        stat: () => {
-          throw new Error('EACCES');
-        },
-      }),
-    );
+    const loaded = loadMachinePolicy({ path: '/p', uid: UID, open: () => { throw new Error('EACCES'); } });
     expect(loaded.policy).toBeNull();
     expect(loaded.reason).toBe('unreadable');
   });
@@ -94,14 +93,8 @@ describe('loadMachinePolicy — ~/.pagespace/env-policy.json → MachinePolicy |
     expect(loadMachinePolicy(deps({ content: JSON.stringify({ ...VALID, mode: 'allow-everything' }) })).policy).toBeNull();
   });
 
-  it('given a readFile that throws after a good stat, should return "unreadable"', () => {
-    const loaded = loadMachinePolicy(
-      deps({
-        readFile: () => {
-          throw new Error('EIO');
-        },
-      }),
-    );
+  it('given a read that throws after a good open, should return "unreadable"', () => {
+    const loaded = loadMachinePolicy(deps({ readFile: () => { throw new Error('EIO'); } }));
     expect(loaded.reason).toBe('unreadable');
   });
 });
@@ -121,5 +114,42 @@ describe('describePolicyRefusal', () => {
     expect(describePolicyRefusal('invalid_json', '/p')).toMatch(/not valid JSON/i);
     expect(describePolicyRefusal('invalid_schema', '/p')).toMatch(/not a valid policy/i);
     expect(describePolicyRefusal('unreadable', '/p')).toMatch(/could not be read/i);
+  });
+});
+
+describe('openPolicyFile — the production adapter reads owner, mode AND content through ONE descriptor (CWE-367)', () => {
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'ps-policy-')));
+  const me = userInfo().uid;
+
+  it('a fresh owner-only file: uid/mode from fstat, content from the same fd', () => {
+    const path = join(dir, 'ok.json');
+    writeFileSync(path, JSON.stringify(VALID), { mode: 0o600 });
+    const opened = openPolicyFile(path);
+    expect(opened).toMatchObject({ uid: me, mode: expect.any(Number), content: JSON.stringify(VALID) });
+    expect((opened!.mode & 0o777)).toBe(0o600);
+    expect(loadMachinePolicy({ path, uid: me, open: openPolicyFile }).policy).toEqual(VALID);
+  });
+
+  it('a group/world-writable file is refused from the fstat mode (no pathname stat anywhere)', () => {
+    const path = join(dir, 'loose.json');
+    writeFileSync(path, JSON.stringify(VALID));
+    chmodSync(path, 0o666);
+    expect(loadMachinePolicy({ path, uid: me, open: openPolicyFile }).reason).toBe('writable_by_others');
+  });
+
+  it('a symlink where the policy should be is never followed (O_NOFOLLOW) — treated as unreadable, deny-all', () => {
+    const target = join(dir, 'target.json');
+    writeFileSync(target, JSON.stringify(VALID), { mode: 0o600 });
+    const link = join(dir, 'link.json');
+    symlinkSync(target, link);
+    expect(loadMachinePolicy({ path: link, uid: me, open: openPolicyFile }).reason).toBe('unreadable');
+  });
+
+  it('a missing file is "missing"', () => {
+    expect(loadMachinePolicy({ path: join(dir, 'nope.json'), uid: me, open: openPolicyFile }).reason).toBe('missing');
+  });
+
+  it('cleanup', () => {
+    rmSync(dir, { recursive: true, force: true });
   });
 });

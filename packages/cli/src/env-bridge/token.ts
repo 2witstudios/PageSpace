@@ -8,6 +8,7 @@
  */
 import type { MachineHostCredential } from '../credentials/serialize.js';
 import { encodeChallenge, type SignWithMachineKey } from './keypair.js';
+import { assertSecureHost } from './secure-host.js';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -42,12 +43,14 @@ export async function refusalOf(response: Response): Promise<string> {
 }
 
 export async function postJson(fetch: Fetch, url: string, body: unknown): Promise<Response> {
-  return fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body) });
+  // redirect: 'error' — a cross-origin 307/308 would forward the enrollmentId, nonce and machine signature to another origin, which could replay them (CWE-200).
+  return fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body), redirect: 'error' });
 }
 
 export async function mintBridgeToken({ host, credential, fetch, sign }: MintBridgeTokenInput): Promise<MintedBridgeToken> {
+  assertSecureHost(host);
   const { enrollmentId } = credential;
-  const challengeResponse = await fetch(`${host}/api/env-bridge/token?enrollmentId=${encodeURIComponent(enrollmentId)}`, { headers: { accept: 'application/json' } });
+  const challengeResponse = await fetch(`${host}/api/env-bridge/token?enrollmentId=${encodeURIComponent(enrollmentId)}`, { headers: { accept: 'application/json' }, redirect: 'error' });
   if (!challengeResponse.ok) throw new BridgeTokenError('challenge', `Challenge refused: ${await refusalOf(challengeResponse)}`);
   const challenge = (await challengeResponse.json()) as { nonce: string; expiresAt: string };
 

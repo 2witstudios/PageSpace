@@ -22,8 +22,8 @@
  * a `revoke` is dispatched from every state so revocation can never be
  * delayed by not being authorized yet.
  */
-import { decodeFrame, encodeFrame, type Frame, type FrameLimits } from '@pagespace/lib/env-bridge/frame-codec';
-import { initialBridgeSession, isSupersededClose, reduceBridgeSession, type BridgeEffect, type BridgeSessionState, type BridgeStatus, type HelloFrame } from '@pagespace/lib/env-bridge/bridge-session';
+import { decodeFrame, encodeFrame, type Frame, type FrameLimits } from './lib-core.js';
+import { initialBridgeSession, isSupersededClose, reduceBridgeSession, type BridgeEffect, type BridgeSessionState, type BridgeStatus, type HelloFrame } from './lib-core.js';
 import type { AuditLog } from './audit-log.js';
 import type { Dispatcher } from './dispatcher.js';
 

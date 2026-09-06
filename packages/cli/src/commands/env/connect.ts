@@ -23,12 +23,12 @@
  */
 import * as clack from '@clack/prompts';
 import { appendFile, mkdir, unlink, writeFile } from 'node:fs/promises';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, statSync } from 'node:fs';
 import { homedir as osHomedir, userInfo } from 'node:os';
 import { dirname } from 'node:path';
 import WebSocket from 'ws';
-import { decodeBase64 } from '@pagespace/lib/env-bridge/grant';
-import type { PathProbe } from '@pagespace/lib/env-bridge/confine-path';
+import { decodeBase64 } from '../../env-bridge/lib-core.js';
+import type { PathProbe } from '../../env-bridge/lib-core.js';
 import { createCredentialStore } from '../../credentials/store.js';
 import type { CredentialStore } from '../../credentials/store.js';
 import { machineProfileName } from '../../credentials/serialize.js';
@@ -44,18 +44,31 @@ import type { CommandResolverDeps } from '../../env-bridge/command-resolver.js';
 import { createFsRunner, type FsRunner } from '../../env-bridge/fs-runner.js';
 import { createDaemonNonceStore } from '../../env-bridge/nonce-store.js';
 import { createPathProbe } from '../../env-bridge/path-probe.js';
-import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, type PolicyFileStat } from '../../env-bridge/policy.js';
+import { defaultPolicyPath, describePolicyRefusal, loadMachinePolicy, openPolicyFile, type OpenedPolicyFile } from '../../env-bridge/policy.js';
 import { signHello } from '../../env-bridge/result-signer.js';
 import { mintBridgeToken } from '../../env-bridge/token.js';
+import { assertSecureHost, bridgeSocketUrl } from '../../env-bridge/secure-host.js';
 import { createBridgeConnection, DEFAULT_BACKOFF, DEFAULT_FRAME_LIMITS, DEFAULT_IDLE_TIMEOUT_MS, type BridgeConnection, type SocketFactory } from '../../env-bridge/ws-client.js';
 import { isEnrolledMachineCredential, resolveHostFor } from '../env.js';
 
 type Fetch = typeof globalThis.fetch;
 
+/** The daemon's process identity, stored beside the pid so `env disconnect` can refuse a reused pid (never signal a stranger). */
+export interface PidRecord {
+  readonly pid: number;
+  /** ms since epoch; the record is re-written on a heartbeat so a stale file is detectable by age. */
+  readonly startedAt: number;
+  /** argv0 identity — a bare pid file left by some other tool is not ours. */
+  readonly argv0: string;
+}
+
 export interface PidFileStore {
-  write(path: string, pid: number): Promise<void>;
+  write(path: string, record: PidRecord): Promise<void>;
   remove(path: string): Promise<void>;
 }
+
+/** How often the pid record is refreshed while the daemon lives; `env disconnect` treats a record older than PID_STALE_MS as dead. */
+export const PID_HEARTBEAT_MS = 30_000;
 
 /** Everything `env connect` needs from the outside world, injected so the daemon is unit-testable end to end. */
 export interface EnvConnectHandlerDeps {
@@ -66,9 +79,9 @@ export interface EnvConnectHandlerDeps {
   readonly homedir: string;
   readonly uid: number;
   readonly pid: number;
+  readonly argv0: string;
   readonly platform: NodeJS.Platform | string;
-  readonly statPolicy: (path: string) => PolicyFileStat | null;
-  readonly readPolicy: (path: string) => string;
+  readonly openPolicy: (path: string) => OpenedPolicyFile | null;
   readonly appendAuditLine: (path: string, line: string) => Promise<void>;
   readonly pidFile: PidFileStore;
   readonly probe: PathProbe;
@@ -87,10 +100,6 @@ export function pidFilePath(homedir: string, enrollmentId: string): string {
   return `${homedir}/.pagespace/env-connect.${enrollmentId}.pid`;
 }
 
-export function bridgeSocketUrl(host: string, envId: string): string {
-  return `${host.replace(/^http/, 'ws')}/api/env-bridge/ws?envId=${encodeURIComponent(envId)}`;
-}
-
 export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
     const [enrollmentId] = intent.args;
@@ -98,7 +107,17 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       ctx.stderr.write('Usage: pagespace env connect <enrollmentId> [--host <url>]\n');
       return EXIT_USAGE_ERROR;
     }
-    const host = resolveHostFor(ctx, intent.flags);
+    if (deps.platform === 'win32') {
+      ctx.stderr.write('Windows is not supported by the bridge daemon yet: it relies on POSIX process groups to kill a timed-out command and on O_NOFOLLOW to open files safely, neither of which Windows provides. Run env connect on macOS or Linux.\n');
+      return EXIT_RUNTIME_ERROR;
+    }
+    let host: string;
+    try {
+      host = assertSecureHost(resolveHostFor(ctx, intent.flags));
+    } catch (error) {
+      ctx.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
+      return EXIT_RUNTIME_ERROR;
+    }
     const store = deps.createCredentialStore();
     const profile = machineProfileName(enrollmentId);
     const credential = await store.get(host, profile);
@@ -114,7 +133,7 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
 
     // Policy: loaded once; its absence is a running daemon that denies everything.
     const policyPath = defaultPolicyPath(ctx.env, deps.homedir);
-    const loaded = loadMachinePolicy({ path: policyPath, uid: deps.uid, stat: deps.statPolicy, readFile: deps.readPolicy });
+    const loaded = loadMachinePolicy({ path: policyPath, uid: deps.uid, open: deps.openPolicy });
     if (loaded.policy === null) {
       ctx.stderr.write(`${describePolicyRefusal(loaded.reason ?? 'missing', policyPath)}\n`);
     } else {
@@ -163,9 +182,11 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
 
     const pidPath = pidFilePath(deps.homedir, enrollmentId);
     let exiting = false;
+    let shutdownCleanup = () => undefined as void;
     const shutdown = async (code: number, why: string) => {
       if (exiting) return;
       exiting = true;
+      shutdownCleanup();
       connection.stop(why);
       execRunner.killAll();
       await deps.pidFile.remove(pidPath).catch(() => undefined);
@@ -199,11 +220,24 @@ export function createEnvConnectHandler(deps: EnvConnectHandlerDeps): CommandHan
       void shutdown(EXIT_SUCCESS, signal);
     });
 
-    try {
-      await deps.pidFile.write(pidPath, deps.pid);
-    } catch (error) {
-      log(`could not write ${pidPath} (env disconnect will not find this daemon): ${error instanceof Error ? error.message : String(error)}`);
-    }
+    const pidRecord: PidRecord = { pid: deps.pid, startedAt: deps.now(), argv0: deps.argv0 };
+    const writePid = async () => {
+      try {
+        await deps.pidFile.write(pidPath, pidRecord);
+      } catch (error) {
+        log(`could not write ${pidPath} (env disconnect will not find this daemon): ${error instanceof Error ? error.message : String(error)}`);
+      }
+    };
+    await writePid();
+    // Refresh the record so its age proves the daemon is still alive (a crashed
+    // daemon's file goes stale and env disconnect refuses to signal its pid).
+    const pidTimer = setInterval(() => void writePid(), PID_HEARTBEAT_MS);
+    if (typeof pidTimer.unref === 'function') pidTimer.unref();
+    const clearPidTimer = () => clearInterval(pidTimer);
+    deps.onSignal(clearPidTimer);
+    const priorShutdownCleanup = shutdownCleanup;
+    shutdownCleanup = () => { clearPidTimer(); priorShutdownCleanup(); };
+
     ctx.stderr.write(`Connecting environment ${credential.envId} (enrollment ${enrollmentId}) to ${host}. Audit log: ${auditPath}. Ctrl-C to disconnect.\n`);
     connection.start();
     deps.onStarted?.({ connection, execRunner });
@@ -234,20 +268,10 @@ function listDir(path: string): readonly string[] {
   return readdirSync(path);
 }
 
-export function statPolicyFile(path: string): PolicyFileStat | null {
-  try {
-    const stat = statSync(path);
-    return { uid: stat.uid, mode: stat.mode };
-  } catch (error) {
-    if (typeof error === 'object' && error !== null && 'code' in error && (error as { code: unknown }).code === 'ENOENT') return null;
-    throw error;
-  }
-}
-
 export const nodePidFile: PidFileStore = {
-  async write(path, pid) {
+  async write(path, record) {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(path, `${pid}\n`, { mode: 0o600 });
+    await writeFile(path, `${JSON.stringify(record)}\n`, { mode: 0o600 });
   },
   async remove(path) {
     await unlink(path);
@@ -272,9 +296,9 @@ export const envConnectHandler: CommandHandler = createEnvConnectHandler({
   homedir: osHomedir(),
   uid: userInfo().uid,
   pid: process.pid,
+  argv0: 'pagespace',
   platform: process.platform,
-  statPolicy: statPolicyFile,
-  readPolicy: (path) => readFileSync(path, 'utf8'),
+  openPolicy: openPolicyFile,
   appendAuditLine,
   pidFile: nodePidFile,
   probe: createPathProbe(),

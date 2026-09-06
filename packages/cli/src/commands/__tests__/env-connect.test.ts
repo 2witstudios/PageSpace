@@ -4,7 +4,8 @@ import { createHash, generateKeyPairSync, sign as nodeSign } from 'node:crypto';
 import { encodeFrame, decodeFrame, type Frame } from '@pagespace/lib/env-bridge/frame-codec';
 import { encodeRevokeForSigning, verifyHello } from '@pagespace/lib/env-bridge/machine-signatures';
 import { decodeBase64 } from '@pagespace/lib/env-bridge/grant';
-import { bridgeSocketUrl, createEnvConnectHandler, pidFilePath, type EnvConnectHandlerDeps } from '../env/connect.js';
+import { createEnvConnectHandler, PID_HEARTBEAT_MS, pidFilePath, type EnvConnectHandlerDeps, type PidRecord } from '../env/connect.js';
+import { bridgeSocketUrl } from '../../env-bridge/secure-host.js';
 import { generateMachineKeypair, signWithMachineKey } from '../../env-bridge/keypair.js';
 import { ed25519Verify } from '../../env-bridge/crypto.js';
 import type { BridgeSocket } from '../../env-bridge/ws-client.js';
@@ -105,7 +106,7 @@ function tokenFetch() {
 function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string | null; policyStat?: { uid: number; mode: number } | null } = {}) {
   const { policy = POLICY, policyStat = { uid: UID, mode: 0o100600 }, ...rest } = overrides;
   const sockets: FakeSocket[] = [];
-  const pidWrites: Array<{ path: string; pid: number }> = [];
+  const pidWrites: Array<{ path: string; record: PidRecord }> = [];
   const pidRemoves: string[] = [];
   const auditLines: string[] = [];
   const signals: Array<(signal: string) => void> = [];
@@ -120,14 +121,14 @@ function harness(overrides: Partial<EnvConnectHandlerDeps> & { policy?: string |
     homedir: HOME,
     uid: UID,
     pid: 4242,
+    argv0: 'pagespace',
     platform: 'darwin',
-    statPolicy: () => (policy === null ? null : policyStat),
-    readPolicy: () => {
-      if (policy === null) throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
-      return policy;
+    openPolicy: () => {
+      if (policyStat === null || policy === null) return null;
+      return { uid: policyStat.uid, mode: policyStat.mode, content: policy };
     },
     appendAuditLine: async (_path, line) => void auditLines.push(line),
-    pidFile: { write: async (path, pid) => void pidWrites.push({ path, pid }), remove: async (path) => void pidRemoves.push(path) },
+    pidFile: { write: async (path, record) => void pidWrites.push({ path, record }), remove: async (path) => void pidRemoves.push(path) },
     probe: { realpath: (path) => (path === '/home/me/proj' ? path : null), isSymlink: () => false },
     createExecRunner: () => execRunner,
     createFsRunner: () => ({ read: async () => ({ kind: 'read', found: false }), write: async () => ({ kind: 'write', ok: true }) }),
@@ -161,6 +162,22 @@ describe('pagespace env connect <enrollmentId>', () => {
     expect(h.sockets).toHaveLength(0);
   });
 
+  it('F: on win32 the daemon refuses to start with a clear message (no process groups, no O_NOFOLLOW) and never connects', async () => {
+    const h = harness({ platform: 'win32' });
+    const c = ctx(true);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(c.err.text()).toMatch(/Windows is not supported/);
+    expect(h.sockets).toHaveLength(0);
+  });
+
+  it('B (CWE-319): a plaintext non-loopback host is refused before any credential or socket work', async () => {
+    const h = harness();
+    const c = ctx(true);
+    expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1', '--host', 'http://pagespace.ai']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(c.err.text()).toMatch(/https/);
+    expect(h.sockets).toHaveLength(0);
+  });
+
   it('R5: given policy mode "ask" without a TTY, should refuse to start with a clear message', async () => {
     const h = harness({ policy: JSON.stringify({ mode: 'ask', principals: ['u1'], ops: [], roots: ['/home/me/proj'], envAllowlist: [] }) });
     const c = ctx(false);
@@ -174,7 +191,7 @@ describe('pagespace env connect <enrollmentId>', () => {
     const c = ctx(false);
     expect(await h.handler(c.ctx, intent(['env', 'connect', 'enr_1']))).toBe(EXIT_SUCCESS);
     expect(c.err.text()).toMatch(/No policy file/);
-    expect(h.pidWrites).toEqual([{ path: pidFilePath(HOME, 'enr_1'), pid: 4242 }]);
+    expect(h.pidWrites).toEqual([{ path: pidFilePath(HOME, 'enr_1'), record: { pid: 4242, startedAt: NOW, argv0: 'pagespace' } }]);
     await flush();
     expect(h.socket().url).toBe(bridgeSocketUrl(HOST, 'env_1'));
     expect(h.socket().url).toBe('wss://pagespace.test/api/env-bridge/ws?envId=env_1');
@@ -193,6 +210,14 @@ describe('pagespace env connect <enrollmentId>', () => {
     await flush();
     h.socket().open();
     expect(h.socket().sent[0]).toContain(createHash('sha256').update(POLICY).digest('hex'));
+  });
+
+  it('C: the pid record is re-written every PID_HEARTBEAT_MS while the daemon lives, so a stale file is detectable by age', async () => {
+    const h = harness();
+    await h.handler(ctx(false).ctx, intent(['env', 'connect', 'enr_1']));
+    await vi.advanceTimersByTimeAsync(PID_HEARTBEAT_MS * 2);
+    expect(h.pidWrites.length).toBeGreaterThanOrEqual(3);
+    expect(new Set(h.pidWrites.map((w) => JSON.stringify(w.record))).size).toBe(1);
   });
 
   it('R8: Ctrl-C (SIGINT) closes the socket, kills every child process group, removes the pid file and exits 0', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createHash } from 'node:crypto';
-import { createEnvDisconnectHandler, type EnvDisconnectHandlerDeps } from '../env/disconnect.js';
+import { createEnvDisconnectHandler, PID_STALE_MS, type EnvDisconnectHandlerDeps } from '../env/disconnect.js';
 import { createEnvPolicyHandler, type EnvPolicyHandlerDeps } from '../env/policy.js';
 import { pidFilePath } from '../env/connect.js';
 import type { HandlerContext } from '../../handler-context.js';
@@ -27,11 +27,12 @@ function intent(argv: string[]) {
   return { ...parsed, args: parsed.args.slice(2) };
 }
 
-describe('pagespace env disconnect <enrollmentId>', () => {
+describe('pagespace env disconnect <enrollmentId> (C: never signal from a bare pid — the record must be fresh and the process alive)', () => {
+  const RECORD = { pid: 777, startedAt: 1_000, argv0: 'pagespace' };
   function deps(overrides: Partial<EnvDisconnectHandlerDeps> = {}) {
-    const kill = vi.fn<(pid: number, signal: NodeJS.Signals) => void>();
+    const kill = vi.fn<(pid: number, signal: NodeJS.Signals | 0) => void>();
     const removePidFile = vi.fn<(path: string) => void>();
-    return { kill, removePidFile, handler: createEnvDisconnectHandler({ homedir: HOME, readPid: () => 777, removePidFile, kill, ...overrides }) };
+    return { kill, removePidFile, handler: createEnvDisconnectHandler({ homedir: HOME, readPidFile: () => ({ record: RECORD, ageMs: 5_000 }), removePidFile, kill, ...overrides }) };
   }
 
   it('given no enrollmentId, should exit 2 with usage', async () => {
@@ -41,22 +42,38 @@ describe('pagespace env disconnect <enrollmentId>', () => {
     expect(d.kill).not.toHaveBeenCalled();
   });
 
-  it('given a pid file, should send SIGTERM to that pid and exit 0 (Ctrl-C equivalent; the daemon never listens, so a signal is the only local channel)', async () => {
+  it('given a fresh record and a live process, should probe with signal 0 then send SIGTERM and exit 0', async () => {
     const d = deps();
     const c = ctx();
     expect(await d.handler(c.ctx, intent(['env', 'disconnect', 'enr_1']))).toBe(EXIT_SUCCESS);
-    expect(d.kill).toHaveBeenCalledWith(777, 'SIGTERM');
+    expect(d.kill.mock.calls).toEqual([[777, 0], [777, 'SIGTERM']]);
     expect(c.out.text()).toMatch(/777/);
   });
 
   it('given no pid file, should exit 1 naming the path', async () => {
-    const d = deps({ readPid: () => null });
+    const d = deps({ readPidFile: () => null });
     const c = ctx();
     expect(await d.handler(c.ctx, intent(['env', 'disconnect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
     expect(c.err.text()).toContain(pidFilePath(HOME, 'enr_1'));
   });
 
-  it('given a stale pid (ESRCH), should remove the pid file and exit 1', async () => {
+  it('given a record older than the staleness window (the daemon stopped refreshing it), should remove it and REFUSE — pid reuse must never be signalled', async () => {
+    const d = deps({ readPidFile: () => ({ record: RECORD, ageMs: PID_STALE_MS + 1 }) });
+    const c = ctx();
+    expect(await d.handler(c.ctx, intent(['env', 'disconnect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(d.kill).not.toHaveBeenCalled();
+    expect(d.removePidFile).toHaveBeenCalledWith(pidFilePath(HOME, 'enr_1'));
+    expect(c.err.text()).toMatch(/stale/i);
+  });
+
+  it('given a record that is not a pid record (old pid-only format, wrong argv0), should remove it and refuse', async () => {
+    const d = deps({ readPidFile: () => ({ record: { pid: 777, startedAt: 1, argv0: 'something-else' }, ageMs: 1 }) });
+    expect(await d.handler(ctx().ctx, intent(['env', 'disconnect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
+    expect(d.kill).not.toHaveBeenCalled();
+    expect(d.removePidFile).toHaveBeenCalled();
+  });
+
+  it('given the probe says the process is gone (ESRCH), should remove the file and exit 1', async () => {
     const d = deps({ kill: () => { throw Object.assign(new Error('kill ESRCH'), { code: 'ESRCH' }); } });
     const c = ctx();
     expect(await d.handler(c.ctx, intent(['env', 'disconnect', 'enr_1']))).toBe(EXIT_RUNTIME_ERROR);
@@ -79,11 +96,7 @@ describe('pagespace env policy', () => {
     return createEnvPolicyHandler({
       homedir: HOME,
       uid: 501,
-      statPolicy: () => (content === null ? null : { uid: uidOfFile, mode }),
-      readPolicy: () => {
-        if (content === null) throw new Error('ENOENT');
-        return content;
-      },
+      openPolicy: () => (content === null ? null : { uid: uidOfFile, mode, content }),
       ...rest,
     });
   }

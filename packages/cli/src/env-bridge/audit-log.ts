@@ -7,7 +7,7 @@
  * Audit I/O must never take the daemon down — a full disk is not a reason to
  * stop enforcing policy — so a failing sink is reported once and swallowed.
  */
-import type { GrantPrincipal } from '@pagespace/lib/env-bridge/grant';
+import type { GrantPrincipal } from './lib-core.js';
 
 export const AUDIT_PATH_ENV_VAR = 'PAGESPACE_ENV_AUDIT_LOG';
 export const AUDIT_FILE_NAME = 'env-audit.jsonl';

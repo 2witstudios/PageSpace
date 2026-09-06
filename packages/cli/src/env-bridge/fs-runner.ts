@@ -52,7 +52,7 @@
  */
 import { promises as fsp, constants as fsConstants } from 'node:fs';
 import { dirname, posix } from 'node:path';
-import type { NormalizedRequest } from '@pagespace/lib/env-bridge/decide-execution';
+import type { NormalizedRequest } from './lib-core.js';
 
 export interface HandleStats {
   readonly dev: number | bigint;
@@ -72,6 +72,8 @@ export interface OpenHandle {
   readFile(): Promise<Buffer>;
   writeFile(data: Buffer): Promise<void>;
   truncate(length: number): Promise<void>;
+  /** Apply `mode` to the open object (CWE-732: `open` sets mode only on CREATE, so an existing file keeps its old permissions otherwise). */
+  chmod(mode: number): Promise<void>;
   close(): Promise<void>;
 }
 
@@ -260,7 +262,9 @@ export function createFsRunner(primitives: FsPrimitives = createFsRunner.nodePri
           return { kind: 'write', ok: false, error: `${path}: ${messageOf(error)}` };
         }
         try {
-          // 5. the handle is verified: truncate IT, then write.
+          // 5. the handle is verified: apply the mode (open only honours it on
+          // create, so an EXISTING file needs an explicit chmod), truncate, write.
+          if (file.mode !== null) await handle.chmod(file.mode);
           await handle.truncate(0);
           await handle.writeFile(Buffer.from(file.contentB64, 'base64'));
         } catch (error) {
@@ -286,6 +290,7 @@ createFsRunner.nodePrimitives = function nodePrimitives(): FsPrimitives {
         readFile: () => handle.readFile(),
         writeFile: (data) => handle.writeFile(data),
         truncate: (length) => handle.truncate(length),
+        chmod: (mode) => handle.chmod(mode),
         close: () => handle.close(),
       };
     },
