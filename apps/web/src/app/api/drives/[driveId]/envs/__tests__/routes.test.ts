@@ -26,6 +26,7 @@ vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   listEnvsInDrive: vi.fn(),
   renameEnv: vi.fn(),
   deleteEnv: vi.fn(),
+  revokeEnv: vi.fn(),
   rebuildEnv: vi.fn(),
   resolveEnvInDrive: vi.fn(),
   toDriveEnvDTO: vi.fn((row: { id: string; driveId: string; name: string }) => ({
@@ -49,7 +50,9 @@ import {
   rebuildEnv,
   renameEnv,
   resolveEnvInDrive,
+  revokeEnv,
 } from '@/lib/drive-envs/drive-envs-runtime';
+import { auditRequest } from '@pagespace/lib/audit/audit-log';
 
 const DRIVE_ID = 'drive-1';
 const ENV_ID = 'env-1';
@@ -320,5 +323,64 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
     const response = await rebuildEnvRoute(rebuildReq(), envParams);
     expect(response.status).toBe(503);
     expect(await response.json()).toMatchObject({ reason: 'teardown_failed' });
+  });
+});
+
+describe('DELETE /envs/[envId] on a LOCAL env — revoke first (Codex C4), then delete', () => {
+  const localRow = { id: ENV_ID, driveId: DRIVE_ID, name: 'mac', substrate: 'local' };
+  const del = () => deleteEnvRoute(req(`http://localhost/api/drives/${DRIVE_ID}/envs/${ENV_ID}`, { method: 'DELETE' }), envParams);
+
+  beforeEach(() => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(localRow as never);
+    vi.mocked(deleteEnv).mockResolvedValue({ ok: true, spriteTornDown: false });
+    vi.mocked(revokeEnv).mockResolvedValue({ ok: true, alreadyRevoked: false, revokedAt: new Date(), sessionsRevoked: 2, machine: 'sent_and_closed' });
+  });
+
+  it('given a drive owner/admin, should revoke the machine BEFORE deleting the row, audit the revoke, and report it', async () => {
+    const order: string[] = [];
+    vi.mocked(revokeEnv).mockImplementation(async () => {
+      order.push('revoke');
+      return { ok: true, alreadyRevoked: false, revokedAt: new Date(), sessionsRevoked: 2, machine: 'sent_and_closed' };
+    });
+    vi.mocked(deleteEnv).mockImplementation(async () => {
+      order.push('delete');
+      return { ok: true, spriteTornDown: false };
+    });
+    const response = await del();
+    expect(response.status).toBe(200);
+    expect(order).toEqual(['revoke', 'delete']);
+    expect(revokeEnv).toHaveBeenCalledWith({ envId: ENV_ID, reason: 'owner_revoked' });
+    expect(await response.json()).toEqual({ deleted: true, spriteTornDown: false, revoked: { sessionsRevoked: 2, machine: 'sent_and_closed', alreadyRevoked: false } });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'auth.token.revoked', resourceType: 'drive_env', resourceId: ENV_ID, details: expect.objectContaining({ operation: 'revoke', sessionsRevoked: 2 }) }));
+  });
+
+  it('given a plain member, should refuse 403 through the centralized owner/admin check and revoke NOTHING', async () => {
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(false);
+    const response = await del();
+    expect(response.status).toBe(403);
+    expect(revokeEnv).not.toHaveBeenCalled();
+    expect(deleteEnv).not.toHaveBeenCalled();
+  });
+
+  it('given an env in another drive, should answer 404 and revoke NOTHING', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
+    const response = await del();
+    expect(response.status).toBe(404);
+    expect(revokeEnv).not.toHaveBeenCalled();
+  });
+
+  it('given a Sprite env, should NOT call revoke — behaviour unchanged', async () => {
+    vi.mocked(resolveEnvInDrive).mockResolvedValue({ ...localRow, substrate: 'sprite' } as never);
+    const response = await del();
+    expect(response.status).toBe(200);
+    expect(revokeEnv).not.toHaveBeenCalled();
+    expect(await response.json()).toEqual({ deleted: true, spriteTornDown: false });
+  });
+
+  it('given live sessions in the env, should still have revoked the machine (revocation is not a deletion) and answer 409', async () => {
+    vi.mocked(deleteEnv).mockResolvedValue({ ok: false, reason: 'live_sessions', liveSessionCount: 1 });
+    const response = await del();
+    expect(response.status).toBe(409);
+    expect(revokeEnv).toHaveBeenCalledTimes(1);
   });
 });

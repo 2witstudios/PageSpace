@@ -7,6 +7,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: your enrolled computer can now hold a live connection, and you can
+  revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
+  addressed to its Environment, proves it is the machine you enrolled with a signed hello
+  before anything else is accepted, and stays "connected" in the Environments list while its
+  heartbeat is fresh. Two of your machines can be connected at once; reconnecting a machine
+  replaces its old connection cleanly. Every command PageSpace will later send that machine
+  is individually signed and bound to exactly what was requested, and every answer the
+  machine sends is verified against the key pinned at enrollment before an agent ever sees
+  it. Deleting a local Environment now revokes the machine completely: its connection tokens
+  are cancelled, the machine is told to forget its key, and it can no longer mint new tokens.
+  Server signing keys can be rotated without stranding already-enrolled machines. Nothing runs
+  on the machine yet (the daemon lands next). Still off by default (`LOCAL_ENVS_ENABLED`).
 - **Local Environments: the server now refuses what the machine cannot do (hardening,
   opt-in groundwork)** — before the bridge connection ships, every server path that could
   provision, bind a session to, or rebuild an Environment now recognises a local machine and

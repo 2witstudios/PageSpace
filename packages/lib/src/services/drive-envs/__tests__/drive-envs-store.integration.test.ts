@@ -776,3 +776,81 @@ describe('the local-env identity slice — compare-and-set predicates, in SQL', 
     expect(row?.lastSeenAt?.getTime()).toBe(later.getTime());
   });
 });
+
+describe('the local-env connection slice (t07) — recordHello / recordHeartbeat / revokeLocal, in SQL', () => {
+  const NOW = new Date('2026-09-06T10:00:00.000Z');
+  const CAPS = { shell: true, pty: false, fs: true, checkpoint: false };
+  async function createLocal(enroll: boolean) {
+    const enrollmentId = `enr_${createId()}`;
+    const created = await store.createIfUnderLimit({
+      driveId,
+      name: `mac-${enrollmentId.slice(-6)}`,
+      createdBy: payerId,
+      now: NOW,
+      payerId,
+      maxEnvs: 10,
+      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(NOW.getTime() + 600_000) },
+    });
+    if (!created.ok) throw new Error(created.reason);
+    if (enroll) await store.pinMachineKey({ envId: created.env.id, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: NOW });
+    return created.env.id;
+  }
+  const rowOf = async (envId: string) => (await db.select().from(driveEnvLocal).where(eq(driveEnvLocal.envId, envId)))[0];
+
+  it('recordHello: given an enrolled, unrevoked machine, should persist capabilities + lastSeenAt (UTC wall-clock, non-UTC session) and answer true', async () => {
+    const envId = await createLocal(true);
+    const at = new Date(NOW.getTime() + 5_000);
+    expect(await store.recordHello({ envId, capabilities: CAPS, now: at })).toBe(true);
+    const row = await rowOf(envId);
+    expect(row?.capabilities).toEqual(CAPS);
+    expect(row?.lastSeenAt?.getTime()).toBe(at.getTime());
+  });
+
+  it('recordHello: given a machine that never enrolled, should change nothing and answer false', async () => {
+    const envId = await createLocal(false);
+    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    const row = await rowOf(envId);
+    expect(row?.capabilities).toBeNull();
+    expect(row?.lastSeenAt).toBeNull();
+  });
+
+  it('recordHello / recordHeartbeat: given a REVOKED machine, should change nothing and answer false (a revoked hello is not a heartbeat)', async () => {
+    const envId = await createLocal(true);
+    expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+    expect(await store.recordHello({ envId, capabilities: CAPS, now: NOW })).toBe(false);
+    expect(await store.recordHeartbeat({ envId, now: NOW })).toBe(false);
+    const row = await rowOf(envId);
+    expect(row?.capabilities).toBeNull();
+    expect(row?.lastSeenAt).toBeNull();
+  });
+
+  it('recordHeartbeat: should move lastSeenAt forward and nothing else', async () => {
+    const envId = await createLocal(true);
+    await store.recordHello({ envId, capabilities: CAPS, now: NOW });
+    const later = new Date(NOW.getTime() + 60_000);
+    expect(await store.recordHeartbeat({ envId, now: later })).toBe(true);
+    const row = await rowOf(envId);
+    expect(row?.lastSeenAt?.getTime()).toBe(later.getTime());
+    expect(row?.capabilities).toEqual(CAPS);
+  });
+
+  it('revokeLocal: should stamp revokedAt exactly once (CAS on revokedAt IS NULL) and keep the FIRST stamp on a repeat', async () => {
+    const envId = await createLocal(true);
+    expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+    const later = new Date(NOW.getTime() + 60_000);
+    expect(await store.revokeLocal({ envId, now: later })).toBe(false);
+    expect((await rowOf(envId))?.revokedAt?.getTime()).toBe(NOW.getTime());
+  });
+
+  it('revokeLocal: after it, setChallenge and consumeChallenge should both lose their CAS — no future token mint', async () => {
+    const envId = await createLocal(true);
+    expect(await store.setChallenge({ envId, nonce: 'n1', expiresAt: new Date(NOW.getTime() + 60_000), now: NOW })).toBe(true);
+    expect(await store.revokeLocal({ envId, now: NOW })).toBe(true);
+    expect(await store.consumeChallenge({ envId, nonce: 'n1', now: NOW })).toBe(false);
+    expect(await store.setChallenge({ envId, nonce: 'n2', expiresAt: new Date(NOW.getTime() + 60_000), now: new Date(NOW.getTime() + 120_000) })).toBe(false);
+  });
+
+  it('revokeLocal: given an unknown env, should answer false without throwing', async () => {
+    expect(await store.revokeLocal({ envId: createId(), now: NOW })).toBe(false);
+  });
+});

@@ -123,6 +123,11 @@
       "import": "./dist/drive-envs/plan-env-delete.js",
       "require": "./dist/drive-envs/plan-env-delete.js"
     },
+    "./services/drive-envs/local-env-revoke": {
+      "types": "./dist/services/drive-envs/local-env-revoke.d.ts",
+      "import": "./dist/services/drive-envs/local-env-revoke.js",
+      "require": "./dist/services/drive-envs/local-env-revoke.js"
+    },
     "./services/drive-envs/env-provision-deps": {
       "types": "./dist/services/drive-envs/env-provision-deps.d.ts",
       "import": "./dist/services/drive-envs/env-provision-deps.js",
@@ -222,6 +227,16 @@
       "types": "./dist/env-bridge/challenge.d.ts",
       "import": "./dist/env-bridge/challenge.js",
       "require": "./dist/env-bridge/challenge.js"
+    },
+    "./env-bridge/grant-args": {
+      "types": "./dist/env-bridge/grant-args.d.ts",
+      "import": "./dist/env-bridge/grant-args.js",
+      "require": "./dist/env-bridge/grant-args.js"
+    },
+    "./env-bridge/machine-signatures": {
+      "types": "./dist/env-bridge/machine-signatures.d.ts",
+      "import": "./dist/env-bridge/machine-signatures.js",
+      "require": "./dist/env-bridge/machine-signatures.js"
     },
     "./env-bridge/server-signing-key": {
       "types": "./dist/env-bridge/server-signing-key.d.ts",

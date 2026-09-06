@@ -184,6 +184,28 @@ export function makeDriveEnvStore(seed: DriveEnvRecord[] = [], now: () => Date =
       return true;
     },
 
+    async recordHello({ envId, capabilities, now: at }) {
+      const sibling = local.get(envId);
+      if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, capabilities, lastSeenAt: at, updatedAt: at });
+      return true;
+    },
+
+    async recordHeartbeat({ envId, now: at }) {
+      const sibling = local.get(envId);
+      if (!sibling || sibling.enrolledAt === null || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, lastSeenAt: at, updatedAt: at });
+      return true;
+    },
+
+    async revokeLocal({ envId, now: at }) {
+      const sibling = local.get(envId);
+      // CAS on `revokedAt IS NULL`: a second revoke is an answer (false), not a rewrite of the stamp.
+      if (!sibling || sibling.revokedAt !== null) return false;
+      local.set(envId, { ...sibling, revokedAt: at, updatedAt: at });
+      return true;
+    },
+
     async rename({ envId, name, now: at }) {
       const row = rows.get(envId);
       if (!row) return { ok: false, reason: 'not_found' };

@@ -137,6 +137,21 @@ export const sessionRepository = {
     return result.rowCount ?? 0;
   },
 
+  // Revoke every active session bound to ONE resource — e.g. every `env:bridge`
+  // socket token of a local environment (`resourceType = 'drive_env'`,
+  // `resourceId = envId`) when that environment is revoked (Codex C4). Same
+  // shape as `revokeAllForUser`: only live sessions, one UPDATE.
+  revokeAllForResource: async (resourceType: string, resourceId: string, reason: string): Promise<number> => {
+    const result = await db.update(sessions)
+      .set({ revokedAt: new Date(), revokedReason: reason })
+      .where(and(
+        eq(sessions.resourceType, resourceType),
+        eq(sessions.resourceId, resourceId),
+        isNull(sessions.revokedAt),
+      ));
+    return result.rowCount ?? 0;
+  },
+
   // Revoke every active session for the user EXCEPT admin-console sessions, so a
   // web login does not knock the user out of the admin app.
   revokeWebForUser: async (userId: string, reason: string): Promise<number> => {

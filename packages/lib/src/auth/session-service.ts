@@ -287,6 +287,15 @@ export class SessionService {
   }
 
   /**
+   * Revoke every live session bound to one resource (`resourceType` +
+   * `resourceId`) — the env bridge's socket tokens on a revoked local
+   * environment. Returns how many were live.
+   */
+  async revokeResourceSessions(resourceType: string, resourceId: string, reason: string): Promise<number> {
+    return sessionRepository.revokeAllForResource(resourceType, resourceId, reason);
+  }
+
+  /**
    * Revoke the user's sessions EXCEPT admin-console sessions. Used by web login
    * flows so signing into the web app does not log the user out of the admin app.
    */
