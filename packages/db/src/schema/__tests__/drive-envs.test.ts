@@ -13,11 +13,16 @@
  *  - **There is NO kind taxonomy and NO stored status.** An earlier cut had a
  *    `drive_env_kind` enum plus a CHECK partitioning Sprite pointers by it;
  *    both are gone, because dev/staging/prod are use cases expressed by NAMING
- *    an env. Every env is Sprite-backed, so the Sprite columns are
- *    unconditional and `machine_sprite_reclaims` is the only outbox this table
- *    can feed. If a `kind` or `substrate` column reappears here, the
- *    provisioner has grown a branch the name was supposed to make
- *    unnecessary.
+ *    an env. `substrate` is a DIFFERENT axis and was reserved by the founder
+ *    (2026-08-18: "onprem later via a local bridge to the user's own shell";
+ *    "envs will need a size/class attribute eventually") — what RUNS an env,
+ *    which a name cannot say. It carries a `'sprite'` default and a CHECK
+ *    that a `'local'` row holds NO Sprite pointer, so every env that carries a
+ *    Sprite pointer is still a Sprite env, the Sprite columns stay meaningful
+ *    unconditionally, and `machine_sprite_reclaims` is still the only outbox
+ *    this table can feed. If a `kind` column reappears here, or `substrate`
+ *    loses its default or its CHECK, the use-case taxonomy is creeping back
+ *    or a local row can masquerade as a VM.
  *  - **A Sprite pointer outlives its row.** Every delete path into
  *    `drive_envs` cascades (drive delete, permanent drive delete, Art. 17
  *    erasure through the drive), so the AFTER DELETE trigger must rescue
@@ -137,14 +142,25 @@ describe('drive_envs schema — identity and ownership', () => {
 });
 
 describe('drive_envs schema — derived state, not stored state', () => {
-  it('given kinds are names not types, should store NO kind and NO substrate column', () => {
+  it('given kinds are names not types, should store NO kind column', () => {
     // The founder decision this table was reshaped around: dev/staging/prod
     // are use cases a user expresses by naming an env. A `kind` column would
-    // force every new use case through a migration, and a `substrate` column
-    // would be a second witness to a fact that is now uniform — every env is
-    // Sprite-backed.
+    // force every new use case through a migration.
     expect('kind' in envsColumns).toBe(false);
-    expect('substrate' in envsColumns).toBe(false);
+  });
+
+  it('given substrate is the reserved "what runs it" axis, should store it with a sprite default and a CHECK that keeps local rows off the Sprite predicates', () => {
+    // This test used to assert `'substrate' in envsColumns === false`, and that
+    // was right while every env was Sprite-backed. The Local Environments epic
+    // (founder ratification 2026-08-18) reopened exactly and only this axis:
+    // a use case is expressible by a name, WHAT RUNS the env is not. The
+    // guard now pins the shape that keeps the old corollary true — a local
+    // row can never carry a Sprite pointer — rather than the column's absence.
+    expect('substrate' in envsColumns).toBe(true);
+    expect(envsColumns.substrate.notNull).toBe(true);
+    expect(envsColumns.substrate.hasDefault).toBe(true);
+    expect(envsConfig.checks.find((check) => check.name === 'drive_envs_local_no_sprite_check')).toBeDefined();
+    expect(envsConfig.checks.find((check) => check.name === 'drive_envs_substrate_check')).toBeDefined();
   });
 
   it('given status is derived from the pointer columns, should store NO status column', () => {

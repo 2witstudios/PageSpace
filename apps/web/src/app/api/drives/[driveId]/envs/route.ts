@@ -28,6 +28,7 @@ import {
   isPrincipalDriveMember,
   isPrincipalDriveOwnerOrAdmin,
 } from '@/lib/auth';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { createDriveEnvRequestSchema } from '@pagespace/lib/drive-envs/env-contract';
@@ -89,10 +90,28 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const body = await request.json().catch(() => null);
     const parsed = createDriveEnvRequestSchema.safeParse(body);
     if (!parsed.success) {
-      return NextResponse.json({ error: 'A non-empty environment name is required' }, { status: 400 });
+      // Name the field that failed: an unknown substrate is not a name problem,
+      // and a blank label is invalid rather than merely missing.
+      const failed = new Set(parsed.error.issues.map((issue) => String(issue.path[0] ?? '')));
+      const error = failed.has('substrate')
+        ? "substrate must be 'sprite' or 'local'"
+        : failed.has('label')
+          ? 'A machine label (1–64 characters) is required for a local environment'
+          : failed.has('name')
+            ? 'A non-empty environment name is required'
+            : 'Invalid environment request';
+      return NextResponse.json({ error }, { status: 400 });
     }
 
-    const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId });
+    // Local environments (the user's own machine via the zero-trust bridge)
+    // are a cloud OPT-IN: never minted — and never a Sprite env in their
+    // place — unless the deployment turned them on.
+    if (parsed.data.substrate === 'local' && !isLocalEnvsEnabled()) {
+      return NextResponse.json({ error: 'Local environments are not enabled on this deployment' }, { status: 501 });
+    }
+
+    const local = parsed.data.substrate === 'local' ? { label: parsed.data.label, ownerId: auth.userId } : undefined;
+    const result = await createEnvInDrive({ driveId, name: parsed.data.name, createdBy: auth.userId, local });
     if (!result.ok) {
       if (result.reason === 'drive_not_found') {
         return NextResponse.json({ error: 'Drive not found' }, { status: 404 });
@@ -129,9 +148,20 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       userId: auth.userId,
       resourceType: 'drive',
       resourceId: driveId,
-      details: { route: 'drive-envs', operation: 'create', envId: result.env.id, name: result.env.name },
+      details: { route: 'drive-envs', operation: 'create', envId: result.env.id, name: result.env.name, substrate: result.env.substrate },
     });
 
+    // A local env is born disconnected (no machine has enrolled yet) and the
+    // one-time code rides the response ONCE — the server keeps only its hash.
+    if (local && result.enrollment) {
+      return NextResponse.json(
+        {
+          env: toDriveEnvDTO(result.env, { label: local.label, status: 'disconnected' }),
+          enrollment: { enrollmentId: result.enrollment.enrollmentId, code: result.enrollment.code, expiresAt: result.enrollment.expiresAt.toISOString() },
+        },
+        { status: 201 },
+      );
+    }
     return NextResponse.json({ env: toDriveEnvDTO(result.env) }, { status: 201 });
   } catch (error) {
     loggers.api.error('Failed to create drive environment', error instanceof Error ? error : new Error(String(error)));

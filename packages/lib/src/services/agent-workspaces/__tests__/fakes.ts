@@ -328,6 +328,7 @@ export function makeHandle(
     onData: () => {},
     onExit: () => {},
     onError: () => {},
+    onPortEvent: () => {},
     kill: () => {},
   };
   return {
@@ -354,6 +355,16 @@ export function makeHandle(
     listStreams: async (): Promise<SandboxStreamSessionInfo[]> => [],
     killSession: async () => {},
     createCheckpoint: async () => {},
+    services: {
+      create: async () => {},
+      list: async () => [],
+      get: async () => null,
+      start: async () => {},
+      stop: async () => {},
+      remove: async () => {},
+    },
+    urlInfo: async () => ({ url: null, auth: 'unknown' }),
+    setUrlAuth: async () => {},
   };
 }
 

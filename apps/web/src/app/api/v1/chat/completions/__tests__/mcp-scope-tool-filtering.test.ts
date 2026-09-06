@@ -83,7 +83,7 @@ vi.mock('@pagespace/lib/audit/audit-log', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   isProviderError: vi.fn((r: unknown) => r != null && typeof r === 'object' && 'error' in r && 'status' in r),
 }));
 vi.mock('@/lib/ai/core/system-prompt', () => ({
@@ -193,7 +193,7 @@ const agentPage = {
   driveId: 'drive-abc',
   systemPrompt: null,
   aiProvider: 'openai',
-  aiModel: 'openai/gpt-5.3-chat',
+  aiModel: 'openai/gpt-5.4-nano',
   includeDrivePrompt: false,
 };
 

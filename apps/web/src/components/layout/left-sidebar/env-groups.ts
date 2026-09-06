@@ -31,6 +31,12 @@ export interface EnvGroup<T> {
   envName: string | null;
   /** Null for an orphan, for the same reason: there is no row here to derive one from. */
   status: DriveEnvStatus | null;
+  /**
+   * What runs the env. Carried so the row can withhold Sprite-only actions
+   * (new session, rebuild) from a LOCAL env until the bridge transport exists;
+   * null for an orphan.
+   */
+  substrate: DriveEnvDTO['substrate'] | null;
   sessions: T[];
 }
 
@@ -73,6 +79,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       envId: env.id,
       envName: env.name,
       status: env.status,
+      substrate: env.substrate,
       sessions: sessionsByEnv.get(env.id) ?? [],
     }))
     .sort(byEnvDisplayName);
@@ -83,6 +90,7 @@ export function partitionSessionsByEnv<T extends { envId: string | null }>(
       envId,
       envName: null,
       status: null,
+      substrate: null,
       sessions: sessionsByEnv.get(envId) ?? [],
     }))
     .sort(byEnvDisplayName);

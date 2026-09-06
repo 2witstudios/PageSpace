@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 import { AuthenticationError, IncompatibleServerError, NetworkError, TimeoutError, ValidationError } from '../errors.js';
 import { defineOperation } from '../registry/define.js';
-import { PageSpaceClient } from '../client.js';
+import { PageSpaceClient, resolveTimeoutMs } from '../client.js';
 import type { AuthProvider } from '../auth/provider.js';
 import { StaticTokenProvider } from '../auth/static.js';
 import type { RetryPolicy } from '../retry.js';
@@ -52,14 +52,24 @@ interface MakeClientOptions {
   fetch: (...args: never[]) => Promise<Response>;
   retryPolicy?: Partial<RetryPolicy>;
   skipVersionCheck?: boolean;
+  /**
+   * `undefined` means "supply the usual 1000ms"; `null` means OMIT the option
+   * entirely. The distinction is load-bearing now that an explicitly-supplied
+   * `timeoutMs` outranks an operation's `timeoutMsOverride` — a helper that
+   * always passes one cannot exercise the unset case at all, which is how the
+   * precedence bug survived: every test here was implicitly an "explicit"
+   * caller and none of them noticed the override was unraisable.
+   */
+  timeoutMs?: number | null;
 }
 
 function makeClient(options: MakeClientOptions): PageSpaceClient {
+  const timeoutMs = options.timeoutMs === undefined ? 1000 : options.timeoutMs;
   return new PageSpaceClient({
     baseUrl: 'https://pagespace.ai',
     auth: options.auth ?? fakeAuth(),
     jitter: () => 0,
-    timeoutMs: 1000,
+    ...(timeoutMs === null ? {} : { timeoutMs }),
     retryPolicy: options.retryPolicy,
     skipVersionCheck: options.skipVersionCheck,
     fetch: options.fetch as unknown as typeof fetch,
@@ -330,39 +340,124 @@ describe('PageSpaceClient — version handshake (ADR 0001)', () => {
   });
 });
 
-describe('PageSpaceClient — per-operation timeoutMsOverride (Phase 3 task 5 agents.ask)', () => {
-  it('times out at the operation override instead of the client default', async () => {
-    vi.useFakeTimers();
-    const slowOp = defineOperation({
-      name: 'widgets.slow',
-      method: 'POST',
-      path: '/api/widgets/slow',
-      inputSchema: z.object({}),
-      outputSchema: z.object({ id: z.string() }),
-      timeoutMsOverride: 5000,
-      description: 'A long-running op.',
-    });
-    const fetchMock = vi.fn(
+/**
+ * TIMEOUT PRECEDENCE: explicit client `timeoutMs` > operation
+ * `timeoutMsOverride` > client fallback.
+ *
+ * The middle term used to win outright (`op.timeoutMsOverride ?? timeoutMs`),
+ * which made every operation-declared deadline a CEILING no caller could
+ * raise. For `agents.ask` — a POST that is never auto-retried, running a
+ * multi-step tool loop the server does not abort when its caller leaves —
+ * that meant a consult exceeding 120s was billed, completed, and
+ * unreachable, with no client option, CLI flag or env var able to wait for
+ * it. The old test for this block asserted the override beat "the client
+ * default" while passing an EXPLICIT 1000ms, so it could not tell the two
+ * readings apart; these three cases pin all of them.
+ */
+describe('PageSpaceClient — timeout precedence', () => {
+  const slowOp = defineOperation({
+    name: 'widgets.slow',
+    method: 'POST',
+    path: '/api/widgets/slow',
+    inputSchema: z.object({}),
+    outputSchema: z.object({ id: z.string() }),
+    timeoutMsOverride: 5000,
+    description: 'A long-running op.',
+  });
+
+  const noOverrideOp = defineOperation({
+    name: 'widgets.plain',
+    method: 'POST',
+    path: '/api/widgets/plain',
+    inputSchema: z.object({}),
+    outputSchema: z.object({ id: z.string() }),
+    description: 'An op with no declared deadline.',
+  });
+
+  /** Never resolves; rejects only when its signal aborts. */
+  const hangingFetch = () =>
+    vi.fn(
       (_url: string, init: RequestInit) =>
         new Promise<Response>((_resolve, reject) => {
           init.signal?.addEventListener('abort', () => reject(new Error('aborted')));
         }),
     );
-    // Client default timeoutMs is 1000ms (see makeClient) — the override must win.
-    const client = makeClient({ fetch: fetchMock as unknown as MakeClientOptions['fetch'] });
 
+  /** Drives fake timers to `ms` and reports whether the call had settled by then. */
+  async function settledAfter(promise: Promise<unknown>, ms: number): Promise<boolean> {
     let settled = false;
-    const promise = client.invoke(slowOp, {});
     promise.catch(() => {}).finally(() => {
       settled = true;
     });
+    await vi.advanceTimersByTimeAsync(ms);
+    return settled;
+  }
 
-    // Past the client's own 1000ms default, but still short of the 5000ms override.
-    await vi.advanceTimersByTimeAsync(1000);
-    expect(settled).toBe(false);
+  it('applies the operation override when the caller set no timeoutMs of their own', async () => {
+    vi.useFakeTimers();
+    const client = makeClient({ timeoutMs: null, fetch: hangingFetch() as unknown as MakeClientOptions['fetch'] });
 
-    await vi.advanceTimersByTimeAsync(4000);
+    const promise = client.invoke(slowOp, {});
+    // Past the 30s built-in fallback would be far too long to wait for here;
+    // what matters is that it survives well beyond it and dies at 5000ms.
+    expect(await settledAfter(promise, 4999)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
     await expect(promise).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  /**
+   * THE REGRESSION. Before the fix this rejected at 5000ms — the operation's
+   * number, not the caller's — and no arrangement of client options could
+   * produce a longer wait.
+   */
+  it('lets an EXPLICIT client timeoutMs override the operation, in both directions', async () => {
+    vi.useFakeTimers();
+    const client = makeClient({ timeoutMs: 20_000, fetch: hangingFetch() as unknown as MakeClientOptions['fetch'] });
+
+    const promise = client.invoke(slowOp, {});
+    // Straight past the operation's own 5000ms: the caller asked for longer.
+    expect(await settledAfter(promise, 19_999)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it('lets an explicit client timeoutMs SHORTEN an operation override too', async () => {
+    vi.useFakeTimers();
+    const client = makeClient({ timeoutMs: 1000, fetch: hangingFetch() as unknown as MakeClientOptions['fetch'] });
+
+    const promise = client.invoke(slowOp, {});
+    expect(await settledAfter(promise, 999)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).rejects.toBeInstanceOf(TimeoutError);
+  });
+
+  it('falls back to the client timeout for an operation that declares none', async () => {
+    vi.useFakeTimers();
+    const client = makeClient({ timeoutMs: 1000, fetch: hangingFetch() as unknown as MakeClientOptions['fetch'] });
+
+    const promise = client.invoke(noOverrideOp, {});
+    expect(await settledAfter(promise, 999)).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(promise).rejects.toBeInstanceOf(TimeoutError);
+  });
+});
+
+describe('resolveTimeoutMs — the precedence rule itself', () => {
+  it('prefers an explicit caller value over an operation override', () => {
+    expect(resolveTimeoutMs(20_000, 5_000, 30_000)).toBe(20_000);
+  });
+
+  it('prefers an operation override over the fallback when the caller set nothing', () => {
+    expect(resolveTimeoutMs(undefined, 5_000, 30_000)).toBe(5_000);
+  });
+
+  it('falls back when neither is present', () => {
+    expect(resolveTimeoutMs(undefined, undefined, 30_000)).toBe(30_000);
+  });
+
+  /** 0 is a real request ("expire immediately"), not an absent one — `??` on a number is a trap. */
+  it('treats an explicit 0 as explicit, not as unset', () => {
+    expect(resolveTimeoutMs(0, 5_000, 30_000)).toBe(0);
   });
 });
 

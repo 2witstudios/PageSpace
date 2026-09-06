@@ -687,7 +687,7 @@ export default function MCPSettingsView() {
               <div>
                 <Label className="text-sm font-medium">Token Value</Label>
                 <div className="flex items-center gap-2 mt-1">
-                  <code className="flex-1 p-2 bg-white dark:bg-gray-900 border dark:border-gray-700 rounded text-sm font-mono text-black dark:text-white">
+                  <code className="flex-1 p-2 bg-muted border rounded text-sm font-mono text-foreground">
                     {showNewToken ? newToken.token : '•'.repeat(48)}
                   </code>
                   <Button

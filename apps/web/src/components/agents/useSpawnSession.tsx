@@ -587,6 +587,18 @@ function SpawnSessionPalette({
                 : 'name';
   const chosenEnv = pick?.envId ? (envs.find((env) => env.id === pick.envId) ?? null) : null;
 
+  // The picked agent's own default env (a PREFERENCE from its Settings
+  // screen, set there via PageAgentSettingsTab), when it still exists in this
+  // drive's listing. This only ever PRE-HIGHLIGHTS the 'env' step below — it
+  // never sets `pick.envId` itself, so "New sandbox" and every other
+  // environment stay one arrow-key away, fully overridable. A stale default
+  // (the env was deleted after being assigned) simply fails to match here and
+  // the list renders in its ordinary order — no error state needed.
+  const defaultEnv = pick?.agentPageId
+    ? (envs.find((env) => env.id === agents.find((agent) => agent.id === pick.agentPageId)?.defaultEnvId) ?? null)
+    : null;
+  const otherEnvs = defaultEnv ? envs.filter((env) => env.id !== defaultEnv.id) : envs;
+
   return (
     <CommandDialog
       open={open}
@@ -712,8 +724,28 @@ function SpawnSessionPalette({
           <CommandInput placeholder="Search environments…" autoFocus />
           <CommandList>
             <CommandGroup>
-              {/* The ephemeral default leads, because it is what every session
-                  was before environments existed and what most still should be. */}
+              {/* Ordering decides cmdk's INITIAL highlight, not just visual
+                  position: cmdk (uncontrolled, no `value` prop threaded down
+                  from this dialog) highlights the first rendered, non-disabled
+                  item on mount — so the configured default, when there is
+                  one, must render BEFORE "New sandbox" or the advertised
+                  preselection is cosmetic and Enter still picks ephemeral
+                  (review — chatgpt-codex-connector, PR #2513). With no
+                  default, "New sandbox" leads exactly as before: it is what
+                  every session was before environments existed and what most
+                  still should be. */}
+              {defaultEnv && (
+                <CommandItem
+                  key={defaultEnv.id}
+                  value={`${defaultEnv.id}-in ${defaultEnv.name}`}
+                  disabled={spawning}
+                  onSelect={() => onPickEnv(defaultEnv.id)}
+                >
+                  <Boxes className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+                  <span className="truncate">in {defaultEnv.name}</span>
+                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">Default</span>
+                </CommandItem>
+              )}
               <CommandItem
                 value="ephemeral-New sandbox"
                 disabled={spawning}
@@ -723,7 +755,7 @@ function SpawnSessionPalette({
                 <span className="truncate">New sandbox</span>
                 <span className="ml-auto shrink-0 text-xs text-muted-foreground">Ephemeral</span>
               </CommandItem>
-              {envs.map((env) => (
+              {otherEnvs.map((env) => (
                 <CommandItem
                   key={env.id}
                   value={`${env.id}-in ${env.name}`}

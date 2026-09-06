@@ -3,13 +3,18 @@
  * @see https://schema.org/
  * @see https://developers.google.com/search/docs/appearance/structured-data
  */
+import { ENTITY_DESCRIPTION } from "./metadata";
+
 // In development, set NEXT_PUBLIC_MARKETING_URL and NEXT_PUBLIC_APP_URL to distinct local origins
 const SITE_URL = process.env.NEXT_PUBLIC_MARKETING_URL || "https://pagespace.ai";
 const APP_URL = process.env.NEXT_PUBLIC_APP_URL || "https://pagespace.ai";
 const SOFTWARE_VERSION = "1.0";
 
 /**
- * Organization schema - used site-wide
+ * Organization schema - used site-wide.
+ * `description` uses the canonical entity sentence so AI engines resolve THIS
+ * product (not the colliding web-design agency of the same name). AEO: entity
+ * disambiguation.
  */
 export const organizationSchema = {
   "@context": "https://schema.org",
@@ -17,6 +22,7 @@ export const organizationSchema = {
   name: "PageSpace",
   url: SITE_URL,
   logo: `${SITE_URL}/android-chrome-512x512.png`,
+  description: ENTITY_DESCRIPTION,
   sameAs: [
     "https://twitter.com/PageSpaceAI",
     "https://github.com/2witstudios/PageSpace",
@@ -41,8 +47,7 @@ export const webApplicationSchema = {
   url: APP_URL,
   applicationCategory: "ProductivityApplication",
   operatingSystem: "Web, macOS, Windows, Linux, iOS, Android",
-  description:
-    "AI-powered unified workspace for documents, tasks, calendar, and team collaboration.",
+  description: ENTITY_DESCRIPTION,
   offers: {
     "@type": "AggregateOffer",
     priceCurrency: "USD",
@@ -101,14 +106,62 @@ export function createArticleSchema(article: ArticleData) {
 }
 
 /**
- * WebSite schema
+ * WebSite schema — carries the canonical entity description too (AEO).
  */
 export const websiteSchema = {
   "@context": "https://schema.org",
   "@type": "WebSite",
   name: "PageSpace",
   url: SITE_URL,
+  description: ENTITY_DESCRIPTION,
 };
+
+/**
+ * FAQPage schema - built from the homepage FAQ (AEO: FAQ coverage + fan-out).
+ * `name`/`text` must mirror the visible question/answer text.
+ */
+export function createFaqSchema(items: { q: string; a: string }[]) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    mainEntity: items.map((item) => ({
+      "@type": "Question",
+      name: item.q,
+      acceptedAnswer: {
+        "@type": "Answer",
+        text: item.a,
+      },
+    })),
+  };
+}
+
+/**
+ * Review schema - machine-readable social proof for a testimonial (AEO: trust).
+ * No `reviewRating`: these are quoted social posts, and no star rating was
+ * given, so emitting one would be fabricated structured data.
+ */
+export function createReviewSchema(review: {
+  author: string;
+  body: string;
+  url?: string;
+}) {
+  return {
+    "@context": "https://schema.org",
+    "@type": "Review",
+    itemReviewed: {
+      "@type": "SoftwareApplication",
+      name: "PageSpace",
+      applicationCategory: "ProductivityApplication",
+      operatingSystem: "Web, macOS, Windows, Linux, iOS, Android",
+    },
+    author: {
+      "@type": "Person",
+      name: review.author,
+    },
+    reviewBody: review.body,
+    ...(review.url ? { url: review.url } : {}),
+  };
+}
 
 /**
  * Helper to render JSON-LD script tag

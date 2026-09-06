@@ -94,7 +94,12 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'stripeCustomerId', 'subscriptionTier', 'tosAcceptedAt',
       'failedLoginAttempts', 'lockedUntil', 'suspendedAt', 'suspendedReason',
       'timezone', 'createdAt', 'updatedAt', 'starterSkillsInstalledAt',
+      'onboardingCompletedAt',
     ],
+    // `onboardingCompletedAt` MUST travel for the same reason: a tenant arriving
+    // with it cleared would show the first-run walkthrough to every migrated
+    // user on their next login, as if the whole workspace were brand new.
+    //
     // `starterSkillsInstalledAt` is the starter-skill install stamp (PR #2359).
     // It MUST travel: the skills themselves are ordinary pages and personal
     // `commands` rows, which the bundle already carries, so a tenant arriving
@@ -155,6 +160,10 @@ export const TENANT_EXPORT_COLUMNS: Readonly<Record<ExportTableName, TableColumn
       'createdBy', 'createdAt', 'updatedAt', 'trashedAt', 'revision', 'stateHash',
       'driveId', 'parentId', 'originalParentId',
     ],
+    excluded: {
+      defaultEnvId:
+        'Names a `drive_envs` row — the same PERSISTENT per-drive machine `agent_workspaces.envId` points at (see that exclusion, above) — and the bundle does not carry that table, so a carried value would reference a row the tenant has no INSERT for. Nullable; NULL is "no default" (ephemeral spawns), which is also the state a page with a dangling default correctly lands in on a substrate that holds no boxes. Same non-permanent status as the `agent_workspaces.envId` exclusion: revisit both together once `drive_envs` ships a writer.',
+    },
   },
 
   // The drive-scoped tag VOCABULARY (reclaimed from the never-written 0000
@@ -440,6 +449,9 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
 
   app_hosting_reclaims:
     'The FK-FREE teardown OUTBOX: each row is an instruction to DESTROY a Fly app in the SOURCE deployment\'s organization, held until the kill is confirmed. It is the one table in the schema where carrying a row is actively dangerous rather than merely useless — an imported reclaim would have the tenant\'s drain cron repeatedly attempt to destroy an app belonging to another organization, and a row that can never be confirmed dead is never removed, so the outbox would accumulate permanently stuck entries that look exactly like the billing anomaly it exists to alert on.',
+
+  dev_preview_services:
+    'The dev-preview RELAY state of a Sprite INSTANCE in the SOURCE fleet: `spriteInstanceId` (NOT NULL, UNIQUE) and `sandboxId` name a VM the tenant does not own, `targetPort` and `relayServiceName` describe a process inside it, and the row is keyed to that instance BY DESIGN so that a re-provisioned VM inherits nothing from it. The tenant\'s migrated session arrives with `sandboxId` NULL (never provisioned — see `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`), so a carried row would be stale on arrival by the table\'s own fail-closed rule (its instance can never match a sprite the tenant provisions) and could only ever read as "this preview needs re-creating". Nothing in it is authored by the user: the dev server they ran is in their session and env, which travel; the relay is our plumbing. Left behind, exactly like the Sprite pointers it hangs off.',
 };
 
 /** The columns emitted inline in `table`'s INSERT. */

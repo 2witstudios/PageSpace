@@ -21,6 +21,7 @@ const REQUESTER_ID = 'requester-9';
 const envRow = {
   id: ENV_ID,
   driveId: DRIVE_ID,
+  substrate: 'sprite',
   name: 'staging',
   createdBy: DRIVE_OWNER_ID,
   spriteKey: null,

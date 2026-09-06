@@ -24,10 +24,21 @@ vi.mock('@pagespace/db/schema/published-apps', () => ({
     tier: 'tier',
     machineId: 'machineId',
     driveId: 'driveId',
+    envId: 'envId',
     subdomain: 'subdomain',
   },
 }));
-vi.mock('@pagespace/db/operators', () => ({ eq: (a: unknown, b: unknown) => ({ eq: [a, b] }) }));
+vi.mock('@pagespace/db/schema/custom-domains', () => ({
+  customDomains: {
+    hostname: 'hostname',
+    publishedAppId: 'publishedAppId',
+    status: 'status',
+  },
+}));
+vi.mock('@pagespace/db/operators', () => ({
+  eq: (a: unknown, b: unknown) => ({ eq: [a, b] }),
+  and: (...conditions: unknown[]) => ({ and: conditions }),
+}));
 // The billing modules are mocked rather than imported: every balance read in this
 // file goes through an injected dep, so pulling in the real credit gate would drag
 // the whole ledger schema into a suite that never calls it. Their own semantics are
@@ -48,6 +59,7 @@ import {
 } from '../router';
 import { db } from '@pagespace/db/db';
 import { publishedApps } from '@pagespace/db/schema/published-apps';
+import { customDomains } from '@pagespace/db/schema/custom-domains';
 import { hasSpendableBalance } from '../../../billing/credit-gate';
 import { resolveTier } from '../../../billing/credit-balance';
 import { defaultAppBillingDeps } from '../app-billing';
@@ -64,6 +76,7 @@ function row(overrides: Partial<PublishedAppRouteRow> = {}): PublishedAppRouteRo
     tier: 'metered',
     machineId: 'm-1',
     driveId: 'drive_payer',
+    envId: 'env_1',
     ...overrides,
   };
 }
@@ -74,6 +87,7 @@ function deps(overrides: Partial<AppRouterDeps> = {}): AppRouterDeps {
     apex: () => 'pagespace.app',
     replaySecret: () => SECRET,
     findAppBySubdomain: async () => row(),
+    findAppByCustomHost: async () => null,
     resolvePayerId: async ({ driveId }) => (driveId === 'drive_payer' ? 'user_payer' : null),
     resolveTier: async () => 'pro',
     hasSpendableBalance: async () => true,
@@ -103,11 +117,34 @@ describe('resolveAppRoute — hostname resolution', () => {
     expect(findAppBySubdomain).not.toHaveBeenCalled();
   });
 
-  it('given a custom domain, should answer custom_host so the proxy keeps serving it', async () => {
+  it('given a custom domain with no published-app target (static site), should answer custom_host so the proxy keeps serving it unchanged', async () => {
     const findAppBySubdomain = vi.fn();
-    const decision = await resolveAppRoute('docs.acme.com', deps({ findAppBySubdomain }));
+    const findAppByCustomHost = vi.fn(async () => null);
+    const decision = await resolveAppRoute('docs.acme.com', deps({ findAppBySubdomain, findAppByCustomHost }));
     expect(decision).toEqual({ kind: 'not_found', reason: 'custom_host' });
+    expect(findAppByCustomHost).toHaveBeenCalledWith('docs.acme.com');
     expect(findAppBySubdomain).not.toHaveBeenCalled();
+  });
+
+  it('given a custom domain pointed at a published app, should route to that app through the SAME gate as a subdomain hit', async () => {
+    const decision = await resolveAppRoute(
+      'docs.acme.com',
+      deps({ findAppByCustomHost: async () => row({ flyAppName: 'pgs-app-custom' }) }),
+    );
+    expect(decision).toEqual({
+      kind: 'replay',
+      flyAppName: 'pgs-app-custom',
+      state: expect.any(String),
+      timeoutMs: expect.any(Number),
+    });
+  });
+
+  it('given a custom domain pointed at an insolvent metered app, should park it exactly like a subdomain hit — no bypass', async () => {
+    const decision = await resolveAppRoute(
+      'docs.acme.com',
+      deps({ findAppByCustomHost: async () => row(), hasSpendableBalance: async () => false }),
+    );
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given a subdomain with no row, should answer no_such_app', async () => {
@@ -153,7 +190,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ resolvePayerId: async () => null, resolveTier, hasSpendableBalance }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
     expect(resolveTier).not.toHaveBeenCalled();
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
@@ -163,7 +200,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ hasSpendableBalance: async () => false }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given a DEDICATED app, should never touch the ledger at all', async () => {
@@ -188,7 +225,7 @@ describe('resolveAppRoute — the balance is asked about the SAME payer the mete
       'acme.pagespace.app',
       deps({ findAppBySubdomain: async () => row({ status: 'parked' }), hasSpendableBalance }),
     );
-    expect(decision).toEqual({ kind: 'parked', reason: 'parked_status' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'parked_status', driveId: 'drive_payer', envId: 'env_1' });
     expect(hasSpendableBalance).not.toHaveBeenCalled();
   });
 });
@@ -206,7 +243,7 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
 
   it('given an UNSET replay secret, should refuse rather than replay with a blank state', async () => {
     const decision = await resolveAppRoute('acme.pagespace.app', deps({ replaySecret: () => '' }));
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given a too-short replay secret, should refuse', async () => {
@@ -214,7 +251,7 @@ describe('resolveAppRoute — the replay key must exist before traffic is replay
       'acme.pagespace.app',
       deps({ replaySecret: () => 'short' }),
     );
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given two different apps, should derive different state keys', async () => {
@@ -334,6 +371,49 @@ describe('defaultAppRouterDeps — the real edge is wired to the real readers', 
 
     expect(await defaultAppRouterDeps.findAppBySubdomain('nope')).toBeNull();
   });
+
+  it('reads the custom_domains row JOINED to published_apps, keyed on hostname AND active status', async () => {
+    const found = row();
+    const limit = vi.fn().mockResolvedValue([found]);
+    const where = vi.fn(() => ({ limit }));
+    const innerJoin = vi.fn(() => ({ where }));
+    const from = vi.fn(() => ({ innerJoin }));
+    vi.mocked(db.select).mockReturnValue({ from } as never);
+
+    const result = await defaultAppRouterDeps.findAppByCustomHost('docs.acme.com');
+
+    expect(from).toHaveBeenCalledWith(customDomains);
+    expect(innerJoin).toHaveBeenCalledWith(publishedApps, { eq: [customDomains.publishedAppId, publishedApps.id] });
+    expect(where).toHaveBeenCalledWith({
+      and: [{ eq: [customDomains.hostname, 'docs.acme.com'] }, { eq: [customDomains.status, 'active'] }],
+    });
+    expect(result).toEqual(found);
+  });
+
+  it('answers null for a custom host that is not ours, or is ours with no app target — both fall through to the static site', async () => {
+    const limit = vi.fn().mockResolvedValue([]);
+    vi.mocked(db.select).mockReturnValue({ from: () => ({ innerJoin: () => ({ where: () => ({ limit }) }) }) } as never);
+
+    expect(await defaultAppRouterDeps.findAppByCustomHost('nope.example.com')).toBeNull();
+  });
+
+  it('answers null for a domain pointed at an app but not yet active — a pending/provisioning/failed domain must not route to the app', async () => {
+    // The query itself filters on status = 'active' server-side, so a
+    // not-yet-active domain never comes back as a row — proven here by the
+    // WHERE clause actually carrying the status condition (asserted above)
+    // combined with this: a `.limit()` result of [] (what Postgres would
+    // return for a WHERE that excludes the row) still falls through cleanly.
+    const limit = vi.fn().mockResolvedValue([]);
+    const where = vi.fn(() => ({ limit }));
+    vi.mocked(db.select).mockReturnValue({ from: () => ({ innerJoin: () => ({ where }) }) } as never);
+
+    const result = await defaultAppRouterDeps.findAppByCustomHost('pending.acme.com');
+
+    expect(where).toHaveBeenCalledWith({
+      and: [{ eq: [customDomains.hostname, 'pending.acme.com'] }, { eq: [customDomains.status, 'active'] }],
+    });
+    expect(result).toBeNull();
+  });
 });
 
 
@@ -362,7 +442,7 @@ describe('resolveAppRoute — the last-hit stamp the idle reaper reads', () => {
       deps({ stampHit, hasSpendableBalance: async () => false }),
     );
 
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
     expect(stampHit).not.toHaveBeenCalled();
   });
 
@@ -432,7 +512,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       }),
     );
 
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
     expect(stampHit).not.toHaveBeenCalled();
   });
 
@@ -453,10 +533,10 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
     );
 
     expect({ outOfCredits, dailyCap }).toEqual({
-      outOfCredits: { kind: 'parked', reason: 'out_of_credits' },
+      outOfCredits: { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' },
       // A different thing to be told: nobody needs to top anything up, and the app
       // returns by itself when the counter rolls over.
-      dailyCap: { kind: 'parked', reason: 'daily_cap' },
+      dailyCap: { kind: 'parked', reason: 'daily_cap', driveId: 'drive_payer', envId: 'env_1' },
     });
   });
 
@@ -497,7 +577,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       }),
     );
 
-    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed' });
+    expect(decision).toEqual({ kind: 'unavailable', reason: 'failed', driveId: 'drive_payer', envId: 'env_1' });
   });
 
   it('given an insolvent payer, should never reach the wake at all', async () => {
@@ -510,7 +590,7 @@ describe('resolveAppRoute — a STOPPED app is woken through the metering seam',
       deps({ findAppBySubdomain: async () => stopped(), hasSpendableBalance: async () => false, wake }),
     );
 
-    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits' });
+    expect(decision).toEqual({ kind: 'parked', reason: 'out_of_credits', driveId: 'drive_payer', envId: 'env_1' });
     expect(wake).not.toHaveBeenCalled();
   });
 });

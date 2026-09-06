@@ -86,6 +86,6 @@ describe('the Agents nav entry', () => {
     // Split into class TOKENS: a substring match would be satisfied by the
     // inactive state's own `hover:bg-accent`, which is how the first draft of
     // this test passed against a deliberately broken `isActive`.
-    expect(agentsLink().className.split(/\s+/)).toContain('bg-accent');
+    expect(agentsLink().className.split(/\s+/)).toContain('bg-primary-soft');
   });
 });

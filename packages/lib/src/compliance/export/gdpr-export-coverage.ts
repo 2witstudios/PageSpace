@@ -104,6 +104,10 @@ export const EXPORTED_TABLES: Readonly<Record<string, ExportCategory>> = {
   // witness — migration 0256 dropped that column, so the table is not merely
   // the better source, it is the only one.
   agent_workspace_nodes: 'agentWorkspaces',
+  // A machine the subject enrolled as a local environment: THEIR device (label, public
+  // key, fingerprint, connection times), selected by ownerId. The env it backs stays
+  // excluded below as the drive's infrastructure; the device is the subject's.
+  drive_env_local: 'localEnvironments',
   ai_stream_sessions: 'streamState',
   // The durable frame log — the same generated content `ai_stream_sessions.parts`
   // holds, in the form that replaces it once the frame-log writer lands and that
@@ -207,6 +211,13 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // `machine_sprite_reclaims` above, holding a Fly app name awaiting a
     // confirmed kill.
     'app_hosting_reclaims',
+    // The published-app DEDICATED SUBSCRIPTION teardown outbox — same shape and
+    // same reasoning as `app_hosting_reclaims` immediately above, just pointed
+    // at a Stripe subscription id instead of a Fly app name. Nothing here is
+    // authored by or about the subject: it is provenance for a billing
+    // resource this app rescued from a cascade, not a record of anything the
+    // subject did or paid.
+    'app_hosting_stripe_reclaims',
     // The local mirror of a published app's MACHINE lifecycle — start/stop
     // boundaries kept because Fly retains only the last 20 events per machine.
     // Every column is fleet telemetry: a Fly app name, a machine id, a
@@ -218,6 +229,19 @@ export const EXCLUDED_TABLES: Readonly<Record<string, string>> = {
     // evidenced — this table is how we priced the drive's machine, not a record
     // of anything the subject did.
     'published_app_machine_events',
+    // The dev-preview RELAY state of a sandbox Sprite: which port a dev server
+    // was detected on, the name of the in-sprite relay service bound to 8080,
+    // and the Sprite INSTANCE it all belongs to. Every column is fleet
+    // plumbing — a VM identity, a port number, a process name, a stop flag —
+    // and none of it is authored by or about the subject. The honest
+    // objection is that the row exists BECAUSE the subject ran a dev server
+    // and PageSpace noticed; but the fact of that activity is already carried
+    // under `agentWorkspaces` (the session it happened in, its shells and
+    // their scrollback), and this row adds only how OUR proxy reaches it. It
+    // keys on the session or env (`workspaceId` / `envId`) the way
+    // `published_app_machine_events` keys on an app: the holder is the
+    // subject's record; this is our infrastructure's note about the holder.
+    'dev_preview_services',
     'rate_limit_buckets',
     'siem_delivery_cursors',
     'siem_delivery_receipts',

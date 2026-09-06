@@ -80,7 +80,7 @@ export const SheetStatusBar: React.FC<SheetStatusBarProps> = ({
             <DropdownMenuItem
               key={option}
               onSelect={() => onDensityChange(option)}
-              className={cn(density === option && 'bg-accent')}
+              className={cn(density === option && 'bg-primary-soft')}
             >
               {DENSITY_LABELS[option]}
             </DropdownMenuItem>

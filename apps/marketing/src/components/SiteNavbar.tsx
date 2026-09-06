@@ -7,6 +7,7 @@ import { NavbarAuthButtons } from "@/components/NavbarAuthButtons";
 
 const navLinks = [
   { href: "/pricing", label: "Pricing" },
+  { href: "/downloads", label: "Downloads" },
   { href: "/docs", label: "Docs" },
   { href: "/blog", label: "Blog" },
   { href: "/faq", label: "FAQ" },
@@ -25,7 +26,7 @@ export function SiteNavbar() {
           >
             <Image
               src="/android-chrome-192x192.png"
-              alt="PageSpace"
+              alt=""
               width={20}
               height={20}
               className="rounded"

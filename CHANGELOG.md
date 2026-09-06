@@ -7,6 +7,80 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
+  owner or admin can now create an Environment with `substrate: "local"` and a machine label,
+  and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that
+  presents the code with its own freshly generated key is pinned to that Environment, and from
+  then on proves it still holds the key every time it connects — the server never stores a
+  secret it could replay, and a used or expired code is worthless. Nothing runs on the machine
+  yet: this release ships the identity and enrollment half of the local-environment bridge; the
+  connection, the daemon and the sandbox host follow. Off by default (`LOCAL_ENVS_ENABLED`),
+  and a deployment that leaves it off answers exactly as before. Your data export
+  (`local-environments.json`) lists the machines you enrolled.
+
+- **The marketing home page is now "The AI for working"** — a full landing redesign that leads with
+  the real app as the hero, proves breadth with an interactive "Everything is a page" carousel across
+  all nine page types, and adds honest capability, automation ("Ask, or automate"), skills, and
+  trust ("Full access, safely") sections. The same pass fixes the on-page AI-visibility issues from
+  the AEO audit: exactly one `<h1>` (demo/mock titles are no longer headings), Review and
+  Organization structured data with a single consistent product description, and a `FAQPage`
+  schema added to the existing FAQ page so its answers are machine-readable.
+
+- **You can find friends and collaborators by name when inviting them to a drive** — the invite
+  member search now surfaces people you already have a relationship with — anyone you share a drive
+  with, or an accepted connection — by their display name or username, even when their profile is
+  private. Previously a private profile could only be reached by typing their exact email address.
+  Strangers with private profiles stay hidden, and no email is ever revealed by a name match, so this
+  opens no new way to discover people you don't already know.
+
+- **You can publish a drive Environment to a live URL** — the Environments UI now has a Publish
+  action, and the resulting app pane lives on the environment itself rather than in a separate
+  dashboard. Publishing snapshots the environment's filesystem, creates its hosting row and Fly app
+  the first time. A Dockerfile at the environment's root always wins; otherwise PageSpace generates
+  one for you — a `package.json` with a `start` script or a `main` entry becomes a Node Dockerfile
+  (running the `build` script first if there is one), and plain static content (an `index.html` with
+  no `package.json`) becomes a small nginx image. An environment with none of those is told so up
+  front, before anything is built, with what to add. Publishing then streams the
+  build to a running subdomain; publishing again is just a fresh build of the same app, so nothing
+  about the URL or its history changes underneath a re-deploy. The pane shows live status, the app's
+  usage drain, and per-app logs, plus stop / resume / unpublish controls that all go through the
+  existing lifecycle functions — never a direct status write. Unpublishing tears down the hosting row
+  and its Fly app but leaves the environment itself untouched, and if the app was on the flat-rate
+  always-on tier its subscription is cancelled through a Stripe-side reclaim outbox in the same
+  transaction as the delete, so a deleted app can never keep billing a card nobody can see anymore. A
+  parked app (out of credits, or over its daily running-time cap) now serves visitors a plain "paused"
+  page that also links back into PageSpace, where its owner sees exactly how to bring it back — top up
+  credits, or switch to the always-on tier, purchasable and cancellable right from the app pane. A
+  drive's custom domains can now be pointed at a published app instead of the drive's static site
+  (nullable per-domain, so nothing changes for a domain nobody touches) from the same Domains settings
+  page used for the static site today. The whole surface ships dark behind `APP_HOSTING_ENABLED` until
+  it's turned on for a deployment.
+
+- **New accounts get a short first-run walkthrough instead of a blank screen** — signing up now
+  opens a five-step introduction that explains what PageSpace is and ends by asking what you
+  actually want to get done, then hands that request straight to the assistant so your first
+  action is the real thing rather than a setup form. It starts by asking who the workspace is for
+  — just you, a small team, several teams, or a whole company — and everything after that is
+  written for the answer you gave: the example it shows you, the six things it demonstrates it can
+  do, how many assistants turn up when a job is too big for one, and the suggested requests at the
+  end. It configures nothing; your Home drive is already set up before the walkthrough appears.
+  What you type is saved to your About You memory page, so every assistant you work with from then
+  on already knows it. Any step can be skipped, and skipping is remembered. Self-hosted
+  installations are not shown suggestions that depend on services they do not have.
+
+- **An agent can default its sessions into one of its drive's Environments** — the Sandbox card in
+  an AI_CHAT agent's Settings screen now has an Environment picker alongside the existing on/off
+  switch. Pick one of the drive's persistent Environments (the same ones the Agents screen's spawn
+  palette already offers) and every new session started for that agent pre-selects it — visibly, with
+  a "Default" badge — instead of the ordinary ephemeral sandbox. It is a default, not a lock: "New
+  sandbox" and every other environment stay one arrow-key away, and any caller (the palette, a
+  claimed conversation, a programmatic spawn) that names an environment explicitly is always honored
+  over the agent's own preference. The default only ever applies while the agent's Sandbox switch is
+  on — turning it off leaves a previously chosen environment stored but inert, so nothing gets
+  spawned into a persistent, shared environment behind a switch that reads as off. Moving the agent's
+  page to a different drive clears the default automatically, since an Environment belongs to the
+  drive it was created in.
+
 - **The server can send an Android notification** — it has always accepted and stored Android push
   tokens, then dropped every message aimed at one: the send path had an iOS branch and a stub. It
   now delivers through Firebase Cloud Messaging. Nothing changes for anyone yet, because the app
@@ -221,6 +295,29 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 - **Sub-task progress wherever a task appears** — a task with sub-tasks now shows how many are done
   in the table, on kanban cards and on the narrow-screen cards. Previously none of them said, and
   the only hint was a count inside the expanded row.
+
+### Changed
+
+- **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
+  sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
+  longer sits on a pure-black floor, which is easier to read and reduces halation. Hover
+  highlights in dark mode are now a quiet gray rather than saturated blue, and the *selected*
+  item (active channel, drive, sidebar entry, agent history row) gets a soft blue tint instead,
+  so "hovered" and "selected" no longer look the same. Sidebars, the AI panel and the header sit
+  one tone above the page, and the hairlines between regions are a touch stronger, so the lighter
+  surfaces read as layered rather than flat. Primary text is a touch whiter and secondary text
+  slightly brighter to
+  keep contrast comfortable on the lighter surfaces (the marketing site's secondary text is a hair
+  darker, matching the app). The admin app, the marketing site (including
+  the hero demo), the code editor and terminal fallbacks, and the iOS/Android status bar and
+  splash colors all use the same new floor so nothing looks darker than the page around it.
+
+- **The default AI model is now Z.ai's GLM-5.3 Flash** — cheaper per token and a larger context
+  window than the previous default (OpenAI's GPT-5.6 Luna), and still on the free-tier allowlist.
+  New accounts pick it up automatically; anyone with an explicit model already selected keeps that
+  choice. Also refreshed the whole OpenRouter model catalog: many new models and providers are now
+  selectable (a lot more vendor choice), pricing and context-window figures were corrected against
+  OpenRouter's live data, and a handful of models OpenRouter no longer serves were removed.
 
 ### Fixed
 
@@ -694,6 +791,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   conversation uses, or about which sessions appear in your sidebar.
 
 ### Changed
+
+- **The agent now defaults to checking what it can do before saying a request is out of scope** —
+  it always documented the code sandbox, delegating to other agents, and scheduling recurring or
+  future work, but only as mechanical "how to call this tool" text easy to skim past. A new
+  unconditional disposition section nudges it to check its actual capabilities this conversation —
+  "write code," "process data," "get a second opinion" — before defaulting to the narrowest reading
+  of a request. The sandbox is now described as a general-purpose environment for open-ended work
+  (scripts, scrapers, data processing, calling external APIs) rather than only a place to edit an
+  existing repo, agents are told they can configure a new specialist rather than only discover
+  existing ones, and triggers now cover one-off future work, not only recurring schedules. Every
+  capability claim follows the tools the agent actually holds this turn (a per-agent allowlist, a
+  read-only conversation) so nothing is ever suggested that the agent can't back up.
 
 - **A tool call that gets a parameter name wrong now gets the answer back, not a lookup** — an
   agent that guessed `pageId` where a tool wanted `id`, or `repoUrl` where it wanted `repo_url`,

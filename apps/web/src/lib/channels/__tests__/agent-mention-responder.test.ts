@@ -115,7 +115,7 @@ const createAskAgentSuccess = (response: string) => ({
     isNewConversation: false,
     callDepth: 1,
     provider: 'openai',
-    model: 'openai/gpt-5.3-chat',
+    model: 'openai/gpt-5.4-nano',
     toolsEnabled: 1,
     toolCalls: 0,
     steps: 1,

@@ -334,6 +334,21 @@ describe('AgentsSidebar', () => {
     expect(mockFetchWithAuth).toHaveBeenCalledWith('/api/agent-workspaces?driveId=drive-1');
   });
 
+  test('tints the selected session row with the selected token, not the hover token', async () => {
+    useAgentSurfaceStore.setState({ selectedSessionId: WS });
+
+    renderSidebar();
+
+    await screen.findByText('api refactor');
+    // The RowMenu wrapper is the element that carries the row's fill. Split into
+    // class TOKENS so the inactive `hover:bg-accent` cannot satisfy a substring
+    // match — hover and selected are deliberately different tokens now.
+    const row = screen.getByTestId(`sidebar-session-${WS}`).firstElementChild as HTMLElement;
+    const tokens = row.className.split(/\s+/);
+    expect(tokens).toContain('bg-primary-soft');
+    expect(tokens).not.toContain('bg-accent');
+  });
+
   test('refuses when signed out, and makes no request on their behalf', () => {
     mockUseAuth.mockReturnValue({ user: null, isLoading: false });
 

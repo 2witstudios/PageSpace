@@ -81,7 +81,7 @@ vi.mock('@/lib/ai/core/ai-tools', () => ({
 }));
 vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   DEFAULT_PROVIDER: 'openai',
-  DEFAULT_MODEL: 'openai/gpt-5.3-chat',
+  DEFAULT_MODEL: 'openai/gpt-5.4-nano',
   ONPREM_ALLOWED_PROVIDERS: new Set(['ollama', 'lmstudio', 'azure_openai']),
   // Cloud models are vendor-prefixed; treat any 'vendor/model' id as valid here.
   isValidModel: (_provider: string, model: string) =>

@@ -81,7 +81,7 @@ export const WebFetchRenderer: React.FC<WebFetchRendererProps> = memo(function W
 
       {content ? (
         <div
-          className="bg-white dark:bg-gray-900 overflow-auto"
+          className="bg-card overflow-auto"
           style={{ maxHeight: `${maxHeight}px` }}
         >
           <div className={PROSE_STYLES} dangerouslySetInnerHTML={{ __html: html }} />

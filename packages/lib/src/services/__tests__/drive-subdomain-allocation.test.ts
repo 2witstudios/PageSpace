@@ -1,5 +1,11 @@
 import { describe, it, expect, vi } from 'vitest'
-import { allocateUniqueSubdomainWithRetry, isUniqueViolation } from '../subdomain-allocation'
+import {
+  allocateUniqueSubdomainWithRetry,
+  isUniqueViolation,
+  subdomainCollisionPrefix,
+  SUBDOMAIN_COLLISION_PREFIX_LENGTH,
+} from '../subdomain-allocation'
+import { resolveUniquePublishSubdomain } from '../../validators/subdomain'
 
 describe('allocateUniqueSubdomainWithRetry', () => {
   it('given a free candidate on the first attempt, should return it without retrying', async () => {
@@ -74,6 +80,38 @@ describe('allocateUniqueSubdomainWithRetry', () => {
     const result = await allocateUniqueSubdomainWithRetry({ base: 'acme', fetchTaken, attempt })
     expect(result).toBe('acme') // NOT 'acme-2'
     expect(attempt).toHaveBeenCalledWith('acme-2')
+  })
+})
+
+describe('subdomainCollisionPrefix', () => {
+  it('given a short base, should return the whole normalized base', () => {
+    expect(subdomainCollisionPrefix('Acme')).toBe('acme')
+  })
+
+  it('given an empty/reserved-only base, should fall back the same way the allocator does', () => {
+    expect(subdomainCollisionPrefix('!!!')).toBe('drive')
+  })
+
+  it('given a base longer than the prefix length, should truncate to SUBDOMAIN_COLLISION_PREFIX_LENGTH', () => {
+    const longBase = 'a'.repeat(SUBDOMAIN_COLLISION_PREFIX_LENGTH + 20)
+    const prefix = subdomainCollisionPrefix(longBase)
+    expect(prefix).toHaveLength(SUBDOMAIN_COLLISION_PREFIX_LENGTH)
+    expect(prefix).toBe('a'.repeat(SUBDOMAIN_COLLISION_PREFIX_LENGTH))
+  })
+
+  it('never hides a real collision: every candidate the allocator could produce starts with the prefix, for many suffixes', () => {
+    // Mutation-style correctness check: simulate a long run of collisions and
+    // confirm every candidate the PURE allocator core actually proposes still
+    // starts with the prefix a `fetchTaken` query would filter on — i.e. the
+    // bounded query could never have excluded a row that matters.
+    const base = 'my-published-app-environment-name'
+    const prefix = subdomainCollisionPrefix(base)
+    const taken: string[] = []
+    for (let i = 0; i < 50; i += 1) {
+      const candidate = resolveUniquePublishSubdomain(base, taken)
+      expect(candidate.startsWith(prefix)).toBe(true)
+      taken.push(candidate)
+    }
   })
 })
 

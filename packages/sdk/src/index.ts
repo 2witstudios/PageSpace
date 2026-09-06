@@ -196,6 +196,30 @@ export type { TaskCompletionGatedError } from './operations/tasks.js';
 // Workflows (Phase 3 task 8).
 export { createWorkflow, deleteWorkflow, listWorkflows, updateWorkflow } from './operations/workflows.js';
 
+// Uploads — the two API legs of a direct-to-storage upload, plus the slot release.
+export { cancelUpload, completeUpload, needsUpload, presignUpload } from './operations/uploads.js';
+export type { PresignFastPath, PresignPutTarget, PresignResult, UploadedFilePage } from './operations/uploads.js';
+
+// `uploadFile` composes presign -> PUT -> complete, including the binary leg
+// that cannot travel through the SDK transport. This is what callers holding
+// bytes should use; the three operations above are the building blocks.
+export {
+  assertSecureStorageUrl,
+  computeContentHash,
+  InsecureStorageTargetError,
+  StorageUploadError,
+  uploadFile,
+  UploadSlotLostError,
+} from './uploads/upload-file.js';
+export type {
+  OperationInvoker,
+  UploadBytes,
+  UploadFileInput,
+  UploadFileOptions,
+  UploadFileResult,
+} from './uploads/upload-file.js';
+
+
 // Transport primitive types needed to declare custom operations. buildRequest/
 // parseResponse/executeRequest stay internal — the facade is the only caller.
 export type { HttpMethod } from './transport/types.js';
@@ -205,5 +229,5 @@ export { DEFAULT_RETRY_POLICY } from './retry.js';
 export type { Jitter, RetryPolicy } from './retry.js';
 
 // The facade.
-export { PageSpaceClient } from './client.js';
+export { PageSpaceClient, resolveTimeoutMs } from './client.js';
 export type { ClientNamespaces, PageSpaceClientOptions } from './client.js';

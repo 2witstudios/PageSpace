@@ -126,7 +126,7 @@ export const validatePublishSubdomain = (input: string): SubdomainValidationResu
  * A safe, non-empty fallback base when a drive slug normalizes to empty or reserved.
  * Uses 'drive' as the canonical default (reserved names are checked separately below).
  */
-const DEFAULT_SUBDOMAIN_BASE = 'drive'
+export const DEFAULT_SUBDOMAIN_BASE = 'drive'
 
 /**
  * Clamp a base so that `base-SUFFIX` always fits within MAX_SUBDOMAIN_LENGTH

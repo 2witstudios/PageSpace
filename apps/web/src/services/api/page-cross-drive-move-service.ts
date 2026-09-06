@@ -177,7 +177,11 @@ async function cascadeDriveIdToDescendants(
     }
 
     next.forEach((id) => visited.add(id));
-    await tx.update(pages).set({ driveId: newDriveId }).where(inArray(pages.id, next));
+    // defaultEnvId is drive-scoped (FK'd to that drive's own drive_envs row) —
+    // carrying it across a drive move would point a descendant AI_CHAT agent
+    // at an environment it can no longer reach, silently 404ing every spawn
+    // that relies on the default until someone notices and resets it by hand.
+    await tx.update(pages).set({ driveId: newDriveId, defaultEnvId: null }).where(inArray(pages.id, next));
     moved.push(...next);
     frontier = next;
   }
@@ -310,6 +314,10 @@ export async function movePagesToDrive(
             parentId: targetParentId,
             position: nextPosition,
             updatedAt: new Date(),
+            // Same reasoning as the descendant cascade below: an env is
+            // drive-scoped, so a moved root's default (if any) belonged to
+            // the drive it just left.
+            ...(page.driveId !== targetDriveId ? { defaultEnvId: null } : {}),
           })
           .where(eq(pages.id, page.id));
 

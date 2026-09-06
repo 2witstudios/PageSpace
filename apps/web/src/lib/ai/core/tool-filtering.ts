@@ -259,6 +259,17 @@ export const SANDBOX_COMPUTE_TOOL_NAMES: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * Whether any name in `toolNames` is a COMPUTE sandbox tool — the check both
+ * `describeSandboxTierCaveat` (agent-tool-surface.ts) and the system prompt's
+ * sandbox-guidance gate (system-prompt.ts) need, centralized here next to the
+ * set it tests against rather than each caller re-deriving its own
+ * `.some((name) => SET.has(name))` scan.
+ */
+export function hasSandboxComputeTools(toolNames: readonly string[]): boolean {
+  return toolNames.some((name) => SANDBOX_COMPUTE_TOOL_NAMES.has(name));
+}
+
+/**
  * Apply the PAYER-tier gate: an ineligible (free-tier) payer loses the
  * compute tools but keeps the chat-only session orchestration family —
  * showing bash/git/shell tools that hard-fail `tier_ineligible` is the UX

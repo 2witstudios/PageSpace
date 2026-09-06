@@ -19,7 +19,7 @@
  * (tenant, onprem): see {@link isDedicatedTierPurchasable}.
  */
 
-import { and, eq } from '@pagespace/db/operators';
+import { and, eq, sql } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { publishedApps, type PublishedApp, type PublishedAppTier } from '@pagespace/db/schema/published-apps';
 import {
@@ -386,7 +386,7 @@ export interface DedicatedSubscriptionFacts {
  * from the very event the guard rejected.
  */
 export interface MirrorWriteResult {
-  outcome: 'applied' | 'stale_event' | 'terminal_absorbed';
+  outcome: 'applied' | 'stale_event' | 'terminal_absorbed' | 'app_destroying';
   row: PublishedAppSubscription | null;
 }
 
@@ -412,6 +412,34 @@ export async function recordDedicatedSubscription(
   const incomingEventCreated = facts.stripeEventCreated ?? null;
 
   return db.transaction(async (tx) => {
+    // Locked FIRST, before the `publishedAppSubscriptions` lock below —
+    // consistent ordering with `destroyPublishedApp`'s own transaction, which
+    // takes the same `published_apps` lock before touching subscriptions,
+    // closes a real race rather than narrowing it: `destroyPublishedApp`
+    // reads `publishedAppSubscriptions` for a subscription to rescue into the
+    // Stripe reclaim outbox, then deletes `published_apps` (cascading away
+    // the subscription mirror). Without this lock, a purchase's INSERT could
+    // land between that read and that delete — the newly-inserted mirror row
+    // would be cascaded away with no reclaim ever written, stranding a live,
+    // still-billing Stripe subscription with no local pointer at all. Taking
+    // the SAME row lock here means whichever transaction acquires it first
+    // fully completes (and, for the destroy side, either sees the purchase's
+    // committed row or excludes it entirely) before the other proceeds — no
+    // interleaving can land between the two halves of either operation.
+    const { rows: appRows } = await tx.execute(
+      sql`SELECT status FROM ${publishedApps} WHERE ${publishedApps.id} = ${facts.publishedAppId} FOR UPDATE`,
+    );
+    const appStatus = (appRows[0] as { status?: string } | undefined)?.status;
+
+    if (appStatus === undefined || appStatus === 'destroying') {
+      loggers.ai.warn('Dedicated subscription mirror refused — app is being unpublished', {
+        publishedAppId: facts.publishedAppId,
+        stripeSubscriptionId: facts.stripeSubscriptionId,
+        appStatus: appStatus ?? 'not_found',
+      });
+      return { outcome: 'app_destroying', row: null };
+    }
+
     // Locked for the read so the decision is made against state that cannot change
     // underneath it. Two Stripe deliveries racing the same subscription is exactly
     // the situation this guard exists for, so reading without the lock would leave

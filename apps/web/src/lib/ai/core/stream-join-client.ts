@@ -1,5 +1,6 @@
 import type { UIMessage, UIMessageChunk } from 'ai';
 import { createPartsFolder } from '@/lib/ai/streams/foldChunksToParts';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 type UIMessagePart = UIMessage['parts'][number];
 
@@ -52,12 +53,19 @@ export async function consumeStreamJoin(
 ): Promise<{ aborted: boolean; resumeFromSeq?: number; reload?: boolean }> {
   let response: Response;
   try {
-    response = await fetch(
+    // `fetchWithAuth`, not plain `fetch`. The desktop shell has no session
+    // cookie — it attaches a Bearer per API call — and `middleware.ts` 401s a
+    // cookie-less API request before the route handler runs, so a plain fetch
+    // here could never join a stream on desktop at all. It also buys the
+    // refresh-and-retry that every other authenticated call in the app gets:
+    // a cookie that goes stale mid-stream stops being a dead join.
+    //
+    // Safe for a streaming response: fetchWithAuth returns the Response
+    // untouched on the success path and only ever `.clone()`s on error paths,
+    // so the body is not consumed before it is read below.
+    response = await fetchWithAuth(
       `/api/ai/chat/stream-join/${encodeURIComponent(messageId)}?fromSeq=${fromSeq}`,
-      {
-        credentials: 'include',
-        signal,
-      },
+      { signal },
     );
   } catch (err) {
     if (signal.aborted || (err instanceof Error && err.name === 'AbortError')) {

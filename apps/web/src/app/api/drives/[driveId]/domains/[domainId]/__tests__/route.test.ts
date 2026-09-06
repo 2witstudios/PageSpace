@@ -26,12 +26,14 @@ vi.mock('@pagespace/lib/logging/logger-config', () => ({
 
 const dbDelete = vi.fn();
 const dbUpdate = vi.fn();
+const dbSelect = vi.fn();
 const findFirst = vi.fn();
 const dbTransaction = vi.fn();
 vi.mock('@pagespace/db/db', () => ({
   db: {
     delete: (...args: unknown[]) => dbDelete(...args),
     update: (...args: unknown[]) => dbUpdate(...args),
+    select: (...args: unknown[]) => dbSelect(...args),
     query: { customDomains: { findFirst: (...args: unknown[]) => findFirst(...args) } },
     transaction: (...args: unknown[]) => dbTransaction(...args),
   },
@@ -50,6 +52,13 @@ vi.mock('@pagespace/db/schema/custom-domains', () => ({
     createdAt: 'col_createdAt',
     publishLandingPageId: 'col_publishLandingPageId',
     publishNotFoundPageId: 'col_publishNotFoundPageId',
+    publishedAppId: 'col_publishedAppId',
+  },
+}));
+vi.mock('@pagespace/db/schema/published-apps', () => ({
+  publishedApps: {
+    id: 'col_app_id',
+    driveId: 'col_app_driveId',
   },
 }));
 
@@ -401,5 +410,80 @@ describe('PATCH /api/drives/[driveId]/domains/[domainId] (landing/404 page overr
 
     const res = await PATCH(makePatchReq({ publishLandingPageId: 'page-1' }), ctx());
     expect(res.status).toBe(500);
+  });
+});
+
+describe('PATCH /api/drives/[driveId]/domains/[domainId] (publishedAppId target)', () => {
+  const makePatchReq = (body: unknown): Request =>
+    ({ json: () => Promise.resolve(body) } as unknown as Request);
+
+  const wireAppLookup = (found: { id: string; driveId: string } | undefined) => {
+    dbSelect.mockReturnValue({
+      from: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ limit: vi.fn().mockResolvedValue(found ? [found] : []) }),
+      }),
+    });
+  };
+
+  const wireUpdate = (updated: unknown) => {
+    dbUpdate.mockReturnValue({
+      set: vi.fn().mockReturnValue({
+        where: vi.fn().mockReturnValue({ returning: vi.fn().mockResolvedValue([updated]) }),
+      }),
+    });
+  };
+
+  // Mirrors createPublishedApp's own env/drive mismatch check
+  // (packages/lib/src/services/app-hosting/provisioner.ts) — a publishedAppId
+  // belonging to a DIFFERENT drive than the domain being patched must be
+  // refused before any write, exactly like a stranger's env id would be.
+  it('refuses a publishedAppId belonging to a different drive', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireAppLookup({ id: 'app-1', driveId: 'some-other-drive' });
+
+    const res = await PATCH(makePatchReq({ publishedAppId: 'app-1' }), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(404);
+    expect(body.error).toBe('Published app not found in this drive');
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses a publishedAppId that does not exist at all', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireAppLookup(undefined);
+
+    const res = await PATCH(makePatchReq({ publishedAppId: 'no-such-app' }), ctx());
+
+    expect(res.status).toBe(404);
+    expect(dbUpdate).not.toHaveBeenCalled();
+  });
+
+  it('sets publishedAppId when the app belongs to the same drive', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireAppLookup({ id: 'app-1', driveId: DRIVE_ID });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishedAppId: 'app-1' });
+
+    const res = await PATCH(makePatchReq({ publishedAppId: 'app-1' }), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.domain.publishedAppId).toBe('app-1');
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'data.write',
+      details: expect.objectContaining({ operation: 'set-custom-domain-target', publishedAppId: 'app-1' }),
+    }));
+  });
+
+  it('clears publishedAppId (falls back to the static site) when null is sent, without an app lookup', async () => {
+    findFirst.mockResolvedValue({ id: DOMAIN_ID, hostname: 'acme.com', status: 'active' });
+    wireUpdate({ id: DOMAIN_ID, driveId: DRIVE_ID, hostname: 'acme.com', publishedAppId: null });
+
+    const res = await PATCH(makePatchReq({ publishedAppId: null }), ctx());
+    const body = await res.json();
+
+    expect(res.status).toBe(200);
+    expect(body.domain.publishedAppId).toBeNull();
+    expect(dbSelect).not.toHaveBeenCalled();
   });
 });

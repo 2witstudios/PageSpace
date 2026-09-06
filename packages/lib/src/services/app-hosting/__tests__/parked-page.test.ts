@@ -8,7 +8,7 @@
  * has none. And the rendered page must be self-contained and escape the one
  * value it interpolates, since that value is a request header.
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { renderAppRouterPage, retryAfterFor, statusCodeFor } from '../parked-page';
 import type { AppRouteDecision } from '../router-core';
 import { assert } from '../../../__tests__/riteway';
@@ -121,5 +121,47 @@ describe('renderAppRouterPage — self-contained, and it escapes the host header
     const html = renderAppRouterPage(decision, 'acme.pagespace.app');
     expect(html.startsWith('<!doctype html>')).toBe(true);
     expect(html).toMatch(/<title>.+<\/title>/);
+  });
+});
+
+describe('manageHref — the owner link deep-links to the app pane, not the drive root', () => {
+  const originalWebAppUrl = process.env.WEB_APP_URL;
+
+  beforeEach(() => {
+    process.env.WEB_APP_URL = 'https://app.pagespace.ai';
+  });
+
+  afterEach(() => {
+    process.env.WEB_APP_URL = originalWebAppUrl;
+  });
+
+  it('given a decision with both driveId and envId, should link to the drive dashboard with an env deep-link', () => {
+    const html = renderAppRouterPage(
+      { kind: 'parked', reason: 'out_of_credits', driveId: 'drive_1', envId: 'env_1' },
+      'acme.pagespace.app',
+    );
+    expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
+  });
+
+  it('given a DEPLOYING decision with driveId and envId, should still include the manage link — an owner must be able to open the app pane while it is deploying', () => {
+    const html = renderAppRouterPage(
+      { kind: 'unavailable', reason: 'deploying', driveId: 'drive_1', envId: 'env_1' },
+      'acme.pagespace.app',
+    );
+    expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1?env=env_1');
+  });
+
+  it('given a decision with driveId but no envId, should degrade to the drive root', () => {
+    const html = renderAppRouterPage(
+      { kind: 'unavailable', reason: 'failed', driveId: 'drive_1' },
+      'acme.pagespace.app',
+    );
+    expect(html).toContain('https://app.pagespace.ai/dashboard/drive_1');
+    expect(html).not.toContain('?env=');
+  });
+
+  it('given a decision with no driveId at all, should render no manage link', () => {
+    const html = renderAppRouterPage({ kind: 'unavailable', reason: 'hosting_disabled' }, 'acme.pagespace.app');
+    expect(html).not.toContain('/dashboard/');
   });
 });

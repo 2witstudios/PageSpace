@@ -40,15 +40,19 @@ const ADMIN_LINK: DriveLink = {
   shareUrl: SHARE_URL_2,
 };
 
+// Both halves of the `Promise.allSettled` now go through `fetchWithAuth`, so
+// they share one mock queue — links first, roles second, matching the call
+// order in the hook. The links call used to be a plain `fetch` with
+// `credentials: 'include'`, which on desktop carries neither Bearer nor cookie.
 function mockLinksFetch(data: unknown) {
-  vi.spyOn(global, 'fetch').mockResolvedValueOnce({
+  vi.mocked(fetchWithAuth).mockResolvedValueOnce({
     ok: true,
     json: async () => data,
   } as Response);
 }
 
 function mockLinksFetchReject() {
-  vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('network error'));
+  vi.mocked(fetchWithAuth).mockRejectedValueOnce(new Error('network error'));
 }
 
 function mockRolesFetch(roles: Array<{ id: string; name: string; isDefault: boolean; color?: string | null }> = []) {

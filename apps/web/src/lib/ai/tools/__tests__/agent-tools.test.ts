@@ -498,7 +498,7 @@ describe('agent-tools', () => {
         systemPrompt: null,
         enabledTools: null,
         aiProvider: 'openai',
-        aiModel: 'openai/gpt-5.3-chat',
+        aiModel: 'openai/gpt-5.4-nano',
         agentDefinition: null,
         visibleToGlobalAssistant: false,
         includeDrivePrompt: false,

@@ -241,6 +241,46 @@ export function readSessionInfoId(message: unknown): string | undefined {
 }
 
 /**
+ * A `port_opened` / `port_closed` control frame from an exec session's
+ * WebSocket, parsed from the same `message` event stream `readSessionInfoId`
+ * reads (the RC SDK ships no typed frame union, so the wire shape is validated
+ * defensively rather than trusted).
+ *
+ * Live-verified (docs/spikes/2026-08-dev-preview-sprite-services-spike.md §5):
+ * the runtime emits `port_opened` when a process binds a port inside a TTY
+ * session — `{"type":"port_opened","port":8124,"address":"10.0.0.1","pid":383}`
+ * — and emits NOTHING on a plain non-TTY `spawn` running the same server (the
+ * filter is server-side; the SDK forwards every TEXT frame regardless of TTY).
+ * `port_closed` is typed by the SDK but was never observed on the wire, so
+ * treat it as best-effort if it ever arrives: never build teardown logic on it.
+ */
+export interface SpritePortNotification {
+  type: 'port_opened' | 'port_closed';
+  port: number;
+  address?: string;
+  pid?: number;
+}
+
+/**
+ * Pure: parse a port notification from an exec-WS `message` frame, or
+ * undefined for every other frame (`session_info`, resize acks, raw text) and
+ * for a malformed port payload. Data only — what a caller DOES about a port
+ * opening (classification, exposure) is deliberately not this layer's job.
+ */
+export function readPortNotification(message: unknown): SpritePortNotification | undefined {
+  if (typeof message !== 'object' || message === null) return undefined;
+  const frame = message as { type?: unknown; port?: unknown; address?: unknown; pid?: unknown };
+  if (frame.type !== 'port_opened' && frame.type !== 'port_closed') return undefined;
+  if (typeof frame.port !== 'number' || !Number.isInteger(frame.port)) return undefined;
+  return {
+    type: frame.type,
+    port: frame.port,
+    ...(typeof frame.address === 'string' ? { address: frame.address } : {}),
+    ...(typeof frame.pid === 'number' ? { pid: frame.pid } : {}),
+  };
+}
+
+/**
  * The subset of the SDK's checkpoint/restore progress stream the driver
  * consumes — mirrors the real `CheckpointStream`/`RestoreStream` (both expose
  * `processAll`). Messages are `{type: 'info'|'stdout'|'stderr'|'error', data?,
@@ -258,6 +298,167 @@ export interface SpriteCheckpointStreamLike {
   /** Close the stream — called on a timeout so a stalled read doesn't hold the
    *  underlying connection open past the point we've given up waiting on it. */
   close(): void;
+}
+
+/**
+ * A service's runtime status, as the services API reports it. The full union
+ * comes from the SDK's `ServiceState` type; live-verified transitions
+ * (docs/spikes/2026-08-dev-preview-sprite-services-spike.md §4):
+ * `running` (fresh create auto-starts), and — the trap — `stopService` lands in
+ * **`failed`** (`error: "exited with code 143"`, the runtime recording its own
+ * SIGTERM as a crash), NOT the documented sticky `stopped`, which was never
+ * observed. Code must not treat `status === 'stopped'` as "the user stopped
+ * it"; stopped-intent has to be tracked by the caller.
+ */
+export type SpriteServiceStatus = 'stopped' | 'starting' | 'running' | 'stopping' | 'failed';
+
+/** The state slice of a service record the driver consumes. Only fields
+ *  verified on the wire AND declared by the SDK are typed here — the wire's
+ *  timestamps are snake_case (`started_at`) while the SDK types camelCase, so
+ *  neither spelling is trustworthy and both are deliberately omitted. */
+export interface SpriteServiceStateLike {
+  status: SpriteServiceStatus;
+  pid?: number;
+  /** e.g. `"exited with code 143"` after a stop — see {@link SpriteServiceStatus}. */
+  error?: string;
+}
+
+/**
+ * A service as reported by GET `/v1/sprites/{name}/services`. `needs` is
+ * `[]` from the list endpoint but `null` from the get-one endpoint (verified),
+ * so it is typed to tolerate both.
+ *
+ * `httpPort` is persisted and echoed back but — live-verified, the spike's
+ * headline finding — has NO routing effect: the sprite URL always proxies to
+ * port 8080, regardless of any service's `httpPort`, and start-on-request does
+ * not exist in shipped behavior. Do not build routing decisions on this field.
+ */
+export interface SpriteServiceRecordLike {
+  name: string;
+  cmd: string;
+  args: string[];
+  needs?: string[] | null;
+  httpPort?: number;
+  state?: SpriteServiceStateLike;
+}
+
+/** Request body for PUT `/v1/sprites/{name}/services/{svc}` (create-or-update). */
+export interface SpriteServiceRequestLike {
+  cmd: string;
+  args?: string[];
+  needs?: string[];
+  httpPort?: number;
+}
+
+/**
+ * One NDJSON event from a service create/start/stop log stream. Only `type` is
+ * load-bearing here; the SDK's `ServiceLogEvent` types richer fields but the
+ * wire diverges from them (verified: the completion event carries `log_files`,
+ * snake_case, where the SDK types `logFiles`), so nothing else is trusted.
+ */
+export interface SpriteServiceLogEventLike {
+  type: string;
+  data?: string;
+}
+
+/** The service-operation NDJSON stream subset the driver consumes — same
+ *  shape/contract as {@link SpriteCheckpointStreamLike}. */
+export interface SpriteServiceLogStreamLike {
+  processAll(handler: (event: SpriteServiceLogEventLike) => void | Promise<void>): Promise<void>;
+  close(): void;
+}
+
+/**
+ * Sprite-URL auth modes accepted by `updateURLSettings` (both live-verified):
+ * `'sprite'` (the default — anonymous/invalid/raw-Fly-token requests get a 302
+ * to an interactive SSO flow at sprites.dev, NOT a 401; `Bearer
+ * <org-minted sprites token>` gets through) and `'public'` (no auth at all).
+ * v1 preview policy keeps every sprite on `'sprite'` — 'public' exists on this
+ * seam because the platform verifies it, but exposure decisions belong to the
+ * (future) decision core and its permission gate, never to this driver.
+ */
+export type SpriteUrlAuth = 'public' | 'sprite';
+
+/** URL auth settings as read back from the API. `auth` is typed open (string)
+ *  because the wire returns a superset of the SDK's `URLSettings` — verified:
+ *  `{ auth: 'sprite', private_access: 'admins' }`. */
+export interface SpriteUrlSettingsLike {
+  auth?: string;
+}
+
+/**
+ * Pure: the failure text of an `error`-type service log event, or undefined
+ * for every other event. Mirrors {@link checkpointStreamErrorMessage}. The
+ * `error` event type is declared by the SDK but was not observed live
+ * (verified events: `started`/`complete`/`stopping`/`stopped`), so this is a
+ * defensive net, not a load-bearing path.
+ */
+export function serviceLogErrorMessage(event: SpriteServiceLogEventLike): string | undefined {
+  if (event.type !== 'error') return undefined;
+  return event.data ?? 'service log stream reported an error';
+}
+
+/**
+ * The monitoring window passed to createService/startService. The stream stays
+ * open for this long after the operation lands (verified: `started` →
+ * `complete` arrive ~`duration` apart), so it is kept short — it is latency on
+ * every create/start. '5s' is the value every live spike run used.
+ */
+export const SERVICE_LOG_MONITOR_WINDOW = '5s';
+
+/** Wall-clock cap on draining a service log stream — the SDK exposes no
+ *  timeout of its own, and every other network op in this driver is bounded. */
+const SERVICE_STREAM_TIMEOUT_MS = 30_000;
+
+/**
+ * Drain a service create/start/stop log stream to completion, bounded, and
+ * surface the first `error`-type event as a rejection. The events themselves
+ * are discarded: the wire's completion payload diverges from the SDK types
+ * (see {@link SpriteServiceLogEventLike}) and no caller consumes it yet.
+ */
+export function drainServiceLogStream(
+  stream: SpriteServiceLogStreamLike,
+  timeoutMs: number = SERVICE_STREAM_TIMEOUT_MS,
+): Promise<void> {
+  let settled = false;
+  return new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      try {
+        stream.close();
+      } catch {
+        // Best-effort cleanup only; the timeout error below is what propagates.
+      }
+      reject(new Error(`Sprite service operation timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+
+    let streamError: string | undefined;
+    stream
+      .processAll((event) => {
+        if (streamError === undefined) {
+          streamError = serviceLogErrorMessage(event);
+        }
+      })
+      .then(
+        () => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (streamError !== undefined) {
+            reject(new Error(`Sprite service operation failed: ${streamError}`));
+          } else {
+            resolve();
+          }
+        },
+        (error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          reject(error);
+        },
+      );
+  });
 }
 
 /** The Sprite instance subset the driver consumes. */
@@ -332,6 +533,44 @@ export interface SpriteInstanceLike {
    * gone — see {@link killSpriteSession}.
    */
   killSession(sessionId: string): Promise<void>;
+  /**
+   * The sprite's URL (`https://<name>-<org>.sprites.app`), hydrated from the
+   * API response like {@link id} — present from creation, no service required.
+   * Live-verified: the URL is a proxy to **port 8080 in the sprite, always** —
+   * a service's `httpPort` does not rewire it (see
+   * {@link SpriteServiceRecordLike}) — and a request to it WAKES a paused
+   * sprite even when nothing is listening (the request then hangs, no 502).
+   * Optional for the same reason `id` is: the RC SDK types it optional, and a
+   * build that stops reporting it must degrade to "no URL known".
+   */
+  readonly url?: string;
+  /** URL auth settings hydrated alongside {@link url}. Default `auth: 'sprite'`. */
+  readonly urlSettings?: SpriteUrlSettingsLike;
+  /** Update the sprite URL's auth mode (PATCH, effective immediately — verified). */
+  updateURLSettings(settings: { auth: SpriteUrlAuth }): Promise<void>;
+  /** List the sprite's services with their runtime state. */
+  listServices(): Promise<SpriteServiceRecordLike[]>;
+  /**
+   * Create-or-update a service (PUT — idempotent on the name). AUTO-STARTS the
+   * process and returns the startup log stream; the caller must drain it
+   * (see {@link drainServiceLogStream}). `duration` is the monitoring window
+   * the stream stays open for.
+   */
+  createService(
+    name: string,
+    config: SpriteServiceRequestLike,
+    duration?: string,
+  ): Promise<SpriteServiceLogStreamLike>;
+  /** Start a stopped/failed service. Returns the same kind of log stream. */
+  startService(name: string, duration?: string): Promise<SpriteServiceLogStreamLike>;
+  /**
+   * Stop a service (SIGTERM, then `timeout` before escalation). Sticky in
+   * effect — nothing restarts it — but the recorded state is `failed`, not
+   * `stopped`; see {@link SpriteServiceStatus}.
+   */
+  stopService(name: string, timeout?: string): Promise<SpriteServiceLogStreamLike>;
+  /** Remove a service definition (404s→rejects on an unknown name — verified 204 on success). */
+  deleteService(name: string): Promise<void>;
 }
 
 /** The injectable Sprites SDK statics. Defaults to the real `@fly/sprites`. */

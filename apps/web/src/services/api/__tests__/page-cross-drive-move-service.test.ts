@@ -339,6 +339,47 @@ describe('movePagesToDrive', () => {
     });
   });
 
+  // ── defaultEnvId clearing (review — chatgpt-codex-connector, PR #2513) ──
+  //
+  // An AI_CHAT agent's `defaultEnvId` is FK'd to a `drive_envs` row that
+  // belongs to the DRIVE it was assigned in — moving the page to another
+  // drive without clearing it would leave the agent pointing at an
+  // environment it can no longer reach, silently 404ing every spawn that
+  // relies on the default until someone notices and resets it by hand.
+
+  describe('defaultEnvId clearing on cross-drive move', () => {
+    it('clears the root page\'s defaultEnvId when it actually crosses drives', async () => {
+      await run();
+
+      expect(txUpdateSet).toHaveBeenCalledWith(
+        expect.objectContaining({ driveId: TARGET_DRIVE, defaultEnvId: null }),
+      );
+    });
+
+    it('does NOT touch defaultEnvId when the page already lives in the target drive (same-drive reparent)', async () => {
+      vi.mocked(db.query.pages.findMany).mockResolvedValue([
+        sourcePage({ driveId: TARGET_DRIVE }),
+      ] as never);
+
+      await run();
+
+      const rootCall = txUpdateSet.mock.calls.find((call) => call[0].driveId === TARGET_DRIVE);
+      expect(rootCall?.[0]).not.toHaveProperty('defaultEnvId');
+    });
+
+    it('clears defaultEnvId on every descendant rewritten by the cascade', async () => {
+      txQueryPagesFindMany
+        .mockResolvedValueOnce([{ id: 'child-1' }, { id: 'child-2' }])
+        .mockResolvedValue([]);
+
+      await run();
+
+      // Call 0 is the root move (already covered above); call 1 is the
+      // single-level cascade batch.
+      expect(txUpdateSet.mock.calls[1][0]).toEqual({ driveId: TARGET_DRIVE, defaultEnvId: null });
+    });
+  });
+
   // ── Descendant cascade ────────────────────────────────────────────────
 
   describe('descendant cascade', () => {

@@ -4,6 +4,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('@pagespace/lib/monitoring/ai-monitoring', () => ({
   MODEL_CONTEXT_WINDOWS: {
     'openai/gpt-5.6-luna': 1050000,
+    'z-ai/glm-5.3-flash': 1310720,
   },
 }));
 
@@ -15,8 +16,8 @@ describe('GET /api/ai/models', () => {
     expect(res.status).toBe(200);
     const body = await res.json();
     expect(Array.isArray(body.providers)).toBe(true);
-    expect(body.defaultProvider).toBe('openai');
-    expect(body.defaultModel).toBe('openai/gpt-5.6-luna');
+    expect(body.defaultProvider).toBe('zai');
+    expect(body.defaultModel).toBe('z-ai/glm-5.3-flash');
   });
 
   it('includes a known model and never includes pricing', async () => {

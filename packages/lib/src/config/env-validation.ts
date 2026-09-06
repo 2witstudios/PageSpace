@@ -147,6 +147,18 @@ export const serverEnvSchema = z
     // validation; isCodeExecutionEnabled() enables only on the exact value 'true'.
     CODE_EXECUTION_ENABLED: z.string().optional(),
 
+    // Local environments (the user's own machine via the zero-trust bridge):
+    // cloud opt-in, same contract as CODE_EXECUTION_ENABLED — only the exact
+    // string 'true' enables (isLocalEnvsEnabled()). The signing key is the
+    // base64 PKCS#8 Ed25519 key every grant is signed with; optional here so a
+    // Sprite-only deployment validates, and loaded fail-closed only on a
+    // local-env path (loadServerSigningKey()).
+    LOCAL_ENVS_ENABLED: z.string().optional(),
+    // `.or('')`: a declared-but-blank placeholder reads as unset, like the
+    // other optional secrets here; the superRefine below is what requires a
+    // real value once the feature is on.
+    ENV_BRIDGE_SIGNING_KEY: z.string().min(1).optional().or(z.literal('')),
+
     // Server-held secret keying the sandbox session-key HMAC (see
     // services/sandbox/session-key.ts). A configured value must be >= 32 chars,
     // but a blank placeholder (SANDBOX_SESSION_SECRET=) is accepted — mirroring
@@ -268,6 +280,21 @@ export const serverEnvSchema = z
         message:
           'PUBLISHED_APPS_APEX must be set explicitly when APP_HOSTING_ENABLED=true — published apps run customer server code, so the apex they share has to be a deliberate, PSL-registered choice rather than a default',
         path: ['PUBLISHED_APPS_APEX'],
+      });
+    }
+
+    // Local environments sign every bridge grant with ENV_BRIDGE_SIGNING_KEY,
+    // and loadServerSigningKey() fails closed without it — which, at request
+    // time, is a generic 500 on the first local-env create. Boot is where an
+    // operator should learn the key is missing, and only once the feature is
+    // actually on: a deployment that never enables local envs must not be
+    // asked for a signing key.
+    if (data.LOCAL_ENVS_ENABLED === 'true' && !data.ENV_BRIDGE_SIGNING_KEY?.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true — it is the base64 PKCS#8 Ed25519 key every bridge grant is signed with and every enrolled machine pins; see .env.example for how to generate one',
+        path: ['ENV_BRIDGE_SIGNING_KEY'],
       });
     }
 

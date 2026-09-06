@@ -1,5 +1,4 @@
 import { ReactRenderer } from '@tiptap/react';
-import { Mention } from '@tiptap/extension-mention';
 import { useDriveStore } from '@/hooks/useDrive';
 import { MentionSuggestion, PageMentionData } from '@/types/mentions';
 import tippy, { Instance } from 'tippy.js';
@@ -8,6 +7,7 @@ import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 import { cn } from '@/lib/utils';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { TAB_TYPES, type TabType } from '@/components/mentions/MentionPicker';
+import { PageMentionNode, getMentionAttrs } from '@/lib/editor/page-mention-node';
 
 interface SuggestionListRef {
   onKeyDown: (props: { event: KeyboardEvent }) => boolean;
@@ -120,87 +120,6 @@ const TiptapSuggestionList = forwardRef<SuggestionListRef, TiptapSuggestionListP
   );
 });
 
-interface MentionAttrs {
-  id: string;
-  label: string;
-  driveId: string | null;
-  driveSlug: string | null;
-  mentionType: string;
-}
-
-function getMentionAttrs(attrs: Record<string, unknown>): MentionAttrs {
-  return {
-    id: typeof attrs.id === 'string' ? attrs.id : '',
-    label: typeof attrs.label === 'string' ? attrs.label : '',
-    driveId: typeof attrs.driveId === 'string' ? attrs.driveId : null,
-    driveSlug: typeof attrs.driveSlug === 'string' ? attrs.driveSlug : null,
-    mentionType: typeof attrs.mentionType === 'string' ? attrs.mentionType : 'page',
-  };
-}
-
-/**
- * The mention HTML dialects that exist in stored `pages.content` today, and
- * which `parseHTML` below has to accept all of.
- *
- * 1. Editor-written. `renderHTML` emitted the node's attributes under their
- *    literal names as well as the `data-*` forms, so old content carries
- *    `id="…" label="…" driveid="…" driveslug="…" mentiontype="…"` alongside
- *    `data-page-id` / `data-mention-type`. Those literal attributes are no
- *    longer emitted — `id` in particular collided with real DOM ids — but they
- *    are still parsed, or every mention written before this change loses its
- *    attributes.
- * 2. Group spans. `<span data-mention-type="everyone|role">` with `data-role-id`
- *    and `data-drive-id`.
- * 3. AI-written. `lib/ai/skills/bodies/writing-documents.ts` instructs models to
- *    write `<a class="mention" data-mention-type="page" data-page-id="ID">@Title</a>`
- *    — no `data-type`, no `href`, no label attribute. `label` therefore falls
- *    back to the element's text and `driveId` to the `href` path.
- *
- * Before this, none of the `<a>` forms parsed at all: the inherited rule matched
- * only `span[data-type="pageMention"]`, so a page mention fell through to
- * StarterKit's `link` mark and re-rendered without `data-page-id` — the exact
- * selector `syncMentions` (`services/api/page-mention-service.ts:61`) matches.
- * Round-tripping a document therefore deleted its mention graph.
- *
- * The readers below are what accept all three; `parseHTML` picks the elements.
- */
-
-const MENTION_TEXT_PREFIX = /^@/;
-
-/**
- * First non-empty attribute, or null. Empty rather than absent is the common
- * case in stored content: `renderHTML` writes `data-drive-id={driveId ?? ''}`
- * and `data-page-id={id}` where `id` defaults to `''`, so a mention with no
- * drive carries `data-drive-id=""`. Reading that back as `''` instead of null
- * would put a meaningless non-default value on every such attribute.
- */
-function readAttr(element: HTMLElement, ...names: string[]): string | null {
-  for (const name of names) {
-    const value = element.getAttribute(name);
-    if (value) {
-      return value;
-    }
-  }
-  return null;
-}
-
-function readLabel(element: HTMLElement): string | null {
-  const explicit = readAttr(element, 'label');
-  if (explicit) {
-    return explicit;
-  }
-  // One leading '@' only, so a label that is itself '@channel' survives.
-  const text = element.textContent?.trim().replace(MENTION_TEXT_PREFIX, '');
-  return text ? text : null;
-}
-
-/** `/dashboard/{driveId}/{pageId}` — the only href shape `renderHTML` produces. */
-function readDriveIdFromHref(element: HTMLElement): string | null {
-  const href = element.getAttribute('href');
-  const match = href?.match(/^\/dashboard\/([^/]+)\/[^/]+$/);
-  return match?.[1] ?? null;
-}
-
 /**
  * Where a click on a page mention goes, in the editor's node view.
  *
@@ -225,36 +144,6 @@ function pageMentionNavigationHref(id: string, driveId: string | null): string |
   return driveId ? `/dashboard/${driveId}/${id}` : `/p/${id}`;
 }
 
-/**
- * `data-mention-type` when it is there, otherwise inferred from whichever
- * identity attribute is present. `syncMentions` selects on `a[data-page-id]`
- * and `a[data-user-id]` alone, so content written against that contract can
- * carry an id with no type — and defaulting such an anchor to 'page' would
- * file a user id as a page id, which is the bug this fix exists to remove.
- */
-function readMentionType(element: HTMLElement): string {
-  const explicit = readAttr(element, 'data-mention-type', 'mentiontype');
-  if (explicit) {
-    return explicit;
-  }
-  if (readAttr(element, 'data-user-id')) {
-    return 'user';
-  }
-  if (readAttr(element, 'data-role-id')) {
-    return 'role';
-  }
-  return 'page';
-}
-
-/**
- * The identity attribute is per mention type: a page mention's id lives in
- * `data-page-id`, a user's in `data-user-id`, a role's in `data-role-id`. An
- * `everyone` mention has no id.
- */
-function readMentionId(element: HTMLElement): string | null {
-  return readAttr(element, 'data-page-id', 'data-user-id', 'data-role-id', 'id');
-}
-
 function dispatchInternalNavigation(href: string): void {
   const event = new CustomEvent('pagespace:navigate', {
     detail: { href },
@@ -264,67 +153,15 @@ function dispatchInternalNavigation(href: string): void {
   document.dispatchEvent(event);
 }
 
-const PageMentionNode = Mention.extend({
-  name: 'pageMention',
-
-  inline: true,
-  atom: true,
-  selectable: false,
-
-  addAttributes() {
-    // Every attribute renders as `{}` because the node's own renderHTML below
-    // emits the `data-*` forms itself. Without this, TipTap falls back to
-    // emitting each attribute under its literal name (core's
-    // `getRenderedAttributes`), which is where the stray `id="…" label="…"`
-    // attributes in existing content came from.
-    return {
-      id: {
-        default: null,
-        parseHTML: readMentionId,
-        renderHTML: () => ({}),
-      },
-      label: {
-        default: null,
-        parseHTML: readLabel,
-        renderHTML: () => ({}),
-      },
-      driveId: {
-        default: null,
-        parseHTML: (element: HTMLElement) =>
-          readAttr(element, 'data-drive-id', 'driveid') ?? readDriveIdFromHref(element),
-        renderHTML: () => ({}),
-      },
-      driveSlug: {
-        default: null,
-        parseHTML: (element: HTMLElement) =>
-          readAttr(element, 'data-drive-slug', 'driveslug'),
-        renderHTML: () => ({}),
-      },
-      // 'page' | 'user' | 'everyone' | 'role'
-      mentionType: {
-        default: 'page',
-        parseHTML: readMentionType,
-        renderHTML: () => ({}),
-      },
-    };
-  },
-
-  /**
-   * `priority: 60` beats the default 50 that StarterKit's `link` mark rule
-   * (`a[href]`) carries, so a page mention's anchor is claimed by this node
-   * rather than degrading to a link. Extension priority does not propagate to
-   * parse rules — it only orders extensions — so it has to be set here.
-   */
-  parseHTML() {
-    return [
-      { tag: 'a[data-page-id]', priority: 60 },
-      { tag: 'a[data-user-id]', priority: 60 },
-      { tag: 'a[data-mention-type]', priority: 60 },
-      { tag: 'span[data-mention-type]', priority: 60 },
-      { tag: `span[data-type="${this.name}"]`, priority: 60 },
-    ];
-  },
-
+/**
+ * The client's `pageMention`: `PageMentionNode`'s frozen schema plus the node
+ * view (DOM click/navigation chip) and the suggestion picker (tippy/React
+ * fetch against `/api/mentions/search`). Neither addition is schema-affecting
+ * — `addNodeView` and the `suggestion` option don't touch `NodeSpec` — but
+ * both need `document`/React/fetch, which is why they stay out of the
+ * Node-safe `page-mention-node.ts`.
+ */
+const PageMentionWithView = PageMentionNode.extend({
   addNodeView() {
     return ({ node }: { node: { attrs: { [key: string]: unknown } } }) => {
       const { mentionType, id, label, driveId } = getMentionAttrs(node.attrs);
@@ -383,94 +220,7 @@ const PageMentionNode = Mention.extend({
   },
 });
 
-export const PageMention = PageMentionNode.configure({
-  HTMLAttributes: {
-    class: 'mention',
-    contenteditable: 'false',
-  },
-  renderHTML({ options, node }) {
-    const { mentionType, id, label, driveId, driveSlug } = getMentionAttrs(node.attrs);
-
-    // Only emitted when set, so mentions that never carried a slug gain no
-    // attribute. Nothing reads it today; it is preserved because dropping a
-    // schema attribute is a decision for the COLLAB_SCHEMA_VERSION v1 leaf,
-    // not a side effect of a round-trip fix.
-    const slugAttrs = driveSlug ? { 'data-drive-slug': driveSlug } : {};
-
-    if (mentionType === 'everyone') {
-      return [
-        'span',
-        {
-          ...options.HTMLAttributes,
-          ...slugAttrs,
-          'data-mention-type': 'everyone',
-          'data-drive-id': driveId ?? '',
-          contenteditable: 'false',
-        },
-        `@${label}`,
-      ];
-    }
-
-    if (mentionType === 'role') {
-      return [
-        'span',
-        {
-          ...options.HTMLAttributes,
-          ...slugAttrs,
-          'data-mention-type': 'role',
-          'data-role-id': id,
-          'data-drive-id': driveId ?? '',
-          contenteditable: 'false',
-        },
-        `@${label}`,
-      ];
-    }
-
-    // A user mention used to fall through to the page branch below, which
-    // wrote the user's id into `data-page-id` — so `syncMentions` read it as a
-    // page id, and the `a[data-user-id]` selector it actually looks for
-    // (`page-mention-service.ts:65`) was emitted by nothing in the codebase.
-    // Deliberately no `href`: there is no user route, and an anchor without one
-    // cannot be claimed by the `link` mark on the way back in.
-    if (mentionType === 'user') {
-      return [
-        'a',
-        {
-          ...options.HTMLAttributes,
-          ...slugAttrs,
-          'data-mention-type': 'user',
-          'data-user-id': id,
-          'data-drive-id': driveId ?? '',
-          contenteditable: 'false',
-        },
-        `@${label}`,
-      ];
-    }
-
-    // Stored HTML only ever gets the dashboard href, and only when the drive is
-    // known. Without it there is no URL this output may carry: the old fallback
-    // wrote a bare `/dashboard/`, which reads as a link and lands on the
-    // dashboard root, and the `/p/{pageId}` resolver the node view uses would
-    // slip past `neutralizeDashboardLinks` (`packages/lib/src/publish/`) and
-    // publish as a live link into an auth-gated route. An href-less anchor is
-    // already inert on a published page.
-    const href = driveId && id ? `/dashboard/${driveId}/${id}` : null;
-    return [
-      'a',
-      {
-        ...options.HTMLAttributes,
-        ...slugAttrs,
-        ...(href ? { href } : {}),
-        // NO target="_blank" - stays in WebView on Capacitor iOS
-        rel: 'noopener noreferrer nofollow',
-        'data-mention-type': 'page',
-        'data-page-id': id,
-        'data-drive-id': driveId ?? '',
-        contenteditable: 'false',
-      },
-      `@${label}`,
-    ];
-  },
+export const PageMention = PageMentionWithView.configure({
   suggestion: {
     allowSpaces: true,
     items: async ({ query }) => {

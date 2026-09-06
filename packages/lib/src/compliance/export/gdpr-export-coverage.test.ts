@@ -81,6 +81,7 @@ const EMPTY: AllUserData = {
   agentWorkspaces: [],
   streamState: [],
   contentTags: [],
+  localEnvironments: [],
 };
 
 describe('GDPR export table coverage', () => {
@@ -165,6 +166,7 @@ describe('GDPR export table coverage', () => {
       personalizationCandidates: 'personalization-candidates.json',
       agentWorkspaces: 'agent-workspaces.json',
       streamState: 'stream-state.json',
+      localEnvironments: 'local-environments.json',
       contentTags: 'content-tags.json',
     };
 

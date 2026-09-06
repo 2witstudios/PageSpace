@@ -30,6 +30,7 @@ interface AgentSummary {
   enabledTools?: string[];
   enabledToolsCount?: number;
   hasSystemPrompt: boolean;
+  defaultEnvId?: string | null;
 }
 
 /**
@@ -147,7 +148,8 @@ export async function GET(request: Request) {
           aiModel: pages.aiModel,
           content: pages.content,
           createdAt: pages.createdAt,
-          updatedAt: pages.updatedAt
+          updatedAt: pages.updatedAt,
+          defaultEnvId: pages.defaultEnvId
         })
         .from(pages)
         .where(and(
@@ -177,6 +179,7 @@ export async function GET(request: Request) {
             driveName: drive.name,
             driveSlug: drive.slug,
             hasSystemPrompt: !!agent.systemPrompt,
+            defaultEnvId: agent.defaultEnvId,
           };
 
           // Add system prompt if requested

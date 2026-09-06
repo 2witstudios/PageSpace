@@ -1,7 +1,7 @@
 "use client";
 
 import { useEditor, EditorContent, Editor } from '@tiptap/react';
-import { buildRichEditorExtensions } from '@/lib/editor/rich-editor-extensions';
+import { clientExtensions } from '@/lib/editor/client-schema';
 import { BubbleMenu, FloatingMenu } from '@tiptap/react/menus';
 import React, { useEffect } from 'react';
 import { useRouter } from 'next/navigation';
@@ -57,7 +57,7 @@ const RichEditor = ({ value, onChange, onEditorChange, readOnly = false, isPagin
 
   const editor = useEditor({
     immediatelyRender: false,
-    extensions: buildRichEditorExtensions({ readOnly, isPaginated }),
+    extensions: clientExtensions({ readOnly, isPaginated }),
     content: value,
     editable: !readOnly,
     autofocus: readOnly ? false : undefined,

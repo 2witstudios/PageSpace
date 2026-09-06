@@ -360,7 +360,7 @@ const DocumentView = ({ pageId, driveId }: DocumentViewProps) => {
         disabled={isPullToRefreshDisabled}
         className="flex-1"
       >
-        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-gray-50/50 dark:bg-gray-900/20' : ''}`}>
+        <CustomScrollArea className={`h-full ${isReadOnly ? 'bg-muted/30 dark:bg-muted/20' : ''}`}>
           <div className={`flex justify-center items-start p-4 ${activeView === 'code' ? 'h-full' : ''}`}>
             <AnimatePresence mode="wait">
               {activeView === 'code' ? (

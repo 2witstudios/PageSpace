@@ -11,6 +11,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { db } from '@pagespace/db/db';
 import { eq, and } from '@pagespace/db/operators';
 import { customDomains } from '@pagespace/db/schema/custom-domains';
+import { publishedApps } from '@pagespace/db/schema/published-apps';
 import { clearCustomHost, mirrorDriveToCustomHost } from '@/lib/canvas/custom-domain-mirror';
 import { regeneratePublishedSiteFiles, republishDriveCanonical, renderDomainNotFoundOverride } from '@/lib/canvas/publish-page';
 import { isServingStatus } from '@pagespace/lib/canvas/cert-action';
@@ -28,13 +29,19 @@ const patchDomainSchema = z
     // "" must never reach the FK; null is the only clear "unset" signal.
     publishLandingPageId: z.string().min(1).nullable().optional(),
     publishNotFoundPageId: z.string().min(1).nullable().optional(),
+    // What this domain routes to. NULL = the drive's static published site
+    // (today's only behavior); a published_apps id routes it to that app
+    // instead — see custom_domains.publishedAppId. min(1): "" must never reach
+    // the FK, null is the only clear "point at the static site" signal.
+    publishedAppId: z.string().min(1).nullable().optional(),
   })
   .strict()
   .refine(
     (data) =>
       data.isPrimary !== undefined ||
       data.publishLandingPageId !== undefined ||
-      data.publishNotFoundPageId !== undefined,
+      data.publishNotFoundPageId !== undefined ||
+      data.publishedAppId !== undefined,
     { message: 'At least one field must be provided' },
   );
 
@@ -104,6 +111,21 @@ export async function PATCH(
           { error: '404 page must be a non-trashed Canvas page in this drive' },
           { status: 400 },
         );
+      }
+    }
+    // Mirrors createPublishedApp's own env/drive mismatch check
+    // (packages/lib/src/services/app-hosting/provisioner.ts): a target must
+    // belong to the SAME drive as the domain being pointed at it, checked
+    // BEFORE any write, so a stranger's app id can never be cross-wired onto
+    // a drive that does not own it.
+    if (typeof body.data.publishedAppId === 'string') {
+      const [app] = await db
+        .select({ id: publishedApps.id, driveId: publishedApps.driveId })
+        .from(publishedApps)
+        .where(eq(publishedApps.id, body.data.publishedAppId))
+        .limit(1);
+      if (!app || app.driveId !== driveId) {
+        return NextResponse.json({ error: 'Published app not found in this drive' }, { status: 404 });
       }
     }
 
@@ -191,6 +213,32 @@ export async function PATCH(
           hostname: target.hostname,
           publishLandingPageId: body.data.publishLandingPageId,
           publishNotFoundPageId: body.data.publishNotFoundPageId,
+        },
+      });
+    }
+
+    if (body.data.publishedAppId !== undefined) {
+      // The certificate itself needs no per-target change: every custom domain's
+      // TLS is terminated at the shared router app regardless of what it points
+      // at (`resolveAppRouterFlyAppName()`, used identically by the DELETE
+      // handler below) — the app-vs-static-site choice is a ROUTING decision made
+      // after termination, not a certificate one. So this write is a plain
+      // column update; nothing here calls the certs REST helpers.
+      [updated] = await db
+        .update(customDomains)
+        .set({ publishedAppId: body.data.publishedAppId })
+        .where(and(eq(customDomains.id, domainId), eq(customDomains.driveId, driveId)))
+        .returning();
+
+      auditRequest(request, {
+        eventType: 'data.write',
+        userId: auth.userId,
+        resourceType: 'drive',
+        resourceId: driveId,
+        details: {
+          operation: 'set-custom-domain-target',
+          hostname: target.hostname,
+          publishedAppId: body.data.publishedAppId,
         },
       });
     }

@@ -188,6 +188,12 @@ function fakeSprite(name: string): SpriteInstanceLike {
     createCheckpoint: async () => { throw new Error('not used'); },
     destroy: async () => {},
     killSession: async () => {},
+    updateURLSettings: async () => {},
+    listServices: async () => [],
+    createService: async () => { throw new Error('not used'); },
+    startService: async () => { throw new Error('not used'); },
+    stopService: async () => { throw new Error('not used'); },
+    deleteService: async () => {},
   };
 }
 

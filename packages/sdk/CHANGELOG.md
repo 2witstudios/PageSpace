@@ -6,6 +6,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`client.uploads` + `uploadFile` — a file can now reach a drive from outside a browser.** The SDK
+  had no upload path at all, so `pages.create({ type: 'FILE' })` produced a page with no way to
+  attach bytes. Three operations model the JSON legs (`uploads.presign`, `uploads.complete`,
+  `uploads.cancel`) and `uploadFile` composes them around the binary `PUT` — which stays a raw
+  `fetch`, because it targets object storage rather than PageSpace and the transport serializes
+  JSON only. Two server behaviours are handled rather than left to callers: the deduplication fast
+  path still calls `complete` (that is what creates the page, so skipping it silently produces
+  none, and it is reported as `deduplicated: true`), and every failure after the reservation
+  releases the slot. The cross-tenant 409 — bytes that exist globally but which this caller has
+  never referenced — is deliberately not a success branch, so it cannot be mistaken for
+  deduplication.
+- **`UploadSlotLostError` names the cause the server's message omits.** A reservation the server
+  cannot find comes back as `Invalid or expired jobId`, but expiry is only one of two causes: slot
+  metadata lives in an in-process map, so `presign` and `complete` must reach the same replica.
+  Machine callers, which put a large upload between the two calls, are far likelier to hit that
+  than the browser client the current design was built for. The original error is kept on `cause`.
+- **Uploads refuse a cleartext storage target and will not follow a redirect.** `redirect: 'error'`,
+  because a presigned `PUT` is terminal and a redirect would forward the file bytes to a host the
+  signature was never issued for; and a plaintext `http://` target is refused unless it is loopback
+  or the caller passes `allowInsecureStorageUrl`, so a server misconfigured with a cleartext S3
+  endpoint cannot silently downgrade every upload.
+
 - **`pages.replaceLines`/`insertLines`/`deleteLines` accept `expectedTotalLines`** — the optional
   staleness guard: the document length the caller believes it is editing. A mismatch is refused
   (409) instead of applying the edit to lines the caller has not seen. Their results now also model

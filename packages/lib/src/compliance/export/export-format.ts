@@ -87,6 +87,7 @@ export function buildNativeExportFiles(data: AllUserData): ExportFile[] {
     // checkpointed `parts` are content nothing else in this bundle carries.
     { name: 'sheets.json', description: 'Your spreadsheets — every tab, with each cell as you wrote it and as it evaluated', recordCount: data.sheets.length, data: data.sheets },
     { name: 'agent-workspaces.json', description: 'Agent workspaces (working contexts) and the shells you opened in them', recordCount: data.agentWorkspaces.length, data: data.agentWorkspaces },
+    { name: 'local-environments.json', description: 'Machines you enrolled as local environments: their labels, public keys and fingerprints, and when they connected', recordCount: data.localEnvironments.length, data: data.localEnvironments },
     { name: 'stream-state.json', description: 'Checkpointed AI generation state, including content from generations that were interrupted', recordCount: data.streamState.length, data: data.streamState },
     // Inferences the memory cron drew about the subject, with the quotes of
     // their own messages it kept as justification. Shipped unconditionally
@@ -212,6 +213,7 @@ export function toPortableExport(data: AllUserData): Record<string, unknown> {
       { '@type': 'PropertyValue', name: 'agentWorkspaces', value: data.agentWorkspaces },
       { '@type': 'PropertyValue', name: 'streamState', value: data.streamState },
       { '@type': 'PropertyValue', name: 'contentTags', value: data.contentTags },
+      { '@type': 'PropertyValue', name: 'localEnvironments', value: data.localEnvironments },
     ],
   };
 }

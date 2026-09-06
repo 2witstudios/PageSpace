@@ -20,6 +20,7 @@ vi.mock('@/lib/auth', () => ({
   isPrincipalDriveMember: vi.fn(),
   isPrincipalDriveOwnerOrAdmin: vi.fn(),
 }));
+vi.mock('@pagespace/lib/services/drive-envs/local-envs-enabled', () => ({ isLocalEnvsEnabled: vi.fn(() => false) }));
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
   createEnvInDrive: vi.fn(),
   listEnvsInDrive: vi.fn(),
@@ -40,6 +41,7 @@ import { GET as listEnvs, POST as createEnv } from '../route';
 import { GET as readEnv, PATCH as patchEnv, DELETE as deleteEnvRoute } from '../[envId]/route';
 import { POST as rebuildEnvRoute } from '../[envId]/rebuild/route';
 import { isPrincipalDriveMember, isPrincipalDriveOwnerOrAdmin, authenticateRequestWithOptions } from '@/lib/auth';
+import { isLocalEnvsEnabled } from '@pagespace/lib/services/drive-envs/local-envs-enabled';
 import {
   createEnvInDrive,
   deleteEnv,
@@ -113,6 +115,56 @@ describe('POST /envs — who may CREATE one', () => {
     const response = await createEnv(jsonReq({ name: '   ' }), params);
     expect(response.status).toBe(400);
     expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given substrate local while LOCAL_ENVS_ENABLED is off, should answer 501 and create NOTHING — never a Sprite env in its place', async () => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(false);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    expect(response.status).toBe(501);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given substrate local with the flag on, should create a local env owned by the caller and return the one-time enrollment code ONCE, with the env born disconnected', async () => {
+    vi.mocked(isLocalEnvsEnabled).mockReturnValue(true);
+    const expiresAt = new Date('2026-09-05T10:10:00.000Z');
+    vi.mocked(createEnvInDrive).mockResolvedValue({
+      ok: true,
+      env: { ...envRow, name: 'mac', substrate: 'local' },
+      enrollment: { enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt },
+    } as never);
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: 'jono-macstudio' }), params);
+    expect(response.status).toBe(201);
+    expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'mac', createdBy: USER_ID, local: { label: 'jono-macstudio', ownerId: USER_ID } });
+    const body = (await response.json()) as { env: unknown; enrollment: { enrollmentId: string; code: string; expiresAt: string } };
+    expect(body.enrollment).toEqual({ enrollmentId: 'enr_1', code: 'ABCDEFGHJKMNPQRSTVWX', expiresAt: expiresAt.toISOString() });
+  });
+
+  it('given substrate local without a label, should answer 400 naming the label, not the name', async () => {
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given an unknown substrate, should answer 400 naming the substrate — not the name', async () => {
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'modal' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/substrate/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given a blank label for a local env, should answer 400 naming the label as invalid (not merely missing)', async () => {
+    const response = await createEnv(jsonReq({ name: 'mac', substrate: 'local', label: '   ' }), params);
+    expect(response.status).toBe(400);
+    expect(((await response.json()) as { error: string }).error).toMatch(/label/i);
+    expect(createEnvInDrive).not.toHaveBeenCalled();
+  });
+
+  it('given an explicit substrate sprite, should behave exactly like the plain-name path', async () => {
+    vi.mocked(createEnvInDrive).mockResolvedValue({ ok: true, env: envRow } as never);
+    const response = await createEnv(jsonReq({ name: 'dev', substrate: 'sprite' }), params);
+    expect(response.status).toBe(201);
+    expect(createEnvInDrive).toHaveBeenCalledWith({ driveId: DRIVE_ID, name: 'dev', createdBy: USER_ID });
   });
 
   it('given a duplicate name, should answer 409', async () => {

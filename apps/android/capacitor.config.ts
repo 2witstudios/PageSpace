@@ -11,7 +11,7 @@ const config: CapacitorConfig = {
     cleartext: false,
   },
   android: {
-    backgroundColor: '#000000',
+    backgroundColor: '#0f0f0f',
     allowMixedContent: false,
     useLegacyBridge: false,
   },
@@ -19,7 +19,7 @@ const config: CapacitorConfig = {
     SplashScreen: {
       launchAutoHide: true,
       launchShowDuration: 0,
-      backgroundColor: '#000000',
+      backgroundColor: '#0f0f0f',
       showSpinner: false,
     },
     Keyboard: {
@@ -28,7 +28,7 @@ const config: CapacitorConfig = {
     },
     StatusBar: {
       style: 'LIGHT', // Light content (icons/text) on dark background
-      backgroundColor: '#000000',
+      backgroundColor: '#0f0f0f',
     },
     SocialLogin: {
       google: {

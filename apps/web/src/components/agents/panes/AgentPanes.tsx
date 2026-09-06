@@ -2007,7 +2007,7 @@ function PaneChatTabStrip({
       }}
       className={cn(
         'flex shrink-0 items-center justify-center rounded p-1 text-muted-foreground hover:bg-accent hover:text-foreground',
-        activeTab === tab && 'bg-accent text-foreground',
+        activeTab === tab && 'bg-primary-soft text-foreground',
       )}
     >
       <Icon className="size-3" aria-hidden="true" />

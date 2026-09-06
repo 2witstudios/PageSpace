@@ -1,5 +1,5 @@
 import type { Viewport } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Geist, Geist_Mono, Newsreader } from "next/font/google";
 import "./globals.css";
 import { ThemeProvider } from "@/components/ThemeProvider";
 import { GoogleOneTap } from "@/components/GoogleOneTap";
@@ -15,6 +15,16 @@ const geistSans = Geist({
 const geistMono = Geist_Mono({
   variable: "--font-geist-mono",
   subsets: ["latin"],
+});
+
+// Display face for marketing headlines only. Geist stays the body and UI face
+// (it is the product's font); the serif is reserved for the site's own voice.
+const newsreader = Newsreader({
+  variable: "--font-newsreader",
+  subsets: ["latin"],
+  weight: "variable",
+  axes: ["opsz"],
+  display: "swap",
 });
 
 export const metadata = siteMetadata;
@@ -39,7 +49,7 @@ export default function RootLayout({
         <JsonLd data={[organizationSchema, websiteSchema]} />
       </head>
       <body
-        className={`${geistSans.variable} ${geistMono.variable} antialiased`}
+        className={`${geistSans.variable} ${geistMono.variable} ${newsreader.variable} antialiased`}
       >
         <ThemeProvider
           attribute="class"

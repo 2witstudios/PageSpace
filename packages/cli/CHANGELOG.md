@@ -4,6 +4,26 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`pagespace env enroll <enrollmentId> <code>` and `pagespace env token <enrollmentId>` — bind
+  this machine to a local Environment.** `enroll` generates an Ed25519 keypair on the machine,
+  presents the one-time code with the public half, and stores the private half in the credential
+  store under `env:<enrollmentId>`; it is never printed or sent, and a refused enrollment discards
+  it. `token` proves possession of the key (server nonce, machine signature) and prints a
+  short-lived bridge token. Both work without a login, and the machine credential can never
+  authenticate an ordinary command (`logout` reports it as not logged in, `keys use` refuses it).
+  Requires a deployment with `LOCAL_ENVS_ENABLED=true`.
+
+- **`pagespace files upload <path> --drive <driveId>` — put a file in a drive without a browser.**
+  Previously nothing outside the web client could, which blocked every headless producer of media.
+  Optional `--parent`, `--title` and `--mime`. The media type is resolved from a table of formats
+  the server actually processes, and an unrecognized extension is a usage error asking for `--mime`
+  rather than a silent `application/octet-stream` — the declared type is signed into the storage
+  request, so a wrong guess fails later with an error that names neither the field nor the cause.
+  When the bytes are already stored the command says so (`already stored; no bytes sent`), because
+  that path returns almost instantly and silence reads as a lost upload.
+
 ### Fixed
 
 - **`pages replace-lines` can refuse a stale edit instead of half-applying it.** The new

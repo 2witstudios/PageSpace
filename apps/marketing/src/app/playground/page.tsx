@@ -19,6 +19,7 @@ export default function PlaygroundPage() {
     { name: "Primary", var: "--primary", class: "bg-primary" },
     { name: "Secondary", var: "--secondary", class: "bg-secondary" },
     { name: "Accent", var: "--accent", class: "bg-accent" },
+    { name: "Primary soft", var: "--primary-soft", class: "bg-primary-soft" },
     { name: "Muted", var: "--muted", class: "bg-muted" },
     { name: "Destructive", var: "--destructive", class: "bg-destructive" },
     { name: "Success", var: "--success", class: "bg-success" },

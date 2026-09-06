@@ -37,7 +37,7 @@ import { useAuth } from '@/hooks/useAuth';
 import { useTouchDevice } from '@/hooks/useTouchDevice';
 import { useBreakpoint } from '@/hooks/useBreakpoint';
 import { useDriveStore, type Drive } from '@/hooks/useDrive';
-import { canManageDrive } from '@/hooks/usePermissions';
+import { canManageDrive, isDriveOwner } from '@/hooks/usePermissions';
 import { usePageAgents, type DriveWithAgents } from '@/hooks/page-agents/usePageAgents';
 import { useAgentSurfaceStore, SHEET_BREAKPOINT_QUERY } from '@/stores/agents/useAgentSurfaceStore';
 import { useAgentWorkspaceStore } from '@/stores/agent-workspace/useAgentWorkspaceStore';
@@ -65,6 +65,7 @@ import { buildSessionGroups, ASSISTANT_GROUP_KEY } from './session-groups';
 import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
+import { DriveEnvAppPane } from './DriveEnvAppPane';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
@@ -465,6 +466,15 @@ function SessionList({
     [drives],
   );
 
+  // Which drives this user OWNS — stricter than manageableDriveIds. Spending
+  // the drive's money (the dedicated-hosting purchase surface) is gated on
+  // this, not on ADMIN/OWNER manage rights: an admin may run an app, not buy
+  // hosting on the owner's card.
+  const ownerDriveIds = useMemo(
+    () => new Set(drives.filter((d) => isDriveOwner(d)).map((d) => d.id)),
+    [drives],
+  );
+
   const [createDriveOpen, setCreateDriveOpen] = useState(false);
   const { openSpawn, openSpawnInEnv, openAssistantSpawn, paletteElement } = useSpawnSession(agentsByDrive, onChanged);
 
@@ -582,6 +592,7 @@ function SessionList({
             sessions={group.sessions}
             agentNamesById={agentNamesById}
             canManage={manageableDriveIds.has(group.driveId)}
+            isOwner={ownerDriveIds.has(group.driveId)}
             // Three things switch it off. `canSpawn` is the authentication gate
             // — the same one that nulls the sessions SWR key, because a surface
             // that will not show a signed-out visitor anything has no business
@@ -706,6 +717,7 @@ function DriveGroupRows({
   sessions,
   agentNamesById,
   canManage,
+  isOwner,
   showEnvironments,
   onNewSessionInEnv,
 }: {
@@ -713,6 +725,8 @@ function DriveGroupRows({
   sessions: SessionListEntry[];
   agentNamesById: Map<string, string>;
   canManage: boolean;
+  /** May spend this drive's money — stricter than `canManage`. See `DriveEnvAppPane`'s dedicated-tier gate. */
+  isOwner: boolean;
   showEnvironments: boolean;
   /** Start a session INSIDE one of this drive's environments — the row's own "+". */
   onNewSessionInEnv: (envId: string) => void;
@@ -758,6 +772,7 @@ function DriveGroupRows({
           driveId={driveId}
           group={group}
           canManage={canManage}
+          isOwner={isOwner}
           agentNamesById={agentNamesById}
           onEnvsChanged={refreshEnvs}
           onNewSession={() => onNewSessionInEnv(group.envId)}
@@ -789,7 +804,14 @@ function EnvStatusDot({ status }: { status: DriveEnvStatus | null }) {
         ? { className: 'bg-amber-500', label: 'Environment stopped' }
         : status === 'none'
           ? { className: 'bg-muted-foreground/40', label: 'Environment not started yet' }
-          : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
+          : // A LOCAL environment reports its bridge connection, not a VM state.
+            status === 'connected'
+            ? { className: 'bg-emerald-500', label: 'Machine connected' }
+            : status === 'connecting'
+              ? { className: 'bg-amber-500', label: 'Machine connecting' }
+              : status === 'disconnected'
+                ? { className: 'bg-muted-foreground/40', label: 'Machine disconnected' }
+                : { className: 'bg-muted-foreground/40', label: 'Environment status unknown' };
   // `role="img"` so the label is announced — aria-label on a bare span is not.
   return <span role="img" aria-label={label} className={cn('size-1.5 shrink-0 rounded-full', className)} />;
 }
@@ -814,6 +836,7 @@ function DriveEnvRow({
   driveId,
   group,
   canManage,
+  isOwner,
   agentNamesById,
   onEnvsChanged,
   onNewSession,
@@ -821,6 +844,7 @@ function DriveEnvRow({
   driveId: string;
   group: EnvGroup<SessionListEntry>;
   canManage: boolean;
+  isOwner: boolean;
   agentNamesById: Map<string, string>;
   onEnvsChanged: () => void;
   onNewSession: () => void;
@@ -835,6 +859,12 @@ function DriveEnvRow({
   const [rebuilding, setRebuilding] = useState(false);
 
   const isOrphan = group.envName === null;
+  // A LOCAL env is the user's own machine reached through the bridge. Until
+  // the bridge transport lands, every path that provisions a Sprite (a new
+  // session in the env, rebuild) would try to put a VM under a row the
+  // database forbids one on — so those actions are withheld, not offered and
+  // failed. Rename and delete are row operations and stay.
+  const isLocal = group.substrate === 'local';
   // An orphan has no name to show and its id is not one: a raw CUID is not a
   // thing a user has ever seen or could recognise, and printing it would read
   // as the environment's name rather than as the absence of one. What we
@@ -908,10 +938,10 @@ function DriveEnvRow({
   const menuItems: RowMenuItem[] = useMemo(
     () => [
       { label: 'Rename', icon: Pencil, onSelect: () => setRenaming(true) },
-      { label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true },
+      ...(isLocal ? [] : [{ label: 'Rebuild to blank', icon: RefreshCw, onSelect: () => setRebuilding(true), destructive: true }]),
       { label: 'Delete environment', icon: Trash2, onSelect: () => setDeleting(true), destructive: true },
     ],
-    [],
+    [isLocal],
   );
 
   const rowInner = (
@@ -934,8 +964,9 @@ function DriveEnvRow({
           binding a session to an environment is member-level server-side, and
           management (rename/rebuild/delete) is the OWNER/ADMIN act — this is
           not. Withheld from an ORPHAN, which names an environment this drive's
-          listing did not return: there is nothing here to spawn into. */}
-      {!isOrphan && (
+          listing did not return: there is nothing here to spawn into — and
+          from a LOCAL env until the bridge transport exists (see `isLocal`). */}
+      {!isOrphan && !isLocal && (
         <button
           type="button"
           aria-label={`New session in ${displayName}`}
@@ -1000,6 +1031,15 @@ function DriveEnvRow({
             <div className="px-2 py-1 text-xs text-muted-foreground">No sessions running in here</div>
           )}
         </div>
+      )}
+      {!isOrphan && (
+        <DriveEnvAppPane
+          driveId={driveId}
+          envId={group.envId}
+          envName={displayName}
+          canManage={canManage}
+          isOwner={isOwner}
+        />
       )}
     </div>
   );
@@ -1343,7 +1383,7 @@ function SessionRow({
       <RowMenu
         items={menuItems}
         menuLabel="Session actions"
-        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-accent')}
+        className={cn('gap-1 rounded-md px-1.5 py-1 text-xs hover:bg-accent', isSelected && 'bg-primary-soft')}
       >
         <button
           type="button"
@@ -1492,7 +1532,7 @@ function ConversationRow({
       className={cn(
         'gap-1.5 rounded-md px-1.5 py-0.5 text-xs hover:bg-accent hover:text-foreground',
         placement === 'grid' ? 'text-muted-foreground' : 'text-muted-foreground/60',
-        isSelected && 'bg-accent text-foreground',
+        isSelected && 'bg-primary-soft text-foreground',
       )}
     >
       <button

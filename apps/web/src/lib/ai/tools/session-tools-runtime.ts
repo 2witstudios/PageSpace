@@ -808,18 +808,28 @@ async function resolveWorkerPlacement(input: {
     // same derivation the caller-thread minting path uses, gated by the same
     // spawn-access primitive.
     let driveId: string | null = null;
+    // This path has no `envId` of its own to offer — it's an internal tool
+    // call, not the spawn palette, so there is no explicit-vs-omitted
+    // question to ask. Honor the agent's own default the same way an
+    // ordinary (no-envId) spawn does when its Sandbox switch is live (review
+    // — general-purpose self-review, PR #2513: this third spawn path fetched
+    // the agent, defaultEnvId/sandboxEnabled included, but never applied it).
+    let envId: string | null = null;
     if (agentPageId !== null) {
       const agent = await conversationRepository.getAiAgent(agentPageId);
       if (!agent) {
         return { ok: false, reason: 'conversation_unavailable', detail: 'That agent is not available.' };
       }
       driveId = agent.driveId;
+      if (agent.sandboxEnabled && agent.defaultEnvId) {
+        envId = agent.defaultEnvId;
+      }
     }
     const access = await checkAccessForSubject(ownerId, { ownerId, driveId });
     if (!access.allowed) {
       return { ok: false, reason: 'not_permitted', detail: 'You are not permitted to start a workspace there.' };
     }
-    const spawned = await spawnSession({ userId: ownerId, driveId });
+    const spawned = await spawnSession({ userId: ownerId, driveId, envId });
     if (!spawned.ok) {
       return spawned.reason === 'session_limit_reached'
         ? { ok: false, reason: 'session_limit_reached', detail: 'You are at your active-session limit — end an existing session first.' }

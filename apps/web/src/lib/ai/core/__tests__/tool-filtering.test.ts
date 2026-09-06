@@ -10,6 +10,7 @@ import {
   isWriteTool,
   isAccountLevelOnlyTool,
   hasSandboxGitTools,
+  hasSandboxComputeTools,
   suppressGithubIntegrationTools,
   filterToolsForAgentAllowlist,
   filterToolsForSandboxEnablement,
@@ -613,6 +614,22 @@ describe('SANDBOX_COMPUTE_TOOL_NAMES', () => {
     const chatOnly = ['list_sessions', 'spawn_session', 'send_session', 'read_session', 'kill_session'];
     const expected = [...SANDBOX_TOOL_NAMES].filter((name) => !chatOnly.includes(name)).sort();
     expect([...SANDBOX_COMPUTE_TOOL_NAMES].sort()).toEqual(expected);
+  });
+});
+
+describe('hasSandboxComputeTools', () => {
+  it('returns true when the list contains a core/git/shell compute tool', () => {
+    expect(hasSandboxComputeTools(['read_page', 'writeFile'])).toBe(true);
+    expect(hasSandboxComputeTools(['git_clone'])).toBe(true);
+    expect(hasSandboxComputeTools(['spawn_shell'])).toBe(true);
+  });
+
+  it('returns false for the chat-only session family alone', () => {
+    expect(hasSandboxComputeTools(['spawn_session', 'list_agents'])).toBe(false);
+  });
+
+  it('returns false for an empty list', () => {
+    expect(hasSandboxComputeTools([])).toBe(false);
   });
 });
 

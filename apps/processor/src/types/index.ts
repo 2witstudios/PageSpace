@@ -143,6 +143,7 @@ export type JobDataMap = {
   'stuck-page-reconciler': Record<string, never>;
   'app-build': AppBuildJobData;
   'app-build-reconciler': Record<string, never>;
+  'app-build-source-retention': Record<string, never>;
 };
 
 export type QueueName = keyof JobDataMap;

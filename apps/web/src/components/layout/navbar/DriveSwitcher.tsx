@@ -295,7 +295,7 @@ function DriveMenuItem({
       onSelect={onSelect}
       className={cn(
         "flex items-center gap-2 pr-2 cursor-pointer",
-        isActive && "bg-accent"
+        isActive && "bg-primary-soft"
       )}
       onMouseEnter={() => setIsHovered(true)}
       onMouseLeave={() => setIsHovered(false)}

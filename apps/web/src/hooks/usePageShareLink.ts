@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react';
 import { z } from 'zod';
 import { post, del } from '@/lib/auth/auth-fetch';
 import { toast } from 'sonner';
+import { fetchWithAuth } from '@/lib/auth/auth-fetch';
 
 const PageLinkSchema = z.object({
   id: z.string(),
@@ -38,7 +39,7 @@ export function usePageShareLink(pageId: string) {
 
     async function loadExisting() {
       try {
-        const res = await fetch(`/api/pages/${pageId}/share-links`, { credentials: 'include' });
+        const res = await fetchWithAuth(`/api/pages/${pageId}/share-links`);
         if (!res.ok || cancelled) return;
         const raw = await res.json();
         const parsed = PageListResponseSchema.safeParse(raw);

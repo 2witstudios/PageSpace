@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_HOST, resolveConfig } from '@pagespace/cli';
+import { DEFAULT_HOST, resolveConfig, resolveTimeoutSetting } from '@pagespace/cli';
 
 describe('resolveConfig', () => {
   it('defaults to https://pagespace.ai when nothing else is provided', () => {
@@ -56,5 +56,65 @@ describe('resolveConfig', () => {
       credential: null,
     };
     expect(resolveConfig(sources)).toEqual(resolveConfig(sources));
+  });
+});
+
+/**
+ * The env var's audience is the MCP server's config file: `pagespace mcp`
+ * builds the same client every CLI verb uses, so this is the one place an MCP
+ * host can raise the deadline for the `ask_agent` consultations it runs.
+ */
+describe('resolveTimeoutSetting', () => {
+  it('prefers the flag over the environment', () => {
+    expect(resolveTimeoutSetting(5_000, { PAGESPACE_TIMEOUT_MS: '99000' })).toBe(5_000);
+  });
+
+  it('falls back to the environment when no flag was given', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '99000' })).toBe(99_000);
+  });
+
+  it('tolerates surrounding whitespace', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: ' 45000 ' })).toBe(45_000);
+  });
+
+  /**
+   * Undefined, not a number: passing a number unconditionally would make the
+   * client's timeout EXPLICIT for every command and so beat every operation's
+   * own default — silently dropping `agents.ask` from 120s to 30s for callers
+   * who set nothing at all.
+   */
+  it('returns undefined when neither source is set, leaving operation defaults intact', () => {
+    expect(resolveTimeoutSetting(undefined, {})).toBeUndefined();
+  });
+
+  /**
+   * A bad flag is a typo worth stopping for (parseArgv rejects it); a stale
+   * env var in a shell profile must not make every command in that shell
+   * unrunnable.
+   */
+  it.each([
+    ['abc'],
+    ['0'],
+    ['-1'],
+    [''],
+    // Sub-millisecond: positive and finite, but rounds to 0ms — a client that
+    // aborts every request instantly, which an explicit setting would impose
+    // over every operation's own default.
+    ['0.4'],
+    // Past setTimeout's 2^31-1 ceiling, where Node silently substitutes 1ms —
+    // so an absurdly LONG timeout would abort immediately.
+    ['99999999999'],
+    ['Infinity'],
+  ])('ignores an unusable env value (%s) rather than failing the command', (value) => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: value })).toBeUndefined();
+  });
+
+  it('accepts the smallest and largest usable values', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '1' })).toBe(1);
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '2147483647' })).toBe(2_147_483_647);
+  });
+
+  it('rounds a fractional millisecond value up to a usable one', () => {
+    expect(resolveTimeoutSetting(undefined, { PAGESPACE_TIMEOUT_MS: '0.6' })).toBe(1);
   });
 });

@@ -26,8 +26,8 @@ export const users = pgTable('users', {
   tokenVersion: integer('tokenVersion').default(0).notNull(),
   role: userRole('role').default('user').notNull(),
   adminRoleVersion: integer('adminRoleVersion').default(0).notNull(),
-  currentAiProvider: text('currentAiProvider').default('openai').notNull(),
-  currentAiModel: text('currentAiModel').default('openai/gpt-5.6-luna').notNull(),
+  currentAiProvider: text('currentAiProvider').default('zai').notNull(),
+  currentAiModel: text('currentAiModel').default('z-ai/glm-5.3-flash').notNull(),
   // Chosen OpenRouter image-generation model (null = none configured → tool uses the
   // system default). Deliberately separate from currentAiModel: image generation is a
   // tool, not the chat model, and is never shown in the model selector.
@@ -87,6 +87,19 @@ export const users = pgTable('users', {
    * "does a command with this trigger exist?" alone would fail both.
    */
   starterSkillsInstalledAt: timestamp('starterSkillsInstalledAt', { mode: 'date' }),
+  /**
+   * When the user finished (or dismissed) first-run onboarding. NULL means the
+   * flow has never run to completion for them.
+   *
+   * Migration 0280 stamps every row that exists at migration time, so from that
+   * point on NULL means genuinely new. That backfill lives in the migration
+   * rather than a standalone script precisely because a script would never run
+   * on self-hosted upgrades (docker-compose runs `db:migrate` and nothing else)
+   * and could race accounts created while it walked the table.
+   *
+   * Read it through `hasCompletedOnboarding`, never as a bare null check.
+   */
+  onboardingCompletedAt: timestamp('onboardingCompletedAt', { mode: 'date' }),
   createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
   updatedAt: timestamp('updatedAt', { mode: 'date' }).defaultNow().notNull().$onUpdate(() => new Date()),
 }, (table) => ({

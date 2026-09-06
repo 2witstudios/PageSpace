@@ -127,32 +127,14 @@ describe('message read ordering is total and stable', () => {
     expect(rows.map((r) => r.id)).toEqual(expectedAsc(thread.ids));
   });
 
-  it('getRecentPageMessagesForUser selects a deterministic WINDOW, not just a deterministic order', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
-    const thread = await seedSameTickThread();
-
-    // DESC + LIMIT under a tie: without a DESC tiebreaker, WHICH rows survive
-    // the limit is itself arbitrary. The newest 3 by (createdAt, id) are the
-    // last 3 of the ascending order, returned oldest-first.
-    const rows = await messageRepository.getRecentPageMessagesForUser(thread.pageId, thread.ownerId, 3);
-    expect(rows.map((r) => r.id)).toEqual(expectedAsc(thread.ids).slice(-3));
-  });
-
-  // The owner predicate is the whole reason this reader exists in scoped form:
-  // page scope answers "which page", never "whose". Without it, the consult
-  // route's fallback branch handed every caller who could VIEW a shared agent
-  // page the 10 most recent messages on it across all users.
-  it('getRecentPageMessagesForUser returns nothing for a co-member who owns none of the messages', async () => {
-    if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');
-    const thread = await seedSameTickThread();
-    const otherMember = await factories.createUser();
-
-    const own = await messageRepository.getRecentPageMessagesForUser(thread.pageId, thread.ownerId, 10);
-    expect(own.length).toBeGreaterThan(0);
-
-    const theirs = await messageRepository.getRecentPageMessagesForUser(thread.pageId, otherMember.id, 10);
-    expect(theirs).toEqual([]);
-  });
+  // The two `getRecentPageMessagesForUser` cases that stood here — a
+  // deterministic DESC+LIMIT window, and the owner predicate that stopped a
+  // shared agent page leaking co-members' messages — went with the reader
+  // itself. It was the consult route's no-conversationId fallback and its only
+  // caller; that path now starts a new conversation with no history at all, so
+  // there is no cross-conversation window left to order or to scope. See
+  // `consult/__tests__/new-conversation-history.test.ts`, which asserts the
+  // emptiness that replaced it.
 
   it('repeated reads of the same tied rows agree with each other', async () => {
     if (!dbAvailable) throw new Error('DATABASE_URL must point at a migrated Postgres');

@@ -536,6 +536,62 @@ describe('env-validation', () => {
     });
   });
 
+  describe('local environments — the signing key is gated at boot', () => {
+    const bootable = () => {
+      process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';
+      process.env.CSRF_SECRET = 'b'.repeat(32);
+      process.env.ENCRYPTION_KEY = 'c'.repeat(32);
+    };
+
+    // Turning local envs on without the key would let every local-env create
+    // reach loadServerSigningKey() and answer a generic 500. Boot is where an
+    // operator finds out, not the first user.
+    it('given LOCAL_ENVS_ENABLED=true and no ENV_BRIDGE_SIGNING_KEY, should refuse to boot naming the key', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true and a blank key, should refuse to boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = '   ';
+      expect(() => validateEnv()).toThrow(/ENV_BRIDGE_SIGNING_KEY must be set when LOCAL_ENVS_ENABLED=true/);
+    });
+
+    it('given LOCAL_ENVS_ENABLED=true and a key, should boot', () => {
+      bootable();
+      process.env.LOCAL_ENVS_ENABLED = 'true';
+      process.env.ENV_BRIDGE_SIGNING_KEY = 'MC4CAQAwBQYDK2VwBCIEIA';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // A declared-but-blank placeholder (ENV_BRIDGE_SIGNING_KEY=) reads as unset,
+    // like SANDBOX_SESSION_SECRET and the other optional secrets: a Sprite-only
+    // deployment that copied .env.example must still boot.
+    it('given the flag off and a BLANK key placeholder, should boot', () => {
+      bootable();
+      delete process.env.LOCAL_ENVS_ENABLED;
+      process.env.ENV_BRIDGE_SIGNING_KEY = '';
+      expect(() => validateEnv()).not.toThrow();
+    });
+
+    // The gate is on ENABLING, not on the variable: a deployment that has never
+    // heard of local envs must not be asked for a signing key.
+    it.each([
+      ['unset', undefined],
+      ['off', 'false'],
+      ['a stray value', '1'],
+    ])('given LOCAL_ENVS_ENABLED %s and no key, should boot', (_label, value) => {
+      bootable();
+      if (value === undefined) delete process.env.LOCAL_ENVS_ENABLED;
+      else process.env.LOCAL_ENVS_ENABLED = value;
+      delete process.env.ENV_BRIDGE_SIGNING_KEY;
+      expect(() => validateEnv()).not.toThrow();
+    });
+  });
+
   describe('app hosting — the apex and the proxy secret are gated at boot', () => {
     const bootable = () => {
       process.env.DATABASE_URL = 'postgresql://user:pass@localhost:5432/db';

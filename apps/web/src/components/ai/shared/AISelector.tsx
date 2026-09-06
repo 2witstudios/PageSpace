@@ -113,7 +113,7 @@ export function AISelector({
             onClick={handleSelectGlobal}
             className={cn(
               'flex items-center gap-2 cursor-pointer',
-              !selectedAgent && 'bg-accent/50'
+              !selectedAgent && 'bg-primary-soft'
             )}
             aria-current={!selectedAgent ? 'true' : undefined}
           >
@@ -148,7 +148,7 @@ export function AISelector({
                       onClick={() => handleSelectOverrideAgent(agent)}
                       className={cn(
                         'flex items-center gap-2 cursor-pointer',
-                        isSelected && 'bg-accent/50'
+                        isSelected && 'bg-primary-soft'
                       )}
                       aria-current={isSelected ? 'true' : undefined}
                     >
@@ -184,7 +184,7 @@ export function AISelector({
                           onClick={() => handleSelectAgent(agent)}
                           className={cn(
                             'flex items-center gap-2 cursor-pointer',
-                            isSelected && 'bg-accent/50'
+                            isSelected && 'bg-primary-soft'
                           )}
                           aria-current={isSelected ? 'true' : undefined}
                         >

@@ -97,11 +97,16 @@ vi.mock('@pagespace/lib/monitoring/activity-logger', () => ({
   getActorInfo: vi.fn().mockResolvedValue({ actorEmail: 'test@example.com', actorDisplayName: 'Test User' }),
 }));
 
+vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({
+  resolveEnvInDrive: vi.fn(),
+}));
+
 import { pageAgentRepository } from '@/lib/repositories/page-agent-repository';
 import { authenticateRequestWithOptions, isAuthError, checkMCPDriveScope } from '@/lib/auth';
 import { canUserEditPage } from '@pagespace/lib/permissions/permissions';
 import { broadcastPageEvent, createPageEventPayload } from '@/lib/websocket';
 import { applyPageMutation } from '@/services/api/page-mutation-service';
+import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 
 // Test fixtures
 const mockUserId = 'user_123';
@@ -133,6 +138,7 @@ const mockAgent = (overrides: Partial<{
   aiModel: string | null;
   toolExposureMode: 'upfront' | 'search' | null;
   sandboxEnabled: boolean;
+  defaultEnvId: string | null;
   isTrashed: boolean;
 }> = {}) => ({
   id: overrides.id ?? mockAgentId,
@@ -146,6 +152,7 @@ const mockAgent = (overrides: Partial<{
   aiModel: overrides.aiModel ?? 'claude-3-opus',
   toolExposureMode: overrides.toolExposureMode ?? 'upfront',
   sandboxEnabled: overrides.sandboxEnabled ?? false,
+  defaultEnvId: overrides.defaultEnvId ?? null,
   isTrashed: overrides.isTrashed ?? false,
 });
 
@@ -465,6 +472,58 @@ describe('PUT /api/ai/page-agents/[agentId]/config', () => {
       const response = await PUT(request, context);
 
       expect(response.status).toBe(400);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('should update defaultEnvId when the env exists in the agent\'s own drive', async () => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue({ id: 'env_1', driveId: mockDriveId } as never);
+      const request = createRequest(mockAgentId, { defaultEnvId: 'env_1' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+      const body = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(resolveEnvInDrive).toHaveBeenCalledWith('env_1', mockDriveId);
+      expect(body.updatedFields).toContain('defaultEnvId');
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: 'env_1' }) })
+      );
+      expect(body.agentConfig.defaultEnvId).toBe('env_1');
+    });
+
+    it('should clear defaultEnvId with an explicit null, without resolving anything', async () => {
+      const request = createRequest(mockAgentId, { defaultEnvId: null });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(200);
+      expect(resolveEnvInDrive).not.toHaveBeenCalled();
+      expect(applyPageMutation).toHaveBeenCalledWith(
+        expect.objectContaining({ updates: expect.objectContaining({ defaultEnvId: null }) })
+      );
+    });
+
+    it('should return 404 for an unresolvable defaultEnvId — same response whether it does not exist or belongs to another drive (resolveEnvInDrive collapses both)', async () => {
+      vi.mocked(resolveEnvInDrive).mockResolvedValue(null);
+      const request = createRequest(mockAgentId, { defaultEnvId: 'env_elsewhere' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(404);
+      expect(applyPageMutation).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 for an empty-string defaultEnvId rather than treating it as null', async () => {
+      const request = createRequest(mockAgentId, { defaultEnvId: '' });
+      const context = createContext(mockAgentId);
+
+      const response = await PUT(request, context);
+
+      expect(response.status).toBe(400);
+      expect(resolveEnvInDrive).not.toHaveBeenCalled();
       expect(applyPageMutation).not.toHaveBeenCalled();
     });
 

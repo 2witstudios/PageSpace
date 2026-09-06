@@ -52,6 +52,7 @@ import {
 import { buildShellCheckAuth } from './terminal/shell-access';
 import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
+import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-handler';
 import { handleShellActivityRequest } from './terminal/shell-activity';
 import { VOICE_BRIDGE_ROUTES } from '@pagespace/lib/realtime/voice-bridge-contract';
 import { handleRealtimeAttachRequest, defaultAttachHandlerDeps } from './voice/attach-handler';
@@ -1740,8 +1741,17 @@ io.on('connection', (socket: AuthSocket) => {
   socket.on('shell:resize', (payload) => shellHandlers.onResize(payload));
   socket.on('shell:disconnect', (payload) => shellHandlers.onDisconnect(payload));
 
+  // Published-app log streaming (app:logs:* family): read-only fan-out of a
+  // Fly app's NATS log firehose to every attached viewer — see app-logs/.
+  const appLogHandlers = buildAppLogHandlers(socket as unknown as AppLogSocketLike);
+  socket.on('app:logs:subscribe', (payload) => {
+    void appLogHandlers.onSubscribe(payload);
+  });
+  socket.on('app:logs:unsubscribe', (payload) => appLogHandlers.onUnsubscribe(payload));
+
   socket.on('disconnect', (reason) => {
     shellHandlers.onDisconnect();
+    appLogHandlers.onDisconnect();
     // Clean up presence tracking and broadcast updates for affected pages
     const affectedPages = presenceTracker.removeSocket(socket.id);
     for (const { pageId, driveId } of affectedPages) {

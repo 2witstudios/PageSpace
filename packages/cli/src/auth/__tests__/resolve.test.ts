@@ -335,3 +335,20 @@ describe('mcpNoExplicitCredentialMessage', () => {
     expect(message).not.toMatch(/activate a key for this machine/i);
   });
 });
+
+describe('resolveAuth — a machine credential is never an auth source', () => {
+  it('given the requested key name holds a machine credential (pagespace env enroll), should resolve to none rather than treat the private key as a login', () => {
+    const machine = {
+      kind: 'machine' as const,
+      privateKey: 'MC4CAQAwBQYDK2VwBCIEIA',
+      enrollmentId: 'enr_1',
+      envId: 'env_1',
+      serverPublicKey: 'MCowBQYDK2VwAyEA',
+      serverKeyId: 'k1',
+      scopes: [],
+      createdAt: '2026-09-05T10:00:00.000Z',
+    };
+    const source = resolveAuth({}, {}, { 'https://pagespace.ai': { 'env:enr_1': machine } }, 'https://pagespace.ai', 'env:enr_1');
+    expect(source).toEqual({ kind: 'none', host: 'https://pagespace.ai' });
+  });
+});

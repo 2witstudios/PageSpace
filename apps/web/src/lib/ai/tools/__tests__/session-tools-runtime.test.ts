@@ -317,7 +317,7 @@ describe('createWorkerSession — placement', () => {
       const result = await deps.createWorkerSession({ ...baseInput, workspace: 'new' });
 
       expect(result).toEqual({ ok: true, workspaceId: 'ses-fresh' });
-      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null });
+      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: null, envId: null });
       expect(mockCreateConversationInSession).toHaveBeenCalledWith(
         expect.objectContaining({ workspaceId: 'ses-fresh' }),
       );
@@ -334,6 +334,30 @@ describe('createWorkerSession — placement', () => {
       expect(result).toEqual(expect.objectContaining({ ok: false, reason: 'not_permitted' }));
       expect(mockCheckAccessForSubject).toHaveBeenCalledWith('user-1', expect.objectContaining({ driveId: 'drive-1' }));
       expect(mockSpawnSession).not.toHaveBeenCalled();
+    });
+
+    test("honors the target agent's own defaultEnvId when Sandbox is enabled (review — general-purpose self-review, PR #2513: this path fetched defaultEnvId/sandboxEnabled but never applied them)", async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: true });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: 'env-default' });
+    });
+
+    test('does NOT apply defaultEnvId while the agent\'s Sandbox switch is off — the stored default stays inert', async () => {
+      mockGetAiAgent.mockResolvedValue({ id: 'agent-1', driveId: 'drive-1', defaultEnvId: 'env-default', sandboxEnabled: false });
+      mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+      mockSpawnSession.mockResolvedValue({ ok: true, session: { id: 'ses-fresh' } });
+      mockCreateConversationInSession.mockResolvedValue(undefined);
+
+      const deps = buildSessionToolsDeps();
+      await deps.createWorkerSession({ ...baseInput, agentPageId: 'agent-1', workspace: 'new' });
+
+      expect(mockSpawnSession).toHaveBeenCalledWith({ userId: 'user-1', driveId: 'drive-1', envId: null });
     });
 
     test('a spawnSession cap refusal propagates as session_limit_reached', async () => {

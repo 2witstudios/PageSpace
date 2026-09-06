@@ -24,12 +24,26 @@
  * unrecognized value on a confirmation flag like `--yes=oops` — better to
  * reject it as an unknown flag than silently coerce a typo to `false`.
  *
+ * `--timeout <seconds>` is the caller's wall-clock deadline for the ONE
+ * request a command makes, in seconds (a human-facing unit; the SDK's own
+ * option is milliseconds). It exists because per-operation deadlines used to
+ * be unraisable: `agents.ask` declares a 120s default and the client applied
+ * it in preference to any caller setting, so a consult whose duration is
+ * inherently unbounded could not be waited on, and the completed answer was
+ * abandoned. Rejected rather than defaulted when the CONVERTED millisecond
+ * value is unusable: silently substituting 30s for `--timeout abc` would make
+ * a caller who asked to wait longer wait LESS, which is the opposite of what
+ * they asked for — and so, more quietly, would accepting `--timeout 0.0001`
+ * (rounds to 0ms) or `--timeout 1e308` (overflows to Infinity, which Node's
+ * setTimeout silently treats as 1ms).
+ *
  * `--profile` (the pre-1.5.0 name for `--key`) is special-cased to a
  * dedicated rename error wherever it appears in argv — it was a GLOBAL
  * value flag before the rename, so letting it fall through as a generic
  * unknown flag (or worse, pass through to a command arg-mapper after a
  * positional) would bury the one-line fix.
  */
+import { isUsableTimeoutMs, MAX_TIMEOUT_MS } from '../config/resolve.js';
 
 export interface ParsedFlags {
   readonly json: boolean;
@@ -42,6 +56,8 @@ export interface ParsedFlags {
   readonly help: boolean;
   readonly version: boolean;
   readonly device: boolean;
+  /** `--timeout <seconds>` as milliseconds, ready to hand to `PageSpaceClientOptions.timeoutMs`. */
+  readonly timeoutMs: number | undefined;
 }
 
 export interface CommandIntent {
@@ -58,7 +74,7 @@ export interface UsageError {
 
 export type ParseResult = CommandIntent | UsageError;
 
-const VALUE_FLAGS = new Set(['--host', '--token', '--key']);
+const VALUE_FLAGS = new Set(['--host', '--token', '--key', '--timeout']);
 const BOOLEAN_FLAGS = new Set(['--json', '--yes', '--all', '--force', '--help', '--version', '--device']);
 
 export const PROFILE_FLAG_RENAMED_MESSAGE = '--profile was renamed to --key in 1.5.0.';
@@ -74,6 +90,7 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   let help = false;
   let version = false;
   let device = false;
+  let timeoutMs: number | undefined;
   const args: string[] = [];
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -94,7 +111,32 @@ export function parseArgv(argv: readonly string[]): ParseResult {
       }
       if (flagName === '--host') host = value;
       else if (flagName === '--token') token = value;
-      else key = value;
+      else if (flagName === '--key') key = value;
+      else {
+        // Seconds in, milliseconds out. Finite and > 0 only: 0 and negatives
+        // would mean "already expired", and NaN would silently become the
+        // default the caller was trying to override.
+        // Validated AFTER the conversion, because the conversion is where the
+        // unusable values come from: 0.0001 is a positive finite number of
+        // seconds that rounds to 0ms, and 1e308 is finite until multiplied by
+        // 1000. Both yield a client that aborts every request immediately —
+        // and since an explicit timeout outranks each operation's own default,
+        // the caller asking to wait longer is the one who breaks.
+        const requestedMs = Math.round(Number(value) * 1000);
+        if (!isUsableTimeoutMs(requestedMs)) {
+          // Stated in MILLISECONDS because milliseconds are what is actually
+          // checked. Quoting a seconds range would misdescribe the boundaries
+          // it is supposed to explain: rounding means `0.0005` (1ms) and
+          // `2147483.5` (2147483500ms) are both accepted, so "between 0.001
+          // and 2147483 seconds" would name a range that is neither what is
+          // enforced nor what a caller at the edge observes.
+          return {
+            kind: 'usage-error',
+            message: `Flag --timeout requires a number of seconds that converts to between 1 and ${MAX_TIMEOUT_MS} milliseconds.`,
+          };
+        }
+        timeoutMs = requestedMs;
+      }
       if (inlineValue === undefined) i += 1;
       continue;
     }
@@ -124,6 +166,6 @@ export function parseArgv(argv: readonly string[]): ParseResult {
   return {
     kind: 'command',
     args,
-    flags: { json, host, token, key, yes, all, force, help, version, device },
+    flags: { json, host, token, key, yes, all, force, help, version, device, timeoutMs },
   };
 }

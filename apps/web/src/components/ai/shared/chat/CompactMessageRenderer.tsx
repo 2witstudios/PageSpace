@@ -65,7 +65,7 @@ const CompactTextBlock: React.FC<CompactTextBlockProps> = React.memo(({
   return (
     <div
       className={`group relative text-xs mb-1 min-w-0 max-w-full ${role === 'user'
-          ? 'p-2 rounded-md bg-primary/10 dark:bg-accent/20 ml-2'
+          ? 'p-2 rounded-md bg-primary-soft ml-2'
           : ''
         }`}
     >

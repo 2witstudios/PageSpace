@@ -8,7 +8,7 @@ interface AuthShellProps {
 
 export function AuthShell({ children }: AuthShellProps) {
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-blue-50 via-blue-100/60 to-blue-200/50 dark:from-gray-950 dark:via-blue-950/40 dark:to-gray-900">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-blue-50 via-blue-100/60 to-blue-200/50 dark:from-background dark:via-blue-950/40 dark:to-card">
       {/* Floating orbs */}
       <motion.div
         className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-blue-300/30 blur-3xl dark:bg-blue-500/10"

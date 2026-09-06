@@ -216,7 +216,7 @@ vi.mock('@pagespace/lib/billing/credit-gate', () => ({
 }));
 
 vi.mock('@/lib/ai/core/provider-factory', () => ({
-  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.3-chat' }),
+  createAIProvider: vi.fn().mockResolvedValue({ model: {}, provider: 'openai', modelName: 'openai/gpt-5.4-nano' }),
   updateUserProviderSettings: vi.fn(),
   createProviderErrorResponse: vi.fn(),
   isProviderError: vi.fn().mockReturnValue(false),
@@ -339,7 +339,7 @@ vi.mock('@/lib/ai/core/ai-providers-config', () => ({
   ADMIN_ONLY_PROVIDERS: new Set<string>([]),
   resolveProviderModel: vi.fn((sp: string, sm: string) => ({
     provider: sp && sm ? sp : 'openai',
-    model: sm || 'openai/gpt-5.3-chat',
+    model: sm || 'openai/gpt-5.4-nano',
   })),
 }));
 vi.mock('@/lib/ai/core/tool-utils', () => ({
@@ -404,7 +404,7 @@ const makeRequest = () =>
     body: JSON.stringify({
       messages: [{ id: 'msg_1', role: 'user', parts: [{ type: 'text', text: 'Hello' }] }],
       selectedProvider: 'openai',
-      selectedModel: 'openai/gpt-5.3-chat',
+      selectedModel: 'openai/gpt-5.4-nano',
     }),
   });
 
@@ -506,7 +506,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('openai/gpt-5.3-chat');
+    expect(call.model).toBe('openai/gpt-5.4-nano');
     expect(call.totalTokens).toBeUndefined();
   });
 
@@ -519,7 +519,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
 
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.3-chat', totalTokens: 20 });
+    expect({ model: call.model, totalTokens: call.totalTokens }).toEqual({ model: 'openai/gpt-5.4-nano', totalTokens: 20 });
   });
 
   it('AWAITS trackUsage in onFinish (durable persistence, not fire-and-forget)', async () => {
@@ -571,7 +571,7 @@ describe('POST /api/ai/global/[id]/messages — usage logging durability (R4)', 
     expect(mockSaveGlobalAssistantMessageToDatabase.mock.calls.length).toBe(savesBeforeFinish);
     expect(AIMonitoring.trackUsage).toHaveBeenCalledTimes(1);
     const call = vi.mocked(AIMonitoring.trackUsage).mock.calls[0][0];
-    expect(call.model).toBe('openai/gpt-5.3-chat');
+    expect(call.model).toBe('openai/gpt-5.4-nano');
   });
 
   it('settles the hold (trackUsage) even when persisting the assistant message throws', async () => {
