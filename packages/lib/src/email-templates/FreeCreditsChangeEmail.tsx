@@ -123,7 +123,7 @@ export function FreeCreditsChangeEmail({
   return (
     <Html>
       <Head />
-      <Preview>Free credits are now a one-time starter grant. Everything you have stays yours.</Preview>
+      <Preview>Free plan credits are now a one-time grant of {starterCredits}. Your current balance is unchanged.</Preview>
       <Body style={emailStyles.main}>
         <Container style={emailStyles.container}>
           <Section style={darkHeader}>
@@ -132,60 +132,46 @@ export function FreeCreditsChangeEmail({
           <Section style={emailStyles.content}>
             <Text style={eyebrow}>Plan update</Text>
             <Text style={emailStyles.contentHeading}>
-              A change to credits on the Free plan
+              Free plan credits are changing
             </Text>
             <Text style={emailStyles.paragraph}>Hi {userName},</Text>
             <Text style={emailStyles.paragraph}>
-              A quick, honest heads-up about how AI credits work on your Free
-              plan. The short version: nothing you have is going away, but
-              the monthly top-up is.
+              Starting today, the Free plan includes a one-time grant of{' '}
+              {starterCredits} credits instead of {starterCredits} credits per
+              month. The grant is added the first time you use AI and is not
+              renewed.
             </Text>
-
-            <Section style={calloutCard}>
-              <Text style={calloutHeading}>What&apos;s changing</Text>
-              <Text style={calloutText}>
-                Until now, Free accounts received {starterCredits} credits
-                every month, and unused credits piled up. Starting today,
-                Free comes with {starterCredits} credits once, granted the
-                first time you use AI. That grant doesn&apos;t refill.
-              </Text>
-            </Section>
 
             <Section style={keepCard}>
               <Text style={{ ...calloutText, fontWeight: typography.semibold, color: colors.heading }}>
-                What you keep
+                Your current balance is not affected
               </Text>
               <Text style={{ ...calloutText, marginTop: spacing.xs }}>
                 {currentCredits !== undefined ? (
                   <>
-                    Every credit already in your account. You have{' '}
-                    {currentCredits} credits right now, and they stay there
-                    until you spend them. Credits never expire and nothing is
-                    being taken back.
+                    You have {currentCredits} credits. They remain available
+                    until you use them and do not expire.
                   </>
                 ) : (
                   <>
-                    Your {starterCredits} starter credits are still waiting
-                    for your first AI call, and once granted they never
+                    You have not used AI yet. Your {starterCredits} starter
+                    credits will be added on your first AI request and do not
                     expire.
                   </>
                 )}
               </Text>
               <Text style={{ ...calloutText, marginTop: spacing.xs }}>
-                Everything else on Free is unchanged: your documents, drives,
-                tasks, channels, collaboration, storage, and the same set of
-                AI models.
+                Storage, documents, drives, tasks, channels, and the Free plan
+                model list are unchanged.
               </Text>
             </Section>
 
             <Section style={calloutCard}>
-              <Text style={calloutHeading}>When you run low</Text>
+              <Text style={calloutHeading}>Adding credits</Text>
               <Text style={calloutText}>
-                Two options, and both keep whatever balance you already
-                have. Buy a top-up pack from {minTopup} (top-ups never
-                expire), or upgrade to Pro for {proMonthlyCredits} credits
-                every month that roll over when unused, plus the full model
-                catalogue.
+                Top-up packs start at {minTopup} and do not expire. The Pro plan
+                includes {proMonthlyCredits} credits per month, unused credits
+                carry over, and all models are available.
               </Text>
               <Text style={{ ...calloutText, marginTop: spacing.sm }}>
                 <Link href={usageUrl} style={secondaryLink}>
@@ -198,29 +184,20 @@ export function FreeCreditsChangeEmail({
               </Text>
             </Section>
 
-            <Text style={emailStyles.paragraph}>
-              Why: free credits that refilled every month and never expired
-              were an open-ended cost for a small team, and most Free
-              accounts never used them. A one-time grant keeps Free
-              genuinely free to try, and keeps us able to keep offering it.
-            </Text>
-
             <Section style={emailStyles.buttonContainer}>
               <Button style={darkButton} href={planUrl}>
-                See your plan
+                View your plan
               </Button>
             </Section>
 
             <Text style={emailStyles.hint}>
-              Questions, or think we got something wrong? Just reply to this
-              email. We read every one.
+              Reply to this email if you have questions.
             </Text>
           </Section>
           <Section style={emailStyles.footer}>
             <Text style={emailStyles.footerText}>
-              You&apos;re receiving this because you have a PageSpace account
-              on the Free plan. It&apos;s a notice about a change to your
-              plan, so it goes to every Free account.
+              You are receiving this notice because your PageSpace account is
+              on the Free plan.
             </Text>
             {postalAddress ? (
               <Text style={emailStyles.footerText}>{postalAddress}</Text>

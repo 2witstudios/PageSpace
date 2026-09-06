@@ -76,7 +76,7 @@ interface Recipient {
   email: string;
 }
 
-const EMAIL_SUBJECT = 'A change to credits on your Free plan';
+const EMAIL_SUBJECT = 'Free plan credits are changing';
 
 /**
  * Namespace for the per-recipient Resend idempotency key. Stable across

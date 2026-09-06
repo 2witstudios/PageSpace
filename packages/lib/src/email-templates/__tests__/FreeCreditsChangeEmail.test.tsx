@@ -20,23 +20,23 @@ describe('FreeCreditsChangeEmail', () => {
   it('given the change props, should say the grant is one-time and no longer refills', async () => {
     const html = await render();
 
-    expect(html).toContain('once');
-    expect(html).toContain("doesn&#x27;t refill");
+    expect(html).toContain('one-time grant');
+    expect(html).toContain('is not renewed');
     expect(html).not.toContain('/month');
   });
 
   it('given a current balance, should tell the recipient exactly what they keep', async () => {
     const html = await render({ currentCredits: '3.2' });
 
-    expect(html).toMatch(/You have[\s\S]{0,40}3\.2[\s\S]{0,40}credits right now/);
-    expect(html).toContain('never expire');
+    expect(html).toMatch(/You have[\s\S]{0,40}3\.2[\s\S]{0,40}credits\./);
+    expect(html).toContain('do not expire');
   });
 
   it('given no balance (never used AI), should say the starter credits are still waiting', async () => {
     const html = await render({ currentCredits: undefined });
 
-    expect(html).toContain('still waiting');
-    expect(html).not.toContain('right now');
+    expect(html).toContain('have not used AI yet');
+    expect(html).not.toContain('You have 3.2');
   });
 
   it('given plan and usage URLs, should link both the plan CTA and buy-credits path', async () => {
@@ -49,8 +49,8 @@ describe('FreeCreditsChangeEmail', () => {
   it('given the pricing props, should quote the top-up floor and the Pro allowance', async () => {
     const html = await render({ minTopup: '$5', proMonthlyCredits: '15' });
 
-    expect(html).toMatch(/from[\s\S]{0,40}\$5/);
-    expect(html).toMatch(/Pro for[\s\S]{0,40}15[\s\S]{0,40}credits/);
+    expect(html).toMatch(/start at[\s\S]{0,40}\$5/);
+    expect(html).toMatch(/includes[\s\S]{0,40}15[\s\S]{0,40}credits per month/);
   });
 
   it('is a relationship notice, so it renders NO unsubscribe link', async () => {
