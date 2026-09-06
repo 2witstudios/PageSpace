@@ -222,6 +222,7 @@ async function main(): Promise<number> {
       monthlyRemainingCents: creditBalances.monthlyRemainingCents,
       topupRemainingCents: creditBalances.topupRemainingCents,
       debtCents: creditBalances.debtCents,
+      monthlyPeriodEnd: creditBalances.monthlyPeriodEnd,
     })
     .from(users)
     .leftJoin(creditBalances, eq(creditBalances.userId, users.id))
@@ -230,23 +231,31 @@ async function main(): Promise<number> {
   console.log(`👥 ${rows.length} free-tier user(s) returned from the database.\n`);
 
   // Spendable, the same arithmetic as credit-balance's display read: funded buckets
-  // minus debt, clamped at 0 when there is no debt. No row (never used AI) → undefined,
-  // and the template says the starter credits are still waiting.
-  const creditsByUserId = new Map<string, string | undefined>();
+  // (plus the pending starter grant on a bare top-up row with no period stamped —
+  // the gate funds it on the next call) minus debt. Three outcomes, mirroring what
+  // the app shows: no row (never used AI) → the starter credits are still waiting;
+  // negative → in the red (a top-up clears it); otherwise the balance they keep.
+  const balanceByUserId = new Map<string, { currentCredits?: string; overageCredits?: string }>();
   for (const r of rows) {
     if (r.monthlyRemainingCents === null || r.topupRemainingCents === null) {
-      creditsByUserId.set(r.id, undefined);
+      balanceByUserId.set(r.id, {});
       continue;
     }
     const debt = r.debtCents ?? 0;
-    const funded = r.monthlyRemainingCents + r.topupRemainingCents;
+    const pendingStarter = r.monthlyPeriodEnd === null ? TIER_MONTHLY_ALLOWANCE_CENTS.free : 0;
+    const funded = r.monthlyRemainingCents + r.topupRemainingCents + pendingStarter;
     const spendable = debt > 0 ? funded - debt : Math.max(0, funded);
-    creditsByUserId.set(r.id, formatCredits(spendable));
+    balanceByUserId.set(
+      r.id,
+      spendable < 0
+        ? { overageCredits: formatCredits(-spendable) }
+        : { currentCredits: formatCredits(spendable) },
+    );
   }
 
   const propsFor = ({ userId, userName }: Recipient) => ({
     userName,
-    currentCredits: creditsByUserId.get(userId),
+    ...(balanceByUserId.get(userId) ?? {}),
     starterCredits,
     proMonthlyCredits,
     minTopup,

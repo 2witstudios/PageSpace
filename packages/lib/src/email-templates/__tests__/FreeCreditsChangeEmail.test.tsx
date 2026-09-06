@@ -33,6 +33,14 @@ describe('FreeCreditsChangeEmail', () => {
     expect(html).toContain('do not expire');
   });
 
+  it('given a negative balance, should say how far in the red and that a top-up clears it — never "You have -0.3 credits"', async () => {
+    const html = await render({ currentCredits: undefined, overageCredits: '0.3' });
+
+    expect(html).toMatch(/balance is[\s\S]{0,40}0\.3[\s\S]{0,40}credits in the red/);
+    expect(html).toContain('top-up clears the overage');
+    expect(html).not.toContain('You have');
+  });
+
   it('given no balance (never used AI), should say the starter credits are still waiting', async () => {
     const html = await render({ currentCredits: undefined });
 

@@ -88,6 +88,27 @@ export const TIER_ALLOWANCE_REFILLS: Record<SubscriptionTier, boolean> = {
 };
 
 /**
+ * Whether `tier` is re-granted its allowance every billing period. Accepts the raw
+ * `users.subscriptionTier` string: an unknown/legacy value is NOT a refilling tier
+ * (no renewal is ever coming for it), so callers show no renewal date for it. The
+ * gate never rolls such a tier either (it has no allowance).
+ */
+export function allowanceRefills(tier: string): boolean {
+  return TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === true;
+}
+
+/**
+ * Whether `tier` gets a ONE-TIME starter grant: it has an allowance AND that
+ * allowance does not refill. An unknown/legacy tier is neither — it must not be
+ * pre-credited or granted anything. The single predicate the gate's starter-grant
+ * branch and the balance display's pending-grant pre-credit share, so they can never
+ * disagree about which rows are "waiting for the grant".
+ */
+export function isOneTimeAllowanceTier(tier: string): boolean {
+  return tier in TIER_MONTHLY_ALLOWANCE_CENTS && TIER_ALLOWANCE_REFILLS[tier as SubscriptionTier] === false;
+}
+
+/**
  * Block AI when spendable credits are at or below this floor. Bounds the single
  * in-flight call that can overshoot zero: the gate runs BEFORE a call but the real
  * cost is only known AFTER the stream, so the gate can wave through one call that

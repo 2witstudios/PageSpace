@@ -131,3 +131,23 @@ describe('TIER_ALLOWANCE_REFILLS', () => {
     expect(TIER_MONTHLY_ALLOWANCE_CENTS.free).toBe(500);
   });
 });
+
+describe('allowanceRefills / isOneTimeAllowanceTier', () => {
+  it('free is a one-time tier and does not refill; paid tiers refill and are not one-time', async () => {
+    const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
+    expect(allowanceRefills('free')).toBe(false);
+    expect(isOneTimeAllowanceTier('free')).toBe(true);
+    for (const tier of ['pro', 'founder', 'business']) {
+      expect(allowanceRefills(tier)).toBe(true);
+      expect(isOneTimeAllowanceTier(tier)).toBe(false);
+    }
+  });
+
+  it('an unknown/legacy tier string is NEITHER refilling NOR one-time — nothing is granted or pre-credited for it', async () => {
+    // users.subscriptionTier reaches callers as an unchecked string; a legacy value
+    // like 'normal' must not be mistaken for the free tier's starter grant.
+    const { allowanceRefills, isOneTimeAllowanceTier } = await import('../credit-pricing');
+    expect(allowanceRefills('normal')).toBe(false);
+    expect(isOneTimeAllowanceTier('normal')).toBe(false);
+  });
+});

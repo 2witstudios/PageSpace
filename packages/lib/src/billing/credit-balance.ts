@@ -33,7 +33,7 @@ import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { TIER_MONTHLY_ALLOWANCE_CENTS, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
+import { TIER_MONTHLY_ALLOWANCE_CENTS, allowanceRefills, isOneTimeAllowanceTier } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -124,7 +124,7 @@ interface FundedBalanceRow {
  * lean routing read so both pre-credit the same rows.
  */
 function pendingStarterGrant(row: FundedBalanceRow, tier: SubscriptionTier): boolean {
-  return TIER_ALLOWANCE_REFILLS[tier] === false && row.monthlyPeriodEnd === null;
+  return isOneTimeAllowanceTier(tier) && row.monthlyPeriodEnd === null;
 }
 
 function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
@@ -237,7 +237,7 @@ export async function getCreditBalance(
   // one-time grant — so surface null and let the UI omit "Renews …" entirely, rather
   // than advancing a phantom date forever.
   const displayPeriodEnd: Date | null = (() => {
-    if (!TIER_ALLOWANCE_REFILLS[tier]) return null;
+    if (!allowanceRefills(tier)) return null;
     if (!expired) return periodEnd;
     let projected = addOneMonth(periodEnd ?? now);
     while (projected <= now) {

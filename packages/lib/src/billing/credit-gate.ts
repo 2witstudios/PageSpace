@@ -35,7 +35,8 @@ import {
 import {
   RESERVE_FLOOR_CENTS,
   TIER_MONTHLY_ALLOWANCE_CENTS,
-  TIER_ALLOWANCE_REFILLS,
+  allowanceRefills,
+  isOneTimeAllowanceTier,
   CREDIT_HOLD_ESTIMATE_CENTS,
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
@@ -282,11 +283,10 @@ export async function canConsumeAI(
   const tierHasAllowance = tier in TIER_MONTHLY_ALLOWANCE_CENTS;
   // Free never refills, so the (rare) subscription lookup is only ever reached by a
   // refilling tier with an expired window.
-  const tierRefills = TIER_ALLOWANCE_REFILLS[tier] === true;
   if (
     windowExpired &&
     tierHasAllowance &&
-    tierRefills &&
+    allowanceRefills(tier) &&
     !(await hasRenewalCapableSubscription(db, userId))
   ) {
     const newEnd = addOneMonth(now);
@@ -415,7 +415,7 @@ export async function canConsumeAI(
   // concurrent init, or a grant already recorded under the old monthly scheme, can
   // never double-fund. The increment is one relative UPDATE, atomic against a
   // concurrent top-up's own locked write to the same row.
-  if (row && row.monthlyPeriodEnd === null && tierHasAllowance && !tierRefills) {
+  if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
     const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier];
     await db.transaction(async (tx) => {
       const granted = await tx
@@ -494,8 +494,9 @@ export async function canConsumeAI(
     // Rollover: the monthly bucket is always spendable — credits never expire. A paid user
     // whose window has lapsed continues to spend from their carried balance; the renewal
     // invoice.paid will then add the new allowance on top of whatever remains (not reset).
-    // Free users were handled by the addOneMonth reset above and never reach here with an
-    // expired window. The gate still does NOT refill paid tiers — invoice.paid is
+    // A free user's allowance is a one-time grant (never refilled), so an expired free
+    // window is simply a user spending down what they have — no reset applies to it.
+    // The gate still does NOT refill paid tiers — invoice.paid is
     // authoritative for that — so there is no double-grant risk: the refill reads the
     // current DB balance inside its own transaction and adds the allowance to whatever is
     // there, exactly accounting for any spend that happened during the gap.
@@ -600,9 +601,9 @@ export async function canConsumeAI(
  * The decision RULE is the one `evaluateGate` applies — spendable above the
  * reserve floor, debt netted, billing-disabled deployments unlimited — reached
  * through `readSpendableCents`, which shares its arithmetic with the display read
- * (including the free-tier lapsed-window rollover the gate applies lazily, so a
- * free user whose month has ticked over is not parked for the gap between the
- * rollover being due and the next AI call performing it).
+ * (including the pending one-time starter grant on a bare free row, which the gate
+ * applies lazily on the next call — so a free user who topped up before their first
+ * AI request is not read as broke for the gap before that call).
  *
  * It reads the funded-balance columns and NOTHING else: ONE indexed row, no
  * aggregate. Going through `getCreditBalance` here would also run its `SUM` over

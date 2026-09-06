@@ -22,6 +22,12 @@ interface FreeCreditsChangeEmailProps {
    * in which case the email tells them their starter credits are still waiting.
    */
   currentCredits?: string;
+  /**
+   * How far in the red the recipient is, as a positive display string (e.g. "0.3"),
+   * when their balance is negative (an in-flight call overshot). Mutually exclusive
+   * with `currentCredits`; when set the email says a top-up clears the overage.
+   */
+  overageCredits?: string;
   /** The free starter grant, as a display string (e.g. "5"). */
   starterCredits: string;
   /** The Pro plan's monthly allowance, as a display string (e.g. "15"). */
@@ -113,6 +119,7 @@ const keepCard = {
 export function FreeCreditsChangeEmail({
   userName,
   currentCredits,
+  overageCredits,
   starterCredits,
   proMonthlyCredits,
   minTopup,
@@ -151,7 +158,13 @@ export function FreeCreditsChangeEmail({
                 Your current balance is not affected
               </Text>
               <Text style={{ ...calloutText, marginTop: spacing.xs }}>
-                {currentCredits !== undefined ? (
+                {overageCredits !== undefined ? (
+                  <>
+                    Your balance is {overageCredits} credits in the red. A
+                    top-up clears the overage first and the rest is added to
+                    your balance; purchased credits do not expire.
+                  </>
+                ) : currentCredits !== undefined ? (
                   <>
                     You have {currentCredits} credits. They remain available
                     until you use them and do not expire.

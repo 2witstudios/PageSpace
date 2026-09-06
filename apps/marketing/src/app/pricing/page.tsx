@@ -120,8 +120,9 @@ export default function PricingPage() {
               Simple, transparent pricing
             </h1>
             <p className="text-lg text-muted-foreground mb-4">
-              Every plan includes a monthly allowance of credits that meter
-              your usage. Run low? Buy more anytime. No hidden fees.
+              Every plan includes credits that meter your AI usage: a
+              one-time starter grant on Free, a monthly allowance on paid
+              plans. Run low? Buy more anytime. No hidden fees.
             </p>
             <p className="text-sm text-muted-foreground">
               No credit card required for the Free plan.
@@ -235,7 +236,7 @@ export default function PricingPage() {
               <tbody>
                 {[
                   { key: "storage", label: "Storage" },
-                  { key: "monthlyCredits", label: "Monthly credits" },
+                  { key: "monthlyCredits", label: "Credits" },
                   { key: "models", label: "Model access" },
                   { key: "sandbox", label: "Cloud sandbox — run code, use a terminal" },
                   { key: "buyMore", label: "Buy more credits anytime" },
