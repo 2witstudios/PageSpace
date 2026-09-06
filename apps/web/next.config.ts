@@ -11,11 +11,15 @@ import { WELL_KNOWN_REWRITES } from "./src/lib/well-known/rewrites";
 // directories from silently overriding source edits during `bun run dev`.
 // Docker builds always run with NODE_ENV=production and pre-build packages
 // before this file is evaluated, so both conditions are satisfied there.
-const dbDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/db/dist"));
-const libDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/lib/dist"));
-const editorDistExists = fs.existsSync(path.resolve(__dirname, "../../packages/editor/dist"));
+//
+// One list drives the dist check, the transpilePackages fallback and the
+// externals predicate below, so a new workspace package is one edit here.
+const WORKSPACE_PACKAGES = ["db", "lib", "editor"] as const;
 const workspaceDistReady =
-  process.env.NODE_ENV === "production" && dbDistExists && libDistExists && editorDistExists;
+  process.env.NODE_ENV === "production" &&
+  WORKSPACE_PACKAGES.every((pkg) =>
+    fs.existsSync(path.resolve(__dirname, `../../packages/${pkg}/dist`))
+  );
 
 type ExternalsFn = (
   data: { context: string; request: string; contextInfo?: { issuer?: string } },
@@ -80,7 +84,7 @@ const edgeNodeOnlyGuard: ExternalsFn = ({ request, contextInfo }, callback) => {
 export const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: path.join(__dirname, "../.."),
-  transpilePackages: workspaceDistReady ? [] : ["@pagespace/db", "@pagespace/lib", "@pagespace/editor"],
+  transpilePackages: workspaceDistReady ? [] : WORKSPACE_PACKAGES.map((pkg) => `@pagespace/${pkg}`),
   // Preserve RFC 8252 loopback redirect_uri query values; NextRequest URL
   // normalization rewrites percent-encoded 127.0.0.1 to localhost otherwise.
   skipMiddlewareUrlNormalize: true,
@@ -98,10 +102,13 @@ export const nextConfig: NextConfig = {
     // When webpack compiles it from SOURCE via the tsconfig `paths` alias
     // (dev, and any build where workspaceDistReady is false) those `.js`
     // specifiers must resolve to the sibling `.ts` file — the standard
-    // webpack setting for TypeScript ESM. A no-op for every other module.
+    // webpack setting for TypeScript ESM. `.js` stays first so the common
+    // case (a real `.js` file under node_modules) resolves on the first try;
+    // editor's src has no `.js` siblings (outDir is dist), so it falls
+    // through to `.ts` there and nowhere else.
     config.resolve.extensionAlias = {
       ...(config.resolve.extensionAlias ?? {}),
-      '.js': ['.ts', '.tsx', '.js'],
+      '.js': ['.js', '.ts', '.tsx'],
     };
 
     // Externalization emits `require()` calls, which only the Node.js runtime
@@ -112,9 +119,8 @@ export const nextConfig: NextConfig = {
     // "Native module not found: @pagespace/lib/logging/logger-config").
     if (isServer && nextRuntime === 'nodejs') {
       // Externalize pg unconditionally (bun cache path bypasses Next's heuristic).
-      // When workspaceDistReady, also externalize @pagespace/db, @pagespace/lib
-      // and @pagespace/editor so Next emits require('@pagespace/...') calls
-      // resolved to their dist/.
+      // When workspaceDistReady, also externalize every WORKSPACE_PACKAGES
+      // entry so Next emits require('@pagespace/...') calls resolved to dist/.
       const bunWorkspaceExternals = (
         { request }: { context: string; request: string },
         callback: (err?: Error | null, result?: string) => void
@@ -122,11 +128,8 @@ export const nextConfig: NextConfig = {
         if (
           request === 'pg' || request === 'pg-pool' || request === 'pg-protocol' ||
           request === 'pg-native' ||
-          (workspaceDistReady && (
-            request.startsWith('@pagespace/db') ||
-            request.startsWith('@pagespace/lib') ||
-            request.startsWith('@pagespace/editor')
-          ))
+          (workspaceDistReady &&
+            WORKSPACE_PACKAGES.some((pkg) => request.startsWith(`@pagespace/${pkg}`)))
         ) {
           return callback(null, `commonjs ${request}`);
         }

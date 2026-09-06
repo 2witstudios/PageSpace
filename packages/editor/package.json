@@ -4,7 +4,7 @@
   "private": true,
   "license": "UNLICENSED",
   "type": "module",
-  "description": "Headless, React-free ProseMirror/TipTap schema for PageSpace documents \u2014 the frozen COLLAB_SCHEMA_VERSION surface shared by the web client and the Node collab service.",
+  "description": "Headless, React-free ProseMirror/TipTap schema for PageSpace documents: the frozen COLLAB_SCHEMA_VERSION surface shared by the web client and any headless Node consumer. yjs is a runtime singleton and is pinned in the root package.json overrides, not here.",
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "typecheck": "tsc --noEmit",
@@ -88,11 +88,7 @@
     "tiptap-markdown": "^0.8.10"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^2.1.0",
     "eslint": "^9.36.0",
-    "jsdom": "^25.0.1",
-    "typescript": "^5",
-    "typescript-eslint": "^8.59.0",
-    "vitest": "^2.1.0"
+    "typescript-eslint": "^8.59.0"
   }
 }

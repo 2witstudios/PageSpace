@@ -6,29 +6,30 @@
  * in CI's typecheck/test jobs — so a new workspace package silently breaks
  * every deploy unless every manifest block gains a COPY line for it.
  *
- * This walks the same eight Dockerfiles and asserts that wherever
- * `packages/lib/package.json` is copied, `packages/editor/package.json` is
- * copied in the same block, with the same COPY source form (plain, or
- * `--from=builder` in apps/realtime's runner stage).
+ * Both inventories are derived, not hand-listed: the packages from
+ * `packages/*` on disk, the Dockerfiles from `apps/* /Dockerfile*`. A new
+ * package or a new Dockerfile is therefore covered the moment it exists.
+ * `packages/lib` is the reference: wherever it is copied, every other package
+ * must be copied in the same form (plain, or `--from=<stage>` in a runner
+ * stage that re-installs), the same number of times.
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 
 const ROOT = join(__dirname, '../../..');
 
-const DOCKERFILES = [
-  'apps/admin/Dockerfile',
-  'apps/marketing/Dockerfile',
-  'apps/processor/Dockerfile',
-  'apps/realtime/Dockerfile',
-  'apps/web/Dockerfile',
-  'apps/web/Dockerfile.migrate',
-  'apps/web/Dockerfile.seed',
-  'apps/web/Dockerfile.worker',
-];
+const WORKSPACE_PACKAGES = readdirSync(join(ROOT, 'packages')).filter((dir) =>
+  existsSync(join(ROOT, 'packages', dir, 'package.json')),
+);
 
-const WORKSPACE_PACKAGES = ['db', 'lib', 'editor', 'sdk', 'cli'];
+const DOCKERFILES = readdirSync(join(ROOT, 'apps')).flatMap((app) =>
+  readdirSync(join(ROOT, 'apps', app))
+    .filter((f) => f.startsWith('Dockerfile'))
+    .map((f) => `apps/${app}/${f}`),
+);
+
+const SOURCES = new Map(DOCKERFILES.map((f) => [f, readFileSync(join(ROOT, f), 'utf-8')]));
 
 function manifestCopyLines(dockerfile: string, pkg: string): string[] {
   const re = new RegExp(`^COPY (?:--from=\\S+ )?\\S*packages/${pkg}/package\\.json \\./packages/${pkg}/$`, 'gm');
@@ -36,26 +37,20 @@ function manifestCopyLines(dockerfile: string, pkg: string): string[] {
 }
 
 describe('Dockerfile workspace manifest COPY blocks', () => {
+  it('derives a non-trivial inventory (guards the test against an empty walk)', () => {
+    expect(WORKSPACE_PACKAGES).toEqual(expect.arrayContaining(['db', 'lib', 'editor']));
+    expect(DOCKERFILES.length).toBeGreaterThanOrEqual(8);
+  });
+
   for (const file of DOCKERFILES) {
-    it(`given ${file}, should copy packages/editor/package.json beside every packages/lib/package.json`, () => {
-      const dockerfile = readFileSync(join(ROOT, file), 'utf-8');
+    it(`given ${file}, should copy every packages/* manifest wherever it copies packages/lib/package.json, in the same form`, () => {
+      const dockerfile = SOURCES.get(file)!;
       const libSites = manifestCopyLines(dockerfile, 'lib');
       expect(libSites.length, `${file} has no lib manifest COPY — test assumptions broken`).toBeGreaterThan(0);
-      const editorSites = manifestCopyLines(dockerfile, 'editor');
-      // Same count AND same source form (a `--from=builder` lib line needs a
-      // `--from=builder` editor line, or the runner stage's install fails).
-      expect(editorSites.map((l) => l.replaceAll('editor', 'lib'))).toEqual(libSites);
-    });
-
-    it(`given ${file}, should copy every workspace package manifest an equal number of times`, () => {
-      const dockerfile = readFileSync(join(ROOT, file), 'utf-8');
-      const counts = WORKSPACE_PACKAGES.map((pkg) => manifestCopyLines(dockerfile, pkg).length);
-      expect(new Set(counts).size, `uneven manifest COPY counts ${JSON.stringify(Object.fromEntries(WORKSPACE_PACKAGES.map((p, i) => [p, counts[i]])))}`).toBe(1);
+      for (const pkg of WORKSPACE_PACKAGES) {
+        const sites = manifestCopyLines(dockerfile, pkg).map((l) => l.replaceAll(`packages/${pkg}/`, 'packages/lib/'));
+        expect(sites, `${file}: packages/${pkg}/package.json COPY lines`).toEqual(libSites);
+      }
     });
   }
-
-  it('given apps/realtime/Dockerfile, should have two manifest blocks (builder and runner)', () => {
-    const dockerfile = readFileSync(join(ROOT, 'apps/realtime/Dockerfile'), 'utf-8');
-    expect(manifestCopyLines(dockerfile, 'editor')).toHaveLength(2);
-  });
 });

@@ -151,6 +151,33 @@ on a fresh checkout, so the gate should be green there; if it is not, that is th
 look at. The genuine finding (the two now-unused tiptap deps in `apps/web/package.json`) appeared
 in both runs and is fixed.
 
+## Cleanup pass (/simplify, 4 reviewers) and first review comment
+
+Applied: one `WORKSPACE_PACKAGES` list in `next.config.ts` now drives the dist check, the
+`transpilePackages` fallback and the externals predicate (was three hand-copied lists); the
+`extensionAlias` order is `.js` first so the common node_modules case resolves on the first try;
+stale "this file will move to packages/editor" / "(this directory)" comments in
+`collab-schema.ts`, `client-schema.ts` and the drift guard now name the real locations; the
+Dockerfile-manifest guard derives its package list from `packages/*` and its Dockerfile list from
+`apps/*/Dockerfile*` instead of hand lists, and asserts every package mirrors `lib`'s COPY sites
+(re-mutation-checked: admin line deleted → red, realtime `--from=builder` dropped → red);
+`tsconfig.build.json` no longer repeats four inherited options; the package's devDependencies
+are only `eslint` + `typescript-eslint` (the rest is hoisted from root, matching `lib`/`sdk`);
+eslint messages deduped and no reference to a non-existent `apps/collab`; knip entry is
+`src/*.ts` (the exports test already pins the flat layout); `vitest.workspace.ts` points at the
+package's own config instead of restating it.
+
+Codex (P2, `packages/editor/package.json`): `bun run test:unit` built only `@pagespace/lib`
+before running web's vitest directly, so on a clean checkout web tests could not resolve the
+editor dist. Verified against `package.json:26` and fixed by adding `--filter=@pagespace/editor`
+to that script.
+
+Skipped, deliberately: replacing the Dockerfile `db && lib && editor` build chains with a turbo
+invocation (changes deploy behaviour in four images; out of scope for a move); dropping
+`typesVersions` (the leaf's acceptance criteria require it alongside `exports`); extracting the
+duplicated coverage-script package arrays (pre-existing); a shared ESM tsconfig base for
+`sdk`+`editor` (two consumers is not yet worth a base).
+
 ## Not done / for the next agent
 
 - `apps/collab` does not exist yet; the package is ready for it to import

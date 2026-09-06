@@ -36,7 +36,8 @@ const APP_SRC_DIR = join(EDITOR_DIR, '..', '..');
 
 // Any `extensions:` property assigned a literal array is a hand-rolled
 // TipTap extension list — the only sanctioned way to build one is
-// collabExtensions()/clientExtensions() (this directory), consumed as
+// collabExtensions() (`@pagespace/editor/collab-schema`) or
+// clientExtensions() (this directory), consumed as
 // `extensions: clientExtensions(...)` (a function CALL, which this pattern
 // does not match). Comments are stripped first so documentation may still
 // describe the shape without tripping the guard.
@@ -538,10 +539,10 @@ describe('findInlineExtensionsArrayOffenses (pure scanner)', () => {
 
 /**
  * Paths the directory walk below does not scan.
- * - `__tests__`: client-schema.ts/collab-schema.ts themselves return
- *   extension arrays (`return [...]`), never assign one to an `extensions:`
- *   property key — no exclusion needed there, and leaving those files
- *   scanned proves that; this only excludes test fixtures.
+ * - `__tests__`: client-schema.ts itself returns an extension array
+ *   (`return [...]`), never assigns one to an `extensions:` property key —
+ *   no exclusion needed there, and leaving it scanned proves that; this
+ *   only excludes test fixtures.
  * - `editor/monaco`: Monaco (code-block language tooling, not TipTap) has
  *   its own unrelated `extensions:` property AND regex literals that defeat
  *   the naive comment stripper in `findInlineExtensionsArrayOffenses` —
@@ -561,7 +562,7 @@ describe('isExcludedFromScan (pure predicate)', () => {
   });
 
   it('does not exclude an ordinary editor source file', () => {
-    expect(isExcludedFromScan(join('apps', 'web', 'src', 'lib', 'editor', 'block-id.ts'))).toBe(false);
+    expect(isExcludedFromScan(join('apps', 'web', 'src', 'lib', 'editor', 'client-schema.ts'))).toBe(false);
   });
 
   it('does not exclude a same-named "monaco" file outside editor/', () => {
@@ -584,7 +585,7 @@ describe('structural guard: no source file bypasses clientExtensions()/collabExt
 
     expect(
       offenders,
-      `TipTap extension lists must come from collabExtensions()/clientExtensions() (apps/web/src/lib/editor):\n${offenders.join('\n')}`,
+      `TipTap extension lists must come from collabExtensions() (@pagespace/editor) or clientExtensions() (apps/web/src/lib/editor):\n${offenders.join('\n')}`,
     ).toEqual([]);
   });
 });

@@ -21,7 +21,7 @@ import { STARTER_KIT_SCHEMA_OPTIONS, TEXT_ALIGN_SCHEMA_OPTIONS } from '@pagespac
 
 /**
  * The client's extension set: everything in the frozen schema
- * (`collab-schema.ts`'s `collabExtensions()`) plus view-only additions.
+ * (`@pagespace/editor/collab-schema`'s `collabExtensions()`) plus view-only additions.
  * Deliberately NOT a re-export of `collabExtensions()` plus a spread —
  * `RichEditor` needs the client variants of `codeBlock`/`pageMention`
  * (`CodeBlockShiki`/`PageMention`, which extend the frozen schema's

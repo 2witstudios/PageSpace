@@ -2,9 +2,11 @@ import tseslint from 'typescript-eslint';
 
 // Mirrors packages/lib: this package is barrel-free and subpath-only (no
 // `main`, no `"."` export), so a barrel import is an error here too.
-// It is also React-free by contract — `apps/collab` imports it in Node —
-// so anything React/DOM-flavoured is refused at lint time, not discovered
-// at runtime when the collab service fails to boot.
+// It is also React-free by contract — a headless Node collab service
+// imports it — so anything React/DOM-flavoured is refused at lint time, not
+// discovered at runtime when that service fails to boot.
+const REACT_FREE = '@pagespace/editor is React-free; client-only code lives in apps/web';
+
 export default [
   {
     files: ['src/**/*.{ts,tsx,js,mjs}'],
@@ -19,9 +21,7 @@ export default [
           paths: [
             { name: './index', message: 'Use direct subpath imports instead of the barrel' },
             { name: '../index', message: 'Use direct subpath imports instead of the barrel' },
-            { name: 'react', message: '@pagespace/editor is React-free; client-only code lives in apps/web' },
-            { name: 'react-dom', message: '@pagespace/editor is React-free; client-only code lives in apps/web' },
-            { name: '@tiptap/react', message: '@pagespace/editor is React-free; client-only code lives in apps/web' },
+            ...['react', 'react-dom', '@tiptap/react'].map((name) => ({ name, message: REACT_FREE })),
           ],
           patterns: [
             { group: ['@/*'], message: 'apps/web aliases are unreachable from a workspace package' },

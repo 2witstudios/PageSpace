@@ -19,14 +19,7 @@ export default defineWorkspace([
       globals: true,
     },
   },
-  {
-    test: {
-      name: '@pagespace/editor',
-      root: './packages/editor',
-      environment: 'jsdom',
-      globals: true,
-    },
-  },
+  './packages/editor/vitest.config.ts',
   {
     resolve: {
       alias: {

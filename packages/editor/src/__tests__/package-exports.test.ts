@@ -25,8 +25,9 @@ type Manifest = {
 
 const manifest = JSON.parse(readFileSync(join(PKG_DIR, 'package.json'), 'utf8')) as Manifest;
 
+// Non-recursive on purpose: the package is flat, and tests live in __tests__/.
 const srcModules = readdirSync(join(PKG_DIR, 'src'))
-  .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+  .filter((f) => f.endsWith('.ts'))
   .map((f) => f.replace(/\.ts$/, ''))
   .sort();
 
@@ -41,7 +42,7 @@ describe('@pagespace/editor package surface', () => {
     // `tiptap-markdown` resolves its `require` condition to a UMD file inside
     // a `"type": "module"` package, which Node evaluates as ESM and which
     // then cannot see its own `require`. A CommonJS dist of this package
-    // therefore fails to load in Node — exactly the consumer (`apps/collab`)
+    // therefore fails to load in Node — exactly the headless collab service
     // this package exists for. Verified before switching (PR scaffold report).
     expect(manifest.type).toBe('module');
     for (const [subpath, entry] of Object.entries(manifest.exports)) {

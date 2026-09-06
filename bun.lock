@@ -501,12 +501,8 @@
         "tiptap-markdown": "^0.8.10",
       },
       "devDependencies": {
-        "@vitest/coverage-v8": "^2.1.0",
         "eslint": "^9.36.0",
-        "jsdom": "^25.0.1",
-        "typescript": "^5",
         "typescript-eslint": "^8.59.0",
-        "vitest": "^2.1.0",
       },
     },
     "packages/lib": {
