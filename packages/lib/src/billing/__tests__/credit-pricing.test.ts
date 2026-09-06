@@ -115,3 +115,19 @@ describe('realtime session constants', () => {
     expect(REALTIME_MAX_GLOBAL_SESSIONS).toBe(8);
   });
 });
+
+describe('TIER_ALLOWANCE_REFILLS', () => {
+  it('names every tier, and only the free tier is a one-time (non-refilling) grant', async () => {
+    const { TIER_ALLOWANCE_REFILLS, TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(Object.keys(TIER_ALLOWANCE_REFILLS).sort()).toEqual(Object.keys(TIER_MONTHLY_ALLOWANCE_CENTS).sort());
+    expect(TIER_ALLOWANCE_REFILLS.free).toBe(false);
+    expect(TIER_ALLOWANCE_REFILLS.pro).toBe(true);
+    expect(TIER_ALLOWANCE_REFILLS.founder).toBe(true);
+    expect(TIER_ALLOWANCE_REFILLS.business).toBe(true);
+  });
+
+  it('free starter grant is $5 of credit value by default', async () => {
+    const { TIER_MONTHLY_ALLOWANCE_CENTS } = await import('../credit-pricing');
+    expect(TIER_MONTHLY_ALLOWANCE_CENTS.free).toBe(500);
+  });
+});

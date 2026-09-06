@@ -10,7 +10,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 /**
  * GET /api/credits — the authenticated user's prepaid credit balance.
  *
- * Returns the monthly allowance bucket (rolls over each period), the never-expiring
+ * Returns the allowance bucket (paid tiers: re-granted and rolled over each period;
+ * free: a one-time starter grant, `periodEnd` null), the never-expiring
  * top-up bucket, the spendable total (net of in-flight reservations), and the
  * reserved amount. Drives the credit-balance widget and the buy-credits surfaces.
  */

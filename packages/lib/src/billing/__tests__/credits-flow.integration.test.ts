@@ -770,11 +770,29 @@ describe('credits flow — crash recovery (backfill reconcile)', () => {
 });
 
 describe('credits flow — monthly reset', () => {
-  it('gate resets an expired period to the tier allowance for a FREE user and rolls the window forward', async () => {
-    seedUser('u1', 'cus_1', 'free'); // free users always refill via the gate; subscription-backed paid users via invoice.paid
+  it('does NOT refill a FREE user whose period has expired — the starter grant is one-time (blocked at 0)', async () => {
+    seedUser('u1', 'cus_1', 'free'); // free = one-time grant (TIER_ALLOWANCE_REFILLS.free === false)
     // Drained balance whose period already ended yesterday.
+    const periodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000);
     store.creditBalances.push({
       userId: 'u1', monthlyRemainingCents: 0, monthlyAllowanceCents: 500,
+      topupRemainingCents: 0, pendingMillicents: 0,
+      monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
+      monthlyPeriodEnd: periodEnd,
+      updatedAt: new Date(),
+    });
+
+    const gate = await canConsumeAI('u1', 'free');
+    expect(gate).toEqual({ allowed: false, reason: 'out_of_credits' });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(0); // NOT refilled
+    expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBe(periodEnd.getTime()); // window NOT advanced
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(0); // no grant row
+  });
+
+  it('a FREE user keeps spending carried starter credit after the window expires (no refill, no expiry)', async () => {
+    seedUser('u1', 'cus_1', 'free');
+    store.creditBalances.push({
+      userId: 'u1', monthlyRemainingCents: 200, monthlyAllowanceCents: 500,
       topupRemainingCents: 0, pendingMillicents: 0,
       monthlyPeriodStart: new Date(Date.now() - 40 * 24 * 60 * 60 * 1000),
       monthlyPeriodEnd: new Date(Date.now() - 24 * 60 * 60 * 1000),
@@ -783,8 +801,24 @@ describe('credits flow — monthly reset', () => {
 
     const gate = await canConsumeAI('u1', 'free');
     expect(gate).toMatchObject({ allowed: true, reason: 'ok' });
-    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free); // refilled
-    expect(balanceOf('u1')!.monthlyPeriodEnd!.getTime()).toBeGreaterThan(Date.now()); // window advanced
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(200); // untouched by any reset
+  });
+
+  it('a brand-new FREE user gets the one-time starter grant on first call, and only once', async () => {
+    seedUser('u1', 'cus_1', 'free');
+
+    const first = await canConsumeAI('u1', 'free');
+    expect(first).toMatchObject({ allowed: true, reason: 'ok' });
+    expect(balanceOf('u1')!.monthlyRemainingCents).toBe(TIER_MONTHLY_ALLOWANCE_CENTS.free);
+    const grants = ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant');
+    expect(grants).toHaveLength(1);
+    expect(String(grants[0].stripeRef)).toBe('free-init-u1');
+
+    // Age the window past its end: still no second grant.
+    balanceOf('u1')!.monthlyPeriodEnd = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    const second = await canConsumeAI('u1', 'free');
+    expect(second).toMatchObject({ allowed: true, reason: 'ok' });
+    expect(ledgerOf('u1').filter((r) => r.entryType === 'monthly_grant')).toHaveLength(1);
   });
 
   it('paid user with expired window, a live subscription, and ZERO carry is blocked (no credits — invoice.paid owns the refill)', async () => {

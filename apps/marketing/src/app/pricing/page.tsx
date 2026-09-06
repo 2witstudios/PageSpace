@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata, APP_URL } from "@/lib/metadata";
-import { MONTHLY_CREDITS } from "@/lib/credits";
+import { creditsPhrase } from "@/lib/credits";
 import {
   TIERS as PLAN_ORDER,
   TIER_PLAN_LIMITS,
@@ -86,7 +86,7 @@ const plans: Plan[] = PLAN_ORDER.map((tier) => {
     highlight: copy.highlight,
     features: {
       storage: formatTierBytes(limits.quotaBytes, " "),
-      monthlyCredits: `${MONTHLY_CREDITS[tier]}/mo`,
+      monthlyCredits: creditsPhrase(tier),
       models: copy.models,
       buyMore: true,
       realtime: true,

@@ -1,5 +1,5 @@
 import { blogPosts } from "@/app/blog/[slug]/data";
-import { MONTHLY_CREDITS } from "@/lib/credits";
+import { FREE_STARTER_CREDITS } from "@/lib/credits";
 
 export interface SearchEntry {
   title: string;
@@ -117,7 +117,7 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "Is there a free plan?",
-    description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of credits. No credit card required.`,
+    description: `Yes. Free plan includes 500 MB storage and ${FREE_STARTER_CREDITS} credits to get started. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
     keywords: "free plan pricing cost no credit card credits",

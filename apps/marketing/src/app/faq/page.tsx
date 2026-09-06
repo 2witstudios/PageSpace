@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 import { SiteNavbar } from "@/components/SiteNavbar";
 import { SiteFooter } from "@/components/SiteFooter";
 import { pageMetadata } from "@/lib/metadata";
-import { MONTHLY_CREDITS, creditPacksPhrase } from "@/lib/credits";
+import { MONTHLY_CREDITS, FREE_STARTER_CREDITS, creditPacksPhrase } from "@/lib/credits";
 import { JsonLd, createFaqSchema } from "@/lib/schema";
 import { FAQHashOpener } from "./hash-opener";
 
@@ -75,7 +75,7 @@ const faqs: FAQItem[] = [
   {
     id: "is-there-a-free-plan",
     question: "Is there a free plan?",
-    answer: `Yes. The Free plan includes 500 MB of storage and ${MONTHLY_CREDITS.free}/month of credits that meter your usage. No credit card required.`,
+    answer: `Yes. The Free plan includes 500 MB of storage and ${FREE_STARTER_CREDITS} credits to get started — a one-time grant that meters your AI usage. No credit card required.`,
     category: "Pricing and plans",
   },
   {
@@ -97,13 +97,13 @@ const faqs: FAQItem[] = [
   {
     id: "how-ai-credits-work",
     question: "How do credits work?",
-    answer: `Every plan includes a monthly allowance of credits — ${MONTHLY_CREDITS.free}/month on Free, more on paid plans. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Unused credits roll over and accumulate — they never expire.`,
+    answer: `Free accounts start with ${FREE_STARTER_CREDITS} credits, once; paid plans include a monthly credit allowance. Each AI action draws down credits based on what the underlying model actually costs, so a quick reply with a lightweight model costs far less than a long answer from a frontier model. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.`,
     category: "Pricing and plans",
   },
   {
     id: "hit-daily-ai-limit",
     question: "What happens when I run out of credits?",
-    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}) or your next monthly allowance is added at your billing renewal.`,
+    answer: `Everything else keeps working — your documents, tasks, channels, and collaboration are unaffected. AI features pause until you buy more credits (top-up packs come in ${creditPacksPhrase()}), upgrade to a paid plan, or — on paid plans — your next monthly allowance is added at your billing renewal.`,
     category: "Pricing and plans",
   },
   // Getting started

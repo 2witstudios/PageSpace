@@ -6,7 +6,9 @@ import { users } from './auth';
 /**
  * creditBalances — denormalized, one row per user. The fast pre-request gate and
  * the dashboard read this. Two buckets plus a debt counter:
- *   - monthly: subscription allowance, ACCUMULATES across periods (rollover)
+ *   - monthly: tier allowance. Paid tiers: re-granted each renewal and ACCUMULATES
+ *              across periods (rollover). Free: a ONE-TIME starter grant, never refilled
+ *              (TIER_ALLOWANCE_REFILLS in credit-pricing)
  *   - topup:   purchased packs, NEVER expire
  *   - debt:    overage owed (a NON-NEGATIVE magnitude). Accrues when a call's real
  *              cost can't be covered; paid down by a purchase; FORGIVEN (zeroed) at

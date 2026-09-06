@@ -51,18 +51,40 @@ export const MARKUP_BPS = envInt('CREDIT_MARKUP_BPS', 15000);
 export const CACHE_READ_DISCOUNT_FACTOR_BPS = envInt('CACHE_READ_DISCOUNT_FACTOR_BPS', 1000);
 
 /**
- * Monthly credit allowance granted on each subscription renewal, per tier.
- * Accumulates across periods (rollover): each renewal ADDS this allowance to
- * the current balance rather than replacing it.
+ * Credit allowance per tier, in whole cents of customer-facing credit value.
+ *
+ * For tiers that REFILL (see {@link TIER_ALLOWANCE_REFILLS}) this is granted on each
+ * subscription renewal and accumulates across periods (rollover): each renewal ADDS
+ * the allowance to the current balance rather than replacing it.
+ *
+ * For the free tier it is a ONE-TIME starter grant: lazily granted on the user's
+ * first metered call (credit-gate's `free-init-` path) and never refilled. Bounded
+ * lifetime exposure per free user = allowance / markup (~$3.33 at $5 and 1.5×).
  */
 export const TIER_MONTHLY_ALLOWANCE_CENTS: Record<SubscriptionTier, number> = {
-  // Free: generous $5/mo of credit value, but the free-tier-only premium gate
+  // Free: $5 of starter credit, once. The free-tier-only premium gate
   // (requiresProSubscription) confines it to cheaper "standard" models, so the
   // real provider cost behind that $5 stays low.
   free: envInt('CREDIT_ALLOWANCE_FREE_CENTS', 500),
   pro: envInt('CREDIT_ALLOWANCE_PRO_CENTS', 1500),
   founder: envInt('CREDIT_ALLOWANCE_FOUNDER_CENTS', 5000),
   business: envInt('CREDIT_ALLOWANCE_BUSINESS_CENTS', 10000),
+};
+
+/**
+ * Whether a tier's allowance is re-granted each billing period. `true` = the
+ * allowance is added again at every renewal (Stripe invoice.paid, or the gate's own
+ * period roll for comped/no-subscription paid accounts) and unspent credit carries
+ * forward. `false` = the allowance is a single starter grant that never refills —
+ * the free tier. The gate's reset path, and the balance display's "upcoming
+ * allowance" / "renews on" projections, all key off this rather than on `tier ===
+ * 'free'`, so a future non-refilling tier needs only a row here.
+ */
+export const TIER_ALLOWANCE_REFILLS: Record<SubscriptionTier, boolean> = {
+  free: false,
+  pro: true,
+  founder: true,
+  business: true,
 };
 
 /**

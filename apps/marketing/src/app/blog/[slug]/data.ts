@@ -304,9 +304,9 @@ So we put our big-boy pants on. AI in PageSpace is now usage-based: a monthly po
 
 ## Credits, not call counts
 
-Every plan comes with a monthly pool of credits:
+Every plan comes with a pool of credits — a one-time starter grant on Free, a monthly allowance on paid plans:
 
-- **Free:** 5/month in credits
+- **Free:** 5 credits to start
 - **Pro:** 15/month in credits
 - **Founder:** 50/month in credits
 - **Business:** 100/month in credits

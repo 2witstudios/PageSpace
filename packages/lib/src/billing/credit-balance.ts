@@ -3,12 +3,14 @@
  * dashboard widget and the `GET /api/credits` endpoint.
  *
  * This is the DISPLAY layer; it never mutates. The authoritative spend decision and
- * the free-tier periodic rollover live in `./credit-gate` (the imperative shell that
+ * the gate-driven periodic rollover live in `./credit-gate` (the imperative shell that
  * owns the clock and the row lock). Here we only mirror the gate's semantics for presentation:
- *   - free tier whose monthly window has lapsed is shown its stored remaining PLUS the
- *     tier allowance (the gate will add it on the next call — rollover semantics);
+ *   - free tier (a ONE-TIME starter grant, TIER_ALLOWANCE_REFILLS.free === false) is
+ *     shown its stored remaining only, and no renewal date — nothing will ever be
+ *     added to the monthly bucket again;
  *   - paid tier whose window has lapsed is shown its stored remaining (credits carry
- *     forward — the renewal invoice will add the new allowance via invoice.paid);
+ *     forward — the renewal invoice will add the new allowance via invoice.paid, or
+ *     the gate will roll it for a no-subscription account);
  *   - spendable is the FUNDED balance (monthly + top-up remaining) MINUS outstanding
  *     debt, and is deliberately GROSS of in-flight holds. We surface the sum of
  *     still-active holds separately as `reserved` (for an optional "call running"
@@ -31,7 +33,7 @@ import { creditBalances, creditHolds } from '@pagespace/db/schema/credits';
 import { users } from '@pagespace/db/schema/auth';
 import { and, eq, gt, sql } from '@pagespace/db/operators';
 import { isBillingEnabled } from '../deployment-mode';
-import { TIER_MONTHLY_ALLOWANCE_CENTS } from './credit-pricing';
+import { TIER_MONTHLY_ALLOWANCE_CENTS, TIER_ALLOWANCE_REFILLS } from './credit-pricing';
 import type { SubscriptionTier } from '../services/subscription-utils';
 
 // Mirror of addOneMonth in credit-gate (same logic, kept local to avoid pulling
@@ -115,21 +117,15 @@ interface FundedBalanceRow {
  * never netted out (see the file header). Clamped at 0 only when there is no
  * debt — outstanding overage pulls the figure negative.
  */
-function spendableCentsFor(
-  row: FundedBalanceRow | null,
-  tier: SubscriptionTier,
-  now: Date,
-): number {
+function spendableCentsFor(row: FundedBalanceRow | null, tier: SubscriptionTier): number {
   // No row yet: the gate lazy-inits from the tier allowance on the first call.
   if (!row) return Math.max(0, allowanceFor(tier));
 
-  const allowance = row.monthlyAllowanceCents || allowanceFor(tier);
-  const expired = row.monthlyPeriodEnd === null || row.monthlyPeriodEnd < now;
-  // A free user whose window has lapsed gets the allowance the gate will apply on
-  // its next call, so they are not treated as broke for the gap between the
-  // rollover being due and something performing it.
-  const monthlyRemaining =
-    tier === 'free' && expired ? row.monthlyRemainingCents + allowance : row.monthlyRemainingCents;
+  // Free is a one-time grant: no upcoming allowance is ever pre-credited, so the
+  // stored remaining is the whole story. (Historically the display pre-credited a
+  // lapsed free window with the next allowance the gate was about to add; the gate
+  // no longer rolls non-refilling tiers, so that projection would over-state.)
+  const monthlyRemaining = row.monthlyRemainingCents;
   const topupRemaining = row.topupRemainingCents;
   const debt = row.debtCents ?? 0;
   return debt > 0
@@ -165,7 +161,7 @@ export async function readSpendableCents(
     .where(eq(creditBalances.userId, userId))
     .limit(1);
 
-  return spendableCentsFor(row ?? null, tier, new Date());
+  return spendableCentsFor(row ?? null, tier);
 }
 
 /**
@@ -206,7 +202,7 @@ export async function getCreditBalance(
   // so present that as the spendable monthly balance.
   if (!row) {
     const allowance = allowanceFor(tier);
-    const spendable = spendableCentsFor(null, tier, now);
+    const spendable = spendableCentsFor(null, tier);
     return {
       billingEnabled: true,
       monthly: { remaining: allowance, allowance, periodEnd: null },
@@ -221,9 +217,12 @@ export async function getCreditBalance(
   const periodEnd = row.monthlyPeriodEnd;
   const expired = periodEnd === null || periodEnd < now;
   // For display: never show a past renewal date. Project addOneMonth from the last known
-  // period end (or now if none recorded) — free users get the same date the gate will stamp
-  // on their next call; paid users get the Stripe cycle date (same day next month).
+  // period end (or now if none recorded); paid users get the Stripe cycle date (same day
+  // next month). A NON-refilling tier (free) has no renewal at all — its allowance was a
+  // one-time grant — so surface null and let the UI omit "Renews …" entirely, rather
+  // than advancing a phantom date forever.
   const displayPeriodEnd: Date | null = (() => {
+    if (!TIER_ALLOWANCE_REFILLS[tier]) return null;
     if (!expired) return periodEnd;
     let projected = addOneMonth(periodEnd ?? now);
     while (projected <= now) {
@@ -233,18 +232,11 @@ export async function getCreditBalance(
   })();
 
   // Rollover: credits never expire. The carry balance is always spendable (both
-  // in the gate and here) — the renewal adds the allowance and nets outstanding debt.
-  // Free tiers without a Stripe subscription get their reset via the gate's addOneMonth
-  // path, so for a free user with a lapsed period we surface stored + upcoming allowance
-  // (what the gate will apply on next call). Debt is shown as-is — the gate will net it
-  // against the carry at reset. For paid tiers the period window doesn't affect display.
-  let monthlyRemaining: number;
-  if (tier === 'free' && expired) {
-    // Gate will net debt against carry and add the allowance on next call; surface the total.
-    monthlyRemaining = row.monthlyRemainingCents + allowance;
-  } else {
-    monthlyRemaining = row.monthlyRemainingCents;
-  }
+  // in the gate and here) — a renewal adds the allowance and nets outstanding debt.
+  // The period window never affects the displayed remaining: paid tiers carry forward
+  // until invoice.paid / the gate roll lands, and free is a one-time grant with nothing
+  // upcoming to pre-credit. Debt is shown as-is.
+  const monthlyRemaining = row.monthlyRemainingCents;
 
   const topupRemaining = row.topupRemainingCents;
   const debt = row.debtCents ?? 0;
@@ -254,7 +246,7 @@ export async function getCreditBalance(
   // shows the red. Debt accrues only after both buckets are exhausted, so the negative
   // branch is effectively −debt.
   // Shared with the routing gate's lean read, so the two can never disagree.
-  const spendable = spendableCentsFor(row, tier, now);
+  const spendable = spendableCentsFor(row, tier);
 
   return {
     billingEnabled: true,
