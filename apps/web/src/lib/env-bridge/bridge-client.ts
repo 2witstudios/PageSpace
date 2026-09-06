@@ -58,9 +58,14 @@ export interface EnvBridgeClientDeps {
 
 export type MachineResultDisposition = 'delivered' | 'unverified' | 'dropped_unknown_grant' | 'dropped_unregistered_socket' | 'dropped_wrong_env';
 
-export class EnvBridgeClient {
-  private readonly log = logger.child({ component: 'env-bridge-client' });
+/** Built on first use, never at import (see ws-env-connections.ts for why). */
+let clientLogger: ReturnType<typeof logger.child> | null = null;
+function log(): ReturnType<typeof logger.child> {
+  clientLogger ??= logger.child({ component: 'env-bridge-client' });
+  return clientLogger;
+}
 
+export class EnvBridgeClient {
   constructor(private readonly deps: EnvBridgeClientDeps) {}
 
   /**
@@ -84,7 +89,7 @@ export class EnvBridgeClient {
     if (!signed.ok) throw new EnvBridgeError(signed.reason, `Cannot sign grant for ${input.envId}: ${signed.reason}`, { envId: input.envId, serverKeyId: facts.serverKeyId });
 
     const timeoutMs = grantCorrelatorTimeoutMs(signed.frame);
-    this.log.info('Sending grant to local environment', { envId: input.envId, grantId: signed.grant.grantId, op: signed.grant.op, keyId: signed.keyId, timeoutMs, action: 'send_grant' });
+    log().info('Sending grant to local environment', { envId: input.envId, grantId: signed.grant.grantId, op: signed.grant.op, keyId: signed.keyId, timeoutMs, action: 'send_grant' });
     try {
       return await this.deps.correlator.open({
         id: signed.grant.grantId,
@@ -114,22 +119,22 @@ export class EnvBridgeClient {
   handleMachineResult(ws: WebSocket, frame: MachineResultFrame): MachineResultDisposition {
     const facts = this.deps.getSocketFacts(ws);
     if (!facts) {
-      this.log.warn('Result frame from an unregistered socket dropped', { grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
+      log().warn('Result frame from an unregistered socket dropped', { grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unregistered_socket';
     }
     const owner = this.deps.correlator.groupOf(frame.grantId);
     if (owner === undefined) {
-      this.log.warn('Result frame for an unknown grant dropped', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
+      log().warn('Result frame for an unknown grant dropped', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, action: 'result_dropped' });
       return 'dropped_unknown_grant';
     }
     if (owner !== facts.envId) {
-      this.log.error('Result frame from an env that does not own the grant refused — request stays pending for its owner', { envId: facts.envId, ownerEnvId: owner, grantId: frame.grantId, frameType: frame.type, action: 'result_wrong_env' });
+      log().error('Result frame from an env that does not own the grant refused — request stays pending for its owner', { envId: facts.envId, ownerEnvId: owner, grantId: frame.grantId, frameType: frame.type, action: 'result_wrong_env' });
       this.deps.onUnverified?.({ envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: 'wrong_env' });
       return 'dropped_wrong_env';
     }
     const verified = verifyResultFromMachine({ frame, machinePublicKey: facts.machinePublicKey });
     if (!verified.ok) {
-      this.log.error('Result frame failed machine-signature verification — NOT delivered', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: verified.reason, action: 'result_unverified' });
+      log().error('Result frame failed machine-signature verification — NOT delivered', { envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: verified.reason, action: 'result_unverified' });
       this.deps.onUnverified?.({ envId: facts.envId, grantId: frame.grantId, frameType: frame.type, reason: verified.reason });
       this.deps.correlator.reject(frame.grantId, new EnvBridgeError('unverified_result', `Result for grant ${frame.grantId} failed machine-signature verification (${verified.reason})`, { envId: facts.envId, grantId: frame.grantId, reason: verified.reason }));
       return 'unverified';
@@ -166,7 +171,7 @@ export function getEnvBridgeClient(): EnvBridgeClient {
   if (singleton) return singleton;
   const client = new EnvBridgeClient({
     correlator: new RequestCorrelator<MachineResultFrame>({
-      onDropped: (id) => logger.child({ component: 'env-bridge-client' }).warn('Reply for a grant that is not pending dropped', { grantId: id, action: 'reply_dropped' }),
+      onDropped: (id) => log().warn('Reply for a grant that is not pending dropped', { grantId: id, action: 'reply_dropped' }),
     }),
     getAuthorizedConnection: getAuthorizedEnvConnection,
     getSocketFacts: (ws) => {

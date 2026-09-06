@@ -24,7 +24,7 @@ import {
   gateLocalEnvForRequester,
   type DriveEnvPayer,
 } from '@pagespace/lib/services/drive-envs/env-provision-deps';
-import type { LocalEnvGateVerdict } from '@pagespace/lib/services/drive-envs/local-env-gate';
+import type { LiveConnectionReader, LocalEnvGateVerdict } from '@pagespace/lib/services/drive-envs/local-env-gate';
 import type {
   EnsureSpriteHolderSandboxResult,
   SpriteHolderProvisionIntent,
@@ -49,7 +49,6 @@ import {
 import type { DriveEnvDTO } from '@pagespace/lib/drive-envs/env-contract';
 import type { RevokeLocalDriveEnvResult } from '@pagespace/lib/services/drive-envs/local-env-revoke';
 import { getSandboxHost } from '@/lib/agent-workspaces/sandbox-host-runtime';
-import { readEnvLiveConnection } from '@/lib/websocket/ws-env-connections';
 import { createHash, createPublicKey, randomBytes, verify as nodeVerify } from 'crypto';
 import { createId } from '@paralleldrive/cuid2';
 import { loadServerSigningKey } from '@pagespace/lib/auth/env-bridge-signing-key';
@@ -74,6 +73,17 @@ export type { DriveEnvDTO };
 // ---------------------------------------------------------------------------
 
 let envStorePromise: Promise<DriveEnvStore> | null = null;
+
+/**
+ * This replica's bridge-socket registry reading, loaded lazily: the registry
+ * builds its logger at import, and this runtime is imported by many suites
+ * that stub the logging module — the same reason the sandbox host is loaded
+ * with `await import()` rather than statically.
+ */
+async function liveConnectionReader(): Promise<LiveConnectionReader> {
+  const { readEnvLiveConnection } = await import('@/lib/websocket/ws-env-connections');
+  return readEnvLiveConnection;
+}
 
 export function getDriveEnvStore(): Promise<DriveEnvStore> {
   envStorePromise ??= createDbDriveEnvStore();
@@ -227,11 +237,11 @@ export async function redeemEnvChallenge(input: { enrollmentId: string; response
 }
 
 export async function listEnvsInDrive(driveId: string): Promise<DriveEnvDTO[]> {
-  const store = await getDriveEnvStore();
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
   // `liveConnection` is THIS replica's bridge-socket registry (t07): a socket
   // held here wins; otherwise a local env's status derives from its heartbeat
   // (`deriveLocalEnvStatus`), which whichever replica holds the socket writes.
-  return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection: readEnvLiveConnection } });
+  return listDriveEnvs({ driveId, deps: { store, now: () => new Date(), liveConnection } });
 }
 
 export async function renameEnv(input: { envId: string; name: string }): Promise<RenameDriveEnvResult> {
@@ -268,12 +278,12 @@ export async function ensureEnvSandboxForSession(input: {
   intent: SpriteHolderProvisionIntent;
   requesterId: string;
 }): Promise<EnsureSpriteHolderSandboxResult> {
-  const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
+  const [store, host, liveConnection] = await Promise.all([getDriveEnvStore(), getSandboxHost(), liveConnectionReader()]);
   return ensureDriveEnvSandbox({
     envId: input.envId,
     intent: input.intent,
     requesterId: input.requesterId,
-    deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection },
+    deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection },
   });
 }
 
@@ -286,10 +296,10 @@ export async function ensureEnvSandboxForSession(input: {
  * the two reads.
  */
 export async function gateLocalEnvBind(input: { envId: string; requesterId: string }): Promise<LocalEnvGateVerdict> {
-  const store = await getDriveEnvStore();
+  const [store, liveConnection] = await Promise.all([getDriveEnvStore(), liveConnectionReader()]);
   const row = await store.findById(input.envId);
   if (!row) return { ok: false, refusal: 'revoked' };
-  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection } });
+  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer, liveConnection } });
 }
 
 /**
@@ -302,7 +312,7 @@ export async function gateLocalEnvBind(input: { envId: string; requesterId: stri
  * exactly the same ones.
  */
 export async function rebuildEnv(input: { envId: string; requesterId: string }): Promise<RebuildDriveEnvResult> {
-  const [store, host] = await Promise.all([getDriveEnvStore(), getSandboxHost()]);
+  const [store, host, liveConnection] = await Promise.all([getDriveEnvStore(), getSandboxHost(), liveConnectionReader()]);
   return rebuildDriveEnv({
     envId: input.envId,
     deps: {
@@ -317,7 +327,7 @@ export async function rebuildEnv(input: { envId: string; requesterId: string }):
           // `create` arm — through the same CAS every other provisioner runs.
           intent: 'ensure',
           requesterId: input.requesterId,
-          deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection: readEnvLiveConnection },
+          deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection },
         }),
     },
   });

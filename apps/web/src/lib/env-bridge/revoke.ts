@@ -33,7 +33,12 @@ import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 export const ENV_REVOKED_CLOSE_CODE = 1008;
 export const ENV_REVOKED_CLOSE_REASON = 'Environment revoked';
 
-const log = logger.child({ component: 'env-bridge-revoke' });
+/** Built on first use, never at import (see ws-env-connections.ts for why). */
+let revokeLogger: ReturnType<typeof logger.child> | null = null;
+function log(): ReturnType<typeof logger.child> {
+  revokeLogger ??= logger.child({ component: 'env-bridge-revoke' });
+  return revokeLogger;
+}
 
 export interface RevokeFrameInput {
   envId: string;
@@ -74,18 +79,18 @@ export async function notifyMachineOfRevoke(input: RevokeFrameInput, deps: Notif
         ws.send(encodeFrame(built.frame));
         outcome = 'sent_and_closed';
       } catch (error) {
-        log.warn('Revoke frame send failed; closing anyway', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_send_failed' });
+        log().warn('Revoke frame send failed; closing anyway', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_send_failed' });
         outcome = 'closed_unsigned_key_unavailable';
       }
     } else {
-      log.error('Enrollment pinned a signing key that is no longer loaded; closing without a revoke frame', { envId: input.envId, serverKeyId: input.serverKeyId, action: 'revoke_key_unavailable' });
+      log().error('Enrollment pinned a signing key that is no longer loaded; closing without a revoke frame', { envId: input.envId, serverKeyId: input.serverKeyId, action: 'revoke_key_unavailable' });
       outcome = 'closed_unsigned_key_unavailable';
     }
   }
   try {
     ws.close(ENV_REVOKED_CLOSE_CODE, ENV_REVOKED_CLOSE_REASON);
   } catch (error) {
-    log.warn('Error closing revoked socket', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_close_error' });
+    log().warn('Error closing revoked socket', { envId: input.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_close_error' });
   }
   // Through the CAS: fails this env's in-flight requests now rather than on the close event.
   deps.unregister(input.envId, ws);
@@ -117,7 +122,7 @@ export async function revokeLocalEnv(input: { envId: string; reason: string }): 
               return loadKeyring();
             } catch (error) {
               // No key configured at all: nothing can sign; the socket still closes.
-              log.error('Signing key ring unavailable during revoke', { envId: machine.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_keyring_error' });
+              log().error('Signing key ring unavailable during revoke', { envId: machine.envId, error: error instanceof Error ? error.message : String(error), action: 'revoke_keyring_error' });
               return { get: () => null };
             }
           },

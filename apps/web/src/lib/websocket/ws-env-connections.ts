@@ -78,7 +78,16 @@ const lostListeners = new Set<(envId: string, ws: WebSocket) => void>();
 
 let cleanupInterval: NodeJS.Timeout | null = null;
 
-const wsLogger = logger.child({ component: 'ws-env-connections' });
+/**
+ * Built on FIRST USE, never at import: this module sits in the drive-envs
+ * runtime's import graph, and suites that stub the logging module must be able
+ * to import that runtime without a logger existing yet.
+ */
+let wsLoggerInstance: ReturnType<typeof logger.child> | null = null;
+function wsLogger(): ReturnType<typeof logger.child> {
+  wsLoggerInstance ??= logger.child({ component: 'ws-env-connections' });
+  return wsLoggerInstance;
+}
 
 /** Subscribe to "the env's LIVE socket is gone" — the bridge client cancels that env's pending requests on it. */
 export function onEnvConnectionLost(listener: (envId: string, ws: WebSocket) => void): () => void {
@@ -93,7 +102,7 @@ function emitLost(envId: string, ws: WebSocket): void {
     try {
       listener(envId, ws);
     } catch (error) {
-      wsLogger.error('Env connection lost listener threw', { envId, error: error instanceof Error ? error.message : String(error), action: 'lost_listener_error' });
+      wsLogger().error('Env connection lost listener threw', { envId, error: error instanceof Error ? error.message : String(error), action: 'lost_listener_error' });
     }
   }
 }
@@ -107,11 +116,11 @@ export function registerEnvConnection(envId: string, ws: WebSocket, input: Regis
   const existing = connections.get(envId);
   if (existing && existing !== ws) {
     if (existing.readyState === 0 || existing.readyState === 1) {
-      wsLogger.info('Closing existing env connection for new connection', { envId, action: 'close_existing' });
+      wsLogger().info('Closing existing env connection for new connection', { envId, action: 'close_existing' });
       try {
         existing.close(ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON);
       } catch (error) {
-        wsLogger.warn('Error closing superseded env connection', { envId, error: error instanceof Error ? error.message : String(error), action: 'close_existing_error' });
+        wsLogger().warn('Error closing superseded env connection', { envId, error: error instanceof Error ? error.message : String(error), action: 'close_existing_error' });
       }
     }
     connectionMetadata.delete(existing);
@@ -132,7 +141,7 @@ export function registerEnvConnection(envId: string, ws: WebSocket, input: Regis
     wsToken: input.wsToken,
   });
 
-  wsLogger.info('Env connection registered', {
+  wsLogger().info('Env connection registered', {
     envId,
     userId: input.userId,
     sessionId: input.sessionId,
@@ -152,9 +161,9 @@ export function unregisterEnvConnection(envId: string, ws: WebSocket): boolean {
   const wasLive = current === ws;
   if (wasLive) {
     connections.delete(envId);
-    wsLogger.info('Env connection unregistered', { envId, totalConnections: connections.size, action: 'unregister' });
+    wsLogger().info('Env connection unregistered', { envId, totalConnections: connections.size, action: 'unregister' });
   } else {
-    wsLogger.debug('Skipped unregistering stale env connection', { envId, action: 'unregister_skipped', reason: 'not_active_connection' });
+    wsLogger().debug('Skipped unregistering stale env connection', { envId, action: 'unregister_skipped', reason: 'not_active_connection' });
   }
   // Always clean up metadata for this specific WebSocket
   connectionMetadata.delete(ws);
@@ -243,7 +252,7 @@ async function cleanupStaleConnections(): Promise<void> {
     if (metadata) {
       // Check if session has expired (critical security check)
       if (metadata.sessionExpiresAt && nowDate > metadata.sessionExpiresAt) {
-        wsLogger.warn('Closing env connection due to expired session', {
+        wsLogger().warn('Closing env connection due to expired session', {
           envId,
           sessionId: metadata.sessionId,
           expiredAt: metadata.sessionExpiresAt.toISOString(),
@@ -258,7 +267,7 @@ async function cleanupStaleConnections(): Promise<void> {
       const inactiveDuration = now - lastActivity;
 
       if (inactiveDuration > ENV_STALE_CONNECTION_TIMEOUT_MS) {
-        wsLogger.warn('Env connection is stale due to inactivity', {
+        wsLogger().warn('Env connection is stale due to inactivity', {
           envId,
           inactiveDurationMinutes: Math.round(inactiveDuration / 60000),
           action: 'stale_detected',
@@ -269,7 +278,7 @@ async function cleanupStaleConnections(): Promise<void> {
   }
 
   if (staleConnections.length > 0) {
-    wsLogger.info('Cleaning up stale env connections', { staleCount: staleConnections.length, action: 'cleanup_start' });
+    wsLogger().info('Cleaning up stale env connections', { staleCount: staleConnections.length, action: 'cleanup_start' });
 
     for (const { envId, ws, reason } of staleConnections) {
       if (ws.readyState === 0 || ws.readyState === 1) {
@@ -277,7 +286,7 @@ async function cleanupStaleConnections(): Promise<void> {
           const closeMessage = reason === 'session_expired' ? 'Session expired' : 'Connection cleanup - inactive';
           ws.close(1000, closeMessage);
         } catch (error) {
-          wsLogger.warn('Error closing stale env connection', {
+          wsLogger().warn('Error closing stale env connection', {
             envId,
             reason,
             error: error instanceof Error ? error.message : String(error),
@@ -289,7 +298,7 @@ async function cleanupStaleConnections(): Promise<void> {
       unregisterEnvConnection(envId, ws);
     }
 
-    wsLogger.info('Env cleanup complete', { activeConnections: connections.size, removedCount: staleConnections.length, action: 'cleanup_complete' });
+    wsLogger().info('Env cleanup complete', { activeConnections: connections.size, removedCount: staleConnections.length, action: 'cleanup_complete' });
   }
 
   // Revalidate sessions to detect revoked tokens (P1 security fix)
@@ -336,12 +345,12 @@ async function revalidateSessions(): Promise<void> {
       metadata.lastRevalidated = new Date();
 
       if (!result.value.claims) {
-        wsLogger.warn('Env session revalidation failed', { envId, sessionId: metadata.sessionId, action: 'session_revoked' });
+        wsLogger().warn('Env session revalidation failed', { envId, sessionId: metadata.sessionId, action: 'session_revoked' });
         connectionsToClose.push({ envId, ws, reason: 'session_revoked' });
       }
     } else {
       // Don't close on transient errors - will retry next interval
-      wsLogger.error('Env session revalidation error', {
+      wsLogger().error('Env session revalidation error', {
         envId,
         error: result.reason instanceof Error ? result.reason.message : String(result.reason),
         action: 'revalidation_error',
@@ -354,28 +363,28 @@ async function revalidateSessions(): Promise<void> {
       ws.close(1008, 'Session revoked');
     }
     unregisterEnvConnection(envId, ws);
-    wsLogger.info('Closed env connection due to revoked session', { envId, reason, action: 'session_revoked_cleanup' });
+    wsLogger().info('Closed env connection due to revoked session', { envId, reason, action: 'session_revoked_cleanup' });
   }
 }
 
 export function startEnvCleanupInterval(): void {
   if (cleanupInterval) {
-    wsLogger.debug('Env cleanup interval already running', { action: 'start_cleanup_interval', status: 'already_running' });
+    wsLogger().debug('Env cleanup interval already running', { action: 'start_cleanup_interval', status: 'already_running' });
     return;
   }
   cleanupInterval = setInterval(() => {
     cleanupStaleConnections().catch((err) =>
-      wsLogger.error('Env cleanup error', { error: err instanceof Error ? err.message : String(err), action: 'cleanup_interval_error' }),
+      wsLogger().error('Env cleanup error', { error: err instanceof Error ? err.message : String(err), action: 'cleanup_interval_error' }),
     );
   }, CLEANUP_INTERVAL_MS);
-  wsLogger.info('Started env cleanup interval', { intervalMinutes: CLEANUP_INTERVAL_MS / 60000, action: 'start_cleanup_interval', status: 'started' });
+  wsLogger().info('Started env cleanup interval', { intervalMinutes: CLEANUP_INTERVAL_MS / 60000, action: 'start_cleanup_interval', status: 'started' });
 }
 
 function stopEnvCleanupInterval(): void {
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
-    wsLogger.info('Stopped env cleanup interval', { action: 'stop_cleanup_interval', status: 'stopped' });
+    wsLogger().info('Stopped env cleanup interval', { action: 'stop_cleanup_interval', status: 'stopped' });
   }
 }
 
@@ -427,7 +436,7 @@ export function checkEnvConnectionHealth(ws: WebSocket): EnvConnectionHealthChec
   }
 
   if (metadata.sessionExpiresAt && new Date() > metadata.sessionExpiresAt) {
-    wsLogger.warn('Session expired for env connection', {
+    wsLogger().warn('Session expired for env connection', {
       envId: metadata.envId,
       sessionId: metadata.sessionId,
       expiredAt: metadata.sessionExpiresAt.toISOString(),
