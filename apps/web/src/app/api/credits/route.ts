@@ -12,8 +12,8 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
  *
  * Returns the allowance bucket (paid tiers: re-granted and rolled over each period;
  * free: a one-time starter grant, `periodEnd` null), the never-expiring
- * top-up bucket, the spendable total (net of in-flight reservations), and the
- * reserved amount. Drives the credit-balance widget and the buy-credits surfaces.
+ * top-up bucket, the spendable total (GROSS of in-flight holds — `reserved` is
+ * reported separately, never netted out), and that reserved amount. Drives the credit-balance widget and the buy-credits surfaces.
  */
 export async function GET(request: NextRequest) {
   try {
