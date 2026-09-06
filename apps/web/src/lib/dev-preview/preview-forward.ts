@@ -147,11 +147,13 @@ export async function forwardPreviewRequest({
     ? null
     : upstreamBody.pipeThrough(boundedStream(limits.maxResponseBodyBytes, touch, () => controller.abort(new Error('response body limit'))));
 
-  // The idle timer must die with the stream, whichever way it ends.
+  // The idle timer dies with the stream. On a client cancel it fires once
+  // more against an already-aborted fetch, which is a harmless no-op
+  // (`Transformer.cancel` is not in the TS lib yet).
   const finish = () => { if (idleTimer) clearTimeout(idleTimer); };
   const bodyWithCleanup = streamed === null
     ? null
-    : streamed.pipeThrough(new TransformStream({ flush: finish, cancel: finish }));
+    : streamed.pipeThrough(new TransformStream({ flush: finish }));
   if (bodyWithCleanup === null) finish();
 
   return {

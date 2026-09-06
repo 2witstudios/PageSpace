@@ -139,7 +139,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
 
   // ---- authorize + decide, per request ---------------------------------------
   const target = await resolvePreviewTargetForRequest(holder, userId);
-  if (target.decision.kind === 'refuse') {
+  if (!('spriteUrl' in target)) {
     const { reason, status, message, detail } = target.decision;
     if (reason === 'not-authorized' || reason === 'wake-denied') {
       auditRequest(request, {

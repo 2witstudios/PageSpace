@@ -22,7 +22,6 @@ vi.mock('@pagespace/lib/services/sandbox/preview/dev-preview-env', () => ({
 vi.mock('@/lib/drive-envs/drive-envs-runtime', () => ({ resolveEnvInDrive: vi.fn() }));
 vi.mock('@/lib/agent-workspaces/agent-workspaces-runtime', () => ({ findSessionRecord: vi.fn() }));
 vi.mock('@/lib/agent-workspaces/workspace-unavailable-response', () => ({
-  auditSessionAccessDenial: vi.fn(),
   workspaceNotFoundOrDenied: vi.fn(() => new Response(null, { status: 404 })),
 }));
 vi.mock('@/lib/dev-preview/preview-runtime', async () => {
@@ -38,7 +37,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
-import { auditSessionAccessDenial } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
 
 const envCtx = { params: Promise.resolve({ driveId: 'd1', envId: 'env1' }) };
@@ -130,7 +129,8 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview/open', () => {
     expect((await openSession(req(), wsCtx)).status).toBe(404);
     vi.mocked(openPreviewForUser).mockResolvedValueOnce({ ok: false, reason: 'not-authorized', detail: 'drive_access_denied' });
     expect((await openSession(req(), wsCtx)).status).toBe(404);
-    expect(auditSessionAccessDenial).toHaveBeenCalledWith(expect.anything(), 'u1', 'ws1', 'drive_access_denied', expect.any(String));
+    expect(workspaceNotFoundOrDenied).toHaveBeenCalledWith(expect.anything(), 'u1', 'ws1', 'session_not_found', expect.any(String));
+    expect(workspaceNotFoundOrDenied).toHaveBeenCalledWith(expect.anything(), 'u1', 'ws1', 'drive_access_denied', expect.any(String));
   });
 
   it('is dark, same-origin only, and 500s on an unexpected failure', async () => {

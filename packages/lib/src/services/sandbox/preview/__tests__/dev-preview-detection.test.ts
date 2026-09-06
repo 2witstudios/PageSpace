@@ -29,7 +29,7 @@ function harness(overrides: {
   let probes = 0;
   const services: SandboxServicesApi = {
     create: async (args) => {
-      calls.push(`create:${args.args?.at(-1)}`);
+      calls.push(`create:${args.args?.[args.args.length - 1]}`);
       if (overrides.failCreate) throw new Error('bind failed');
       relay = { name: args.name, command: args.command, args: args.args ?? [], status: 'running', pid: 9 };
     },

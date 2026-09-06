@@ -23,7 +23,7 @@ import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
-import { auditSessionAccessDenial, workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
+import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { isAllowedPreviewOpen, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
@@ -44,7 +44,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     // The gather below decides access; this read only resolves WHICH holder
     // the session's preview belongs to (the env for an env-bound session).
     const session = await findSessionRecord(workspaceId);
-    if (!session) return workspaceNotFoundOrDenied();
+    if (!session) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, 'session_not_found', ROUTE);
     const holder = resolveDevPreviewHolder({ id: session.id, envId: session.envId });
 
     // Authorization is the SESSION's (the user reached the preview through
@@ -52,10 +52,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     // an env-bound session, the session's own otherwise.
     const opened = await openPreviewForUser({ authorizeAs: { kind: 'workspace', id: session.id }, mintFor: holder, userId: auth.userId });
     if (!opened.ok) {
-      if (opened.reason === 'not-authorized') {
-        auditSessionAccessDenial(request, auth.userId, workspaceId, opened.detail ?? 'not-authorized', ROUTE);
-      }
-      return workspaceNotFoundOrDenied();
+      return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, opened.reason === 'not-authorized' ? opened.detail ?? 'not-authorized' : opened.reason, ROUTE);
     }
     return new NextResponse(null, { status: 302, headers: { location: opened.redirectTo, 'cache-control': 'no-store' } });
   } catch (error) {
