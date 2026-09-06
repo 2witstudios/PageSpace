@@ -2576,6 +2576,16 @@ describe('http upgrade dispatcher - one owner per socket', () => {
     expect(socket.destroy).not.toHaveBeenCalled();
   });
 
+  it('given a preview upgrade whose handler rejects, should log and destroy the socket rather than leak it or the rejection', async () => {
+    mockPreviewHolderForUpgrade.mockReturnValue({ kind: 'env', id: 'e' });
+    mockPreviewUpgrade.mockRejectedValueOnce(new Error('boom'));
+    const socket = { destroy: vi.fn() };
+    capturedUpgradeListener!({ url: '/ws', headers: { host: 'env-e.preview.x' } }, socket, Buffer.alloc(0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(loggers.realtime.error).toHaveBeenCalledWith('dev-preview: upgrade failed', expect.any(Error));
+  });
+
   it.each(['/anything-else', undefined])('given a stray upgrade (%s), should destroy the socket — destroyUpgrade is off, so the dispatcher owns the hygiene', async (url) => {
     const socket = { destroy: vi.fn() };
     capturedUpgradeListener!({ url, headers: {} }, socket, Buffer.alloc(0));

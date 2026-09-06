@@ -57,7 +57,11 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   const watchers = new Map<string, { close(): void }>();
 
   async function start(holder: DevPreviewHolderRef, sandboxId: string): Promise<void> {
+    const reservation = watchers.get(sandboxId);
     const handle = await deps.attach(sandboxId);
+    // `stopAll` (or a close) released the reservation while `attach` was
+    // pending: nothing could stop a channel opened now, so open none.
+    if (watchers.get(sandboxId) !== reservation) return;
     if (handle === null) {
       deps.log.warn('dev-preview: sprite not attachable, not watching', { holderKind: holder.kind, holderId: holder.id });
       watchers.delete(sandboxId);

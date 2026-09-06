@@ -115,7 +115,8 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
       refuse(socket, 502, 'Bad Gateway');
       return true;
     }
-    deps.tunnel({
+    try {
+      deps.tunnel({
       clientSocket: socket,
       head,
       requestHeaders: flatten(req.headers),
@@ -136,7 +137,13 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
           transport: 'websocket',
         }));
       },
-    });
+      });
+    } catch (error) {
+      // Request construction can throw synchronously (a token that is not a
+      // legal header value): answer the client rather than leak the socket.
+      deps.log.error('dev-preview: tunnel failed to start', asError(error), { holderKind: holder.kind, holderId: holder.id });
+      refuse(socket, 502, 'Bad Gateway');
+    }
     return true;
   };
 }

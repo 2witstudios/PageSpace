@@ -92,12 +92,21 @@ export async function forwardPreviewRequest({
 
   const controller = new AbortController();
   let idleTimer: ReturnType<typeof setTimeout> | undefined;
+  let headersTimer: ReturnType<typeof setTimeout> | undefined;
   let limitHit = false;
+  // The headers deadline is measured from the last byte the client sent, not
+  // from the first: a large streaming upload must not be cut for taking
+  // longer than the upstream is allowed to THINK about it.
+  const armHeadersTimer = () => {
+    if (headersTimer) clearTimeout(headersTimer);
+    headersTimer = setTimeout(() => controller.abort(new Error('preview proxy headers timeout')), limits.upstreamHeadersTimeoutMs);
+  };
   const touch = () => {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => controller.abort(new Error('preview proxy idle timeout')), limits.streamIdleTimeoutMs);
   };
-  const headersTimer = setTimeout(() => controller.abort(new Error('preview proxy headers timeout')), limits.upstreamHeadersTimeoutMs);
+  const uploadProgress = () => { armHeadersTimer(); touch(); };
+  armHeadersTimer();
 
   const headers = new Headers(selectForwardableRequestHeaders(flatten(request.headers)));
   headers.set('authorization', `Bearer ${token}`);
@@ -108,7 +117,7 @@ export async function forwardPreviewRequest({
 
   const hasBody = request.method !== 'GET' && request.method !== 'HEAD' && request.body !== null;
   const body = hasBody
-    ? request.body!.pipeThrough(boundedStream(limits.maxRequestBodyBytes, touch, () => { limitHit = true; controller.abort(new Error('request body limit')); }))
+    ? request.body!.pipeThrough(boundedStream(limits.maxRequestBodyBytes, uploadProgress, () => { limitHit = true; controller.abort(new Error('request body limit')); }))
     : undefined;
 
   let response: Response;
@@ -123,12 +132,12 @@ export async function forwardPreviewRequest({
       ...(hasBody ? { duplex: 'half' } : {}),
     } as RequestInit);
   } catch (error) {
-    clearTimeout(headersTimer);
+    if (headersTimer) clearTimeout(headersTimer);
     if (limitHit) return { kind: 'refused', status: 413, reason: 'request-too-large' };
     const reason = error instanceof Error ? error.message : String(error);
     return { kind: 'upstream-error', status: controller.signal.aborted ? 504 : 502, reason };
   }
-  clearTimeout(headersTimer);
+  if (headersTimer) clearTimeout(headersTimer);
   touch();
 
   const relayed = new Headers(selectForwardableResponseHeaders(flatten(response.headers)));

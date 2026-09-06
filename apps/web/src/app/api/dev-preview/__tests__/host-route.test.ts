@@ -109,10 +109,11 @@ describe('the handshake: /__pagespace/auth', () => {
     expect((await POST(req('/__pagespace/auth?grant=g1', { method: 'POST' }), ctx())).status).toBe(404);
   });
 
-  it('answers 503 when the cookie key is not configured rather than issuing an unverifiable cookie', async () => {
+  it('answers 503 when the cookie key is not configured — BEFORE consuming the single-use grant', async () => {
     vi.mocked(getPreviewCookieKey).mockReturnValue(Buffer.alloc(0));
     consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt: new Date(Date.now() + 1000) });
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(503);
+    expect(consume).not.toHaveBeenCalled();
   });
 });
 

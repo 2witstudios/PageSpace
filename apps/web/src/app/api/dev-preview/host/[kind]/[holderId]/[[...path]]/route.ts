@@ -122,6 +122,13 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
   // ---- the handshake's second half ------------------------------------------
   if (path === PREVIEW_AUTH_PATH) {
     if (request.method !== 'GET') return notFound();
+    // The key is checked BEFORE the grant is consumed: a grant is single-use,
+    // and burning it only to answer 503 would strand the user.
+    const cookieKey = getPreviewCookieKey();
+    if (cookieKey.length === 0) {
+      loggers.security.error('dev-preview: cookie key not configured (SANDBOX_SESSION_SECRET)');
+      return NextResponse.json({ error: 'Preview is not configured' }, { status: 503 });
+    }
     const grantId = request.nextUrl.searchParams.get(PREVIEW_GRANT_QUERY_PARAM) ?? '';
     const consumed = grantId.length === 0 ? null : await getPreviewGrantsStore().consume({ id: grantId, now });
     if (consumed === null || !sameHolder(consumed.holder, holder)) {
@@ -134,13 +141,7 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
       });
       return NextResponse.json({ error: 'This preview link has expired. Reopen the preview from PageSpace.' }, { status: 403, headers: { 'cache-control': 'no-store' } });
     }
-    let cookie: string;
-    try {
-      cookie = signPreviewCookie({ holder, userId: consumed.userId, expiresAt: consumed.cookieExpiresAt.getTime() }, getPreviewCookieKey());
-    } catch {
-      loggers.security.error('dev-preview: cookie key not configured (SANDBOX_SESSION_SECRET)');
-      return NextResponse.json({ error: 'Preview is not configured' }, { status: 503 });
-    }
+    const cookie = signPreviewCookie({ holder, userId: consumed.userId, expiresAt: consumed.cookieExpiresAt.getTime() }, cookieKey);
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: consumed.userId, holder, method: 'GET', path, outcome: 'forwarded', reason: 'grant-redeemed', status: 302, transport: 'http' }));
     return new NextResponse(null, {
       status: 302,

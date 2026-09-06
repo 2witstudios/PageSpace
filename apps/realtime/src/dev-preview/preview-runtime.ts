@@ -63,7 +63,15 @@ export function buildRealtimePreviewAccessDeps(): PreviewAccessDeps {
       return drive ? { payerId: drive.ownerId } : null;
     },
     canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
-    attach: async (sandboxId) => (await createConnectScopedSandboxHost()).attach({ sandboxId }).catch(() => null),
+    attach: async (sandboxId) => {
+      try {
+        return await (await createConnectScopedSandboxHost()).attach({ sandboxId });
+      } catch {
+        // A failed host construction (no SDK, wrong Node) is "no sprite
+        // reachable" to the gather, exactly like a failed attach.
+        return null;
+      }
+    },
     previewStore: getRealtimePreviewStore(),
     featureEnabled: isDevPreviewEnabled,
     now: () => new Date(),

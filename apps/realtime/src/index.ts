@@ -1146,7 +1146,10 @@ const engineUpgradeListeners = httpServer.listeners('upgrade') as Array<(req: In
 httpServer.removeAllListeners('upgrade');
 httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
   if (previewHolderForUpgrade(req, isDevPreviewEnabled() ? resolveDevPreviewApex() : null) !== null) {
-    void previewUpgrade(req, socket, head);
+    previewUpgrade(req, socket, head).catch((error: unknown) => {
+      loggers.realtime.error('dev-preview: upgrade failed', error instanceof Error ? error : new Error(String(error)));
+      socket.destroy();
+    });
     return;
   }
   if ((req.url ?? '').startsWith('/socket.io/')) {

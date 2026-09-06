@@ -111,23 +111,22 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
       listeners.clear();
       for (const port of frame.ports) listeners.set(port.port, port);
       // A snapshot is every port bound BEFORE we attached. Classify each
-      // against the current relay; offer the known dev ports first so the
-      // core's thrash guard keeps one of THOSE when several are listening,
-      // and let the core converge on the row's target when none qualifies.
-      const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
+      // against the current relay and plan ONE candidate: the row's own
+      // target if it is still listening (a reconnect must never re-point a
+      // working preview), else the lowest known dev port, else the lowest
+      // unlisted one. Planning every candidate in turn would let a second
+      // KNOWN port displace the first — the core's thrash guard only shields
+      // a known target from UNLISTED newcomers. With no candidate, the core
+      // converges the relay on the row's target (or does nothing).
+      const [relay, row] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), store.findByHolder(holder)]);
       const candidates = frame.ports
         .map((port) => classifyDetectedDevServer({ event: { type: 'port_opened', ...port }, relay }))
         .filter((c): c is Detected => c.kind === 'dev-server')
         .sort((a, b) => Number(KNOWN_DEV_SERVER_PORTS.has(b.port)) - Number(KNOWN_DEV_SERVER_PORTS.has(a.port)) || a.port - b.port);
-      if (candidates.length === 0) {
-        const applied = await reconcile(null);
-        log.info('dev-preview: snapshot reconciled', { ...context(), applied: applied.action });
-        return;
-      }
-      for (const candidate of candidates) {
-        const applied = await reconcile(candidate);
-        log.info('dev-preview: snapshot candidate planned', { ...context(), port: candidate.port, applied: applied.action });
-      }
+      const current = row === null ? undefined : candidates.find((c) => c.port === row.targetPort);
+      const chosen = current ?? candidates[0] ?? null;
+      const applied = await reconcile(chosen);
+      log.info('dev-preview: snapshot reconciled', { ...context(), ...(chosen ? { port: chosen.port } : {}), applied: applied.action });
       return;
     }
 

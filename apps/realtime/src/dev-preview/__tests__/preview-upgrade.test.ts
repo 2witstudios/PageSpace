@@ -194,4 +194,12 @@ describe('buildPreviewUpgradeHandler', () => {
     expect(await buildPreviewUpgradeHandler(badUrl.deps)(req({ cookie: cookieFor() }), b.socket, Buffer.alloc(0))).toBe(true);
     expect(b.written.join('')).toMatch(/^HTTP\/1\.1 502 Bad Gateway\r\n/);
   });
+
+  it('answers 502 when the tunnel throws synchronously (a token that is not a legal header value)', async () => {
+    const d = deps({ tunnel: () => { throw new TypeError('Invalid character in header'); } });
+    const s = fakeSocket();
+    expect(await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor() }), s.socket, Buffer.alloc(0))).toBe(true);
+    expect(s.written.join('')).toMatch(/^HTTP\/1\.1 502 Bad Gateway\r\n/);
+    expect(d.logs.at(-1)).toMatchObject({ level: 'error', message: 'dev-preview: tunnel failed to start' });
+  });
 });

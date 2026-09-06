@@ -196,4 +196,18 @@ describe('createDetectionRegistry', () => {
       vi.unstubAllGlobals();
     }
   });
+
+  it('a stopAll that lands while attach is pending opens no channel', async () => {
+    let releaseAttach: (h: SandboxHandle) => void = () => {};
+    const h = deps({ attach: () => new Promise<SandboxHandle>((resolve) => { releaseAttach = resolve; }) });
+    const registry = createDetectionRegistry(h.deps);
+    const pending = registry.ensure({ holder: HOLDER });
+    await new Promise((r) => setImmediate(r));
+    expect(registry.watching()).toEqual(['sbx-env1']);
+    registry.stopAll();
+    releaseAttach(fakeHandle());
+    await pending;
+    expect(h.sockets).toHaveLength(0);
+    expect(registry.watching()).toEqual([]);
+  });
 });

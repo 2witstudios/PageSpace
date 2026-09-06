@@ -36,6 +36,9 @@ export function requestDevPreviewWatch(input: DevPreviewWatchRequest, fetchImpl:
     method: 'POST',
     headers: createSignedBroadcastHeaders(body),
     body,
+    // A signed internal call never follows a redirect: the signature is for
+    // THIS body at THIS URL, and a redirect would replay it elsewhere.
+    redirect: 'error',
     signal: AbortSignal.timeout(5000),
   }).catch((error: unknown) => {
     loggers.realtime.warn('dev-preview: watch trigger failed', {

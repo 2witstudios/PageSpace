@@ -27,7 +27,8 @@ vi.mock('@pagespace/lib/services/sandbox/sandbox-client/sprites', () => ({
 }));
 vi.mock('@pagespace/lib/services/sandbox/sandbox-client/sprite-sandbox-host', () => ({ createSpriteSandboxHost: vi.fn(() => ({ attach })) }));
 vi.mock('@pagespace/lib/services/sandbox/preview/dev-preview-store', () => ({ createDbDevPreviewStore: vi.fn(() => ({ findByHolder: vi.fn(), upsert: vi.fn() })) }));
-vi.mock('../../terminal/realtime-sprites-client', () => ({ getRealtimeSpritesSdk: async () => ({ getSprite: vi.fn() }) }));
+const { getRealtimeSpritesSdk } = vi.hoisted(() => ({ getRealtimeSpritesSdk: vi.fn(async () => ({ getSprite: vi.fn() })) }));
+vi.mock('../../terminal/realtime-sprites-client', () => ({ getRealtimeSpritesSdk }));
 
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { buildRealtimePreviewAccessDeps, createConnectScopedSandboxHost, getRealtimePreviewCookieKey, getRealtimePreviewStore, resolveHolderSandboxId } from '../preview-runtime';
@@ -73,6 +74,8 @@ describe('buildRealtimePreviewAccessDeps', () => {
     attach.mockResolvedValueOnce({ sandboxId: 'sbx' });
     expect(await deps.attach('sbx')).toEqual({ sandboxId: 'sbx' });
     attach.mockRejectedValueOnce(new Error('gone'));
+    expect(await deps.attach('sbx')).toBeNull();
+    getRealtimeSpritesSdk.mockRejectedValueOnce(new Error('Node too old'));
     expect(await deps.attach('sbx')).toBeNull();
     expect(await createConnectScopedSandboxHost()).toEqual({ attach });
   });

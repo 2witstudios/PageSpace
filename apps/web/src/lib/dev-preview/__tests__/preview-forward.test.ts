@@ -104,6 +104,25 @@ describe('forwardPreviewRequest', () => {
     await expect(outcome.response.arrayBuffer()).rejects.toThrow(/byte limit/);
   });
 
+  it('measures the headers deadline from the last uploaded byte — a slow streaming upload is not cut by it', async () => {
+    let received = '';
+    const { fetchImpl } = await upstream((req, res) => { req.on('data', (c: Buffer) => { received += c.toString(); }); req.on('end', () => { res.writeHead(201); res.end('ok'); }); });
+    const limits = Object.freeze({ ...PREVIEW_PROXY_LIMITS, upstreamHeadersTimeoutMs: 120 });
+    const body = new ReadableStream<Uint8Array>({
+      async start(controller) {
+        for (let i = 0; i < 4; i += 1) {
+          await new Promise((r) => setTimeout(r, 60));
+          controller.enqueue(new TextEncoder().encode(`chunk${i}`));
+        }
+        controller.close();
+      },
+    });
+    const post = new Request('https://x/upload', { method: 'POST', body, headers: { 'content-type': 'text/plain' }, duplex: 'half' } as RequestInit);
+    const outcome = await forwardPreviewRequest({ request: post, pathAndQuery: '/upload', spriteUrl: SPRITE, token: 't', appOrigin: null, fetchImpl, limits });
+    expect(outcome.kind === 'response' && outcome.response.status).toBe(201);
+    expect(received).toBe('chunk0chunk1chunk2chunk3');
+  });
+
   it('answers 504 when the upstream never sends headers within the bound, and 502 when it cannot be reached', async () => {
     const { fetchImpl } = await upstream(() => { /* never answers */ });
     const limits = Object.freeze({ ...PREVIEW_PROXY_LIMITS, upstreamHeadersTimeoutMs: 50 });

@@ -135,7 +135,19 @@ describe('createDevPreviewDetector — port_list snapshot', () => {
     h.calls.length = 0;
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
     assert({ given: 'a snapshot with inspector, db and vite', should: 'replace listeners', actual: h.detector.listeners(), expected: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
-    assert({ given: 'the snapshot', should: 're-point the 1111 relay at vite first; the inspector then loses to the thrash guard', actual: h.calls, expected: [`remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'the snapshot', should: 're-point the 1111 relay at vite (the inspector is never a candidate over a known port)', actual: h.calls, expected: [`remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+  });
+
+  it('plans ONE candidate per snapshot: two known dev ports do not replace each other, and a still-listening row target wins', async () => {
+    const h = harness();
+    await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173 }, { port: 3000 }] });
+    assert({ given: 'vite and next both listening, no row', should: 'plan only the lowest known port', actual: h.calls, expected: ['create:3000', `upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    h.calls.length = 0;
+    await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173 }, { port: 3000 }] });
+    assert({ given: 'the same snapshot again (a reconnect)', should: 'change nothing', actual: h.calls, expected: [] });
+    const g = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
+    await g.detector.onFrame({ type: 'port_list', ports: [{ port: 3000 }, { port: 5173 }] });
+    assert({ given: 'a row on 5173 still listening beside 3000', should: 'keep the working preview', actual: g.calls, expected: [] });
   });
 
   it('with no candidate, reconciles the row (a crashed relay is restarted; a row without a relay gets one)', async () => {
