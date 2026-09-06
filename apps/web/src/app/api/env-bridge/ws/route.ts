@@ -25,15 +25,11 @@ import { verifyHello, isMachineResultFrame } from '@pagespace/lib/env-bridge/mac
 import { getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { decodePinnedPublicKey, ed25519Verify } from '@/lib/env-bridge/crypto';
+import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
 
 // Initialize cleanup interval on module load
 // This prevents memory leaks from stale connections
 startEnvCleanupInterval();
-
-/** How long a socket may sit without a valid signed hello before it is closed. */
-export const ENV_BRIDGE_HELLO_TIMEOUT_MS = 10_000;
-/** Server → daemon heartbeat cadence; well inside LOCAL_ENV_HEARTBEAT_WINDOW_MS (90 s). */
-export const ENV_BRIDGE_PING_INTERVAL_MS = 30_000;
 
 const RESOURCE_TYPE = 'env_bridge_websocket';
 const DRIVE_ENV_RESOURCE = 'drive_env';

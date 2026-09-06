@@ -40,7 +40,8 @@ import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace
 import { clearAllEnvConnectionsForTesting, getEnvConnection, readEnvLiveConnection, ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON } from '@/lib/websocket/ws-env-connections';
 import { getEnvBridgeClient } from '@/lib/env-bridge/bridge-client';
 import { envBridgeHash } from '@/lib/env-bridge/crypto';
-import { UPGRADE, GET, ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '../route';
+import { ENV_BRIDGE_HELLO_TIMEOUT_MS, ENV_BRIDGE_PING_INTERVAL_MS } from '@/lib/env-bridge/ws-route-config';
+import { UPGRADE, GET } from '../route';
 
 // ---- keys -------------------------------------------------------------------
 const primitives: SigningKeyPrimitives = {
