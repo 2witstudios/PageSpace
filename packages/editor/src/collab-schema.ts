@@ -7,23 +7,18 @@ import { TableKit } from '@tiptap/extension-table';
 import { TaskList, TaskItem } from '@tiptap/extension-list';
 import { Highlight } from '@tiptap/extension-highlight';
 import { TextAlign } from '@tiptap/extension-text-align';
-import { PageMentionNode } from '@/lib/editor/page-mention-node';
-import { CodeBlockNode } from '@/lib/editor/code-block';
-import { BlockId } from '@/lib/editor/block-id';
-import { CommentMark, InsertionMark, DeletionMark } from '@/lib/editor/collab-marks';
-import { ImageNode } from '@/lib/editor/image-node';
+import { PageMentionNode } from './page-mention-node.js';
+import { CodeBlockNode } from './code-block-node.js';
+import { BlockId } from './block-id.js';
+import { CommentMark, InsertionMark, DeletionMark } from './collab-marks.js';
+import { ImageNode } from './image-node.js';
 
 /**
- * `packages/editor` will own this module eventually (Phase B leaf: "Scaffold
- * packages/editor"). It lives in `apps/web/src/lib/editor` for now because
- * that scaffold — 21 files, 9 Docker COPY sites — is deliberately its own
- * change. Every import here is Node-safe (no React, no `document`/`window`
- * at module-eval time), which is what lets `packages/editor` re-export this
- * file's contents unchanged later, and lets a future headless collab server
- * import `collabExtensions()`/`SCHEMA_HASH`/`COLLAB_SCHEMA_VERSION` directly
- * without pulling in React. `clientExtensions()` — which DOES need React —
- * lives in the sibling `client-schema.ts` precisely so importing it doesn't
- * drag React into this module's import graph.
+ * Node-safe by contract: no React, no `document`/`window` at module-eval
+ * time, so a headless collab server can import `collabExtensions()`/
+ * `SCHEMA_HASH`/`COLLAB_SCHEMA_VERSION` directly. `clientExtensions()` — which
+ * DOES need React — lives in `apps/web/src/lib/editor/client-schema.ts` and
+ * layers the view-only extensions on top of this list.
  */
 
 /**

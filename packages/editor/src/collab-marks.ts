@@ -1,5 +1,5 @@
 import { Mark } from '@tiptap/core';
-import { simpleDataAttr } from '@/lib/editor/simple-data-attr';
+import { simpleDataAttr } from './simple-data-attr.js';
 
 /**
  * Comment, insertion and deletion marks — schema-only, inert. No commands, no

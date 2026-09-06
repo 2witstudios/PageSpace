@@ -19,6 +19,7 @@ export default defineWorkspace([
       globals: true,
     },
   },
+  './packages/editor/vitest.config.ts',
   {
     resolve: {
       alias: {

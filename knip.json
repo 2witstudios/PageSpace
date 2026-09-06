@@ -548,6 +548,17 @@
         "@types/xlsx"
       ]
     },
+    "packages/editor": {
+      "entry": [
+        "src/*.ts"
+      ],
+      "project": [
+        "src/**/*.ts"
+      ],
+      "ignore": [
+        "src/**/__tests__/**"
+      ]
+    },
     "apps/android": {
       "ignoreDependencies": [
         "@capacitor/app",

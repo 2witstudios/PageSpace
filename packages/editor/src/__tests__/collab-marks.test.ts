@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import { getSchema } from '@tiptap/core';
 import StarterKit from '@tiptap/starter-kit';
-import { CommentMark } from '../collab-marks';
+import { CommentMark } from '../collab-marks.js';
 
 describe('CommentMark allows overlapping threads', () => {
   it('two comment marks with different threadId can both be added to the same set', () => {

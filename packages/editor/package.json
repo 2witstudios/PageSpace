@@ -1,0 +1,94 @@
+{
+  "name": "@pagespace/editor",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "description": "Headless, React-free ProseMirror/TipTap schema for PageSpace documents: the frozen COLLAB_SCHEMA_VERSION surface shared by the web client and any headless Node consumer. yjs is a runtime singleton and is pinned in the root package.json overrides, not here.",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src"
+  },
+  "exports": {
+    "./block-id": {
+      "types": "./dist/block-id.d.ts",
+      "import": "./dist/block-id.js",
+      "default": "./dist/block-id.js"
+    },
+    "./code-block-node": {
+      "types": "./dist/code-block-node.d.ts",
+      "import": "./dist/code-block-node.js",
+      "default": "./dist/code-block-node.js"
+    },
+    "./collab-marks": {
+      "types": "./dist/collab-marks.d.ts",
+      "import": "./dist/collab-marks.js",
+      "default": "./dist/collab-marks.js"
+    },
+    "./collab-schema": {
+      "types": "./dist/collab-schema.d.ts",
+      "import": "./dist/collab-schema.js",
+      "default": "./dist/collab-schema.js"
+    },
+    "./image-node": {
+      "types": "./dist/image-node.d.ts",
+      "import": "./dist/image-node.js",
+      "default": "./dist/image-node.js"
+    },
+    "./page-mention-node": {
+      "types": "./dist/page-mention-node.d.ts",
+      "import": "./dist/page-mention-node.js",
+      "default": "./dist/page-mention-node.js"
+    },
+    "./simple-data-attr": {
+      "types": "./dist/simple-data-attr.d.ts",
+      "import": "./dist/simple-data-attr.js",
+      "default": "./dist/simple-data-attr.js"
+    }
+  },
+  "typesVersions": {
+    "*": {
+      "block-id": [
+        "./dist/block-id.d.ts"
+      ],
+      "code-block-node": [
+        "./dist/code-block-node.d.ts"
+      ],
+      "collab-marks": [
+        "./dist/collab-marks.d.ts"
+      ],
+      "collab-schema": [
+        "./dist/collab-schema.d.ts"
+      ],
+      "image-node": [
+        "./dist/image-node.d.ts"
+      ],
+      "page-mention-node": [
+        "./dist/page-mention-node.d.ts"
+      ],
+      "simple-data-attr": [
+        "./dist/simple-data-attr.d.ts"
+      ]
+    }
+  },
+  "dependencies": {
+    "@tiptap/core": "^3.7.2",
+    "@tiptap/extension-code-block": "^3.6.1",
+    "@tiptap/extension-highlight": "3.23.5",
+    "@tiptap/extension-list": "3.23.5",
+    "@tiptap/extension-mention": "^3.0.7",
+    "@tiptap/extension-table": "^3.0.7",
+    "@tiptap/extension-text-align": "3.23.5",
+    "@tiptap/extension-text-style": "^3.0.7",
+    "@tiptap/pm": "^3.7.2",
+    "@tiptap/starter-kit": "^3.0.7",
+    "tiptap-markdown": "^0.8.10"
+  },
+  "devDependencies": {
+    "eslint": "^9.36.0",
+    "typescript-eslint": "^8.59.0"
+  }
+}

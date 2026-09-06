@@ -14,14 +14,14 @@ import { PageMention } from '@/lib/editor/tiptap-mention-config';
 import { PaginationPlus } from '@/lib/editor/pagination';
 import { CodeBlockShiki } from '@/lib/editor/code-block';
 import { FindExtension } from '@/lib/editor/find-plugin';
-import { BlockId } from '@/lib/editor/block-id';
-import { CommentMark, InsertionMark, DeletionMark } from '@/lib/editor/collab-marks';
-import { ImageNode } from '@/lib/editor/image-node';
-import { STARTER_KIT_SCHEMA_OPTIONS, TEXT_ALIGN_SCHEMA_OPTIONS } from '@/lib/editor/collab-schema';
+import { BlockId } from '@pagespace/editor/block-id';
+import { CommentMark, InsertionMark, DeletionMark } from '@pagespace/editor/collab-marks';
+import { ImageNode } from '@pagespace/editor/image-node';
+import { STARTER_KIT_SCHEMA_OPTIONS, TEXT_ALIGN_SCHEMA_OPTIONS } from '@pagespace/editor/collab-schema';
 
 /**
  * The client's extension set: everything in the frozen schema
- * (`collab-schema.ts`'s `collabExtensions()`) plus view-only additions.
+ * (`@pagespace/editor/collab-schema`'s `collabExtensions()`) plus view-only additions.
  * Deliberately NOT a re-export of `collabExtensions()` plus a spread —
  * `RichEditor` needs the client variants of `codeBlock`/`pageMention`
  * (`CodeBlockShiki`/`PageMention`, which extend the frozen schema's
