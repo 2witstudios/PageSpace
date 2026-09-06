@@ -29,8 +29,6 @@ export interface OpenDevPreview {
   openPath: string;
   /** What to call it in the chrome — the session or environment name. */
   title: string;
-  /** Whether this viewer may stop/resume it (the reader's own write gate). */
-  canManage: boolean;
 }
 
 export interface DevPreviewPaneState {

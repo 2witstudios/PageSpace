@@ -88,9 +88,12 @@ vi.mock('../panes/AgentPanes', () => ({
 }));
 
 const mockFetchWithAuth = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
-}));
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  // Partial: the dev-preview pane mounted beside the console needs the REAL
+  // `ApiRequestError` class for its `instanceof` check.
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return { ...actual, fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args) };
+});
 
 const mockLoadConversation = vi.hoisted(() => vi.fn());
 vi.mock('@/contexts/GlobalChatContext', () => ({
@@ -102,6 +105,7 @@ vi.mock('sonner', () => ({ toast: { info: mockToastInfo, error: vi.fn() } }));
 
 import AgentsSurface from '../AgentsSurface';
 import { useAgentSurfaceStore } from '@/stores/agents/useAgentSurfaceStore';
+import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
 import {
   useAgentWorkspaceStore,
   __resetWorkspaceQueuesForTests,
@@ -721,5 +725,20 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(mockToastInfo).toHaveBeenCalledTimes(1);
     expect(mockLoadConversation).not.toHaveBeenCalled();
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
+  });
+
+  test('an open dev-server preview pane belongs to the drive it was opened in: switching drives closes it', async () => {
+    useDevPreviewPaneStore.setState({
+      open: { holder: { kind: 'env', id: 'e1' }, statusPath: '/api/drives/drive-1/envs/e1/preview', actionsPath: '/api/drives/drive-1/envs/e1/preview/actions', openPath: '/api/drives/drive-1/envs/e1/preview/open', title: 'main' },
+      reloadNonce: 0,
+    });
+    // Mount closes nothing that was opened for THIS drive... (mount runs the effect once — on a fresh store)
+    const { rerender } = render(<AgentsSurface driveId="drive-1" />);
+    await act(async () => {});
+    // ...so re-open after mount to model "opened while on drive-1", then switch.
+    act(() => useDevPreviewPaneStore.getState().openPreview({ holder: { kind: 'env', id: 'e1' }, statusPath: '/api/drives/drive-1/envs/e1/preview', actionsPath: '/api/drives/drive-1/envs/e1/preview/actions', openPath: '/api/drives/drive-1/envs/e1/preview/open', title: 'main' }));
+    expect(useDevPreviewPaneStore.getState().open).not.toBeNull();
+    rerender(<AgentsSurface driveId="drive-2" />);
+    await waitFor(() => expect(useDevPreviewPaneStore.getState().open).toBeNull());
   });
 });

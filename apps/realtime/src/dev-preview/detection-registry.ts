@@ -69,14 +69,22 @@ const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
 export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionRegistry {
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
-  const watchers = new Map<string, { close(): void }>();
   /**
-   * The live detector per watched sprite — the snapshot source for
-   * `listeners()` — with whether the CURRENT connection has delivered its
-   * `port_list` (`fresh`). Set once the channel is opening, `fresh` flips on
-   * the snapshot frame and off on every close, cleared with the watcher.
+   * One entry per watched sprite: how to close it, its detector (the snapshot
+   * source for `listeners()`; null while the slot is only reserved), and
+   * whether the CURRENT connection's `port_list` has been APPLIED by the
+   * detector (`fresh`). `fresh` flips on only after the detector's serialized
+   * chain has folded the snapshot in — flipping it on frame ARRIVAL would hand
+   * out the previous connection's set as this one's for a tick — and flips
+   * off on every close. One map, one lifetime: an entry is created by the
+   * reservation, replaced when the channel opens, and deleted on every exit.
    */
-  const detectors = new Map<string, { detector: DevPreviewDetector; fresh: boolean }>();
+  interface Watcher {
+    close(): void;
+    detector: DevPreviewDetector | null;
+    fresh: boolean;
+  }
+  const watchers = new Map<string, Watcher>();
 
   async function start(holder: DevPreviewHolderRef, sandboxId: string): Promise<void> {
     const reservation = watchers.get(sandboxId);
@@ -90,24 +98,44 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       return;
     }
     const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log });
-    const entry = { detector, fresh: false };
-    detectors.set(sandboxId, entry);
     const url = buildPortsWatchUrl(deps.spritesApiBaseUrl(), sandboxId);
     let stopped = false;
     let current: PortsWatchHandle | null = null;
     let attempts = 0;
+    // Which connection a frame belongs to: a `port_list` that finishes
+    // applying after its socket has already dropped must not mark the NEXT
+    // connection fresh.
+    let generation = 0;
+
+    const entry: Watcher = {
+      detector,
+      fresh: false,
+      close() {
+        stopped = true;
+        current?.close();
+        watchers.delete(sandboxId);
+      },
+    };
 
     const open = () => {
+      generation += 1;
+      const mine = generation;
       current = openPortsWatch({
         url,
         token: deps.spritesToken(),
         createSocket: deps.createSocket,
         onFrame: (frame) => {
           // The platform's first frame on a connection is the full `port_list`
-          // (ports-watch.ts); from then until the socket drops, the detector's
-          // accumulated set describes THIS connection and may be handed out.
-          if (frame.type === 'port_list') entry.fresh = true;
-          void detector.onFrame(frame);
+          // (ports-watch.ts). The detector applies frames on a serialized
+          // chain, so the set describes THIS connection only once that frame
+          // has been APPLIED — hence `fresh` flips after `onFrame` resolves,
+          // and only if this connection is still the live one.
+          const applied = detector.onFrame(frame);
+          if (frame.type === 'port_list') {
+            void applied.then(() => {
+              if (!stopped && mine === generation && current !== null) entry.fresh = true;
+            });
+          }
         },
         onClose: (info) => {
           current = null;
@@ -118,7 +146,6 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
             deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts });
             stopped = true;
             watchers.delete(sandboxId);
-            detectors.delete(sandboxId);
             return;
           }
           const delay = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)];
@@ -128,14 +155,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       });
     };
 
-    watchers.set(sandboxId, {
-      close() {
-        stopped = true;
-        current?.close();
-        watchers.delete(sandboxId);
-        detectors.delete(sandboxId);
-      },
-    });
+    watchers.set(sandboxId, entry);
     open();
     deps.log.info('dev-preview: watching sprite', { holderKind: holder.kind, holderId: holder.id });
   }
@@ -150,10 +170,12 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       if (sandboxId === null) return;
       if (watchers.has(sandboxId)) return;
       // Reserve the slot synchronously so two concurrent ensures start one watcher.
-      watchers.set(sandboxId, { close() { watchers.delete(sandboxId); } });
+      watchers.set(sandboxId, { detector: null, fresh: false, close() { watchers.delete(sandboxId); } });
       try {
         await start(holder, sandboxId);
       } catch (error) {
+        // Whatever `start` had registered goes with the failure — the
+        // reservation, or the live entry if the throw came after it was set.
         watchers.delete(sandboxId);
         deps.log.error('dev-preview: watcher failed to start', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
       }
@@ -163,8 +185,8 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       // Same rule as `ensure`: the sprite is the holder's ROW's, never a claim.
       const sandboxId = await deps.resolveHolderSandboxId(holder);
       if (sandboxId === null) return null;
-      const entry = detectors.get(sandboxId);
-      return entry !== undefined && entry.fresh ? entry.detector.listeners() : null;
+      const entry = watchers.get(sandboxId);
+      return entry !== undefined && entry.fresh && entry.detector !== null ? entry.detector.listeners() : null;
     },
     watching: () => [...watchers.keys()],
     stopAll() {

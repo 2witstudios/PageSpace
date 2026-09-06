@@ -40,6 +40,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
+import { DEV_PREVIEW_MESSAGE_TYPE, DEV_PREVIEW_REAUTH_EVENT } from '@pagespace/lib/services/sandbox/preview/dev-preview-contract';
 import { parsePreviewHost, DEV_PREVIEW_HOST_ROUTE_PREFIX } from '@pagespace/lib/services/sandbox/preview/preview-host';
 import {
   PREVIEW_AUTH_PATH,
@@ -69,7 +70,7 @@ type RouteContext = { params: Promise<{ kind: string; holderId: string; path?: s
 const REAUTH_SCRIPT = [
   "var d=document.currentScript.dataset;",
   "var holder={kind:d.kind,id:d.id};",
-  "if(window.parent!==window){window.parent.postMessage({type:'pagespace:dev-preview',event:'reauth-required',holder:holder},d.appOrigin);}",
+  `if(window.parent!==window){window.parent.postMessage({type:'${DEV_PREVIEW_MESSAGE_TYPE}',event:'${DEV_PREVIEW_REAUTH_EVENT}',holder:holder},d.appOrigin);}`,
   "else{window.location.replace(d.openUrl);}",
 ].join('');
 const REAUTH_SCRIPT_HASH = `sha256-${createHash('sha256').update(REAUTH_SCRIPT).digest('base64')}`;

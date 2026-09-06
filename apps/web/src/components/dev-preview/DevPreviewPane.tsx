@@ -45,8 +45,9 @@
  *
  * STOP / RESUME write `stoppedByUserAt` through the store (via the actions
  * route, which reconciles once through the core). Offered only when the
- * server says they apply (`canStop` / `canResume`) AND the reader may manage
- * the preview; both refuse cleanly server-side regardless.
+ * server says they apply (`canStop` / `canResume`) AND that this viewer may
+ * manage it (`canManage`) — all three read LIVE from the polled status, never
+ * snapshotted at open; both refuse cleanly server-side regardless.
  *
  * REFRESH PROTECTION: while open, the pane registers with `useEditingStore`
  * (repo rule) — an auth refresh or an SWR revalidation must not tear down a
@@ -59,7 +60,8 @@ import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { post } from '@/lib/auth/auth-fetch';
+import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
+import { isDevPreviewReauthMessageFor } from '@pagespace/lib/services/sandbox/preview/dev-preview-contract';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
@@ -69,32 +71,10 @@ import { devPreviewBadge } from './dev-preview-copy';
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
 const PANE_POLL_MS = 5_000;
 
-/** The message the preview origin posts when its cookie has expired inside the frame. */
-export const DEV_PREVIEW_REAUTH_MESSAGE_TYPE = 'pagespace:dev-preview';
 /** A re-auth is a grant mint; one per this window is plenty for a cookie that lives ten minutes. */
 export const REAUTH_DEBOUNCE_MS = 5_000;
 /** Exactly what a dev server needs inside the frame, and nothing that reaches the PageSpace tab — see the docblock. */
 export const DEV_PREVIEW_FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
-
-interface ReauthMessage {
-  type: typeof DEV_PREVIEW_REAUTH_MESSAGE_TYPE;
-  event: 'reauth-required';
-  holder: { kind: 'workspace' | 'env'; id: string };
-}
-
-/** Pure: is this a re-auth request about `holder`? Anything else (other shapes, other holders) is ignored. */
-export function isReauthMessageFor(data: unknown, holder: { kind: string; id: string }): data is ReauthMessage {
-  if (typeof data !== 'object' || data === null) return false;
-  const message = data as Partial<ReauthMessage>;
-  return (
-    message.type === DEV_PREVIEW_REAUTH_MESSAGE_TYPE &&
-    message.event === 'reauth-required' &&
-    typeof message.holder === 'object' &&
-    message.holder !== null &&
-    message.holder.kind === holder.kind &&
-    message.holder.id === holder.id
-  );
-}
 
 /** Pure: the frame URL for a reload nonce — a changed query string forces a fresh navigation through the handshake. */
 export function buildFrameSrc(openPath: string, nonce: number): string {
@@ -107,10 +87,32 @@ export function DevPreviewPane() {
   const reloadNonce = useDevPreviewPaneStore((state) => state.reloadNonce);
   const closePreview = useDevPreviewPaneStore((state) => state.closePreview);
   const reload = useDevPreviewPaneStore((state) => state.reload);
-  const { preview, mutate } = useDevPreviewStatus(open?.statusPath ?? null, { enabled: enabled === true, intervalMs: PANE_POLL_MS });
+  // The open pane is one per viewer and has no disclosure to re-arm from, so
+  // it never idle-pauses (`pauseWhenIdle: false`) — the affordance for the
+  // same holder yields to it (`paneOwnsPoll`), so this is still one poll.
+  const { preview, error, mutate } = useDevPreviewStatus(open?.statusPath ?? null, { enabled: enabled === true, pauseWhenIdle: false, intervalMs: PANE_POLL_MS });
   const [actioning, setActioning] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const lastReauthAt = useRef(0);
+  // Once the frame has been shown for THIS open it stays mounted: a dev
+  // server restarting (a transient `down`) must not unmount the frame —
+  // that would throw away in-app state and re-mint a grant on remount. The
+  // status line carries the honest state meanwhile. Reset per open.
+  const [frameArmed, setFrameArmed] = useState(false);
+  useEffect(() => {
+    setFrameArmed(false);
+  }, [open]);
+  useEffect(() => {
+    if (preview?.canOpen) setFrameArmed(true);
+  }, [preview?.canOpen]);
+
+  // The holder is gone or no longer ours (session ended, env deleted, access
+  // revoked, a drive switched away from): the status route answers 404 and
+  // the pane closes itself rather than framing a preview it can no longer
+  // vouch for. Any other error keeps the last good answer and retries.
+  useEffect(() => {
+    if (open !== null && error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) closePreview();
+  }, [open, error, closePreview]);
 
   useEditingSession(`dev-preview-pane-${open?.holder.kind ?? 'none'}-${open?.holder.id ?? 'none'}`, open !== null, 'form', {
     componentName: 'DevPreviewPane',
@@ -127,7 +129,7 @@ export function DevPreviewPane() {
     const onMessage = (event: MessageEvent) => {
       const frameWindow = frameRef.current?.contentWindow ?? null;
       if (frameWindow === null || event.source !== frameWindow) return;
-      if (!isReauthMessageFor(event.data, open.holder)) return;
+      if (!isDevPreviewReauthMessageFor(event.data, open.holder)) return;
       const now = Date.now();
       if (now - lastReauthAt.current < REAUTH_DEBOUNCE_MS) return;
       lastReauthAt.current = now;
@@ -177,7 +179,18 @@ export function DevPreviewPane() {
           </Badge>
         )}
         <div className="ml-auto flex shrink-0 items-center gap-1">
-          <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" onClick={reload} title="Reload the preview">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+            // Re-point the frame AND re-read the status: a user hitting Reload
+            // wants the whole pane to reflect now, not the last 5-second tick.
+            onClick={() => {
+              reload();
+              mutate();
+            }}
+            title="Reload the preview"
+          >
             <RefreshCw className="size-3.5" aria-hidden="true" />
             <span className="sr-only">Reload</span>
           </Button>
@@ -187,13 +200,13 @@ export function DevPreviewPane() {
               <span className="sr-only">Open in new tab</span>
             </a>
           </Button>
-          {open.canManage && preview?.canStop && (
+          {preview?.canManage && preview.canStop && (
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" disabled={actioning} onClick={() => void runAction('stop')} title="Switch the preview off">
               <Square className="size-3.5" aria-hidden="true" />
               Stop
             </Button>
           )}
-          {open.canManage && preview?.canResume && (
+          {preview?.canManage && preview.canResume && (
             <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" disabled={actioning} onClick={() => void runAction('resume')} title="Switch the preview back on">
               <Play className="size-3.5" aria-hidden="true" />
               Resume
@@ -206,9 +219,9 @@ export function DevPreviewPane() {
         </div>
       </div>
 
-      <DevPreviewStatusLine preview={preview} />
+      <DevPreviewStatusLine preview={preview} frameMounted={frameArmed} />
 
-      {preview?.canOpen ? (
+      {frameArmed ? (
         <iframe
           key={frameSrc}
           ref={frameRef}
@@ -229,16 +242,18 @@ export function DevPreviewPane() {
 }
 
 /**
- * The honest line under the header: the server's own message while the frame
- * is up but the state is not plainly live (a relay still starting), plus the
- * 8080 slot explanation whenever the slot is known to be held by something
- * that is not our relay. When the frame is NOT openable the placeholder below
- * carries the state message instead, so it is never said twice; a live relay
- * with a relay-held slot says nothing — the badge already does.
+ * The honest line under the header: the server's own message whenever the
+ * frame is mounted but the state is not plainly live (a relay still
+ * starting, a dev server mid-restart, a preview switched off while the frame
+ * keeps its last render), plus the 8080 slot explanation whenever the slot
+ * is known to be held by something that is not our relay. When the frame is
+ * NOT mounted the placeholder below carries the state message instead, so it
+ * is never said twice; a live relay with a relay-held slot says nothing — the
+ * badge already does.
  */
-function DevPreviewStatusLine({ preview }: { preview: DevPreviewStatusDTO | undefined }) {
+function DevPreviewStatusLine({ preview, frameMounted }: { preview: DevPreviewStatusDTO | undefined; frameMounted: boolean }) {
   if (!preview) return null;
-  const showState = preview.canOpen && preview.state.status !== 'live';
+  const showState = frameMounted && preview.state.status !== 'live';
   const showSlot = preview.slot.known && preview.slot.holder === 'user-process';
   if (!showState && !showSlot) return null;
   const tone = preview.state.status === 'blocked' ? 'text-destructive' : 'text-muted-foreground';

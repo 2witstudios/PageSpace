@@ -32,6 +32,7 @@ import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runti
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
+import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
 import { decideDevPreviewManage } from '@/lib/dev-preview/manage-decision';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -67,22 +68,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     }
 
     const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
-    if (!result.ok) {
-      if (result.reason === 'wake-not-allowed') {
-        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
-        return NextResponse.json({ error: 'This drive cannot run code right now, so the preview cannot be switched back on', reason: result.detail }, { status: 403 });
-      }
-      return NextResponse.json({ error: 'This session has no dev-server preview to switch', reason: result.reason }, { status: 404 });
-    }
-
-    auditRequest(request, {
-      eventType: 'data.write',
-      userId: auth.userId,
-      resourceType: 'dev_preview',
-      resourceId: `${holder.kind}:${holder.id}`,
-      details: { route: ROUTE, action, applied: result.applied?.action ?? null },
-    });
-    return NextResponse.json({ ok: true, applied: result.applied });
+    return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply session preview action', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to apply preview action' }, { status: 500 });

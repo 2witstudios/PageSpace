@@ -33,7 +33,8 @@ describe('readDevPreviewListeners', () => {
   it('POSTs the holder, signed, to the listeners route with redirect: error and a timeout, and returns the cleaned snapshot', async () => {
     const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 'x' }, { port: 1, pid: 'y' }] })));
     const result = await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch);
-    expect(result).toEqual([{ port: 5173, pid: 3 }, { port: 8080 }]);
+    // Parsed with the watch channel's own reader: a non-integer pid is dropped, the port is kept; a non-integer port is dropped.
+    expect(result).toEqual([{ port: 5173, pid: 3 }, { port: 8080 }, { port: 1 }]);
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://realtime.internal:3001/api/dev-preview/listeners');
     expect(init.method).toBe('POST');

@@ -24,9 +24,9 @@
  * the disclosure toggles, and runs NO timer while the pane is open on this
  * same holder — the pane owns the poll and this line reads the shared cache.
  *
- * WHO MAY MANAGE is the server's answer (`preview.canManage`), never a prop:
- * the client cannot know the drive role, and the actions route enforces the
- * same rule regardless.
+ * WHO MAY MANAGE is the server's answer (`preview.canManage`, read live by
+ * the pane from the same status), never a prop: the client cannot know the
+ * drive role, and the actions route enforces the same rule regardless.
  */
 
 import { Globe } from 'lucide-react';
@@ -44,6 +44,7 @@ export function DevPreviewAffordance({
   statusPath,
   title,
   active = true,
+  pauseWhenIdle = true,
   className,
 }: {
   /** The reader's status route — session or env. */
@@ -52,13 +53,15 @@ export function DevPreviewAffordance({
   title: string;
   /** The caller's disclosure: poll only while true; a toggle re-arms an idle-paused poll. */
   active?: boolean;
+  /** Stop polling after four idle answers (per-row surfaces); a per-viewer surface with no disclosure passes false. */
+  pauseWhenIdle?: boolean;
   className?: string;
 }) {
   const enabled = useDevPreviewCapability();
   const openPreview = useDevPreviewPaneStore((state) => state.openPreview);
   const openStatusPath = useDevPreviewPaneStore((state) => state.open?.statusPath ?? null);
   const isOpen = openStatusPath === statusPath;
-  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, active, paneOwnsPoll: isOpen, intervalMs: AFFORDANCE_POLL_MS });
+  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, active, paneOwnsPoll: isOpen, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
 
   if (enabled !== true || !shouldShowDevPreviewAffordance(preview)) return null;
   const text = devPreviewAffordanceText(preview);
@@ -88,7 +91,6 @@ export function DevPreviewAffordance({
                 actionsPath: `${statusPath}/actions`,
                 openPath,
                 title,
-                canManage: preview.canManage,
               });
             }}
           >

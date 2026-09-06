@@ -21,6 +21,7 @@ import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
+import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'drive-envs/preview/actions';
@@ -51,22 +52,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
       return NextResponse.json({ error: 'Not found' }, { status: 404 });
     }
     const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
-    if (!result.ok) {
-      if (result.reason === 'wake-not-allowed') {
-        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
-        return NextResponse.json({ error: 'This drive cannot run code right now, so the preview cannot be switched back on', reason: result.detail }, { status: 403 });
-      }
-      return NextResponse.json({ error: 'This environment has no dev-server preview to switch', reason: result.reason }, { status: 404 });
-    }
-
-    auditRequest(request, {
-      eventType: 'data.write',
-      userId: auth.userId,
-      resourceType: 'dev_preview',
-      resourceId: `env:${envId}`,
-      details: { route: ROUTE, action, applied: result.applied?.action ?? null },
-    });
-    return NextResponse.json({ ok: true, applied: result.applied });
+    return respondToDevPreviewUserAction({ request, userId: auth.userId, route: ROUTE, holder, action, result });
   } catch (error) {
     loggers.api.error('Failed to apply env preview action', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to apply preview action' }, { status: 500 });

@@ -16,6 +16,7 @@ import AgentsListHeader from './AgentsListHeader';
 import { DevPreviewAffordance } from '@/components/dev-preview/DevPreviewAffordance';
 import { DevPreviewPane } from '@/components/dev-preview/DevPreviewPane';
 import { sessionDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
+import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -47,6 +48,15 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   const search = useSearchParams().toString();
 
   const { data: sessionData } = useSessionRecord(selectedSessionId);
+
+  // A preview pane belongs to the drive it was opened in: switching drives
+  // (this surface's own `driveId` prop changes on an already-mounted
+  // instance) closes it rather than leaving another drive's dev server
+  // framed beside this drive's console. Mount is a no-op (nothing open).
+  const closePreview = useDevPreviewPaneStore((state) => state.closePreview);
+  useEffect(() => {
+    closePreview();
+  }, [driveId, closePreview]);
   // Resolved vs. not — NOT the same question as "which drive". On the global
   // route (`storeDriveId` null), an unresolved DRIVE session must not render
   // as global in the meantime: `AgentPanes` treats `driveId === null` as a
@@ -223,6 +233,10 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
                 <DevPreviewAffordance
                   statusPath={sessionDevPreviewPath(selectedSessionId)}
                   title={sessionData?.session?.name || 'Session'}
+                  // One per viewer, no disclosure to re-arm from: keep
+                  // polling (slowly) so a dev server started a minute from
+                  // now is still noticed — see `useDevPreviewStatus`.
+                  pauseWhenIdle={false}
                   className="ml-auto"
                 />
               </div>

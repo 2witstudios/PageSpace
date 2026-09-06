@@ -10,14 +10,21 @@ import { SWRConfig } from 'swr';
 
 const mockFetchWithAuth = vi.hoisted(() => vi.fn());
 const mockPost = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
-  post: (...args: unknown[]) => mockPost(...args),
-}));
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  // `ApiRequestError` is the REAL class: the pane's `instanceof` check on a
+  // 404 status read must see the same class the real fetch throws.
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return {
+    ...actual,
+    fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+    post: (...args: unknown[]) => mockPost(...args),
+  };
+});
 const mockToastError = vi.hoisted(() => vi.fn());
 vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), success: vi.fn() } }));
 
-import { DEV_PREVIEW_FRAME_SANDBOX, DevPreviewPane, buildFrameSrc, isReauthMessageFor } from '../DevPreviewPane';
+import { DEV_PREVIEW_FRAME_SANDBOX, DevPreviewPane, buildFrameSrc } from '../DevPreviewPane';
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
@@ -28,7 +35,6 @@ const OPEN: OpenDevPreview = {
   actionsPath: '/api/drives/d1/envs/env1/preview/actions',
   openPath: '/api/drives/d1/envs/env1/preview/open',
   title: 'main',
-  canManage: true,
 };
 
 function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
@@ -147,16 +153,19 @@ describe('DevPreviewPane', () => {
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith(OPEN.actionsPath, { action: 'stop' }));
     await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(before));
     await screen.findByTitle('Switch the preview back on');
-    expect(screen.queryByTestId('dev-preview-frame')).toBeNull();
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
-    expect(screen.getByTestId('dev-preview-placeholder')).toHaveTextContent('Preview of port 5173 is switched off.');
-    expect(screen.queryByTestId('dev-preview-status-line')).toBeNull();
+    // The frame was shown for this open, so it STAYS mounted; the status line explains, once.
+    expect(screen.getByTestId('dev-preview-frame')).toBeInTheDocument();
+    expect(screen.queryByTestId('dev-preview-placeholder')).toBeNull();
+    expect(screen.getByTestId('dev-preview-status-line')).toHaveTextContent('Preview of port 5173 is switched off.');
+    expect(screen.getAllByText('Preview of port 5173 is switched off.')).toHaveLength(1);
     fireEvent.click(screen.getByTitle('Switch the preview back on'));
     await waitFor(() => expect(mockPost).toHaveBeenCalledWith(OPEN.actionsPath, { action: 'resume' }));
 
-    act(() => useDevPreviewPaneStore.getState().openPreview({ ...OPEN, canManage: false }));
-    await screen.findByTestId('dev-preview-pane');
-    expect(screen.queryByTitle('Switch the preview back on')).toBeNull();
+    // The manage verdict is read LIVE from the status, never snapshotted at open.
+    status = live({ canManage: false });
+    fireEvent.click(screen.getByTitle('Reload the preview'));
+    await waitFor(() => expect(screen.queryByTitle('Switch the preview back on')).toBeNull());
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
   });
 
@@ -209,11 +218,40 @@ describe('DevPreviewPane', () => {
     await waitFor(() => expect(screen.getByTestId('dev-preview-frame')).toHaveAttribute('src', `${OPEN.openPath}?r=2`));
   });
 
-  test('pure helpers: the reauth shape check and the frame src builder', () => {
-    expect(isReauthMessageFor({ type: 'pagespace:dev-preview', event: 'reauth-required', holder: { kind: 'workspace', id: 'w' } }, { kind: 'workspace', id: 'w' })).toBe(true);
-    expect(isReauthMessageFor({ type: 'pagespace:dev-preview', event: 'reauth-required', holder: { kind: 'env', id: 'w' } }, { kind: 'workspace', id: 'w' })).toBe(false);
-    expect(isReauthMessageFor({ type: 'pagespace:dev-preview', event: 'reauth-required', holder: null }, { kind: 'workspace', id: 'w' })).toBe(false);
-    expect(isReauthMessageFor(null, { kind: 'workspace', id: 'w' })).toBe(false);
+  test('a transient non-live answer (dev server restarting) keeps the frame MOUNTED and explains above it; a preview never openable shows only the placeholder', async () => {
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTestId('dev-preview-frame');
+    status = live({ canOpen: false, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The dev server on port 5173 is not listening any more.' } });
+    fireEvent.click(screen.getByTitle('Reload the preview'));
+    await screen.findByText('Down · :5173');
+    expect(screen.getByTestId('dev-preview-frame')).toBeInTheDocument();
+    expect(screen.queryByTestId('dev-preview-placeholder')).toBeNull();
+    expect(screen.getByTestId('dev-preview-status-line')).toHaveTextContent('not listening any more');
+    // Said once: the placeholder is not also rendered.
+    expect(screen.getAllByText(/not listening any more/)).toHaveLength(1);
+
+    // A fresh open that was never openable: placeholder only, no frame.
+    act(() => useDevPreviewPaneStore.getState().openPreview({ ...OPEN, statusPath: '/api/drives/d1/envs/env2/preview', holder: { kind: 'env', id: 'env2' } }));
+    await screen.findByTestId('dev-preview-placeholder');
+    expect(screen.queryByTestId('dev-preview-frame')).toBeNull();
+  });
+
+  test('closes itself when the status read answers 404/403 (holder gone or no longer ours); other errors keep the last answer', async () => {
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTestId('dev-preview-frame');
+    mockFetchWithAuth.mockImplementation(async () => { throw new ApiRequestError('boom', 500, null); });
+    fireEvent.click(screen.getByTitle('Reload the preview'));
+    await new Promise((r) => setTimeout(r, 30));
+    expect(useDevPreviewPaneStore.getState().open).not.toBeNull();
+    mockFetchWithAuth.mockImplementation(async () => { throw new ApiRequestError('gone', 404, null); });
+    fireEvent.click(screen.getByTitle('Reload the preview'));
+    await waitFor(() => expect(useDevPreviewPaneStore.getState().open).toBeNull());
+    expect(screen.queryByTestId('dev-preview-pane')).toBeNull();
+  });
+
+  test('pure helper: the frame src builder', () => {
     expect(buildFrameSrc('/p', 0)).toBe('/p');
     expect(buildFrameSrc('/p', 3)).toBe('/p?r=3');
     expect(buildFrameSrc('/p?x=1', 3)).toBe('/p?x=1&r=3');

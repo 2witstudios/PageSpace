@@ -109,6 +109,9 @@ describe('createDetectionRegistry', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(await registry.listeners({ holder: HOLDER })).toBeNull();
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }, { port: 8080, pid: 9 }] }) });
+    // The snapshot has ARRIVED but the detector applies frames on a serialized
+    // chain: until it has, the set in hand is the pre-snapshot one — unknown.
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_closed', port: 8080 }) });
     await new Promise((r) => setTimeout(r, 10));
     expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
@@ -138,6 +141,29 @@ describe('createDetectionRegistry', () => {
     h.sockets[1].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 8080, pid: 42 }] }) });
     await new Promise((r) => setTimeout(r, 10));
     expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 8080, pid: 42 }]);
+  });
+
+  it('listeners(): a port_list whose socket dropped before the detector applied it never marks the NEXT connection fresh', async () => {
+    const h = deps({ maxReconnects: 3 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    h.sockets[0].emit('open');
+    // Arrives on connection 1, then connection 1 drops before the chain has applied it.
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }] }) });
+    h.sockets[0].emit('close', { code: 1006 });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.sockets).toHaveLength(2);
+    h.sockets[1].emit('open');
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+  });
+
+  it('a failing start leaves no entry behind (a malformed API base URL throws before the channel opens)', async () => {
+    const h = deps({ spritesApiBaseUrl: () => 'not a url' });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    expect(registry.watching()).toEqual([]);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    expect(h.logs.some((l) => l.startsWith('error:dev-preview: watcher failed to start'))).toBe(true);
   });
 
   it('listeners(): a watcher dropped past its reconnect budget answers null, not a stale snapshot', async () => {

@@ -89,7 +89,6 @@ describe('DevPreviewAffordance', () => {
       actionsPath: `${STATUS_PATH}/actions`,
       openPath: '/api/agent-workspaces/ws1/preview/open',
       title: 'My session',
-      canManage: true,
     });
     // Once open, the button reads as such and is inert.
     await screen.findByRole('button', { name: 'Open' });
@@ -103,13 +102,6 @@ describe('DevPreviewAffordance', () => {
     expect(screen.getByText('Preview of :3000 is switched off')).toHaveAttribute('title', 'Preview of port 3000 is switched off.');
     expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
-  });
-
-  test('carries the SERVER manage verdict into the pane store — there is no client-side flag to hardcode', async () => {
-    preview = status({ canManage: false });
-    renderAffordance();
-    fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
-    expect(useDevPreviewPaneStore.getState().open?.canManage).toBe(false);
   });
 
   test('an unknown status renders neutral copy and "Details" rather than crashing the row', async () => {

@@ -37,11 +37,13 @@ function preview(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
 
 describe('devPreviewRefreshInterval — pure', () => {
   it('no timer while inactive, while the pane owns the poll, or after the idle budget; the interval otherwise', () => {
-    expect(devPreviewRefreshInterval({ active: false, paneOwnsPoll: false, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE - 1, intervalMs: 15_000 })).toBe(15_000);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, idleStreak: 0, intervalMs: 5_000 })).toBe(5_000);
+    expect(devPreviewRefreshInterval({ active: false, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
+    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: true, pauseWhenIdle: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
+    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE, intervalMs: 15_000 })).toBe(0);
+    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE - 1, intervalMs: 15_000 })).toBe(15_000);
+    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: 0, intervalMs: 5_000 })).toBe(5_000);
+    // A per-viewer surface never idle-pauses.
+    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: false, idleStreak: 99, intervalMs: 5_000 })).toBe(5_000);
   });
 
   it('an idle answer is "none" or an absent sandbox; anything with a dev server is not', () => {
@@ -86,6 +88,28 @@ describe('useDevPreviewStatus — the hook against real SWR', () => {
   it('keeps polling while there is a dev server to watch', async () => {
     answer = preview({ state: { status: 'live', targetPort: 5173, via: 'relay', message: '' }, canOpen: true });
     renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15 }), { wrapper });
+    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
+  });
+
+  it('a FAILED poll does not freeze the status: it retries at the disciplined interval and recovers', async () => {
+    let calls = 0;
+    mockFetchWithAuth.mockImplementation(async () => {
+      calls += 1;
+      if (calls <= 2) return { ok: false, status: 500, json: async () => ({}) };
+      return { ok: true, json: async () => ({ preview: preview({ state: { status: 'live', targetPort: 1, via: 'relay', message: '' }, canOpen: true }) }) };
+    });
+    const { result } = renderHook(() => useDevPreviewStatus('/p', { intervalMs: 120 }), { wrapper });
+    // The error is surfaced (the pane's 404 auto-close depends on that)...
+    await waitFor(() => expect(result.current.error).toBeDefined());
+    expect(result.current.preview).toBeUndefined();
+    // ...and the retry at the disciplined interval recovers without a key change.
+    await waitFor(() => expect(result.current.preview?.state.status).toBe('live'), { timeout: 3000 });
+    expect(result.current.error).toBeUndefined();
+    expect(calls).toBeGreaterThanOrEqual(3);
+  });
+
+  it('with pauseWhenIdle: false an idle holder keeps being polled (the console header / pane case)', async () => {
+    renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15, pauseWhenIdle: false }), { wrapper });
     await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
   });
 
