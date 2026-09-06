@@ -449,6 +449,9 @@ export const TENANT_EXPORT_EXCLUDED_TABLES: Readonly<Record<string, string>> = {
 
   app_hosting_reclaims:
     'The FK-FREE teardown OUTBOX: each row is an instruction to DESTROY a Fly app in the SOURCE deployment\'s organization, held until the kill is confirmed. It is the one table in the schema where carrying a row is actively dangerous rather than merely useless — an imported reclaim would have the tenant\'s drain cron repeatedly attempt to destroy an app belonging to another organization, and a row that can never be confirmed dead is never removed, so the outbox would accumulate permanently stuck entries that look exactly like the billing anomaly it exists to alert on.',
+
+  dev_preview_services:
+    'The dev-preview RELAY state of a Sprite INSTANCE in the SOURCE fleet: `spriteInstanceId` (NOT NULL, UNIQUE) and `sandboxId` name a VM the tenant does not own, `targetPort` and `relayServiceName` describe a process inside it, and the row is keyed to that instance BY DESIGN so that a re-provisioned VM inherits nothing from it. The tenant\'s migrated session arrives with `sandboxId` NULL (never provisioned — see `AGENT_WORKSPACE_SPRITE_EXCLUSIONS`), so a carried row would be stale on arrival by the table\'s own fail-closed rule (its instance can never match a sprite the tenant provisions) and could only ever read as "this preview needs re-creating". Nothing in it is authored by the user: the dev server they ran is in their session and env, which travel; the relay is our plumbing. Left behind, exactly like the Sprite pointers it hangs off.',
 };
 
 /** The columns emitted inline in `table`'s INSERT. */
