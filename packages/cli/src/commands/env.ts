@@ -115,7 +115,20 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string };
 
     const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
-    await store.set(host, credential, profile);
+    // (Codex C11) The code is spent and the server has pinned this key. The
+    // pending record already proved the store writable moments ago, so a
+    // failure here is transient far more often than not: retry once, and if
+    // it still fails say exactly what state things are in and how to
+    // recover — never the key.
+    const saved = await storeWithOneRetry(store, host, credential, profile);
+    if (!saved.ok) {
+      ctx.stderr.write(
+        `Enrolled on the server as environment ${result.envId}, but this machine's credential store refused the final write twice: ${saved.error}\n` +
+          `The server has pinned this machine's key; a pending record under profile "${profile}" still holds it locally, but "env token" and "env connect" will not use a pending record.\n` +
+          `To recover: make the credential store writable (keychain access, or a writable ~/.pagespace), then delete environment ${result.envId} in PageSpace, create a new local environment, and run "pagespace env enroll" again with its code.\n`,
+      );
+      return EXIT_RUNTIME_ERROR;
+    }
 
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host })}\n`);
@@ -127,6 +140,19 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     }
     return EXIT_SUCCESS;
   };
+}
+
+async function storeWithOneRetry(store: CredentialStore, host: string, credential: MachineHostCredential, profile: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  let lastError = '';
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await store.set(host, credential, profile);
+      return { ok: true };
+    } catch (error) {
+      lastError = messageOf(error);
+    }
+  }
+  return { ok: false, error: lastError };
 }
 
 export function createEnvTokenHandler(deps: EnvTokenHandlerDeps): CommandHandler {
