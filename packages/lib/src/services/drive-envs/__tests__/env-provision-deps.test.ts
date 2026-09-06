@@ -39,6 +39,7 @@ vi.mock('../../sandbox/can-run-code', () => ({
 }));
 
 import { buildEnvProvisionDeps, ensureDriveEnvSandbox } from '../env-provision-deps';
+import { makeLocalRecord } from './fakes';
 import { deriveDriveEnvSpriteKey } from '../../../drive-envs/env-sprite-key';
 import { deriveAgentSessionSpriteKey } from '../../../agent-workspaces/workspace-sprite-key';
 import type { DriveEnvRecord, DriveEnvStore } from '../drive-envs-store';
@@ -99,6 +100,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   canRunCode.mockResolvedValue({ ok: true });
   process.env.SANDBOX_SESSION_SECRET = SECRET;
+  // Containment verified, so the Sprite path reaches the HOST in this harness —
+  // which is what makes "the host was never called" a load-bearing assertion
+  // for the local-env rows below rather than an artifact of an earlier refusal.
+  process.env.SANDBOX_CONTAINMENT_VERIFIED = 'true';
 });
 
 describe('buildEnvProvisionDeps', () => {
@@ -199,7 +204,7 @@ describe('ensureDriveEnvSandbox', () => {
       intent: 'ensure',
       requesterId: REQUESTER_ID,
       deps: {
-        store: { ...noopStore, findById: async () => null },
+        store: { ...noopStore, findById: async () => null, findLocalByEnvId: async () => null },
         host: noopHost,
         resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
       },
@@ -217,7 +222,7 @@ describe('ensureDriveEnvSandbox', () => {
       intent: 'ensure',
       requesterId: REQUESTER_ID,
       deps: {
-        store: { ...noopStore, findById: async () => envRow },
+        store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
         host: noopHost,
         resolvePayer: async () => {
           resolved += 1;
@@ -228,5 +233,104 @@ describe('ensureDriveEnvSandbox', () => {
 
     expect(resolved).toBe(1);
     expect(result).toEqual({ ok: false, reason: 'provision_failed', detail: 'drive_not_found' });
+  });
+
+  /**
+   * C1 (Codex): a LOCAL env used to fall straight into the Sprite provisioning
+   * path — the t05 CHECK would have failed it mid-provision, AFTER a VM was
+   * minted. The gate now refuses before the host is ever touched. Each row
+   * asserts the NEGATIVE explicitly: the Sprite host's `provision` is never
+   * called. (A mutant that skips the branch mints a Sprite and goes red here.)
+   */
+  describe('a LOCAL env never reaches the Sprite host (C1)', () => {
+    const localRow = { ...envRow, substrate: 'local' as const };
+    const sibling = (over: Partial<ReturnType<typeof makeLocalRecord>> = {}) =>
+      makeLocalRecord({ envId: ENV_ID, driveId: DRIVE_ID, ownerId: REQUESTER_ID, enrolledAt: new Date(), machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', lastSeenAt: new Date(), ...over });
+
+    function spyHost() {
+      const provision = vi.fn(async () => ({ sandboxId: 'pgs-should-never-exist', spriteInstanceId: 'inst-x' }));
+      const attach = vi.fn(async () => null);
+      return { host: { provision, attach, kill: vi.fn() } as unknown as SandboxHost, provision, attach };
+    }
+
+    async function ensureLocal(input: { sibling: ReturnType<typeof makeLocalRecord> | null; liveConnection?: () => 'connecting' | 'connected' | null; flag?: boolean; role?: 'admin' | 'member' }) {
+      const host = spyHost();
+      const result = await ensureDriveEnvSandbox({
+        envId: ENV_ID,
+        intent: 'ensure',
+        requesterId: REQUESTER_ID,
+        deps: {
+          store: { ...noopStore, findById: async () => localRow, findLocalByEnvId: async () => input.sibling },
+          host: host.host,
+          resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
+          liveConnection: input.liveConnection ?? (() => 'connected'),
+          localEnvsEnabled: input.flag ?? true,
+          resolveActorRole: async () => input.role ?? 'member',
+        },
+      });
+      return { result, host };
+    }
+
+    it('given a connected, enrolled machine the owner may bind to, should answer local_refused/substrate_unsupported (no local host yet) and NOT call the Sprite host', async () => {
+      const { result, host } = await ensureLocal({ sibling: sibling() });
+      expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' });
+      expect(host.provision).not.toHaveBeenCalled();
+      expect(host.attach).not.toHaveBeenCalled();
+      expect(noopStore.updateSpriteIdentity).not.toHaveBeenCalled();
+    });
+
+    it('given the machine is NOT connected, should answer the typed not_connected — never a Sprite provision, never a queue', async () => {
+      const { result, host } = await ensureLocal({ sibling: sibling({ lastSeenAt: null }), liveConnection: () => null });
+      expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'not_connected', detail: 'not_connected' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('given a revoked machine, should answer revoked and touch no host', async () => {
+      const { result, host } = await ensureLocal({ sibling: sibling({ revokedAt: new Date() }) });
+      expect(result).toMatchObject({ ok: false, reason: 'local_refused', refusal: 'revoked' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('given LOCAL_ENVS_ENABLED off, should answer flag_disabled (invariant 11) and touch no host', async () => {
+      const { result, host } = await ensureLocal({ sibling: sibling(), flag: false });
+      expect(result).toMatchObject({ ok: false, reason: 'local_refused', refusal: 'flag_disabled' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('given canRunCode denies, should answer code_exec_denied with the cause as detail — the base gate is consulted with the DRIVE OWNER as payer', async () => {
+      canRunCode.mockResolvedValue({ ok: false, reason: 'no_drive_access' });
+      const { result, host } = await ensureLocal({ sibling: sibling() });
+      expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'code_exec_denied', detail: 'no_drive_access' });
+      expect(canRunCode).toHaveBeenCalledWith({ userId: REQUESTER_ID, driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, requestOrigin: 'user' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it("given a requester who is not the machine's owner under owner-only policy, should answer bind_policy", async () => {
+      const { result, host } = await ensureLocal({ sibling: sibling({ ownerId: 'someone-else' }), role: 'admin' });
+      expect(result).toMatchObject({ ok: false, reason: 'local_refused', refusal: 'bind_policy' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('given a local env whose sibling is gone (owner erased), should answer revoked and touch no host', async () => {
+      const { result, host } = await ensureLocal({ sibling: null });
+      expect(result).toMatchObject({ ok: false, reason: 'local_refused', refusal: 'revoked' });
+      expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('CONTROL: the same row as a Sprite env DOES reach the Sprite host — proving the negative rows above are load-bearing', async () => {
+      const host = spyHost();
+      const control = await ensureDriveEnvSandbox({
+        envId: ENV_ID,
+        intent: 'ensure',
+        requesterId: REQUESTER_ID,
+        deps: {
+          store: { ...noopStore, findById: async () => envRow, findLocalByEnvId: async () => null },
+          host: host.host,
+          resolvePayer: async () => ({ payerId: DRIVE_OWNER_ID, tier: 'pro' }),
+        },
+      });
+      expect(control.ok, JSON.stringify(control)).toBe(true);
+      expect(host.provision).toHaveBeenCalledTimes(1);
+    });
   });
 });

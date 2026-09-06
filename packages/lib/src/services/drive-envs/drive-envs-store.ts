@@ -100,6 +100,8 @@ export interface DriveEnvLocalRecord {
   enrollmentCodeExpiresAt: Date | null;
   enrollmentCodeUsedAt: Date | null;
   challengeNonce: string | null;
+  /** When the outstanding challenge was issued — stored, never fabricated from the expiry (C15). */
+  challengeIssuedAt: Date | null;
   challengeExpiresAt: Date | null;
   challengeUsedAt: Date | null;
   lastSeenAt: Date | null;
@@ -197,6 +199,8 @@ export interface DriveEnvStore {
 
   /** The sibling by its wire identity (what the daemon presents). */
   findLocalByEnrollmentId(enrollmentId: string): Promise<DriveEnvLocalRecord | null>;
+  /** The sibling by its env — what the server-side gate reads before any bind / provision of a local env (C1). */
+  findLocalByEnvId(envId: string): Promise<DriveEnvLocalRecord | null>;
   /** Every sibling in the drive — what the listing joins. */
   listLocalFacts(driveId: string): Promise<DriveEnvLocalRecord[]>;
   /**
@@ -205,7 +209,15 @@ export interface DriveEnvStore {
    * NULL`). Clears the code hash — a consumed code is not kept around.
    */
   pinMachineKey(input: { envId: string; machinePublicKey: string; machineKeyFingerprint: string; serverKeyId: string; now: Date }): Promise<boolean>;
-  /** Store the outstanding challenge, replacing any previous one, IFF enrolled and not revoked. */
+  /**
+   * Store the outstanding challenge (issued `now`) IFF enrolled, not revoked,
+   * AND no live challenge is outstanding — i.e. the previous one is absent,
+   * consumed, or expired (`challengeExpiresAt <= now`). A live, unconsumed
+   * nonce is NEVER replaced (Codex C5): anyone holding a leaked enrollmentId
+   * could otherwise invalidate the daemon's nonce mid-handshake forever. The
+   * predicate is the CAS itself, not a read in the service, so two replicas
+   * issuing at once resolve to exactly one winner.
+   */
   setChallenge(input: { envId: string; nonce: string; expiresAt: Date; now: Date }): Promise<boolean>;
   /**
    * Consume the challenge IFF it is exactly this nonce, unconsumed, and the
@@ -520,7 +532,7 @@ export function isUniqueViolation(error: unknown): boolean {
 export async function createDbDriveEnvStore(now: () => Date = () => new Date()): Promise<DriveEnvStore> {
   const [
     { db },
-    { eq, and, eqOrIsNull, isNull, sql, count, asc },
+    { eq, and, or, eqOrIsNull, isNull, isNotNull, lte, sql, count, asc },
     { driveEnvs },
     { driveEnvLocal },
     { agentWorkspaces },
@@ -553,6 +565,7 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     enrollmentCodeExpiresAt: driveEnvLocal.enrollmentCodeExpiresAt,
     enrollmentCodeUsedAt: driveEnvLocal.enrollmentCodeUsedAt,
     challengeNonce: driveEnvLocal.challengeNonce,
+    challengeIssuedAt: driveEnvLocal.challengeIssuedAt,
     challengeExpiresAt: driveEnvLocal.challengeExpiresAt,
     challengeUsedAt: driveEnvLocal.challengeUsedAt,
     lastSeenAt: driveEnvLocal.lastSeenAt,
@@ -588,6 +601,16 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
       return (row as DriveEnvLocalRecord | undefined) ?? null;
     },
 
+    async findLocalByEnvId(envId) {
+      const [row] = await db
+        .select(localSelection)
+        .from(driveEnvLocal)
+        .innerJoin(driveEnvs, eq(driveEnvs.id, driveEnvLocal.envId))
+        .where(eq(driveEnvLocal.envId, envId))
+        .limit(1);
+      return (row as DriveEnvLocalRecord | undefined) ?? null;
+    },
+
     async listLocalFacts(driveId) {
       const rows = await db
         .select(localSelection)
@@ -610,8 +633,18 @@ export async function createDbDriveEnvStore(now: () => Date = () => new Date()):
     async setChallenge({ envId, nonce, expiresAt, now: at }) {
       const updated = await db
         .update(driveEnvLocal)
-        .set({ challengeNonce: nonce, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at })
-        .where(and(eq(driveEnvLocal.envId, envId), sql`${driveEnvLocal.enrolledAt} IS NOT NULL`, isNull(driveEnvLocal.revokedAt)))
+        .set({ challengeNonce: nonce, challengeIssuedAt: at, challengeExpiresAt: expiresAt, challengeUsedAt: null, updatedAt: at })
+        .where(
+          and(
+            eq(driveEnvLocal.envId, envId),
+            sql`${driveEnvLocal.enrolledAt} IS NOT NULL`,
+            isNull(driveEnvLocal.revokedAt),
+            // C5: only an absent, consumed, or expired challenge may be replaced.
+            // `at` is the caller's clock (the same one that stamped the expiry),
+            // so the comparison is UTC-wall-clock on both sides — never `now()`.
+            or(isNull(driveEnvLocal.challengeNonce), isNotNull(driveEnvLocal.challengeUsedAt), lte(driveEnvLocal.challengeExpiresAt, at)),
+          ),
+        )
         .returning({ envId: driveEnvLocal.envId });
       return updated.length === 1;
     },

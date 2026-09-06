@@ -57,6 +57,12 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const result = await rebuildEnv({ envId, requesterId: auth.userId });
     if (!result.ok) {
       if (result.reason === 'not_found') return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+      // A LOCAL env is the user's own machine: there is no Sprite to replace, so
+      // the verb does not apply (409 — a conflict with the resource's state,
+      // not a transient failure the client should retry).
+      if (result.reason === 'substrate_unsupported') {
+        return NextResponse.json({ error: 'Local environments have no machine to rebuild', reason: result.reason }, { status: 409 });
+      }
       // Both remaining failures leave the env intact and retryable — the
       // teardown one still on its old machine, the provision one machineless
       // until the next ensure — so both are 503 rather than a 4xx the client

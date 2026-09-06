@@ -21,8 +21,10 @@ import { users } from '@pagespace/db/schema/auth';
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import {
   ensureDriveEnvSandbox,
+  gateLocalEnvForRequester,
   type DriveEnvPayer,
 } from '@pagespace/lib/services/drive-envs/env-provision-deps';
+import type { LocalEnvGateVerdict } from '@pagespace/lib/services/drive-envs/local-env-gate';
 import type {
   EnsureSpriteHolderSandboxResult,
   SpriteHolderProvisionIntent,
@@ -178,6 +180,10 @@ async function localEnvIdentityServiceDeps(): Promise<LocalEnvIdentityServiceDep
         driveId: machine.driveId,
         createdByService: 'env-bridge',
       }),
+    // The compensating revoke for a revocation that lands between the challenge
+    // CAS and the mint (C4): the real session revoker, keyed by the raw token
+    // the mint just returned.
+    revokeToken: (token, machine) => sessionService.revokeSession(token, `env_bridge_${machine.reason}`),
   };
 }
 
@@ -257,6 +263,21 @@ export async function ensureEnvSandboxForSession(input: {
     requesterId: input.requesterId,
     deps: { store, host, resolvePayer: resolveDriveEnvPayer },
   });
+}
+
+/**
+ * The server-side bind gate for a LOCAL env at session SPAWN (C1) — the same
+ * assembly (`gateLocalEnvForRequester`) the provisioner runs on every ensure,
+ * so a spawn and an ensure can never answer differently. A vanished env is
+ * `revoked` here: the spawn service has already proven the env exists and
+ * belongs to the drive, so this only ever sees a row that disappeared between
+ * the two reads.
+ */
+export async function gateLocalEnvBind(input: { envId: string; requesterId: string }): Promise<LocalEnvGateVerdict> {
+  const store = await getDriveEnvStore();
+  const row = await store.findById(input.envId);
+  if (!row) return { ok: false, refusal: 'revoked' };
+  return gateLocalEnvForRequester({ row, requesterId: input.requesterId, deps: { store, resolvePayer: resolveDriveEnvPayer } });
 }
 
 /**

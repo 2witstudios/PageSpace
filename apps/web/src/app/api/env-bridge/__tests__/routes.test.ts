@@ -131,6 +131,8 @@ describe('GET /api/env-bridge/token — the challenge', () => {
     ['not_found', 404],
     ['not_enrolled', 409],
     ['revoked', 410],
+    // A lost issue race is retryable; it must never read as the permanent 410.
+    ['race', 409],
   ] as const)('given the service refuses with %s, should answer %i and audit', async (reason, status) => {
     vi.mocked(issueEnvChallenge).mockResolvedValue({ ok: false, reason });
     const response = await challenge(challengeReq());
@@ -142,6 +144,18 @@ describe('GET /api/env-bridge/token — the challenge', () => {
     vi.mocked(checkDistributedRateLimit).mockResolvedValueOnce({ allowed: false, retryAfter: 10 } as never);
     expect((await challenge(challengeReq())).status).toBe(429);
     expect(issueEnvChallenge).not.toHaveBeenCalled();
+  });
+
+  it('given a live challenge is already outstanding (C5), should answer 429 with Retry-After rounded UP to whole seconds (never 0) and audit the refusal', async () => {
+    vi.mocked(issueEnvChallenge).mockResolvedValue({ ok: false, reason: 'challenge_pending', retryAfterMs: 41_200 });
+    const response = await challenge(challengeReq());
+    expect(response.status).toBe(429);
+    expect(response.headers.get('Retry-After')).toBe('42');
+    expect(await response.json()).toMatchObject({ reason: 'challenge_pending' });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'challenge_pending' }) }));
+
+    vi.mocked(issueEnvChallenge).mockResolvedValue({ ok: false, reason: 'challenge_pending', retryAfterMs: 5 });
+    expect((await challenge(challengeReq())).headers.get('Retry-After')).toBe('1');
   });
 });
 

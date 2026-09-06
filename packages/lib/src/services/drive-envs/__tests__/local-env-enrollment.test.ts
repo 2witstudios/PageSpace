@@ -49,6 +49,9 @@ const resolvePayer = async () => ({ payerId: PAYER_ID, tier: 'pro' as const });
 function harness(now: Date = NOW) {
   const fake = makeDriveEnvStore([], () => now);
   const minted: Array<{ type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }> = [];
+  const revoked: Array<{ token: string; reason: string }> = [];
+  /** Every IO step in order, so a test can pin mint → re-read → revoke. */
+  const order: string[] = [];
   const deps = {
     store: fake.store,
     resolvePayer,
@@ -56,10 +59,15 @@ function harness(now: Date = NOW) {
     identity,
     mintToken: async (policy: { type: string; scopes: string[]; ttlMs: number; claims: Record<string, string> }) => {
       minted.push(policy);
+      order.push('mint');
       return `tok_${minted.length}`;
     },
+    revokeToken: async (token: string, machine: { reason: string }) => {
+      revoked.push({ token, reason: machine.reason });
+      order.push('revoke');
+    },
   };
-  return { fake, deps, minted };
+  return { fake, deps, minted, revoked, order };
 }
 
 async function createLocal(h: ReturnType<typeof harness>) {
@@ -193,16 +201,165 @@ describe('issueLocalEnvChallenge / redeemLocalEnvChallenge — proof of possessi
     return env;
   }
 
-  it('given an enrolled machine, should issue a nonce bound to the enrollment with a short expiry, replacing any previous one', async () => {
+  it('given an enrolled machine, should issue a nonce bound to the enrollment with a short expiry', async () => {
     const h = harness();
     const env = await enrolled(h);
     const first = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    expect(first.ok).toBe(true);
+    if (!first.ok) return;
+    expect(h.fake.local.get(env.id)?.challengeNonce).toBe(first.nonce);
+    expect(first.expiresAt.getTime() - NOW.getTime()).toBeLessThanOrEqual(60_000);
+  });
+
+  // C5 (Codex): a leaked enrollmentId must not let a stranger overwrite the
+  // nonce the daemon is about to sign. One live handshake at a time.
+  it('given a live (unconsumed, unexpired) challenge, a second issue should NOT replace it — challenge_pending with the time left, nonce unchanged (C5)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const first = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!first.ok) throw new Error(first.reason);
     const second = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
-    expect(first.ok && second.ok).toBe(true);
-    if (!first.ok || !second.ok) return;
+    expect(second).toEqual({ ok: false, reason: 'challenge_pending', retryAfterMs: first.expiresAt.getTime() - NOW.getTime() });
+    expect(h.fake.local.get(env.id)?.challengeNonce).toBe(first.nonce);
+    // The daemon's proof over the FIRST nonce still mints — nothing was invalidated.
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: first.nonce, signature: signChallenge(machine.privateKey, first.nonce, first.expiresAt.getTime()) },
+      deps: h.deps,
+    });
+    expect(result.ok).toBe(true);
+  });
+
+  it('given the outstanding challenge has EXPIRED, a new issue should replace it (C5 keeps the daemon able to recover)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const first = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!first.ok) throw new Error(first.reason);
+    const later = new Date(first.expiresAt.getTime());
+    const second = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, now: () => later } });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
     expect(second.nonce).not.toBe(first.nonce);
     expect(h.fake.local.get(env.id)?.challengeNonce).toBe(second.nonce);
-    expect(second.expiresAt.getTime() - NOW.getTime()).toBeLessThanOrEqual(60_000);
+  });
+
+  it('given the outstanding challenge was CONSUMED, a new issue should replace it', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const first = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!first.ok) throw new Error(first.reason);
+    await redeemLocalEnvChallenge({ enrollmentId: 'enr-1', response: { enrollmentId: 'enr-1', nonce: first.nonce, signature: signChallenge(machine.privateKey, first.nonce, first.expiresAt.getTime()) }, deps: h.deps });
+    const second = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    expect(second.ok).toBe(true);
+    if (!second.ok) return;
+    expect(h.fake.local.get(env.id)?.challengeNonce).toBe(second.nonce);
+    expect(h.fake.local.get(env.id)?.challengeUsedAt).toBeNull();
+  });
+
+  it('given the pre-read saw no live challenge but the compare-and-set loses to a concurrent issue, should answer challenge_pending from a RE-READ — never revoked, never a guess', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    let raced = false;
+    const store = {
+      ...real,
+      setChallenge: async (input: Parameters<typeof real.setChallenge>[0]) => {
+        if (!raced) {
+          // Another replica lands its challenge between our read and our write.
+          raced = true;
+          await real.setChallenge({ ...input, nonce: 'theirs' });
+          return false;
+        }
+        return real.setChallenge(input);
+      },
+    };
+    const result = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } });
+    expect(result).toMatchObject({ ok: false, reason: 'challenge_pending' });
+    expect(h.fake.local.get(env.id)?.challengeNonce).toBe('theirs');
+  });
+
+  it('given the compare-and-set loses to a concurrent issue whose challenge is CONSUMED before the re-read, should answer race (retryable) — never revoked (Codex P2 on #2537)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      setChallenge: async () => {
+        // Another replica issued AND its daemon redeemed between our read and our write.
+        h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeNonce: 'theirs', challengeIssuedAt: NOW, challengeExpiresAt: new Date(NOW.getTime() + 60_000), challengeUsedAt: NOW });
+        return false;
+      },
+    };
+    expect(await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } })).toEqual({ ok: false, reason: 'race' });
+  });
+
+  it('given the compare-and-set loses and the row is GONE on re-read, should answer not_found', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      setChallenge: async () => {
+        h.fake.local.delete(env.id);
+        return false;
+      },
+    };
+    expect(await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } })).toEqual({ ok: false, reason: 'not_found' });
+  });
+
+  it('given the compare-and-set loses to a concurrent REVOKE, should answer revoked', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      setChallenge: async () => {
+        h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, revokedAt: NOW });
+        return false;
+      },
+    };
+    expect(await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: { ...h.deps, store } })).toEqual({ ok: false, reason: 'revoked' });
+  });
+
+  it('should STORE when the challenge was issued (C15): challengeIssuedAt = now, never fabricated from the expiry', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const issued = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!issued.ok) throw new Error(issued.reason);
+    const sibling = h.fake.local.get(env.id)!;
+    expect(sibling.challengeIssuedAt).toEqual(NOW);
+    expect(sibling.challengeExpiresAt).toEqual(issued.expiresAt);
+    expect(sibling.challengeExpiresAt!.getTime()).toBeGreaterThan(sibling.challengeIssuedAt!.getTime());
+  });
+
+  it('given a stored challenge whose issue time is AFTER its expiry (an inverted window), should refuse as malformed even with a valid proof — iat is reconstructed from challengeIssuedAt (C15)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeIssuedAt: new Date(challenge.expiresAt.getTime() + 1) });
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: h.deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'malformed' });
+    expect(h.minted).toHaveLength(0);
+  });
+
+  it('given a nonce with NO issue stamp (a row from before C15), should refuse with no_challenge rather than guess a window', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, challengeIssuedAt: null });
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: h.deps,
+    });
+    expect(result).toEqual({ ok: false, reason: 'no_challenge' });
+    expect(h.minted).toHaveLength(0);
   });
 
   it('given a machine that has not enrolled yet, should refuse with not_enrolled', async () => {
@@ -267,6 +424,80 @@ describe('issueLocalEnvChallenge / redeemLocalEnvChallenge — proof of possessi
     });
     expect(result).toEqual({ ok: false, reason: 'race' });
     expect(h.minted).toHaveLength(0);
+  });
+
+  // C4 (Codex): the consume CAS carries `revokedAt IS NULL`, but the mint runs
+  // after it. A revocation landing in that gap must not leave a live token.
+  it('given a revocation that lands between the challenge CAS and the mint, should mint, RE-READ, revoke the just-minted token, and answer revoked (C4)', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    let consumed = false;
+    const store = {
+      ...real,
+      consumeChallenge: async (input: Parameters<typeof real.consumeChallenge>[0]) => {
+        const won = await real.consumeChallenge(input);
+        // The revoke lands right after the CAS won — the row the service read is stale.
+        h.fake.local.set(env.id, { ...h.fake.local.get(env.id)!, revokedAt: NOW });
+        consumed = true;
+        return won;
+      },
+      findLocalByEnrollmentId: async (enrollmentId: string) => {
+        h.order.push(consumed ? 'reread' : 'read');
+        return real.findLocalByEnrollmentId(enrollmentId);
+      },
+    };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(h.minted).toHaveLength(1);
+    expect(h.revoked).toEqual([{ token: 'tok_1', reason: 'revoked_during_mint' }]);
+    expect(h.order).toEqual(['read', 'mint', 'reread', 'revoke']);
+  });
+
+  it('given the row VANISHED between the CAS and the mint (owner erased), should likewise revoke the minted token', async () => {
+    const h = harness();
+    const env = await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    const store = {
+      ...real,
+      consumeChallenge: async (input: Parameters<typeof real.consumeChallenge>[0]) => {
+        const won = await real.consumeChallenge(input);
+        h.fake.local.delete(env.id);
+        return won;
+      },
+    };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(h.revoked.map((r) => r.token)).toEqual(['tok_1']);
+  });
+
+  it('given NO revocation, the happy path should re-read once and revoke NOTHING', async () => {
+    const h = harness();
+    await enrolled(h);
+    const challenge = await issueLocalEnvChallenge({ enrollmentId: 'enr-1', deps: h.deps });
+    if (!challenge.ok) throw new Error(challenge.reason);
+    const real = h.deps.store;
+    const store = { ...real, findLocalByEnrollmentId: async (id: string) => { h.order.push('read'); return real.findLocalByEnrollmentId(id); } };
+    const result = await redeemLocalEnvChallenge({
+      enrollmentId: 'enr-1',
+      response: { enrollmentId: 'enr-1', nonce: challenge.nonce, signature: signChallenge(machine.privateKey, challenge.nonce, challenge.expiresAt.getTime()) },
+      deps: { ...h.deps, store },
+    });
+    expect(result.ok).toBe(true);
+    expect(h.revoked).toEqual([]);
+    expect(h.order).toEqual(['read', 'mint', 'read']);
   });
 
   it('given no outstanding challenge, should refuse with no_challenge', async () => {

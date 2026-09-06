@@ -1,0 +1,1 @@
+ALTER TABLE "drive_env_local" ADD COLUMN "challengeIssuedAt" timestamp;

@@ -102,6 +102,14 @@ describe('verifyChallengeResponse — proof of possession, never a stored secret
     expect(run(challenge(), { usedAt: NOW - 1 })).toEqual({ ok: false, reason: 'used' });
   });
 
+  it('given a stored challenge whose exp < iat, should return malformed before anything else (C15: a fabricated or corrupted window is not a challenge)', () => {
+    const c = challenge({ iat: NOW, exp: NOW - 1 });
+    // Even a correct signature by the pinned key and a matching nonce must not rescue it.
+    expect(run(c)).toEqual({ ok: false, reason: 'malformed' });
+    // And it is judged before wrong_enrollment, i.e. inside the structural phase.
+    expect(run(c, { response: { enrollmentId: 'enr_other', nonce: c.nonce, signature: signWith(machine.privateKey, c) } })).toEqual({ ok: false, reason: 'malformed' });
+  });
+
   it('given a nonce past its expiry, should return expired; exactly at expiry is still good', () => {
     const c = challenge();
     expect(run(c, { now: c.exp + 1 })).toEqual({ ok: false, reason: 'expired' });

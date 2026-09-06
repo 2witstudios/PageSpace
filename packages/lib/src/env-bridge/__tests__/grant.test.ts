@@ -8,11 +8,12 @@ import {
   GRANT_MAX_TTL_MS,
   GRANT_MAX_CLOCK_SKEW_MS,
   type Grant,
-  type GrantOp,
   type Ed25519Verify,
   type HashBytes,
   type NonceStore,
+  type GrantRequest,
 } from '../grant';
+import type { ExecGrantArgs } from '../grant-args';
 
 // ---------------------------------------------------------------------------
 // Fixtures. Real Ed25519 keys and a real SHA-256 so the signature and hashing
@@ -39,7 +40,8 @@ const NOW = 1_800_000_000_000; // fixed clock — verifyGrant must never read Da
 const ENV = 'env_local_1';
 
 /** The request the grant in makeGrant() was issued for. */
-const ARGS = { cmd: 'ls', args: ['-la'], cwd: '/home/u/proj', env: { LANG: 'C' } };
+/** The exec PROJECTION (`grantArgsForFrame`): the fixed field set, absent limits as null. */
+const ARGS: ExecGrantArgs = { cmd: 'ls', args: ['-la'], cwd: '/home/u/proj', env: { LANG: 'C' }, timeoutMs: null, maxBytes: null };
 const ARGS_HASH = hash(canonicalizeArgs(ARGS));
 
 function makeGrant(overrides: Partial<Grant> = {}): Grant {
@@ -62,7 +64,7 @@ interface RunOpts {
   expectedEnvId?: string;
   now?: number;
   key?: Uint8Array;
-  request?: { op: GrantOp; args: unknown };
+  request?: GrantRequest;
 }
 
 function run(grant: unknown, opts: RunOpts = {}) {
@@ -147,7 +149,7 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
   });
 
   it('given the same args with object keys in a different order, should still bind (canonical hashing)', () => {
-    const reordered = { env: { LANG: 'C' }, cwd: '/home/u/proj', args: ['-la'], cmd: 'ls' };
+    const reordered: ExecGrantArgs = { maxBytes: null, timeoutMs: null, env: { LANG: 'C' }, cwd: '/home/u/proj', args: ['-la'], cmd: 'ls' };
     expect(run(makeGrant(), { request: { op: 'exec', args: reordered } }).ok).toBe(true);
   });
 
@@ -163,6 +165,22 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
   it('given iat within the allowed skew in the future, should NOT deny for skew', () => {
     const iat = NOW + GRANT_MAX_CLOCK_SKEW_MS;
     expect(run(makeGrant({ iat, exp: iat + 10_000 })).ok).toBe(true);
+  });
+
+  // C15 (Codex adversarial review): a grant whose window is negative is not a
+  // "short TTL", it is not a grant. Structural, so it is `malformed` and is
+  // judged BEFORE ttl_too_long — and before anything that costs more.
+  it('given exp < iat, should deny malformed — evaluated before ttl_too_long (C15)', () => {
+    expect(run(makeGrant({ iat: NOW, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given exp < iat AND a wrong envId, should still deny malformed — the structural check beats wrong_env in the fixed order', () => {
+    expect(run(makeGrant({ envId: 'env_other', iat: NOW, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'malformed' });
+  });
+
+  it('given exp === iat (a zero-length window), should NOT be malformed — it is simply expired the instant after', () => {
+    expect(run(makeGrant({ iat: NOW, exp: NOW }))).toEqual({ ok: true, grant: makeGrant({ iat: NOW, exp: NOW }) });
+    expect(run(makeGrant({ iat: NOW - 1, exp: NOW - 1 }))).toEqual({ ok: false, reason: 'expired' });
   });
 
   it('given exp - iat > the max TTL, should deny ttl_too_long even when otherwise valid and unexpired', () => {
@@ -193,8 +211,8 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
     run(grant, { nonces, signature: signWith(rogue.privateKey, grant) });
     run(makeGrant({ envId: 'env_other', nonce: 'n_env' }), { nonces });
     run(makeGrant({ iat: NOW - 50_000, exp: NOW - 1, nonce: 'n_exp' }), { nonces });
-    run(makeGrant({ nonce: 'n_op' }), { nonces, request: { op: 'fs_write', args: ARGS } });
-    run(makeGrant({ nonce: 'n_args' }), { nonces, request: { op: 'exec', args: { cmd: 'other' } } });
+    run(makeGrant({ nonce: 'n_op' }), { nonces, request: { op: 'fs_write', args: { files: [] } } });
+    run(makeGrant({ nonce: 'n_args' }), { nonces, request: { op: 'exec', args: { ...ARGS, cmd: 'other' } } });
     expect(nonces.has(grant.nonce)).toBe(false);
     for (const n of ['n_env', 'n_exp', 'n_op', 'n_args']) expect(nonces.has(n)).toBe(false);
   });
@@ -239,7 +257,7 @@ describe('verifyGrant — the daemon-side authorization gate (invariant 3)', () 
 
   it('should enforce a fixed deny order: request binding is checked before the signature', () => {
     const grant = makeGrant();
-    const verdict = run(grant, { signature: signWith(rogue.privateKey, grant), request: { op: 'pty_open', args: ARGS } });
+    const verdict = run(grant, { signature: signWith(rogue.privateKey, grant), request: { op: 'pty_open', args: { cols: 80, rows: 24, cwd: null, command: null, args: [] } } });
     expect(verdict).toEqual({ ok: false, reason: 'op_mismatch' });
   });
 });

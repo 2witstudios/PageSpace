@@ -273,6 +273,12 @@ export interface LocalEnvIdentityServiceDeps {
    * which drive it serves. The store of tokens is the caller's.
    */
   mintToken: (policy: EnvBridgeTokenPolicy, machine: { envId: string; driveId: string; ownerId: string; enrollmentId: string }) => Promise<string>;
+  /**
+   * Revoke a token this flow minted moments ago — the compensating write for
+   * a revocation that landed between the challenge CAS and the mint (Codex
+   * C4). Wired to the real session revoker; a fake records the call.
+   */
+  revokeToken: (token: string, machine: { envId: string; enrollmentId: string; reason: 'revoked_during_mint' }) => Promise<void>;
 }
 
 export type EnrollLocalDriveEnvResult =
@@ -341,9 +347,27 @@ export async function enrollLocalDriveEnv({
 
 export type IssueLocalEnvChallengeResult =
   | { ok: true; nonce: string; expiresAt: Date }
-  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' };
+  | { ok: false; reason: 'not_found' | 'not_enrolled' | 'revoked' }
+  /** A live, unconsumed challenge is outstanding; ask again once it has expired (`retryAfterMs`). */
+  | { ok: false; reason: 'challenge_pending'; retryAfterMs: number }
+  /** The compare-and-set lost to a concurrent issue that has since been consumed or expired; retry now. Never `revoked` (Codex P2 on #2537). */
+  | { ok: false; reason: 'race' };
 
-/** A fresh nonce for the machine to sign. Replaces any outstanding one — one handshake at a time. */
+/** Is a live (unconsumed, unexpired) challenge outstanding on this row at `now`? */
+function pendingChallengeMs(row: DriveEnvLocalRecord, now: Date): number | null {
+  if (row.challengeNonce === null || row.challengeUsedAt !== null || row.challengeExpiresAt === null) return null;
+  const remaining = row.challengeExpiresAt.getTime() - now.getTime();
+  return remaining > 0 ? remaining : null;
+}
+
+/**
+ * A fresh nonce for the machine to sign — ONE handshake at a time. An
+ * outstanding challenge that is unconsumed and unexpired is NOT replaced
+ * (Codex C5): a leaked enrollmentId must not let a stranger invalidate the
+ * nonce the daemon is about to sign. The store's compare-and-set is the
+ * mechanism; the pre-read only chooses the honest answer (`challenge_pending`
+ * with the time left) without a write. An expired or consumed one IS replaced.
+ */
 export async function issueLocalEnvChallenge({
   enrollmentId,
   deps,
@@ -356,10 +380,23 @@ export async function issueLocalEnvChallenge({
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
   if (row.enrolledAt === null) return { ok: false, reason: 'not_enrolled' };
   const now = deps.now();
+  const pending = pendingChallengeMs(row, now);
+  if (pending !== null) return { ok: false, reason: 'challenge_pending', retryAfterMs: pending };
   const challenge = issueChallenge({ random: deps.identity.random, now: now.getTime(), enrollmentId });
   const expiresAt = new Date(challenge.exp);
   const stored = await deps.store.setChallenge({ envId: row.envId, nonce: challenge.nonce, expiresAt, now });
-  if (!stored) return { ok: false, reason: 'revoked' };
+  if (!stored) {
+    // The CAS refused: a concurrent issue won (its challenge is the live one, or
+    // was already consumed by its daemon), or a revocation landed, or the row is
+    // gone. Re-read and say WHICH — `revoked` (410, permanent) only when the row
+    // really says so, or a reconnecting daemon would abandon a valid enrollment.
+    const after = await deps.store.findLocalByEnrollmentId(enrollmentId);
+    if (!after) return { ok: false, reason: 'not_found' };
+    if (after.revokedAt !== null) return { ok: false, reason: 'revoked' };
+    const pendingAfter = pendingChallengeMs(after, now);
+    if (pendingAfter !== null) return { ok: false, reason: 'challenge_pending', retryAfterMs: pendingAfter };
+    return { ok: false, reason: 'race' };
+  }
   return { ok: true, nonce: challenge.nonce, expiresAt };
 }
 
@@ -372,6 +409,14 @@ export type RedeemLocalEnvChallengeResult =
  * The pure gate decides; the store's compare-and-set consumes the nonce (and
  * records the heartbeat) only on ok; the token is minted only after the CAS
  * won — so a replay, a race, or a forged signature mints nothing.
+ *
+ * **Mint, then re-read, then (maybe) revoke** (Codex C4). The consume CAS
+ * carries `revokedAt IS NULL`, but the mint runs AFTER it, so a revocation
+ * landing in that gap would leave a valid token on a revoked machine. Re-read
+ * the row after minting: if it is revoked (or gone), revoke the token just
+ * minted and answer `revoked`. No valid token survives a revoke. The order is
+ * pinned by test — the mint must be visible to the revoker before the re-read
+ * decides, or a crash between the two could still strand a live token.
  */
 export async function redeemLocalEnvChallenge({
   enrollmentId,
@@ -386,7 +431,9 @@ export async function redeemLocalEnvChallenge({
   if (!row) return { ok: false, reason: 'not_found' };
   if (row.revokedAt !== null) return { ok: false, reason: 'revoked' };
   if (row.enrolledAt === null || row.machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
-  if (row.challengeNonce === null || row.challengeExpiresAt === null) return { ok: false, reason: 'no_challenge' };
+  // A nonce without its issue stamp cannot be judged (its window is unknown),
+  // so it is no challenge at all — the daemon simply asks for a fresh one (C15).
+  if (row.challengeNonce === null || row.challengeIssuedAt === null || row.challengeExpiresAt === null) return { ok: false, reason: 'no_challenge' };
 
   const machinePublicKey = decodeBase64(row.machinePublicKey);
   if (machinePublicKey === null) return { ok: false, reason: 'not_enrolled' };
@@ -396,7 +443,9 @@ export async function redeemLocalEnvChallenge({
     challenge: {
       nonce: row.challengeNonce,
       enrollmentId: row.enrollmentId,
-      iat: row.challengeExpiresAt.getTime(),
+      // The STORED issue time, never fabricated from the expiry (Codex C15):
+      // the pure gate refuses an inverted window as malformed.
+      iat: row.challengeIssuedAt.getTime(),
       exp: row.challengeExpiresAt.getTime(),
       usedAt: row.challengeUsedAt?.getTime() ?? null,
     },
@@ -412,6 +461,13 @@ export async function redeemLocalEnvChallenge({
 
   const policy = getEnvBridgeTokenPolicy({ envId: row.envId, enrollmentId: row.enrollmentId });
   const token = await deps.mintToken(policy, { envId: row.envId, driveId: row.driveId, ownerId: row.ownerId, enrollmentId: row.enrollmentId });
+
+  // C4: re-read AFTER the mint; a revocation that landed since the CAS wins.
+  const after = await deps.store.findLocalByEnrollmentId(enrollmentId);
+  if (!after || after.revokedAt !== null) {
+    await deps.revokeToken(token, { envId: row.envId, enrollmentId: row.enrollmentId, reason: 'revoked_during_mint' });
+    return { ok: false, reason: 'revoked' };
+  }
   return { ok: true, token, expiresInMs: policy.ttlMs, envId: row.envId };
 }
 
@@ -947,6 +1003,8 @@ export interface RebuildDriveEnvDeps {
 export type RebuildDriveEnvResult =
   | { ok: true; sandboxId: string }
   | { ok: false; reason: 'not_found' }
+  /** A LOCAL env has no Sprite to replace: rebuild is a Sprite verb (C1). Nothing is torn down or provisioned. */
+  | { ok: false; reason: 'substrate_unsupported' }
   | { ok: false; reason: 'teardown_failed'; detail: string }
   /** The old Sprite is gone but the new one could not be minted. The env survives, machineless, and the next ensure retries. */
   | { ok: false; reason: 'provision_failed'; detail: string };
@@ -982,6 +1040,9 @@ export async function rebuildDriveEnv({
 }): Promise<RebuildDriveEnvResult> {
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'not_found' };
+  // C1: the user's own machine has no Sprite to destroy and re-mint. Refuse
+  // BEFORE the teardown and before the provisioner is ever consulted.
+  if (row.substrate === 'local') return { ok: false, reason: 'substrate_unsupported' };
 
   if (row.sandboxId !== null && row.spriteTornDownAt === null) {
     const teardown = await teardownEnvSprite({

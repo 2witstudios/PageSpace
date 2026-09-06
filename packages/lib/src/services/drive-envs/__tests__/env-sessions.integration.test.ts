@@ -40,6 +40,8 @@ import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { agentWorkspaces } from '@pagespace/db/schema/agent-workspaces';
 import { machineSpriteReclaims } from '@pagespace/db/schema/machine-sprite-reclaims';
+import { driveEnvLocal } from '@pagespace/db/schema/drive-env-local';
+import { gateLocalEnvForRequester } from '../env-provision-deps';
 import { createDbDriveEnvStore, type DriveEnvStore } from '../drive-envs-store';
 import { deleteDriveEnv } from '../drive-envs';
 import { deriveDriveEnvSpriteKey } from '../../../drive-envs/env-sprite-key';
@@ -150,6 +152,15 @@ async function trySpawn(input: { envId: string | null; driveId?: string | null }
       store: sessionStore,
       now: () => new Date(),
       maxActiveSessions: 1_000,
+      // The REAL gate (C1), on the real store: the sibling lookup, the drive-role
+      // check and canRunCode all run against Postgres. Only consulted for a
+      // LOCAL env — the Sprite rows in this suite never reach it.
+      gateLocalEnvBind: ({ envId, requesterId }) =>
+        gateLocalEnvForRequester({
+          row: { id: envId, driveId, substrate: 'local' },
+          requesterId,
+          deps: { store: envStore, resolvePayer: async () => ({ payerId, tier: 'pro' }), localEnvsEnabled: true },
+        }),
       // The REAL store, so the drive-agreement check reads a real row rather
       // than a fixture that could disagree with one.
       findEnv: async (id) => envStore.findById(id),
@@ -168,8 +179,11 @@ beforeAll(async () => {
   sessionStore = await createDbAgentSessionStore();
   await db
     .insert(users)
-    .values({ id: payerId, email: `env-ses-${payerId}@test.local`, name: 'Env Payer', updatedAt: new Date() })
+    .values({ id: payerId, email: `env-ses-${payerId}@test.local`, name: 'Env Payer', subscriptionTier: 'pro', updatedAt: new Date() })
     .onConflictDoNothing();
+  // The local-env bind rows below run the REAL canRunCode against this DB; the
+  // kill switch is the one input that is process env rather than a row.
+  process.env.CODE_EXECUTION_ENABLED = 'true';
   await db
     .insert(drives)
     .values([
@@ -588,5 +602,64 @@ describe('the database\'s own guard', () => {
       }),
     );
     expect(violated).toBe('agent_workspaces_env_needs_drive_check');
+  });
+});
+
+/**
+ * C1 on real Postgres: spawning INTO a local env runs the server-side gate
+ * through the same assembly the provisioner uses. The sibling lookup
+ * (`findLocalByEnvId`), the drive-role query and `canRunCode` are all real
+ * queries here; only the payer tier is injected (the drive owner is seeded
+ * as the payer above).
+ */
+describe('spawnAgentSession into a LOCAL env — the bind gate, for real (C1)', () => {
+  async function seedLocalEnv(input: { enrolled: boolean; heartbeat?: Date; revoked?: boolean }) {
+    const created = await envStore.createIfUnderLimit({
+      driveId,
+      name: `local-${createId().slice(0, 8)}`,
+      createdBy: payerId,
+      payerId,
+      maxEnvs: 1_000,
+      now: new Date(),
+      local: { ownerId: payerId, label: 'jono-macstudio', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) },
+    });
+    if (!created.ok) throw new Error(`seedLocalEnv refused: ${created.reason}`);
+    const envId = created.env.id;
+    if (input.enrolled) {
+      await envStore.pinMachineKey({ envId, machinePublicKey: 'pk', machineKeyFingerprint: 'fp', serverKeyId: 'k1', now: new Date() });
+    }
+    if (input.heartbeat || input.revoked) {
+      await db.update(driveEnvLocal).set({ ...(input.heartbeat && { lastSeenAt: input.heartbeat }), ...(input.revoked && { revokedAt: new Date() }) }).where(eq(driveEnvLocal.envId, envId));
+    }
+    return envId;
+  }
+
+  it('given a local env that has never connected, should refuse not_connected and mint NO session row — the sibling was read from Postgres', async () => {
+    const envId = await seedLocalEnv({ enrolled: true });
+    const result = await trySpawn({ envId });
+    expect(result).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'not_connected' });
+    expect(await db.select({ id: agentWorkspaces.id }).from(agentWorkspaces).where(eq(agentWorkspaces.envId, envId))).toEqual([]);
+  });
+
+  it('given a local env with a fresh heartbeat (another replica holds the socket) and the drive owner asking, should bind the session', async () => {
+    const envId = await seedLocalEnv({ enrolled: true, heartbeat: new Date() });
+    const result = await trySpawn({ envId });
+    expect(result.ok, JSON.stringify(result)).toBe(true);
+    if (!result.ok) return;
+    expect(result.session.envId).toBe(envId);
+  });
+
+  it('given a revoked local env, should refuse revoked even with a fresh heartbeat (the row wins)', async () => {
+    const envId = await seedLocalEnv({ enrolled: true, heartbeat: new Date(), revoked: true });
+    expect(await trySpawn({ envId })).toEqual({ ok: false, reason: 'env_bind_refused', refusal: 'revoked' });
+  });
+
+  it('given a local env in ANOTHER drive, should still be env_not_found — the drive check runs before the gate', async () => {
+    const created = await envStore.createIfUnderLimit({
+      driveId: otherDriveId, name: `local-${createId().slice(0, 8)}`, createdBy: payerId, payerId, maxEnvs: 1_000, now: new Date(),
+      local: { ownerId: payerId, label: 'x', enrollmentId: `enr_${createId()}`, enrollmentCodeHash: 'hash', enrollmentCodeExpiresAt: new Date(Date.now() + 600_000) },
+    });
+    if (!created.ok) throw new Error(created.reason);
+    expect(await trySpawn({ envId: created.env.id })).toEqual({ ok: false, reason: 'env_not_found' });
   });
 });

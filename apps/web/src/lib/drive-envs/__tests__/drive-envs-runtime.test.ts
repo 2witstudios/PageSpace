@@ -65,6 +65,27 @@ vi.mock('@pagespace/lib/services/drive-envs/drive-envs', () => ({
   renameDriveEnv: vi.fn(),
   deleteDriveEnv: vi.fn(),
   toDriveEnvDTO: vi.fn(),
+  /**
+   * A probe for the identity wiring: mints through the runtime's `mintToken`
+   * and then exercises its `revokeToken` (the C4 compensating write) with the
+   * token the mint returned, exactly as the real service does after a
+   * revocation lands between the challenge CAS and the mint.
+   */
+  redeemLocalEnvChallenge: vi.fn(async ({ deps }: { deps: RedeemDeps }) => {
+    const token = await deps.mintToken(
+      { type: 'mcp', scopes: ['env:bridge'], ttlMs: 60_000, claims: { envId: ENV_ID, enrollmentId: 'enr-1' } } as never,
+      { envId: ENV_ID, driveId: DRIVE_ID, ownerId: DRIVE_OWNER_ID, enrollmentId: 'enr-1' },
+    );
+    await deps.revokeToken(token, { envId: ENV_ID, enrollmentId: 'enr-1', reason: 'revoked_during_mint' });
+    return { ok: false, reason: 'revoked' };
+  }),
+}));
+type RedeemDeps = import('@pagespace/lib/services/drive-envs/drive-envs').LocalEnvIdentityServiceDeps;
+
+const sessionService = vi.hoisted(() => ({ createSession: vi.fn(async () => 'tok_raw_1'), revokeSession: vi.fn(async () => {}) }));
+vi.mock('@pagespace/lib/auth/session-service', () => ({ sessionService }));
+vi.mock('@pagespace/lib/auth/env-bridge-signing-key', () => ({
+  loadServerSigningKey: () => ({ keyId: 'srv-k1', publicKey: new Uint8Array(0) }),
 }));
 
 /**
@@ -85,7 +106,7 @@ vi.mock('@pagespace/lib/services/drive-envs/env-provision-deps', () => ({
 
 import type { EnsureSpriteHolderSandboxResult } from '@pagespace/lib/services/agent-workspaces/agent-workspace-sprite';
 import type { ensureDriveEnvSandbox as ensureDriveEnvSandboxFn } from '@pagespace/lib/services/drive-envs/env-provision-deps';
-import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer } from '../drive-envs-runtime';
+import { ensureEnvSandboxForSession, rebuildEnv, resolveDriveEnvPayer, redeemEnvChallenge } from '../drive-envs-runtime';
 import { db } from '@pagespace/db/db';
 
 type EnsureDriveEnvSandboxInput = Parameters<typeof ensureDriveEnvSandboxFn>[0];
@@ -129,6 +150,17 @@ describe('ensureEnvSandboxForSession', () => {
     expect(lastCall().intent).toBe('attach');
     expect(lastCall().requesterId).toBe(REQUESTER_ID);
     expect(lastCall().deps.resolvePayer).toBe(resolveDriveEnvPayer);
+  });
+});
+
+describe('redeemEnvChallenge — the identity wiring', () => {
+  it('should mint through the real session service and wire revokeToken (C4) to the real revoker, keyed by the RAW token the mint returned', async () => {
+    const result = await redeemEnvChallenge({ enrollmentId: 'enr-1', response: {} });
+    expect(result).toEqual({ ok: false, reason: 'revoked' });
+    expect(sessionService.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: DRIVE_OWNER_ID, resourceType: 'drive_env', resourceId: ENV_ID, driveId: DRIVE_ID, createdByService: 'env-bridge' }),
+    );
+    expect(sessionService.revokeSession).toHaveBeenCalledWith('tok_raw_1', 'env_bridge_revoked_during_mint');
   });
 });
 

@@ -308,6 +308,13 @@ describe('POST /envs/[envId]/rebuild — the only sprite-replacing verb', () => 
     expect(rebuildEnv).toHaveBeenCalledWith({ envId: ENV_ID, requesterId: USER_ID });
   });
 
+  it('given a LOCAL env, should answer 409 substrate_unsupported — the user\'s own machine has no Sprite to replace (C1)', async () => {
+    vi.mocked(rebuildEnv).mockResolvedValue({ ok: false, reason: 'substrate_unsupported' } as never);
+    const response = await rebuildEnvRoute(rebuildReq(), envParams);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ reason: 'substrate_unsupported' });
+  });
+
   it('given the teardown failed, should answer 503 and say so', async () => {
     vi.mocked(rebuildEnv).mockResolvedValue({ ok: false, reason: 'teardown_failed', detail: 'boom' } as never);
     const response = await rebuildEnvRoute(rebuildReq(), envParams);

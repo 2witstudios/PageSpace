@@ -32,7 +32,7 @@ import {
 import { toSubscriptionTier } from '@pagespace/lib/billing/subscription-tiers';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import { getSandboxHost } from './sandbox-host-runtime';
-import { ensureEnvSandboxForSession, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
+import { ensureEnvSandboxForSession, gateLocalEnvBind, getDriveEnvStore } from '@/lib/drive-envs/drive-envs-runtime';
 import { canRunCode, isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   decideFullEgressEnablement,
@@ -786,6 +786,10 @@ export async function spawnSession(input: {
       // question the service is asking, and answering it twice in two places
       // is how the two answers come to differ.
       findEnv: async (envId) => (await getDriveEnvStore()).findById(envId),
+      // C1: a LOCAL env's bind is gated at the server through the ONE shared
+      // assembly the provisioner also runs; the service calls this only when
+      // the env's substrate is `local`.
+      gateLocalEnvBind,
     },
   });
 }

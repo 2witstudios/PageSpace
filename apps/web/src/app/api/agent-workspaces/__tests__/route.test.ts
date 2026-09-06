@@ -949,6 +949,23 @@ describe('POST /api/agent-workspaces — spawn ceiling (review M6/F4)', () => {
     expect(mockCreateConversationInSession).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['bind_policy', 403],
+    ['code_exec_denied', 403],
+    ['flag_disabled', 403],
+    ['not_connected', 409],
+    ['revoked', 409],
+    ['substrate_unsupported', 409],
+  ] as const)('given a LOCAL env refuses the bind with %s (C1), should answer %i naming the refusal, audit it, and start no conversation', async (refusal, status) => {
+    mockCheckAccessForSubject.mockResolvedValue({ allowed: true });
+    mockCountActiveSessionsForOwner.mockResolvedValue(0);
+    mockSpawnSession.mockResolvedValue({ ok: false, reason: 'env_bind_refused', refusal });
+    const response = await spawn({ driveId: 'drive-1', envId: 'env-local' });
+    expect(response.status).toBe(status);
+    expect(await response.json()).toMatchObject({ reason: 'env_bind_refused', refusal });
+    expect(mockCreateConversationInSession).not.toHaveBeenCalled();
+  });
+
   it('429s on the ATOMIC backstop when a concurrent spawn wins the race the pre-check missed (review #2261/2)', async () => {
     // The pre-check above is advisory (TOCTOU-racy on its own) — spawnSession
     // itself is the authoritative, atomically-enforced ceiling, and its

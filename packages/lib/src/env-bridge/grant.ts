@@ -27,12 +27,16 @@
  *
  * Deny order is FIXED and tested: malformed → wrong_env → op_mismatch →
  * args_mismatch → ttl_too_long → clock_skew → expired → bad_signature →
- * replayed. Cheap structural checks (including the request binding) run before
- * the signature so junk never reaches crypto, and the replay check runs LAST so
- * a grant that fails any earlier check can never burn its nonce — the nonce is
- * recorded only when the whole verdict is `ok`.
+ * replayed. `malformed` covers the schema AND the window's sanity: `exp < iat`
+ * is not a short grant, it is not a grant, so it is refused as structure —
+ * before `ttl_too_long`, which only has meaning for a non-negative window
+ * (Codex C15). Cheap structural checks (including the request binding) run
+ * before the signature so junk never reaches crypto, and the replay check runs
+ * LAST so a grant that fails any earlier check can never burn its nonce — the
+ * nonce is recorded only when the whole verdict is `ok`.
  */
 import { z } from 'zod';
+import type { GrantRequest } from './grant-args';
 
 /** The closed set of operations a grant may authorize. Anything else is malformed. */
 export const GRANT_OPS = ['exec', 'fs_read', 'fs_write', 'pty_open'] as const;
@@ -94,12 +98,13 @@ export type Ed25519Verify = (message: Uint8Array, signature: Uint8Array, publicK
 /** Cryptographic hash primitive (bytes → hex/base64 digest), injected for the same reason. */
 export type HashBytes = (bytes: Uint8Array) => string;
 
-/** The frame that carries the grant: what the caller is actually asking to run. */
-export interface GrantRequest {
-  readonly op: GrantOp;
-  /** The request's arguments exactly as received; hashed via `canonicalizeArgs`. */
-  readonly args: unknown;
-}
+/**
+ * The frame that carries the grant: what the caller is actually asking to run,
+ * as the per-op PROJECTION from `grant-args.ts` (`grantRequestForFrame`) —
+ * never the raw frame. Both the signer and this gate hash that projection, so
+ * the hashed bytes are defined once (Codex C7).
+ */
+export type { GrantRequest } from './grant-args';
 
 export interface VerifyGrantInput {
   /** Untrusted: whatever arrived on the wire. */
@@ -221,6 +226,8 @@ export function verifyGrant(input: VerifyGrantInput): GrantVerdict {
   const parsed = grantSchema.safeParse(input.grant);
   if (!parsed.success) return deny('malformed');
   const grant: Grant = parsed.data;
+  // A negative window is structural nonsense, not a TTL question (C15).
+  if (grant.exp < grant.iat) return deny('malformed');
 
   if (grant.envId !== input.expectedEnvId) return deny('wrong_env');
 

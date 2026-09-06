@@ -128,6 +128,11 @@
       "import": "./dist/services/drive-envs/env-provision-deps.js",
       "require": "./dist/services/drive-envs/env-provision-deps.js"
     },
+    "./services/drive-envs/local-env-gate": {
+      "types": "./dist/services/drive-envs/local-env-gate.d.ts",
+      "import": "./dist/services/drive-envs/local-env-gate.js",
+      "require": "./dist/services/drive-envs/local-env-gate.js"
+    },
     "./services/drive-envs/drive-envs": {
       "types": "./dist/services/drive-envs/drive-envs.d.ts",
       "import": "./dist/services/drive-envs/drive-envs.js",

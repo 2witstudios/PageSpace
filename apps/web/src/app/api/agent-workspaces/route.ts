@@ -48,6 +48,18 @@ import { listShellsBulk, spawnShell } from '@/lib/agent-workspaces/workspace-she
 import { findWorkspaceOfConversation, checkSessionAccess } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { readWorkspaceNodesBulk } from '@/lib/agent-workspaces/workspace-node-runtime';
 import { sessionQuotaExceeded } from '@/lib/agent-workspaces/quota-response';
+import type { LocalEnvRefusal } from '@pagespace/lib/services/drive-envs/local-env-gate';
+
+/** C1: how a LOCAL env's typed bind refusal maps to a status. Policy ⇒ 403, machine state ⇒ 409. */
+const LOCAL_BIND_REFUSAL_STATUS = {
+  flag_disabled: 403,
+  code_exec_denied: 403,
+  bind_policy: 403,
+  not_local: 409,
+  revoked: 409,
+  not_connected: 409,
+  substrate_unsupported: 409,
+} as const satisfies Record<LocalEnvRefusal, number>;
 
 /** Bound on the stored display label — rendered everywhere the session appears. */
 const MAX_SESSION_NAME_LENGTH = 120;
@@ -517,6 +529,22 @@ export async function POST(request: Request) {
       // service collapses them deliberately, so that a caller who cannot see a
       // drive cannot enumerate its environments through this endpoint either.
       return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
+    }
+    if (spawned.reason === 'env_bind_refused') {
+      // A LOCAL env refused the bind at the server (C1). Policy refusals are the
+      // actor's problem (403); state refusals are the machine's (409).
+      auditRequest(request, {
+        eventType: 'authz.access.denied',
+        userId: auth.userId,
+        resourceType: 'drive_env',
+        resourceId: envId ?? undefined,
+        details: { route: 'agent-sessions', operation: 'spawn', refusal: spawned.refusal, ...(spawned.cause ? { cause: spawned.cause } : {}) },
+        riskScore: 0.4,
+      });
+      return NextResponse.json(
+        { error: 'This environment refused the session', reason: spawned.reason, refusal: spawned.refusal },
+        { status: LOCAL_BIND_REFUSAL_STATUS[spawned.refusal] },
+      );
     }
     loggers.api.error('Agent session spawn failed', undefined, { driveId, detail: spawned.detail });
     return NextResponse.json({ error: 'Could not start a session', reason: spawned.reason }, { status: 502 });

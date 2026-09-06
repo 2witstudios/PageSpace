@@ -7,6 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Local Environments: the server now refuses what the machine cannot do (hardening,
+  opt-in groundwork)** — before the bridge connection ships, every server path that could
+  provision, bind a session to, or rebuild an Environment now recognises a local machine and
+  answers with a typed refusal instead of trying to mint a cloud sandbox for it: a disconnected
+  or revoked machine is `not_connected` / `revoked`, a bind the machine's owner has not allowed
+  is `bind_policy`, and "rebuild" answers that a local Environment has no machine to rebuild.
+  Requesting a fresh connection challenge while one is still live now answers 429 with a
+  `Retry-After` instead of silently invalidating the machine's outstanding handshake, a
+  connection token can no longer survive a revocation that lands during its issue, and a
+  malformed authorization window (expiry before issue) is refused outright. Cloud Environments
+  behave exactly as before. Still off by default (`LOCAL_ENVS_ENABLED`).
 - **You can enroll your own computer as a drive Environment (opt-in, groundwork)** — a drive
   owner or admin can now create an Environment with `substrate: "local"` and a machine label,
   and receives a one-time enrollment code (shown once, valid for ten minutes). A machine that

@@ -35,7 +35,8 @@ const redeemSchema = z
   })
   .strict();
 
-const ISSUE_STATUS = { not_found: 404, not_enrolled: 409, revoked: 410 } as const;
+/** `challenge_pending` is 429 with `Retry-After`: one live handshake at a time (Codex C5), and the daemon simply waits it out. */
+const ISSUE_STATUS = { not_found: 404, not_enrolled: 409, revoked: 410, challenge_pending: 429, race: 409 } as const;
 const REDEEM_STATUS = {
   not_found: 404,
   not_enrolled: 409,
@@ -85,7 +86,8 @@ export async function GET(request: Request) {
       riskScore: 0.2,
       details: { route: 'env-bridge/token', step: 'challenge', reason: result.reason },
     });
-    return NextResponse.json({ error: `Challenge refused: ${result.reason}`, reason: result.reason }, { status: ISSUE_STATUS[result.reason] });
+    const headers = result.reason === 'challenge_pending' ? { 'Retry-After': String(Math.max(1, Math.ceil(result.retryAfterMs / 1000))) } : undefined;
+    return NextResponse.json({ error: `Challenge refused: ${result.reason}`, reason: result.reason }, { status: ISSUE_STATUS[result.reason], headers });
   }
   return NextResponse.json({ nonce: result.nonce, expiresAt: result.expiresAt.toISOString() });
 }
