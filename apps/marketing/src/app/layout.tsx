@@ -32,10 +32,9 @@ export const metadata = siteMetadata;
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#ffffff" },
-    { media: "(prefers-color-scheme: dark)", color: "#0f0f0f" },
-  ],
+  // Dark is the default theme regardless of OS preference, so one value
+  // matching the dark canvas (oklch 0.11 0 0).
+  themeColor: "#040404",
 };
 
 export default function RootLayout({
@@ -53,7 +52,7 @@ export default function RootLayout({
       >
         <ThemeProvider
           attribute="class"
-          defaultTheme="system"
+          defaultTheme="dark"
           enableSystem
           disableTransitionOnChange
         >
