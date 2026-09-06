@@ -75,7 +75,11 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
     findByHolder: async () => { calls.push('findByHolder'); return current; },
     upsert: async (intent) => {
       calls.push(`upsert:${intent.targetPort}`);
-      current = { id: 'r1', ...intent, stoppedByUserAt: null };
+      // The real store refuses when the stored intent has moved since the plan's read.
+      if (current !== null && (current.stoppedByUserAt?.getTime() ?? null) !== (intent.basedOnStoppedByUserAt?.getTime() ?? null)) return false;
+      const { basedOnStoppedByUserAt: _guard, ...row } = intent;
+      current = { id: 'r1', ...row, stoppedByUserAt: null };
+      return true;
     },
     setStoppedByUser: async (_holder, at) => {
       calls.push(`setStoppedByUser:${at ? 'stop' : 'clear'}`);
@@ -259,7 +263,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed', error: 'exited with code 143' }), calls: trackedCalls }),
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
-    assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173 } } });
+    assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173, recorded: true } } });
     assert({ given: 'the resume', should: 'call services.start', actual: trackedCalls.includes(`start:${PREVIEW_RELAY_SERVICE_NAME}`), expected: true });
     assert({ given: 'the resume', should: 'leave stoppedByUserAt cleared', actual: store.current()?.stoppedByUserAt, expected: null });
   });

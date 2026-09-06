@@ -13,7 +13,10 @@ const ROW: DevPreviewRowIntent = {
   relayServiceName: PREVIEW_RELAY_SERVICE_NAME,
   detectedAt: new Date('2026-09-06T00:00:00Z'),
   stoppedByUserAt: null,
+  basedOnStoppedByUserAt: null,
 };
+
+const STOPPED_AT = new Date('2026-09-06T01:00:00Z');
 
 function fakeServices(failing: Partial<Record<keyof SandboxServicesApi, Error>> = {}) {
   const calls: string[] = [];
@@ -33,9 +36,22 @@ function fakeServices(failing: Partial<Record<keyof SandboxServicesApi, Error>> 
   return { services, calls };
 }
 
-function fakeStore() {
+/**
+ * `accepts: false` models the store's intent guard refusing the write (a
+ * user's stop landed after the plan's read); `stoppedByUserAt` is what the
+ * row says NOW, which the `stop-relay` arm re-reads before stopping.
+ */
+function fakeStore({ accepts = true, stoppedByUserAt = null as Date | null, missing = false } = {}) {
   const written: DevPreviewRowIntent[] = [];
-  return { store: { upsert: async (intent: DevPreviewRowIntent) => { written.push(intent); } }, written };
+  const reads: string[] = [];
+  return {
+    store: {
+      upsert: async (intent: DevPreviewRowIntent) => { written.push(intent); return accepts; },
+      findByHolder: async (holder: { kind: string; id: string }) => { reads.push(`${holder.kind}:${holder.id}`); return missing ? null : { stoppedByUserAt }; },
+    },
+    written,
+    reads,
+  };
 }
 
 const spec = buildPreviewRelaySpec({ targetPort: 5173 });
@@ -47,7 +63,7 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
     const plan: DevServerServicePlan = { action: 'start-relay', via: 'create', service: spec, row: ROW };
     const applied = await applyDevServerServicePlan({ plan, services, store });
     assert({ given: 'create plan', should: 'create then upsert', actual: { calls, written }, expected: { calls: [`create:${spec.name}:node:${spec.args.length}`], written: [ROW] } });
-    assert({ given: 'create plan', should: 'report', actual: applied, expected: { action: 'start-relay', via: 'create', targetPort: 5173 } });
+    assert({ given: 'create plan', should: 'report', actual: applied, expected: { action: 'start-relay', via: 'create', targetPort: 5173, recorded: true } });
   });
 
   it('start-relay via start: starts by name (no create), then upserts', async () => {
@@ -69,7 +85,7 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
     const { store, written } = fakeStore();
     const applied = await applyDevServerServicePlan({ plan: { action: 'replace-relay', previousTargetPort: 3000, service: spec, row: ROW }, services, store });
     assert({ given: 'replace plan', should: 'remove, create, upsert', actual: { calls, written: written.length }, expected: { calls: [`remove:${spec.name}`, `create:${spec.name}:node:${spec.args.length}`], written: 1 } });
-    assert({ given: 'replace plan', should: 'report both ports', actual: applied, expected: { action: 'replace-relay', previousTargetPort: 3000, targetPort: 5173 } });
+    assert({ given: 'replace plan', should: 'report both ports', actual: applied, expected: { action: 'replace-relay', previousTargetPort: 3000, targetPort: 5173, recorded: true } });
   });
 
   it('record-direct: removes a leftover relay only when asked, and always upserts', async () => {
@@ -82,11 +98,59 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
     assert({ given: 'removeRelay false', should: 'touch no service', actual: { calls: b.calls, written: sb.written.length }, expected: { calls: [], written: 1 } });
   });
 
-  it('stop-relay: stops the named relay and writes nothing (the stop intent is already on the row)', async () => {
+  const stopPlan: DevServerServicePlan = { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay', holder: ROW.holder, stoppedByUserAt: STOPPED_AT };
+
+  it('stop-relay: confirms the stop still stands, then stops the named relay and writes nothing (the intent is already on the row)', async () => {
     const { services, calls } = fakeServices();
-    const { store, written } = fakeStore();
-    await applyDevServerServicePlan({ plan: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' }, services, store });
-    assert({ given: 'stop plan', should: 'stop only', actual: { calls, written }, expected: { calls: ['stop:pagespace-preview-relay'], written: [] } });
+    const { store, written, reads } = fakeStore({ stoppedByUserAt: STOPPED_AT });
+    const applied = await applyDevServerServicePlan({ plan: stopPlan, services, store });
+    assert({ given: 'stop plan, intent still set', should: 'read the intent then stop only', actual: { calls, written, reads }, expected: { calls: ['stop:pagespace-preview-relay'], written: [], reads: ['env:e1'] } });
+    assert({ given: 'the stop', should: 'report it', actual: applied, expected: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
+  });
+
+  it('USER INTENT WINS: a stop-relay planned before the user RESUMED stops nothing (the intent is gone), and a row write the guard refuses reports skipped', async () => {
+    // The mirror cases of one rule: the plan was made from a row the user has
+    // since changed, so carrying it out would undo their click.
+    const resumed = fakeServices();
+    const resumedStore = fakeStore({ stoppedByUserAt: null });
+    assert({
+      given: 'a stop-relay for a stop the user has cleared',
+      should: 'stop nothing and report skipped/resumed',
+      actual: { applied: await applyDevServerServicePlan({ plan: stopPlan, services: resumed.services, store: resumedStore.store }), calls: resumed.calls },
+      expected: { applied: { action: 'skipped', reason: 'resumed' }, calls: [] },
+    });
+    const gone = fakeServices();
+    const goneStore = fakeStore({ missing: true });
+    assert({
+      given: 'a stop-relay for a holder whose row has gone',
+      should: 'stop nothing',
+      actual: { applied: await applyDevServerServicePlan({ plan: stopPlan, services: gone.services, store: goneStore.store }), calls: gone.calls },
+      expected: { applied: { action: 'skipped', reason: 'resumed' }, calls: [] },
+    });
+    // The write side: the service call still happened (it was planned from a
+    // truthful read), but the row write is refused, so the user's stop stands.
+    const started = fakeServices();
+    const refusing = fakeStore({ accepts: false });
+    assert({
+      given: 'a start-relay whose row write the intent guard refuses',
+      should: 'report skipped/intent-changed, having started the relay',
+      actual: { applied: await applyDevServerServicePlan({ plan: { action: 'start-relay', via: 'create', service: spec, row: ROW }, services: started.services, store: refusing.store }), calls: started.calls.length },
+      expected: { applied: { action: 'skipped', reason: 'intent-changed' }, calls: 1 },
+    });
+    const replacing = fakeStore({ accepts: false });
+    assert({
+      given: 'a replace-relay the guard refuses',
+      should: 'report skipped/intent-changed',
+      actual: await applyDevServerServicePlan({ plan: { action: 'replace-relay', previousTargetPort: 3000, service: spec, row: ROW }, services: fakeServices().services, store: replacing.store }),
+      expected: { action: 'skipped', reason: 'intent-changed' },
+    });
+    const direct = fakeStore({ accepts: false });
+    assert({
+      given: 'a record-direct the guard refuses',
+      should: 'report skipped/intent-changed',
+      actual: await applyDevServerServicePlan({ plan: { action: 'record-direct', removeRelay: false, row: { ...ROW, targetPort: 8080, relayServiceName: null } }, services: fakeServices().services, store: direct.store }),
+      expected: { action: 'skipped', reason: 'intent-changed' },
+    });
   });
 
   it('none / refuse: does nothing at all and reports the reason', async () => {

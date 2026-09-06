@@ -45,7 +45,7 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canManage: true,
     sandbox: 'attached',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
-    slot: { known: true, free: false, holder: 'relay', pid: null, message: 'Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.' },
+    slot: { known: true, holder: 'relay', pid: null, message: 'Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.' },
     openPath: OPEN.openPath,
     canOpen: true,
     canStop: true,
@@ -132,7 +132,7 @@ describe('DevPreviewPane', () => {
     status = live({
       canOpen: false,
       state: { status: 'blocked', targetPort: 5173, message: 'Port 8080 is already in use by something that is not the preview relay. Run your dev server on port 8080 to preview it, or free the port.' },
-      slot: { known: true, free: false, holder: 'user-process', pid: 999, message: 'Port 8080 is held by another process in the sandbox (pid 999). Stop that process so the preview relay can bind 8080, or run your dev server on port 8080 directly.' },
+      slot: { known: true, holder: 'user-process', pid: 999, message: 'Port 8080 is held by another process in the sandbox (pid 999). Stop that process so the preview relay can bind 8080, or run your dev server on port 8080 directly.' },
     });
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();

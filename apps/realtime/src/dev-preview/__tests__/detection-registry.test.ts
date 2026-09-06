@@ -51,7 +51,7 @@ function deps(over: Partial<DetectionRegistryDeps> = {}) {
     featureEnabled: () => true,
     resolveHolderSandboxId: async (holder) => (holder.id === 'gone-holder' ? null : `sbx-${holder.id}`),
     attach: async () => fakeHandle(),
-    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); }, setStoppedByUser: async () => null },
+    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); return true; }, setStoppedByUser: async () => null },
     createSocket: factory.createSocket,
     spritesToken: () => 'tok',
     spritesApiBaseUrl: () => 'https://api.sprites.dev',

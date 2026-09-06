@@ -21,6 +21,8 @@ function harness(overrides: {
   instance?: string | null;
   runtime?: 'node' | 'socat';
   failCreate?: boolean;
+  /** What the PLANNER sees, when the stored row has already moved on (the stop/detection race). */
+  readsAheadOfWrites?: DevPreviewRecord | null;
 } = {}) {
   let relay: SandboxServiceInfo | null = overrides.relay ?? null;
   let row: DevPreviewRecord | null = overrides.row ?? null;
@@ -40,10 +42,23 @@ function harness(overrides: {
     remove: async (name) => { calls.push(`remove:${name}`); relay = null; },
   };
   const store: DevPreviewStore = {
-    findByHolder: async () => row,
+    // `readsAheadOfWrites` models the real race: the planner reads the row as
+    // it was, and by the time the write lands the STORED row has moved on
+    // (a user's stop). The write then meets the same compare-and-set the real
+    // store applies.
+    findByHolder: async () => overrides.readsAheadOfWrites ?? row,
     upsert: async (intent: DevPreviewRowIntent) => {
       calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? 'direct'}`);
+      const storedIntent = row === null || row.spriteInstanceId !== intent.spriteInstanceId ? null : row.stoppedByUserAt;
+      const guardHolds = row !== null && row.spriteInstanceId !== intent.spriteInstanceId
+        ? true
+        : (storedIntent?.getTime() ?? null) === (intent.basedOnStoppedByUserAt?.getTime() ?? null);
+      if (!guardHolds) {
+        calls.push('upsert-refused');
+        return false;
+      }
       row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null };
+      return true;
     },
     setStoppedByUser: async () => null,
   };
@@ -201,5 +216,15 @@ describe('createDevPreviewDetector — discipline', () => {
     assert({ given: 'invalidation queued after a late snapshot', should: 'end unknown', actual: detector.listeners(), expected: null });
     await detector.onFrame({ type: 'port_list', ports: [{ port: 5000 }] });
     assert({ given: 'the next connection\'s snapshot', should: 'be known again', actual: detector.listeners(), expected: [{ port: 5000 }] });
+  });
+
+  it('USER INTENT WINS THE RACE: a frame that planned from a row read BEFORE the user\'s stop starts the relay but cannot clear the stop — the click survives, and the next frame plans from the row that won', async () => {
+    const stoppedAt = new Date('2026-09-06T13:00:00.000Z');
+    const stored = { id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date('2026-09-06T12:00:00.000Z'), stoppedByUserAt: stoppedAt };
+    // The planner reads the PRE-stop row; the store already holds the stop.
+    const h = harness({ row: stored, readsAheadOfWrites: { ...stored, stoppedByUserAt: null }, relay: relayInfo(5173, 'node', 'failed') });
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
+    assert({ given: 'a stop that landed after the plan\'s read', should: 'attempt the write and be refused by the guard', actual: h.calls.includes('upsert-refused'), expected: true });
+    assert({ given: 'the refused write', should: 'leave the user\'s stop intact', actual: h.row()?.stoppedByUserAt, expected: stoppedAt });
   });
 });
