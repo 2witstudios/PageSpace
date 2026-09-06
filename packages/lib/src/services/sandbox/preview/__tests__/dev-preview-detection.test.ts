@@ -45,6 +45,7 @@ function harness(overrides: {
       calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? 'direct'}`);
       row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null };
     },
+    setStoppedByUser: async () => false,
   };
   const deps: DevPreviewDetectorDeps = {
     holder: HOLDER,

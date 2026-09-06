@@ -19,8 +19,8 @@
  */
 
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
-import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
-import { createDevPreviewDetector, type DevPreviewDetectorLog } from '@pagespace/lib/services/sandbox/preview/dev-preview-detection';
+import type { DevPreviewHolderRef, ListeningPort } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { createDevPreviewDetector, type DevPreviewDetector, type DevPreviewDetectorLog } from '@pagespace/lib/services/sandbox/preview/dev-preview-detection';
 import type { DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
 import { buildPortsWatchUrl, openPortsWatch, type PortsWatchHandle, type PortsWatchSocketFactory } from '@pagespace/lib/services/sandbox/preview/ports-watch';
 
@@ -43,6 +43,16 @@ export interface DetectionRegistryDeps {
 export interface DetectionRegistry {
   /** Watch the holder's live sprite (re-derived from the holder's row). Idempotent per sprite. */
   ensure(input: { holder: DevPreviewHolderRef }): Promise<void>;
+  /**
+   * The listener snapshot the holder's watcher has ACCUMULATED so far, or
+   * `null` when this process holds no watcher for the holder's live sprite
+   * (never watched, dropped past the reconnect budget, or the sprite is on
+   * another instance's channel). This is the ONLY listener source a status
+   * render may use — it is already in hand, so answering costs the sprite
+   * nothing (the never-probe-to-render rule). `null` is a legitimate answer
+   * the UI renders as "slot unknown", never as "free".
+   */
+  listeners(input: { holder: DevPreviewHolderRef }): Promise<ListeningPort[] | null>;
   /** Sprites currently watched — for tests and for a status line. */
   watching(): string[];
   stopAll(): void;
@@ -55,6 +65,8 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
   const watchers = new Map<string, { close(): void }>();
+  /** The live detector per watched sprite — the snapshot source for `listeners()`. Set once the channel is opening, cleared with the watcher. */
+  const detectors = new Map<string, DevPreviewDetector>();
 
   async function start(holder: DevPreviewHolderRef, sandboxId: string): Promise<void> {
     const reservation = watchers.get(sandboxId);
@@ -68,6 +80,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       return;
     }
     const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log });
+    detectors.set(sandboxId, detector);
     const url = buildPortsWatchUrl(deps.spritesApiBaseUrl(), sandboxId);
     let stopped = false;
     let current: PortsWatchHandle | null = null;
@@ -87,6 +100,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
             deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts });
             stopped = true;
             watchers.delete(sandboxId);
+            detectors.delete(sandboxId);
             return;
           }
           const delay = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)];
@@ -101,6 +115,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
         stopped = true;
         current?.close();
         watchers.delete(sandboxId);
+        detectors.delete(sandboxId);
       },
     });
     open();
@@ -124,6 +139,13 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
         watchers.delete(sandboxId);
         deps.log.error('dev-preview: watcher failed to start', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
       }
+    },
+    async listeners({ holder }) {
+      if (!deps.featureEnabled()) return null;
+      // Same rule as `ensure`: the sprite is the holder's ROW's, never a claim.
+      const sandboxId = await deps.resolveHolderSandboxId(holder);
+      if (sandboxId === null) return null;
+      return detectors.get(sandboxId)?.listeners() ?? null;
     },
     watching: () => [...watchers.keys()],
     stopAll() {

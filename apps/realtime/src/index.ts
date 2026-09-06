@@ -57,6 +57,7 @@ import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-h
 import { handleShellActivityRequest } from './terminal/shell-activity';
 import { buildPreviewUpgradeHandler, previewHolderForUpgrade } from './dev-preview/preview-upgrade';
 import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
+import { readDevPreviewHolderBody } from './dev-preview/holder-body';
 import {
   buildRealtimePreviewAccessDeps,
   createConnectScopedSandboxHost,
@@ -1035,24 +1036,44 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ error: 'Authentication failed' }));
                 return;
             }
-            let parsed: { holder?: { kind?: unknown; id?: unknown } };
-            try {
-                parsed = JSON.parse(body);
-            } catch {
+            const holder = readDevPreviewHolderBody(body);
+            if (holder === null) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Malformed body' }));
                 return;
             }
-            const kind = parsed?.holder?.kind;
-            const id = parsed?.holder?.id;
-            if ((kind !== 'workspace' && kind !== 'env') || typeof id !== 'string' || id.length === 0) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Malformed body' }));
-                return;
-            }
-            void devPreviewRegistry.ensure({ holder: { kind, id } });
+            void devPreviewRegistry.ensure({ holder });
             res.writeHead(202, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ accepted: true }));
+        });
+    } else if (req.method === 'POST' && req.url === '/api/dev-preview/listeners') {
+        // The web tier is rendering a holder's preview status and asks for the
+        // listener snapshot this process's watcher already holds — the ONLY
+        // listener source a render may use (never-probe-to-render: the sprite
+        // is not touched to answer). `listeners: null` is the honest "no
+        // snapshot in hand" answer, and the web tier renders it as such.
+        // Signed and holder-only exactly like the watch trigger above.
+        readCappedBody(body => {
+            const signatureHeader = req.headers['x-broadcast-signature'] as string;
+            if (!verifySignature(signatureHeader, body)) {
+                res.writeHead(401, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Authentication failed' }));
+                return;
+            }
+            const holder = readDevPreviewHolderBody(body);
+            if (holder === null) {
+                res.writeHead(400, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Malformed body' }));
+                return;
+            }
+            devPreviewRegistry.listeners({ holder }).then((listeners) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ listeners }));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('dev-preview: listeners read failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal error' }));
+            });
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation

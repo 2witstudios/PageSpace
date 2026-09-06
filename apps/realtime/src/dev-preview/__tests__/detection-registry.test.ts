@@ -51,7 +51,7 @@ function deps(over: Partial<DetectionRegistryDeps> = {}) {
     featureEnabled: () => true,
     resolveHolderSandboxId: async (holder) => (holder.id === 'gone-holder' ? null : `sbx-${holder.id}`),
     attach: async () => fakeHandle(),
-    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); } },
+    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); }, setStoppedByUser: async () => false },
     createSocket: factory.createSocket,
     spritesToken: () => 'tok',
     spritesApiBaseUrl: () => 'https://api.sprites.dev',
@@ -94,6 +94,40 @@ describe('createDetectionRegistry', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(h.upserts).toHaveLength(1);
     expect(h.upserts[0]).toMatchObject({ holder: HOLDER, targetPort: 5173, spriteInstanceId: 'inst' });
+  });
+
+  it('listeners(): null before any watch, the accumulated snapshot while watching, null again once the watcher is gone or the feature is dark', async () => {
+    const h = deps();
+    const registry = createDetectionRegistry(h.deps);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    await registry.ensure({ holder: HOLDER });
+    // Watching, but no frame yet: an empty snapshot is "known empty", not unknown.
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([]);
+    h.sockets[0].emit('open');
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }, { port: 8080, pid: 9 }] }) });
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_closed', port: 8080 }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
+    // A holder whose row has no live sprite is never answered from someone else's watcher.
+    expect(await registry.listeners({ holder: { kind: 'env', id: 'gone-holder' } })).toBeNull();
+    registry.stopAll();
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    const dark = createDetectionRegistry(deps({ featureEnabled: () => false }).deps);
+    expect(await dark.listeners({ holder: HOLDER })).toBeNull();
+  });
+
+  it('listeners(): a watcher dropped past its reconnect budget answers null, not a stale snapshot', async () => {
+    const h = deps({ maxReconnects: 0 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    h.sockets[0].emit('open');
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_opened', port: 5173, pid: 3 }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
+    h.sockets[0].emit('close', { code: 1006 });
+    await new Promise((r) => setImmediate(r));
+    expect(registry.watching()).toEqual([]);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
   });
 
   it('watches nothing for a holder whose row has no live sprite — the caller never names the sprite', async () => {

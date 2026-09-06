@@ -13,6 +13,9 @@ import { useSessionRecord } from './useSessionRecord';
 import AgentPanes from './panes/AgentPanes';
 import AgentsPastConversationsList from './AgentsPastConversationsList';
 import AgentsListHeader from './AgentsListHeader';
+import { DevPreviewAffordance } from '@/components/dev-preview/DevPreviewAffordance';
+import { DevPreviewPane } from '@/components/dev-preview/DevPreviewPane';
+import { sessionDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 /**
  * The Agents console: mounted for the lifetime of the route, whatever is
@@ -164,95 +167,120 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
   );
 
   return (
-    <div className="flex h-full flex-col">
-      {selectedSessionId ? (
-        sessionDriveResolved ? (
-          <>
-            {/*
-              The way OUT of a session, and the only one that doesn't destroy
-              it. Everything that cleared a selection before this — the end
-              dialog, the sidebar's End Session, the server answering that the
-              workspace is gone — required the session to stop existing, so
-              browsing your own history meant ending the work you were in the
-              middle of. `selectSession(null)` just drops the selection: the
-              workspace, its panes, its PTYs and any streaming reply are all
-              untouched, and the row in the sidebar reselects it.
+    // A ROW: the console on the left, and — only while one is open — the
+    // dev-server preview pane beside it. The pane sits at THIS level rather
+    // than inside the session branch because an environment's preview can be
+    // opened from the sidebar with no session selected at all; it is a
+    // per-viewer window onto a server-side row, not a workspace pane (see
+    // `useDevPreviewPaneStore`). It renders nothing on a dark deployment.
+    <div className="flex h-full min-w-0">
+      <div className="flex h-full min-w-0 flex-1 flex-col">
+        {selectedSessionId ? (
+          sessionDriveResolved ? (
+            <>
+              {/*
+                The way OUT of a session, and the only one that doesn't destroy
+                it. Everything that cleared a selection before this — the end
+                dialog, the sidebar's End Session, the server answering that the
+                workspace is gone — required the session to stop existing, so
+                browsing your own history meant ending the work you were in the
+                middle of. `selectSession(null)` just drops the selection: the
+                workspace, its panes, its PTYs and any streaming reply are all
+                untouched, and the row in the sidebar reselects it.
 
-              Rendered above the grid rather than inside `AgentPanes` because
-              it is the CONSOLE's control, not the workspace's — the same grid
-              also mounts inside a page (`AgentPageView`), where there is no
-              conversation list to go back to.
-            */}
-            <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
-                onClick={() => selectSession(null)}
-              >
-                <ChevronLeft className="size-4" aria-hidden="true" />
-                All conversations
-              </Button>
-              {sessionData?.session?.name ? (
-                <span className="truncate text-xs text-muted-foreground" title={sessionData.session.name}>
-                  {sessionData.session.name}
-                </span>
-              ) : null}
-            </div>
-            {/*
-              `min-h-0 flex-1` rather than letting the grid own the height:
-              `SessionPanes` is `h-full`, which is 100% of THIS box, so the
-              header above has to be subtracted by the flex track rather than
-              by the grid — without it the grid overflows by the header's
-              height and the bottom pane's input is pushed off-screen.
+                Rendered above the grid rather than inside `AgentPanes` because
+                it is the CONSOLE's control, not the workspace's — the same grid
+                also mounts inside a page (`AgentPageView`), where there is no
+                conversation list to go back to.
+              */}
+              <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1.5">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+                  onClick={() => selectSession(null)}
+                >
+                  <ChevronLeft className="size-4" aria-hidden="true" />
+                  All conversations
+                </Button>
+                {sessionData?.session?.name ? (
+                  <span className="truncate text-xs text-muted-foreground" title={sessionData.session.name}>
+                    {sessionData.session.name}
+                  </span>
+                ) : null}
+                {/*
+                  "Dev server detected on :5173 — Preview": the detection
+                  pipeline's one affordance for THIS session (an env-bound
+                  session reads its environment's preview — the holder rule —
+                  through its own route). Renders nothing unless the deployment
+                  has the feature on AND a dev server has actually been
+                  recorded; auto-opens nothing. Stop/resume through the session
+                  route are gated server-side by the same session-access
+                  decision that let the viewer in, so the pane may offer them.
+                */}
+                <DevPreviewAffordance
+                  statusPath={sessionDevPreviewPath(selectedSessionId)}
+                  title={sessionData?.session?.name || 'Session'}
+                  canManage
+                  className="ml-auto"
+                />
+              </div>
+              {/*
+                `min-h-0 flex-1` rather than letting the grid own the height:
+                `SessionPanes` is `h-full`, which is 100% of THIS box, so the
+                header above has to be subtracted by the flex track rather than
+                by the grid — without it the grid overflows by the header's
+                height and the bottom pane's input is pushed off-screen.
 
-              A session selection alone mounts the grid — the conversation is
-              the SEED, not a precondition. A session can be page- or
-              terminal-only now (the sidebar's page rows select a session and
-              focus a pane, with no conversation to name), and `AgentPanes`
-              accepts a null `initialConversation` for exactly that: it
-              renders the stored/hydrated grid and seeds nothing.
-            */}
-            <div className="flex min-h-0 flex-1 flex-col">
-              <AgentPanes
-                key={selectedSessionId}
-                sessionId={selectedSessionId}
-                driveId={sessionDriveId}
-                initialConversation={
-                  selectedConversationId
-                    ? {
-                        conversationId: selectedConversationId,
-                        agentPageId: selectedAgentId,
-                        name: 'Conversation',
-                      }
-                    : null
-                }
-                onSessionEnded={() => selectSession(null)}
-                onConversationClosed={handleConversationClosed}
-              />
+                A session selection alone mounts the grid — the conversation is
+                the SEED, not a precondition. A session can be page- or
+                terminal-only now (the sidebar's page rows select a session and
+                focus a pane, with no conversation to name), and `AgentPanes`
+                accepts a null `initialConversation` for exactly that: it
+                renders the stored/hydrated grid and seeds nothing.
+              */}
+              <div className="flex min-h-0 flex-1 flex-col">
+                <AgentPanes
+                  key={selectedSessionId}
+                  sessionId={selectedSessionId}
+                  driveId={sessionDriveId}
+                  initialConversation={
+                    selectedConversationId
+                      ? {
+                          conversationId: selectedConversationId,
+                          agentPageId: selectedAgentId,
+                          name: 'Conversation',
+                        }
+                      : null
+                  }
+                  onSessionEnded={() => selectSession(null)}
+                  onConversationClosed={handleConversationClosed}
+                />
+              </div>
+            </>
+          ) : (
+            <div className="flex h-full items-center justify-center">
+              <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
             </div>
-          </>
+          )
         ) : (
-          <div className="flex h-full items-center justify-center">
-            <Loader2 className="size-4 animate-spin text-muted-foreground" aria-hidden="true" />
+          // Keyed by drive: this surface's own `driveId` prop CAN change on an
+          // already-mounted instance (switching drives while staying on the
+          // agents tab re-renders with new `useParams()`, same as the
+          // `hydrateFromSearch({ driveId })` effect above already accounts
+          // for) — a bare prop change would leave the list's cursor/page state
+          // naming a position in the PREVIOUS drive's ordering. Remounting via
+          // `key` resets everything at once rather than chasing every piece of
+          // state that would otherwise need its own reset effect (review).
+          <div className="flex h-full flex-col">
+            <AgentsListHeader driveId={driveId} />
+            <div className="flex-1 min-h-0">
+              <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
+            </div>
           </div>
-        )
-      ) : (
-        // Keyed by drive: this surface's own `driveId` prop CAN change on an
-        // already-mounted instance (switching drives while staying on the
-        // agents tab re-renders with new `useParams()`, same as the
-        // `hydrateFromSearch({ driveId })` effect above already accounts
-        // for) — a bare prop change would leave the list's cursor/page state
-        // naming a position in the PREVIOUS drive's ordering. Remounting via
-        // `key` resets everything at once rather than chasing every piece of
-        // state that would otherwise need its own reset effect (review).
-        <div className="flex h-full flex-col">
-          <AgentsListHeader driveId={driveId} />
-          <div className="flex-1 min-h-0">
-            <AgentsPastConversationsList key={driveId ?? 'global'} driveId={driveId} />
-          </div>
-        </div>
-      )}
+        )}
+      </div>
+      <DevPreviewPane />
     </div>
   );
 }

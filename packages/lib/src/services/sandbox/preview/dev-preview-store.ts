@@ -27,6 +27,16 @@ export interface DevPreviewRecord extends DevPreviewRow {
 export interface DevPreviewStore {
   findByHolder(holder: DevPreviewHolderRef): Promise<DevPreviewRecord | null>;
   upsert(intent: DevPreviewRowIntent): Promise<void>;
+  /**
+   * Record the user's STOP intent (`at`) or clear it (`null`) on the holder's
+   * row — the one column the platform cannot report (an explicit stop lands a
+   * service in `failed`, indistinguishable from a crash — spike §4). Writes
+   * ONLY that column: the row's instance, target and relay name are facts
+   * about the sprite and a user action changes none of them. Resolves `false`
+   * when the holder has no row (nothing to switch off), so a caller never
+   * reports "switched off" for a preview that does not exist.
+   */
+  setStoppedByUser(holder: DevPreviewHolderRef, at: Date | null): Promise<boolean>;
 }
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -83,6 +93,15 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             updatedAt: sql`(now() at time zone 'utc')`,
           },
         });
+    },
+
+    async setStoppedByUser(holder, at) {
+      const updated = await db
+        .update(devPreviewServices)
+        .set({ stoppedByUserAt: at, updatedAt: sql`(now() at time zone 'utc')` })
+        .where(eq(holderColumn(holder), holder.id))
+        .returning({ id: devPreviewServices.id });
+      return updated.length > 0;
     },
   };
 }

@@ -7,6 +7,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
+  when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
+  drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath
+  the Environment in the sidebar: "Dev server detected on :5173 — Preview". Nothing opens on its
+  own. Clicking Preview opens the running app in a pane beside the console, served through
+  PageSpace's own authenticated preview origin (only people with access to the session or drive can
+  load it, checked on every request), with an open-in-new-tab option, a Reload, and status chrome
+  that says exactly what is true — live, starting, down (with the relay's error), switched off,
+  "sandbox rebuilt since", or "port 8080 is in use by another process" with the process and how to
+  release it. A drive owner or admin (or the session's owner, from inside the session) can switch a
+  preview off and back on. Reading the status never wakes a sleeping sandbox. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
 - **Local Environments: your enrolled computer can now hold a live connection, and you can
   revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
   addressed to its Environment, proves it is the machine you enrolled with a signed hello

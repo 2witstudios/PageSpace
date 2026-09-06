@@ -194,7 +194,7 @@ export interface ClassifyDetectedDevServerInput {
    * is defined. Needed to recognise the relay's OWN bind on 8080: with a pid
    * on both sides they are compared; with either pid missing, a running or
    * starting relay is assumed to be the 8080 listener (a wrong assumption
-   * self-corrects — see `httpPortSlotHolder`).
+   * self-corrects — see `describeHttpPortSlot`).
    */
   relay: SandboxServiceInfo | null;
 }
@@ -242,14 +242,19 @@ export interface HttpPortSlotInput {
 export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
 
 /**
- * Who holds 8080. A listener whose pid matches a live relay — or whose pid is
- * unknown while a relay is live — is the relay; any other listener is a user
- * process. A live relay with no listener in the snapshot still holds the slot
- * (the snapshot may predate its bind). Misattributing a user process to the
- * relay is self-correcting: the planned relay fails to bind, lands in
- * `failed`, and the next call sees a non-live relay beside a listener.
+ * Pure: WHO holds 8080 — `'none'` (free), `'relay'` (ours), `'user-process'`
+ * (something that is not our relay). {@link isHttpPortSlotFree} is this
+ * `=== 'none'`; the UI asks this fuller form so it can say which of the two
+ * holders is in the way and how to release it, instead of surfacing a 409.
+ *
+ * A listener whose pid matches a live relay — or whose pid is unknown while a
+ * relay is live — is the relay; any other listener is a user process. A live
+ * relay with no listener in the snapshot still holds the slot (the snapshot
+ * may predate its bind). Misattributing a user process to the relay is
+ * self-correcting: the planned relay fails to bind, lands in `failed`, and
+ * the next call sees a non-live relay beside a listener.
  */
-function httpPortSlotHolder({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
+export function describeHttpPortSlot({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
   const listener = listeners.find((entry) => entry.port === SPRITE_HTTP_PORT);
   const relayAlive = isRelayAlive(relay);
   if (!listener) return relayAlive ? 'relay' : 'none';
@@ -260,7 +265,7 @@ function httpPortSlotHolder({ listeners, relay }: HttpPortSlotInput): HttpPortSl
 
 /** Pure: is 8080 free — no relay, no user process? The one-slot question, relocated to the port that is actually routed. */
 export function isHttpPortSlotFree(input: HttpPortSlotInput): boolean {
-  return httpPortSlotHolder(input) === 'none';
+  return describeHttpPortSlot(input) === 'none';
 }
 
 // -----------------------------------------------------------------------------
@@ -404,7 +409,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     };
   }
 
-  if (httpPortSlotHolder({ listeners, relay }) === 'user-process') {
+  if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
 
@@ -497,7 +502,7 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
 
   const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);
 
-  const holder = httpPortSlotHolder({ listeners: listeners ?? [], relay });
+  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
 
   if (row.relayServiceName === null) {
     // Direct: the user's server on 8080 is the whole path, so the slot holder

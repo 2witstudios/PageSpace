@@ -69,6 +69,16 @@ describe('createDbDevPreviewStore', () => {
   it('answers null for a holder with no row', async () => {
     expect(await store.findByHolder({ kind: 'workspace', id: createId() })).toBeNull();
   });
+
+  it('setStoppedByUser writes ONLY the intent column, clears it on null, and reports false for a holder with no row', async () => {
+    await store.upsert({ holder, spriteInstanceId: 'inst-d', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null });
+    const stoppedAt = new Date('2026-09-06T12:30:00.000Z');
+    expect(await store.setStoppedByUser(holder, stoppedAt)).toBe(true);
+    expect(await store.findByHolder(holder)).toMatchObject({ spriteInstanceId: 'inst-d', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, stoppedByUserAt: stoppedAt });
+    expect(await store.setStoppedByUser(holder, null)).toBe(true);
+    expect((await store.findByHolder(holder))?.stoppedByUserAt).toBeNull();
+    expect(await store.setStoppedByUser({ kind: 'workspace', id: createId() }, stoppedAt)).toBe(false);
+  });
 });
 
 describe('createDbDevPreviewGrantsStore', () => {

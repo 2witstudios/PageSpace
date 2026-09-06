@@ -978,6 +978,11 @@
       "import": "./dist/services/sandbox/preview/dev-preview-detection.js",
       "require": "./dist/services/sandbox/preview/dev-preview-detection.js"
     },
+    "./services/sandbox/preview/dev-preview-status": {
+      "types": "./dist/services/sandbox/preview/dev-preview-status.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-status.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-status.js"
+    },
     "./services/sandbox/preview/preview-ws-tunnel": {
       "types": "./dist/services/sandbox/preview/preview-ws-tunnel.d.ts",
       "import": "./dist/services/sandbox/preview/preview-ws-tunnel.js",
