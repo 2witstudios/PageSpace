@@ -21,10 +21,15 @@ import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/previe
 
 export interface OpenDevPreview {
   holder: DevPreviewHolderRef;
-  /** Where the status is read from — the reader's own route (session or env). */
+  /**
+   * The drive the preview was opened IN (null for a global-assistant
+   * session): the pane renders only beside THAT drive's console. Switching
+   * drives hides it (and polls nothing) rather than framing another drive's
+   * dev server; coming back shows it again. No reset effect, no mount hazard.
+   */
+  driveId: string | null;
+  /** Where the status is read from — the reader's own route (session or env); the actions route is derived from it. */
   statusPath: string;
-  /** Where stop/resume are posted — `${statusPath}/actions`. */
-  actionsPath: string;
   /** The app-origin `/preview/open` route the frame loads (and the new-tab link targets). */
   openPath: string;
   /** What to call it in the chrome — the session or environment name. */

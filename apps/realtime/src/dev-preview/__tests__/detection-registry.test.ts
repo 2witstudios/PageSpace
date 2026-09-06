@@ -51,7 +51,7 @@ function deps(over: Partial<DetectionRegistryDeps> = {}) {
     featureEnabled: () => true,
     resolveHolderSandboxId: async (holder) => (holder.id === 'gone-holder' ? null : `sbx-${holder.id}`),
     attach: async () => fakeHandle(),
-    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); }, setStoppedByUser: async () => false },
+    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); }, setStoppedByUser: async () => null },
     createSocket: factory.createSocket,
     spritesToken: () => 'tok',
     spritesApiBaseUrl: () => 'https://api.sprites.dev',
@@ -96,7 +96,7 @@ describe('createDetectionRegistry', () => {
     expect(h.upserts[0]).toMatchObject({ holder: HOLDER, targetPort: 5173, spriteInstanceId: 'inst' });
   });
 
-  it('listeners(): null before any watch AND before the connection has delivered its port_list; the accumulated snapshot after it; null again once the watcher is gone or the feature is dark', async () => {
+  it('listeners(): null before any watch AND until the connection\'s port_list has APPLIED (the detector owns that); the accumulated snapshot after it; null again once the watcher is gone or the feature is dark', async () => {
     const h = deps();
     const registry = createDetectionRegistry(h.deps);
     expect(await registry.listeners({ holder: HOLDER })).toBeNull();
@@ -109,9 +109,7 @@ describe('createDetectionRegistry', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(await registry.listeners({ holder: HOLDER })).toBeNull();
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }, { port: 8080, pid: 9 }] }) });
-    // The snapshot has ARRIVED but the detector applies frames on a serialized
-    // chain: until it has, the set in hand is the pre-snapshot one — unknown.
-    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    // (Arrived-but-not-applied is the detector's own contract, tested there.)
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_closed', port: 8080 }) });
     await new Promise((r) => setTimeout(r, 10));
     expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);

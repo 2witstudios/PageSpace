@@ -2,7 +2,7 @@
  * `POST /api/drives/[driveId]/envs/[envId]/preview/actions` — switch an
  * environment's dev-server preview off or back on.
  *
- * OWNER/ADMIN only (`isPrincipalDriveOwnerOrAdmin`) — the same bar as every
+ * OWNER/ADMIN only (`canManageDevPreview`, the one manage rule) — the same bar as every
  * other write on the env row (rename, rebuild, delete, the published app's
  * stop/resume). An env's preview is shared by everyone in the drive, so
  * switching it off is a management act; a member acting from inside their
@@ -14,7 +14,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -22,6 +22,7 @@ import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
 import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
 import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
+import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'drive-envs/preview/actions';
@@ -36,15 +37,18 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     const action = readDevPreviewUserAction(await request.json().catch(() => null));
     if (action === null) return NextResponse.json({ error: 'action must be "stop" or "resume"' }, { status: 400 });
 
-    if (!(await isPrincipalDriveOwnerOrAdmin(auth, driveId))) {
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: ROUTE, envId, action } });
-      return NextResponse.json({ error: 'Only the drive owner or an admin can switch an environment preview' }, { status: 403 });
+    const holder = { kind: 'env', id: envId } as const;
+    // The ONE manage rule (`canManageDevPreview`), asked before any row is
+    // read — the same verdict the env status route reports as `canManage`.
+    const manage = await canManageDevPreview(auth, { holder, sessionOwnerId: null, driveId });
+    if (!manage.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'drive', resourceId: driveId, details: { route: ROUTE, envId, action, reason: manage.reason } });
+      return NextResponse.json({ error: manage.message }, { status: 403 });
     }
     const env = await resolveEnvInDrive(envId, driveId);
     if (!env) return NextResponse.json({ error: 'Environment not found' }, { status: 404 });
     if (env.substrate !== 'sprite') return NextResponse.json({ error: 'This environment has no sandbox to preview', reason: 'env_not_sprite' }, { status: 404 });
 
-    const holder = { kind: 'env', id: envId } as const;
     // The shared gather's rows-only decision, for its wake subject (the drive's payer).
     const authorization = await authorizePreviewHolderForUser({ holder, userId: auth.userId });
     if (!authorization.allowed) {

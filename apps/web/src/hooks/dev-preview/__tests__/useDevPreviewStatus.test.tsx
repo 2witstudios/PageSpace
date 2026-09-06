@@ -8,9 +8,16 @@ import { renderHook, waitFor } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 import type { ReactNode } from 'react';
 
-const mockFetchWithAuth = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/auth/auth-fetch', () => ({ fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args) }));
+// `fetchJSON` is what the hook uses (it throws the real `ApiRequestError` on
+// a non-2xx — the plain authenticated fetch never throws). The mock models
+// exactly that: resolve with the body, or throw with a status.
+const mockFetchJSON = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return { ...actual, fetchJSON: (...args: unknown[]) => mockFetchJSON(...args) };
+});
 
+import { ApiRequestError } from '@/lib/auth/auth-fetch';
 import {
   IDLE_ANSWERS_BEFORE_PAUSE,
   devPreviewRefreshInterval,
@@ -37,13 +44,12 @@ function preview(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
 
 describe('devPreviewRefreshInterval — pure', () => {
   it('no timer while inactive, while the pane owns the poll, or after the idle budget; the interval otherwise', () => {
-    expect(devPreviewRefreshInterval({ active: false, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: true, pauseWhenIdle: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE, intervalMs: 15_000 })).toBe(0);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE - 1, intervalMs: 15_000 })).toBe(15_000);
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: true, idleStreak: 0, intervalMs: 5_000 })).toBe(5_000);
+    expect(devPreviewRefreshInterval({ polling: false, pauseWhenIdle: true, idleStreak: 0, intervalMs: 15_000 })).toBe(0);
+    expect(devPreviewRefreshInterval({ polling: true, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE, intervalMs: 15_000 })).toBe(0);
+    expect(devPreviewRefreshInterval({ polling: true, pauseWhenIdle: true, idleStreak: IDLE_ANSWERS_BEFORE_PAUSE - 1, intervalMs: 15_000 })).toBe(15_000);
+    expect(devPreviewRefreshInterval({ polling: true, pauseWhenIdle: true, idleStreak: 0, intervalMs: 5_000 })).toBe(5_000);
     // A per-viewer surface never idle-pauses.
-    expect(devPreviewRefreshInterval({ active: true, paneOwnsPoll: false, pauseWhenIdle: false, idleStreak: 99, intervalMs: 5_000 })).toBe(5_000);
+    expect(devPreviewRefreshInterval({ polling: true, pauseWhenIdle: false, idleStreak: 99, intervalMs: 5_000 })).toBe(5_000);
   });
 
   it('an idle answer is "none" or an absent sandbox; anything with a dev server is not', () => {
@@ -63,40 +69,40 @@ describe('useDevPreviewStatus — the hook against real SWR', () => {
 
   beforeEach(() => {
     answer = preview();
-    mockFetchWithAuth.mockImplementation(async () => ({ ok: true, json: async () => ({ preview: answer }) }));
+    mockFetchJSON.mockImplementation(async () => ({ preview: answer }));
   });
   afterEach(() => vi.clearAllMocks());
 
-  it('STOPS after four idle answers (initial + 3 refreshes), and RE-ARMS when `active` toggles', async () => {
-    const { result, rerender } = renderHook(({ active }: { active: boolean }) => useDevPreviewStatus('/p', { active, intervalMs: 15 }), {
+  it('STOPS after four idle answers (initial + 3 refreshes), and RE-ARMS when `polling` flips back on (expand, or the pane closing)', async () => {
+    const { result, rerender } = renderHook(({ polling }: { polling: boolean }) => useDevPreviewStatus('/p', { polling, intervalMs: 15 }), {
       wrapper,
-      initialProps: { active: true },
+      initialProps: { polling: true },
     });
     await waitFor(() => expect(result.current.preview).toBeDefined());
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE));
+    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE));
     await new Promise((r) => setTimeout(r, 120));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE);
+    expect(mockFetchJSON).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE);
 
     // Collapse then expand: the streak resets and polling resumes.
-    rerender({ active: false });
+    rerender({ polling: false });
     await new Promise((r) => setTimeout(r, 60));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE);
-    rerender({ active: true });
-    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE));
+    expect(mockFetchJSON).toHaveBeenCalledTimes(IDLE_ANSWERS_BEFORE_PAUSE);
+    rerender({ polling: true });
+    await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE));
   });
 
   it('keeps polling while there is a dev server to watch', async () => {
     answer = preview({ state: { status: 'live', targetPort: 5173, via: 'relay', message: '' }, canOpen: true });
     renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15 }), { wrapper });
-    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
+    await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
   });
 
   it('a FAILED poll does not freeze the status: it retries at the disciplined interval and recovers', async () => {
     let calls = 0;
-    mockFetchWithAuth.mockImplementation(async () => {
+    mockFetchJSON.mockImplementation(async () => {
       calls += 1;
-      if (calls <= 2) return { ok: false, status: 500, json: async () => ({}) };
-      return { ok: true, json: async () => ({ preview: preview({ state: { status: 'live', targetPort: 1, via: 'relay', message: '' }, canOpen: true }) }) };
+      if (calls <= 2) throw new ApiRequestError('boom', 500);
+      return { preview: preview({ state: { status: 'live', targetPort: 1, via: 'relay', message: '' }, canOpen: true }) };
     });
     const { result } = renderHook(() => useDevPreviewStatus('/p', { intervalMs: 120 }), { wrapper });
     // The error is surfaced (the pane's 404 auto-close depends on that)...
@@ -110,19 +116,19 @@ describe('useDevPreviewStatus — the hook against real SWR', () => {
 
   it('with pauseWhenIdle: false an idle holder keeps being polled (the console header / pane case)', async () => {
     renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15, pauseWhenIdle: false }), { wrapper });
-    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
+    await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));
   });
 
-  it('runs no timer when the pane owns the poll, when disabled, or with no path — but a disabled/no-path hook fetches nothing at all', async () => {
-    renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15, paneOwnsPoll: true }), { wrapper });
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(1));
+  it('runs no timer when not polling, and a disabled/no-path hook fetches nothing at all', async () => {
+    renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15, polling: false }), { wrapper });
+    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 80));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchJSON).toHaveBeenCalledTimes(1);
 
-    mockFetchWithAuth.mockClear();
+    mockFetchJSON.mockClear();
     renderHook(() => useDevPreviewStatus('/p', { enabled: false, intervalMs: 15 }), { wrapper });
     renderHook(() => useDevPreviewStatus(null, { intervalMs: 15 }), { wrapper });
     await new Promise((r) => setTimeout(r, 60));
-    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    expect(mockFetchJSON).not.toHaveBeenCalled();
   });
 });

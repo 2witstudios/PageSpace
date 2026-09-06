@@ -42,6 +42,7 @@ const AFFORDANCE_POLL_MS = 15_000;
 
 export function DevPreviewAffordance({
   statusPath,
+  driveId,
   title,
   active = true,
   pauseWhenIdle = true,
@@ -49,6 +50,8 @@ export function DevPreviewAffordance({
 }: {
   /** The reader's status route — session or env. */
   statusPath: string;
+  /** The drive this affordance lives in (null for a global-assistant session) — the pane renders only beside that drive's console. */
+  driveId: string | null;
   /** The session or environment name, for the pane's chrome. */
   title: string;
   /** The caller's disclosure: poll only while true; a toggle re-arms an idle-paused poll. */
@@ -61,7 +64,8 @@ export function DevPreviewAffordance({
   const openPreview = useDevPreviewPaneStore((state) => state.openPreview);
   const openStatusPath = useDevPreviewPaneStore((state) => state.open?.statusPath ?? null);
   const isOpen = openStatusPath === statusPath;
-  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, active, paneOwnsPoll: isOpen, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
+  // One poll per holder: while the pane is open on this holder it owns the timer and this line reads the shared cache.
+  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, polling: active && !isOpen, pauseWhenIdle, intervalMs: AFFORDANCE_POLL_MS });
 
   if (enabled !== true || !shouldShowDevPreviewAffordance(preview)) return null;
   const text = devPreviewAffordanceText(preview);
@@ -85,13 +89,7 @@ export function DevPreviewAffordance({
             onClick={(event) => {
               // A row's own click targets (its context menu, its disclosure) must not also fire.
               event.stopPropagation();
-              openPreview({
-                holder: preview.holder,
-                statusPath,
-                actionsPath: `${statusPath}/actions`,
-                openPath,
-                title,
-              });
+              openPreview({ holder: preview.holder, driveId, statusPath, openPath, title });
             }}
           >
             {isOpen ? 'Open' : verb}

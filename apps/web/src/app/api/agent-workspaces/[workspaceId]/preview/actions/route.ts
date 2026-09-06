@@ -23,7 +23,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -33,7 +33,7 @@ import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unav
 import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
 import { respondToDevPreviewUserAction } from '@/lib/dev-preview/action-response';
-import { decideDevPreviewManage } from '@/lib/dev-preview/manage-decision';
+import { canManageDevPreview } from '@/lib/dev-preview/manage-decision';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/actions';
@@ -54,17 +54,12 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     if (!authorization.allowed) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, authorization.reason, ROUTE);
 
     const holder = resolveDevPreviewHolder({ id: session.id, envId: session.envId });
-    const canManage = decideDevPreviewManage({
-      holder,
-      userId: auth.userId,
-      sessionOwnerId: session.ownerId,
-      isDriveOwnerOrAdmin: holder.kind === 'env' && session.driveId !== null ? await isPrincipalDriveOwnerOrAdmin(auth, session.driveId) : false,
-    });
-    if (!canManage) {
+    const manage = await canManageDevPreview(auth, { holder, sessionOwnerId: session.ownerId, driveId: session.driveId });
+    if (!manage.allowed) {
       // A denial AFTER the family gate: the caller already knows the session
       // exists, so a genuine 403 leaks nothing new (the `provisioningDenied` precedent).
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: holder.kind === 'env' ? 'env_manage_requires_owner_or_admin' : 'session_manage_requires_owner' }, riskScore: 0.5 });
-      return NextResponse.json({ error: holder.kind === 'env' ? 'Only the drive owner or an admin can switch an environment preview' : 'Only the session owner can switch its preview' }, { status: 403 });
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: manage.reason }, riskScore: 0.5 });
+      return NextResponse.json({ error: manage.message }, { status: 403 });
     }
 
     const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });

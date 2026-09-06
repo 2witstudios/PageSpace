@@ -6,11 +6,10 @@ import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 import type { SandboxHandle, SandboxServiceInfo } from '../../sandbox-host';
 import type { DevPreviewHolderRef, DevPreviewRow } from '../dev-preview-core';
-import { HTTP_PORT_BUSY_MESSAGE } from '../dev-preview-core';
+import { HTTP_PORT_BUSY_MESSAGE, describeServiceState } from '../dev-preview-core';
 import type { DevPreviewRecord, DevPreviewStore } from '../dev-preview-store';
 import {
   SANDBOX_ABSENT_MESSAGE,
-  SANDBOX_UNREACHABLE_MESSAGE,
   applyDevPreviewUserAction,
   buildDevPreviewStatus,
   describeSlotMessage,
@@ -80,9 +79,9 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
     },
     setStoppedByUser: async (_holder, at) => {
       calls.push(`setStoppedByUser:${at ? 'stop' : 'clear'}`);
-      if (current === null) return false;
+      if (current === null) return null;
       current = { ...current, stoppedByUserAt: at };
-      return true;
+      return current;
     },
   };
 }
@@ -97,9 +96,10 @@ describe('buildDevPreviewStatus — pure fold', () => {
     assert({ given: 'no live sprite', should: 'say so and offer nothing', actual: [status.state, status.canOpen, status.canStop, status.canResume, status.slot], expected: [{ status: 'none', message: SANDBOX_ABSENT_MESSAGE }, false, false, false, { known: false }] });
   });
 
-  it('an unreachable sandbox is instance-unknown with a row and none without', () => {
-    assert({ given: 'unreachable + row', should: 'be instance-unknown with the unreachable message', actual: buildDevPreviewStatus({ ...base, sandbox: 'unreachable', liveInstanceId: null, row: row(5173), relay: null, listeners: null }).state, expected: { status: 'instance-unknown', message: SANDBOX_UNREACHABLE_MESSAGE } });
-    assert({ given: 'unreachable + no row', should: 'be none', actual: buildDevPreviewStatus({ ...base, sandbox: 'unreachable', liveInstanceId: null, row: null, relay: null, listeners: null }).state.status, expected: 'none' });
+  it('an unreachable sandbox is the CORE\'s instance-unknown with a row (worded once, there) and the core\'s none without', () => {
+    const withRow = buildDevPreviewStatus({ ...base, sandbox: 'unreachable', liveInstanceId: null, row: row(5173), relay: null, listeners: null });
+    assert({ given: 'unreachable + row', should: 'be instance-unknown, the core\'s copy', actual: withRow.state, expected: describeServiceState({ liveInstanceId: null, row: row(5173), relay: null, listeners: null }) });
+    assert({ given: 'unreachable + no row', should: 'be none (nothing was ever detected — not "not running", which would be a guess)', actual: buildDevPreviewStatus({ ...base, sandbox: 'unreachable', liveInstanceId: null, row: null, relay: null, listeners: null }).state, expected: describeServiceState({ liveInstanceId: null, row: null, relay: null, listeners: null }) });
   });
 
   it('a live relay is openable and stoppable; the slot is reported ONLY when a snapshot is in hand', () => {
@@ -111,7 +111,7 @@ describe('buildDevPreviewStatus — pure fold', () => {
       given: 'a snapshot where the relay holds 8080',
       should: 'explain the relay holds it and where it forwards',
       actual: withSnapshot.slot,
-      expected: { known: true, free: false, holder: 'relay', pid: null, message: `Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.` },
+      expected: { known: true, holder: 'relay', pid: null, message: `Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.` },
     });
   });
 
@@ -120,19 +120,20 @@ describe('buildDevPreviewStatus — pure fold', () => {
     assert({ given: 'a foreign 8080 listener', should: 'be blocked (core copy)', actual: [status.state.status, status.state.message, status.canOpen], expected: ['blocked', HTTP_PORT_BUSY_MESSAGE, false] });
     assert({
       given: 'the same snapshot',
-      should: 'report the holder with its pid and both remedies',
+      should: 'report the holder with its pid as a FACT (the advice has one home: the core busy message the blocked state carries)',
       actual: status.slot,
-      expected: { known: true, free: false, holder: 'user-process', pid: 999, message: describeSlotMessage({ holder: 'user-process', pid: 999, targetPort: 5173 }) },
+      expected: { known: true, holder: 'user-process', pid: 999, message: 'Port 8080 is held by another process in the sandbox (pid 999).' },
     });
-    expect(describeSlotMessage({ holder: 'user-process', pid: 999, targetPort: 5173 })).toContain('pid 999');
-    expect(describeSlotMessage({ holder: 'user-process', pid: 999, targetPort: 5173 })).toContain('run your dev server on port 8080');
-    expect(describeSlotMessage({ holder: 'user-process', pid: null, targetPort: 5173 })).not.toContain('pid');
+    expect(describeSlotMessage({ holder: 'user-process', pid: null, targetPort: 5173 })).toBe('Port 8080 is held by another process in the sandbox.');
+    expect(describeSlotMessage({ holder: 'user-process', pid: 999, targetPort: 5173 })).not.toContain('Stop that process');
   });
 
-  it('a free slot with no row is known-free', () => {
+  it('a free slot with no row is known-free; a DIRECT row\'s 8080 listener is the user\'s own server, never "another process"', () => {
     const status = buildDevPreviewStatus({ ...base, row: null, relay: null, listeners: [] });
-    assert({ given: 'empty snapshot, no row', should: 'be none + free', actual: [status.state.status, status.slot], expected: ['none', { known: true, free: true, holder: 'none', pid: null, message: 'Port 8080 is free.' }] });
+    assert({ given: 'empty snapshot, no row', should: 'be none + free', actual: [status.state.status, status.slot], expected: ['none', { known: true, holder: 'none', pid: null, message: 'Port 8080 is free.' }] });
     assert({ given: 'relay copy with an 8080 target', should: 'not mention forwarding', actual: describeSlotMessage({ holder: 'relay', pid: null, targetPort: SPRITE_HTTP_PORT }), expected: 'Port 8080 is held by the preview relay.' });
+    const direct = buildDevPreviewStatus({ ...base, row: row(SPRITE_HTTP_PORT), relay: null, listeners: [{ port: SPRITE_HTTP_PORT, pid: 12 }] });
+    assert({ given: 'a direct row with its server on 8080', should: 'be live and name the server as the user\'s own', actual: [direct.state.status, direct.slot], expected: ['live', { known: true, holder: 'user-process', pid: 12, message: 'Port 8080 is held by your dev server (pid 12).' }] });
   });
 
   it('a user-stopped row is resumable, not stoppable, not openable', () => {

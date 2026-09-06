@@ -14,6 +14,8 @@
  *    is may always release it, and nobody else gets to flip it under them.
  */
 
+import type { AuthResult } from '@/lib/auth';
+import { isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 
 export function decideDevPreviewManage({
@@ -32,4 +34,26 @@ export function decideDevPreviewManage({
 }): boolean {
   if (holder.kind === 'env') return isDriveOwnerOrAdmin;
   return sessionOwnerId !== null && sessionOwnerId === userId;
+}
+
+export type DevPreviewManageVerdict =
+  | { allowed: true }
+  | { allowed: false; reason: 'env_manage_requires_owner_or_admin' | 'session_manage_requires_owner'; message: string };
+
+/**
+ * The same rule, asked the same way by every route — status routes to tell
+ * the client (`canManage`), action routes to enforce it. Performs the drive
+ * role lookup itself, and ONLY for an env holder (a session holder's rule
+ * needs no drive read), so no route re-assembles the inputs or the denial
+ * copy by hand.
+ */
+export async function canManageDevPreview(
+  auth: AuthResult,
+  { holder, sessionOwnerId, driveId }: { holder: DevPreviewHolderRef; sessionOwnerId: string | null; driveId: string | null },
+): Promise<DevPreviewManageVerdict> {
+  const isDriveOwnerOrAdmin = holder.kind === 'env' && driveId !== null ? await isPrincipalDriveOwnerOrAdmin(auth, driveId) : false;
+  if (decideDevPreviewManage({ holder, userId: auth.userId, sessionOwnerId, isDriveOwnerOrAdmin })) return { allowed: true };
+  return holder.kind === 'env'
+    ? { allowed: false, reason: 'env_manage_requires_owner_or_admin', message: 'Only the drive owner or an admin can switch an environment preview' }
+    : { allowed: false, reason: 'session_manage_requires_owner', message: 'Only the session owner can switch its preview' };
 }

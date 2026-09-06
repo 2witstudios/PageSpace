@@ -1049,6 +1049,7 @@ function DriveEnvRow({
       {!isOrphan && !isLocal && (
         <DevPreviewAffordance
           statusPath={envDevPreviewPath(driveId, group.envId)}
+          driveId={driveId}
           title={displayName}
           active={expanded}
           className="ml-4 border-l border-border py-1 pl-3"

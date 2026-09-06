@@ -32,11 +32,13 @@ export interface DevPreviewStore {
    * row — the one column the platform cannot report (an explicit stop lands a
    * service in `failed`, indistinguishable from a crash — spike §4). Writes
    * ONLY that column: the row's instance, target and relay name are facts
-   * about the sprite and a user action changes none of them. Resolves `false`
-   * when the holder has no row (nothing to switch off), so a caller never
-   * reports "switched off" for a preview that does not exist.
+   * about the sprite and a user action changes none of them. Resolves the
+   * row AS WRITTEN (the same slice `findByHolder` returns, so the caller can
+   * plan from it without a second read), or `null` when the holder has no
+   * row (nothing to switch off) — a caller never reports "switched off" for
+   * a preview that does not exist.
    */
-  setStoppedByUser(holder: DevPreviewHolderRef, at: Date | null): Promise<boolean>;
+  setStoppedByUser(holder: DevPreviewHolderRef, at: Date | null): Promise<DevPreviewRecord | null>;
 }
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -96,12 +98,20 @@ export function createDbDevPreviewStore(): DevPreviewStore {
     },
 
     async setStoppedByUser(holder, at) {
-      const updated = await db
+      const [row] = await db
         .update(devPreviewServices)
         .set({ stoppedByUserAt: at, updatedAt: sql`(now() at time zone 'utc')` })
         .where(eq(holderColumn(holder), holder.id))
-        .returning({ id: devPreviewServices.id });
-      return updated.length > 0;
+        .returning({
+          id: devPreviewServices.id,
+          spriteInstanceId: devPreviewServices.spriteInstanceId,
+          sandboxId: devPreviewServices.sandboxId,
+          targetPort: devPreviewServices.targetPort,
+          relayServiceName: devPreviewServices.relayServiceName,
+          detectedAt: devPreviewServices.detectedAt,
+          stoppedByUserAt: devPreviewServices.stoppedByUserAt,
+        });
+      return row ?? null;
     },
   };
 }

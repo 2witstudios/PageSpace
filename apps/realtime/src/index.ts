@@ -1023,12 +1023,19 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
-    } else if (req.method === 'POST' && req.url === '/api/dev-preview/watch') {
-        // The web tier just ensured a sprite (a session provision) and asks for a
-        // dev-server watcher on its HOLDER. Signed like every other web→realtime
-        // call; the body names only a holder — which sprite that holder is on
-        // is re-derived from the holder's own row inside the registry, so a
-        // signed-but-wrong sprite name can never be watched.
+    } else if (req.method === 'POST' && (req.url === '/api/dev-preview/watch' || req.url === '/api/dev-preview/listeners')) {
+        // The two dev-preview calls from the web tier share ONE prologue:
+        // signed like every other web→realtime call, and the body names only
+        // a HOLDER — which sprite that holder is on is re-derived from the
+        // holder's own row inside the registry, so a signed-but-wrong sprite
+        // name can never be watched or read (`readDevPreviewHolderBody`).
+        //   watch     — a session ensure just happened: start a dev-server
+        //               watcher on the holder's live sprite (202, idempotent).
+        //   listeners — a status render asks for the snapshot this process's
+        //               watcher already holds; `null` is the honest "no
+        //               snapshot in hand" (never-probe-to-render: the sprite
+        //               is not touched to answer).
+        const isWatch = req.url === '/api/dev-preview/watch';
         readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
@@ -1042,28 +1049,10 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ error: 'Malformed body' }));
                 return;
             }
-            void devPreviewRegistry.ensure({ holder });
-            res.writeHead(202, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ accepted: true }));
-        });
-    } else if (req.method === 'POST' && req.url === '/api/dev-preview/listeners') {
-        // The web tier is rendering a holder's preview status and asks for the
-        // listener snapshot this process's watcher already holds — the ONLY
-        // listener source a render may use (never-probe-to-render: the sprite
-        // is not touched to answer). `listeners: null` is the honest "no
-        // snapshot in hand" answer, and the web tier renders it as such.
-        // Signed and holder-only exactly like the watch trigger above.
-        readCappedBody(body => {
-            const signatureHeader = req.headers['x-broadcast-signature'] as string;
-            if (!verifySignature(signatureHeader, body)) {
-                res.writeHead(401, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Authentication failed' }));
-                return;
-            }
-            const holder = readDevPreviewHolderBody(body);
-            if (holder === null) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Malformed body' }));
+            if (isWatch) {
+                void devPreviewRegistry.ensure({ holder });
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ accepted: true }));
                 return;
             }
             devPreviewRegistry.listeners({ holder }).then((listeners) => {

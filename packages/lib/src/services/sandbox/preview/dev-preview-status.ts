@@ -34,6 +34,7 @@
 import type { CanRunCodeResult } from '../can-run-code';
 import type { SandboxHandle, SandboxServiceInfo } from '../sandbox-host';
 import {
+  HTTP_PORT_BUSY_MESSAGE,
   describeHttpPortSlot,
   describeServiceState,
   planDevServerService,
@@ -57,11 +58,13 @@ import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT } from './preview-relay';
  * The 8080 slot as the UI should explain it. `known: false` when no listener
  * snapshot is in hand — the slot is then simply not described, because a
  * guess dressed as a fact is exactly the dishonesty the never-probe rule
- * exists to prevent.
+ * exists to prevent. `message` states the FACT (who holds the port); the
+ * advice for a held slot has one home, the core's `HTTP_PORT_BUSY_MESSAGE`,
+ * which the `blocked` state already carries.
  */
 export type DevPreviewSlotReport =
   | { known: false }
-  | { known: true; free: boolean; holder: HttpPortSlotHolder; pid: number | null; message: string };
+  | { known: true; holder: HttpPortSlotHolder; pid: number | null; message: string };
 
 /** Whether the holder's sprite could be reached for this render. */
 export type DevPreviewSandboxReach =
@@ -94,12 +97,21 @@ export interface DevPreviewStatus {
   detectedAt: Date | null;
 }
 
-/** The message for a holder with no live sprite — the one fact `describeServiceState` cannot state, because it is asked about a sprite. */
+/**
+ * The message for a holder with no live sprite — the one fact the core cannot
+ * state, because `describeServiceState` is asked about a sprite. (A sprite
+ * the platform could not ATTACH to is the core's own `instance-unknown`.)
+ */
 export const SANDBOX_ABSENT_MESSAGE = 'This sandbox is not running, so there is no dev server to preview.';
-/** The message for a sprite the platform could not attach to. */
-export const SANDBOX_UNREACHABLE_MESSAGE = 'The sandbox could not be reached, so its preview state cannot be shown right now.';
 
+/**
+ * Pure: who holds 8080, as a fact. A user process on 8080 is the USER'S OWN
+ * server when the row is direct (`targetPort === 8080`) — not "another
+ * process" — and otherwise the intruder the core's busy message advises on
+ * (that advice is not repeated here; it has one home).
+ */
 export function describeSlotMessage({ holder, pid, targetPort }: { holder: HttpPortSlotHolder; pid: number | null; targetPort: number | null }): string {
+  const who = pid !== null ? ` (pid ${pid})` : '';
   switch (holder) {
     case 'none':
       return `Port ${SPRITE_HTTP_PORT} is free.`;
@@ -108,9 +120,14 @@ export function describeSlotMessage({ holder, pid, targetPort }: { holder: HttpP
         ? `Port ${SPRITE_HTTP_PORT} is held by the preview relay, forwarding to your dev server on port ${targetPort}.`
         : `Port ${SPRITE_HTTP_PORT} is held by the preview relay.`;
     case 'user-process':
-      return `Port ${SPRITE_HTTP_PORT} is held by another process in the sandbox${pid !== null ? ` (pid ${pid})` : ''}. Stop that process so the preview relay can bind ${SPRITE_HTTP_PORT}, or run your dev server on port ${SPRITE_HTTP_PORT} directly.`;
+      return targetPort === SPRITE_HTTP_PORT
+        ? `Port ${SPRITE_HTTP_PORT} is held by your dev server${who}.`
+        : `Port ${SPRITE_HTTP_PORT} is held by another process in the sandbox${who}.`;
   }
 }
+
+/** Re-exported beside the slot report so a reader of the fact can find the advice without importing the core. */
+export { HTTP_PORT_BUSY_MESSAGE };
 
 export interface BuildDevPreviewStatusInput {
   holder: DevPreviewHolderRef;
@@ -127,14 +144,13 @@ export interface BuildDevPreviewStatusInput {
 
 /** Pure: the whole read model from what the gather collected. */
 export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
+  // Absent is the one reach the core cannot describe (it is asked about a
+  // sprite); unreachable IS the core's `instance-unknown` (no live instance
+  // id can be proven), so it is worded there and nowhere else.
   const state: DevPreviewServiceState =
     sandbox === 'absent'
       ? { status: 'none', message: SANDBOX_ABSENT_MESSAGE }
-      : sandbox === 'unreachable'
-        ? row === null
-          ? { status: 'none', message: SANDBOX_ABSENT_MESSAGE }
-          : { status: 'instance-unknown', message: SANDBOX_UNREACHABLE_MESSAGE }
-        : describeServiceState({ liveInstanceId, row, relay, listeners });
+      : describeServiceState({ liveInstanceId: sandbox === 'attached' ? liveInstanceId : null, row, relay, listeners });
 
   let slot: DevPreviewSlotReport = { known: false };
   if (sandbox === 'attached' && listeners !== null) {
@@ -143,7 +159,6 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     const pid = slotHolder === 'user-process' && listener?.pid !== undefined ? listener.pid : null;
     slot = {
       known: true,
-      free: slotHolder === 'none',
       holder: slotHolder,
       pid,
       message: describeSlotMessage({ holder: slotHolder, pid, targetPort: row?.targetPort ?? null }),
@@ -306,22 +321,20 @@ export async function applyDevPreviewUserAction({
     if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   }
 
-  const recorded = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
-  if (!recorded) return { ok: false, reason: 'no-preview' };
-
-  // RACE WITH THE DETECTOR, stated rather than hidden. The detector plans per
-  // `ports/watch` frame from a row it reads at frame time. A frame that read
-  // the row BEFORE this write and applies AFTER it can `start-relay` and
-  // upsert `stoppedByUserAt: null`, undoing a stop; the reverse frame can
-  // stop-relay after a resume. The window is one frame wide, it exists only
-  // while a port is opening in the same second the user clicks, and it is
-  // self-correcting in the honest direction: the very next frame plans from
-  // whichever write landed last, and the status the user sees is always the
-  // fold of the real row and the real relay — so a lost click shows as
-  // "still live" / "still off", and clicking again wins. Serializing the two
-  // writers would need a lock spanning the realtime and web tiers for a
-  // one-frame window; not worth a lock.
-  const row = await deps.previewStore.findByHolder(holder);
+  // The write returns the row as written, and the plan is made from THAT —
+  // no second read. RACE WITH THE DETECTOR, stated rather than hidden: the
+  // detector plans per `ports/watch` frame from a row it reads at frame
+  // time. A frame that read the row BEFORE this write and applies AFTER it
+  // can `start-relay` and upsert `stoppedByUserAt: null`, undoing a stop;
+  // the reverse frame can stop-relay after a resume. The window is one frame
+  // wide, it exists only while a port is opening in the same second the user
+  // clicks, and it is self-correcting in the honest direction: the very next
+  // frame plans from whichever write landed last, and the status the user
+  // sees is always the fold of the real row and the real relay — so a lost
+  // click shows as "still live" / "still off", and clicking again wins.
+  // Serializing the two writers would need a lock spanning the realtime and
+  // web tiers for a one-frame window; not worth a lock.
+  const row = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
   if (row === null) return { ok: false, reason: 'no-preview' };
 
   const handle = await deps.attach(row.sandboxId);

@@ -70,19 +70,18 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
   /**
-   * One entry per watched sprite: how to close it, its detector (the snapshot
-   * source for `listeners()`; null while the slot is only reserved), and
-   * whether the CURRENT connection's `port_list` has been APPLIED by the
-   * detector (`fresh`). `fresh` flips on only after the detector's serialized
-   * chain has folded the snapshot in — flipping it on frame ARRIVAL would hand
-   * out the previous connection's set as this one's for a tick — and flips
-   * off on every close. One map, one lifetime: an entry is created by the
-   * reservation, replaced when the channel opens, and deleted on every exit.
+   * One entry per watched sprite: how to close it, and its detector — the
+   * snapshot source for `listeners()`, null while the slot is only reserved.
+   * Snapshot VALIDITY is the detector's own (`DevPreviewDetector.listeners`
+   * is null until a `port_list` has been applied since the last
+   * `invalidateSnapshot`, which this registry queues on every close); the
+   * registry keeps no bookkeeping of its own about it. One map, one
+   * lifetime: an entry is created by the reservation, replaced when the
+   * channel opens, and deleted on every exit.
    */
   interface Watcher {
     close(): void;
     detector: DevPreviewDetector | null;
-    fresh: boolean;
   }
   const watchers = new Map<string, Watcher>();
 
@@ -102,14 +101,9 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     let stopped = false;
     let current: PortsWatchHandle | null = null;
     let attempts = 0;
-    // Which connection a frame belongs to: a `port_list` that finishes
-    // applying after its socket has already dropped must not mark the NEXT
-    // connection fresh.
-    let generation = 0;
 
     const entry: Watcher = {
       detector,
-      fresh: false,
       close() {
         stopped = true;
         current?.close();
@@ -118,28 +112,16 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     };
 
     const open = () => {
-      generation += 1;
-      const mine = generation;
       current = openPortsWatch({
         url,
         token: deps.spritesToken(),
         createSocket: deps.createSocket,
-        onFrame: (frame) => {
-          // The platform's first frame on a connection is the full `port_list`
-          // (ports-watch.ts). The detector applies frames on a serialized
-          // chain, so the set describes THIS connection only once that frame
-          // has been APPLIED — hence `fresh` flips after `onFrame` resolves,
-          // and only if this connection is still the live one.
-          const applied = detector.onFrame(frame);
-          if (frame.type === 'port_list') {
-            void applied.then(() => {
-              if (!stopped && mine === generation && current !== null) entry.fresh = true;
-            });
-          }
-        },
+        onFrame: (frame) => { void detector.onFrame(frame); },
         onClose: (info) => {
           current = null;
-          entry.fresh = false;
+          // The accumulated set no longer describes a live connection.
+          // Queued on the detector's chain, behind any frame still applying.
+          detector.invalidateSnapshot();
           if (stopped) return;
           if (info.opened) attempts = 0;
           if (info.reason === 'no-token' || attempts >= maxReconnects) {
@@ -170,7 +152,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       if (sandboxId === null) return;
       if (watchers.has(sandboxId)) return;
       // Reserve the slot synchronously so two concurrent ensures start one watcher.
-      watchers.set(sandboxId, { detector: null, fresh: false, close() { watchers.delete(sandboxId); } });
+      watchers.set(sandboxId, { detector: null, close() { watchers.delete(sandboxId); } });
       try {
         await start(holder, sandboxId);
       } catch (error) {
@@ -185,8 +167,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       // Same rule as `ensure`: the sprite is the holder's ROW's, never a claim.
       const sandboxId = await deps.resolveHolderSandboxId(holder);
       if (sandboxId === null) return null;
-      const entry = watchers.get(sandboxId);
-      return entry !== undefined && entry.fresh && entry.detector !== null ? entry.detector.listeners() : null;
+      return watchers.get(sandboxId)?.detector?.listeners() ?? null;
     },
     watching: () => [...watchers.keys()],
     stopAll() {

@@ -6,9 +6,12 @@
  * how loud to be about it.
  */
 
+import type { VariantProps } from 'class-variance-authority';
+import type { badgeVariants } from '@/components/ui/badge';
 import type { DevPreviewStateDTO, DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
-export type BadgeTone = 'default' | 'secondary' | 'destructive' | 'outline';
+/** The Badge's own variant union — never a hand copy that stops typechecking against it. */
+export type BadgeTone = NonNullable<VariantProps<typeof badgeVariants>['variant']>;
 
 export function devPreviewBadge(state: DevPreviewStateDTO): { label: string; tone: BadgeTone } {
   switch (state.status) {

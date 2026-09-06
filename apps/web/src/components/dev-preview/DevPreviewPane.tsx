@@ -63,8 +63,8 @@ import { Button } from '@/components/ui/button';
 import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
 import { isDevPreviewReauthMessageFor } from '@pagespace/lib/services/sandbox/preview/dev-preview-contract';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
-import { useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
-import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
+import { devPreviewActionsPath, useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
+import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { devPreviewBadge } from './dev-preview-copy';
 
@@ -81,42 +81,53 @@ export function buildFrameSrc(openPath: string, nonce: number): string {
   return nonce === 0 ? openPath : `${openPath}${openPath.includes('?') ? '&' : '?'}r=${nonce}`;
 }
 
-export function DevPreviewPane() {
+/**
+ * The pane beside the console. Renders only when a preview is open FOR THIS
+ * DRIVE (`open.driveId === driveId`) and the capability is on; a preview
+ * opened in another drive stays in the store, hidden and unpolled, until the
+ * user returns. The per-open body is keyed by holder so every piece of
+ * per-open state (the frame latch, the re-auth debounce) resets by identity
+ * rather than by effect.
+ */
+export function DevPreviewPane({ driveId }: { driveId: string | null }) {
   const enabled = useDevPreviewCapability();
   const open = useDevPreviewPaneStore((state) => state.open);
+  // Dark, nothing open, or open for another drive: the pane is not there.
+  // `undefined` (capability still loading) renders nothing too — never a
+  // frame that must vanish.
+  if (enabled !== true || open === null || open.driveId !== driveId) return null;
+  return <OpenDevPreviewPane key={`${open.holder.kind}:${open.holder.id}`} open={open} />;
+}
+
+function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
   const reloadNonce = useDevPreviewPaneStore((state) => state.reloadNonce);
   const closePreview = useDevPreviewPaneStore((state) => state.closePreview);
   const reload = useDevPreviewPaneStore((state) => state.reload);
   // The open pane is one per viewer and has no disclosure to re-arm from, so
   // it never idle-pauses (`pauseWhenIdle: false`) — the affordance for the
-  // same holder yields to it (`paneOwnsPoll`), so this is still one poll.
-  const { preview, error, mutate } = useDevPreviewStatus(open?.statusPath ?? null, { enabled: enabled === true, pauseWhenIdle: false, intervalMs: PANE_POLL_MS });
+  // same holder yields to it, so this is still one poll per holder.
+  const { preview, error, mutate } = useDevPreviewStatus(open.statusPath, { pauseWhenIdle: false, intervalMs: PANE_POLL_MS });
   const [actioning, setActioning] = useState(false);
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const lastReauthAt = useRef(0);
   // Once the frame has been shown for THIS open it stays mounted: a dev
   // server restarting (a transient `down`) must not unmount the frame —
   // that would throw away in-app state and re-mint a grant on remount. The
-  // status line carries the honest state meanwhile. Reset per open.
+  // status line carries the honest state meanwhile. A latch adjusted during
+  // render (React's "storing information from previous renders"), scoped to
+  // this open by the parent's `key`.
   const [frameArmed, setFrameArmed] = useState(false);
-  useEffect(() => {
-    setFrameArmed(false);
-  }, [open]);
-  useEffect(() => {
-    if (preview?.canOpen) setFrameArmed(true);
-  }, [preview?.canOpen]);
+  if (preview?.canOpen && !frameArmed) setFrameArmed(true);
+
+  useEditingSession(`dev-preview-pane-${open.holder.kind}-${open.holder.id}`, true, 'form', { componentName: 'DevPreviewPane' });
 
   // The holder is gone or no longer ours (session ended, env deleted, access
-  // revoked, a drive switched away from): the status route answers 404 and
-  // the pane closes itself rather than framing a preview it can no longer
-  // vouch for. Any other error keeps the last good answer and retries.
+  // revoked): the status route answers 404/403 and the pane closes itself
+  // rather than framing a preview it can no longer vouch for. Any other
+  // error keeps the last good answer and the poll retries.
   useEffect(() => {
-    if (open !== null && error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) closePreview();
-  }, [open, error, closePreview]);
-
-  useEditingSession(`dev-preview-pane-${open?.holder.kind ?? 'none'}-${open?.holder.id ?? 'none'}`, open !== null, 'form', {
-    componentName: 'DevPreviewPane',
-  });
+    if (error instanceof ApiRequestError && (error.status === 404 || error.status === 403)) closePreview();
+  }, [error, closePreview]);
 
   // The frame's re-auth signal. Origin-agnostic by necessity — the preview
   // host is a different site by design and this window does not know the
@@ -125,7 +136,6 @@ export function DevPreviewPane() {
   // mints a grant server-side). The only thing it can cause is a same-origin
   // reload of a route that re-authenticates anyway.
   useEffect(() => {
-    if (open === null) return;
     const onMessage = (event: MessageEvent) => {
       const frameWindow = frameRef.current?.contentWindow ?? null;
       if (frameWindow === null || event.source !== frameWindow) return;
@@ -137,29 +147,24 @@ export function DevPreviewPane() {
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
-  }, [open, reload]);
+  }, [open.holder, reload]);
 
   const runAction = useCallback(
     async (action: 'stop' | 'resume') => {
-      if (open === null) return;
       setActioning(true);
       try {
-        await post(open.actionsPath, { action });
-      } catch (error) {
+        await post(devPreviewActionsPath(open.statusPath), { action });
+      } catch (actionError) {
         toast.error(action === 'stop' ? 'Could not switch the preview off' : 'Could not switch the preview on', {
-          description: error instanceof Error ? error.message : 'Please try again.',
+          description: actionError instanceof Error ? actionError.message : 'Please try again.',
         });
       } finally {
         setActioning(false);
         mutate();
       }
     },
-    [open, mutate],
+    [open.statusPath, mutate],
   );
-
-  // Dark, or nothing open: the pane is not there. `undefined` (capability
-  // still loading) renders nothing too — never a frame that must vanish.
-  if (enabled !== true || open === null) return null;
 
   const frameSrc = buildFrameSrc(open.openPath, reloadNonce);
 
@@ -254,7 +259,10 @@ export function DevPreviewPane() {
 function DevPreviewStatusLine({ preview, frameMounted }: { preview: DevPreviewStatusDTO | undefined; frameMounted: boolean }) {
   if (!preview) return null;
   const showState = frameMounted && preview.state.status !== 'live';
-  const showSlot = preview.slot.known && preview.slot.holder === 'user-process';
+  // The slot line states WHO holds 8080 (a fact, with the pid); the advice
+  // for a held slot is the core's, carried by the `blocked` state's message.
+  // A direct row's own server on 8080 is not worth a line.
+  const showSlot = preview.slot.known && preview.slot.holder === 'user-process' && !(preview.state.status === 'live' && preview.state.via === 'direct');
   if (!showState && !showSlot) return null;
   const tone = preview.state.status === 'blocked' ? 'text-destructive' : 'text-muted-foreground';
   return (

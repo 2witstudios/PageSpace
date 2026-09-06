@@ -8,15 +8,16 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 
-const mockFetchWithAuth = vi.hoisted(() => vi.fn());
+// `fetchJSON` is what the status hook uses; it throws the REAL
+// `ApiRequestError` on a non-2xx (the plain authenticated fetch never
+// throws), which is what the pane's self-close `instanceof` check needs.
+const mockFetchJSON = vi.hoisted(() => vi.fn());
 const mockPost = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
-  // `ApiRequestError` is the REAL class: the pane's `instanceof` check on a
-  // 404 status read must see the same class the real fetch throws.
   const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
   return {
     ...actual,
-    fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
+    fetchJSON: (...args: unknown[]) => mockFetchJSON(...args),
     post: (...args: unknown[]) => mockPost(...args),
   };
 });
@@ -31,11 +32,12 @@ import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatu
 
 const OPEN: OpenDevPreview = {
   holder: { kind: 'env', id: 'env1' },
+  driveId: 'd1',
   statusPath: '/api/drives/d1/envs/env1/preview',
-  actionsPath: '/api/drives/d1/envs/env1/preview/actions',
   openPath: '/api/drives/d1/envs/env1/preview/open',
   title: 'main',
 };
+const ACTIONS_PATH = '/api/drives/d1/envs/env1/preview/actions';
 
 function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
   return {
@@ -56,10 +58,10 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
 let capabilityEnabled = true;
 let status: DevPreviewStatusDTO = live();
 
-function renderPane() {
+function renderPane(driveId: string | null = 'd1') {
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <DevPreviewPane />
+      <DevPreviewPane driveId={driveId} />
     </SWRConfig>,
   );
 }
@@ -68,7 +70,7 @@ beforeEach(() => {
   capabilityEnabled = true;
   status = live();
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ enabled: capabilityEnabled }) })));
-  mockFetchWithAuth.mockImplementation(async () => ({ ok: true, json: async () => ({ preview: status }) }));
+  mockFetchJSON.mockImplementation(async () => ({ preview: status }));
   mockPost.mockResolvedValue({ ok: true, applied: { action: 'stop-relay' } });
   useDevPreviewPaneStore.setState({ open: null, reloadNonce: 0 });
 });
@@ -87,13 +89,13 @@ describe('DevPreviewPane', () => {
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     rerender(
       <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-        <DevPreviewPane />
+        <DevPreviewPane driveId="d1" />
       </SWRConfig>,
     );
     await waitFor(() => expect(fetch).toHaveBeenCalled());
     expect(screen.queryByTestId('dev-preview-pane')).toBeNull();
     // Dark ⇒ the status route is never even called.
-    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    expect(mockFetchJSON).not.toHaveBeenCalled();
   });
 
   test('a live preview: the frame loads the app-origin /preview/open route, the new-tab link targets the same route top-level, the badge is honest', async () => {
@@ -113,7 +115,7 @@ describe('DevPreviewPane', () => {
     expect(screen.getByText('Live · :5173')).toBeInTheDocument();
     // A live relay with a relay-held slot needs no extra line — the badge says it all.
     expect(screen.queryByTestId('dev-preview-status-line')).toBeNull();
-    expect(mockFetchWithAuth).toHaveBeenCalledWith(OPEN.statusPath);
+    expect(mockFetchJSON).toHaveBeenCalledWith(OPEN.statusPath);
   });
 
   test('registers with the editing store while open and releases it on close', async () => {
@@ -146,12 +148,12 @@ describe('DevPreviewPane', () => {
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
     await screen.findByTestId('dev-preview-frame');
-    const before = mockFetchWithAuth.mock.calls.length;
+    const before = mockFetchJSON.mock.calls.length;
     // The server will answer "stopped" to the re-read the action triggers.
     status = live({ canOpen: false, canStop: false, canResume: true, state: { status: 'stopped', targetPort: 5173, stoppedAt: '2026-09-06T12:00:00.000Z', message: 'Preview of port 5173 is switched off.' } });
     fireEvent.click(screen.getByTitle('Switch the preview off'));
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(OPEN.actionsPath, { action: 'stop' }));
-    await waitFor(() => expect(mockFetchWithAuth.mock.calls.length).toBeGreaterThan(before));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'stop' }));
+    await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(before));
     await screen.findByTitle('Switch the preview back on');
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
     // The frame was shown for this open, so it STAYS mounted; the status line explains, once.
@@ -160,7 +162,7 @@ describe('DevPreviewPane', () => {
     expect(screen.getByTestId('dev-preview-status-line')).toHaveTextContent('Preview of port 5173 is switched off.');
     expect(screen.getAllByText('Preview of port 5173 is switched off.')).toHaveLength(1);
     fireEvent.click(screen.getByTitle('Switch the preview back on'));
-    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(OPEN.actionsPath, { action: 'resume' }));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'resume' }));
 
     // The manage verdict is read LIVE from the status, never snapshotted at open.
     status = live({ canManage: false });
@@ -241,14 +243,29 @@ describe('DevPreviewPane', () => {
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
     await screen.findByTestId('dev-preview-frame');
-    mockFetchWithAuth.mockImplementation(async () => { throw new ApiRequestError('boom', 500, null); });
+    mockFetchJSON.mockImplementation(async () => { throw new ApiRequestError('boom', 500, null); });
     fireEvent.click(screen.getByTitle('Reload the preview'));
     await new Promise((r) => setTimeout(r, 30));
     expect(useDevPreviewPaneStore.getState().open).not.toBeNull();
-    mockFetchWithAuth.mockImplementation(async () => { throw new ApiRequestError('gone', 404, null); });
+    mockFetchJSON.mockImplementation(async () => { throw new ApiRequestError('gone', 404, null); });
     fireEvent.click(screen.getByTitle('Reload the preview'));
     await waitFor(() => expect(useDevPreviewPaneStore.getState().open).toBeNull());
     expect(screen.queryByTestId('dev-preview-pane')).toBeNull();
+  });
+
+  test('belongs to the drive it was opened in: hidden (and unpolled) beside another drive\'s console, back when the user returns — the store keeps it', async () => {
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    const { rerender } = renderPane('other-drive');
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByTestId('dev-preview-pane')).toBeNull();
+    expect(mockFetchJSON).not.toHaveBeenCalled();
+    expect(useDevPreviewPaneStore.getState().open).toEqual(OPEN);
+    rerender(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <DevPreviewPane driveId="d1" />
+      </SWRConfig>,
+    );
+    await screen.findByTestId('dev-preview-frame');
   });
 
   test('pure helper: the frame src builder', () => {

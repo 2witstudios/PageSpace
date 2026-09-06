@@ -88,11 +88,13 @@ vi.mock('../panes/AgentPanes', () => ({
 }));
 
 const mockFetchWithAuth = vi.hoisted(() => vi.fn());
+const mockFetchJSON = vi.hoisted(() => vi.fn());
 vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   // Partial: the dev-preview pane mounted beside the console needs the REAL
-  // `ApiRequestError` class for its `instanceof` check.
+  // `ApiRequestError` class for its `instanceof` check, and reads its status
+  // through `fetchJSON`.
   const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
-  return { ...actual, fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args) };
+  return { ...actual, fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args), fetchJSON: (...args: unknown[]) => mockFetchJSON(...args) };
 });
 
 const mockLoadConversation = vi.hoisted(() => vi.fn());
@@ -727,18 +729,23 @@ describe('past conversations (default view, replacing the old static prompt)', (
     expect(useAgentSurfaceStore.getState().selectedSessionId).toBeNull();
   });
 
-  test('an open dev-server preview pane belongs to the drive it was opened in: switching drives closes it', async () => {
-    useDevPreviewPaneStore.setState({
-      open: { holder: { kind: 'env', id: 'e1' }, statusPath: '/api/drives/drive-1/envs/e1/preview', actionsPath: '/api/drives/drive-1/envs/e1/preview/actions', openPath: '/api/drives/drive-1/envs/e1/preview/open', title: 'main' },
-      reloadNonce: 0,
-    });
-    // Mount closes nothing that was opened for THIS drive... (mount runs the effect once — on a fresh store)
-    const { rerender } = render(<AgentsSurface driveId="drive-1" />);
-    await act(async () => {});
-    // ...so re-open after mount to model "opened while on drive-1", then switch.
-    act(() => useDevPreviewPaneStore.getState().openPreview({ holder: { kind: 'env', id: 'e1' }, statusPath: '/api/drives/drive-1/envs/e1/preview', actionsPath: '/api/drives/drive-1/envs/e1/preview/actions', openPath: '/api/drives/drive-1/envs/e1/preview/open', title: 'main' }));
-    expect(useDevPreviewPaneStore.getState().open).not.toBeNull();
-    rerender(<AgentsSurface driveId="drive-2" />);
-    await waitFor(() => expect(useDevPreviewPaneStore.getState().open).toBeNull());
+  test('an open dev-server preview pane belongs to the drive it was opened in: hidden beside another drive\'s console, back when the user returns', async () => {
+    const opened = { holder: { kind: 'env', id: 'e1' } as const, driveId: 'drive-1', statusPath: '/api/drives/drive-1/envs/e1/preview', openPath: '/api/drives/drive-1/envs/e1/preview/open', title: 'main' };
+    useDevPreviewPaneStore.setState({ open: opened, reloadNonce: 0 });
+    // The capability answers "on" and the status answers "live" for this test only.
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ enabled: true }) })));
+    mockFetchJSON.mockResolvedValue({ preview: { holder: opened.holder, canManage: false, sandbox: 'attached', state: { status: 'live', targetPort: 5173, via: 'relay', message: '' }, slot: { known: false }, openPath: opened.openPath, canOpen: true, canStop: false, canResume: false, detectedAt: null } });
+    try {
+      const { rerender } = render(<AgentsSurface driveId="drive-1" />);
+      await screen.findByTestId('dev-preview-pane');
+      rerender(<AgentsSurface driveId="drive-2" />);
+      await waitFor(() => expect(screen.queryByTestId('dev-preview-pane')).toBeNull());
+      expect(useDevPreviewPaneStore.getState().open).toEqual(opened);
+      rerender(<AgentsSurface driveId="drive-1" />);
+      await screen.findByTestId('dev-preview-pane');
+    } finally {
+      vi.unstubAllGlobals();
+      useDevPreviewPaneStore.setState({ open: null, reloadNonce: 0 });
+    }
   });
 });

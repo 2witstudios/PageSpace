@@ -9,11 +9,11 @@ import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 
-const mockFetchWithAuth = vi.hoisted(() => vi.fn());
-vi.mock('@/lib/auth/auth-fetch', () => ({
-  fetchWithAuth: (...args: unknown[]) => mockFetchWithAuth(...args),
-  post: vi.fn(),
-}));
+const mockFetchJSON = vi.hoisted(() => vi.fn());
+vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/auth/auth-fetch')>();
+  return { ...actual, fetchJSON: (...args: unknown[]) => mockFetchJSON(...args), post: vi.fn() };
+});
 
 import { DevPreviewAffordance } from '../DevPreviewAffordance';
 import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
@@ -43,7 +43,7 @@ let preview: DevPreviewStatusDTO = status();
 function renderAffordance(props: Partial<{ active: boolean }> = {}) {
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <DevPreviewAffordance statusPath={STATUS_PATH} title="My session" active={props.active} />
+      <DevPreviewAffordance statusPath={STATUS_PATH} driveId="d1" title="My session" active={props.active} />
     </SWRConfig>,
   );
 }
@@ -52,7 +52,7 @@ beforeEach(() => {
   capabilityEnabled = true;
   preview = status();
   vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ enabled: capabilityEnabled }) })));
-  mockFetchWithAuth.mockImplementation(async () => ({ ok: true, json: async () => ({ preview }) }));
+  mockFetchJSON.mockImplementation(async () => ({ preview }));
   useDevPreviewPaneStore.setState({ open: null, reloadNonce: 0 });
 });
 afterEach(() => {
@@ -67,13 +67,13 @@ describe('DevPreviewAffordance', () => {
     await waitFor(() => expect(fetch).toHaveBeenCalledWith('/api/dev-preview/capability'));
     await new Promise((r) => setTimeout(r, 20));
     expect(container).toBeEmptyDOMElement();
-    expect(mockFetchWithAuth).not.toHaveBeenCalled();
+    expect(mockFetchJSON).not.toHaveBeenCalled();
   });
 
   test('no dev server recorded: renders nothing (unobtrusive means absent)', async () => {
     preview = status({ state: { status: 'none', message: 'No dev server has been detected in this sandbox yet.' }, canOpen: false, canStop: false });
     const { container } = renderAffordance();
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledWith(STATUS_PATH));
+    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledWith(STATUS_PATH));
     await new Promise((r) => setTimeout(r, 20));
     expect(container).toBeEmptyDOMElement();
   });
@@ -85,8 +85,8 @@ describe('DevPreviewAffordance', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(useDevPreviewPaneStore.getState().open).toEqual({
       holder: { kind: 'workspace', id: 'ws1' },
+      driveId: 'd1',
       statusPath: STATUS_PATH,
-      actionsPath: `${STATUS_PATH}/actions`,
       openPath: '/api/agent-workspaces/ws1/preview/open',
       title: 'My session',
     });
@@ -113,8 +113,8 @@ describe('DevPreviewAffordance', () => {
 
   test('polls only while ACTIVE: a collapsed row fetches once and then never again', async () => {
     renderAffordance({ active: false });
-    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
     await new Promise((r) => setTimeout(r, 60));
-    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
+    expect(mockFetchJSON).toHaveBeenCalledTimes(1);
   });
 });

@@ -45,7 +45,7 @@ function harness(overrides: {
       calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? 'direct'}`);
       row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null };
     },
-    setStoppedByUser: async () => false,
+    setStoppedByUser: async () => null,
   };
   const deps: DevPreviewDetectorDeps = {
     holder: HOLDER,
@@ -71,6 +71,8 @@ function harness(overrides: {
 describe('createDevPreviewDetector — port_opened', () => {
   it('a dev server on 5173 with no relay: probes the runtime once, creates the relay, records the row', async () => {
     const h = harness();
+    // An (empty) snapshot first: the accumulated set is only KNOWN once a port_list has applied.
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
     await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
     assert({ given: 'fresh detection', should: 'create relay → upsert', actual: h.calls, expected: ['create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
     assert({ given: 'fresh detection', should: 'probe exactly once', actual: h.probes(), expected: 1 });
@@ -85,6 +87,7 @@ describe('createDevPreviewDetector — port_opened', () => {
 
   it('does not probe when the plan touches no relay (a database port, our own relay bind, a port_closed)', async () => {
     const h = harness({ relay: relayInfo(5173) });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
     await h.detector.onFrame({ type: 'port_opened', port: 5432 });
     await h.detector.onFrame({ type: 'port_opened', port: 8080, pid: 7 });
     await h.detector.onFrame({ type: 'port_closed', port: 5173 });
@@ -178,5 +181,25 @@ describe('createDevPreviewDetector — discipline', () => {
     assert({ given: 'create threw', should: 'log and write nothing', actual: { calls: h.calls, row: h.row() }, expected: { calls: ['create:5173'], row: null } });
     expect(h.logs.some((l) => l.startsWith('error:dev-preview: frame failed:bind failed'))).toBe(true);
     await expect(h.detector.onFrame({ type: 'port_closed', port: 5173 })).resolves.toBeUndefined();
+  });
+
+  it('owns snapshot validity: listeners() is null until a port_list has APPLIED, and invalidateSnapshot() is queued on the chain so a snapshot behind it lands first', async () => {
+    const { detector } = harness();
+    assert({ given: 'no frame yet', should: 'know nothing', actual: detector.listeners(), expected: null });
+    void detector.onFrame({ type: 'port_opened', port: 5173, pid: 3 });
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'an increment with no snapshot', should: 'still know nothing', actual: detector.listeners(), expected: null });
+    const applied = detector.onFrame({ type: 'port_list', ports: [{ port: 3000, pid: 9 }] });
+    assert({ given: 'a snapshot that has ARRIVED but not applied', should: 'still be null', actual: detector.listeners(), expected: null });
+    await applied;
+    assert({ given: 'an applied snapshot', should: 'be known', actual: detector.listeners(), expected: [{ port: 3000, pid: 9 }] });
+    // Drop: a snapshot from the dropped connection is still queued AHEAD of the invalidation.
+    const late = detector.onFrame({ type: 'port_list', ports: [{ port: 4000 }] });
+    detector.invalidateSnapshot();
+    await late;
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'invalidation queued after a late snapshot', should: 'end unknown', actual: detector.listeners(), expected: null });
+    await detector.onFrame({ type: 'port_list', ports: [{ port: 5000 }] });
+    assert({ given: 'the next connection\'s snapshot', should: 'be known again', actual: detector.listeners(), expected: [{ port: 5000 }] });
   });
 });
