@@ -8,7 +8,9 @@
  * switching it off is a management act; a member acting from inside their
  * own SESSION in the env has the session route for that. The env must belong
  * to the drive in the path (else 404), and it must be a sprite env with a
- * preview row to switch (else 404 with the reason). Dark unless configured.
+ * preview row to switch (else 404 with the reason). A RESUME additionally
+ * passes the wake gate (`canRunCode` on the drive's payer) — a relay start is
+ * compute. Dark unless configured.
  */
 
 import { NextResponse } from 'next/server';
@@ -17,7 +19,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { applyDevPreviewUserActionForHolder } from '@/lib/dev-preview/preview-runtime';
+import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
@@ -42,8 +44,20 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (env.substrate !== 'sprite') return NextResponse.json({ error: 'This environment has no sandbox to preview', reason: 'env_not_sprite' }, { status: 404 });
 
     const holder = { kind: 'env', id: envId } as const;
-    const result = await applyDevPreviewUserActionForHolder({ holder, action });
-    if (!result.ok) return NextResponse.json({ error: 'This environment has no dev-server preview to switch', reason: result.reason }, { status: 404 });
+    // The shared gather's rows-only decision, for its wake subject (the drive's payer).
+    const authorization = await authorizePreviewHolderForUser({ holder, userId: auth.userId });
+    if (!authorization.allowed) {
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action, reason: authorization.reason } });
+      return NextResponse.json({ error: 'Not found' }, { status: 404 });
+    }
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
+    if (!result.ok) {
+      if (result.reason === 'wake-not-allowed') {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, action, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
+        return NextResponse.json({ error: 'This drive cannot run code right now, so the preview cannot be switched back on', reason: result.detail }, { status: 403 });
+      }
+      return NextResponse.json({ error: 'This environment has no dev-server preview to switch', reason: result.reason }, { status: 404 });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',

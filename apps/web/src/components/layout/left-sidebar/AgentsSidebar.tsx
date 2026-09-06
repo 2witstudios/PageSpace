@@ -1039,14 +1039,18 @@ function DriveEnvRow({
           on :5173 — Preview" — beneath its sessions, the way the published-app
           pane sits on the env. Withheld from an ORPHAN (no env to read) and a
           LOCAL env (no sprite, so no preview — the status route would 404 it
-          as `env_not_sprite`). Stop/resume are OWNER/ADMIN (`canManage`), the
-          env-write bar the actions route enforces. Dark ⇒ renders nothing.
+          as `env_not_sprite`). Polls only while the row is EXPANDED (its one
+          disclosure — this tree has no collapsible drive group), and stops on
+          its own after four idle answers until the row is toggled. Stop/resume
+          are OWNER/ADMIN, decided server-side and carried in the status
+          (`preview.canManage`), the env-write bar the actions route enforces.
+          Dark ⇒ renders nothing.
         */}
       {!isOrphan && !isLocal && (
         <DevPreviewAffordance
           statusPath={envDevPreviewPath(driveId, group.envId)}
           title={displayName}
-          canManage={canManage}
+          active={expanded}
           className="ml-4 border-l border-border py-1 pl-3"
         />
       )}

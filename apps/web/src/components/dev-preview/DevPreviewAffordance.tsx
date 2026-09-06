@@ -17,6 +17,16 @@
  * (the default everywhere). `undefined` (still loading) is treated as dark so
  * nothing flashes (the #2518 shape). Also nothing for the `none` state: a
  * session with no dev server shows no preview chrome at all.
+ *
+ * POLL DISCIPLINE (`useDevPreviewStatus`): polls only while `active` (the
+ * caller's disclosure — an expanded env row; the console header is always
+ * active while a session is selected), stops after four idle answers until
+ * the disclosure toggles, and runs NO timer while the pane is open on this
+ * same holder — the pane owns the poll and this line reads the shared cache.
+ *
+ * WHO MAY MANAGE is the server's answer (`preview.canManage`), never a prop:
+ * the client cannot know the drive role, and the actions route enforces the
+ * same rule regardless.
  */
 
 import { Globe } from 'lucide-react';
@@ -25,7 +35,7 @@ import { cn } from '@/lib/utils';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { useDevPreviewStatus } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDevPreviewPaneStore } from '@/stores/useDevPreviewPaneStore';
-import { devPreviewAffordanceText, shouldShowDevPreviewAffordance } from './dev-preview-copy';
+import { devPreviewAffordanceText, devPreviewAffordanceVerb, shouldShowDevPreviewAffordance } from './dev-preview-copy';
 
 /** The affordance polls slowly: a dev server coming up is a seconds-scale event, and every tick is a control-plane read. */
 const AFFORDANCE_POLL_MS = 15_000;
@@ -33,25 +43,27 @@ const AFFORDANCE_POLL_MS = 15_000;
 export function DevPreviewAffordance({
   statusPath,
   title,
-  canManage,
+  active = true,
   className,
 }: {
   /** The reader's status route — session or env. */
   statusPath: string;
   /** The session or environment name, for the pane's chrome. */
   title: string;
-  /** Whether this viewer may stop/resume the preview (the reader's own write gate). */
-  canManage: boolean;
+  /** The caller's disclosure: poll only while true; a toggle re-arms an idle-paused poll. */
+  active?: boolean;
   className?: string;
 }) {
   const enabled = useDevPreviewCapability();
-  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, intervalMs: AFFORDANCE_POLL_MS });
   const openPreview = useDevPreviewPaneStore((state) => state.openPreview);
-  const openHolder = useDevPreviewPaneStore((state) => state.open?.statusPath ?? null);
+  const openStatusPath = useDevPreviewPaneStore((state) => state.open?.statusPath ?? null);
+  const isOpen = openStatusPath === statusPath;
+  const { preview } = useDevPreviewStatus(statusPath, { enabled: enabled === true, active, paneOwnsPoll: isOpen, intervalMs: AFFORDANCE_POLL_MS });
 
   if (enabled !== true || !shouldShowDevPreviewAffordance(preview)) return null;
   const text = devPreviewAffordanceText(preview);
-  const isOpen = openHolder === statusPath;
+  const openPath = preview.openPath;
+  const verb = devPreviewAffordanceVerb(preview);
 
   return (
     <div className={cn('flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground', className)} data-testid="dev-preview-affordance">
@@ -59,7 +71,7 @@ export function DevPreviewAffordance({
       <span className="truncate" title={preview.state.message}>
         {text}
       </span>
-      {preview.openPath !== null && (
+      {openPath !== null && (
         <>
           <span aria-hidden="true">—</span>
           <button
@@ -74,13 +86,13 @@ export function DevPreviewAffordance({
                 holder: preview.holder,
                 statusPath,
                 actionsPath: `${statusPath}/actions`,
-                openPath: preview.openPath as string,
+                openPath,
                 title,
-                canManage,
+                canManage: preview.canManage,
               });
             }}
           >
-            {isOpen ? 'Previewing' : 'Preview'}
+            {isOpen ? 'Open' : verb}
           </button>
         </>
       )}

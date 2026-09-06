@@ -28,6 +28,11 @@ export function devPreviewBadge(state: DevPreviewStateDTO): { label: string; ton
       return { label: 'Unavailable', tone: 'outline' };
     case 'none':
       return { label: 'No dev server', tone: 'outline' };
+    default:
+      // A status this build does not know (the union can grow a member before
+      // every reader is updated) must never TypeError the pane subtree or
+      // render an empty label — the `STATUS_COPY` lesson from the app pane.
+      return { label: 'Unknown state', tone: 'outline' };
   }
 }
 
@@ -55,7 +60,19 @@ export function devPreviewAffordanceText(preview: DevPreviewStatusDTO): string |
       return 'Preview state unavailable';
     case 'none':
       return null;
+    default:
+      return 'Preview state unknown';
   }
+}
+
+/**
+ * The affordance's verb: "Preview" only when the frame would actually show
+ * something (`canOpen`); otherwise "Details" — opening the pane on a down,
+ * blocked, stopped or stale preview shows its status and controls, not a
+ * live app, and the button should not promise one.
+ */
+export function devPreviewAffordanceVerb(preview: DevPreviewStatusDTO): 'Preview' | 'Details' {
+  return preview.canOpen ? 'Preview' : 'Details';
 }
 
 /** Whether the affordance should render at all for this status. */

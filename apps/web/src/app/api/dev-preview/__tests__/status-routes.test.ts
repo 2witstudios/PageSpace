@@ -73,27 +73,38 @@ beforeEach(() => {
   vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
   vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
   vi.mocked(resolveEnvInDrive).mockResolvedValue({ id: 'env1', driveId: 'd1', substrate: 'sprite' } as never);
-  vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: null } as never);
+  vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: null, ownerId: 'u1', driveId: 'd1' } as never);
   vi.mocked(readDevPreviewStatusForUser).mockResolvedValue({ ok: true, status: STATUS as never });
   vi.mocked(authorizePreviewHolderForUser).mockResolvedValue({ allowed: true, driveId: 'd1', wakeSubject: { driveId: 'd1', ownerId: 'o' }, sandboxId: 'sbx' });
   vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValue({ ok: true, applied: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
 });
 
 describe('GET /api/agent-workspaces/[workspaceId]/preview', () => {
-  it('answers the status, authorizing as the session and reading the SESSION holder for a plain session', async () => {
+  it('answers the status, authorizing as the session and reading the SESSION holder for a plain session; canManage = session owner', async () => {
     const res = await sessionStatus(get(), wsCtx);
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toBe('no-store');
     const body = await res.json();
     expect(body.preview.state.status).toBe('live');
     expect(body.preview.detectedAt).toBe('2026-09-06T11:00:00.000Z');
+    expect(body.preview.canManage).toBe(true);
     expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
+    // The drive role is never consulted for a session-holder preview.
+    expect(isPrincipalDriveOwnerOrAdmin).not.toHaveBeenCalled();
+
+    vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: null, ownerId: 'someone-else', driveId: 'd1' } as never);
+    expect((await (await sessionStatus(get(), wsCtx)).json()).preview.canManage).toBe(false);
   });
 
-  it('for an ENV-BOUND session reads the ENV holder (the holder rule) while still authorizing as the session', async () => {
-    vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: 'env1' } as never);
-    await sessionStatus(get(), wsCtx);
+  it('for an ENV-BOUND session reads the ENV holder (the holder rule) while still authorizing as the session; canManage = drive owner/admin, NOT session ownership', async () => {
+    vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: 'env1', ownerId: 'u1', driveId: 'd1' } as never);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(false);
+    const denied = await (await sessionStatus(get(), wsCtx)).json();
     expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, holder: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(denied.preview.canManage).toBe(false);
+    expect(isPrincipalDriveOwnerOrAdmin).toHaveBeenCalledWith({ userId: 'u1' }, 'd1');
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(true);
+    expect((await (await sessionStatus(get(), wsCtx)).json()).preview.canManage).toBe(true);
   });
 
   it('is dark (404) before authentication when not configured', async () => {
@@ -121,19 +132,43 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview', () => {
 });
 
 describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
-  it('applies a stop to the session holder after the session access decision, and audits the write', async () => {
+  it('applies a stop to the session holder after the session access decision (as the OWNER), passing the payer as wake subject, and audits the write', async () => {
     const res = await sessionAction(post({ action: 'stop' }), wsCtx);
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, applied: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
     expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: 'stop' });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: 'stop', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceType: 'dev_preview', details: expect.objectContaining({ action: 'stop', applied: 'stop-relay' }) }));
   });
 
-  it('for an ENV-BOUND session applies to the ENV holder', async () => {
-    vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: 'env1' } as never);
-    await sessionAction(post({ action: 'resume' }), wsCtx);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume' });
+  it('AUTHZ: a session-holder preview may only be switched by the session OWNER — a drive admin with session access still 403s (audited), applying nothing', async () => {
+    vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: null, ownerId: 'someone-else', driveId: 'd1' } as never);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValue(true);
+    const res = await sessionAction(post({ action: 'stop' }), wsCtx);
+    expect(res.status).toBe(403);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'session_manage_requires_owner' }) }));
+    expect(applyDevPreviewUserActionForHolder).not.toHaveBeenCalled();
+  });
+
+  it('AUTHZ: for an ENV-BOUND session the action lands on the ENV holder and requires the env write bar (drive owner/admin) — a plain member who OWNS the session still 403s; an admin passes', async () => {
+    vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: 'env1', ownerId: 'u1', driveId: 'd1' } as never);
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(false);
+    const denied = await sessionAction(post({ action: 'resume' }), wsCtx);
+    expect(denied.status).toBe(403);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'env_manage_requires_owner_or_admin' }) }));
+    expect(applyDevPreviewUserActionForHolder).not.toHaveBeenCalled();
+
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(true);
+    expect((await sessionAction(post({ action: 'resume' }), wsCtx)).status).toBe(200);
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+  });
+
+  it('BILLING: a resume the wake gate refuses is a 403 with the gate reason, audited', async () => {
+    vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'wake-not-allowed', detail: 'no_capability' });
+    const res = await sessionAction(post({ action: 'resume' }), wsCtx);
+    expect(res.status).toBe(403);
+    expect((await res.json()).reason).toBe('no_capability');
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'authz.access.denied', details: expect.objectContaining({ reason: 'wake_not_allowed', detail: 'no_capability' }) }));
   });
 
   it.each([{ action: 'nuke' }, {}, 'not json', null])('400s a malformed action (%o) before any lookup', async (body) => {
@@ -167,11 +202,15 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
 });
 
 describe('GET /api/drives/[driveId]/envs/[envId]/preview', () => {
-  it('answers the status for a drive member', async () => {
+  it('answers the status for a drive member; canManage follows the drive owner/admin verdict', async () => {
     const res = await envStatus(get(), envCtx);
     expect(res.status).toBe(200);
-    expect((await res.json()).preview.holder).toEqual({ kind: 'env', id: 'env1' });
+    const body = await res.json();
+    expect(body.preview.holder).toEqual({ kind: 'env', id: 'env1' });
+    expect(body.preview.canManage).toBe(true);
     expect(readDevPreviewStatusForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(false);
+    expect((await (await envStatus(get(), envCtx)).json()).preview.canManage).toBe(false);
   });
 
   it('is dark before auth, 403s a non-member (audited), 404s an env outside the drive', async () => {
@@ -196,11 +235,20 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview', () => {
 });
 
 describe('POST /api/drives/[driveId]/envs/[envId]/preview/actions', () => {
-  it('applies the action for a drive owner/admin and audits it', async () => {
+  it('applies the action for a drive owner/admin with the payer as wake subject, and audits it', async () => {
     const res = await envAction(post({ action: 'resume' }), envCtx);
     expect(res.status).toBe(200);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume' });
+    expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceId: 'env:env1', details: expect.objectContaining({ action: 'resume' }) }));
+  });
+
+  it('BILLING: a wake-gate refusal is 403 (audited); a gather refusal is the uniform 404', async () => {
+    vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'wake-not-allowed', detail: 'no_capability' });
+    expect((await envAction(post({ action: 'resume' }), envCtx)).status).toBe(403);
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ details: expect.objectContaining({ reason: 'wake_not_allowed' }) }));
+    vi.mocked(authorizePreviewHolderForUser).mockResolvedValueOnce({ allowed: false, reason: 'env_not_sprite' });
+    expect((await envAction(post({ action: 'stop' }), envCtx)).status).toBe(404);
   });
 
   it('403s a plain member (owner/admin only — the env-write bar), audited, applying nothing', async () => {

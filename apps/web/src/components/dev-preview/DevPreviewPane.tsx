@@ -12,18 +12,30 @@
  * against the preview origin, so a real Vite/Next dev server just works. The
  * app's CSP `frame-src` admits `*.preview.<apex>` only when the feature is
  * configured, which is also the only time this component can render (the
- * capability gate below). No `sandbox` attribute: the dedicated apex IS the
- * isolation — a sandboxed (opaque-origin) frame would send no cookie and
- * render nothing — and `referrerPolicy="no-referrer"` keeps the app URL out
- * of the dev server's logs.
+ * capability gate below). `referrerPolicy="no-referrer"` keeps the app URL
+ * out of the dev server's logs.
+ *
+ * SANDBOX ALLOW-LIST. The frame runs agent-authored (or npm-supply-chain)
+ * code, so it gets exactly what a dev server needs and nothing that reaches
+ * the PageSpace tab: `allow-scripts allow-same-origin allow-forms
+ * allow-popups allow-modals`. `allow-same-origin` grants the frame ITS OWN
+ * preview origin (not the parent's — it is cross-site by design), which is
+ * what lets the partitioned cookie flow; without it the frame is an opaque
+ * origin, sends no cookie and renders nothing. Withheld on purpose:
+ * `allow-top-navigation` (and the `-by-user-activation` form — one in-frame
+ * click must not be able to `top.location` the dashboard away),
+ * `allow-downloads`, `allow-popups-to-escape-sandbox` (a popup the frame
+ * opens stays sandboxed), `allow-pointer-lock`, `allow-orientation-lock`.
  *
  * RE-AUTH. The preview origin's cookie is short-lived; when it expires inside
  * the frame the origin renders a page that posts
  * `{ type: 'pagespace:dev-preview', event: 'reauth-required', holder }` to
- * this window (contract from the proxy task). The pane verifies the message
- * is about ITS holder and re-points the iframe at `/preview/open`, which
- * re-mints same-origin. Any other origin's message, or a message about
- * another holder, is ignored — the frame's content is untrusted code.
+ * this window (contract from the proxy task). The pane accepts it ONLY from
+ * its own frame (`event.source === iframe.contentWindow`), only about ITS
+ * holder, and at most once per {@link REAUTH_DEBOUNCE_MS} — every accepted
+ * message costs a grant row on the server, so a page spamming it must not
+ * be able to mint one per tick. Anything else is ignored — the frame's
+ * content is untrusted code.
  *
  * OPEN IN NEW TAB is a plain link to the SAME `/preview/open` route with
  * `target="_blank"`: a top-level navigation, where the partitioned cookie does
@@ -41,7 +53,7 @@
  * frame the user is working in.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { ExternalLink, Play, RefreshCw, Square, X } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -59,6 +71,10 @@ const PANE_POLL_MS = 5_000;
 
 /** The message the preview origin posts when its cookie has expired inside the frame. */
 export const DEV_PREVIEW_REAUTH_MESSAGE_TYPE = 'pagespace:dev-preview';
+/** A re-auth is a grant mint; one per this window is plenty for a cookie that lives ten minutes. */
+export const REAUTH_DEBOUNCE_MS = 5_000;
+/** Exactly what a dev server needs inside the frame, and nothing that reaches the PageSpace tab — see the docblock. */
+export const DEV_PREVIEW_FRAME_SANDBOX = 'allow-scripts allow-same-origin allow-forms allow-popups allow-modals';
 
 interface ReauthMessage {
   type: typeof DEV_PREVIEW_REAUTH_MESSAGE_TYPE;
@@ -93,6 +109,8 @@ export function DevPreviewPane() {
   const reload = useDevPreviewPaneStore((state) => state.reload);
   const { preview, mutate } = useDevPreviewStatus(open?.statusPath ?? null, { enabled: enabled === true, intervalMs: PANE_POLL_MS });
   const [actioning, setActioning] = useState(false);
+  const frameRef = useRef<HTMLIFrameElement | null>(null);
+  const lastReauthAt = useRef(0);
 
   useEditingSession(`dev-preview-pane-${open?.holder.kind ?? 'none'}-${open?.holder.id ?? 'none'}`, open !== null, 'form', {
     componentName: 'DevPreviewPane',
@@ -100,12 +118,20 @@ export function DevPreviewPane() {
 
   // The frame's re-auth signal. Origin-agnostic by necessity — the preview
   // host is a different site by design and this window does not know the
-  // apex — but SHAPE- and HOLDER-checked, and the only thing it can cause is
-  // a same-origin reload of a route that re-authenticates anyway.
+  // apex — but SOURCE-checked (our own frame's window, nothing else on the
+  // page), SHAPE- and HOLDER-checked, and DEBOUNCED (each accepted message
+  // mints a grant server-side). The only thing it can cause is a same-origin
+  // reload of a route that re-authenticates anyway.
   useEffect(() => {
     if (open === null) return;
     const onMessage = (event: MessageEvent) => {
-      if (isReauthMessageFor(event.data, open.holder)) reload();
+      const frameWindow = frameRef.current?.contentWindow ?? null;
+      if (frameWindow === null || event.source !== frameWindow) return;
+      if (!isReauthMessageFor(event.data, open.holder)) return;
+      const now = Date.now();
+      if (now - lastReauthAt.current < REAUTH_DEBOUNCE_MS) return;
+      lastReauthAt.current = now;
+      reload();
     };
     window.addEventListener('message', onMessage);
     return () => window.removeEventListener('message', onMessage);
@@ -185,9 +211,11 @@ export function DevPreviewPane() {
       {preview?.canOpen ? (
         <iframe
           key={frameSrc}
+          ref={frameRef}
           src={frameSrc}
           title={`Dev server preview of ${open.title}`}
           className="min-h-0 flex-1 border-0 bg-white"
+          sandbox={DEV_PREVIEW_FRAME_SANDBOX}
           referrerPolicy="no-referrer"
           data-testid="dev-preview-frame"
         />

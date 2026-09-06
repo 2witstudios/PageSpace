@@ -3,21 +3,27 @@
  * session's dev-server preview off (`{ action: 'stop' }`) or back on
  * (`{ action: 'resume' }`).
  *
- * Authorized as the SESSION (the same access decision as the status read and
- * the open route — the user is acting from inside the session they reached),
- * applied to the HOLDER: for an env-bound session that is the environment's
- * preview, shared by every session in it, which is exactly what the user is
- * looking at. "Stop" records `stoppedByUserAt` (the intent the platform
- * cannot report) and the core stops the relay; "resume" clears it and the
- * core restarts the relay on the row's own target. Neither invents a rule:
- * both are one reconcile through `planDevServerService`.
+ * Two gates, in order. First the SESSION access decision (the family's
+ * not-found/denied 404 — the same verdict as the status read and the open
+ * route). Then the MANAGE bar (`decideDevPreviewManage`, a genuine 403 once
+ * the session is known to exist): for an ENV-BOUND session the action lands
+ * on the ENVIRONMENT's shared preview, so it requires the env's own write bar
+ * (drive owner/admin) — this route is not a way around the env route; for a
+ * session-holder preview, the session OWNER (the end-session precedent).
  *
- * CSRF-guarded write; the family's uniform 404 for unknown/denied; 404 with
- * a reason for a session that has no preview to switch. Dark unless configured.
+ * "Stop" records `stoppedByUserAt` (the intent the platform cannot report)
+ * and the core stops the relay; "resume" first passes the WAKE GATE
+ * (`canRunCode` on the holder's payer — a relay start is compute, and on a
+ * suspended sprite a billed wake), then clears the intent and the core
+ * restarts the relay on the row's own target. Neither invents a rule: both
+ * are one reconcile through `planDevServerService`.
+ *
+ * CSRF-guarded write; 404 with a reason for a session that has no preview to
+ * switch. Dark unless configured.
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -26,6 +32,7 @@ import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runti
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { applyDevPreviewUserActionForHolder, authorizePreviewHolderForUser } from '@/lib/dev-preview/preview-runtime';
 import { readDevPreviewUserAction } from '@/lib/dev-preview/user-action-body';
+import { decideDevPreviewManage } from '@/lib/dev-preview/manage-decision';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: true };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/actions';
@@ -46,8 +53,27 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     if (!authorization.allowed) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, authorization.reason, ROUTE);
 
     const holder = resolveDevPreviewHolder({ id: session.id, envId: session.envId });
-    const result = await applyDevPreviewUserActionForHolder({ holder, action });
-    if (!result.ok) return NextResponse.json({ error: 'This session has no dev-server preview to switch', reason: result.reason }, { status: 404 });
+    const canManage = decideDevPreviewManage({
+      holder,
+      userId: auth.userId,
+      sessionOwnerId: session.ownerId,
+      isDriveOwnerOrAdmin: holder.kind === 'env' && session.driveId !== null ? await isPrincipalDriveOwnerOrAdmin(auth, session.driveId) : false,
+    });
+    if (!canManage) {
+      // A denial AFTER the family gate: the caller already knows the session
+      // exists, so a genuine 403 leaks nothing new (the `provisioningDenied` precedent).
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: holder.kind === 'env' ? 'env_manage_requires_owner_or_admin' : 'session_manage_requires_owner' }, riskScore: 0.5 });
+      return NextResponse.json({ error: holder.kind === 'env' ? 'Only the drive owner or an admin can switch an environment preview' : 'Only the session owner can switch its preview' }, { status: 403 });
+    }
+
+    const result = await applyDevPreviewUserActionForHolder({ holder, action, userId: auth.userId, wakeSubject: authorization.wakeSubject });
+    if (!result.ok) {
+      if (result.reason === 'wake-not-allowed') {
+        auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
+        return NextResponse.json({ error: 'This drive cannot run code right now, so the preview cannot be switched back on', reason: result.detail }, { status: 403 });
+      }
+      return NextResponse.json({ error: 'This session has no dev-server preview to switch', reason: result.reason }, { status: 404 });
+    }
 
     auditRequest(request, {
       eventType: 'data.write',

@@ -1,7 +1,9 @@
 /**
  * The detection affordance against real hooks and stores: dark ⇒ nothing and
  * NO status fetch; no dev server ⇒ nothing; a recorded one ⇒ one quiet line
- * and a Preview button that opens the pane store — never auto-opens.
+ * and a Preview button that opens the pane store — never auto-opens. The
+ * manage verdict is the SERVER's, the verb is honest, and the poll respects
+ * the caller's disclosure.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
@@ -22,6 +24,7 @@ const STATUS_PATH = '/api/agent-workspaces/ws1/preview';
 function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
   return {
     holder: { kind: 'workspace', id: 'ws1' },
+    canManage: true,
     sandbox: 'attached',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: false },
@@ -37,10 +40,10 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
 let capabilityEnabled = true;
 let preview: DevPreviewStatusDTO = status();
 
-function renderAffordance(props: Partial<{ canManage: boolean }> = {}) {
+function renderAffordance(props: Partial<{ active: boolean }> = {}) {
   return render(
     <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
-      <DevPreviewAffordance statusPath={STATUS_PATH} title="My session" canManage={props.canManage ?? true} />
+      <DevPreviewAffordance statusPath={STATUS_PATH} title="My session" active={props.active} />
     </SWRConfig>,
   );
 }
@@ -79,8 +82,7 @@ describe('DevPreviewAffordance', () => {
     renderAffordance();
     await screen.findByText('Dev server detected on :5173');
     expect(useDevPreviewPaneStore.getState().open).toBeNull();
-    const button = screen.getByRole('button', { name: 'Preview' });
-    fireEvent.click(button);
+    fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
     expect(useDevPreviewPaneStore.getState().open).toEqual({
       holder: { kind: 'workspace', id: 'ws1' },
       statusPath: STATUS_PATH,
@@ -90,20 +92,37 @@ describe('DevPreviewAffordance', () => {
       canManage: true,
     });
     // Once open, the button reads as such and is inert.
-    await screen.findByRole('button', { name: 'Previewing' });
-    expect(screen.getByRole('button', { name: 'Previewing' })).toBeDisabled();
+    await screen.findByRole('button', { name: 'Open' });
+    expect(screen.getByRole('button', { name: 'Open' })).toBeDisabled();
   });
 
-  test('a stopped or blocked preview still gets its honest line (last-known state, never hidden)', async () => {
+  test('a stopped or blocked preview still gets its honest line (last-known state, never hidden) — and the verb is "Details", not "Preview"', async () => {
     preview = status({ canOpen: false, canStop: false, canResume: true, state: { status: 'stopped', targetPort: 3000, stoppedAt: 'x', message: 'Preview of port 3000 is switched off.' } });
     renderAffordance();
     await screen.findByText('Preview of :3000 is switched off');
     expect(screen.getByText('Preview of :3000 is switched off')).toHaveAttribute('title', 'Preview of port 3000 is switched off.');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
   });
 
-  test('carries the reader\'s manage flag into the pane store', async () => {
-    renderAffordance({ canManage: false });
+  test('carries the SERVER manage verdict into the pane store — there is no client-side flag to hardcode', async () => {
+    preview = status({ canManage: false });
+    renderAffordance();
     fireEvent.click(await screen.findByRole('button', { name: 'Preview' }));
     expect(useDevPreviewPaneStore.getState().open?.canManage).toBe(false);
+  });
+
+  test('an unknown status renders neutral copy and "Details" rather than crashing the row', async () => {
+    preview = status({ canOpen: false, state: { status: 'teleporting', message: 'from the future' } as unknown as DevPreviewStatusDTO['state'] });
+    renderAffordance();
+    await screen.findByText('Preview state unknown');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
+  });
+
+  test('polls only while ACTIVE: a collapsed row fetches once and then never again', async () => {
+    renderAffordance({ active: false });
+    await waitFor(() => expect(mockFetchWithAuth).toHaveBeenCalledTimes(1));
+    await new Promise((r) => setTimeout(r, 60));
+    expect(mockFetchWithAuth).toHaveBeenCalledTimes(1);
   });
 });

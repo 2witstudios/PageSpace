@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { devPreviewAffordanceText, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
+import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 function preview(state: DevPreviewStatusDTO['state']): DevPreviewStatusDTO {
-  return { holder: { kind: 'env', id: 'e' }, sandbox: 'attached', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, detectedAt: null };
+  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, detectedAt: null };
 }
 
 describe('dev-preview copy', () => {
@@ -31,5 +31,21 @@ describe('dev-preview copy', () => {
     expect(shouldShowDevPreviewAffordance(undefined)).toBe(false);
     expect(shouldShowDevPreviewAffordance(preview({ status: 'none', message: '' }))).toBe(false);
     expect(shouldShowDevPreviewAffordance(preview({ status: 'live', targetPort: 1, via: 'relay', message: '' }))).toBe(true);
+  });
+
+  it('a status this build does not know falls back to neutral copy instead of throwing or rendering an empty label', () => {
+    const bogus = { status: 'teleporting', message: 'from the future' } as unknown as DevPreviewStatusDTO['state'];
+    expect(devPreviewBadge(bogus)).toEqual({ label: 'Unknown state', tone: 'outline' });
+    expect(devPreviewAffordanceText(preview(bogus))).toBe('Preview state unknown');
+    expect(shouldShowDevPreviewAffordance(preview(bogus))).toBe(true);
+    // ...and it never earns the live verb: canOpen is the server's, and a bogus state has none.
+    expect(devPreviewAffordanceVerb(preview(bogus))).toBe('Details');
+  });
+
+  it('the verb promises a live app only when the frame would show one', () => {
+    expect(devPreviewAffordanceVerb({ ...preview({ status: 'live', targetPort: 1, via: 'relay', message: '' }), canOpen: true })).toBe('Preview');
+    expect(devPreviewAffordanceVerb(preview({ status: 'down', targetPort: 1, via: 'relay', error: null, message: '' }))).toBe('Details');
+    expect(devPreviewAffordanceVerb(preview({ status: 'blocked', targetPort: 1, message: '' }))).toBe('Details');
+    expect(devPreviewAffordanceVerb(preview({ status: 'stale', targetPort: 1, message: '' }))).toBe('Details');
   });
 });

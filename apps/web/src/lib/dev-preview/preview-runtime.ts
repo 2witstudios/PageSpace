@@ -212,7 +212,24 @@ export function authorizePreviewHolderForUser({ holder, userId }: { holder: DevP
  * has ALREADY authorized the write (session access, or drive owner/admin for
  * an env) — this binding only supplies the real store, host and snapshot.
  */
-export function applyDevPreviewUserActionForHolder({ holder, action }: { holder: DevPreviewHolderRef; action: DevPreviewUserAction }): Promise<DevPreviewUserActionResult> {
+export function applyDevPreviewUserActionForHolder({
+  holder,
+  action,
+  userId,
+  wakeSubject,
+}: {
+  holder: DevPreviewHolderRef;
+  action: DevPreviewUserAction;
+  userId: string;
+  /** `PreviewAuthorization.wakeSubject` — the payer the resume wake gate is asked about. */
+  wakeSubject: { driveId: string | null; ownerId: string };
+}): Promise<DevPreviewUserActionResult> {
   const deps = buildPreviewAccessDeps();
-  return applyDevPreviewUserAction({ holder, action, deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, now: deps.now } });
+  return applyDevPreviewUserAction({
+    holder,
+    action,
+    userId,
+    wakeSubject,
+    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },
+  });
 }

@@ -31,6 +31,7 @@
  * before the plan so the plan sees the intent it is acting on.
  */
 
+import type { CanRunCodeResult } from '../can-run-code';
 import type { SandboxHandle, SandboxServiceInfo } from '../sandbox-host';
 import {
   describeHttpPortSlot,
@@ -242,6 +243,8 @@ export interface DevPreviewUserActionDeps {
   /** A control-plane attach to the holder's LIVE sprite by name; null when the platform no longer has it. Must not wake. */
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   readListeners: DevPreviewListenersReader;
+  /** The centralized code-execution gate — consulted on every RESUME (see below). */
+  canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
   now(): Date;
 }
 
@@ -249,7 +252,9 @@ export type DevPreviewUserActionResult =
   /** The intent is recorded and the relay was reconciled (or there was nothing to reconcile). */
   | { ok: true; applied: AppliedDevServerServicePlan | null }
   /** The holder has no preview row — nothing to switch. */
-  | { ok: false; reason: 'no-preview' };
+  | { ok: false; reason: 'no-preview' }
+  /** A RESUME the holder's payer may not spend compute on — the wake gate said no. Nothing was written. */
+  | { ok: false; reason: 'wake-not-allowed'; detail: string };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -272,16 +277,50 @@ export type DevPreviewUserActionResult =
 export async function applyDevPreviewUserAction({
   holder,
   action,
+  userId,
+  wakeSubject,
   deps,
 }: {
   holder: DevPreviewHolderRef;
   action: DevPreviewUserAction;
+  /** Who is acting — the subject of the wake gate. */
+  userId: string;
+  /** Who PAYS for compute in this holder's drive — `PreviewAuthorization.wakeSubject`, the same input a session ensure gives `canRunCode`. */
+  wakeSubject: { driveId: string | null; ownerId: string };
   deps: DevPreviewUserActionDeps;
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
+
+  // RESUME IS COMPUTE. `services.start` brings a process up inside the sprite
+  // and, on a suspended sprite, is a billed wake — the same posture the proxy
+  // applies before forwarding into a paused sprite (`decidePreviewForward` →
+  // `canRunCode`). It is asked on EVERY resume, not only when the sprite is
+  // known to be paused: a payer whose code-execution has been revoked must
+  // not be able to restart anything, and "is it paused right now" is a race
+  // the gate should not depend on. Asked BEFORE the intent is cleared, on
+  // purpose: a refused resume that had already cleared `stoppedByUserAt`
+  // would leave the row "on", and the detector's next frame would restart
+  // the relay anyway — the exact bypass the gate exists to close.
+  if (action === 'resume') {
+    const wake = await deps.canRunCode({ userId, ...wakeSubject });
+    if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
+  }
+
   const recorded = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
   if (!recorded) return { ok: false, reason: 'no-preview' };
 
+  // RACE WITH THE DETECTOR, stated rather than hidden. The detector plans per
+  // `ports/watch` frame from a row it reads at frame time. A frame that read
+  // the row BEFORE this write and applies AFTER it can `start-relay` and
+  // upsert `stoppedByUserAt: null`, undoing a stop; the reverse frame can
+  // stop-relay after a resume. The window is one frame wide, it exists only
+  // while a port is opening in the same second the user clicks, and it is
+  // self-correcting in the honest direction: the very next frame plans from
+  // whichever write landed last, and the status the user sees is always the
+  // fold of the real row and the real relay — so a lost click shows as
+  // "still live" / "still off", and clicking again wins. Serializing the two
+  // writers would need a lock spanning the realtime and web tiers for a
+  // one-frame window; not worth a lock.
   const row = await deps.previewStore.findByHolder(holder);
   if (row === null) return { ok: false, reason: 'no-preview' };
 

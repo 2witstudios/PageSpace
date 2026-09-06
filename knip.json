@@ -479,6 +479,7 @@
         "src/services/sandbox/preview/dev-preview-grants-store.ts",
         "src/services/sandbox/preview/ports-watch.ts",
         "src/services/sandbox/preview/dev-preview-detection.ts",
+        "src/services/sandbox/preview/dev-preview-status.ts",
         "src/services/sandbox/preview/preview-access.ts",
         "src/services/sandbox/preview/preview-ws-tunnel.ts",
         "src/services/sandbox/egress.ts",

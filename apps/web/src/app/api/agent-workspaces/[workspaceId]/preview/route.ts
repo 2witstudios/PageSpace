@@ -18,13 +18,14 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveOwnerOrAdmin } from '@/lib/auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
 import { readDevPreviewStatusForUser } from '@/lib/dev-preview/preview-runtime';
+import { decideDevPreviewManage } from '@/lib/dev-preview/manage-decision';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview';
@@ -43,7 +44,15 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
 
     const result = await readDevPreviewStatusForUser({ authorizeAs: { kind: 'workspace', id: session.id }, holder, userId: auth.userId });
     if (!result.ok) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, result.detail, ROUTE);
-    return NextResponse.json({ preview: result.status }, { headers: { 'cache-control': 'no-store' } });
+    // Whether THIS viewer may stop/resume — server-derived (the client cannot
+    // know the drive role), the same rule the actions route enforces.
+    const canManage = decideDevPreviewManage({
+      holder,
+      userId: auth.userId,
+      sessionOwnerId: session.ownerId,
+      isDriveOwnerOrAdmin: holder.kind === 'env' && session.driveId !== null ? await isPrincipalDriveOwnerOrAdmin(auth, session.driveId) : false,
+    });
+    return NextResponse.json({ preview: { ...result.status, canManage } }, { headers: { 'cache-control': 'no-store' } });
   } catch (error) {
     loggers.api.error('Failed to read session preview status', error instanceof Error ? error : new Error(String(error)));
     return NextResponse.json({ error: 'Failed to read preview status' }, { status: 500 });

@@ -214,14 +214,15 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
                   session reads its environment's preview — the holder rule —
                   through its own route). Renders nothing unless the deployment
                   has the feature on AND a dev server has actually been
-                  recorded; auto-opens nothing. Stop/resume through the session
-                  route are gated server-side by the same session-access
-                  decision that let the viewer in, so the pane may offer them.
+                  recorded; auto-opens nothing. Whether THIS viewer may stop or
+                  resume it is the server's answer (`preview.canManage`): the
+                  session owner for a session's own preview, the drive
+                  owner/admin for an env-bound session's (that is the env's
+                  shared preview, and the env route's bar applies).
                 */}
                 <DevPreviewAffordance
                   statusPath={sessionDevPreviewPath(selectedSessionId)}
                   title={sessionData?.session?.name || 'Session'}
-                  canManage
                   className="ml-auto"
                 />
               </div>

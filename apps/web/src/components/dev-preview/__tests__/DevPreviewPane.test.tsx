@@ -17,7 +17,7 @@ vi.mock('@/lib/auth/auth-fetch', () => ({
 const mockToastError = vi.hoisted(() => vi.fn());
 vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), success: vi.fn() } }));
 
-import { DevPreviewPane, buildFrameSrc, isReauthMessageFor } from '../DevPreviewPane';
+import { DEV_PREVIEW_FRAME_SANDBOX, DevPreviewPane, buildFrameSrc, isReauthMessageFor } from '../DevPreviewPane';
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingStore } from '@/stores/useEditingStore';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
@@ -34,6 +34,7 @@ const OPEN: OpenDevPreview = {
 function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
   return {
     holder: OPEN.holder,
+    canManage: true,
     sandbox: 'attached',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: true, free: false, holder: 'relay', pid: null, message: 'Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.' },
@@ -95,7 +96,10 @@ describe('DevPreviewPane', () => {
     const frame = await screen.findByTestId('dev-preview-frame');
     expect(frame).toHaveAttribute('src', OPEN.openPath);
     expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
-    expect(frame).not.toHaveAttribute('sandbox');
+    // The allow-list: what a dev server needs, and nothing that reaches the PageSpace tab.
+    expect(frame).toHaveAttribute('sandbox', DEV_PREVIEW_FRAME_SANDBOX);
+    for (const granted of ['allow-scripts', 'allow-same-origin', 'allow-forms', 'allow-popups', 'allow-modals']) expect(DEV_PREVIEW_FRAME_SANDBOX.split(' ')).toContain(granted);
+    for (const withheld of ['allow-top-navigation', 'allow-top-navigation-by-user-activation', 'allow-downloads', 'allow-popups-to-escape-sandbox']) expect(DEV_PREVIEW_FRAME_SANDBOX.split(' ')).not.toContain(withheld);
     const newTab = screen.getByTitle('Open the preview in a new tab');
     expect(newTab).toHaveAttribute('href', OPEN.openPath);
     expect(newTab).toHaveAttribute('target', '_blank');
@@ -174,20 +178,33 @@ describe('DevPreviewPane', () => {
     await waitFor(() => expect(mockToastError).toHaveBeenCalledWith('Could not switch the preview off', expect.objectContaining({ description: 'nope' })));
   });
 
-  test('RE-AUTH: a reauth-required message about THIS holder re-points the frame through /preview/open; other holders and other shapes are ignored', async () => {
+  test('RE-AUTH: a reauth-required message FROM OUR FRAME about THIS holder re-points the frame through /preview/open; other sources, holders and shapes are ignored; repeats are debounced', async () => {
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
-    const frame = await screen.findByTestId('dev-preview-frame');
+    const frame = (await screen.findByTestId('dev-preview-frame')) as HTMLIFrameElement;
     expect(frame).toHaveAttribute('src', OPEN.openPath);
+    const source = frame.contentWindow;
+    expect(source).not.toBeNull();
+    const reauth = { type: 'pagespace:dev-preview', event: 'reauth-required', holder: { kind: 'env', id: 'env1' } };
 
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { type: 'pagespace:dev-preview', event: 'reauth-required', holder: { kind: 'env', id: 'other' } } })); });
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { type: 'pagespace:dev-preview', event: 'something-else', holder: OPEN.holder } })); });
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: 'not an object' })); });
+    // Wrong source (no source, the page itself), wrong holder, wrong shape.
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: reauth })); });
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: reauth, source: window })); });
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { ...reauth, holder: { kind: 'env', id: 'other' } }, source })); });
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { ...reauth, event: 'something-else' }, source })); });
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: 'not an object', source })); });
     expect(screen.getByTestId('dev-preview-frame')).toHaveAttribute('src', OPEN.openPath);
 
-    act(() => { window.dispatchEvent(new MessageEvent('message', { data: { type: 'pagespace:dev-preview', event: 'reauth-required', holder: { kind: 'env', id: 'env1' } } })); });
+    // The real thing, from our frame: one re-mint...
+    act(() => { window.dispatchEvent(new MessageEvent('message', { data: reauth, source })); });
     await waitFor(() => expect(screen.getByTestId('dev-preview-frame')).toHaveAttribute('src', `${OPEN.openPath}?r=1`));
+    // ...and a spam of repeats within the debounce window mints nothing more (each accepted one is a grant row).
+    const again = (screen.getByTestId('dev-preview-frame') as HTMLIFrameElement).contentWindow;
+    for (let i = 0; i < 5; i += 1) act(() => { window.dispatchEvent(new MessageEvent('message', { data: reauth, source: again })); });
+    await new Promise((r) => setTimeout(r, 30));
+    expect(screen.getByTestId('dev-preview-frame')).toHaveAttribute('src', `${OPEN.openPath}?r=1`);
 
+    // The user's own Reload is never debounced.
     fireEvent.click(screen.getByTitle('Reload the preview'));
     await waitFor(() => expect(screen.getByTestId('dev-preview-frame')).toHaveAttribute('src', `${OPEN.openPath}?r=2`));
   });
