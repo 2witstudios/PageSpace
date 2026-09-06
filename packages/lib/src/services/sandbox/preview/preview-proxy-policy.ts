@@ -193,6 +193,9 @@ export function buildPreviewResponseHeaders(appOrigin: string | null): ReadonlyA
     ['cache-control', 'no-store'],
     ['referrer-policy', 'no-referrer'],
     ['x-content-type-options', 'nosniff'],
+    // A foreign page must not be able to embed preview resources no-cors
+    // (`<script src>`, `<img>`), even with a cookie it somehow holds.
+    ['cross-origin-resource-policy', 'same-origin'],
   ];
 }
 

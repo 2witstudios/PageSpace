@@ -10,6 +10,7 @@
  * same gather with its own stores, cannot answer differently.
  */
 
+import { NextResponse } from 'next/server';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
@@ -115,6 +116,19 @@ export function isAllowedPreviewOpen(request: Request): boolean {
   const site = request.headers.get('sec-fetch-site');
   if (site === 'same-origin' || site === 'none') return true;
   return request.headers.get('sec-fetch-dest') === 'document';
+}
+
+/**
+ * An unauthenticated open: a top-level document navigation (the "open in a
+ * new tab" re-mint arriving from the preview origin, where the app's
+ * SameSite session cookie may not have travelled) is sent to sign in — after
+ * which the user reopens from the dashboard; `/api/*` is not an admissible
+ * `next=` target, so no `next` is carried. Anything else gets the auth
+ * layer's own 401.
+ */
+export function signInOrDeny(request: Request, denial: NextResponse): NextResponse {
+  if (request.headers.get('sec-fetch-dest') !== 'document') return denial;
+  return NextResponse.redirect(new URL('/auth/signin', request.url), 302);
 }
 
 /**

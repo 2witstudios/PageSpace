@@ -1,6 +1,7 @@
 import './instrument';
 import * as Sentry from '@sentry/node';
 import { createServer, IncomingMessage, ServerResponse } from 'http';
+import type { Duplex } from 'stream';
 import { Server, Socket } from 'socket.io';
 import { getUserAccessLevel, getUserDriveAccess } from '@pagespace/lib/permissions/permissions';
 import { SHELL_BRIDGE_ROUTES } from '@pagespace/lib/agent-workspaces/shells-contract';
@@ -54,7 +55,7 @@ import { deriveShellSessionKey } from './terminal/shell-session-key';
 import { handleShellReadRequest, handleShellSendRequest } from './terminal/shell-io';
 import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-handler';
 import { handleShellActivityRequest } from './terminal/shell-activity';
-import { buildPreviewUpgradeHandler } from './dev-preview/preview-upgrade';
+import { buildPreviewUpgradeHandler, previewHolderForUpgrade } from './dev-preview/preview-upgrade';
 import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
 import {
   buildRealtimePreviewAccessDeps,
@@ -1113,19 +1114,11 @@ const previewUpgrade = buildPreviewUpgradeHandler({
   log: loggers.realtime,
   now: () => new Date(),
 });
-httpServer.on('upgrade', (req, socket, head) => {
-  void previewUpgrade(req, socket, head).then((handled) => {
-    if (handled) return;
-    if ((req.url ?? '').startsWith('/socket.io/')) return;
-    socket.destroy();
-  });
-});
-
 const io = new Server(httpServer, {
   // engine.io would otherwise destroy any upgrade socket that has not been
   // written to within 1s of arriving — a preview tunnel writes its 101 only
   // once the sprite answers, which after a hibernation wake takes longer.
-  // The upgrade listener above closes non-socket.io, non-preview sockets.
+  // The single upgrade dispatcher below closes stray sockets itself.
   destroyUpgrade: false,
   cors: {
     origin: (origin, callback) => {
@@ -1139,6 +1132,28 @@ const io = new Server(httpServer, {
     },
     credentials: true,
   },
+});
+
+// ONE owner per upgrade socket. Node invokes every 'upgrade' listener, so
+// engine.io's own listener (registered by `new Server(httpServer)` above) and
+// the preview tunnel would both receive a preview-host `/socket.io/` upgrade
+// — a previewed app using Socket.IO's default path — and engine.io would
+// write to or destroy the socket while the tunnel was still authorizing.
+// So engine.io's listeners are taken off the server and re-dispatched from
+// here: a preview HOST goes to the tunnel exclusively, PageSpace's own
+// `/socket.io/` goes to engine.io, and anything else is closed.
+const engineUpgradeListeners = httpServer.listeners('upgrade') as Array<(req: IncomingMessage, socket: Duplex, head: Buffer) => void>;
+httpServer.removeAllListeners('upgrade');
+httpServer.on('upgrade', (req: IncomingMessage, socket: Duplex, head: Buffer) => {
+  if (previewHolderForUpgrade(req, isDevPreviewEnabled() ? resolveDevPreviewApex() : null) !== null) {
+    void previewUpgrade(req, socket, head);
+    return;
+  }
+  if ((req.url ?? '').startsWith('/socket.io/')) {
+    for (const listener of engineUpgradeListeners) listener(req, socket, head);
+    return;
+  }
+  socket.destroy();
 });
 
 // AuthSocket is imported from per-event-auth.ts

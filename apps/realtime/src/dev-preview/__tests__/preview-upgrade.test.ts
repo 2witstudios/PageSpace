@@ -4,7 +4,7 @@ import type { IncomingMessage } from 'node:http';
 import { derivePreviewCookieKey, signPreviewCookie, PREVIEW_COOKIE_NAME } from '@pagespace/lib/services/sandbox/preview/preview-grant';
 import type { PreviewTarget } from '@pagespace/lib/services/sandbox/preview/preview-access';
 import type { TunnelWebSocketUpgradeInput } from '@pagespace/lib/services/sandbox/preview/preview-ws-tunnel';
-import { buildPreviewUpgradeHandler, type PreviewUpgradeDeps } from '../preview-upgrade';
+import { buildPreviewUpgradeHandler, previewHolderForUpgrade, type PreviewUpgradeDeps } from '../preview-upgrade';
 
 const APEX = 'pagespace-preview.app';
 const KEY = derivePreviewCookieKey('k'.repeat(40));
@@ -165,11 +165,13 @@ describe('buildPreviewUpgradeHandler', () => {
     expect(d.tunnelled).toHaveLength(2);
   });
 
-  it('leaves /socket.io/ upgrades to engine.io even on a preview host', async () => {
+  it('tunnels a previewed app\'s own /socket.io/ upgrade — the host decides, never the path', async () => {
     const d = deps();
     const s = fakeSocket();
-    expect(await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor(), url: '/socket.io/?EIO=4&transport=websocket' }), s.socket, Buffer.alloc(0))).toBe(false);
-    expect(s.destroyed()).toBe(false);
+    expect(await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor(), url: '/socket.io/?EIO=4&transport=websocket' }), s.socket, Buffer.alloc(0))).toBe(true);
+    expect(d.tunnelled[0].upstreamUrl.toString()).toBe('https://ps-x-org.sprites.app/socket.io/?EIO=4&transport=websocket');
+    expect(previewHolderForUpgrade({ headers: { host: `env-env1.preview.${APEX}` } }, APEX)).toEqual({ kind: 'env', id: 'env1' });
+    expect(previewHolderForUpgrade({ headers: { host: `env-env1.preview.${APEX}` } }, null)).toBeNull();
   });
 
   it('flattens array-valued and undefined request headers, and reports non-Error throws', async () => {

@@ -117,29 +117,38 @@ describe('the handshake: /__pagespace/auth', () => {
 });
 
 describe('the cookie authenticates', () => {
-  it('a framed navigation without a cookie is sent back to the app origin to re-mint, for both holder kinds', async () => {
+  it('a navigation without a cookie gets the re-auth page on THIS origin (401): framed → postMessage to the dashboard, top-level → the app-origin open route', async () => {
     const host = `ws-ws1.preview.${APEX}`;
     const nav = new NextRequest(`https://${host}/api/dev-preview/host/workspace/ws1/`, { headers: { host, 'sec-fetch-dest': 'iframe' } });
     const res = await GET(nav, ctx('workspace', 'ws1'));
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('https://app.pagespace.ai/api/agent-workspaces/ws1/preview/open');
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('text/html');
     expect(res.headers.get('set-cookie')).toContain('Max-Age=0');
+    const body = await res.text();
+    expect(body).toContain('data-open-url="https://app.pagespace.ai/api/agent-workspaces/ws1/preview/open"');
+    expect(body).toContain('data-kind="workspace" data-id="ws1" data-app-origin="https://app.pagespace.ai"');
+    expect(body).toContain("postMessage({type:'pagespace:dev-preview',event:'reauth-required',holder:holder},d.appOrigin)");
+    expect(body).toContain('window.location.replace(d.openUrl)');
+    const csp = res.headers.get('content-security-policy') ?? '';
+    expect(csp).toMatch(/^default-src 'none'; script-src 'sha256-[A-Za-z0-9+/=]+'; frame-ancestors https:\/\/app\.pagespace\.ai$/);
 
     const envNav = await GET(req('/', { headers: { 'sec-fetch-dest': 'iframe' } }), ctx());
-    expect(envNav.status).toBe(302);
-    expect(envNav.headers.get('location')).toBe('https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open');
+    expect(envNav.status).toBe(401);
+    expect(await envNav.text()).toContain('data-open-url="https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open"');
   });
 
-  it('OPEN IN A NEW TAB: a top-level document navigation carries no partitioned cookie, so it is sent to the app origin to mint a fresh grant', async () => {
+  it('OPEN IN A NEW TAB: a top-level document navigation carries no partitioned cookie, so it gets the same page — never the gather', async () => {
     const res = await GET(req('/some/deep/link', { headers: { 'sec-fetch-dest': 'document', 'sec-fetch-site': 'none' } }), ctx());
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe('https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open');
+    expect(res.status).toBe(401);
+    expect(await res.text()).toContain('data-open-url="https://app.pagespace.ai/api/drives/d1/envs/env1/preview/open"');
     expect(resolvePreviewTargetForRequest).not.toHaveBeenCalled();
   });
 
-  it('a navigation whose holder cannot be resolved to an open route gets 401 rather than a dangling redirect', async () => {
+  it('a navigation whose holder cannot be resolved to an open route gets a bare 401 rather than a dangling page', async () => {
     vi.mocked(resolvePreviewOpenPath).mockResolvedValueOnce(null);
-    expect((await GET(req('/', { headers: { 'sec-fetch-dest': 'document' } }), ctx())).status).toBe(401);
+    const res = await GET(req('/', { headers: { 'sec-fetch-dest': 'document' } }), ctx());
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toContain('application/json');
   });
 
   it('a subresource without a cookie, with a bad cookie, an expired cookie, or another holder\'s cookie is 401 — and the gather is never asked', async () => {

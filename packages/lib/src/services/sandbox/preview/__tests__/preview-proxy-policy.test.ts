@@ -131,7 +131,7 @@ describe('header policy', () => {
       given: 'any origin',
       should: 'never cache and never send a referrer',
       actual: buildPreviewResponseHeaders('https://a').slice(1),
-      expected: [['cache-control', 'no-store'], ['referrer-policy', 'no-referrer'], ['x-content-type-options', 'nosniff']],
+      expected: [['cache-control', 'no-store'], ['referrer-policy', 'no-referrer'], ['x-content-type-options', 'nosniff'], ['cross-origin-resource-policy', 'same-origin']],
     });
   });
 

@@ -59,14 +59,18 @@
  *    user may reach, and stops reaching it the moment that access is
  *    revoked. The preview response's own `frame-ancestors <app-origin>`
  *    keeps a foreign page from rendering the frame at all.
- *  - OPEN IN A NEW TAB: a partitioned jar does not travel to a top-level
- *    navigation, so the preview host sees no cookie. The host route sends a
- *    top-level document navigation back to the app origin's `/preview/open`
- *    route, which mints a FRESH grant (the previous one is spent) and runs
- *    the handshake again in that top-level context. The open routes admit a
- *    top-level navigation from any site for exactly this reason, and refuse
- *    a cross-site EMBED (`Sec-Fetch-Dest: iframe` from another site) so a
- *    foreign page cannot run the handshake inside its own frame.
+ *  - RE-MINT (expired in the frame, or OPEN IN A NEW TAB, where a
+ *    partitioned jar never travels): the preview host cannot simply redirect
+ *    to the app origin — it is cross-site to the app by design, so the app's
+ *    SameSite session cookie would not travel and the open route's
+ *    same-origin rule would refuse. It serves a small page on its own origin
+ *    instead: framed, it `postMessage`s `reauth-required` to the dashboard,
+ *    which re-points the iframe at `/preview/open` SAME-ORIGIN (cookies and
+ *    all) and a FRESH grant is minted (the previous one is spent); top-level,
+ *    it navigates to the app origin's open route, which admits a top-level
+ *    document navigation and sends an unauthenticated one to sign in. The
+ *    open routes refuse a cross-site EMBED (`Sec-Fetch-Dest: iframe` from
+ *    another site) so a foreign page cannot run the handshake in its frame.
  *  - Signed, stateless, short-lived: an HMAC over (holder, user, expiry) under
  *    a key DERIVED from the server-held sandbox secret with a fixed label, so
  *    the web tier (which mints) and the realtime tier (which verifies for

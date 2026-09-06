@@ -56,14 +56,18 @@ function refuse(socket: Duplex, status: number, reason: string): void {
   socket.destroy();
 }
 
+/** Pure, synchronous: the holder a preview-host upgrade names, or null. The dispatcher in `index.ts` uses this to pick ONE owner for the socket before anything is written to it. */
+export function previewHolderForUpgrade(req: Pick<IncomingMessage, 'headers'>, apex: string | null): DevPreviewHolderRef | null {
+  return apex === null ? null : parsePreviewHost(req.headers.host, apex);
+}
+
 export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
   return async (req: IncomingMessage, socket: Duplex, head: Buffer): Promise<boolean> => {
     const path = req.url ?? '/';
-    // engine.io's own upgrade lives at /socket.io/ and is never a preview,
-    // whatever host it arrives on — leave it to engine.io without parsing.
-    if (path.startsWith('/socket.io/')) return false;
-    const apex = deps.resolveApex();
-    const holder = apex === null ? null : parsePreviewHost(req.headers.host, apex);
+    // The HOST decides, never the path: a previewed app may well run
+    // Socket.IO at its default `/socket.io/`, and on a preview host that
+    // upgrade belongs to the tunnel, not to PageSpace's own engine.io.
+    const holder = previewHolderForUpgrade(req, deps.resolveApex());
     if (holder === null) return false;
 
     // `frame-ancestors` does not govern `new WebSocket()`, and a non-CHIPS

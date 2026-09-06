@@ -16,8 +16,10 @@
  *    preview's state and decides whether forwarding would wake the sprite
  *    and whether this user may (`decidePreviewForward`). A `forward` verdict
  *    streams the request to the sprite URL with the org token.
- *  - Anything else WITHOUT a valid cookie — a navigation is sent back to the
- *    app origin's `/preview/open` route to re-mint; a subresource gets 401.
+ *  - Anything else WITHOUT a valid cookie — a navigation gets a small
+ *    re-auth page on THIS origin (401) that hands the re-mint to the
+ *    dashboard by `postMessage` when framed, or navigates a top-level tab to
+ *    the app origin's `/preview/open`; a subresource gets a bare 401.
  *
  * NEVER REACHABLE ON THE APP ORIGIN. The `Host` header must parse as a
  * preview host naming the same holder the path names, or the request is
@@ -33,6 +35,7 @@
  * outcome, status and whether it woke the sprite — never a body.
  */
 
+import { createHash } from 'node:crypto';
 import { NextResponse, type NextRequest } from 'next/server';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
@@ -54,6 +57,33 @@ import { forwardPreviewRequest } from '@/lib/dev-preview/preview-forward';
 import { getPreviewCookieKey, getPreviewGrantsStore, resolveAppOrigin, resolvePreviewOpenPath, resolvePreviewTargetForRequest } from '@/lib/dev-preview/preview-runtime';
 
 type RouteContext = { params: Promise<{ kind: string; holderId: string; path?: string[] }> };
+
+/**
+ * The re-auth page's ONE script, hashed for its CSP. It reads its inputs from
+ * `data-*` attributes (never interpolated into the script, so the hash holds
+ * and nothing from the request reaches script context). The dashboard's
+ * contract (consumed by the UI task): a `message` from the preview frame
+ * `{ type: 'pagespace:dev-preview', event: 'reauth-required', holder }` means
+ * "re-point my iframe at the app-origin open route".
+ */
+const REAUTH_SCRIPT = [
+  "var d=document.currentScript.dataset;",
+  "var holder={kind:d.kind,id:d.id};",
+  "if(window.parent!==window){window.parent.postMessage({type:'pagespace:dev-preview',event:'reauth-required',holder:holder},d.appOrigin);}",
+  "else{window.location.replace(d.openUrl);}",
+].join('');
+const REAUTH_SCRIPT_HASH = `sha256-${createHash('sha256').update(REAUTH_SCRIPT).digest('base64')}`;
+
+function escapeAttribute(value: string): string {
+  return value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function buildReauthPage({ appOrigin, openPath, holder }: { appOrigin: string; openPath: string; holder: DevPreviewHolderRef }): string {
+  const openUrl = `${appOrigin}${openPath}`;
+  return `<!doctype html><meta charset="utf-8"><title>Preview session expired</title>`
+    + `<p>Your preview session expired. <a href="${escapeAttribute(openUrl)}" target="_top">Reopen the preview</a> from PageSpace.</p>`
+    + `<script data-kind="${escapeAttribute(holder.kind)}" data-id="${escapeAttribute(holder.id)}" data-app-origin="${escapeAttribute(appOrigin)}" data-open-url="${escapeAttribute(openUrl)}">${REAUTH_SCRIPT}</script>`;
+}
 
 const ROUTE = 'dev-preview/host';
 
@@ -123,14 +153,29 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
   const verified = token === null ? null : verifyPreviewCookie(token, getPreviewCookieKey(), now);
   if (verified === null || !verified.ok || !sameHolder(verified.claims.holder, holder)) {
     const reason = verified === null ? 'no-cookie' : verified.ok ? 'cookie-holder-mismatch' : verified.reason;
+    loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: 'anonymous', holder, method: request.method, path, outcome: 'refused', reason, status: 401, transport: 'http' }));
     if (isNavigation(request)) {
-      // Send the navigation back to the app origin to re-mint: the framed
-      // case after the cookie expired, and "open in a new tab", where a
-      // partitioned cookie does not travel to top-level at all. The app
-      // origin is the only place a session lives; it mints a FRESH grant.
+      // A navigation with no usable cookie cannot be sent straight to the
+      // app origin: this host is cross-site to the app BY DESIGN, so a
+      // redirect from here arrives there without the app's SameSite session
+      // cookie and outside the open route's same-origin rule. Instead serve
+      // a tiny page on THIS origin that hands the re-mint to whoever can do
+      // it: framed → `postMessage` to the dashboard (which re-points the
+      // iframe at `/preview/open` same-origin, cookies and all); top-level
+      // ("open in a new tab", where a partitioned cookie never travels) →
+      // navigate to the app origin's open route, which admits a top-level
+      // document navigation and sends an unauthenticated one to sign in.
       const [appOrigin, openPath] = [resolveAppOrigin(), await resolvePreviewOpenPath(holder)];
       if (appOrigin !== null && openPath !== null) {
-        return new NextResponse(null, { status: 302, headers: { location: `${appOrigin}${openPath}`, 'set-cookie': buildClearPreviewCookieHeader(), 'cache-control': 'no-store' } });
+        return new NextResponse(buildReauthPage({ appOrigin, openPath, holder }), {
+          status: 401,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': `default-src 'none'; script-src '${REAUTH_SCRIPT_HASH}'; frame-ancestors ${appOrigin}`,
+            'set-cookie': buildClearPreviewCookieHeader(),
+            'cache-control': 'no-store',
+          },
+        });
       }
     }
     return NextResponse.json({ error: 'Preview session expired. Reopen the preview from PageSpace.', reason }, { status: 401, headers: { 'set-cookie': buildClearPreviewCookieHeader(), 'cache-control': 'no-store' } });

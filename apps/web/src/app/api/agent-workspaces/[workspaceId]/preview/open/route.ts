@@ -24,7 +24,7 @@ import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/
 import { resolveDevPreviewHolder } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { workspaceNotFoundOrDenied } from '@/lib/agent-workspaces/workspace-unavailable-response';
-import { isAllowedPreviewOpen, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
+import { isAllowedPreviewOpen, openPreviewForUser, signInOrDeny } from '@/lib/dev-preview/preview-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'agent-workspaces/[workspaceId]/preview/open';
@@ -34,7 +34,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     if (!isDevPreviewConfigured()) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     const { workspaceId } = await context.params;
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) return signInOrDeny(request, auth.error);
 
     if (!isAllowedPreviewOpen(request)) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `workspace:${workspaceId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });

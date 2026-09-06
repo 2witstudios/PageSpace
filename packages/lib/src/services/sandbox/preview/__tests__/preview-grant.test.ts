@@ -31,11 +31,17 @@ describe('the preview apex', () => {
     ['pagespace.ai', 'app.pagespace.ai', 'the app domain itself'],
     ['preview.pagespace.ai', 'pagespace.ai', 'a child of the app domain'],
     ['pagespace.ai', 'preview.pagespace.ai', 'a parent of the app host'],
+    ['previews.pagespace.ai', 'app.pagespace.ai', 'a SIBLING on the same registrable domain'],
+    ['previews.pagespace.co.uk', 'app.pagespace.co.uk', 'a sibling under a two-label public suffix'],
     ['', 'app.pagespace.ai', 'unset'],
     ['not a domain', 'app.pagespace.ai', 'malformed'],
     ['localhost', 'app.pagespace.ai', 'no TLD'],
   ])('refuses %s (%s) — cookie tossing needs shared registrable domain', (raw, appHost) => {
     assert({ given: `${raw} against ${appHost}`, should: 'be null (fail closed)', actual: normalizeDevPreviewApex(raw, appHost), expected: null });
+  });
+
+  it('accepts a genuinely separate registrable domain even when it shares a TLD', () => {
+    assert({ given: 'pagespace-preview.app vs app.pagespace.app', should: 'accept', actual: normalizeDevPreviewApex('pagespace-preview.app', 'app.pagespace.app'), expected: 'pagespace-preview.app' });
   });
 
   it('accepts an apex when the app host is unknown (the app-host guard is defense in depth, not the only guard)', () => {

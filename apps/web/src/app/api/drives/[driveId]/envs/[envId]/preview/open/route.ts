@@ -30,7 +30,7 @@ import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
-import { isAllowedPreviewOpen, openPreviewForUser } from '@/lib/dev-preview/preview-runtime';
+import { isAllowedPreviewOpen, openPreviewForUser, signInOrDeny } from '@/lib/dev-preview/preview-runtime';
 
 const AUTH_OPTIONS = { allow: ['session'] as const, requireCSRF: false };
 const ROUTE = 'drive-envs/preview/open';
@@ -40,7 +40,7 @@ export async function GET(request: Request, context: { params: Promise<{ driveId
     if (!isDevPreviewConfigured()) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     const { driveId, envId } = await context.params;
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
-    if (isAuthError(auth)) return auth.error;
+    if (isAuthError(auth)) return signInOrDeny(request, auth.error);
 
     if (!isAllowedPreviewOpen(request)) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `env:${envId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });

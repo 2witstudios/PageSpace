@@ -26,8 +26,25 @@ export function normalizeDevPreviewApex(raw: string | undefined, appHost: string
   if (appHost) {
     const app = appHost.split(':')[0].toLowerCase();
     if (app === apex || app.endsWith(`.${apex}`) || apex.endsWith(`.${app}`)) return null;
+    // Siblings share a registrable domain too (`previews.pagespace.ai` vs
+    // `app.pagespace.ai`): a `Domain=.pagespace.ai` cookie set from the
+    // former reaches the latter. No Public Suffix List is available to an
+    // edge leaf, so the registrable domain is approximated CONSERVATIVELY:
+    // if the apex and the app host agree on their last two labels — or on
+    // their last three when the second label is short (`co.uk`, `com.au`) —
+    // they are treated as the same registrable domain and the apex is
+    // refused. A false refusal costs a rename; a false accept costs the
+    // cookie boundary.
+    if (registrableDomain(app) === registrableDomain(apex)) return null;
   }
   return apex;
+}
+
+/** Pure, PSL-free approximation of the registrable domain (see {@link normalizeDevPreviewApex}). */
+function registrableDomain(hostname: string): string {
+  const labels = hostname.split('.');
+  const take = labels.length >= 3 && labels[labels.length - 2].length <= 3 ? 3 : 2;
+  return labels.slice(-take).join('.');
 }
 
 /** Pure: the preview host for a holder. Throws on an id that cannot be a label (never a client input — ids come from authorized rows). */

@@ -26,13 +26,13 @@ vi.mock('@/lib/agent-workspaces/workspace-unavailable-response', () => ({
 }));
 vi.mock('@/lib/dev-preview/preview-runtime', async () => {
   const actual = await vi.importActual<typeof import('@/lib/dev-preview/preview-runtime')>('@/lib/dev-preview/preview-runtime');
-  return { isAllowedPreviewOpen: actual.isAllowedPreviewOpen, openPreviewForUser: vi.fn() };
+  return { isAllowedPreviewOpen: actual.isAllowedPreviewOpen, signInOrDeny: actual.signInOrDeny, openPreviewForUser: vi.fn() };
 });
 
 import { GET as openEnv } from '../../drives/[driveId]/envs/[envId]/preview/open/route';
 import { GET as openSession } from '../../agent-workspaces/[workspaceId]/preview/open/route';
 import { GET as capability } from '../capability/route';
-import { authenticateRequestWithOptions, isPrincipalDriveMember } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isPrincipalDriveMember } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { resolveEnvInDrive } from '@/lib/drive-envs/drive-envs-runtime';
@@ -88,6 +88,20 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview/open', () => {
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe(REDIRECT);
     expect(openPreviewForUser).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends an UNAUTHENTICATED top-level navigation to sign in (the new-tab re-mint without a session), and 401s an unauthenticated fetch', async () => {
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ error: new Response(null, { status: 401 }) } as never);
+    vi.mocked(isAuthError).mockReturnValue(true);
+    try {
+      const nav = await openEnv(req({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' }), envCtx);
+      expect(nav.status).toBe(302);
+      expect(nav.headers.get('location')).toBe('https://app.pagespace.ai/auth/signin');
+      expect((await openEnv(req(), envCtx)).status).toBe(401);
+      expect((await openSession(req({ 'sec-fetch-site': 'cross-site', 'sec-fetch-dest': 'document' }), wsCtx)).status).toBe(302);
+    } finally {
+      vi.mocked(isAuthError).mockReturnValue(false);
+    }
   });
 
   it('403s a non-member and 404s an env outside the drive', async () => {

@@ -255,16 +255,24 @@ let capturedIoUseCallback: ((socket: unknown, next: (err?: Error) => void) => Pr
 let capturedIoConnectionCallback: ((socket: unknown) => void) | null = null;
 
 let capturedUpgradeListener: ((req: unknown, socket: unknown, head: unknown) => void) | null = null;
+// engine.io registers its own upgrade listener when `new Server(httpServer)` runs;
+// index.ts takes it off the server and re-dispatches. Model that: the mock server
+// reports one "engine" listener, and records whatever index.ts installs after.
+const mockEngineUpgradeListener = vi.fn();
 const mockHttpServer = {
   listen: vi.fn((port: unknown, cb: () => void) => { if (cb) cb(); }),
+  listeners: vi.fn(() => [mockEngineUpgradeListener]),
+  removeAllListeners: vi.fn(),
   on: vi.fn((event: string, cb: (req: unknown, socket: unknown, head: unknown) => void) => {
     if (event === 'upgrade') capturedUpgradeListener = cb;
   }),
 };
 
 const mockPreviewUpgrade = vi.fn<(req: unknown, socket: unknown, head: unknown) => Promise<boolean>>().mockResolvedValue(false);
+const mockPreviewHolderForUpgrade = vi.fn<(req: unknown, apex: unknown) => unknown>().mockReturnValue(null);
 vi.mock('../dev-preview/preview-upgrade', () => ({
   buildPreviewUpgradeHandler: () => mockPreviewUpgrade,
+  previewHolderForUpgrade: (req: unknown, apex: unknown) => mockPreviewHolderForUpgrade(req, apex),
 }));
 const mockRegistryEnsure = vi.fn<(input: unknown) => Promise<void>>().mockResolvedValue(undefined);
 vi.mock('../dev-preview/detection-registry', () => ({
@@ -2537,36 +2545,42 @@ describe('requestListener - /api/dev-preview/watch', () => {
   });
 });
 
-describe('http upgrade listener - dev-preview tunnel vs socket.io vs strays', () => {
+describe('http upgrade dispatcher - one owner per socket', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockPreviewHolderForUpgrade.mockReturnValue(null);
   });
 
-  it('should register exactly one upgrade listener on the http server', () => {
+  it('should install the dispatcher as the upgrade owner', () => {
     expect(capturedUpgradeListener).not.toBeNull();
   });
 
-  it('given a preview-host upgrade the handler takes, should leave the socket to the tunnel', async () => {
-    mockPreviewUpgrade.mockResolvedValueOnce(true);
+  it('given a preview-host upgrade — even at /socket.io/ — should hand the socket to the tunnel ONLY, never to engine.io', async () => {
+    mockPreviewHolderForUpgrade.mockReturnValue({ kind: 'env', id: 'e' });
     const socket = { destroy: vi.fn() };
-    capturedUpgradeListener!({ url: '/ws', headers: {} }, socket, Buffer.alloc(0));
+    const req = { url: '/socket.io/?EIO=4&transport=websocket', headers: { host: 'env-e.preview.x' } };
+    capturedUpgradeListener!(req, socket, Buffer.alloc(0));
     await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockPreviewUpgrade).toHaveBeenCalledWith(req, socket, expect.anything());
+    expect(mockEngineUpgradeListener).not.toHaveBeenCalled();
     expect(socket.destroy).not.toHaveBeenCalled();
   });
 
-  it('given a socket.io upgrade, should leave the socket to engine.io', async () => {
-    mockPreviewUpgrade.mockResolvedValueOnce(false);
+  it('given PageSpace\'s own /socket.io/ upgrade, should hand the socket to engine.io only', async () => {
     const socket = { destroy: vi.fn() };
-    capturedUpgradeListener!({ url: '/socket.io/?EIO=4&transport=websocket', headers: {} }, socket, Buffer.alloc(0));
+    const req = { url: '/socket.io/?EIO=4&transport=websocket', headers: {} };
+    capturedUpgradeListener!(req, socket, Buffer.alloc(0));
     await new Promise(resolve => setTimeout(resolve, 0));
+    expect(mockEngineUpgradeListener).toHaveBeenCalledWith(req, socket, expect.anything());
+    expect(mockPreviewUpgrade).not.toHaveBeenCalled();
     expect(socket.destroy).not.toHaveBeenCalled();
   });
 
-  it.each(['/anything-else', undefined])('given a stray upgrade (%s), should destroy the socket — destroyUpgrade is off, so this listener owns the hygiene', async (url) => {
-    mockPreviewUpgrade.mockResolvedValueOnce(false);
+  it.each(['/anything-else', undefined])('given a stray upgrade (%s), should destroy the socket — destroyUpgrade is off, so the dispatcher owns the hygiene', async (url) => {
     const socket = { destroy: vi.fn() };
     capturedUpgradeListener!({ url, headers: {} }, socket, Buffer.alloc(0));
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(socket.destroy).toHaveBeenCalledTimes(1);
+    expect(mockEngineUpgradeListener).not.toHaveBeenCalled();
   });
 });
