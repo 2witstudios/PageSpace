@@ -99,6 +99,23 @@ interface BalanceRow {
 export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpaid'];
 
 /**
+ * The ledger row for a tier's first-ever allowance grant. The stripeRef is
+ * USER-scoped (no timestamp) on purpose: the partial unique index on stripeRef makes
+ * it the exactly-once key shared by the lazy-init path and the bare-row starter-grant
+ * path, so whichever lands first wins and the other is a no-op.
+ */
+function starterGrantLedgerRow(userId: string, monthly: number) {
+  return {
+    userId,
+    entryType: 'monthly_grant',
+    bucket: 'monthly',
+    amountCents: monthly,
+    stripeRef: `free-init-${userId}`,
+    consumeStatus: 'applied',
+  } as const;
+}
+
+/**
  * Whether ANY of the user's subscriptions could still deliver an invoice-driven
  * refill. Takes the executor so the reset transaction can RE-CHECK on `tx`
  * right before granting — a subscription created between the unlocked pre-check
@@ -380,14 +397,7 @@ export async function canConsumeAI(
       if (balanceInserted.length > 0) {
         await tx
           .insert(creditLedger)
-          .values({
-            userId,
-            entryType: 'monthly_grant',
-            bucket: 'monthly',
-            amountCents: monthly,
-            stripeRef: `free-init-${userId}`,
-            consumeStatus: 'applied',
-          })
+          .values(starterGrantLedgerRow(userId, monthly))
           .onConflictDoNothing(STRIPE_REF_ARBITER);
       }
     });
@@ -395,7 +405,8 @@ export async function canConsumeAI(
 
   // Starter grant for a NON-refilling tier whose row already exists but was never
   // granted. A top-up purchase before the user's first AI call (or a top-up racing
-  // the lazy-init above) creates a bare credit_balances row with no period stamped.
+  // the lazy-init above, caught on the next call) creates a bare credit_balances
+  // row with no period stamped.
   // A refilling tier gets such a row rolled by the reset path; free is excluded from
   // that path, so without this branch a user who bought credits first would
   // permanently miss the advertised starter grant. Eligibility is decided by the
@@ -409,14 +420,7 @@ export async function canConsumeAI(
     await db.transaction(async (tx) => {
       const granted = await tx
         .insert(creditLedger)
-        .values({
-          userId,
-          entryType: 'monthly_grant',
-          bucket: 'monthly',
-          amountCents: monthly,
-          stripeRef: `free-init-${userId}`,
-          consumeStatus: 'applied',
-        })
+        .values(starterGrantLedgerRow(userId, monthly))
         .onConflictDoNothing(STRIPE_REF_ARBITER)
         .returning({ id: creditLedger.id });
       if (granted.length === 0) return;
