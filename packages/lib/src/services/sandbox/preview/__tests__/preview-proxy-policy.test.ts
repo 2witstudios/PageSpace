@@ -37,8 +37,9 @@ describe('the upstream is never derivable from client input', () => {
     });
   });
 
-  it('cannot be re-homed by a protocol-relative path', () => {
-    expect(() => buildPreviewUpstreamUrl(SPRITE, '//evil.example.com/x')).toThrow(/escaped the sprite origin/);
+  it('cannot be re-homed by a protocol-relative path — the leading slashes are collapsed and the host stays the sprite', () => {
+    assert({ given: '//evil.example.com/x', should: 'stay on the sprite origin as a path', actual: buildPreviewUpstreamUrl(SPRITE, '//evil.example.com/x').toString(), expected: `${SPRITE}/evil.example.com/x` });
+    expect(() => buildPreviewUpstreamUrl(SPRITE, '/a\r\nHost: evil')).toThrow(/control character/);
   });
 
   it('resolves dot segments against the fixed origin rather than escaping it', () => {

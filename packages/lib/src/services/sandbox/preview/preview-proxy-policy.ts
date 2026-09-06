@@ -96,11 +96,13 @@ export function assertTrustedPreviewUpstream(url: URL): void {
 export function buildPreviewUpstreamUrl(spriteUrl: string, pathAndQuery: string): URL {
   const base = new URL(spriteUrl);
   assertTrustedPreviewUpstream(base);
-  const suffix = pathAndQuery.startsWith('/') ? pathAndQuery : `/${pathAndQuery}`;
-  const upstream = new URL(suffix, base.origin);
-  // `new URL('//evil', origin)` would re-home the request; a path from a real
-  // request never starts with `//` after Next's routing, but the check costs
-  // nothing and the failure mode is an open relay.
+  // The client-supplied part is appended AFTER the sprite origin and a literal
+  // `/`, never resolved as a URL of its own: `new URL('//evil', origin)` would
+  // re-home the request, and a control character or whitespace has no place in
+  // a request target. Dot segments are then resolved against the fixed host.
+  const suffix = pathAndQuery.replace(/^\/+/, '');
+  if (/[\s\u0000-\u001f\u007f]/.test(suffix)) throw new Error('preview path contains a control character — refusing to forward');
+  const upstream = new URL(`${base.origin}/${suffix}`);
   if (upstream.origin !== base.origin) throw new Error('preview path escaped the sprite origin — refusing to forward');
   return upstream;
 }
