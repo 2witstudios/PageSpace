@@ -17,10 +17,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   that says exactly what is true — live, starting, down (with the relay's error), switched off,
   "sandbox rebuilt since", or "port 8080 is in use by another process" with the process and how to
   release it. A drive owner or admin (or the session's owner, from inside the session) can switch a
-  preview off and back on. Reading the status never wakes a sleeping sandbox. Off by default: the
-  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
-  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
-  first.
+  preview off and back on, and switching it off is remembered even if the sandbox notices the dev
+  server again a moment later. Reading the status never wakes a sleeping sandbox. One thing to know
+  about your own dev server: the preview reaches it through PageSpace's hostname, so a server that
+  checks the `Host` header (Vite 6 and newer do) needs that hostname allowed — for Vite, add the
+  preview domain to `server.allowedHosts`. Off by default: the whole surface is absent until
+  `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
+  ops work (wildcard DNS, certificate, and the Caddy block) to land first.
 - **Local Environments: your enrolled computer can now hold a live connection, and you can
   revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
   addressed to its Environment, proves it is the machine you enrolled with a signed hello
