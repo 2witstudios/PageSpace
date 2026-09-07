@@ -7,19 +7,21 @@ Capacitor wrapper around the web app, mirroring `apps/ios`.
 > prompt, token registration, build and signing — belongs to the Android client work and is not
 > documented here yet.
 
-## Deep links need an assetlinks.json that does not exist yet
+## Deep links: what ships, and what is deliberately deferred
 
-`AndroidManifest.xml` registers two deep-link intent filters:
+`AndroidManifest.xml` registers **one** deep-link intent filter: the `pagespace://` custom
+scheme, mirroring iOS's `CFBundleURLSchemes`. This is what the Google and Apple OAuth callback
+routes redirect to (`pagespace://auth-exchange?code=…`). A custom scheme is claimed by the app
+outright — no domain verification, no server-side file — so it works as soon as the app is
+installed, on every supported API level.
 
-- **Verified App Links** for `https://pagespace.ai`, on the same paths iOS claims in
-  `apps/web/public/.well-known/apple-app-site-association` (`/auth/callback/*`,
-  `/api/auth/callback/*`, `/invite/*`, `/join/*`).
-- **The `pagespace://` custom scheme**, mirroring iOS's `CFBundleURLSchemes`. This is what the
-  Google and Apple OAuth callback routes redirect to (`pagespace://auth-exchange?code=…`).
+**Verified App Links for `https://pagespace.ai` are NOT registered.** Two prerequisites are
+missing, and the filter is a regression rather than groundwork until both land.
 
-The custom scheme works as soon as the app is installed. **The App Links do not, and will not
-until `/.well-known/assetlinks.json` is served from `pagespace.ai`** carrying the SHA-256
-fingerprint of the *release* signing certificate:
+### Prerequisite 1 — assetlinks.json, which needs a release signing certificate
+
+`/.well-known/assetlinks.json` must be served from `pagespace.ai` carrying the SHA-256
+fingerprint of the **release** signing certificate:
 
 ```json
 [{
@@ -32,21 +34,56 @@ fingerprint of the *release* signing certificate:
 }]
 ```
 
-That fingerprint does not exist: a release keystore and Play Console setup are deliberately
-outside the Android parity epic. Until it does, Android's link verification fails and — because
-the filter is `android:autoVerify="true"` and the app targets SDK 36 — the app is simply not
-offered as a handler and the link opens in the browser. That is the intended degradation; it is
-also why the filter must keep `autoVerify`, since without it PageSpace would appear in the
-disambiguation chooser on every `pagespace.ai` link.
+No release keystore exists — signing and Play Console setup are outside the Android parity epic —
+so link verification cannot succeed on any Android version today.
 
-To verify locally before then, serve the same file with the **debug** keystore's fingerprint
-(`keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`)
-and re-run verification with `adb shell pm verify-app-links --re-verify ai.pagespace.android`,
-then inspect `adb shell pm get-app-links ai.pagespace.android`.
+### Prerequisite 2 — link routing in the web app
 
-One further gap, shared with iOS: nothing in the web app listens for the Capacitor App plugin's
-`appUrlOpen` event, so a captured link opens the app at `server.url` (`/dashboard`) rather than at
-the linked path. Widening the host capture beyond the paths above should wait on that routing.
+Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform. A
+captured link therefore opens the app at `server.url` (`/dashboard`), not at the linked path: the
+invite token or auth callback code in the URL is silently dropped.
+
+### Why `autoVerify` alone is not enough here
+
+`android:autoVerify="true"` is often described as making an unverified filter degrade safely to
+the browser. That is true only on **API 31+**, and it is a behaviour of the *device's* platform
+version, not of `targetSdk`:
+
+| Device API level | Filter present, verification fails |
+|---|---|
+| 31+ (Android 12+) | App is not a candidate; link opens in the browser. Safe. |
+| 23–30 (Android 6–11) | Filter stays eligible; PageSpace appears in the disambiguation chooser. |
+
+`minSdkVersion` is 23, so the second row is in scope. On those devices a user who picks PageSpace
+from the chooser lands on `/dashboard` with the token gone — strictly worse than the browser,
+for no gain, since verification cannot succeed anyway. Hence: deferred, not shipped.
+
+### The filter to add, once both prerequisites are met
+
+Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
+the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+capture would strand users on `/dashboard` from every marketing, blog, or docs link.
+
+```xml
+<intent-filter android:autoVerify="true">
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/auth/callback/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/api/auth/callback/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/invite/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/join/" />
+</intent-filter>
+```
+
+To exercise it before a release certificate exists, serve the same `assetlinks.json` with the
+**debug** keystore's fingerprint:
+
+```bash
+keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android
+adb shell pm verify-app-links --re-verify ai.pagespace.android
+adb shell pm get-app-links ai.pagespace.android
+```
 
 ## Server-side push requirements (production `pagespace-web`)
 

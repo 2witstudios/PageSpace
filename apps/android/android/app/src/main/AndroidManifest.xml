@@ -23,42 +23,47 @@
             </intent-filter>
 
             <!--
-                Verified App Links. autoVerify is what keeps the degradation safe:
-                on Android 12+ (this app targets 36) an unverified autoVerify
-                filter makes the app simply not a candidate for the link, so it
-                opens in the browser. Dropping autoVerify would instead put
-                PageSpace in the disambiguation chooser on every pagespace.ai
-                link, which is the behaviour we do not want.
+                Verified App Links for https://pagespace.ai are deliberately NOT
+                registered yet. They need two things that do not exist, and
+                shipping the filter before both would be a regression, not
+                groundwork:
 
-                Verification needs /.well-known/assetlinks.json served from
-                pagespace.ai listing the RELEASE signing certificate's SHA-256
-                fingerprint. That certificate does not exist yet (signing and Play
-                Console are out of scope for this epic), so this is inert in
-                production today — see apps/android/README.md.
+                  1. /.well-known/assetlinks.json served from pagespace.ai with
+                     the RELEASE signing certificate's SHA-256 fingerprint. No
+                     release keystore exists — signing and Play Console are
+                     outside the Android parity epic — so verification cannot
+                     succeed on ANY Android version today.
+                  2. Link routing in the web app. Nothing listens for the
+                     @capacitor/app plugin's `appUrlOpen` event (on either
+                     platform), so a captured link opens the app at server.url
+                     (/dashboard) and the linked path — an invite token, an auth
+                     callback code — is silently dropped.
 
-                Paths mirror apps/web/public/.well-known/apple-app-site-association
-                so the two platforms capture the same links. Widening the host
-                capture needs link routing first: nothing in the web app listens
-                for the App plugin's `appUrlOpen`, so a captured link opens the
-                app at server.url (/dashboard), not at the linked path.
+                android:autoVerify="true" does not make an unverified filter safe
+                on the devices this app supports. Exclusive resolution of verified
+                links is a behaviour of the DEVICE's platform version (API 31+),
+                not of targetSdk: on API 31+ a failed-verification filter takes
+                the app out of the running and the link opens in the browser, but
+                minSdkVersion is 23, and on API 23-30 the same filter stays
+                eligible and PageSpace appears in the disambiguation chooser.
+                Picking it there would land the user on /dashboard with the token
+                gone — worse than the browser, for no gain.
+
+                The exact filter to add, and the order the prerequisites have to
+                land in, are written up in apps/android/README.md.
             -->
-            <intent-filter android:autoVerify="true">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/auth/callback/" />
-                <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/api/auth/callback/" />
-                <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/invite/" />
-                <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/join/" />
-            </intent-filter>
 
             <!--
                 Custom scheme, mirroring CFBundleURLSchemes `pagespace` on iOS.
                 This is the OAuth handoff target: the Google and Apple callback
-                routes redirect to `pagespace://auth-exchange?code=...`. Kept in a
-                separate filter from the App Links one — autoVerify applies to the
-                whole filter, and a non-https scheme inside a verified filter has
-                nothing to verify against.
+                routes redirect to `pagespace://auth-exchange?code=...`.
+
+                Unlike an https App Link this needs no domain verification and no
+                assetlinks.json — a custom scheme is claimed by the app outright —
+                so it works as soon as the app is installed, on every supported
+                API level. It also cannot be hijacked into the wrong app by a
+                chooser on pre-API-31 devices the way an unverified https filter
+                can, because no browser competes for a `pagespace://` URL.
 
                 MainActivity is already launchMode="singleTask", so an incoming
                 link reaches the running task through onNewIntent; BridgeActivity

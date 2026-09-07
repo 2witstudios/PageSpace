@@ -7,18 +7,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
-- **Android app: a failed load now offers a Retry, and links can open the app (groundwork)** —
+- **Android app: a failed load now offers a Retry, and OAuth sign-in can return to the app** —
   the Android shell previously had no bundled error screen, so a launch with no connectivity left
   the WebView on Chrome's own error page with nothing to do. It now falls back to a PageSpace
-  screen with a working Retry button, matching iOS. The app also registers deep links: the
-  `pagespace://` scheme the Google and Apple sign-in redirects already use, and Android App Links
-  for the same `pagespace.ai` paths iOS claims (`/auth/callback/`, `/api/auth/callback/`,
-  `/invite/`, `/join/`). **The App Links are inert until `/.well-known/assetlinks.json` is served
-  from pagespace.ai with the release signing certificate's fingerprint** — that certificate does
-  not exist yet, since signing and Play Console setup are separate work. Until it is served,
-  `pagespace.ai` links open in the browser exactly as they do today; no disambiguation dialog
-  appears. Sign-in and other non-pagespace.ai hosts the app navigates to are now allowlisted so
-  they stay inside the app instead of being handed to Chrome.
+  screen with a working Retry button, matching iOS. The app also registers the `pagespace://`
+  link scheme the Google and Apple sign-in redirects already use, so a native sign-in can hand
+  back to the app the way it does on iOS. Sign-in and other non-pagespace.ai hosts the app
+  navigates to are now allowlisted so they stay inside the app instead of being handed to Chrome.
+  Opening a `pagespace.ai` web link still opens your browser, unchanged — making those links open
+  the app needs a signed release build and in-app link routing that do not exist yet, and adding
+  it early would have put PageSpace in Android's "open with" chooser on Android 6–11 and then
+  dropped you on the dashboard with the link's invite or sign-in token discarded.
 
 - **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
   when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
