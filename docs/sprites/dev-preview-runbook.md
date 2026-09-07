@@ -92,6 +92,23 @@ does not know, so the spec starts a server without the allow-list first and
 records what the user actually sees, then starts one with
 `server.allowedHosts` and asserts the app renders.
 
+### Verify this against a real sprite before the flag goes on
+
+The proxy authenticates to the sprite edge with the **org-scoped Sprites
+bearer token** (`preview-forward.ts`, and the WebSocket tunnel does the same),
+and the in-sprite relay is a byte-for-byte TCP pipe — it copies whatever
+arrives on 8080 straight to the dev server. So the whole question is whether
+the sprite edge STRIPS that `Authorization` header before proxying inward. The
+spike verified the edge *accepts* the header; it did not verify that the
+header stops there.
+
+If it does not stop there, a previewed dev server — which is agent-authored or
+npm-supply-chain code — can read an org-wide credential out of its own request
+headers. That is worth one direct check against a real sprite (curl through
+the preview origin to a server that echoes its request headers) before this is
+enabled anywhere, and it is cheap. Nothing in the application can fix it if the
+answer is bad; the mitigation would be an edge change or a header-stripping hop.
+
 ## What is NOT ready — the smoke has no target yet
 
 **Staging cannot run it as configured**, and this is the open item:
