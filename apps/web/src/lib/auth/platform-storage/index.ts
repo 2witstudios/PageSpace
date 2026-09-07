@@ -1,5 +1,16 @@
 import type { PlatformStorage } from './types';
 import { hasNativeCapability, getPlatform, type Platform } from '@/lib/capacitor-bridge';
+/**
+ * These were `require()` calls so a platform's module only loaded on that
+ * platform. They are static imports now: every one of these modules already
+ * defers its platform-specific dependency (`@/lib/keychain-plugin`,
+ * `@/lib/ios-google-auth`, `@capacitor/preferences`, `window.electron`) to a
+ * dynamic import *inside* a method, so their module bodies carry nothing but
+ * `cuid2` — which `web-storage` pulls in on every platform regardless. The
+ * requires bought no code splitting and cost the factory its testability:
+ * `require` of a TypeScript module does not resolve under vitest, so nothing
+ * could assert which implementation a platform actually resolves to.
+ */
 import { AndroidStorage } from './android-storage';
 import { DesktopStorage } from './desktop-storage';
 import { IOSStorage } from './ios-storage';
@@ -25,17 +36,7 @@ const SECURE_STORAGE_FACTORIES: Record<Platform, (() => PlatformStorage) | null>
   web: null,
 };
 
-/**
- * These were `require()` calls so a platform's module only loaded on that
- * platform. They are static imports now: every one of these modules already
- * defers its platform-specific dependency (`@/lib/keychain-plugin`,
- * `@/lib/ios-google-auth`, `@capacitor/preferences`, `window.electron`) to a
- * dynamic import *inside* a method, so their module bodies carry nothing but
- * `cuid2` — which `web-storage` pulls in on every platform regardless. The
- * requires bought no code splitting and cost the factory its testability:
- * `require` of a TypeScript module does not resolve under vitest, so nothing
- * could assert which implementation a platform actually resolves to.
- */
+/** The platform's storage adapter, built once and reused. */
 export function getPlatformStorage(): PlatformStorage {
   if (instance) return instance;
 

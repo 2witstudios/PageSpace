@@ -72,6 +72,11 @@ describe('AndroidStorage', () => {
     keychainMock.get.mockReset();
     keychainMock.set.mockReset();
     keychainMock.remove.mockReset();
+    // The real plugin always resolves an object; default to an empty store so a
+    // test only has to say what it puts in the keychain, not that one exists.
+    keychainMock.get.mockResolvedValue({ value: null });
+    keychainMock.set.mockResolvedValue({ success: true });
+    keychainMock.remove.mockResolvedValue({ success: true });
     preferencesStore.clear();
     localStorage.clear();
     preferencesMock.get.mockClear();
@@ -133,6 +138,44 @@ describe('AndroidStorage', () => {
         key: 'pagespace_session',
         value: JSON.stringify(session),
       });
+    });
+
+    it('keeps a bearer-less refresh out of the keychain and in the legacy store', async () => {
+      // The device/refresh web branch — which is what an Android device
+      // registered by the in-WebView web flow gets — sets a session cookie and
+      // returns no sessionToken. Storing that shape would strand the device
+      // token in a blob getStoredSession rejects.
+      localStorage.setItem('deviceToken', 'old-device-token');
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: 'csrf',
+        deviceId: 'web_abc123',
+        deviceToken: 'rotated-device-token',
+      });
+
+      expect(keychainMock.set).not.toHaveBeenCalled();
+      // A rotated token must land somewhere, or the next refresh is a 401.
+      expect(localStorage.getItem('deviceToken')).toBe('rotated-device-token');
+      expect(localStorage.getItem('browser_device_id')).toBe('web_abc123');
+    });
+
+    it('still recovers the session after a bearer-less refresh', async () => {
+      localStorage.setItem('deviceToken', 'old-device-token');
+      keychainMock.get.mockResolvedValue({ value: null });
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'web_abc123',
+        deviceToken: 'rotated-device-token',
+      });
+
+      const recovered = await storage.getStoredSession();
+      expect(recovered?.deviceToken).toBe('rotated-device-token');
+      expect(await storage.getDeviceId()).toBe('web_abc123');
     });
 
     it('spends the legacy device token once the keychain holds the session', async () => {
@@ -371,6 +414,33 @@ describe('AndroidStorage', () => {
 
       expect(await storage.getDeviceId()).toBe('web_abc123');
       expect(preferencesStore.get('pagespace_device_id')).toBe('web_abc123');
+    });
+
+    it('reports the id the keychain session is bound to, not a legacy one', async () => {
+      // Both stores can hold a session at once — a keychain session plus a
+      // fresh in-WebView web sign-in. Sending the keychain's device token with
+      // the legacy id is read by the refresh route as a stolen token.
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'native-device-id',
+          deviceToken: 'native-device-token',
+        }),
+      });
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('native-device-id');
+      expect((await storage.getStoredSession())?.deviceToken).toBe('native-device-token');
+    });
+
+    it('falls back to preferences when the store cannot be read', async () => {
+      preferencesStore.set('pagespace_device_id', 'preferences-id');
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('preferences-id');
     });
 
     it('lets the live binding outrank an id already in preferences', async () => {

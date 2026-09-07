@@ -97,6 +97,22 @@ const {
 });
 
 // Mock dependencies with hoisted mocks
+const { mockClearNativeSession, mockGetStoredSession } = vi.hoisted(() => ({
+  mockClearNativeSession: vi.fn(async () => {}),
+  mockGetStoredSession: vi.fn(async () => null),
+}));
+
+// Logout has to clear the native secure store on every platform that has one.
+// Android writes to the same keychain under the same key as iOS, so this is
+// mocked at the platform-storage seam rather than at the iOS module.
+vi.mock('@/lib/auth/platform-storage', () => ({
+  getPlatformStorage: () => ({
+    platform: 'android' as const,
+    clearSession: mockClearNativeSession,
+    getStoredSession: mockGetStoredSession,
+  }),
+}));
+
 vi.mock('next/navigation', () => ({
   useRouter: () => ({
     push: mockPush,
@@ -262,6 +278,35 @@ describe('useAuth', () => {
       expect(mockAuthStore.endSession).toHaveBeenCalled();
       expect(mockPush).toHaveBeenCalledWith('/auth/signin');
       consoleError.mockRestore();
+    });
+
+    it('clears the native secure-storage session on a native shell', async () => {
+      // Regression: an iOS-only branch here left a revoked session in the
+      // Android keychain for fetchWithAuth to keep presenting until a 401.
+      mockPost.mockResolvedValue({ ok: true });
+      (window as Window & { Capacitor?: unknown }).Capacitor = {
+        isNativePlatform: () => true,
+        getPlatform: () => 'android',
+      };
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockClearNativeSession).toHaveBeenCalled();
+      delete (window as Window & { Capacitor?: unknown }).Capacitor;
+    });
+
+    it('does not reach for a native store in a plain browser tab', async () => {
+      mockPost.mockResolvedValue({ ok: true });
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockClearNativeSession).not.toHaveBeenCalled();
     });
 
     it('should clear deviceToken from localStorage', async () => {

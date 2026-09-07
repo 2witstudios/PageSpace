@@ -100,15 +100,19 @@ export function useAuth(): {
         clearSessionCache();
       }
 
-      // iOS: Clear session from Keychain
+      // Native shells: clear the secure-storage session through the platform
+      // adapter. Asking the capability, not the platform, is what makes this
+      // cover Android — which writes to the same `PageSpaceKeychain` under the
+      // same key as iOS, so an iOS-only branch would leave a revoked session on
+      // the device for `fetchWithAuth` to keep presenting until a 401.
       if (typeof window !== 'undefined') {
-        const { isCapacitorApp, getPlatform } = await import('@/lib/capacitor-bridge');
-        if (isCapacitorApp() && getPlatform() === 'ios') {
+        const { hasNativeCapability } = await import('@/lib/capacitor-bridge');
+        if (hasNativeCapability('secureStore')) {
           try {
-            const { clearStoredSession } = await import('@/lib/ios-google-auth');
-            await clearStoredSession();
+            const { getPlatformStorage } = await import('@/lib/auth/platform-storage');
+            await getPlatformStorage().clearSession();
           } catch (err) {
-            console.error('Failed to clear iOS Keychain session', err);
+            console.error('Failed to clear native secure-storage session', err);
           }
         }
       }

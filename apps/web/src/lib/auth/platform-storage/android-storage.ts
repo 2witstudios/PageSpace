@@ -46,6 +46,15 @@ function readLegacy(key: string): string | null {
   }
 }
 
+/** Write a key to localStorage, ignoring an unavailable store. */
+function writeLegacy(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Private mode or a full quota — the caller has no better option either.
+  }
+}
+
 /** Drop a key from localStorage, ignoring an unavailable store. */
 function clearLegacy(key: string): void {
   try {
@@ -168,16 +177,37 @@ export class AndroidStorage implements PlatformStorage {
    * refresh worked.
    */
   async storeSession(session: StoredSession): Promise<void> {
+    // A session with no bearer token is not a native session, and the keychain
+    // is the wrong home for it. It arrives whenever the device record was
+    // registered by the in-WebView web flow — which is every Android device
+    // until Phase B, since those flows register with `platform: 'web'`. The
+    // refresh route branches on that *stored* platform and its web branch
+    // (`device/refresh/route.ts`) sets a session **cookie** and returns only
+    // `{ csrfToken, deviceToken }`. Writing that here would store a blob
+    // `getStoredSession` rejects for want of a `sessionToken`, and spending the
+    // legacy copy on top of it would destroy the only token the fallback can
+    // recover — a forced sign-out on the very refresh that succeeded.
+    //
+    // So it goes where the cookie world reads it from, exactly as
+    // `WebStorage.storeSession` puts it there. That also persists a *rotated*
+    // device token: the web branch returns a new one when the old is near
+    // expiry, and dropping it would revoke the client on the next refresh.
+    if (!session.sessionToken) {
+      if (session.deviceToken) writeLegacy(LEGACY_DEVICE_TOKEN_KEY, session.deviceToken);
+      if (session.deviceId) writeLegacy(LEGACY_DEVICE_ID_KEYS[0], session.deviceId);
+      return;
+    }
+
     try {
       const keychain = await this.keychain();
       await keychain.set({ key: SESSION_KEY, value: JSON.stringify(session) });
     } catch (error) {
       throw storageError('write', error);
     }
-    // The keychain now holds the session, so the legacy copy is spent. Dropping
-    // it here is what makes the migration one-way: `readLegacySession` stops
-    // firing, and with it `resolveDeviceId`'s legacy branch, so the device
-    // identity settles on the value already persisted to preferences.
+    // The keychain now holds a session that supersedes the legacy one, so the
+    // legacy copy is spent. Dropping it here is what makes the migration
+    // one-way: `readLegacySession` stops firing and the device identity settles
+    // on the session in the keychain.
     clearLegacy(LEGACY_DEVICE_TOKEN_KEY);
   }
 
@@ -222,6 +252,23 @@ export class AndroidStorage implements PlatformStorage {
   }
 
   /**
+   * The device id the session currently in force is bound to, if any.
+   *
+   * A store fault is not fatal here — the caller falls back to preferences —
+   * so unlike `getStoredSession` this swallows it. Losing the binding degrades
+   * a refresh; failing to answer at all would break every caller of
+   * `getDeviceInfo`.
+   */
+  private async boundDeviceId(): Promise<string | null> {
+    try {
+      const session = await this.getStoredSession();
+      return session?.deviceId || null;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * In-flight device-id resolution, shared by concurrent callers.
    *
    * `getDeviceId` is a read-then-write. Two callers that both reach the read
@@ -247,23 +294,23 @@ export class AndroidStorage implements PlatformStorage {
   }
 
   private async resolveDeviceId(): Promise<string> {
-    const { Preferences } = await import('@capacitor/preferences');
-    const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
-
-    // While a legacy device token is live, the id the web flow registered is
-    // the device's real identity and outranks anything in preferences.
+    // The identity of the session in force outranks anything in preferences.
     // `/api/auth/device/refresh` enforces strict binding: a deviceId that does
     // not match the one the token was issued against is treated as a stolen
     // token and answered 401 (`device/refresh/route.ts` via
-    // `shouldAllowDeviceRefresh`). Every web sign-in path binds the token to
-    // `getOrCreateDeviceId()` — i.e. `browser_device_id` — so reporting a
-    // preferences id minted by an earlier refresh attempt would guarantee that
-    // 401 and force a re-auth. Preferences is caught up to the live binding
-    // rather than allowed to contradict it.
-    const legacyId = readLegacy(LEGACY_DEVICE_TOKEN_KEY) ? readLegacyDeviceId() : null;
-    if (legacyId) {
-      if (legacyId !== value) await Preferences.set({ key: DEVICE_ID_KEY, value: legacyId });
-      return legacyId;
+    // `shouldAllowDeviceRefresh`), and `refreshBearerSession` sends the id from
+    // `getDeviceInfo()` rather than from the session it just read. Deriving it
+    // from that same session is what keeps the pair it sends consistent —
+    // whichever store the session came from, and however many stores hold one.
+    const bound = await this.boundDeviceId();
+
+    const { Preferences } = await import('@capacitor/preferences');
+    const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
+
+    if (bound) {
+      // Catch preferences up rather than let it contradict the live binding.
+      if (bound !== value) await Preferences.set({ key: DEVICE_ID_KEY, value: bound });
+      return bound;
     }
 
     if (value) return value;
