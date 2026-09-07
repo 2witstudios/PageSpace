@@ -8,7 +8,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import type { SandboxHandle, SandboxServiceInfo } from '../../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxServiceInfo } from '../../sandbox-host';
 import { planDevServerService, type DevPreviewHolderRef } from '../dev-preview-core';
 import { createDevPreviewDetector } from '../dev-preview-detection';
 import { applyDevPreviewUserAction } from '../dev-preview-status';
@@ -81,6 +81,7 @@ function relayService(targetPort: number, overrides: Partial<SandboxServiceInfo>
 function handleFor(log: string[], relay: SandboxServiceInfo | null): SandboxHandle {
   return {
     sandboxId: 'sbx',
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     spriteInstanceId: INSTANCE,
     exec: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
     writeFiles: async () => {},

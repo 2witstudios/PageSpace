@@ -4,7 +4,7 @@
  */
 import { describe, it, expect, vi } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import type { SandboxHandle, SandboxServiceInfo } from '../../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxServiceInfo } from '../../sandbox-host';
 import {
   reconcileStoppedDevPreviews,
   DEV_PREVIEW_SWEEP_STALE_AFTER_MS,
@@ -40,6 +40,7 @@ const row = (over: Partial<DevPreviewRecord> = {}): DevPreviewRecord => ({
 function fakeHandle(calls: string[], relay: SandboxServiceInfo | null): SandboxHandle {
   return {
     sandboxId: 'sbx',
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     spriteInstanceId: INSTANCE,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
     writeFiles: async () => {},
