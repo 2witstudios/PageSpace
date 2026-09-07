@@ -2,9 +2,51 @@
 
 Capacitor wrapper around the web app, mirroring `apps/ios`.
 
-> **Scope of this file today:** only the server-side push requirements below, added with the FCM
-> sender. Client-side setup — the runtime permission prompt, token registration, build and signing
-> — belongs to the Android client work and is not documented here yet.
+> **Scope of this file today:** the server-side push requirements below (added with the FCM
+> sender) and the deep-link deployment dependency. Client-side setup — the runtime permission
+> prompt, token registration, build and signing — belongs to the Android client work and is not
+> documented here yet.
+
+## Deep links need an assetlinks.json that does not exist yet
+
+`AndroidManifest.xml` registers two deep-link intent filters:
+
+- **Verified App Links** for `https://pagespace.ai`, on the same paths iOS claims in
+  `apps/web/public/.well-known/apple-app-site-association` (`/auth/callback/*`,
+  `/api/auth/callback/*`, `/invite/*`, `/join/*`).
+- **The `pagespace://` custom scheme**, mirroring iOS's `CFBundleURLSchemes`. This is what the
+  Google and Apple OAuth callback routes redirect to (`pagespace://auth-exchange?code=…`).
+
+The custom scheme works as soon as the app is installed. **The App Links do not, and will not
+until `/.well-known/assetlinks.json` is served from `pagespace.ai`** carrying the SHA-256
+fingerprint of the *release* signing certificate:
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "ai.pagespace.android",
+    "sha256_cert_fingerprints": ["<release cert SHA-256, colon-separated hex>"]
+  }
+}]
+```
+
+That fingerprint does not exist: a release keystore and Play Console setup are deliberately
+outside the Android parity epic. Until it does, Android's link verification fails and — because
+the filter is `android:autoVerify="true"` and the app targets SDK 36 — the app is simply not
+offered as a handler and the link opens in the browser. That is the intended degradation; it is
+also why the filter must keep `autoVerify`, since without it PageSpace would appear in the
+disambiguation chooser on every `pagespace.ai` link.
+
+To verify locally before then, serve the same file with the **debug** keystore's fingerprint
+(`keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android`)
+and re-run verification with `adb shell pm verify-app-links --re-verify ai.pagespace.android`,
+then inspect `adb shell pm get-app-links ai.pagespace.android`.
+
+One further gap, shared with iOS: nothing in the web app listens for the Capacitor App plugin's
+`appUrlOpen` event, so a captured link opens the app at `server.url` (`/dashboard`) rather than at
+the linked path. Widening the host capture beyond the paths above should wait on that routing.
 
 ## Server-side push requirements (production `pagespace-web`)
 

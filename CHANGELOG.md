@@ -7,6 +7,19 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Android app: a failed load now offers a Retry, and links can open the app (groundwork)** —
+  the Android shell previously had no bundled error screen, so a launch with no connectivity left
+  the WebView on Chrome's own error page with nothing to do. It now falls back to a PageSpace
+  screen with a working Retry button, matching iOS. The app also registers deep links: the
+  `pagespace://` scheme the Google and Apple sign-in redirects already use, and Android App Links
+  for the same `pagespace.ai` paths iOS claims (`/auth/callback/`, `/api/auth/callback/`,
+  `/invite/`, `/join/`). **The App Links are inert until `/.well-known/assetlinks.json` is served
+  from pagespace.ai with the release signing certificate's fingerprint** — that certificate does
+  not exist yet, since signing and Play Console setup are separate work. Until it is served,
+  `pagespace.ai` links open in the browser exactly as they do today; no disambiguation dialog
+  appears. Sign-in and other non-pagespace.ai hosts the app navigates to are now allowlisted so
+  they stay inside the app instead of being handed to Chrome.
+
 - **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
   when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
   drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath
