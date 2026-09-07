@@ -219,9 +219,16 @@ export class AndroidStorage implements PlatformStorage {
         throw storageError('write', 'session carries neither a bearer token nor a device token');
       }
 
+      // Write before clearing, never the other way round: `writeLegacy` throws
+      // on an unusable store, and a clear that ran first would have destroyed
+      // the old token to make room for one that never landed. This order can
+      // only leave a *stale* session behind, which the next refresh corrects;
+      // the other can leave none at all.
+      writeLegacy(LEGACY_DEVICE_TOKEN_KEY, session.deviceToken);
+
       // Any keychain session is superseded: the server has just told us this
       // device's record is a cookie one. Leaving it would shadow the token
-      // written below, because `getStoredSession` reads the keychain first.
+      // written above, because `getStoredSession` reads the keychain first.
       // Best-effort, for the same reason `clearSession` is.
       try {
         const keychain = await this.keychain();
@@ -229,8 +236,6 @@ export class AndroidStorage implements PlatformStorage {
       } catch (error) {
         console.error(storageError('clear', error).message);
       }
-
-      writeLegacy(LEGACY_DEVICE_TOKEN_KEY, session.deviceToken);
       // Only when nothing claims the key. It belongs to `getOrCreateDeviceId`
       // in `analytics/device-fingerprint` — the browser's stable identity, and
       // what every web sign-in binds its device token to. Overwriting it with

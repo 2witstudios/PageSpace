@@ -183,6 +183,34 @@ describe('AndroidStorage', () => {
       expect(keychainMock.remove).toHaveBeenCalledWith({ key: 'pagespace_session' });
     });
 
+    it('keeps the superseded session when the legacy write fails', async () => {
+      // Clearing first would destroy the old token to make room for one that
+      // never landed. A stale session the next refresh corrects beats none.
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'stale',
+          deviceId: 'web_abc123',
+          deviceToken: 'stale-device-token',
+        }),
+      });
+      const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+        throw new Error('QuotaExceededError');
+      });
+      const storage = await importAndroidStorage();
+
+      await expect(
+        storage.storeSession({
+          sessionToken: '',
+          csrfToken: null,
+          deviceId: 'web_abc123',
+          deviceToken: 'rotated-device-token',
+        })
+      ).rejects.toThrow('QuotaExceededError');
+
+      expect(keychainMock.remove).not.toHaveBeenCalled();
+      setItem.mockRestore();
+    });
+
     it('does not overwrite a browser device id that already exists', async () => {
       // browser_device_id belongs to getOrCreateDeviceId and is what every web
       // sign-in binds its token to; overwriting it would make a divergence
