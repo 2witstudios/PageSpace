@@ -76,14 +76,45 @@ export type AppliedDevServerServicePlan =
    * since cleared (`resumed`). Not an error — the next reconcile plans from
    * the row that won.
    */
-  | { action: 'skipped'; reason: 'intent-changed' | 'resumed' };
+  | {
+      action: 'skipped';
+      reason: 'intent-changed' | 'resumed';
+      /**
+       * What was done to the SPRITE before the refusal. Always `'none'`, and
+       * that is the point: the row is written before any service call, so a
+       * refused plan cannot leave a relay behind. The field exists so the
+       * type has to be changed before the ordering can be — a future
+       * re-ordering would make this a lie, and lies should not typecheck.
+       */
+      mutated: 'none';
+    };
 
 /**
- * Carry out one plan: service calls first (so a row is never written for a
- * relay that failed to start — a thrown service call aborts before the
- * upsert), then the holder-keyed upsert exactly as the core's row intent
- * specifies (every field, `stoppedByUserAt: null` included — see
- * `DevPreviewRowIntent`).
+ * Carry out one plan: **the row first, then the service calls.**
+ *
+ * THE ORDER IS THE CORRECTNESS PROPERTY, and it used to be the other way
+ * round. The two failure shapes are not symmetric:
+ *
+ *  - ROW AHEAD OF SPRITE (the row is written, the service call then fails):
+ *    `describeServiceState` folds row + live relay and reports `down` — "the
+ *    preview relay for port N is not defined on this sandbox" — and the next
+ *    plan is `start-relay via create`. **It converges**, and it never lies in
+ *    the meantime.
+ *  - SPRITE AHEAD OF ROW (service-first, and the row write is then refused by
+ *    the intent guard): a relay is left RUNNING that no future plan can see,
+ *    because `relayServiceName` was never written. `planDevServerService`
+ *    reads the row, sees a user-stopped preview with no relay recorded, and
+ *    answers `user-stopped` forever. **It never converges** — the relay is
+ *    orphaned for the life of the sprite.
+ *
+ * So a refused write must cost nothing, which it can only do if nothing has
+ * been done yet. The accepted price is a worse SECOND rather than a worse
+ * forever: between the row write and the service call the proxy may forward
+ * to 8080 with nothing listening, which reads as `down` and self-heals.
+ *
+ * Compensating service calls on refusal are deliberately NOT built: a
+ * compensation is a second effect that can itself fail, needing its own error
+ * taxonomy, and row-first removes the need for one entirely.
  *
  * USER INTENT WINS EVERY RACE. A plan is made from a row read moments
  * earlier; a user's stop or resume can land in between. Both places where
@@ -91,9 +122,7 @@ export type AppliedDevServerServicePlan =
  * plan was made against: the row write is a compare-and-set in SQL
  * (`basedOnStoppedByUserAt`), and `stop-relay` — destructive without
  * writing — re-reads the row and stops nothing if the stop has been cleared.
- * A refusal is reported as `skipped`, never thrown: the relay may be a step
- * ahead of the row for one frame, `describeServiceState` folds both and says
- * so honestly, and the next reconcile converges.
+ * A refusal is reported as `skipped`, never thrown.
  */
 export async function applyDevServerServicePlan({
   plan,
@@ -106,29 +135,33 @@ export async function applyDevServerServicePlan({
 }): Promise<AppliedDevServerServicePlan> {
   switch (plan.action) {
     case 'start-relay': {
+      const recorded = await store.upsert(plan.row);
+      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
       if (plan.via === 'create') {
         await services.create({ name: plan.service.name, command: plan.service.command, args: plan.service.args });
       } else if (plan.via === 'start') {
         await services.start(plan.service.name);
       }
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed' };
       return { action: 'start-relay', via: plan.via, targetPort: plan.service.targetPort, recorded };
     }
     case 'replace-relay': {
+      // Row first (see the docblock). A refusal here leaves the OLD relay
+      // running and the row still naming it — which is exactly right: the
+      // refusal means the user's stop landed, and the next reconcile plans
+      // `stop-relay` against a row that can still find the relay to stop.
+      const recorded = await store.upsert(plan.row);
+      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
       // Remove-then-create, never an in-place PUT with a different command:
       // what the platform does with a DIFFERENT command under the same name is
       // unverified (`relayServiceMatches`'s doc), and the core plans around it.
       await services.remove(plan.service.name);
       await services.create({ name: plan.service.name, command: plan.service.command, args: plan.service.args });
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed' };
       return { action: 'replace-relay', previousTargetPort: plan.previousTargetPort, targetPort: plan.service.targetPort, recorded };
     }
     case 'record-direct': {
-      if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
       const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed' };
+      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
+      if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
       return { action: 'record-direct', removedRelay: plan.removeRelay, recorded };
     }
     case 'stop-relay': {
@@ -137,7 +170,7 @@ export async function applyDevServerServicePlan({
       // it. Re-read the intent at the last possible moment; gone ⇒ do
       // nothing (the resume's own reconcile has the relay in hand).
       const current = await store.findByHolder(plan.holder);
-      if (current === null || current.stoppedByUserAt === null) return { action: 'skipped', reason: 'resumed' };
+      if (current === null || current.stoppedByUserAt === null) return { action: 'skipped', reason: 'resumed', mutated: 'none' };
       await services.stop(plan.relayServiceName);
       return { action: 'stop-relay', relayServiceName: plan.relayServiceName };
     }

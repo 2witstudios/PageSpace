@@ -89,7 +89,7 @@ describe('createDevPreviewDetector — port_opened', () => {
     // An (empty) snapshot first: the accumulated set is only KNOWN once a port_list has applied.
     await h.detector.onFrame({ type: 'port_list', ports: [] });
     await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
-    assert({ given: 'fresh detection', should: 'create relay → upsert', actual: h.calls, expected: ['create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'fresh detection', should: 'record the row FIRST, then create the relay (a refused write must cost no sprite mutation)', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
     assert({ given: 'fresh detection', should: 'probe exactly once', actual: h.probes(), expected: 1 });
     assert({ given: 'fresh detection', should: 'accumulate the listener', actual: h.detector.listeners(), expected: [{ port: 5173, pid: 11 }] });
   });
@@ -114,7 +114,7 @@ describe('createDevPreviewDetector — port_opened', () => {
     const stale: DevPreviewRecord = { id: 'r', spriteInstanceId: 'inst-0', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null };
     const h = harness({ row: stale });
     await h.detector.onFrame({ type: 'port_opened', port: 5173 });
-    assert({ given: 'stale row', should: 'create for the new detection and replace the row', actual: h.calls, expected: ['create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'stale row', should: 'replace the row for the live instance, then create', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
     assert({ given: 'stale row', should: 'now name the live instance', actual: h.row()?.spriteInstanceId, expected: INSTANCE });
   });
 
@@ -143,7 +143,7 @@ describe('createDevPreviewDetector — port_opened', () => {
   it('re-points the relay when a known dev port appears on a different port', async () => {
     const h = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
     await h.detector.onFrame({ type: 'port_opened', port: 3000 });
-    assert({ given: 'next dev after vite', should: 'remove, create 3000, upsert', actual: h.calls, expected: [`remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000', `upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'next dev after vite', should: 'upsert, then remove and re-create on the new port', actual: h.calls, expected: [`upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000'] });
   });
 });
 
@@ -154,13 +154,13 @@ describe('createDevPreviewDetector — port_list snapshot', () => {
     h.calls.length = 0;
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
     assert({ given: 'a snapshot with inspector, db and vite', should: 'replace listeners', actual: h.detector.listeners(), expected: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
-    assert({ given: 'the snapshot', should: 're-point the 1111 relay at vite (the inspector is never a candidate over a known port)', actual: h.calls, expected: [`remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'the snapshot', should: 're-point the 1111 relay at vite (the inspector is never a candidate over a known port)', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
   });
 
   it('plans ONE candidate per snapshot: two known dev ports do not replace each other, and a still-listening row target wins', async () => {
     const h = harness();
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173 }, { port: 3000 }] });
-    assert({ given: 'vite and next both listening, no row', should: 'plan only the lowest known port', actual: h.calls, expected: ['create:3000', `upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'vite and next both listening, no row', should: 'plan only the lowest known port', actual: h.calls, expected: [`upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000'] });
     h.calls.length = 0;
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173 }, { port: 3000 }] });
     assert({ given: 'the same snapshot again (a reconnect)', should: 'change nothing', actual: h.calls, expected: [] });
@@ -172,7 +172,7 @@ describe('createDevPreviewDetector — port_list snapshot', () => {
   it('with no candidate, reconciles the row (a crashed relay is restarted; a row without a relay gets one)', async () => {
     const h = harness({ relay: relayInfo(5173, 'node', 'failed'), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5432 }] });
-    assert({ given: 'a failed relay and a row', should: 'start it again', actual: h.calls, expected: [`start:${PREVIEW_RELAY_SERVICE_NAME}`, `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
+    assert({ given: 'a failed relay and a row', should: 'start it again', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, `start:${PREVIEW_RELAY_SERVICE_NAME}`] });
   });
 });
 
@@ -186,14 +186,18 @@ describe('createDevPreviewDetector — discipline', () => {
       given: 'two frames fired without awaiting',
       should: 'plan 5173 first, then replace with 3000',
       actual: h.calls,
-      expected: ['create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000', `upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`],
+      expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173', `upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000'],
     });
   });
 
   it('a failed effect is logged, writes no row, and does not poison the next frame', async () => {
     const h = harness({ failCreate: true });
     await h.detector.onFrame({ type: 'port_opened', port: 5173 });
-    assert({ given: 'create threw', should: 'log and write nothing', actual: { calls: h.calls, row: h.row() }, expected: { calls: ['create:5173'], row: null } });
+    // Row-first: the row IS written before the failing create, and that is
+    // what makes the failure recoverable — the next frame reads a row naming
+    // a relay the sprite lacks and plans the create again. What must not
+    // happen is a poisoned chain, which the following frame proves.
+    assert({ given: 'create threw', should: 'log, and leave the row ahead of the sprite', actual: { calls: h.calls, target: h.row()?.targetPort ?? null }, expected: { calls: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'], target: 5173 } });
     expect(h.logs.some((l) => l.startsWith('error:dev-preview: frame failed:bind failed'))).toBe(true);
     await expect(h.detector.onFrame({ type: 'port_closed', port: 5173 })).resolves.toBeUndefined();
   });
