@@ -27,13 +27,20 @@ const config: CapacitorConfig = {
     // when `maskSize > 1 && hostSize != maskSize`, so '*.pagespace.ai' (3 dot
     // components) does not match 'pagespace.ai' (2).
     //
-    // Google/Apple are deliberate but imperfect, for the same reason as iOS.
-    // Android signs in through the NATIVE plugin (@capgo/capacitor-social-login),
-    // so the web fallback should never fire here. If it does, allowlisting keeps
-    // it in the WebView, where Google answers `disallowed_useragent` — a visible,
-    // diagnosable failure. Omitting them instead hands the consent screen to
-    // Chrome, where a successful sign-in drops the cookie in the WRONG cookie jar
-    // and the app stays silently logged out.
+    // Google/Apple are deliberate but imperfect, and the reasoning differs from
+    // iOS in one important way. On iOS the web OAuth fallback should never fire,
+    // because sign-in goes through the native plugin. On Android it is currently
+    // the ONLY path: isNativeGoogleAuthAvailable() in ios-google-auth.ts is
+    // `isCapacitorApp() && getPlatform() === 'ios'`, so until the epic's native
+    // auth phase generalizes it, Android takes the browser fallback every time.
+    //
+    // Both outcomes are broken, and this picks the diagnosable one. Allowlisted,
+    // the consent screen loads in the WebView and Google answers
+    // `disallowed_useragent` — a visible failure. Omitted, it goes to Chrome,
+    // where a successful sign-in drops the cookie in the WRONG cookie jar and the
+    // app stays silently logged out. Nobody is hitting either today: there is no
+    // shipped Android build (versionCode is still 1), and native auth should land
+    // before there is one. The real fix is native sign-in, not this list.
     //
     // Android-only caveat: Bridge.setAllowedOriginRules() also adds these hosts
     // to WebViewLocalServer's `authorities`. That only changes behaviour while
