@@ -130,6 +130,12 @@ export interface DevPreviewStatus {
    * of the same fact is a second thing that can disagree.
    */
   canApprove: boolean;
+  /**
+   * The sprite instance this status describes, or null when none is attached.
+   * The approve action echoes it back, so consent cannot drift onto a VM that
+   * replaced the one the user was looking at.
+   */
+  spriteInstanceId: string | null;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
   /**
@@ -232,6 +238,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     canStop: actionable && row.stoppedByUserAt === null,
     canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
     canApprove: actionable && state.status === 'needs-approval',
+    spriteInstanceId: sandbox === 'attached' ? liveInstanceId : null,
     detectedAt: row?.detectedAt ?? null,
     detection,
   };
@@ -316,7 +323,17 @@ export async function gatherDevPreviewStatus({
 export type DevPreviewUserAction =
   | { kind: 'stop' }
   | { kind: 'resume' }
-  | { kind: 'approve'; port: number };
+  | {
+      kind: 'approve';
+      port: number;
+      /**
+       * The sprite INSTANCE the decision was made against. Echoed for the same
+       * reason `port` is: a rebuild replaces the row and can detect the same
+       * port again, so a click made against the old sandbox would otherwise
+       * approve a different VM's server of the same number.
+       */
+      spriteInstanceId: string;
+    };
 
 export interface DevPreviewUserActionDeps {
   previewStore: DevPreviewStore;
@@ -489,7 +506,7 @@ async function writeDevPreviewIntent({
     const row = await store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
     return row === null ? { ok: false, reason: 'no-preview' } : { ok: true, row };
   }
-  const approved = await store.approvePort(holder, { port: action.port, at: now, byUserId: userId });
+  const approved = await store.approvePort(holder, { port: action.port, spriteInstanceId: action.spriteInstanceId, at: now, byUserId: userId });
   if (approved !== null) return { ok: true, row: approved };
   // Null means the filtered UPDATE matched nothing: either there is no row at
   // all, or the row moved on to another port. Only the second is a conflict.

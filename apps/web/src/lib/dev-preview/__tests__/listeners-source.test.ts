@@ -68,17 +68,23 @@ describe('readDevPreviewUserAction', () => {
   it('accepts exactly stop / resume / approve-with-a-port', () => {
     expect(readDevPreviewUserAction({ action: 'stop' })).toEqual({ kind: 'stop' });
     expect(readDevPreviewUserAction({ action: 'resume' })).toEqual({ kind: 'resume' });
-    expect(readDevPreviewUserAction({ action: 'approve', port: 9000 })).toEqual({ kind: 'approve', port: 9000 });
+    expect(readDevPreviewUserAction({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' })).toEqual({ kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' });
     for (const bad of [{ action: 'start' }, {}, null, 'stop', 7, { action: 1 }]) expect(readDevPreviewUserAction(bad)).toBeNull();
     // The ECHOED PORT is what binds the click to the port on screen, so a
     // missing or nonsensical one is not an approve at all — never a default.
     for (const bad of [
       { action: 'approve' },
-      { action: 'approve', port: '9000' },
-      { action: 'approve', port: 0 },
-      { action: 'approve', port: 65536 },
-      { action: 'approve', port: 90.5 },
-      { action: 'approve', port: null },
+      { action: 'approve', port: '9000', spriteInstanceId: 'i' },
+      { action: 'approve', port: 0, spriteInstanceId: 'i' },
+      { action: 'approve', port: 65536, spriteInstanceId: 'i' },
+      { action: 'approve', port: 90.5, spriteInstanceId: 'i' },
+      { action: 'approve', port: null, spriteInstanceId: 'i' },
+      // The INSTANCE is as required as the port — an approve without it is not
+      // bound to the sandbox the user was looking at.
+      { action: 'approve', port: 9000 },
+      { action: 'approve', port: 9000, spriteInstanceId: '' },
+      { action: 'approve', port: 9000, spriteInstanceId: 42 },
+      { action: 'approve', port: 9000, spriteInstanceId: 'x'.repeat(201) },
     ]) expect(readDevPreviewUserAction(bad)).toBeNull();
   });
 });

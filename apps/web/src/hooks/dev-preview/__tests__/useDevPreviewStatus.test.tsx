@@ -39,6 +39,7 @@ function preview(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canStop: false,
     canResume: false,
     canApprove: false,
+    spriteInstanceId: null,
     detectedAt: null,
     ...over,
   };

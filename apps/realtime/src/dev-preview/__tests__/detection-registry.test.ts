@@ -495,6 +495,25 @@ describe('createDetectionRegistry', () => {
     expect(h.logs.some((l) => l.includes('watch channel gone'))).toBe(false);
   });
 
+  it('a SLOW HANDSHAKE is not uptime — the ceiling still retires a channel that never stays up', async () => {
+    // `attemptStartedAt` is taken from the socket's own `open` event, not from
+    // when the attempt began. Measuring from the attempt would let a handshake
+    // that takes longer than the health window count as a healthy connection,
+    // clearing the very budget that exists to retire a channel like this.
+    const h = deps({ maxTotalReconnects: 2 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    for (let i = 0; i < 5 && h.sockets.length > 0; i += 1) {
+      const socket = h.sockets[h.sockets.length - 1];
+      // Two minutes of HANDSHAKE, then it opens and dies at once.
+      clock.now = new Date(clock.now.getTime() + 2 * 60 * 1000);
+      socket.emit('open');
+      socket.emit('close', { code: 1006 });
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(h.logs.some((l) => l.includes('watch channel gone'))).toBe(true);
+  });
+
   it('drops a channel that flaps forever, because a status read re-arms it within a poll', async () => {
     // `attempts` resets on any connection that OPENS, so a socket that opens
     // and dies immediately would reconnect for ever — which is not what the

@@ -34,6 +34,7 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canStop: true,
     canResume: false,
     canApprove: false,
+    spriteInstanceId: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };

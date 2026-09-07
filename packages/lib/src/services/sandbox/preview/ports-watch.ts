@@ -111,6 +111,14 @@ export interface OpenPortsWatchInput {
   token: string;
   createSocket: PortsWatchSocketFactory;
   onFrame: (frame: PortsWatchFrame) => void;
+  /**
+   * Fired when the socket actually CONNECTS, which is not the same moment the
+   * attempt began: a handshake can take seconds. A caller judging whether a
+   * connection was healthy must measure from here, or a slow handshake counts
+   * as uptime and a channel that keeps failing looks like one that keeps
+   * working.
+   */
+  onOpen?: () => void;
   /** Fired exactly once, when the channel is gone for any reason. `opened` says whether it ever connected. */
   onClose: (info: { opened: boolean; code?: number; reason: string }) => void;
 }
@@ -120,7 +128,7 @@ export interface PortsWatchHandle {
 }
 
 /** Open the watch. Frames are delivered in order; malformed frames are dropped silently. */
-export function openPortsWatch({ url, token, createSocket, onFrame, onClose }: OpenPortsWatchInput): PortsWatchHandle {
+export function openPortsWatch({ url, token, createSocket, onFrame, onOpen, onClose }: OpenPortsWatchInput): PortsWatchHandle {
   let closed = false;
   let opened = false;
   const finish = (info: { code?: number; reason: string }) => {
@@ -142,7 +150,7 @@ export function openPortsWatch({ url, token, createSocket, onFrame, onClose }: O
     return { close() { finish({ reason: 'closed-by-caller' }); } };
   }
 
-  socket.addEventListener('open', () => { opened = true; });
+  socket.addEventListener('open', () => { opened = true; onOpen?.(); });
   socket.addEventListener('message', (event) => {
     if (closed) return;
     const frame = readPortsWatchFrame(event.data);

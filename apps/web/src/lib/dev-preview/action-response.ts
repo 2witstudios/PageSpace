@@ -41,12 +41,11 @@ export function respondToDevPreviewUserAction({
     // `slot-unknown` IS NOT A FAILURE, and answering 4xx made the UI say it
     // was. The user's intent is already written — the resume cleared the stop,
     // the approval recorded the consent — and only the relay work deferred,
-    // because no `ports/watch` snapshot proved 8080 free; the detector's next
-    // frame starts it against a real snapshot. `post()` THROWS on any 4xx, so
-    // the pane toasted "Could not switch the preview on" over a click that had
-    // taken effect. It is therefore the same success shape an attach-less
-    // action already returns (`applied: null`), with the deferral named so a
-    // caller can say "starting shortly" if it wants.
+    // because no `ports/watch` snapshot proved 8080 free. That is precisely
+    // the shape `lockContended` already reports as a success, and `post()`
+    // THROWS on any 4xx, so the pane toasted "Could not switch the preview on"
+    // over a click that had taken effect. Same status, same body shape, with
+    // the deferral named so a caller can say "starting shortly" if it wants.
     if (result.reason === 'slot-unknown') {
       auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, applied: null, deferred: 'awaiting-port-snapshot' } });
       return NextResponse.json({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });

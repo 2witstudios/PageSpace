@@ -163,10 +163,25 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
     expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
   });
 
-  it('APPROVE carries the port through, and a port that moved answers 409 rather than sharing the wrong thing', async () => {
-    const res = await sessionAction(post({ action: 'approve', port: 9000 }), wsCtx);
+  it('a DEFERRED relay is a success, not a toast: the intent landed and only the start waits', async () => {
+    // `post()` throws on any 4xx, so answering `slot-unknown` with a 409 made
+    // the pane say "Could not switch the preview on" over a click that had
+    // already cleared the stop. It is the same shape as a contended lock,
+    // which is reported as a success.
+    vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'slot-unknown' });
+    const res = await sessionAction(post({ action: 'resume' }), wsCtx);
     expect(res.status).toBe(200);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'approve', port: 9000 }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+    expect(await res.json()).toMatchObject({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'data.write',
+      details: expect.objectContaining({ deferred: 'awaiting-port-snapshot' }),
+    }));
+  });
+
+  it('APPROVE carries the port through, and a port that moved answers 409 rather than sharing the wrong thing', async () => {
+    const res = await sessionAction(post({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' }), wsCtx);
+    expect(res.status).toBe(200);
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ action: 'approve', port: 9000 }) }));
 
     // A body with no port is not an approve at all — 400 before anything runs.
@@ -175,7 +190,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
     expect(applyDevPreviewUserActionForHolder).not.toHaveBeenCalled();
 
     vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'port-changed' });
-    const moved = await sessionAction(post({ action: 'approve', port: 9000 }), wsCtx);
+    const moved = await sessionAction(post({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' }), wsCtx);
     expect(moved.status).toBe(409);
     expect(await moved.json()).toMatchObject({ reason: 'port-changed' });
   });

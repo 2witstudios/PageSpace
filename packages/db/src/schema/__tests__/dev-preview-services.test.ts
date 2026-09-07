@@ -129,11 +129,16 @@ describe('dev_preview_services', () => {
     expect(migrationSql).toContain(
       'CONSTRAINT "dev_preview_services_relay_never_8080_check" CHECK ("dev_preview_services"."relayServiceName" IS NULL OR "dev_preview_services"."targetPort" <> 8080)',
     );
+    // Every statement in 0288 is guarded, so a second pass is a no-op rather
+    // than a failed deployment command.
+    expect(migrationSql).toContain('ADD COLUMN IF NOT EXISTS "approvedPort"');
     // The biconditional it replaced is GONE from the live schema — a detected
     // but unshared port is a legal row, and re-adding the other half would
     // make consent unrecordable.
     expect(config.checks.map((entry) => entry.name)).not.toContain('dev_preview_services_relay_iff_not_8080_check');
-    expect(migrationSql).toContain('DROP CONSTRAINT "dev_preview_services_relay_iff_not_8080_check"');
+    // `IF EXISTS`, because the migration is written to survive the re-run its
+    // own hash change forces — see 0288's header.
+    expect(migrationSql).toContain('DROP CONSTRAINT IF EXISTS "dev_preview_services_relay_iff_not_8080_check"');
     expect(checkSql('dev_preview_services_target_port_range_check')).toContain('BETWEEN 1 AND 65535');
   });
 

@@ -88,11 +88,12 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
     markRelayStopped: async () => {},
-    approvePort: async (_holder, { port, at }) => {
+    approvePort: async (_holder, { port, spriteInstanceId, at }) => {
       calls.push(`approvePort:${port}`);
-      // The real store filters the UPDATE on the row's current target, so a
-      // port the row no longer names matches nothing.
-      if (current === null || current.targetPort !== port) return null;
+      // The real store filters the UPDATE on the row's current target AND its
+      // instance, so a port the row no longer names — or a row from a VM that
+      // has since been replaced — matches nothing.
+      if (current === null || current.targetPort !== port || current.spriteInstanceId !== spriteInstanceId) return null;
       current = { ...current, approvedPort: port, stoppedByUserAt: null };
       void at;
       return current;
@@ -419,7 +420,7 @@ describe('approve — one explicit act, bound to the port the user was shown', (
 
   it('records the consent, clears any stop, and the SAME call reconciles the relay up', async () => {
     const { deps, calls, store } = pending();
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps });
     assert({ given: 'an approve for the detected port', should: 'create the relay', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'create', targetPort: 9000, recorded: true } } });
     assert({ given: 'the approve', should: 'write the consent BEFORE planning', actual: calls.indexOf('approvePort:9000') < calls.indexOf('services.get'), expected: true });
     assert({ given: 'the approve', should: 'leave the row approved', actual: store.current()?.approvedPort, expected: 9000 });
@@ -429,19 +430,19 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     const calls: string[] = [];
     const store = fakeStore(row(9001, { relayServiceName: null }), calls);
     const { deps } = actionDeps({ calls, store, attach: async () => fakeHandle({ relay: null, calls }) });
-    assert({ given: 'a click for 9000 while the server moved to 9001', should: 'be port-changed', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'port-changed' } });
+    assert({ given: 'a click for 9000 while the server moved to 9001', should: 'be port-changed', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps }), expected: { ok: false, reason: 'port-changed' } });
     assert({ given: 'a refused approve', should: 'approve nothing', actual: store.current()?.approvedPort, expected: null });
     assert({ given: 'a refused approve', should: 'never reach the sprite', actual: calls.includes('services.get'), expected: false });
   });
 
   it('a holder with no row at all is no-preview, not port-changed', async () => {
     const { deps } = actionDeps({ store: fakeStore(null) });
-    assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });
+    assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });
   });
 
   it('is gated by the wake gate exactly as a resume is — sharing a port is asking for compute', async () => {
     const { deps, store } = pending({ canRunCode: async () => ({ ok: false as const, reason: 'tier_ineligible' }) });
-    assert({ given: 'a payer that may not run code', should: 'refuse', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'wake-not-allowed', detail: 'tier_ineligible' } });
+    assert({ given: 'a payer that may not run code', should: 'refuse', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps }), expected: { ok: false, reason: 'wake-not-allowed', detail: 'tier_ineligible' } });
     assert({ given: 'a refused wake gate', should: 'write no consent', actual: store.current()?.approvedPort, expected: null });
   });
 
@@ -450,7 +451,7 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     // core refuses a blind start. What must NOT happen is losing the approval:
     // the user agreed, and the detector's next frame starts it for real.
     const { deps, store } = pending({ readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
-    assert({ given: 'an approve with no ports snapshot', should: 'defer the relay, honestly', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+    assert({ given: 'an approve with no ports snapshot', should: 'defer the relay, honestly', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
     assert({ given: 'the deferral', should: 'still have recorded the consent', actual: store.current()?.approvedPort, expected: 9000 });
   });
 

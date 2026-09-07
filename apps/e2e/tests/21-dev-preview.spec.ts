@@ -54,7 +54,7 @@ import { sessionGet, sessionPost } from '../support/http';
  */
 
 const SESSION_TTL_MS = 60 * 60 * 1000;
-/** A dev server, an npm install and a sandbox cold start — minutes, not seconds. */
+/** A dev server, a dependency install and a sandbox cold start — minutes, not seconds. */
 const SANDBOX_TIMEOUT_MS = 5 * 60 * 1000;
 /** How long to wait for detection to surface a port after the server binds. */
 const DETECTION_TIMEOUT_MS = 60 * 1000;
@@ -167,7 +167,7 @@ async function waitForPreview(
  * Type a command into the session's real terminal and press Enter.
  *
  * `interruptFirst` sends Ctrl-C before the command. It is not optional
- * politeness: this reaches the SAME PTY every time, so a second `npm run dev`
+ * politeness: this reaches the SAME PTY every time, so a second `bun run dev`
  * typed while the first one is still in the foreground goes into Vite's stdin
  * as shortcut keystrokes, not into a shell — the command silently never runs,
  * and the assertion that follows fails minutes later for a reason that has
@@ -231,7 +231,7 @@ test.describe('dev-server preview: the browser journey', () => {
     // PageSpace's hostname. This half exists so we know exactly what the user
     // sees when they have not set `allowedHosts`.
     await writeSandboxFile(request, user, workspaceId, 'preview-smoke/vite.config.js', VITE_CONFIG_WITHOUT_HOSTS);
-    await runInShell(context, user, workspaceId, 'cd preview-smoke && npm install && npm run dev');
+    await runInShell(context, user, workspaceId, 'cd preview-smoke && bun install && bun run dev');
 
     const detected = await waitForPreview(request, user, workspaceId, (preview) => preview.state.targetPort === 5173, SANDBOX_TIMEOUT_MS);
     expect(detected.state.targetPort).toBe(5173);
@@ -264,7 +264,7 @@ test.describe('dev-server preview: the browser journey', () => {
     // `preview-smoke` from the first command — a second `cd` fails, `&&`
     // short-circuits, and the server never starts. The two facts are the same
     // fact: if the PTY were not shared, the Ctrl-C would interrupt nothing.
-    await runInShell(context, user, workspaceId, 'npm run dev', { interruptFirst: true });
+    await runInShell(context, user, workspaceId, 'bun run dev', { interruptFirst: true });
     await page.getByTitle('Reload the preview').click();
     await expect(frame.locator('#app')).toHaveText('first render', { timeout: SANDBOX_TIMEOUT_MS });
 

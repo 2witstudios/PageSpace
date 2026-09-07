@@ -63,22 +63,14 @@ export interface DevPreviewStore {
    * and clear any stop intent — agreeing to share something is asking for it
    * to be on, and leaving it off would answer a click with silence.
    *
-   * Deliberately NOT instance-guarded, for the same reason `setStoppedByUser`
-   * is not: an approval written onto a row from a dead VM is already inert
-   * (the planner ignores stale rows and `describeServiceState` renders
-   * `stale`), and requiring the live instance would mean an un-attachable
-   * sprite could no longer accept a decision at all. The cost is that the
-   * action answers 200 for a sandbox that has since been rebuilt; the status
-   * read the caller makes next says `stale`, which is the honest answer and
-   * the one the UI renders.
-   *
-   * Resolves the row AS WRITTEN, or `null` when the holder has no row OR the
-   * row no longer targets `port`. That second case is the point: the port is
+   * Resolves the row AS WRITTEN, or `null` when the holder has no row, the
+   * row no longer targets `port`, or it belongs to a different sprite
+   * INSTANCE than the one the decision was made against. That second case is the point: the port is
    * echoed back from the UI, and the write is filtered on it, so approval
    * cannot drift onto a dev server that moved between the render and the
    * click. The caller answers a null with a conflict, never with success.
    */
-  approvePort(holder: DevPreviewHolderRef, input: { port: number; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
+  approvePort(holder: DevPreviewHolderRef, input: { port: number; spriteInstanceId: string; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
   /**
    * Holders whose STOP intent has outlived its relay for longer than
    * `staleAfterMs` — the backstop sweep's candidate list
@@ -283,7 +275,7 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         );
     },
 
-    async approvePort(holder, { port, at, byUserId }) {
+    async approvePort(holder, { port, spriteInstanceId, at, byUserId }) {
       const [row] = await db
         .update(devPreviewServices)
         .set({ approvedPort: port, approvedAt: at, approvedByUserId: byUserId, stoppedByUserAt: null, updatedAt: sql`(now() at time zone 'utc')` })
@@ -291,7 +283,17 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         // the approval lands only while the row still targets the port the
         // user was shown. A dev server that moved between the render and the
         // click therefore cannot be approved by a click meant for the old one.
-        .where(and(eq(holderColumn(holder), holder.id), eq(devPreviewServices.targetPort, port)))
+        // The port AND the INSTANCE, both echoed from what the user was shown.
+        // The port stops a consent meant for one server landing on another;
+        // the instance stops it landing on another VM. A rebuild replaces the
+        // row and can legitimately detect the same port again, so a click made
+        // against the old sandbox would otherwise approve the new one — and
+        // sharing is exactly the decision that must not be inherited.
+        .where(and(
+          eq(holderColumn(holder), holder.id),
+          eq(devPreviewServices.targetPort, port),
+          eq(devPreviewServices.spriteInstanceId, spriteInstanceId),
+        ))
         .returning(rowColumns);
       return row ?? null;
     },

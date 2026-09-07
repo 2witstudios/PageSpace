@@ -110,15 +110,20 @@ describe('createDbDevPreviewStore', () => {
     ).rejects.toThrow();
   });
 
-  it('approvePort records consent for exactly the port shown, clears the stop, and REFUSES a port the row no longer targets', async () => {
+  it('approvePort records consent for exactly the port shown, clears the stop, and REFUSES a port the row no longer targets or a sandbox that was rebuilt', async () => {
     await store.upsert({ holder, spriteInstanceId: 'inst-ap', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     await store.setStoppedByUser(holder, NOW);
 
     const at = new Date('2026-09-06T12:45:00.000Z');
-    expect(await store.approvePort(holder, { port: 9001, at, byUserId: userId })).toBeNull();
+    expect(await store.approvePort(holder, { port: 9001, spriteInstanceId: 'inst-ap', at, byUserId: userId })).toBeNull();
+    // And a click made against a sandbox that has since been REBUILT is
+    // refused even though the port still matches: sharing is a decision about
+    // a particular VM's server, and the replacement inherits nothing.
+    expect(await store.approvePort(holder, { port: 9000, spriteInstanceId: 'inst-other', at, byUserId: userId })).toBeNull();
+    expect((await store.findByHolder(holder))?.approvedPort).toBeNull();
     expect((await store.findByHolder(holder))?.approvedPort).toBeNull();
 
-    const approved = await store.approvePort(holder, { port: 9000, at, byUserId: userId });
+    const approved = await store.approvePort(holder, { port: 9000, spriteInstanceId: 'inst-ap', at, byUserId: userId });
     expect(approved).toMatchObject({ targetPort: 9000, approvedPort: 9000, stoppedByUserAt: null });
     const [stored] = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(stored).toMatchObject({ approvedPort: 9000, approvedAt: at, approvedByUserId: userId });
@@ -133,7 +138,7 @@ describe('createDbDevPreviewStore', () => {
     await store.upsert({ holder, spriteInstanceId: 'inst-new', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const [rebuilt] = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(rebuilt).toMatchObject({ approvedPort: null, approvedAt: null });
-    expect(await store.approvePort({ kind: 'workspace', id: createId() }, { port: 9000, at, byUserId: userId })).toBeNull();
+    expect(await store.approvePort({ kind: 'workspace', id: createId() }, { port: 9000, spriteInstanceId: 'inst-ap', at, byUserId: userId })).toBeNull();
   });
 
   it('findStoppedWithRelay lists ONLY aged rows that are switched off with a relay still recorded', async () => {

@@ -193,12 +193,18 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     };
 
     const open = () => {
+      // Set on the OPEN event below, not here: the handshake can take seconds,
+      // and counting it as uptime would let a channel that keeps failing to
+      // stay up look like one being healthily recycled — which clears the
+      // ceiling that exists to retire it. Until it opens this stays at the
+      // attempt's start, which can only make `survived` stricter.
       attemptStartedAt = deps.now().getTime();
       current = openPortsWatch({
         url,
         token: deps.spritesToken(),
         createSocket: deps.createSocket,
         onFrame: (frame) => { void detector.onFrame(frame); },
+        onOpen: () => { attemptStartedAt = deps.now().getTime(); },
         onClose: (info) => {
           current = null;
           // The accumulated set no longer describes a live connection. Takes

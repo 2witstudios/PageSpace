@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { assert } from '../../__tests__/riteway';
 import {
   PREVIEW_COOKIE_NAME,
@@ -117,11 +118,13 @@ describe('the cookie token', () => {
     const result = verifyPreviewCookie(signed, KEY, NOW);
     assert({ given: 'a v2 cookie', should: 'carry the minting session', actual: result.ok && result.claims.sessionId, expected: 'sess1' });
 
-    // Re-signed under the real key, so this tests the CLAIM check and not the
-    // signature check that would otherwise mask it.
+    // Re-signed OVER THE MODIFIED BODY, which is the whole point: reusing the
+    // original signature would make every case below fail on `bad-signature`
+    // before the claim check ran, and the assertion would pass without testing
+    // anything. The MAC covers `v2.<payload>`, matching `signPreviewCookie`.
     const resign = (payload: Record<string, unknown>) => {
       const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
-      const [, , sig] = signPreviewCookie(claims, KEY).split('.');
+      const sig = createHmac('sha256', KEY).update(`v2.${body}`).digest().toString('base64url');
       return { body, sig };
     };
     for (const payload of [

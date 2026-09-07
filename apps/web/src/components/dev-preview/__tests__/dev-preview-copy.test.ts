@@ -3,7 +3,7 @@ import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewApprovalA
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 function preview(state: DevPreviewStatusDTO['state']): DevPreviewStatusDTO {
-  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', detection: 'watching', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, canApprove: false, detectedAt: null };
+  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', detection: 'watching', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, canApprove: false, spriteInstanceId: null, detectedAt: null };
 }
 
 describe('dev-preview copy', () => {

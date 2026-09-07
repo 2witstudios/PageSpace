@@ -69,7 +69,7 @@ describe('createDevPreviewLock', () => {
     const { pool } = fakePool([], { connectThrows: true });
     const outcome = await createDevPreviewLock({ pool, log: { warn: (m) => warnings.push(m) } })(HOLDER, async () => 'unreached');
     assert({ given: 'a pool that cannot connect', should: 'be busy, not an exception', actual: outcome, expected: { outcome: 'busy' } });
-    assert({ given: 'the degradation', should: 'be warned about once', actual: warnings, expected: ['dev-preview: lock unavailable, proceeding unserialized'] });
+    assert({ given: 'the degradation', should: 'be warned about once', actual: warnings, expected: ['dev-preview: lock pool unavailable, relay work deferred'] });
   });
 
   it('the no-op lock always acquires (the default where serialization is optional)', async () => {

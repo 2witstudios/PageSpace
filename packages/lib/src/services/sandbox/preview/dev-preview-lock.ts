@@ -80,7 +80,13 @@ export function createDevPreviewLock({ pool, retries = [], wait, log }: CreateDe
       const locked = await withAdvisoryLock(pool ?? getAdvisoryLockPool(), key, fn);
       if (locked.outcome === 'acquired') return { outcome: 'acquired', result: locked.result };
       if (locked.outcome === 'connection_error') {
-        log?.warn('dev-preview: lock unavailable, proceeding unserialized', {
+        // NOT "proceeding unserialized" — nothing serialized ever runs without
+        // the lock. The detector DEFERS its reconcile entirely, and a user
+        // action records only its INTENT (one compare-and-set, safe on its
+        // own) and defers the relay work with `lockContended`. The old wording
+        // read as though the read-plan-apply sequence had gone ahead
+        // unprotected, which is the one thing that never happens here.
+        log?.warn('dev-preview: lock pool unavailable, relay work deferred', {
           holderKind: holder.kind,
           holderId: holder.id,
           error: locked.error instanceof Error ? locked.error.message : String(locked.error),

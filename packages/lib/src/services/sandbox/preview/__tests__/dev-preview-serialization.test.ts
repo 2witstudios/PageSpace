@@ -78,7 +78,14 @@ function relayService(targetPort: number, overrides: Partial<SandboxServiceInfo>
   return { name: spec.name, command: spec.command, args: spec.args, status: 'running', pid: 42, ...overrides };
 }
 
+/**
+ * The services fake TRACKS what it creates. A `get` that kept answering null
+ * after a create makes every reconcile plan another create, which shows up as
+ * duplicate work that the real platform would never do — and hides the
+ * ordering the test is actually about.
+ */
 function handleFor(log: string[], relay: SandboxServiceInfo | null): SandboxHandle {
+  let current = relay;
   return {
     sandboxId: 'sbx',
     capabilities: SPRITE_SANDBOX_CAPABILITIES,
@@ -91,9 +98,12 @@ function handleFor(log: string[], relay: SandboxServiceInfo | null): SandboxHand
     killSession: async () => {},
     createCheckpoint: async () => {},
     services: {
-      create: async (args) => { log.push(`create:${args.name}`); },
+      create: async (args) => {
+        log.push(`create:${args.name}`);
+        current = { name: args.name, command: args.command, args: args.args ?? [], status: 'running', pid: 99 };
+      },
       list: async () => [],
-      get: async () => relay,
+      get: async () => current,
       start: async (name) => { log.push(`start:${name}`); },
       stop: async (name) => { log.push(`stop:${name}`); },
       remove: async (name) => { log.push(`remove:${name}`); },
@@ -158,12 +168,16 @@ describe('the web tier and the detector, serialized per holder', () => {
     await detector.onFrame({ type: 'port_list', ports: [] });
 
     // The detector enters its section and BLOCKS inside the read.
+    const reads = () => log.filter((entry) => entry === 'read').length;
+    // COUNT, not `includes`. The `port_list` above already logged a read, so a
+    // presence check exits immediately and the click can win the lock before
+    // the frame ever reaches its critical section — the test would then assert
+    // the reverse ordering and still pass, which is the same as not testing.
+    const before = reads();
     const release = pauseNextRead();
     const frame = detector.onFrame({ type: 'port_opened', port: 5173, pid: 3 });
-    // Wait until the detector has actually ENTERED its section, otherwise the
-    // click would simply happen first and prove nothing.
-    for (let i = 0; i < 100 && !log.includes('read'); i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
-    expect(log).toContain('read');
+    for (let i = 0; i < 200 && reads() === before; i += 1) await new Promise((resolve) => setTimeout(resolve, 1));
+    expect(reads()).toBeGreaterThan(before);
 
     // The user clicks Stop while the detector is mid-section. Serialized, this
     // cannot begin until the frame is done; unserialized it writes immediately,

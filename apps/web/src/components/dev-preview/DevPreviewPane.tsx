@@ -160,7 +160,9 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
       // The approve body ECHOES the port the user was just shown; the server
       // refuses it with a 409 if the dev server has moved since, rather than
       // sharing whatever is running now.
-      const body = action.kind === 'approve' ? { action: 'approve', port: action.port } : { action: action.kind };
+      const body = action.kind === 'approve'
+        ? { action: 'approve', port: action.port, spriteInstanceId: action.spriteInstanceId }
+        : { action: action.kind };
       try {
         await post(devPreviewActionsPath(open.statusPath), body);
       } catch (actionError) {
@@ -278,7 +280,7 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
             // line in a list. The port comes off the NARROWED state, so the
             // button's label and the request it sends cannot name different
             // ports.
-            <ApprovalControl port={preview.state.targetPort} holder={preview.holder} disabled={actioning} onShare={runAction} />
+            <ApprovalControl port={preview.state.targetPort} spriteInstanceId={preview.spriteInstanceId} holder={preview.holder} disabled={actioning} onShare={runAction} />
           )}
         </div>
       )}
@@ -293,19 +295,23 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
  */
 function ApprovalControl({
   port,
+  spriteInstanceId,
   holder,
   disabled,
   onShare,
 }: {
   port: number;
+  /** Null only when nothing is attached, in which case there is nothing to share. */
+  spriteInstanceId: string | null;
   holder: DevPreviewStatusDTO['holder'];
   disabled: boolean;
   onShare: (action: DevPreviewUserAction) => void;
 }) {
+  if (spriteInstanceId === null) return null;
   return (
     <>
       <p className="max-w-sm">{devPreviewApprovalAudience(holder)}</p>
-      <Button size="sm" className="h-7 gap-1 px-3" disabled={disabled} onClick={() => onShare({ kind: 'approve', port })} title={`Share port ${port}`}>
+      <Button size="sm" className="h-7 gap-1 px-3" disabled={disabled} onClick={() => onShare({ kind: 'approve', port, spriteInstanceId })} title={`Share port ${port}`}>
         <Share2 className="size-3.5" aria-hidden="true" />
         Share :{port}
       </Button>
