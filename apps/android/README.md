@@ -165,6 +165,20 @@ version, not of `targetSdk`:
 from the chooser lands on `/dashboard` with the token gone — strictly worse than the browser,
 for no gain, since verification cannot succeed anyway. Hence: deferred, not shipped.
 
+Sourcing, since the two rows are not equally well documented. The 23–30 row follows from the
+docs: unverified deep links are "subject to the system disambiguation dialog", and "on Android 11
+(API level 30) and lower, the system establishes your app as the default handler for the specified
+URL patterns only if it finds a matching Digital Asset Links file for all hosts in the manifest" —
+i.e. failing verification costs you *default* status, not candidacy. The 31+ row is the
+well-established behaviour change that Codex review identified; I did not find it stated in one
+quotable sentence in the official docs.
+
+That gap does not affect the decision, which is why it is recorded rather than chased: **deferring
+is the safe choice under either reading.** If 31+ really does drop the app from resolution, the
+filter is inert and costs nothing to omit; if it does not, the filter would be actively harmful on
+every supported version. The filter only becomes worth adding once verification can actually
+succeed — which is prerequisite 1.
+
 ### The filter to add, once both prerequisites are met
 
 Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
