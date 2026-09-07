@@ -42,13 +42,16 @@ function harness(overrides: {
     remove: async (name) => { calls.push(`remove:${name}`); relay = null; },
   };
   const store: DevPreviewStore = {
+    approvePort: async () => null,
     // `readsAheadOfWrites` models the real race: the planner reads the row as
     // it was, and by the time the write lands the STORED row has moved on
     // (a user's stop). The write then meets the same compare-and-set the real
     // store applies.
     findByHolder: async () => overrides.readsAheadOfWrites ?? row,
     upsert: async (intent: DevPreviewRowIntent) => {
-      calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? 'direct'}`);
+      // No relay name means the row serves nothing through 8080: the user's
+      // own server IS 8080 ('direct'), or the port is not shared yet.
+      calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? (intent.targetPort === 8080 ? 'direct' : 'unshared')}`);
       const storedIntent = row === null || row.spriteInstanceId !== intent.spriteInstanceId ? null : row.stoppedByUserAt;
       const guardHolds = row !== null && row.spriteInstanceId !== intent.spriteInstanceId
         ? true
@@ -57,7 +60,7 @@ function harness(overrides: {
         calls.push('upsert-refused');
         return false;
       }
-      row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null };
+      row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null, approvedPort: null };
       return true;
     },
     setStoppedByUser: async () => null,
@@ -111,7 +114,7 @@ describe('createDevPreviewDetector — port_opened', () => {
   });
 
   it('honours the core: a row for a DEAD instance is ignored and the preview is re-created on the live one', async () => {
-    const stale: DevPreviewRecord = { id: 'r', spriteInstanceId: 'inst-0', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null };
+    const stale: DevPreviewRecord = { id: 'r', spriteInstanceId: 'inst-0', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null };
     const h = harness({ row: stale });
     await h.detector.onFrame({ type: 'port_opened', port: 5173 });
     assert({ given: 'stale row', should: 'replace the row for the live instance, then create', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
@@ -119,7 +122,7 @@ describe('createDevPreviewDetector — port_opened', () => {
   });
 
   it('honours the core: a user-stopped preview is NOT restarted by a new detection', async () => {
-    const stopped: DevPreviewRecord = { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: NOW };
+    const stopped: DevPreviewRecord = { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: NOW, approvedPort: null };
     const h = harness({ row: stopped });
     await h.detector.onFrame({ type: 'port_opened', port: 5173 });
     assert({ given: 'stoppedByUserAt set, relay not alive', should: 'do nothing', actual: h.calls, expected: [] });
@@ -141,7 +144,7 @@ describe('createDevPreviewDetector — port_opened', () => {
   });
 
   it('re-points the relay when a known dev port appears on a different port', async () => {
-    const h = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
+    const h = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null } });
     await h.detector.onFrame({ type: 'port_opened', port: 3000 });
     assert({ given: 'next dev after vite', should: 'upsert, then remove and re-create on the new port', actual: h.calls, expected: [`upsert:3000:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:3000'] });
   });
@@ -150,11 +153,14 @@ describe('createDevPreviewDetector — port_opened', () => {
 describe('createDevPreviewDetector — port_list snapshot', () => {
   it('replaces the listener set and plans the known dev port first', async () => {
     const h = harness();
+    // 1111 is unlisted, so it is RECORDED and nothing is started — there is
+    // no relay for the later snapshot to re-point, only a target to move.
     await h.detector.onFrame({ type: 'port_opened', port: 1111 });
+    assert({ given: 'an unlisted 1111', should: 'record the port and start nothing', actual: h.calls, expected: ['upsert:1111:unshared'] });
     h.calls.length = 0;
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
     assert({ given: 'a snapshot with inspector, db and vite', should: 'replace listeners', actual: h.detector.listeners(), expected: [{ port: 9229 }, { port: 5432 }, { port: 5173, pid: 3 }] });
-    assert({ given: 'the snapshot', should: 're-point the 1111 relay at vite (the inspector is never a candidate over a known port)', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, `remove:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
+    assert({ given: 'the snapshot', should: 'take vite as the target and relay it (the inspector is never a candidate over a known port)', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
   });
 
   it('plans ONE candidate per snapshot: two known dev ports do not replace each other, and a still-listening row target wins', async () => {
@@ -164,13 +170,13 @@ describe('createDevPreviewDetector — port_list snapshot', () => {
     h.calls.length = 0;
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173 }, { port: 3000 }] });
     assert({ given: 'the same snapshot again (a reconnect)', should: 'change nothing', actual: h.calls, expected: [] });
-    const g = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
+    const g = harness({ relay: relayInfo(5173), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null } });
     await g.detector.onFrame({ type: 'port_list', ports: [{ port: 3000 }, { port: 5173 }] });
     assert({ given: 'a row on 5173 still listening beside 3000', should: 'keep the working preview', actual: g.calls, expected: [] });
   });
 
   it('with no candidate, reconciles the row (a crashed relay is restarted; a row without a relay gets one)', async () => {
-    const h = harness({ relay: relayInfo(5173, 'node', 'failed'), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null } });
+    const h = harness({ relay: relayInfo(5173, 'node', 'failed'), row: { id: 'r', spriteInstanceId: INSTANCE, sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null } });
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5432 }] });
     assert({ given: 'a failed relay and a row', should: 'start it again', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, `start:${PREVIEW_RELAY_SERVICE_NAME}`] });
   });
@@ -227,9 +233,9 @@ describe('createDevPreviewDetector — discipline', () => {
 
   it('USER INTENT WINS THE RACE: a frame that planned from a row read BEFORE the user\'s stop starts the relay but cannot clear the stop — the click survives, and the next frame plans from the row that won', async () => {
     const stoppedAt = new Date('2026-09-06T13:00:00.000Z');
-    const stored = { id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date('2026-09-06T12:00:00.000Z'), stoppedByUserAt: stoppedAt };
+    const stored = { id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date('2026-09-06T12:00:00.000Z'), stoppedByUserAt: stoppedAt, approvedPort: null };
     // The planner reads the PRE-stop row; the store already holds the stop.
-    const h = harness({ row: stored, readsAheadOfWrites: { ...stored, stoppedByUserAt: null }, relay: relayInfo(5173, 'node', 'failed') });
+    const h = harness({ row: stored, readsAheadOfWrites: { ...stored, stoppedByUserAt: null, approvedPort: null }, relay: relayInfo(5173, 'node', 'failed') });
     await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
     assert({ given: 'a stop that landed after the plan\'s read', should: 'attempt the write and be refused by the guard', actual: h.calls.includes('upsert-refused'), expected: true });
     assert({ given: 'the refused write', should: 'leave the user\'s stop intact', actual: h.row()?.stoppedByUserAt, expected: stoppedAt });

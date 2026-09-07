@@ -38,6 +38,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     relayServiceName: targetPort === SPRITE_HTTP_PORT ? null : PREVIEW_RELAY_SERVICE_NAME,
     detectedAt: new Date('2026-09-06T11:00:00.000Z'),
     stoppedByUserAt: null,
+    approvedPort: null,
     ...overrides,
   };
 }
@@ -81,6 +82,15 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
       const { basedOnStoppedByUserAt: _guard, ...row } = intent;
       current = { id: 'r1', ...row, stoppedByUserAt: null };
       return true;
+    },
+    approvePort: async (_holder, { port, at }) => {
+      calls.push(`approvePort:${port}`);
+      // The real store filters the UPDATE on the row's current target, so a
+      // port the row no longer names matches nothing.
+      if (current === null || current.targetPort !== port) return null;
+      current = { ...current, approvedPort: port, stoppedByUserAt: null };
+      void at;
+      return current;
     },
     setStoppedByUser: async (_holder, at) => {
       calls.push(`setStoppedByUser:${at ? 'stop' : 'clear'}`);
@@ -286,7 +296,7 @@ function actionDeps(over: Partial<DevPreviewUserActionDeps> & { calls?: string[]
 describe('applyDevPreviewUserAction — intent first, then ONE reconcile through the core', () => {
   it('STOP records the intent and the core stops the live relay', async () => {
     const { deps, calls, store } = actionDeps();
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps });
     assert({ given: 'a live relay', should: 'stop it', actual: result, expected: { ok: true, applied: { action: 'stop-relay', relayServiceName: PREVIEW_RELAY_SERVICE_NAME } } });
     assert({ given: 'the stop', should: 'write the intent BEFORE planning', actual: calls.indexOf('setStoppedByUser:stop') < calls.indexOf('services.get'), expected: true });
     assert({ given: 'the stop', should: 'leave the row stopped at now', actual: store.current()?.stoppedByUserAt, expected: NOW });
@@ -302,7 +312,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       // relay may honestly be started (see the slot-unknown case below).
       readListeners: async () => ({ detection: 'watching', listeners: [{ port: 5173, pid: 7 }] }),
     });
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps });
     assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173, recorded: true } } });
     assert({ given: 'the resume', should: 'call services.start', actual: trackedCalls.includes(`start:${PREVIEW_RELAY_SERVICE_NAME}`), expected: true });
     assert({ given: 'the resume', should: 'leave stoppedByUserAt cleared', actual: store.current()?.stoppedByUserAt, expected: null });
@@ -316,14 +326,14 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
       readListeners: async () => ({ detection: 'unavailable', listeners: null }),
     });
-    assert({ given: 'no ports/watch snapshot', should: 'refuse rather than read unknown as "8080 is free"', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+    assert({ given: 'no ports/watch snapshot', should: 'refuse rather than read unknown as "8080 is free"', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
     assert({ given: 'the refusal', should: 'still have cleared the stop — the user\'s ON stands', actual: store.current()?.stoppedByUserAt, expected: null });
     assert({ given: 'the refusal', should: 'touch no service', actual: trackedCalls.some((c) => c.startsWith('start:') || c.startsWith('create:')), expected: false });
   });
 
   it('a DIRECT (8080) resume needs no snapshot — there is no relay to place', async () => {
     const { deps } = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }), readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
-    assert({ given: 'a direct row and no snapshot', should: 'converge without refusing', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
+    assert({ given: 'a direct row and no snapshot', should: 'converge without refusing', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
   });
 
   it('RESUME against a slot a user process has since taken is REFUSED by the core (with the snapshot), not planned', async () => {
@@ -333,7 +343,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
       readListeners: async () => ({ detection: 'watching', listeners: [{ port: SPRITE_HTTP_PORT, pid: 999 }] }),
     });
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps });
     assert({ given: 'foreign 8080 listener', should: 'refuse http-port-busy', actual: result, expected: { ok: true, applied: { action: 'refuse', reason: 'http-port-busy', targetPort: 5173 } } });
     assert({ given: 'the refusal', should: 'touch no service', actual: trackedCalls.some((c) => c.startsWith('start:') || c.startsWith('create:')), expected: false });
   });
@@ -347,7 +357,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
       canRunCode: async (input) => { trackedCalls.push(`canRunCode:${input.userId}:${input.driveId}:${input.ownerId}`); return { ok: false, reason: 'no_capability' as never }; },
     });
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps });
     assert({ given: 'a payer who may not run code', should: 'refuse the resume with the gate reason', actual: result, expected: { ok: false, reason: 'wake-not-allowed', detail: 'no_capability' } });
     assert({ given: 'the refusal', should: 'consult the gate on the PAYER (driveId + ownerId), not the actor as payer', actual: trackedCalls[0], expected: 'canRunCode:u1:d1:owner' });
     assert({ given: 'the refusal', should: 'leave the stop intent in place', actual: store.current()?.stoppedByUserAt, expected: NOW });
@@ -356,7 +366,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
 
   it('STOP is never gated — stopping compute needs no spend permission', async () => {
     const { deps, calls } = actionDeps({ canRunCode: async () => { calls.push('canRunCode'); return { ok: false, reason: 'no_capability' as never }; } });
-    const result = await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps });
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps });
     assert({ given: 'a denied payer stopping', should: 'still stop', actual: result.ok, expected: true });
     assert({ given: 'a stop', should: 'not consult the gate', actual: calls.includes('canRunCode'), expected: false });
   });
@@ -364,26 +374,79 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
   it('a holder with no row is no-preview and nothing is attached', async () => {
     const trackedCalls: string[] = [];
     const { deps } = actionDeps({ store: fakeStore(null), attach: async () => { trackedCalls.push('attach'); return null; } });
-    assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });
+    assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });
     assert({ given: 'no row', should: 'not attach', actual: trackedCalls, expected: [] });
   });
 
   it('a sprite the platform cannot attach still records the intent (applied: null) — the planner honours it later', async () => {
     const { deps, store } = actionDeps({ attach: async () => null });
-    assert({ given: 'attach → null', should: 'record and report no effect', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps }), expected: { ok: true, applied: null } });
+    assert({ given: 'attach → null', should: 'record and report no effect', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps }), expected: { ok: true, applied: null } });
     assert({ given: 'attach → null', should: 'still have written the intent', actual: store.current()?.stoppedByUserAt, expected: NOW });
   });
 
   it('a row for a DEAD instance is ignored by the core: the intent is recorded and the plan is nothing-detected', async () => {
     const { deps } = actionDeps({ store: fakeStore(row(5173, { spriteInstanceId: 'inst-dead' })) });
-    assert({ given: 'stale row', should: 'plan nothing', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'nothing-detected', staleRowIgnored: true } } });
+    assert({ given: 'stale row', should: 'plan nothing', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'nothing-detected', staleRowIgnored: true } } });
   });
 
   it('a direct (8080) row: stop records intent with nothing to stop; resume records direct again', async () => {
     const stopCalls: string[] = [];
     const stop = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT)), attach: async () => fakeHandle({ relay: null, calls: stopCalls }) });
-    assert({ given: 'direct row, stop', should: 'be user-stopped with no service call', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'stop', ...ACTOR, deps: stop.deps }), expected: { ok: true, applied: { action: 'none', reason: 'user-stopped', staleRowIgnored: false } } });
+    assert({ given: 'direct row, stop', should: 'be user-stopped with no service call', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'stop' }, ...ACTOR, deps: stop.deps }), expected: { ok: true, applied: { action: 'none', reason: 'user-stopped', staleRowIgnored: false } } });
     const resume = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }) });
-    assert({ given: 'direct row, resume', should: 'converge as already-direct', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps: resume.deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
+    assert({ given: 'direct row, resume', should: 'converge as already-direct', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps: resume.deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
+  });
+});
+
+describe('approve — one explicit act, bound to the port the user was shown', () => {
+  function pending(overrides: Partial<DevPreviewUserActionDeps> = {}) {
+    const calls: string[] = [];
+    const store = fakeStore(row(9000, { relayServiceName: null }), calls);
+    const { deps } = actionDeps({
+      calls,
+      store,
+      attach: async () => fakeHandle({ relay: null, calls }),
+      readListeners: async () => ({ detection: 'watching', listeners: [{ port: 9000, pid: 7 }] }),
+      ...overrides,
+    });
+    return { deps, calls, store };
+  }
+
+  it('records the consent, clears any stop, and the SAME call reconciles the relay up', async () => {
+    const { deps, calls, store } = pending();
+    const result = await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps });
+    assert({ given: 'an approve for the detected port', should: 'create the relay', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'create', targetPort: 9000, recorded: true } } });
+    assert({ given: 'the approve', should: 'write the consent BEFORE planning', actual: calls.indexOf('approvePort:9000') < calls.indexOf('services.get'), expected: true });
+    assert({ given: 'the approve', should: 'leave the row approved', actual: store.current()?.approvedPort, expected: 9000 });
+  });
+
+  it('REFUSES a port the row no longer targets, and writes nothing — the echo is what binds the click to the screen', async () => {
+    const calls: string[] = [];
+    const store = fakeStore(row(9001, { relayServiceName: null }), calls);
+    const { deps } = actionDeps({ calls, store, attach: async () => fakeHandle({ relay: null, calls }) });
+    assert({ given: 'a click for 9000 while the server moved to 9001', should: 'be port-changed', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'port-changed' } });
+    assert({ given: 'a refused approve', should: 'approve nothing', actual: store.current()?.approvedPort, expected: null });
+    assert({ given: 'a refused approve', should: 'never reach the sprite', actual: calls.includes('services.get'), expected: false });
+  });
+
+  it('a holder with no row at all is no-preview, not port-changed', async () => {
+    const { deps } = actionDeps({ store: fakeStore(null) });
+    assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });
+  });
+
+  it('is gated by the wake gate exactly as a resume is — sharing a port is asking for compute', async () => {
+    const { deps, store } = pending({ canRunCode: async () => ({ ok: false as const, reason: 'tier_ineligible' }) });
+    assert({ given: 'a payer that may not run code', should: 'refuse', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'wake-not-allowed', detail: 'tier_ineligible' } });
+    assert({ given: 'a refused wake gate', should: 'write no consent', actual: store.current()?.approvedPort, expected: null });
+  });
+
+  it('the status offers the decision only where it can be taken: needs-approval, on this instance', () => {
+    const base = { holder: ENV, sandbox: 'attached' as const, detection: 'watching' as const, openPath: '/o' };
+    const waiting = buildDevPreviewStatus({ ...base, liveInstanceId: INSTANCE, row: row(9000, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'an unshared 9000', should: 'offer approval, naming the port, and offer no open', actual: [waiting.state.status, waiting.canApprove, waiting.pendingApprovalPort, waiting.canOpen], expected: ['needs-approval', true, 9000, false] });
+    const live = buildDevPreviewStatus({ ...base, liveInstanceId: INSTANCE, row: row(5173), relay: relayService(5173), listeners: null });
+    assert({ given: 'a live known-port preview', should: 'have nothing to approve', actual: [live.canApprove, live.pendingApprovalPort], expected: [false, null] });
+    const stale = buildDevPreviewStatus({ ...base, liveInstanceId: 'other-instance', row: row(9000, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'a row from a dead VM', should: 'offer nothing to approve', actual: stale.canApprove, expected: false });
   });
 });

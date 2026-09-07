@@ -116,6 +116,13 @@ export interface DevPreviewRow {
   relayServiceName: string | null;
   detectedAt: Date;
   stoppedByUserAt: Date | null;
+  /**
+   * The port a person explicitly agreed to share, or `null` for none. Named
+   * by PORT rather than a boolean so approval is per-port by construction: a
+   * dev server that moves to another unlisted port is a new decision, not an
+   * inherited one. See {@link requiresPreviewApproval}.
+   */
+  approvedPort: number | null;
 }
 
 /**
@@ -141,6 +148,12 @@ export interface DevPreviewRowIntent {
   relayServiceName: string | null;
   detectedAt: Date;
   stoppedByUserAt: null;
+  /**
+   * The approval to carry forward — the row's existing one, untouched. A
+   * detection never grants approval and never revokes one: only the explicit
+   * `approve` action writes this column.
+   */
+  approvedPort: number | null;
   /**
    * THE USER-INTENT GUARD (optimistic concurrency, not a value to write).
    *
@@ -181,6 +194,41 @@ export const NON_HTTP_SERVICE_PORTS: ReadonlySet<number> = new Set([
 export const KNOWN_DEV_SERVER_PORTS: ReadonlySet<number> = new Set([
   1234, 3000, 3001, 4000, 4200, 4321, 5000, 5173, 5174, 8000, 8080, 8081, 8888,
 ]);
+
+/**
+ * Pure: does offering THIS port need a person to say yes first?
+ *
+ * Starting the relay is the act of exposure — from that moment the port is
+ * reachable by everyone the holder's preview is reachable by, which for an
+ * env is every accepted member of the drive. Detection is not exposure and
+ * is deliberately unchanged: an unlisted port is still detected, still named
+ * in the affordance, still explicable. What it does not do any more is
+ * publish itself.
+ *
+ * The line is {@link KNOWN_DEV_SERVER_PORTS}: a port whose default owner is a
+ * dev server (vite, next, astro, django…) is what the user asked for by
+ * running the tool, and auto-relaying it is the feature working. Anything
+ * else — an admin UI on 9000, a debug listener, a colleague's service — is a
+ * guess, and a guess that exposes something is one a person makes.
+ *
+ * This is the ONLY home for the rule. It deliberately does not live in SQL:
+ * the port list is TypeScript, and duplicating it into a CHECK would
+ * guarantee drift. The security property is structural anyway — the sprite
+ * URL routes to 8080 alone, so a row with no relay serves nothing at all.
+ */
+export function requiresPreviewApproval(port: number): boolean {
+  return !KNOWN_DEV_SERVER_PORTS.has(port);
+}
+
+/** Pure: has a person approved sharing exactly this port on this row? */
+export function isPreviewApproved(row: Pick<DevPreviewRow, 'approvedPort'> | null, port: number): boolean {
+  return row !== null && row.approvedPort === port;
+}
+
+/** Pure: may this row's target be relayed right now — either it needs no approval, or it has one. */
+export function isPreviewShareable(row: Pick<DevPreviewRow, 'approvedPort'> | null, port: number): boolean {
+  return !requiresPreviewApproval(port) || isPreviewApproved(row, port);
+}
 
 export type DevServerClassification =
   | {
@@ -357,6 +405,21 @@ export type DevServerServicePlan =
       row: DevPreviewRowIntent;
     }
   | {
+      /**
+       * An UNLISTED port is the target and nobody has agreed to share it.
+       * Record the detection — so the UI can name the port and offer the
+       * decision — but start NOTHING, and take down a relay left over from a
+       * previous target, because that relay is exposure the user did not ask
+       * to keep. `row.relayServiceName` is null, which is what makes the
+       * sprite serve nothing: the URL routes to 8080 alone.
+       */
+      action: 'await-approval';
+      targetPort: number;
+      /** `services.remove(...)` first — a relay for the PREVIOUS target must not outlive it. */
+      removeRelay: boolean;
+      row: DevPreviewRowIntent;
+    }
+  | {
       /** The user switched the preview off and the relay is still up: `services.stop(relayServiceName)`. */
       action: 'stop-relay';
       relayServiceName: string;
@@ -425,12 +488,16 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return { action: 'none', reason: 'user-stopped', staleRowIgnored };
   }
 
-  // Thrash guard: a fresh UNLISTED port must not displace a KNOWN dev-port
-  // target that is still serving. Everything else — a known port, or any port
-  // once the current target is gone — replaces freely.
+  // Thrash guard: a fresh UNLISTED port must not displace a target that is
+  // still serving — either a KNOWN dev port, or an unlisted one a person has
+  // APPROVED. Without the second half, a `node --inspect` bind would knock a
+  // working, explicitly-shared preview back into needs-approval and make the
+  // user agree to it all over again. Everything else — a known port, or any
+  // port once the current target is gone — replaces freely.
   if (
     detected !== null && row !== null && detected.port !== row.targetPort
-    && detected.likelihood === 'unlisted' && KNOWN_DEV_SERVER_PORTS.has(row.targetPort)
+    && detected.likelihood === 'unlisted'
+    && (KNOWN_DEV_SERVER_PORTS.has(row.targetPort) || isPreviewApproved(row, row.targetPort))
     && listeners.some((entry) => entry.port === row.targetPort)
   ) {
     return { action: 'none', reason: 'current-target-preferred', staleRowIgnored };
@@ -452,7 +519,19 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return {
       action: 'record-direct',
       removeRelay: relay !== null,
-      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
+      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, approvedPort: row?.approvedPort ?? null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
+    };
+  }
+
+  // CONSENT BEFORE EXPOSURE, and before the slot questions: nothing is being
+  // started here, so `http-port-busy` and `slot-unknown` would both be
+  // dishonest answers to "why is my preview not up?".
+  if (!isPreviewShareable(row, targetPort)) {
+    return {
+      action: 'await-approval',
+      targetPort,
+      removeRelay: relay !== null,
+      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, approvedPort: row?.approvedPort ?? null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
     };
   }
 
@@ -475,6 +554,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     relayServiceName: service.name,
     detectedAt,
     stoppedByUserAt: null,
+    approvedPort: row?.approvedPort ?? null,
     basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
   };
 
@@ -517,6 +597,7 @@ export type DevPreviewServiceState =
   | { status: 'instance-unknown'; message: string }
   | { status: 'stale'; targetPort: number; message: string }
   | { status: 'stopped'; targetPort: number; stoppedAt: Date; message: string }
+  | { status: 'needs-approval'; targetPort: number; message: string }
   | { status: 'starting'; targetPort: number; via: 'relay'; message: string }
   | { status: 'live'; targetPort: number; via: 'relay' | 'direct'; message: string }
   | {
@@ -552,6 +633,11 @@ function relayTargets(relay: SandboxServiceInfo, targetPort: number): boolean {
   return (['node', 'socat'] as const).some((runtime) => relayServiceMatches(relay, buildPreviewRelaySpec({ targetPort, runtime })));
 }
 
+/** The copy for a detected-but-unshared port — the ONE place it is worded. */
+export function needsApprovalMessage(targetPort: number): string {
+  return `A dev server is running on port ${targetPort}. It is not a usual dev-server port, so it is not being shared until you say so.`;
+}
+
 /** The honest fallback copy for a held slot — the ONE place it is worded. */
 export const HTTP_PORT_BUSY_MESSAGE =
   `Port ${SPRITE_HTTP_PORT} is already in use by something that is not the preview relay. Run your dev server on port ${SPRITE_HTTP_PORT} to preview it, or free the port.`;
@@ -576,6 +662,17 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
       stoppedAt: row.stoppedByUserAt,
       message: `Preview of port ${row.targetPort} is switched off.`,
     };
+  }
+
+  // Detected, recorded, and serving NOTHING — no relay for a non-8080 target
+  // means the sprite URL (which routes to 8080 alone) reaches nothing. Two
+  // reasons land here and they read very differently to a user: waiting on a
+  // person, or a relay this reconcile has not created yet.
+  if (row.relayServiceName === null && row.targetPort !== SPRITE_HTTP_PORT) {
+    if (isPreviewApproved(row, row.targetPort)) {
+      return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
+    }
+    return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
   }
 
   const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);

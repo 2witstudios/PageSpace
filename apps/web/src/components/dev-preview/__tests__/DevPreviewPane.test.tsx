@@ -51,6 +51,8 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canOpen: true,
     canStop: true,
     canResume: false,
+    canApprove: false,
+    pendingApprovalPort: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -170,6 +172,38 @@ describe('DevPreviewPane', () => {
     fireEvent.click(screen.getByTitle('Reload the preview'));
     await waitFor(() => expect(screen.queryByTitle('Switch the preview back on')).toBeNull());
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
+  });
+
+  test('NEEDS APPROVAL: no frame, the audience is stated, and Share posts the PORT that was shown', async () => {
+    status = live({
+      canOpen: false,
+      canStop: true,
+      canResume: false,
+      canApprove: true,
+      pendingApprovalPort: 9000,
+      state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+    });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    // Nothing is served, so nothing is framed — the pane must not imply it is.
+    await screen.findByTestId('dev-preview-placeholder');
+    expect(screen.queryByTestId('dev-preview-frame')).toBeNull();
+    expect(screen.getByText('Needs your OK · :9000')).toBeInTheDocument();
+    // "Share" is meaningless without saying with whom.
+    expect(screen.getByText('Everyone with access to this drive will be able to open it.')).toBeInTheDocument();
+    // Stop is honest here: nothing is running to switch off.
+    expect(screen.getByTitle('Dismiss this preview')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Share port 9000'));
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'approve', port: 9000 }));
+  });
+
+  test('a viewer who may not manage is offered NO way to share, however unshared the preview is', async () => {
+    status = live({ canManage: false, canOpen: false, canApprove: true, pendingApprovalPort: 9000, state: { status: 'needs-approval', targetPort: 9000, message: 'not shared' } });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTestId('dev-preview-placeholder');
+    expect(screen.queryByTitle('Share port 9000')).toBeNull();
   });
 
   test('STARTING: the frame is up AND the status line explains the relay is coming up (the one time both show)', async () => {

@@ -66,6 +66,13 @@ export type AppliedDevServerServicePlan =
   | { action: 'start-relay'; via: 'create' | 'start' | 'already-running'; targetPort: number; recorded: boolean }
   | { action: 'replace-relay'; previousTargetPort: number; targetPort: number; recorded: boolean }
   | { action: 'record-direct'; removedRelay: boolean; recorded: boolean }
+  /**
+   * The port was recorded so the UI can name it and offer the decision, and
+   * NOTHING was started — an unlisted port is not shared until a person says
+   * so (`requiresPreviewApproval`). Any relay for a PREVIOUS target was taken
+   * down, because that relay is exposure nobody asked to keep.
+   */
+  | { action: 'await-approval'; targetPort: number; removedRelay: boolean; recorded: boolean }
   | { action: 'stop-relay'; relayServiceName: string }
   | { action: 'none'; reason: string; staleRowIgnored: boolean }
   | { action: 'refuse'; reason: string; targetPort?: number }
@@ -169,6 +176,14 @@ export async function applyDevServerServicePlan({
       if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
       if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
       return { action: 'record-direct', removedRelay: plan.removeRelay, recorded };
+    }
+    case 'await-approval': {
+      // Row first, like every other arm. A refusal means the user's stop
+      // landed in between, and a stopped preview needs no approval prompt.
+      const recorded = await store.upsert(plan.row);
+      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
+      if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
+      return { action: 'await-approval', targetPort: plan.targetPort, removedRelay: plan.removeRelay, recorded };
     }
     case 'stop-relay': {
       // The mirror of the row guard, for the effect that writes nothing: a

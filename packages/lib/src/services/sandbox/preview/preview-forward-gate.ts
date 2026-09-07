@@ -86,6 +86,7 @@ export type PreviewForwardDecision =
         | 'instance-unknown'
         | 'stale-instance'
         | 'stopped-by-user'
+        | 'needs-approval'
         | 'http-port-busy'
         | 'preview-down'
         | 'preview-starting'
@@ -127,6 +128,11 @@ export function decidePreviewForward(input: PreviewForwardInput): PreviewForward
       return { kind: 'refuse', reason: 'stale-instance', status: 409, message: state.message };
     case 'stopped':
       return { kind: 'refuse', reason: 'stopped-by-user', status: 409, message: state.message };
+    case 'needs-approval':
+      // The one line that makes BOTH proxy tiers refuse an unshared port.
+      // The switch is exhaustive, so this cannot be forgotten: adding the
+      // state without this case does not compile.
+      return { kind: 'refuse', reason: 'needs-approval', status: 409, message: state.message };
     case 'blocked':
       return { kind: 'refuse', reason: 'http-port-busy', status: 409, message: state.message };
     case 'down':

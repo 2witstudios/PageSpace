@@ -32,6 +32,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
   /** Set to hold the next `findByHolder` open until the test releases it. */
   let pause: { promise: Promise<void>; release: () => void } | null = null;
   const store: DevPreviewStore = {
+    approvePort: async () => null,
     findByHolder: async () => {
       log.push('read');
       if (pause !== null) {
@@ -127,7 +128,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     targetPort,
     relayServiceName: targetPort === 8080 ? null : PREVIEW_RELAY_SERVICE_NAME,
     detectedAt: new Date('2026-09-07T11:00:00.000Z'),
-    stoppedByUserAt: null,
+    stoppedByUserAt: null, approvedPort: null,
     ...overrides,
   };
 }
@@ -160,9 +161,9 @@ describe('the web tier and the detector, serialized per holder', () => {
     // landing between the detector's read and its write.
     const action = applyDevPreviewUserAction({
       holder: HOLDER,
-      action: 'stop',
+      action: { kind: 'stop' },
       ...ACTOR,
-      deps: { previewStore: store, attach: async () => handleFor(calls, relayService(5173)), readListeners: async () => [{ port: 5173, pid: 3 }], canRunCode: async () => ({ ok: true }), lock, now: () => NOW },
+      deps: { previewStore: store, attach: async () => handleFor(calls, relayService(5173)), readListeners: async () => ({ detection: 'watching' as const, listeners: [{ port: 5173, pid: 3 }] }), canRunCode: async () => ({ ok: true }), lock, now: () => NOW },
     });
     await new Promise((resolve) => setTimeout(resolve, 5));
     release();
@@ -203,9 +204,9 @@ describe('the web tier and the detector, serialized per holder', () => {
     const { store, current } = sharedStore(row(5173));
     const result = await applyDevPreviewUserAction({
       holder: HOLDER,
-      action: 'stop',
+      action: { kind: 'stop' },
       ...ACTOR,
-      deps: { previewStore: store, attach: async () => handleFor(calls, relayService(5173)), readListeners: async () => null, canRunCode: async () => ({ ok: true }), lock: alwaysBusy, now: () => NOW },
+      deps: { previewStore: store, attach: async () => handleFor(calls, relayService(5173)), readListeners: async () => ({ detection: 'unavailable' as const, listeners: null }), canRunCode: async () => ({ ok: true }), lock: alwaysBusy, now: () => NOW },
     });
     assert({ given: 'a contended lock', should: 'record the intent and report the deferral honestly', actual: result, expected: { ok: true, applied: null, lockContended: true } });
     assert({ given: 'the deferral', should: 'still have switched the preview off', actual: current()?.stoppedByUserAt, expected: NOW });
@@ -263,12 +264,12 @@ describe('the web tier and the detector, serialized per holder', () => {
 
   it('a degraded lock pool never breaks a click: the intent lands and nothing throws', async () => {
     const { store, current } = sharedStore(row(5173));
-    const degraded: DevPreviewLock = vi.fn(async () => ({ outcome: 'busy' }));
+    const degraded: DevPreviewLock = vi.fn(async () => ({ outcome: 'busy' as const }));
     const result = await applyDevPreviewUserAction({
       holder: HOLDER,
-      action: 'resume',
+      action: { kind: 'resume' },
       ...ACTOR,
-      deps: { previewStore: store, attach: async () => { throw new Error('never reached'); }, readListeners: async () => null, canRunCode: async () => ({ ok: true }), lock: degraded, now: () => NOW },
+      deps: { previewStore: store, attach: async () => { throw new Error('never reached'); }, readListeners: async () => ({ detection: 'unavailable' as const, listeners: null }), canRunCode: async () => ({ ok: true }), lock: degraded, now: () => NOW },
     });
     assert({ given: 'a lock pool that cannot serve', should: 'still clear the stop intent', actual: { ok: result.ok, stopped: current()?.stoppedByUserAt }, expected: { ok: true, stopped: null } });
   });

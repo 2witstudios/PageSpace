@@ -122,6 +122,15 @@ export interface DevPreviewStatus {
    * message already says what actually has to happen.
    */
   canResume: boolean;
+  /**
+   * True when this reader may turn a detected-but-unshared port into a shared
+   * one — the preview is waiting on a decision and the caller has already
+   * established the reader may manage it. The PORT is carried beside it so
+   * the click can echo back what the user was actually shown.
+   */
+  canApprove: boolean;
+  /** The port awaiting a decision, or null. Echoed by the approve action. */
+  pendingApprovalPort: number | null;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
   /**
@@ -218,6 +227,8 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     canOpen: state.status === 'live' || state.status === 'starting',
     canStop: actionable && row.stoppedByUserAt === null,
     canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
+    canApprove: actionable && state.status === 'needs-approval',
+    pendingApprovalPort: state.status === 'needs-approval' ? state.targetPort : null,
     detectedAt: row?.detectedAt ?? null,
     detection,
   };
@@ -292,7 +303,17 @@ export async function gatherDevPreviewStatus({
 // User actions
 // -----------------------------------------------------------------------------
 
-export type DevPreviewUserAction = 'stop' | 'resume';
+/**
+ * What a user may do to a preview. A discriminated union rather than a bare
+ * string because `approve` carries the PORT the user was shown: echoing it
+ * back is what binds the click to the thing on screen, so a dev server that
+ * moved between the render and the click can never be shared by a click that
+ * meant the old one.
+ */
+export type DevPreviewUserAction =
+  | { kind: 'stop' }
+  | { kind: 'resume' }
+  | { kind: 'approve'; port: number };
 
 export interface DevPreviewUserActionDeps {
   previewStore: DevPreviewStore;
@@ -331,7 +352,13 @@ export type DevPreviewUserActionResult =
    * detector's next frame starts the relay against a real snapshot; the
    * caller should say "starting shortly" rather than claim a failure.
    */
-  | { ok: false; reason: 'slot-unknown' };
+  | { ok: false; reason: 'slot-unknown' }
+  /**
+   * An `approve` whose echoed port is not the port the row targets any more.
+   * Nothing was written: the user agreed to share something else than what is
+   * running now, and the honest answer is to show them the new port.
+   */
+  | { ok: false; reason: 'port-changed' };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -379,7 +406,9 @@ export async function applyDevPreviewUserAction({
   // purpose: a refused resume that had already cleared `stoppedByUserAt`
   // would leave the row "on", and the detector's next frame would restart
   // the relay anyway — the exact bypass the gate exists to close.
-  if (action === 'resume') {
+  // An APPROVE is the same kind of act — it exists to make the relay start —
+  // so it is gated identically.
+  if (action.kind === 'resume' || action.kind === 'approve') {
     const wake = await deps.canRunCode({ userId, ...wakeSubject });
     if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   }
@@ -393,7 +422,8 @@ export async function applyDevPreviewUserAction({
   const locked = await lock(holder, async (): Promise<DevPreviewUserActionResult> => {
     // The write returns the row as written, and the plan is made from THAT —
     // no second read.
-    const row = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
+    const row = await writeIntent(holder, action, now, userId, deps.previewStore);
+    if (row === 'port-changed') return { ok: false, reason: 'port-changed' };
     if (row === null) return { ok: false, reason: 'no-preview' };
 
     const handle = await deps.attach(row.sandboxId);
@@ -426,7 +456,29 @@ export async function applyDevPreviewUserAction({
   // are entitled to, so record it unserialized — the row's compare-and-set
   // keeps that write safe on its own — and defer the relay work to the
   // detector's next frame or the backstop sweep.
-  const contendedRow = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
+  const contendedRow = await writeIntent(holder, action, now, userId, deps.previewStore);
+  if (contendedRow === 'port-changed') return { ok: false, reason: 'port-changed' };
   if (contendedRow === null) return { ok: false, reason: 'no-preview' };
   return { ok: true, applied: null, lockContended: true };
+}
+
+/**
+ * The one durable write a user action makes, before any plan: the stop
+ * intent, or the approval. Both return the row AS WRITTEN so the plan can be
+ * made from it without a second read; `'port-changed'` is the approve-only
+ * outcome where the row no longer targets the port the user was shown.
+ */
+async function writeIntent(
+  holder: DevPreviewHolderRef,
+  action: DevPreviewUserAction,
+  now: Date,
+  userId: string,
+  store: DevPreviewStore,
+): Promise<DevPreviewRow | null | 'port-changed'> {
+  if (action.kind !== 'approve') return store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
+  const approved = await store.approvePort(holder, { port: action.port, at: now, byUserId: userId });
+  if (approved !== null) return approved;
+  // Null means the filtered UPDATE matched nothing: either there is no row at
+  // all, or the row moved on to another port. Only the second is a conflict.
+  return (await store.findByHolder(holder)) === null ? null : 'port-changed';
 }

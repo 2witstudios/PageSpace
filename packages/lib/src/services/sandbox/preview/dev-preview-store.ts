@@ -23,7 +23,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { eq, eqOrIsNull, isDistinctFrom, or, sql } from '@pagespace/db/operators';
+import { and, eq, eqOrIsNull, isDistinctFrom, or, sql } from '@pagespace/db/operators';
 import { devPreviewServices } from '@pagespace/db/schema/dev-preview-services';
 import type { DevPreviewHolderRef, DevPreviewRow, DevPreviewRowIntent } from './dev-preview-core';
 
@@ -58,6 +58,18 @@ export interface DevPreviewStore {
    * a preview that does not exist.
    */
   setStoppedByUser(holder: DevPreviewHolderRef, at: Date | null): Promise<DevPreviewRecord | null>;
+  /**
+   * Record a person's consent to SHARE exactly `port` on the holder's row,
+   * and clear any stop intent — agreeing to share something is asking for it
+   * to be on, and leaving it off would answer a click with silence.
+   *
+   * Resolves the row AS WRITTEN, or `null` when the holder has no row OR the
+   * row no longer targets `port`. That second case is the point: the port is
+   * echoed back from the UI, and the write is filtered on it, so approval
+   * cannot drift onto a dev server that moved between the render and the
+   * click. The caller answers a null with a conflict, never with success.
+   */
+  approvePort(holder: DevPreviewHolderRef, input: { port: number; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
 }
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -76,6 +88,7 @@ export function createDbDevPreviewStore(): DevPreviewStore {
           relayServiceName: devPreviewServices.relayServiceName,
           detectedAt: devPreviewServices.detectedAt,
           stoppedByUserAt: devPreviewServices.stoppedByUserAt,
+          approvedPort: devPreviewServices.approvedPort,
         })
         .from(devPreviewServices)
         .where(eq(holderColumn(holder), holder.id))
@@ -94,6 +107,10 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         relayServiceName: intent.relayServiceName,
         detectedAt: intent.detectedAt,
         stoppedByUserAt: intent.stoppedByUserAt,
+        approvedPort: intent.approvedPort ?? null,
+        // Only the INSERT path uses this, and there the planner saw no row
+        // (so it carried no approval forward). Kept paired for the CHECK.
+        approvedAt: intent.approvedPort == null ? null : intent.detectedAt,
       };
       const written = await db
         .insert(devPreviewServices)
@@ -127,6 +144,12 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             relayServiceName: values.relayServiceName,
             detectedAt: values.detectedAt,
             stoppedByUserAt: values.stoppedByUserAt,
+            approvedPort: values.approvedPort,
+            // The planner never grants or revokes an approval — it only
+            // carries the row's own forward — so the stored timestamp is
+            // KEPT rather than restamped, and says when a person actually
+            // agreed. Cleared together with the port, for the CHECK.
+            approvedAt: values.approvedPort == null ? null : sql`${devPreviewServices.approvedAt}`,
             // Not `now()`: `updatedAt` is a UTC wall-clock timestamp column and
             // `now()` resolves through the session TZ (see the SQL-now rule).
             updatedAt: sql`(now() at time zone 'utc')`,
@@ -149,6 +172,29 @@ export function createDbDevPreviewStore(): DevPreviewStore {
           relayServiceName: devPreviewServices.relayServiceName,
           detectedAt: devPreviewServices.detectedAt,
           stoppedByUserAt: devPreviewServices.stoppedByUserAt,
+          approvedPort: devPreviewServices.approvedPort,
+        });
+      return row ?? null;
+    },
+
+    async approvePort(holder, { port, at, byUserId }) {
+      const [row] = await db
+        .update(devPreviewServices)
+        .set({ approvedPort: port, approvedAt: at, approvedByUserId: byUserId, stoppedByUserAt: null, updatedAt: sql`(now() at time zone 'utc')` })
+        // THE ECHOED PORT, enforced in SQL rather than by a read-then-write:
+        // the approval lands only while the row still targets the port the
+        // user was shown. A dev server that moved between the render and the
+        // click therefore cannot be approved by a click meant for the old one.
+        .where(and(eq(holderColumn(holder), holder.id), eq(devPreviewServices.targetPort, port)))
+        .returning({
+          id: devPreviewServices.id,
+          spriteInstanceId: devPreviewServices.spriteInstanceId,
+          sandboxId: devPreviewServices.sandboxId,
+          targetPort: devPreviewServices.targetPort,
+          relayServiceName: devPreviewServices.relayServiceName,
+          detectedAt: devPreviewServices.detectedAt,
+          stoppedByUserAt: devPreviewServices.stoppedByUserAt,
+          approvedPort: devPreviewServices.approvedPort,
         });
       return row ?? null;
     },

@@ -25,22 +25,30 @@ export function respondToDevPreviewUserAction({
   result: DevPreviewUserActionResult;
 }): NextResponse {
   const resourceId = `${holder.kind}:${holder.id}`;
+  // The audit trail names the port for an approve — who agreed to share what
+  // is the whole point of recording the act.
+  const audited = action.kind === 'approve' ? { action: action.kind, port: action.port } : { action: action.kind };
   if (!result.ok) {
     if (result.reason === 'wake-not-allowed') {
-      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'dev_preview', resourceId, details: { route, action, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, reason: 'wake_not_allowed', detail: result.detail }, riskScore: 0.5 });
       return NextResponse.json({ error: 'This drive cannot run code right now, so the preview cannot be switched back on', reason: result.detail }, { status: 403 });
     }
+    // Neither of these is "there is nothing to switch", and answering 404
+    // would tell the user their preview does not exist when it plainly does.
+    if (result.reason === 'port-changed') {
+      return NextResponse.json({ error: 'The dev server has moved to a different port since this was shown. Check the port and share it again.', reason: result.reason }, { status: 409 });
+    }
     // `slot-unknown` IS NOT A FAILURE, and answering 4xx made the UI say it
-    // was. The user's intent is already written — the resume cleared the stop
-    // — and only the relay work deferred, because no `ports/watch` snapshot
-    // proved 8080 free; the detector's next frame starts it against a real
-    // snapshot. `post()` THROWS on any 4xx, so the pane toasted "Could not
-    // switch the preview on" over a click that had taken effect. It is
-    // therefore the same success shape an attach-less action already returns
-    // (`applied: null`), with the deferral named so a caller can say
-    // "starting shortly" if it wants.
+    // was. The user's intent is already written — the resume cleared the stop,
+    // the approval recorded the consent — and only the relay work deferred,
+    // because no `ports/watch` snapshot proved 8080 free; the detector's next
+    // frame starts it against a real snapshot. `post()` THROWS on any 4xx, so
+    // the pane toasted "Could not switch the preview on" over a click that had
+    // taken effect. It is therefore the same success shape an attach-less
+    // action already returns (`applied: null`), with the deferral named so a
+    // caller can say "starting shortly" if it wants.
     if (result.reason === 'slot-unknown') {
-      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, action, applied: null, deferred: 'awaiting-port-snapshot' } });
+      auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, applied: null, deferred: 'awaiting-port-snapshot' } });
       return NextResponse.json({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
     }
     return NextResponse.json(
@@ -48,6 +56,6 @@ export function respondToDevPreviewUserAction({
       { status: 404 },
     );
   }
-  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, action, applied: result.applied?.action ?? null } });
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, applied: result.applied?.action ?? null } });
   return NextResponse.json({ ok: true, applied: result.applied });
 }

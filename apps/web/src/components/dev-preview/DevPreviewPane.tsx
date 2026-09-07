@@ -55,7 +55,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, Play, RefreshCw, Square, X } from 'lucide-react';
+import { ExternalLink, Play, RefreshCw, Share2, Square, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -67,7 +67,7 @@ import { devPreviewActionsPath, useDevPreviewStatus, type DevPreviewStatusDTO } 
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingSession } from '@/stores/useEditingSession';
 import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
-import { devPreviewBadge } from './dev-preview-copy';
+import { devPreviewApprovalAudience, devPreviewBadge } from './dev-preview-copy';
 
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
 const PANE_POLL_MS = 5_000;
@@ -151,14 +151,20 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
   }, [open.holder, reload]);
 
   const runAction = useCallback(
-    async (action: 'stop' | 'resume') => {
+    async (action: 'stop' | 'resume' | { approvePort: number }) => {
       setActioning(true);
+      // The approve body ECHOES the port the user was just shown; the server
+      // refuses it with a 409 if the dev server has moved since, rather than
+      // sharing whatever is running now.
+      const body = typeof action === 'string' ? { action } : { action: 'approve', port: action.approvePort };
       try {
-        await post(devPreviewActionsPath(open.statusPath), { action });
+        await post(devPreviewActionsPath(open.statusPath), body);
       } catch (actionError) {
-        toast.error(action === 'stop' ? 'Could not switch the preview off' : 'Could not switch the preview on', {
-          description: actionError instanceof Error ? actionError.message : 'Please try again.',
-        });
+        const failure =
+          action === 'stop' ? 'Could not switch the preview off'
+          : action === 'resume' ? 'Could not switch the preview on'
+          : 'Could not share the preview';
+        toast.error(failure, { description: actionError instanceof Error ? actionError.message : 'Please try again.' });
       } finally {
         setActioning(false);
         mutate();
@@ -207,9 +213,19 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
             </a>
           </Button>
           {preview?.canManage && preview.canStop && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" disabled={actioning} onClick={() => void runAction('stop')} title="Switch the preview off">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+              disabled={actioning}
+              onClick={() => void runAction('stop')}
+              // Nothing is being served while a decision is pending, so "Stop"
+              // would name an act that has not happened. The same write does
+              // the honest thing: put the offer away.
+              title={preview.state.status === 'needs-approval' ? 'Dismiss this preview' : 'Switch the preview off'}
+            >
               <Square className="size-3.5" aria-hidden="true" />
-              Stop
+              {preview.state.status === 'needs-approval' ? 'Dismiss' : 'Stop'}
             </Button>
           )}
           {preview?.canManage && preview.canResume && (
@@ -249,8 +265,27 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
           data-testid="dev-preview-frame"
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground" data-testid="dev-preview-placeholder">
-          {preview ? preview.state.message : 'Loading preview status…'}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-xs text-muted-foreground" data-testid="dev-preview-placeholder">
+          <p className="max-w-sm">{preview ? preview.state.message : 'Loading preview status…'}</p>
+          {preview?.canManage && preview.canApprove && preview.pendingApprovalPort !== null && (
+            // The decision lives HERE and not on the affordance row: this is
+            // the surface that can state who would be able to see it, and
+            // sharing something should not be a one-click side effect of a
+            // line in a list.
+            <>
+              <p className="max-w-sm">{devPreviewApprovalAudience(preview.holder)}</p>
+              <Button
+                size="sm"
+                className="h-7 gap-1 px-3"
+                disabled={actioning}
+                onClick={() => void runAction({ approvePort: preview.pendingApprovalPort as number })}
+                title={`Share port ${preview.pendingApprovalPort}`}
+              >
+                <Share2 className="size-3.5" aria-hidden="true" />
+                Share :{preview.pendingApprovalPort}
+              </Button>
+            </>
+          )}
         </div>
       )}
     </aside>

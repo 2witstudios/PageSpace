@@ -38,6 +38,8 @@ function preview(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canOpen: false,
     canStop: false,
     canResume: false,
+    canApprove: false,
+    pendingApprovalPort: null,
     detectedAt: null,
     ...over,
   };

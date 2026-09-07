@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
+import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewApprovalAudience, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 function preview(state: DevPreviewStatusDTO['state']): DevPreviewStatusDTO {
-  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', detection: 'watching', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, detectedAt: null };
+  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', detection: 'watching', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, canApprove: false, pendingApprovalPort: null, detectedAt: null };
 }
 
 describe('dev-preview copy', () => {
@@ -47,5 +47,18 @@ describe('dev-preview copy', () => {
     expect(devPreviewAffordanceVerb(preview({ status: 'down', targetPort: 1, via: 'relay', error: null, repairable: true, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'blocked', targetPort: 1, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'stale', targetPort: 1, message: '' }))).toBe('Details');
+  });
+});
+
+describe('needs-approval copy', () => {
+  it('names the port in the badge and the line, and never claims the preview is live', () => {
+    const state = { status: 'needs-approval' as const, targetPort: 9000, message: 'not shared yet' };
+    expect(devPreviewBadge(state)).toEqual({ label: 'Needs your OK · :9000', tone: 'secondary' });
+    expect(devPreviewAffordanceText(preview(state))).toBe('Dev server detected on :9000 — not shared yet');
+  });
+
+  it('states the audience per holder kind — the sentence that makes "share" mean something', () => {
+    expect(devPreviewApprovalAudience({ kind: 'env', id: 'e' })).toContain('drive');
+    expect(devPreviewApprovalAudience({ kind: 'workspace', id: 'w' })).toContain('session');
   });
 });

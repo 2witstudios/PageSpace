@@ -8,6 +8,9 @@ import {
   describeServiceState,
   resolveDevPreviewHolder,
   HTTP_PORT_BUSY_MESSAGE,
+  requiresPreviewApproval,
+  isPreviewApproved,
+  KNOWN_DEV_SERVER_PORTS,
   type DevPreviewHolderRef,
   type DevPreviewRow,
   type PlanDevServerServiceInput,
@@ -32,6 +35,7 @@ function relayRow(targetPort: number, overrides: Partial<DevPreviewRow> = {}): D
     relayServiceName: targetPort === SPRITE_HTTP_PORT ? null : PREVIEW_RELAY_SERVICE_NAME,
     detectedAt: new Date('2026-09-05T11:00:00.000Z'),
     stoppedByUserAt: null,
+    approvedPort: null,
     ...overrides,
   };
 }
@@ -206,7 +210,7 @@ describe('planDevServerService', () => {
         action: 'start-relay',
         via: 'create',
         service: buildPreviewRelaySpec({ targetPort: 5173 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -278,7 +282,7 @@ describe('planDevServerService', () => {
         action: 'replace-relay',
         previousTargetPort: 5173,
         service: buildPreviewRelaySpec({ targetPort: 3000 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -291,7 +295,7 @@ describe('planDevServerService', () => {
       expected: {
         action: 'record-direct',
         removeRelay: false,
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
       },
     });
     const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }) }));
@@ -407,12 +411,22 @@ describe('planDevServerService — thrash guard', () => {
   });
 
   it('replaces freely once the current target stopped listening, or when the newcomer is a known dev port', () => {
+    // The guard no longer applies (5173 is gone), so 9230 becomes the target —
+    // but an unlisted target is not SHARED without a person's say-so, so the
+    // plan is to record it and take the old relay down, not to re-point it.
     const gone = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
-    assert({ given: 'row=5173 no longer bound, unlisted 9230 opens', should: 'replace the relay', actual: gone.action, expected: 'replace-relay' });
+    assert({ given: 'row=5173 no longer bound, unlisted 9230 opens', should: 'take the target but await approval, removing the old relay', actual: [gone.action, gone.action === 'await-approval' && gone.removeRelay], expected: ['await-approval', true] });
+    const approvedGone = planDevServerService(planInput({ row: relayRow(5173, { approvedPort: 9230 }), relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    assert({ given: 'the same move with 9230 already approved', should: 'replace the relay', actual: approvedGone.action, expected: 'replace-relay' });
     const known = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listeners: [{ port: 5173, pid: 1 }], detected: { kind: 'dev-server', port: 3000, likelihood: 'known-dev-port' } }));
     assert({ given: 'row=5173 still bound, known 3000 opens', should: 'replace the relay', actual: known.action, expected: 'replace-relay' });
     const unlistedCurrent = planDevServerService(planInput({ row: relayRow(7777), relay: relayService(7777), listeners: [{ port: 7777, pid: 1 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
-    assert({ given: 'row=7777 (unlisted) still bound, unlisted 9230 opens', should: 'replace (only a KNOWN current target is defended)', actual: unlistedCurrent.action, expected: 'replace-relay' });
+    assert({ given: 'row=7777 (unapproved, unlisted) still bound, unlisted 9230 opens', should: 'move to 9230 — an unapproved target is not worth defending', actual: unlistedCurrent.action, expected: 'await-approval' });
+    // But an APPROVED unlisted target IS defended: otherwise a `node --inspect`
+    // bind would knock a working, explicitly-shared preview back into
+    // needs-approval and make the user agree to it a second time.
+    const approvedCurrent = planDevServerService(planInput({ row: relayRow(7777, { approvedPort: 7777 }), relay: relayService(7777), listeners: [{ port: 7777, pid: 1 }], detected: { kind: 'dev-server', port: 9230, likelihood: 'unlisted' } }));
+    assert({ given: 'row=7777 APPROVED and still bound, unlisted 9230 opens', should: 'keep the working preview', actual: [approvedCurrent.action, approvedCurrent.action === 'none' && approvedCurrent.reason], expected: ['none', 'current-target-preferred'] });
   });
 });
 
@@ -563,5 +577,75 @@ describe('describeServiceState', () => {
     const state = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173), listeners: null });
     expect(JSON.stringify(state).toLowerCase()).not.toContain('public');
     expect(Object.keys(state)).not.toContain('url');
+  });
+});
+
+describe('sharing an UNLISTED port is a decision, not a default', () => {
+  it('draws the line at the known dev-server ports, and nowhere else', () => {
+    for (const port of KNOWN_DEV_SERVER_PORTS) {
+      assert({ given: `port ${port}`, should: 'need no approval — running the tool IS the ask', actual: requiresPreviewApproval(port), expected: false });
+    }
+    for (const port of [9000, 7777, 9230, 4444, 1]) {
+      assert({ given: `port ${port}`, should: 'need approval', actual: requiresPreviewApproval(port), expected: true });
+    }
+    assert({ given: 'no row at all', should: 'never count as approved', actual: isPreviewApproved(null, 9000), expected: false });
+    assert({ given: 'approval for another port', should: 'not carry over — approval is per PORT', actual: isPreviewApproved({ approvedPort: 9000 }, 9001), expected: false });
+    assert({ given: 'approval for this port', should: 'count', actual: isPreviewApproved({ approvedPort: 9000 }, 9000), expected: true });
+  });
+
+  it('a fresh unlisted detection is RECORDED but never relayed — the row it writes serves nothing', () => {
+    const plan = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({
+      given: 'a dev server on 9000 with no approval',
+      should: 'await approval, writing a row with NO relay',
+      actual: plan,
+      expected: {
+        action: 'await-approval',
+        targetPort: 9000,
+        removeRelay: false,
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
+      },
+    });
+  });
+
+  it('the approval unlocks exactly the port it names, and the relay starts on the next plan', () => {
+    const approved = planDevServerService(planInput({ row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({ given: '9000 approved', should: 'create the relay', actual: [approved.action, approved.action === 'start-relay' && approved.via], expected: ['start-relay', 'create'] });
+
+    // The server moved to another unlisted port: the old approval does not
+    // travel with it, so exposure stops until the user agrees again.
+    const moved = planDevServerService(planInput({ row: relayRow(9000, { approvedPort: 9000 }), relay: relayService(9000), listeners: [{ port: 8080, pid: 42 }], detected: { kind: 'dev-server', port: 9001, likelihood: 'unlisted' } }));
+    assert({ given: 'an approved 9000 moving to 9001', should: 'await approval again AND remove the 9000 relay', actual: [moved.action, moved.action === 'await-approval' && moved.removeRelay], expected: ['await-approval', true] });
+  });
+
+  it('never asks about 8080 or a known port, and asks BEFORE the slot questions', () => {
+    const direct = planDevServerService(planInput({ detected: detected(8080, 5), listeners: [{ port: 8080, pid: 5 }] }));
+    assert({ given: 'the server on 8080 itself', should: 'record directly — 8080 is a known dev port', actual: direct.action, expected: 'record-direct' });
+    const known = planDevServerService(planInput({ detected: detected(5173) }));
+    assert({ given: 'vite on 5173', should: 'start the relay with no approval', actual: known.action, expected: 'start-relay' });
+
+    // A held slot and an unknown snapshot are both answers about STARTING
+    // something. Nothing is being started here, so neither is the honest reason.
+    const busy = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' }, listeners: [{ port: 8080, pid: 99 }] }));
+    assert({ given: 'an unlisted port while a stranger holds 8080', should: 'still be await-approval, not http-port-busy', actual: busy.action, expected: 'await-approval' });
+    const blind = planDevServerService(planInput({ detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' }, listenersKnown: false }));
+    assert({ given: 'an unlisted port with no listener snapshot', should: 'still be await-approval, not slot-unknown', actual: blind.action, expected: 'await-approval' });
+  });
+
+  it('a STOP still outranks approval — the user switching it off is never overridden by a pending decision', () => {
+    const stopped = planDevServerService(planInput({ row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
+    assert({ given: 'an unlisted port on a switched-off preview', should: 'stay off', actual: [stopped.action, stopped.action === 'none' && stopped.reason], expected: ['none', 'user-stopped'] });
+  });
+
+  it('describeServiceState says needs-approval, and says STARTING once approved but not yet relayed', () => {
+    const waiting = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'a recorded but unapproved 9000', should: 'be needs-approval naming the port', actual: [waiting.status, waiting.status === 'needs-approval' && waiting.targetPort], expected: ['needs-approval', 9000] });
+    expect(waiting.message).toContain('9000');
+
+    const approved = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null });
+    assert({ given: 'approved but the relay is not created yet', should: 'read as starting, never as "serving 8080 directly"', actual: approved.status, expected: 'starting' });
+
+    const off = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), relay: null, listeners: null });
+    assert({ given: 'a switched-off unapproved preview', should: 'read as stopped, not as a pending decision', actual: off.status, expected: 'stopped' });
   });
 });
