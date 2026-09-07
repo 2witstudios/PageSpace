@@ -686,7 +686,13 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
   // means the sprite URL (which routes to 8080 alone) reaches nothing. Three
   // reasons land here and they read very differently to a user.
   if (row.relayServiceName === null && row.targetPort !== SPRITE_HTTP_PORT) {
-    if (!isPreviewApproved(row, row.targetPort)) {
+    // SHAREABLE, not APPROVED. A row can reach this branch with a perfectly
+    // ordinary dev-server port — a stopped preview records that its relay is
+    // no longer running, and the resume that follows clears the stop before
+    // the relay is re-created. Asking `isPreviewApproved` there would demand
+    // consent for port 5173, which needs none, and offer a Share button for a
+    // port that was never withheld.
+    if (!isPreviewShareable(row, row.targetPort)) {
       return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
     }
     // Approved, and the slot is TAKEN: the relay was planned and refused, and

@@ -654,6 +654,14 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
     // With no snapshot the slot is UNKNOWN, which is not evidence of a problem.
     assert({ given: 'approved with no listener snapshot', should: 'stay starting rather than invent a blockage', actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null }).status, expected: 'starting' });
 
+    // A row can reach the relay-less branch with an ORDINARY dev-server port:
+    // a stop records that the relay is gone, and the resume clears the stop
+    // before the relay is re-created. That must not demand consent for a port
+    // that never needed any — the whole Share affordance would appear on a
+    // vite server the user has been previewing all along.
+    const resumedKnownPort = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173, { relayServiceName: null }), relay: null, listeners: null });
+    assert({ given: 'a known dev port whose relay was stopped and then resumed', should: 'read as starting, never as needs-approval', actual: resumedKnownPort.status, expected: 'starting' });
+
     const off = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), relay: null, listeners: null });
     assert({ given: 'a switched-off unapproved preview', should: 'read as stopped, not as a pending decision', actual: off.status, expected: 'stopped' });
   });
