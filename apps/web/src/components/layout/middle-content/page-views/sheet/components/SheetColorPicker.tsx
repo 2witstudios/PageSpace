@@ -5,7 +5,7 @@ import { Check, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Input } from '@/components/ui/input';
 import { cn } from '@/lib/utils';
-import { NEUTRALS, PALETTE, normalizeHex, readableTextColor, swatchRow } from '../core/palette';
+import { NEUTRALS, PALETTE, normalizeHex, readableTextColor, swatchRow } from '@pagespace/lib/sheets/sheet';
 
 interface SheetColorPickerProps {
   /** The colour currently applied, if any. */
@@ -46,7 +46,7 @@ const Swatch: React.FC<{ color: string; isActive: boolean; onSelect: () => void;
 /**
  * The swatch popover for text and fill colour.
  *
- * The hues are the product's own (see `core/palette`), in three strengths, so a
+ * The hues are the product's own (see `@pagespace/lib/sheets/palette`), in three strengths, so a
  * dashboard built here uses the same vocabulary as a task board rather than
  * Excel's. A hex field underneath covers everything else.
  */
