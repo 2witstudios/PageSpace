@@ -37,7 +37,149 @@ export type SandboxSize = 'small' | 'beefy';
  * union so a second backend adds a new `kind` member here (and nowhere else a
  * `SandboxHost` caller can see) — see the file header.
  */
-export type SandboxSubstrateSpec = { kind: 'sprite'; size?: SandboxSize };
+export type SandboxSubstrateSpec =
+  | { kind: 'sprite'; size?: SandboxSize }
+  /**
+   * A LOCAL environment — the user's own computer, reached over the zero-trust
+   * env bridge (Local Environments epic). There is no VM here and no size to
+   * ask for: the hardware is whatever the user enrolled, and its owner's
+   * daemon is the policy enforcement point (invariant 4). See
+   * `sandbox-client/local-env-sandbox-host.ts`.
+   */
+  | { kind: 'local'; envId: string };
+
+/**
+ * What a substrate can actually DO, advertised by the handle rather than
+ * assumed by the caller (invariant 12: no silent safety degradation).
+ *
+ * The point of declaring this is that `SandboxHandle` has one shape and two
+ * substrates behind it, and the local one genuinely cannot serve seven of its
+ * members. A caller that meets `false` here must REFUSE with a reason it can
+ * name; the unsupported member itself throws {@link LocalEnvUnsupportedError}
+ * rather than returning a degenerate value, because a degenerate value is a
+ * lie a caller cannot detect — `listStreams()` answering `[]` tells a caller
+ * "no shells are running", which is a statement about the machine, not about
+ * this seam's reach.
+ *
+ * `false` never means "not yet". Local terminals are PERMANENTLY outside this
+ * seam: the plan routes local PTYs through apps/realtime with a signed
+ * apps/web proxy and an SSE return path (M2), never through
+ * `SandboxHandle.stream`.
+ */
+export interface SandboxCapabilities {
+  /** `exec` — run a command and collect its output. */
+  readonly exec: boolean;
+  /** `writeFiles` / `readFile`. */
+  readonly fs: boolean;
+  /** `stream` / `listStreams` / `killSession` — interactive PTY sessions on THIS seam. */
+  readonly stream: boolean;
+  /** `createCheckpoint` — a filesystem snapshot before a destructive agent batch. */
+  readonly checkpoint: boolean;
+  /** `urlInfo` / `powerState` / `setUrlAuth` — the dev-preview surface. */
+  readonly preview: boolean;
+  /** `services.*` — runtime-managed services. */
+  readonly services: boolean;
+}
+
+/** Every member of {@link SandboxHandle} the Sprite backend serves — all of them. */
+export const SPRITE_SANDBOX_CAPABILITIES: SandboxCapabilities = {
+  exec: true,
+  fs: true,
+  stream: true,
+  checkpoint: true,
+  preview: true,
+  services: true,
+};
+
+/**
+ * What a LOCAL environment serves: exec and files, and nothing else.
+ *
+ * `checkpoint: false` is invariant 12 in one line — the machine is the user's
+ * own computer and this seam has no way to snapshot its filesystem, so the
+ * checkpoint-policy layer must fail CLOSED on it rather than run a destructive
+ * batch unprotected. `stream: false` is permanent (M2 routes local PTYs
+ * elsewhere); `preview`/`services` are Sprite platform surfaces with no local
+ * analogue.
+ */
+export const LOCAL_ENV_SANDBOX_CAPABILITIES: SandboxCapabilities = {
+  exec: true,
+  fs: true,
+  stream: false,
+  checkpoint: false,
+  preview: false,
+  services: false,
+};
+
+/** The `SandboxHandle` / `SandboxHost` members a local environment cannot serve. */
+export type LocalEnvUnsupportedOp =
+  | 'stream'
+  | 'listStreams'
+  | 'killSession'
+  | 'createCheckpoint'
+  | 'services'
+  | 'urlInfo'
+  | 'powerState'
+  | 'setUrlAuth';
+
+/**
+ * A caller reached a `SandboxHandle` member this substrate does not serve.
+ *
+ * Deliberately an ERROR carrying the op name, never a degenerate return
+ * value — see {@link SandboxCapabilities}. A caller has two correct
+ * responses and no third: consult `capabilities` first and refuse with its
+ * own typed reason, or catch this and do the same. Swallowing it and
+ * continuing is the silent degradation invariant 12 forbids.
+ */
+export class LocalEnvUnsupportedError extends Error {
+  constructor(
+    readonly op: LocalEnvUnsupportedOp,
+    readonly envId: string,
+  ) {
+    super(`Local environment ${envId} does not support "${op}" — see SandboxCapabilities`);
+    this.name = 'LocalEnvUnsupportedError';
+  }
+}
+
+/**
+ * A local environment was asked for a machine while its daemon holds no
+ * authorized bridge socket on this replica.
+ *
+ * Distinct from a policy denial ON PURPOSE, and the distinction is the whole
+ * value of the type: "your computer is not connected" is fixed by running
+ * `pagespace env connect`, while "the machine owner's bind policy denied you"
+ * is fixed by the OWNER, on a different machine, in a different place. A
+ * caller that cannot tell them apart sends the user to debug the wrong layer.
+ */
+export class LocalEnvNotConnectedError extends Error {
+  constructor(readonly envId: string) {
+    super(`Local environment ${envId} has no connected machine`);
+    this.name = 'LocalEnvNotConnectedError';
+  }
+}
+
+/**
+ * The scheme for a local environment's sandbox ADDRESS.
+ *
+ * A local env holds no `drive_envs.sandboxId` — invariant 9 keeps every Sprite
+ * column NULL so the row is structurally invisible to reclaim and billing — but
+ * the seam's existing callers address a machine by an opaque id string
+ * (`SandboxHost.attach({ sandboxId })`, the tool runner's `reconnect`). So a
+ * local machine gets an address that is DERIVED, never persisted: it exists
+ * only inside a request, and nothing writes it to a column.
+ */
+const LOCAL_ENV_SANDBOX_ID_PREFIX = 'local-env:';
+
+/** The derived, never-persisted address of a local environment's machine. */
+export function localEnvSandboxId(envId: string): string {
+  return `${LOCAL_ENV_SANDBOX_ID_PREFIX}${envId}`;
+}
+
+/** The envId inside a local address, or null for any other id (a Sprite name). */
+export function parseLocalEnvSandboxId(sandboxId: string): string | null {
+  if (!sandboxId.startsWith(LOCAL_ENV_SANDBOX_ID_PREFIX)) return null;
+  const envId = sandboxId.slice(LOCAL_ENV_SANDBOX_ID_PREFIX.length);
+  return envId.length > 0 ? envId : null;
+}
 
 /** Options for opening (or reattaching to) an interactive PTY stream on a machine. */
 export interface SandboxStreamOptions {
@@ -230,6 +372,16 @@ export interface SandboxServicesApi {
 
 /** A provisioned/attached machine session — the full surface a caller drives. */
 export interface SandboxHandle {
+  /**
+   * What this substrate can actually serve — read it BEFORE driving a member
+   * that a second backend might not have (see {@link SandboxCapabilities}).
+   * Required, not optional, for the same reason `createCheckpoint` is: a
+   * caller that could not tell whether a handle had declared its capabilities
+   * would have to guess, and the safe guess (assume nothing works) would break
+   * the Sprite path while the unsafe one (assume everything works) is exactly
+   * the silent degradation this field exists to stop.
+   */
+  readonly capabilities: SandboxCapabilities;
   /**
    * The platform's id for this Sprite INSTANCE — the VM's actual identity, unique
    * per generation. `sandboxId` below is only the reused NAME, so anything that

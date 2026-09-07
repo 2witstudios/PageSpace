@@ -10,7 +10,8 @@ import { generateKeyPairSync, createPrivateKey, createPublicKey, createHash, sig
 import { verifyGrant, createMemoryNonceStore, canonicalizeArgs, GRANT_MAX_TTL_MS } from '@pagespace/lib/env-bridge/grant';
 import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import { parseServerSigningKeyring, type SigningKeyPrimitives } from '@pagespace/lib/env-bridge/server-signing-key';
-import { signGrantFrame, type UnsignedGrantFrame } from '../grant-signer';
+import type { UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
+import { signGrantFrame } from '../grant-signer';
 import { ed25519Verify, envBridgeHash } from '../crypto';
 
 const primitives: SigningKeyPrimitives = {

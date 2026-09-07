@@ -21,14 +21,9 @@
  * `encodeGrant` (never re-implemented here), the clock is a parameter.
  */
 import { canonicalizeArgs, encodeGrant, GRANT_MAX_TTL_MS, type Grant, type GrantPrincipal, type HashBytes } from '@pagespace/lib/env-bridge/grant';
-import { grantRequestForFrame, type GrantFrame } from '@pagespace/lib/env-bridge/grant-args';
+import { grantRequestForFrame, type GrantFrame, type UnsignedGrantFrame } from '@pagespace/lib/env-bridge/grant-args';
 import type { ServerSigningKeyring } from '@pagespace/lib/env-bridge/server-signing-key';
 import { envBridgeHash } from './crypto';
-
-/** A grant frame before its grant + signature are attached — what a host asks the bridge to send. */
-export type UnsignedGrantFrame = {
-  [K in GrantFrame['type']]: Omit<Extract<GrantFrame, { type: K }>, 'grant' | 'sig'>;
-}[GrantFrame['type']];
 
 export interface GrantIdSource {
   grantId(): string;

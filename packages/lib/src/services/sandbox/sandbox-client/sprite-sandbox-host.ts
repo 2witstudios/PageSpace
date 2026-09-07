@@ -30,6 +30,7 @@ import {
   type SandboxStreamSessionInfo,
   type SandboxUrlAuth,
   type SandboxUrlInfo,
+  SPRITE_SANDBOX_CAPABILITIES,
 } from '../sandbox-host';
 import type { ExecSandboxClient, ExecutableSandbox } from './types';
 import {
@@ -329,6 +330,8 @@ function wrapSpriteHandle({
   streamOpenTimeoutMs: number;
 }): SandboxHandle {
   return {
+    // The Sprite backend serves every member of the seam — see `SandboxCapabilities`.
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: exec.sandboxId,
     spriteInstanceId: exec.spriteInstanceId ?? null,
     egressPolicyToken: exec.egressPolicyToken,

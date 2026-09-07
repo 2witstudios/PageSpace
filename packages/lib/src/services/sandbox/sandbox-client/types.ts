@@ -11,6 +11,7 @@
  */
 
 import type { SandboxClient, SandboxHandle, SandboxGetOrCreateArgs } from '../machine-session-manager';
+import type { SandboxCapabilities } from '../sandbox-host';
 
 /** Result of a single command run inside the sandbox. */
 export interface SandboxRunResult {
@@ -49,6 +50,20 @@ export interface WriteFileEntry {
  * authorized the conversation.
  */
 export interface ExecutableSandbox extends SandboxHandle {
+  /**
+   * What the substrate behind this sandbox can actually serve, carried across
+   * from `SandboxHost`'s handle by `adaptSandboxHandleToExecutableSandbox`.
+   *
+   * OPTIONAL here, unlike on `SandboxHandle`, and the asymmetry is deliberate:
+   * this interface predates the second substrate and is implemented by fakes
+   * all over the test suite that describe a Sprite. Absent therefore means
+   * "a sandbox built before capabilities existed" — i.e. the Sprite surface,
+   * which is what every such implementation is. What must never happen is a
+   * substrate that CANNOT do something leaving this absent: the local adapter
+   * always sets it, and the checkpoint gate additionally treats the typed
+   * `LocalEnvUnsupportedError` as a refusal, so neither net alone is trusted.
+   */
+  readonly capabilities?: SandboxCapabilities;
   runCommand(args: RunCommandArgs): Promise<SandboxRunResult>;
   writeFiles(files: WriteFileEntry[]): Promise<void>;
   readFileToBuffer(args: { path: string }): Promise<Buffer | null>;
