@@ -365,10 +365,13 @@ launcher feature: launchers that do not implement one reject or ignore the write
 logs and otherwise treats as a no-op. The iOS-only authorization gate inside it is conditional, not
 removed — see the comment there for the one-shot option cap it defends against.
 
-Adding that dependency means `capacitor.settings.gradle` and `app/capacitor.build.gradle` are stale
-until someone runs `bun run --filter '@pagespace/android' sync` (`cap sync android`); both files are
-generated, and until they are regenerated the Badge plugin is not compiled into the APK and
-`Badge.set()` rejects at runtime (silently, per the above). Do that before the first build.
+Adding that dependency leaves the generated `capacitor.settings.gradle` and
+`app/capacitor.build.gradle` stale in the repo — neither lists the badge plugin yet, and until they
+do it is not compiled into the APK and `Badge.set()` rejects at runtime (silently, per the above).
+No separate step is needed to fix that: `cap sync android` regenerates both, and it is already the
+second half of `build:full`, so the documented device-verification path
+(`bun run --cwd apps/android build:full`) picks it up. The stale files only bite someone who builds
+Gradle directly without syncing first.
 
 **Not verified on a device.** Nothing here has been exercised on real hardware — there is no
 release build yet. The permission dialog, the FCM token round trip and badge behaviour across
