@@ -336,10 +336,26 @@ comparing the platform to `'ios'`. On registration the FCM token POSTs to
 **A refusal is remembered.** The hook writes a `push_permission_denied` record to `localStorage`
 and declines to call `requestPermissions()` again while it stands, so the dialog does not return on
 every cold start. This is not redundant with the OS state: after one refusal Android reports
-`'prompt-with-rationale'` from `checkPermissions()` and would still allow the ask. The record is
-dropped as soon as `checkPermissions()` reads `granted` — which is what happens when the user turns
-notifications on from system settings — and an explicitly user-initiated retry can pass
-`requestPermission({ ignoreRecordedDenial: true })` to ask anyway.
+`'prompt-with-rationale'` from `checkPermissions()` and would still allow the ask.
+
+The record is a cache of the OS's answer, never a second source of truth. The permission-check
+effect drops it whenever `checkPermissions()` reports a state that is not holding a refusal —
+`granted` (the user turned notifications on from system settings) or `prompt` (the OS has forgotten
+the refusal and would ask again, which is where **Android 11+ lands after auto-revoking permissions
+for an app that went unused**). `denied` and `prompt-with-rationale` both keep it. There is
+therefore no manual override to re-ask: the way back is the OS's own state, so the record can never
+outlive the refusal it stands for. While it does stand, `hasPreviouslyDenied` is the signal a
+settings surface should use to say "enable notifications in system settings" rather than offer a
+button that would do nothing.
+
+**Not covered here: how the notification is drawn.** This work makes a push *deliverable*; what the
+tray renders is separate and unverified. The manifest declares no
+`com.google.firebase.messaging.default_notification_icon` or `default_notification_channel_id`
+meta-data, so both the small icon and the channel fall to Firebase's defaults inside
+`CommonNotificationBuilder.getOrCreateChannel` / `createNotificationInfo` (the plugin calls both —
+`PushNotificationsPlugin.java:274-286`). Whether that produces a usable icon and a sensibly-named
+channel on a real device is a device-verification question, and adding a monochrome notification
+icon is its own asset task.
 
 **Badges.** `@capawesome/capacitor-badge` is now an Android dependency and `useNativeBadgeSync`
 (formerly `useIosBadgeSync`) projects the unread count on both platforms. The Android badge is a

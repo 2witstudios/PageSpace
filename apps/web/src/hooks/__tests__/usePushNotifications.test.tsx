@@ -309,22 +309,36 @@ describe('usePushNotifications', () => {
     expect(mockRegister).not.toHaveBeenCalled();
   });
 
-  it('an explicitly user-initiated retry can override the recorded refusal', async () => {
+  it("regression: the record is dropped when the OS reports 'prompt' again — Android auto-resets permissions for an unused app, and a record that outlived the refusal would lock the user out forever", async () => {
     localStorage.setItem(DENIAL_KEY, 'android');
-    mockCheckPermissions.mockResolvedValue({ receive: 'prompt-with-rationale' });
+    mockCheckPermissions.mockResolvedValue({ receive: 'prompt' });
 
     const { result } = renderHook(() => usePushNotifications());
-    await waitFor(() => expect(result.current.isSupported).toBe(true));
 
+    await waitFor(() => expect(result.current.permissionStatus).toBe('prompt'));
+    expect(localStorage.getItem(DENIAL_KEY)).toBeNull();
+    expect(result.current.hasPreviouslyDenied).toBe(false);
+
+    // ...and the guard is open again, so the OS can be asked.
     let granted: boolean | undefined;
     await act(async () => {
-      granted = await result.current.requestPermission({ ignoreRecordedDenial: true });
+      granted = await result.current.requestPermission();
     });
 
     expect(granted).toBe(true);
     expect(mockRequestPermissions).toHaveBeenCalledTimes(1);
     expect(mockRegister).toHaveBeenCalledTimes(1);
-    expect(localStorage.getItem(DENIAL_KEY)).toBeNull();
+  });
+
+  it("regression: 'prompt-with-rationale' does NOT drop the record — the refusal still stands there", async () => {
+    localStorage.setItem(DENIAL_KEY, 'android');
+    mockCheckPermissions.mockResolvedValue({ receive: 'prompt-with-rationale' });
+
+    const { result } = renderHook(() => usePushNotifications());
+
+    await waitFor(() => expect(result.current.permissionStatus).toBe('prompt-with-rationale'));
+    expect(localStorage.getItem(DENIAL_KEY)).toBe('android');
+    expect(result.current.hasPreviouslyDenied).toBe(true);
   });
 
   it('drops the recorded refusal when the OS reports the permission granted (enabled from system settings)', async () => {

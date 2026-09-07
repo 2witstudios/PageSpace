@@ -29,6 +29,10 @@ type PermissionStatus = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied
  * 'prompt-with-rationale' until the OS gives up and only then 'denied' — so
  * "has this user already said no?" is not one native value to compare against.
  * This record answers it directly, in one place, on every platform.
+ *
+ * It is a cache of the OS's answer, never a second source of truth: the
+ * permission-check effect clears it the moment the OS stops holding a refusal,
+ * so it can never outlive the refusal it stands for.
  */
 const DENIAL_STORAGE_KEY = 'push_permission_denied';
 
@@ -78,12 +82,7 @@ interface PushNotificationState {
 }
 
 interface PushNotificationActions {
-  /**
-   * @param options.ignoreRecordedDenial - ask again even though the user
-   * already refused. For an explicitly user-initiated retry only; the
-   * automatic path must never pass it, or the prompt returns every launch.
-   */
-  requestPermission: (options?: { ignoreRecordedDenial?: boolean }) => Promise<boolean>;
+  requestPermission: () => Promise<boolean>;
   registerToken: () => Promise<boolean>;
   unregisterToken: () => Promise<void>;
 }
@@ -231,13 +230,22 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
       try {
         const result = await PushNotifications.checkPermissions();
-        // The user may have granted it from system settings since the refusal.
-        // Drop the record so the auto-registration path is unblocked again.
-        if (result.receive === 'granted') clearRecordedDenial();
+        // Keep the record in step with the OS, which is the real authority on
+        // whether this user has refused. Two states mean it is no longer
+        // holding a refusal against them:
+        //   'granted' — turned on from system settings since.
+        //   'prompt'  — the OS has forgotten the refusal and would ask again.
+        //               Android 11+ auto-revokes and RESETS permissions for an
+        //               app that goes unused, landing exactly here; without
+        //               this the record would outlive the refusal it stands for
+        //               and the user could never be asked again.
+        // 'denied' and 'prompt-with-rationale' both mean the refusal stands.
+        const osHasNoRefusal = result.receive === 'granted' || result.receive === 'prompt';
+        if (osHasNoRefusal) clearRecordedDenial();
         setState(prev => ({
           ...prev,
           permissionStatus: result.receive,
-          hasPreviouslyDenied: result.receive === 'granted' ? false : prev.hasPreviouslyDenied,
+          hasPreviouslyDenied: osHasNoRefusal ? false : prev.hasPreviouslyDenied,
         }));
       } catch (error) {
         console.error('[PushNotifications] Error checking permissions:', error);
@@ -294,19 +302,19 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   registerTokenWithServerRef.current = registerTokenWithServer;
 
   // Request permission and register for push notifications
-  const requestPermission = useCallback(async (
-    options?: { ignoreRecordedDenial?: boolean }
-  ): Promise<boolean> => {
+  const requestPermission = useCallback(async (): Promise<boolean> => {
     if (!state.isSupported || !pushNotificationsRef.current) {
       return false;
     }
 
-    // A refusal is final until the user revisits it. Without this the automatic
-    // registration path in PushNotificationManager would call straight back
-    // into requestPermissions() on every cold start — on Android the OS still
-    // allows that ask while it reports 'prompt-with-rationale', so the dialog
-    // really would reappear each launch.
-    if (!options?.ignoreRecordedDenial && hasRecordedDenial()) {
+    // A refusal stands until the OS itself stops holding it — at which point
+    // the permission-check effect above clears the record and this guard opens
+    // again. Without it the automatic registration path in
+    // PushNotificationManager would call straight back into
+    // requestPermissions() on every cold start: on Android the OS still allows
+    // that ask while it reports 'prompt-with-rationale', so the dialog really
+    // would reappear each launch.
+    if (hasRecordedDenial()) {
       setState(prev => ({ ...prev, hasPreviouslyDenied: true, isLoading: false }));
       return false;
     }
