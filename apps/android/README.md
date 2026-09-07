@@ -10,8 +10,9 @@ Capacitor wrapper around the web app, mirroring `apps/ios`.
 ## Why this config is not a copy of the iOS one
 
 `apps/ios/capacitor.config.ts` carries a long comment about `allowNavigation` and `errorPath`,
-added when the iOS shell bricked in PR #2010. Android's config sets the same two keys for
-different reasons, and its `allowNavigation` list is deliberately much shorter.
+added when the iOS shell bricked in PR #2010. Android sets those two keys for different reasons,
+splits `server.url` in a way iOS does not need to, and keeps a deliberately much shorter
+`allowNavigation` list. Three divergences, in the order they matter:
 
 ### `server.url` must stay an origin — the path lives in `appStartPath`
 
@@ -139,8 +140,9 @@ so link verification cannot succeed on any Android version today.
 ### Prerequisite 2 — link routing in the web app
 
 Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform. A
-captured link therefore opens the app at `server.url` (`/dashboard`), not at the linked path: the
-invite token or auth callback code in the URL is silently dropped.
+captured link therefore opens the app at its configured start URL (`server.url` + `appStartPath`,
+so `/dashboard`), not at the linked path: the invite token or auth callback code in the URL is
+silently dropped.
 
 ### Why `autoVerify` alone is not enough here
 
@@ -189,6 +191,11 @@ keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -sto
 adb shell pm verify-app-links --re-verify ai.pagespace.android
 adb shell pm get-app-links ai.pagespace.android
 ```
+
+Both `pm` subcommands arrived with the API 31 verification system, so this checks the top row of
+the table above. Confirming the API 23–30 behaviour — that an unverified filter stays chooser-
+eligible — needs an older device or emulator image, and is the row that matters for the decision
+to defer.
 
 ## Server-side push requirements (production `pagespace-web`)
 
