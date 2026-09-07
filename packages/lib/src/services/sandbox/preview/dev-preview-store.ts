@@ -23,7 +23,7 @@
  */
 
 import { db } from '@pagespace/db/db';
-import { and, eq, eqOrIsNull, isDistinctFrom, or, sql } from '@pagespace/db/operators';
+import { and, eq, eqOrIsNull, isDistinctFrom, isNotNull, lt, or, sql } from '@pagespace/db/operators';
 import { devPreviewServices } from '@pagespace/db/schema/dev-preview-services';
 import type { DevPreviewHolderRef, DevPreviewRow, DevPreviewRowIntent } from './dev-preview-core';
 
@@ -70,6 +70,14 @@ export interface DevPreviewStore {
    * click. The caller answers a null with a conflict, never with success.
    */
   approvePort(holder: DevPreviewHolderRef, input: { port: number; at: Date; byUserId: string }): Promise<DevPreviewRecord | null>;
+  /**
+   * Holders whose STOP intent has outlived its relay for longer than
+   * `staleAfterMs` — the backstop sweep's candidate list
+   * (`dev-preview-reconcile.ts`). Oldest first and capped, so one tick is
+   * bounded; the age bound keeps the sweep off rows a live path is still
+   * working through.
+   */
+  findStoppedWithRelay(input: { staleAfterMs: number; limit: number; now: Date }): Promise<Array<{ holder: DevPreviewHolderRef; sandboxId: string }>>;
 }
 
 function holderColumn(holder: DevPreviewHolderRef) {
@@ -175,6 +183,31 @@ export function createDbDevPreviewStore(): DevPreviewStore {
           approvedPort: devPreviewServices.approvedPort,
         });
       return row ?? null;
+    },
+
+    async findStoppedWithRelay({ staleAfterMs, limit, now }) {
+      const rows = await db
+        .select({
+          workspaceId: devPreviewServices.workspaceId,
+          envId: devPreviewServices.envId,
+          sandboxId: devPreviewServices.sandboxId,
+        })
+        .from(devPreviewServices)
+        .where(
+          and(
+            isNotNull(devPreviewServices.stoppedByUserAt),
+            isNotNull(devPreviewServices.relayServiceName),
+            // `sql.param` routes the Date through the column's encoder; a bare
+            // interpolation would land offset against a wall-clock column.
+            lt(devPreviewServices.updatedAt, sql.param(new Date(now.getTime() - staleAfterMs), devPreviewServices.updatedAt)),
+          ),
+        )
+        .orderBy(devPreviewServices.updatedAt)
+        .limit(limit);
+      return rows.map((row) => ({
+        holder: (row.workspaceId !== null ? { kind: 'workspace', id: row.workspaceId } : { kind: 'env', id: row.envId as string }) as DevPreviewHolderRef,
+        sandboxId: row.sandboxId,
+      }));
     },
 
     async approvePort(holder, { port, at, byUserId }) {

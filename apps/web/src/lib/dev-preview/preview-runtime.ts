@@ -19,6 +19,7 @@ import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { createDbDevPreviewStore, type DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
 import { createDevPreviewLock, DEV_PREVIEW_USER_ACTION_RETRIES, type DevPreviewLock } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
+import { reconcileStoppedDevPreviews, type DevPreviewReconcileRun } from '@pagespace/lib/services/sandbox/preview/dev-preview-reconcile';
 import { createDbDevPreviewGrantsStore, type DevPreviewGrantsStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-grants-store';
 import {
   authorizePreviewHolder,
@@ -251,5 +252,25 @@ export function applyDevPreviewUserActionForHolder({
     userId,
     wakeSubject,
     deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
+  });
+}
+
+/**
+ * The backstop sweep, bound to the real store, host and lock — see
+ * `dev-preview-reconcile.ts` for why it exists and why it can only ever stop
+ * a relay, never start one. The lock takes NO retries here: busy means a live
+ * path already owns the holder and is doing the same work.
+ */
+export function reconcileStoppedDevPreviewsForCron(): Promise<DevPreviewReconcileRun> {
+  const deps = buildPreviewAccessDeps();
+  const store = deps.previewStore;
+  return reconcileStoppedDevPreviews({
+    findStoppedWithRelay: ({ staleAfterMs, limit }) => store.findStoppedWithRelay({ staleAfterMs, limit, now: new Date() }),
+    attach: deps.attach,
+    previewStore: store,
+    lock: createDevPreviewLock({ retries: [], log: loggers.realtime }),
+    featureEnabled: isDevPreviewEnabled,
+    now: deps.now,
+    log: loggers.realtime,
   });
 }

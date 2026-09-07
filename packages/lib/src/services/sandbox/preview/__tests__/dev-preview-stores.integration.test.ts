@@ -136,6 +136,30 @@ describe('createDbDevPreviewStore', () => {
     expect(await store.approvePort({ kind: 'workspace', id: createId() }, { port: 9000, at, byUserId: userId })).toBeNull();
   });
 
+  it('findStoppedWithRelay lists ONLY aged rows that are switched off with a relay still recorded', async () => {
+    // `updatedAt` is stamped by the DATABASE (`now() at time zone 'utc'`), so
+    // the age window has to be measured against the real clock, not the fixed
+    // NOW the rest of these fixtures use. This is also what proves the
+    // comparison lands in the same time base the column is written in.
+    const ask = () => store.findStoppedWithRelay({ staleAfterMs: 2 * 60 * 1000, limit: 50, now: new Date(Date.now() + 10 * 60 * 1000) });
+
+    // Switched off with a relay: a candidate, but only once it has aged.
+    await store.upsert({ holder, spriteInstanceId: 'inst-s', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.setStoppedByUser(holder, NOW);
+    // Not yet aged: the row was written a moment ago.
+    expect(await store.findStoppedWithRelay({ staleAfterMs: 2 * 60 * 1000, limit: 50, now: new Date() })).toEqual([]);
+    expect(await ask()).toEqual([{ holder: { kind: 'env', id: envId }, sandboxId: 'sbx' }]);
+
+    // Resumed: no longer a candidate.
+    await store.setStoppedByUser(holder, null);
+    expect(await ask()).toEqual([]);
+
+    // Switched off but with no relay recorded: nothing to stop.
+    await store.upsert({ holder, spriteInstanceId: 'inst-s2', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.setStoppedByUser(holder, NOW);
+    expect(await ask()).toEqual([]);
+  });
+
   it('answers null for a holder with no row', async () => {
     expect(await store.findByHolder({ kind: 'workspace', id: createId() })).toBeNull();
   });

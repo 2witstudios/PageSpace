@@ -116,6 +116,16 @@
 */30 * * * * flock -n /run/reconcile-orphaned-sprites.lock cron-curl GET __WEB_URL__/api/cron/reconcile-orphaned-sprites >> /var/log/cron/reconcile-orphaned-sprites.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-orphaned-sprites.log
 
 
+# Dev-preview backstop - Every 5 minutes
+# Converges previews a user switched OFF whose relay is somehow still up. A Stop
+# is durable the moment it is written, and the relay work is normally done by the
+# realtime detector's next ports/watch frame — but a holder nobody is watching
+# produces no frames, and a stop is exactly when a dev server goes quiet. This
+# sweep can only ever STOP a relay (it plans with no listener snapshot, which
+# makes any start a refusal) and never wakes a sprite. Dark deployments no-op.
+*/5 * * * * flock -n /run/reconcile-dev-previews.lock cron-curl GET __WEB_URL__/api/cron/reconcile-dev-previews >> /var/log/cron/reconcile-dev-previews.log 2>&1 || echo "$(date -u) tick skipped (lock held) or request failed" >> /var/log/cron/reconcile-dev-previews.log
+
+
 # Expired row sweep - Every 15 minutes
 # Reaps expired tombstones from append-with-TTL tables (revoked_service_tokens;
 # rate_limit_buckets in PR3; ai_pending_abort_intents). Short cadence matches the 5-minute default

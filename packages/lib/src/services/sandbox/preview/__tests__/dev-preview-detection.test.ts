@@ -43,6 +43,7 @@ function harness(overrides: {
   };
   const store: DevPreviewStore = {
     approvePort: async () => null,
+    findStoppedWithRelay: async () => [],
     // `readsAheadOfWrites` models the real race: the planner reads the row as
     // it was, and by the time the write lands the STORED row has moved on
     // (a user's stop). The write then meets the same compare-and-set the real

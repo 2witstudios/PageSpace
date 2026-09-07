@@ -83,6 +83,7 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
       current = { id: 'r1', ...row, stoppedByUserAt: null };
       return true;
     },
+    findStoppedWithRelay: async () => [],
     approvePort: async (_holder, { port, at }) => {
       calls.push(`approvePort:${port}`);
       // The real store filters the UPDATE on the row's current target, so a

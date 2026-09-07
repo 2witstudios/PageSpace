@@ -988,6 +988,11 @@
       "import": "./dist/services/sandbox/preview/dev-preview-lock.js",
       "require": "./dist/services/sandbox/preview/dev-preview-lock.js"
     },
+    "./services/sandbox/preview/dev-preview-reconcile": {
+      "types": "./dist/services/sandbox/preview/dev-preview-reconcile.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-reconcile.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-reconcile.js"
+    },
     "./services/sandbox/preview/dev-preview-status": {
       "types": "./dist/services/sandbox/preview/dev-preview-status.d.ts",
       "import": "./dist/services/sandbox/preview/dev-preview-status.js",
