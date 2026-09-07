@@ -27,7 +27,7 @@ Or run it without installing:
 npx -y -p @pagespace/cli pagespace <command>
 \`\`\`
 
-The current version is **1.8.0**. Installing gives you two binaries: \`pagespace\` (the CLI) and \`pagespace-mcp\` (the MCP server).
+The current version is **1.9.0**. Installing gives you two binaries: \`pagespace\` (the CLI) and \`pagespace-mcp\` (the MCP server).
 
 ## Sign in
 

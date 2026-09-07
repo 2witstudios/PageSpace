@@ -21,7 +21,7 @@ It's the same client the [\`pagespace\` CLI](/docs/features/cli) and the \`pages
 npm install @pagespace/sdk
 \`\`\`
 
-ESM only, with a single runtime dependency (\`zod\`). The current version is **2.2.0**.
+ESM only, with a single runtime dependency (\`zod\`). The current version is **2.3.0**.
 
 ## Quickstart
 
