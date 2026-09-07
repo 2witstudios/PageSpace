@@ -80,11 +80,12 @@ export interface DevPreviewDetector {
   listeners(): ListeningPort[] | null;
   /**
    * The watch connection dropped: the accumulated set no longer describes a
-   * live connection. QUEUED on the frame chain, so a `port_list` from the
-   * dropped connection that is still waiting to apply lands BEFORE the
-   * invalidation and can never mark the next connection's snapshot known —
-   * FIFO ordering makes that correct by construction, with no generation
-   * bookkeeping outside the detector.
+   * live connection. Takes effect IMMEDIATELY — a `listeners()` between the
+   * close and the next connection's snapshot must not be answered from the
+   * dead connection's set, so this cannot wait behind queued frame work.
+   * Frames already enqueued are tagged with the epoch they arrived in, so a
+   * `port_list` from the closed connection that applies afterwards cannot
+   * mark the NEXT connection's snapshot known either.
    */
   invalidateSnapshot(): void;
 }
@@ -97,6 +98,11 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
   const listeners = new Map<number, ListeningPort>();
   /** True once a `port_list` has been applied and no invalidation has landed since. */
   let snapshotKnown = false;
+  /**
+   * Bumped by every invalidation. A frame carries the epoch it ARRIVED in, so
+   * work that applies after its connection died cannot claim the snapshot.
+   */
+  let epoch = 0;
   let runtime: PreviewRelayRuntime | undefined;
   let chain: Promise<void> = Promise.resolve();
 
@@ -127,11 +133,12 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
     return applyDevServerServicePlan({ plan, services: handle.services, store });
   }
 
-  async function handle_(frame: PortsWatchFrame): Promise<void> {
+  async function handle_(frame: PortsWatchFrame, frameEpoch: number): Promise<void> {
     if (frame.type === 'port_list') {
       listeners.clear();
       for (const port of frame.ports) listeners.set(port.port, port);
-      snapshotKnown = true;
+      // Only this connection's own snapshot may mark the set known.
+      if (frameEpoch === epoch) snapshotKnown = true;
       // A snapshot is every port bound BEFORE we attached. Classify each
       // against the current relay and plan ONE candidate: the row's own
       // target if it is still listening (a reconnect must never re-point a
@@ -168,7 +175,10 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
 
   return {
     onFrame(frame) {
-      const next = chain.then(() => handle_(frame)).catch((error: unknown) => {
+      // The epoch is captured at ARRIVAL, not at apply time: that is what
+      // makes a frame belong to the connection it came from.
+      const frameEpoch = epoch;
+      const next = chain.then(() => handle_(frame, frameEpoch)).catch((error: unknown) => {
         log.error('dev-preview: frame failed', error instanceof Error ? error : new Error(String(error)), { ...context(), frame: frame.type });
       });
       chain = next;
@@ -176,9 +186,8 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
     },
     listeners: () => (snapshotKnown ? [...listeners.values()] : null),
     invalidateSnapshot() {
-      chain = chain.then(() => {
-        snapshotKnown = false;
-      });
+      snapshotKnown = false;
+      epoch += 1;
     },
   };
 }

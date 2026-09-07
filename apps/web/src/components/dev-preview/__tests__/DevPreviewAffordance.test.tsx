@@ -6,7 +6,7 @@
  * the caller's disclosure.
  */
 import { describe, test, expect, beforeEach, afterEach, vi } from 'vitest';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
+import { act, render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { SWRConfig } from 'swr';
 
 const mockFetchJSON = vi.hoisted(() => vi.fn());
@@ -111,10 +111,26 @@ describe('DevPreviewAffordance', () => {
     expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
   });
 
-  test('polls only while ACTIVE: a collapsed row fetches once and then never again', async () => {
-    renderAffordance({ active: false });
-    await waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
-    await new Promise((r) => setTimeout(r, 60));
-    expect(mockFetchJSON).toHaveBeenCalledTimes(1);
+  test('polls only while ACTIVE — proved across a FULL poll interval, so wiring `active` as always-on would fail this', async () => {
+    // The affordance polls on a 15s interval; a 60ms wall-clock wait would
+    // pass even if `active` were ignored. Fake timers advance past three
+    // intervals, and the ACTIVE case is the positive control that proves the
+    // advance actually drives SWR.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      const collapsed = renderAffordance({ active: false });
+      await vi.waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(mockFetchJSON).toHaveBeenCalledTimes(1);
+      collapsed.unmount();
+
+      mockFetchJSON.mockClear();
+      renderAffordance({ active: true });
+      await vi.waitFor(() => expect(mockFetchJSON).toHaveBeenCalledTimes(1));
+      await act(async () => { await vi.advanceTimersByTimeAsync(45_000); });
+      expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

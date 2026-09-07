@@ -286,7 +286,14 @@ export default function AgentsSurface({ driveId }: { driveId?: string }) {
           </div>
         )}
       </div>
-      <DevPreviewPane driveId={driveId ?? null} />
+      {/*
+        The drive this console is CURRENTLY showing, which is not always the
+        route's: on the global agents route a selected session can belong to a
+        drive, and the affordance tags its preview with that (the session's own
+        record is the authority — `sessionDriveId`). Passing the route drive
+        here would hide a preview the user just opened from this very header.
+      */}
+      <DevPreviewPane driveId={selectedSessionId && sessionDriveResolved ? sessionDriveId : driveId ?? null} />
     </div>
   );
 }

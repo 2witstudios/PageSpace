@@ -208,12 +208,15 @@ describe('createDevPreviewDetector — discipline', () => {
     assert({ given: 'a snapshot that has ARRIVED but not applied', should: 'still be null', actual: detector.listeners(), expected: null });
     await applied;
     assert({ given: 'an applied snapshot', should: 'be known', actual: detector.listeners(), expected: [{ port: 3000, pid: 9 }] });
-    // Drop: a snapshot from the dropped connection is still queued AHEAD of the invalidation.
+    // Drop: the invalidation takes effect AT ONCE (a reader between the close
+    // and the next snapshot must not see the dead connection's set)...
     const late = detector.onFrame({ type: 'port_list', ports: [{ port: 4000 }] });
     detector.invalidateSnapshot();
+    assert({ given: 'a socket close', should: 'be unknown immediately, not after the queue drains', actual: detector.listeners(), expected: null });
+    // ...and the closed connection's snapshot, applying afterwards, cannot claim it back.
     await late;
     await new Promise((r) => setTimeout(r, 0));
-    assert({ given: 'invalidation queued after a late snapshot', should: 'end unknown', actual: detector.listeners(), expected: null });
+    assert({ given: 'a snapshot from the closed connection applying late', should: 'stay unknown', actual: detector.listeners(), expected: null });
     await detector.onFrame({ type: 'port_list', ports: [{ port: 5000 }] });
     assert({ given: 'the next connection\'s snapshot', should: 'be known again', actual: detector.listeners(), expected: [{ port: 5000 }] });
   });

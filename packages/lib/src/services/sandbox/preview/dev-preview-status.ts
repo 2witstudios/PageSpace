@@ -91,7 +91,14 @@ export interface DevPreviewStatus {
   canOpen: boolean;
   /** True when a Stop control makes sense: there is a row on this instance and the user has not already stopped it. */
   canStop: boolean;
-  /** True when the user has switched the preview off and may switch it back on. */
+  /**
+   * True when the preview can be (re)started by hand: the user switched it
+   * off, or the relay is DOWN — a crashed relay, or one a reconcile has not
+   * caught up with — and one click should be able to ask for it back rather
+   * than leaving the user waiting for a port frame that may never come.
+   * Both go through the same `resume` action (clearing an already-null stop
+   * intent is a no-op; the reconcile is the point).
+   */
   canResume: boolean;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
@@ -178,7 +185,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     openPath,
     canOpen: state.status === 'live' || state.status === 'starting',
     canStop: actionable && row.stoppedByUserAt === null,
-    canResume: actionable && row.stoppedByUserAt !== null,
+    canResume: actionable && (row.stoppedByUserAt !== null || state.status === 'down'),
     detectedAt: row?.detectedAt ?? null,
   };
 }
@@ -269,7 +276,15 @@ export type DevPreviewUserActionResult =
   /** The holder has no preview row — nothing to switch. */
   | { ok: false; reason: 'no-preview' }
   /** A RESUME the holder's payer may not spend compute on — the wake gate said no. Nothing was written. */
-  | { ok: false; reason: 'wake-not-allowed'; detail: string };
+  | { ok: false; reason: 'wake-not-allowed'; detail: string }
+  /**
+   * A RESUME that would start a relay while no current `ports/watch`
+   * snapshot proves 8080 is free (the watcher is starting up or
+   * reconnecting). The intent IS cleared — the user's "on" stands — and the
+   * detector's next frame starts the relay against a real snapshot; the
+   * caller should say "starting shortly" rather than claim a failure.
+   */
+  | { ok: false; reason: 'slot-unknown' };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -341,6 +356,10 @@ export async function applyDevPreviewUserAction({
   if (handle === null) return { ok: true, applied: null };
 
   const [relay, listeners] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
+  // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
+  // empty set would let the core read 8080 as free and start a relay that may
+  // fail to bind; `listenersKnown` makes the core refuse that instead, and the
+  // detector — which plans on a frame it just saw — starts it a moment later.
   const plan = planDevServerService({
     liveInstanceId: handle.spriteInstanceId,
     sandboxId: handle.sandboxId,
@@ -349,8 +368,10 @@ export async function applyDevPreviewUserAction({
     detected: null,
     relay,
     listeners: listeners ?? [],
+    listenersKnown: listeners !== null,
     now,
   });
+  if (plan.action === 'refuse' && plan.reason === 'slot-unknown') return { ok: false, reason: 'slot-unknown' };
   const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
   return { ok: true, applied };
 }
