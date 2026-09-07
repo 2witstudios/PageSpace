@@ -21,6 +21,7 @@
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import type { DevPreviewHolderRef, ListeningPort } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { createDevPreviewDetector, type DevPreviewDetector, type DevPreviewDetectorLog } from '@pagespace/lib/services/sandbox/preview/dev-preview-detection';
+import type { DevPreviewLock } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
 import type { DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
 import { buildPortsWatchUrl, openPortsWatch, type PortsWatchHandle, type PortsWatchSocketFactory } from '@pagespace/lib/services/sandbox/preview/ports-watch';
 
@@ -34,6 +35,12 @@ export interface DetectionRegistryDeps {
   spritesToken(): string;
   spritesApiBaseUrl(): string;
   log: DevPreviewDetectorLog;
+  /**
+   * Serializes a frame's read → plan → apply against the web tier's stop and
+   * resume. Optional so the unit surface needs no Postgres; `index.ts` binds
+   * the real advisory lock.
+   */
+  lock?: DevPreviewLock;
   now(): Date;
   /** Test seam for the reconnect delay. */
   wait?: (ms: number) => Promise<void>;
@@ -96,7 +103,7 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       watchers.delete(sandboxId);
       return;
     }
-    const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log });
+    const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log, lock: deps.lock });
     const url = buildPortsWatchUrl(deps.spritesApiBaseUrl(), sandboxId);
     let stopped = false;
     let current: PortsWatchHandle | null = null;

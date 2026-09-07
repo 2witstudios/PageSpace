@@ -87,7 +87,13 @@ export type AppliedDevServerServicePlan =
        * re-ordering would make this a lie, and lies should not typecheck.
        */
       mutated: 'none';
-    };
+    }
+  /**
+   * Another writer holds this holder's lock and the retry budget is spent.
+   * Nothing was read, planned or done. The next frame — or the backstop
+   * sweep — converges; see `dev-preview-lock.ts`.
+   */
+  | { action: 'deferred'; reason: 'reconcile-in-progress' };
 
 /**
  * Carry out one plan: **the row first, then the service calls.**

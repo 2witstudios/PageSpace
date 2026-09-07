@@ -983,6 +983,11 @@
       "import": "./dist/services/sandbox/preview/dev-preview-contract.js",
       "require": "./dist/services/sandbox/preview/dev-preview-contract.js"
     },
+    "./services/sandbox/preview/dev-preview-lock": {
+      "types": "./dist/services/sandbox/preview/dev-preview-lock.d.ts",
+      "import": "./dist/services/sandbox/preview/dev-preview-lock.js",
+      "require": "./dist/services/sandbox/preview/dev-preview-lock.js"
+    },
     "./services/sandbox/preview/dev-preview-status": {
       "types": "./dist/services/sandbox/preview/dev-preview-status.d.ts",
       "import": "./dist/services/sandbox/preview/dev-preview-status.js",

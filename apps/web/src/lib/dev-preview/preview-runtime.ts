@@ -11,11 +11,13 @@
  */
 
 import { NextResponse } from 'next/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { createDbDevPreviewStore, type DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
+import { createDevPreviewLock, DEV_PREVIEW_USER_ACTION_RETRIES, type DevPreviewLock } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
 import { createDbDevPreviewGrantsStore, type DevPreviewGrantsStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-grants-store';
 import {
   authorizePreviewHolder,
@@ -44,6 +46,19 @@ import { getDriveEnvStore, resolveDriveEnvPayer } from '@/lib/drive-envs/drive-e
 import { readDevPreviewListeners } from './listeners-source';
 
 let previewStore: DevPreviewStore | null = null;
+let previewLock: DevPreviewLock | null = null;
+
+/**
+ * The user-action lock, bound lazily — building it resolves the advisory-lock
+ * pool, and this module is imported by routes that never take a lock. The
+ * retry budget is human-latency shaped: a click contends with at most a
+ * handful of control-plane calls, so it almost always acquires, and past the
+ * budget the action records the intent and defers the relay work.
+ */
+function getPreviewLock(): DevPreviewLock {
+  previewLock ??= createDevPreviewLock({ retries: DEV_PREVIEW_USER_ACTION_RETRIES, log: loggers.realtime });
+  return previewLock;
+}
 let grantsStore: DevPreviewGrantsStore | null = null;
 
 function getPreviewStore(): DevPreviewStore {
@@ -230,6 +245,6 @@ export function applyDevPreviewUserActionForHolder({
     action,
     userId,
     wakeSubject,
-    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },
+    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
   });
 }

@@ -42,6 +42,7 @@ import {
   type ListeningPort,
 } from './dev-preview-core';
 import { applyDevServerServicePlan, probeRelayRuntime, type AppliedDevServerServicePlan } from './dev-preview-effects';
+import { unlocked, type DevPreviewLock } from './dev-preview-lock';
 import type { DevPreviewStore } from './dev-preview-store';
 import { PREVIEW_RELAY_SERVICE_NAME, type PreviewRelayRuntime } from './preview-relay';
 import type { PortsWatchFrame } from './ports-watch';
@@ -61,6 +62,12 @@ export interface DevPreviewDetectorDeps {
   log: DevPreviewDetectorLog;
   /** Test seam; production probes with `probeRelayRuntime`. */
   probeRuntime?: (exec: SandboxHandle['exec']) => Promise<PreviewRelayRuntime>;
+  /**
+   * Serializes this holder's read → plan → apply against the WEB tier's user
+   * actions. Defaults to no serialization so the pure unit surface needs no
+   * Postgres; the realtime binding supplies the real advisory lock.
+   */
+  lock?: DevPreviewLock;
 }
 
 export interface DevPreviewDetector {
@@ -95,6 +102,7 @@ type Detected = Extract<DevServerClassification, { kind: 'dev-server' }>;
 export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPreviewDetector {
   const { holder, handle, store, now, log } = deps;
   const probe = deps.probeRuntime ?? probeRelayRuntime;
+  const lock = deps.lock ?? unlocked;
   const listeners = new Map<number, ListeningPort>();
   /** True once a `port_list` has been applied and no invalidation has landed since. */
   let snapshotKnown = false;
@@ -108,7 +116,26 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
 
   const context = () => ({ holderKind: holder.kind, holderId: holder.id, spriteInstanceId: handle.spriteInstanceId });
 
+  /**
+   * The authoritative read → plan → apply, serialized per holder against the
+   * web tier's stop/resume (`dev-preview-lock.ts`). Only this is locked: the
+   * listener bookkeeping and `classifyDetectedDevServer` above are pure and
+   * in-process, and holding a Postgres connection across them would pin it to
+   * work that changes nothing.
+   *
+   * A bounded retry rather than a bare try-lock, because frames are not
+   * guaranteed to recur — a `port_opened` for a server that then sits quiet is
+   * often the last frame for minutes, so dropping one can mean the preview
+   * silently never appears. Past the budget the frame is DEFERRED, which the
+   * next frame or the backstop sweep converges.
+   */
   async function reconcile(detected: Detected | null): Promise<AppliedDevServerServicePlan> {
+    const outcome = await lock(holder, () => reconcileLocked(detected));
+    if (outcome.outcome === 'acquired') return outcome.result;
+    return { action: 'deferred', reason: 'reconcile-in-progress' };
+  }
+
+  async function reconcileLocked(detected: Detected | null): Promise<AppliedDevServerServicePlan> {
     const [relay, row] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), store.findByHolder(holder)]);
     const input = {
       liveInstanceId: handle.spriteInstanceId,

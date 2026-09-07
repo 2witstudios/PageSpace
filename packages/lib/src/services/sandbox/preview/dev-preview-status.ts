@@ -45,6 +45,7 @@ import {
   type ListeningPort,
 } from './dev-preview-core';
 import { applyDevServerServicePlan, type AppliedDevServerServicePlan } from './dev-preview-effects';
+import { unlocked, type DevPreviewLock } from './dev-preview-lock';
 import type { DevPreviewStore } from './dev-preview-store';
 import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorization } from './preview-access';
 import { buildPreviewOpenPath } from './preview-grant';
@@ -274,12 +275,25 @@ export interface DevPreviewUserActionDeps {
   readListeners: DevPreviewListenersReader;
   /** The centralized code-execution gate — consulted on every RESUME (see below). */
   canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
+  /**
+   * Serializes this holder's read → plan → apply against the realtime
+   * detector's. Defaults to no serialization (pure unit surfaces); the web
+   * binding supplies the real Postgres advisory lock.
+   */
+  lock?: DevPreviewLock;
   now(): Date;
 }
 
 export type DevPreviewUserActionResult =
   /** The intent is recorded and the relay was reconciled (or there was nothing to reconcile). */
-  | { ok: true; applied: AppliedDevServerServicePlan | null }
+  /**
+   * `lockContended` means the INTENT was recorded but the relay work was
+   * deferred — the detector held this holder's lock past the retry budget, or
+   * the lock pool was degraded. Deliberately not an `ok: false` reason: the
+   * action-response helper maps unrecognised refusals onto "no preview to
+   * switch", which would be a lie about a click that took effect.
+   */
+  | { ok: true; applied: AppliedDevServerServicePlan | null; lockContended?: true }
   /** The holder has no preview row — nothing to switch. */
   | { ok: false; reason: 'no-preview' }
   /** A RESUME the holder's payer may not spend compute on — the wake gate said no. Nothing was written. */
@@ -327,6 +341,7 @@ export async function applyDevPreviewUserAction({
   deps: DevPreviewUserActionDeps;
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
+  const lock = deps.lock ?? unlocked;
 
   // RESUME IS COMPUTE. `services.start` brings a process up inside the sprite
   // and, on a suspended sprite, is a billed wake — the same posture the proxy
@@ -343,42 +358,48 @@ export async function applyDevPreviewUserAction({
     if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   }
 
-  // The write returns the row as written, and the plan is made from THAT —
-  // no second read. RACE WITH THE DETECTOR, stated rather than hidden: the
-  // detector plans per `ports/watch` frame from a row it reads at frame
-  // time. A frame that read the row BEFORE this write and applies AFTER it
-  // can `start-relay` and upsert `stoppedByUserAt: null`, undoing a stop;
-  // the reverse frame can stop-relay after a resume. The window is one frame
-  // wide, it exists only while a port is opening in the same second the user
-  // clicks, and it is self-correcting in the honest direction: the very next
-  // frame plans from whichever write landed last, and the status the user
-  // sees is always the fold of the real row and the real relay — so a lost
-  // click shows as "still live" / "still off", and clicking again wins.
-  // Serializing the two writers would need a lock spanning the realtime and
-  // web tiers for a one-frame window; not worth a lock.
-  const row = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
-  if (row === null) return { ok: false, reason: 'no-preview' };
+  // ONE CRITICAL SECTION, serialized per holder against the realtime
+  // detector (`dev-preview-lock.ts`). The two writers used to interleave
+  // read → plan → apply freely; the comment that stood here argued the window
+  // was one frame wide and self-correcting, which was wrong on both counts —
+  // convergence assumed a later frame that may never come. Under the lock the
+  // plan is made from the row it acts on.
+  const locked = await lock(holder, async (): Promise<DevPreviewUserActionResult> => {
+    // The write returns the row as written, and the plan is made from THAT —
+    // no second read.
+    const row = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
+    if (row === null) return { ok: false, reason: 'no-preview' };
 
-  const handle = await deps.attach(row.sandboxId);
-  if (handle === null) return { ok: true, applied: null };
+    const handle = await deps.attach(row.sandboxId);
+    if (handle === null) return { ok: true, applied: null };
 
-  const [relay, listeners] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
-  // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
-  // empty set would let the core read 8080 as free and start a relay that may
-  // fail to bind; `listenersKnown` makes the core refuse that instead, and the
-  // detector — which plans on a frame it just saw — starts it a moment later.
-  const plan = planDevServerService({
-    liveInstanceId: handle.spriteInstanceId,
-    sandboxId: handle.sandboxId,
-    row,
-    holder,
-    detected: null,
-    relay,
-    listeners: listeners ?? [],
-    listenersKnown: listeners !== null,
-    now,
+    const [relay, listeners] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
+    // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
+    // empty set would let the core read 8080 as free and start a relay that may
+    // fail to bind; `listenersKnown` makes the core refuse that instead, and the
+    // detector — which plans on a frame it just saw — starts it a moment later.
+    const plan = planDevServerService({
+      liveInstanceId: handle.spriteInstanceId,
+      sandboxId: handle.sandboxId,
+      row,
+      holder,
+      detected: null,
+      relay,
+      listeners: listeners ?? [],
+      listenersKnown: listeners !== null,
+      now,
+    });
+    if (plan.action === 'refuse' && plan.reason === 'slot-unknown') return { ok: false, reason: 'slot-unknown' };
+    const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
+    return { ok: true, applied };
   });
-  if (plan.action === 'refuse' && plan.reason === 'slot-unknown') return { ok: false, reason: 'slot-unknown' };
-  const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
-  return { ok: true, applied };
+  if (locked.outcome === 'acquired') return locked.result;
+
+  // CONTENDED (or the lock pool is degraded). The user's INTENT is what they
+  // are entitled to, so record it unserialized — the row's compare-and-set
+  // keeps that write safe on its own — and defer the relay work to the
+  // detector's next frame or the backstop sweep.
+  const contendedRow = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
+  if (contendedRow === null) return { ok: false, reason: 'no-preview' };
+  return { ok: true, applied: null, lockContended: true };
 }
