@@ -1126,7 +1126,7 @@ const httpServer = createServer(requestListener);
 const previewUpgrade = buildPreviewUpgradeHandler({
   resolveApex: () => (isDevPreviewEnabled() ? resolveDevPreviewApex() : null),
   cookieKey: getRealtimePreviewCookieKey,
-  resolveTarget: (holder, userId) => resolvePreviewTarget({ holder, userId, deps: buildRealtimePreviewAccessDeps() }),
+  resolveTarget: (holder, userId, sessionId) => resolvePreviewTarget({ holder, userId, sessionId, deps: buildRealtimePreviewAccessDeps() }),
   tunnel: tunnelWebSocketUpgrade,
   spritesToken: resolveSpritesToken,
   log: loggers.realtime,

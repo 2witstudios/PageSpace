@@ -45,7 +45,7 @@ const HOLDER: Holder = { kind: 'env', id: 'env1' };
 const consume = vi.fn();
 
 function cookie(holder: Holder = HOLDER, expiresAt = Date.now() + 60_000): string {
-  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', expiresAt }, KEY)}`;
+  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', sessionId: 'sess1', expiresAt }, KEY)}`;
 }
 
 function req(path: string, init: { host?: string; method?: string; body?: string; headers?: Record<string, string> } = {}): NextRequest {
@@ -84,12 +84,12 @@ describe('the host must be a preview host naming the holder in the path', () => 
 describe('the handshake: /__pagespace/auth', () => {
   it('consumes the grant, installs the host-only cookie, and redirects to /', async () => {
     const cookieExpiresAt = new Date(Date.now() + 3600_000);
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt });
     const res = await GET(req('/__pagespace/auth?grant=g1'), ctx());
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/');
     const set = res.headers.get('set-cookie') ?? '';
-    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v1\\.`));
+    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v2\\.`));
     expect(set).toContain('Secure; HttpOnly; SameSite=None; Partitioned');
     expect(set).not.toMatch(/domain=/i);
     expect(consume).toHaveBeenCalledWith({ id: 'g1', now: expect.any(Date) });
@@ -98,7 +98,7 @@ describe('the handshake: /__pagespace/auth', () => {
   it('refuses an unknown/used grant and a grant minted for another host, and audits both', async () => {
     consume.mockResolvedValueOnce(null);
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(403);
-    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', cookieExpiresAt: new Date() });
+    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date() });
     expect((await GET(req('/__pagespace/auth?grant=g2'), ctx())).status).toBe(403);
     expect(vi.mocked(auditRequest).mock.calls.map((c) => (c[1].details as { reason: string }).reason)).toEqual(['grant-invalid', 'grant-holder-mismatch']);
   });
@@ -111,7 +111,7 @@ describe('the handshake: /__pagespace/auth', () => {
 
   it('answers 503 when the cookie key is not configured — BEFORE consuming the single-use grant', async () => {
     vi.mocked(getPreviewCookieKey).mockReturnValue(Buffer.alloc(0));
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt: new Date(Date.now() + 1000) });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date(Date.now() + 1000) });
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(503);
     expect(consume).not.toHaveBeenCalled();
   });
@@ -189,7 +189,9 @@ describe('authorize + decide, per request', () => {
     const res = await POST(req('/api/items?x=%2F', { method: 'POST', body: 'b', headers: { cookie: cookie(), 'content-type': 'text/plain' } }), ctx());
     expect(res).toBe(upstream);
     expect(forwardPreviewRequest).toHaveBeenCalledWith(expect.objectContaining({ pathAndQuery: '/api/items?x=%2F', spriteUrl: 'https://ps-x-org.sprites.app', token: 'org-token', appOrigin: 'https://app.pagespace.ai' }));
-    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1');
+    // The SESSION travels grant → cookie → gather; without it revocation could
+    // not reach a live preview at all.
+    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1', 'sess1');
     expect(loggers.security.info).toHaveBeenCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', status: 201, wake: true, method: 'POST', path: '/api/items' }));
   });
 

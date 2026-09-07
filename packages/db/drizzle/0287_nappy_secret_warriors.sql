@@ -1,0 +1,2 @@
+ALTER TABLE "dev_preview_grants" ADD COLUMN "sessionId" text NOT NULL;--> statement-breakpoint
+ALTER TABLE "dev_preview_grants" ADD CONSTRAINT "dev_preview_grants_sessionId_sessions_id_fk" FOREIGN KEY ("sessionId") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;

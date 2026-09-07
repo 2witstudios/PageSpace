@@ -127,6 +127,34 @@ export class SessionService {
    * only serves a single session type (e.g. 'user' for browser cookie/bearer auth) so a token
    * leaked from one surface cannot be replayed on another.
    */
+  /**
+   * Is the session that minted a DERIVED credential still usable, for this
+   * user? Read-only, and keyed on the session id rather than its token.
+   *
+   * The dev-preview cookie is the caller: it is signed by us, names its
+   * minting session, and is presented to a preview origin that never sees the
+   * session token — so `validateSession` (token-hash keyed) cannot answer.
+   * Without this, revoking a session left its preview answering until the
+   * cookie expired.
+   *
+   * `tokenVersion` and `suspendedAt` are BOTH checked, not just `revokedAt`.
+   * `validateSessionWithReason` revokes on those mismatches LAZILY — the row
+   * may still show `revokedAt: null` after a password change, an erasure or a
+   * suspension — so testing revocation alone would leave open exactly the
+   * window this exists to close.
+   *
+   * Deliberately performs no writes: no lazy revoke, no `lastUsedAt` touch.
+   * This runs per proxied subresource from an untrusted origin, and the next
+   * real session use will do the lazy revoke anyway.
+   */
+  async isSessionUsableById(sessionId: string, userId: string): Promise<boolean> {
+    const session = await sessionRepository.findActiveSessionById(sessionId);
+    if (!session?.user) return false;
+    if (session.userId !== userId) return false;
+    if (session.user.suspendedAt) return false;
+    return session.tokenVersion === session.user.tokenVersion;
+  }
+
   async validateSessionWithReason(
     token: string,
     options?: { expectedType?: SessionClaims['type'] }

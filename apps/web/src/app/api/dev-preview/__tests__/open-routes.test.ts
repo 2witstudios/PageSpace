@@ -13,6 +13,7 @@ vi.mock('@/lib/auth', () => ({
   authenticateRequestWithOptions: vi.fn(),
   isAuthError: vi.fn(() => false),
   isPrincipalDriveMember: vi.fn(),
+  isSessionAuthResult: vi.fn((r: unknown) => typeof (r as { sessionId?: unknown }).sessionId === 'string'),
 }));
 vi.mock('@pagespace/lib/services/sandbox/preview/dev-preview-env', () => ({
   isDevPreviewConfigured: vi.fn(() => true),
@@ -51,7 +52,7 @@ function req(headers: Record<string, string> = { 'sec-fetch-site': 'same-origin'
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(isDevPreviewConfigured).mockReturnValue(true);
-  vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1' } as never);
+  vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1', sessionId: 'sess1' } as never);
   vi.mocked(isPrincipalDriveMember).mockResolvedValue(true);
   vi.mocked(resolveEnvInDrive).mockResolvedValue({ id: 'env1', driveId: 'd1' } as never);
   vi.mocked(findSessionRecord).mockResolvedValue({ id: 'ws1', envId: null } as never);
@@ -63,7 +64,7 @@ describe('GET /api/drives/[driveId]/envs/[envId]/preview/open', () => {
     const res = await openEnv(req(), envCtx);
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe(REDIRECT);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'env', id: 'env1' }, userId: 'u1', sessionId: 'sess1' });
   });
 
   it('is dark (404) when the feature is not configured, before authentication', async () => {
@@ -129,13 +130,23 @@ describe('GET /api/agent-workspaces/[workspaceId]/preview/open', () => {
   it('authorizes as the session and mints for the session holder', async () => {
     const res = await openSession(req(), wsCtx);
     expect(res.status).toBe(302);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'workspace', id: 'ws1' }, userId: 'u1', sessionId: 'sess1' });
   });
 
   it('for an env-bound session, authorizes as the session and mints for the ENV (the holder rule)', async () => {
     vi.mocked(findSessionRecord).mockResolvedValueOnce({ id: 'ws1', envId: 'env1' } as never);
     await openSession(req(), wsCtx);
-    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'env', id: 'env1' }, userId: 'u1' });
+    expect(openPreviewForUser).toHaveBeenCalledWith({ authorizeAs: { kind: 'workspace', id: 'ws1' }, mintFor: { kind: 'env', id: 'env1' }, userId: 'u1', sessionId: 'sess1' });
+  });
+
+  it('refuses a principal that is not a browser session, on BOTH routes — a grant with no session could never be revoked', async () => {
+    // `allow: ['session']` already excludes API keys and device tokens; the
+    // narrowing is what makes `sessionId` readable without an assertion, and
+    // this is the branch that proves it is not decoration.
+    vi.mocked(authenticateRequestWithOptions).mockResolvedValue({ userId: 'u1' } as never);
+    expect((await openSession(req(), wsCtx)).status).toBe(404);
+    expect((await openEnv(req(), envCtx)).status).toBe(404);
+    expect(openPreviewForUser).not.toHaveBeenCalled();
   });
 
   it('answers the family not-found/denied policy for an unknown session and for a refusal (audited)', async () => {

@@ -17,7 +17,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { authenticateRequestWithOptions, isAuthError } from '@/lib/auth';
+import { authenticateRequestWithOptions, isAuthError, isSessionAuthResult } from '@/lib/auth';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -35,6 +35,9 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     const { workspaceId } = await context.params;
     const auth = await authenticateRequestWithOptions(request, AUTH_OPTIONS);
     if (isAuthError(auth)) return signInOrDeny(request, auth.error);
+    // `allow: ['session']` already excludes every other principal; narrowing
+    // makes that a type fact so `sessionId` is read, never asserted.
+    if (!isSessionAuthResult(auth)) return NextResponse.json({ error: 'Not found' }, { status: 404 });
 
     if (!isAllowedPreviewOpen(request)) {
       auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `workspace:${workspaceId}`, details: { route: ROUTE, reason: 'cross-site-embed' }, riskScore: 0.6 });
@@ -50,7 +53,7 @@ export async function GET(request: Request, context: { params: Promise<{ workspa
     // Authorization is the SESSION's (the user reached the preview through
     // the session); the grant is minted for the HOLDER — the env's origin for
     // an env-bound session, the session's own otherwise.
-    const opened = await openPreviewForUser({ authorizeAs: { kind: 'workspace', id: session.id }, mintFor: holder, userId: auth.userId });
+    const opened = await openPreviewForUser({ authorizeAs: { kind: 'workspace', id: session.id }, mintFor: holder, userId: auth.userId, sessionId: auth.sessionId });
     if (!opened.ok) {
       return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, opened.reason === 'not-authorized' ? opened.detail ?? 'not-authorized' : opened.reason, ROUTE);
     }

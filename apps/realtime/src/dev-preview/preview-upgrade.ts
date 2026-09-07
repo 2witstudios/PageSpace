@@ -27,7 +27,7 @@ export interface PreviewUpgradeDeps {
   /** The configured apex, or null when the feature is dark (then no host is a preview host). */
   resolveApex(): string | null;
   cookieKey(): Buffer;
-  resolveTarget(holder: DevPreviewHolderRef, userId: string): Promise<PreviewTarget>;
+  resolveTarget(holder: DevPreviewHolderRef, userId: string, sessionId: string): Promise<PreviewTarget>;
   tunnel(input: TunnelWebSocketUpgradeInput): void;
   spritesToken(): string;
   log: {
@@ -90,11 +90,13 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
       refuse(socket, 401, 'Unauthorized');
       return true;
     }
-    const userId = verified.claims.userId;
+    const { userId, sessionId } = verified.claims;
 
     let target: PreviewTarget;
     try {
-      target = await deps.resolveTarget(holder, userId);
+      // The session is re-checked inside the gather: a socket must not outlive
+      // the session that opened it any more than an HTTP request may.
+      target = await deps.resolveTarget(holder, userId, sessionId);
     } catch (error) {
       deps.log.error('dev-preview: upgrade gather failed', asError(error), { holderKind: holder.kind, holderId: holder.id });
       refuse(socket, 502, 'Bad Gateway');

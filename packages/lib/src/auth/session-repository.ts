@@ -76,6 +76,33 @@ export const sessionRepository = {
   },
 
   // Look up a session by hash in ANY state (revoked, expired, or active). Used by the
+  /**
+   * A live session BY ID, for credentials derived from a session that do not
+   * carry its token — today, the dev-preview cookie.
+   *
+   * `findActiveSession` above is keyed on the token hash, which the preview
+   * origin never sees: it holds a signed cookie naming the session, not the
+   * session's secret. This is the read that lets a per-request gate ask "is
+   * the session that minted this still usable?" without the token.
+   *
+   * Read-only by design — no lazy revoke, no `lastUsedAt` touch. It is driven
+   * by subresource requests from an untrusted origin, so it must not write.
+   */
+  findActiveSessionById: async (sessionId: string): Promise<SessionRecord | undefined> => {
+    return db.query.sessions.findFirst({
+      where: and(
+        eq(sessions.id, sessionId),
+        isNull(sessions.revokedAt),
+        gt(sessions.expiresAt, new Date()),
+      ),
+      with: {
+        user: {
+          columns: { id: true, tokenVersion: true, role: true, adminRoleVersion: true, suspendedAt: true },
+        },
+      },
+    }) as Promise<SessionRecord | undefined>;
+  },
+
   // failure-reason classifier when findActiveSession finds nothing, to split "revoked" vs
   // "grace-expired" vs "genuinely never existed". No revoked/expiry predicate, no user join.
   findSessionByHashAnyState: async (tokenHash: string): Promise<SessionAnyStateRecord | undefined> => {

@@ -14,6 +14,7 @@ import { createId } from '@paralleldrive/cuid2';
 import { db } from '@pagespace/db/db';
 import { eq, inArray } from '@pagespace/db/operators';
 import { users } from '@pagespace/db/schema/auth';
+import { sessions } from '@pagespace/db/schema/sessions';
 import { drives } from '@pagespace/db/schema/core';
 import { driveEnvs } from '@pagespace/db/schema/drive-envs';
 import { devPreviewServices } from '@pagespace/db/schema/dev-preview-services';
@@ -26,16 +27,24 @@ import { PREVIEW_RELAY_SERVICE_NAME } from '../preview-relay';
 const userId = createId();
 const driveId = createId();
 const envId = createId();
+const sessionId = createId();
 const NOW = new Date('2026-09-06T12:00:00.000Z');
 
 beforeAll(async () => {
   await db.insert(users).values({ id: userId, email: `${userId}@example.com`, name: 'preview-store-test' });
   await db.insert(drives).values({ id: driveId, name: 'd', slug: `d-${driveId}`, ownerId: userId });
   await db.insert(driveEnvs).values({ id: envId, driveId, name: 'main', storageLastBilledAt: NOW });
+  // A grant names the SESSION that opened it, so an integration test needs a
+  // real one: the FK is what makes revocation reach the grants table.
+  await db.insert(sessions).values({
+    id: sessionId, tokenHash: `h-${sessionId}`, tokenPrefix: 'ps_', userId, type: 'user',
+    tokenVersion: 1, expiresAt: new Date(NOW.getTime() + 86_400_000),
+  });
 });
 
 afterAll(async () => {
   await db.delete(devPreviewGrants).where(eq(devPreviewGrants.userId, userId));
+  await db.delete(sessions).where(eq(sessions.id, sessionId));
   await db.delete(driveEnvs).where(eq(driveEnvs.id, envId));
   await db.delete(drives).where(eq(drives.id, driveId));
   await db.delete(users).where(inArray(users.id, [userId]));
@@ -111,41 +120,52 @@ describe('createDbDevPreviewGrantsStore', () => {
   const holder = { kind: 'env', id: envId } as const;
 
   it('mints a grant bound to (holder, user) with the two expiries fixed at mint time', async () => {
-    const minted = await store.mint({ holder, userId, now: NOW });
+    const minted = await store.mint({ holder, userId, sessionId, now: NOW });
     expect(minted.id).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(minted.expiresAt).toEqual(new Date(NOW.getTime() + PREVIEW_GRANT_TTL_MS));
     expect(minted.cookieExpiresAt).toEqual(new Date(NOW.getTime() + PREVIEW_COOKIE_TTL_MS));
     const [row] = await db.select().from(devPreviewGrants).where(eq(devPreviewGrants.id, minted.id));
-    expect(row).toMatchObject({ holderKind: 'env', holderId: envId, userId, consumedAt: null });
+    expect(row).toMatchObject({ holderKind: 'env', holderId: envId, userId, sessionId, consumedAt: null });
   });
 
   it('consumes exactly once: the first redemption returns the claims, the second returns null', async () => {
-    const minted = await store.mint({ holder, userId, now: NOW });
+    const minted = await store.mint({ holder, userId, sessionId, now: NOW });
     const later = new Date(NOW.getTime() + 1000);
-    expect(await store.consume({ id: minted.id, now: later })).toEqual({ holder: { kind: 'env', id: envId }, userId, cookieExpiresAt: minted.cookieExpiresAt });
+    expect(await store.consume({ id: minted.id, now: later })).toEqual({ holder: { kind: 'env', id: envId }, userId, sessionId, cookieExpiresAt: minted.cookieExpiresAt });
     expect(await store.consume({ id: minted.id, now: later })).toBeNull();
     const [row] = await db.select({ consumedAt: devPreviewGrants.consumedAt }).from(devPreviewGrants).where(eq(devPreviewGrants.id, minted.id));
     expect(row.consumedAt).toEqual(later);
   });
 
   it('under a concurrent race, exactly one of N redemptions wins', async () => {
-    const minted = await store.mint({ holder, userId, now: NOW });
+    const minted = await store.mint({ holder, userId, sessionId, now: NOW });
     const later = new Date(NOW.getTime() + 1000);
     const results = await Promise.all(Array.from({ length: 8 }, () => store.consume({ id: minted.id, now: later })));
     expect(results.filter((r) => r !== null)).toHaveLength(1);
   });
 
   it('refuses an expired grant, an unknown id, and a malformed id', async () => {
-    const minted = await store.mint({ holder, userId, now: NOW });
+    const minted = await store.mint({ holder, userId, sessionId, now: NOW });
     expect(await store.consume({ id: minted.id, now: new Date(minted.expiresAt.getTime()) })).toBeNull();
     expect(await store.consume({ id: 'A'.repeat(43), now: NOW })).toBeNull();
     expect(await store.consume({ id: 'not-a-grant', now: NOW })).toBeNull();
     expect(await store.consume({ id: `${minted.id}'; --`, now: NOW })).toBeNull();
   });
 
+  it('a deleted session takes its unredeemed grants with it (the FK cascade)', async () => {
+    const doomedSession = createId();
+    await db.insert(sessions).values({
+      id: doomedSession, tokenHash: `h-${doomedSession}`, tokenPrefix: 'ps_', userId, type: 'user',
+      tokenVersion: 1, expiresAt: new Date(NOW.getTime() + 86_400_000),
+    });
+    const minted = await store.mint({ holder, userId, sessionId: doomedSession, now: NOW });
+    await db.delete(sessions).where(eq(sessions.id, doomedSession));
+    expect(await db.select().from(devPreviewGrants).where(eq(devPreviewGrants.id, minted.id))).toHaveLength(0);
+  });
+
   it('sweeps grants an hour past expiry on the next mint', async () => {
-    const old = await store.mint({ holder, userId, now: new Date(NOW.getTime() - 3 * 60 * 60 * 1000) });
-    await store.mint({ holder, userId, now: NOW });
+    const old = await store.mint({ holder, userId, sessionId, now: new Date(NOW.getTime() - 3 * 60 * 60 * 1000) });
+    await store.mint({ holder, userId, sessionId, now: NOW });
     const rows = await db.select().from(devPreviewGrants).where(eq(devPreviewGrants.id, old.id));
     expect(rows).toHaveLength(0);
   });

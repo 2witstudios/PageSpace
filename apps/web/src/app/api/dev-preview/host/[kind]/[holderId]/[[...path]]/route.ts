@@ -142,7 +142,9 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
       });
       return NextResponse.json({ error: 'This preview link has expired. Reopen the preview from PageSpace.' }, { status: 403, headers: { 'cache-control': 'no-store' } });
     }
-    const cookie = signPreviewCookie({ holder, userId: consumed.userId, expiresAt: consumed.cookieExpiresAt.getTime() }, cookieKey);
+    // The grant carries the session that opened it; the cookie carries it on,
+    // so revoking that session cuts this preview on its very next request.
+    const cookie = signPreviewCookie({ holder, userId: consumed.userId, sessionId: consumed.sessionId, expiresAt: consumed.cookieExpiresAt.getTime() }, cookieKey);
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: consumed.userId, holder, method: 'GET', path, outcome: 'forwarded', reason: 'grant-redeemed', status: 302, transport: 'http' }));
     return new NextResponse(null, {
       status: 302,
@@ -182,10 +184,10 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
     }
     return NextResponse.json({ error: 'Preview session expired. Reopen the preview from PageSpace.', reason }, { status: 401, headers: { 'set-cookie': buildClearPreviewCookieHeader(), 'cache-control': 'no-store' } });
   }
-  const userId = verified.claims.userId;
+  const { userId, sessionId } = verified.claims;
 
   // ---- authorize + decide, per request ---------------------------------------
-  const target = await resolvePreviewTargetForRequest(holder, userId);
+  const target = await resolvePreviewTargetForRequest(holder, userId, sessionId);
   if (!('spriteUrl' in target)) {
     const { reason, status, message, detail } = target.decision;
     if (reason === 'not-authorized' || reason === 'wake-denied') {

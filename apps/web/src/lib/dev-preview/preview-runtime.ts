@@ -13,6 +13,7 @@
 import { NextResponse } from 'next/server';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
@@ -106,6 +107,7 @@ function buildPreviewAccessDeps(): PreviewAccessDeps {
       return payer ? { payerId: payer.payerId } : null;
     },
     canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
+    isSessionUsable: ({ sessionId, userId }) => sessionService.isSessionUsableById(sessionId, userId),
     attach: async (sandboxId) => {
       const host = await createRequestScopedSandboxHost();
       return host.attach({ sandboxId }).catch(() => null);
@@ -116,9 +118,9 @@ function buildPreviewAccessDeps(): PreviewAccessDeps {
   };
 }
 
-/** The whole gather for one proxied request. */
-export function resolvePreviewTargetForRequest(holder: DevPreviewHolderRef, userId: string): Promise<PreviewTarget> {
-  return resolvePreviewTarget({ holder, userId, deps: buildPreviewAccessDeps() });
+/** The whole gather for one proxied request. `sessionId` comes from the cookie's claims. */
+export function resolvePreviewTargetForRequest(holder: DevPreviewHolderRef, userId: string, sessionId: string): Promise<PreviewTarget> {
+  return resolvePreviewTarget({ holder, userId, sessionId, deps: buildPreviewAccessDeps() });
 }
 
 /**
@@ -182,18 +184,21 @@ export async function openPreviewForUser({
   authorizeAs,
   mintFor = authorizeAs,
   userId,
+  sessionId,
 }: {
   /** The holder whose access decision governs — the session the user came through, or the env. */
   authorizeAs: DevPreviewHolderRef;
   /** The holder whose preview origin the grant opens — the env for an env-bound session (the holder rule). */
   mintFor?: DevPreviewHolderRef;
   userId: string;
+  /** The session doing the opening; carried into the grant and the cookie so revoking it cuts the preview. */
+  sessionId: string;
 }): Promise<OpenPreviewResult> {
   const apex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
   if (apex === null) return { ok: false, reason: 'not-configured' };
   const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, userId, deps: buildPreviewAccessDeps() });
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
-  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, now: new Date() });
+  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, sessionId, now: new Date() });
   return { ok: true, redirectTo: buildPreviewAuthRedirect(buildPreviewHost(mintFor, apex), grant.id) };
 }
 
