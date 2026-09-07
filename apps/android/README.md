@@ -69,9 +69,16 @@ main-frame requests. With no `errorPath` configured that returns `null`, so a fa
 WebView on its own error page. With it, Android serves `https://localhost/index.html` from the
 bundled assets — `public/index.html`, which carries the Retry button.
 
-Note that page gets **no Capacitor bridge**: `Bridge.loadWebView()` scopes
-`addDocumentStartJavaScript` to the `server.url` origin, so `Capacitor` and every plugin are
-undefined there. It uses plain DOM APIs only, and must keep doing so.
+That page has no `window.Capacitor` — `Bridge.loadWebView()` scopes
+`addDocumentStartJavaScript` to the `server.url` origin, so the JS wrapper and its plugin proxies
+are undefined there. **It is not, however, outside the native bridge**, and it would be a mistake
+to treat it as a sandbox: `Bridge.setAllowedOriginRules()` adds `scheme://hostname` —
+`https://localhost` — to the allowed-origin set *unconditionally*, before it looks at
+`allowNavigation` at all, so `MessageHandler` exposes `androidBridge` on this origin. Code that
+knows the message protocol can call registered plugins directly.
+
+The retry page uses plain DOM APIs only and should keep doing so, but that is a discipline, not a
+boundary the platform enforces.
 
 ### An `allowNavigation` entry grants the native plugin bridge
 
