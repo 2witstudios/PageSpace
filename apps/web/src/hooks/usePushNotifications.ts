@@ -240,6 +240,12 @@ export function usePushNotifications(): PushNotificationState & PushNotification
         //               this the record would outlive the refusal it stands for
         //               and the user could never be asked again.
         // 'denied' and 'prompt-with-rationale' both mean the refusal stands.
+        //
+        // Clearing BEFORE the setState below is what makes the ordering safe:
+        // PushNotificationManager waits for permissionStatus to leave 'unknown'
+        // before it calls requestPermission(), and this setState is the only
+        // thing that moves it — so the record is always already in step by the
+        // time requestPermission() reads it. Do not reorder these two.
         const osHasNoRefusal = result.receive === 'granted' || result.receive === 'prompt';
         if (osHasNoRefusal) clearRecordedDenial();
         setState(prev => ({

@@ -339,7 +339,9 @@ every cold start. This is not redundant with the OS state: after one refusal And
 `'prompt-with-rationale'` from `checkPermissions()` and would still allow the ask.
 
 The record is a cache of the OS's answer, never a second source of truth. The permission-check
-effect drops it whenever `checkPermissions()` reports a state that is not holding a refusal —
+effect runs once per mount, so the sync below happens on the next launch rather than the moment a
+setting changes; it drops the record whenever `checkPermissions()` reports a state that is not
+holding a refusal —
 `granted` (the user turned notifications on from system settings) or `prompt` (the OS has forgotten
 the refusal and would ask again, which is where **Android 11+ lands after auto-revoking permissions
 for an app that went unused**). `denied` and `prompt-with-rationale` both keep it. There is
