@@ -64,11 +64,12 @@
                 does take the deep-link branch.
 
                 Unlike an https App Link this needs no domain verification and no
-                assetlinks.json — a custom scheme is claimed by the app outright —
-                so it works as soon as the app is installed, on every supported
-                API level. It also cannot be hijacked into the wrong app by a
-                chooser on pre-API-31 devices the way an unverified https filter
-                can, because no browser competes for a `pagespace://` URL.
+                assetlinks.json, so the registration takes effect as soon as the
+                app is installed, on every supported API level. That is NOT the
+                same as owning the scheme: see the block above — another installed
+                app can register `pagespace://` too and be offered in the chooser
+                or set as the default handler. No browser competes for it, which
+                is not the same thing as no app competing for it.
 
                 MainActivity is already launchMode="singleTask", so an incoming
                 link reaches the running task through onNewIntent; BridgeActivity

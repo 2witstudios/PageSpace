@@ -19,15 +19,22 @@ const config: CapacitorConfig = {
     //     && !appAllowNavigationMask.matches(url.getHost())
     //
     // `https://pagespace.ai/signin` therefore already stays in the WebView on
-    // Android with no allowNavigation at all. The entry that earns its place is
-    // the wildcard: a navigation to any pagespace.ai SUBDOMAIN fails the host
-    // equality test and would be handed to Chrome via ACTION_VIEW.
+    // Android with no allowNavigation at all, and the apex is listed here to say
+    // so out loud rather than to change behaviour.
     //
-    // The apex is listed alongside it because one mask cannot cover both —
-    // HostMask.Simple.matches() bails when `maskSize > 1 && hostSize != maskSize`,
-    // so '*.pagespace.ai' (3 dot components) does not match 'pagespace.ai' (2) —
-    // and because leaving the app's own host implicit here invites someone to
-    // 'tidy up' the wildcard later without noticing what it covered.
+    // '*.pagespace.ai' is deliberately NOT listed, though the epic's task asked
+    // for apex and wildcard both. allowNavigation governs TOP-LEVEL navigations
+    // only — subresources from assets.pagespace.ai and friends are unaffected —
+    // and the shell loads pagespace.ai and stays there, so the wildcard buys no
+    // navigation we can point at while granting the native plugin bridge (see
+    // below) to every pagespace.ai subdomain that exists or ever will, tenant
+    // hosts included. Least privilege wins over the parity.
+    //
+    // If a real subdomain navigation ever needs allowing, add that HOST, not the
+    // wildcard — and if the wildcard truly is wanted, the apex must stay listed
+    // beside it, because one mask cannot cover both: HostMask.Simple.matches()
+    // bails when `maskSize > 1 && hostSize != maskSize`, so '*.pagespace.ai' (3
+    // dot components) does not match 'pagespace.ai' (2).
     //
     // Deliberately NOT listed here: accounts.google.com and appleid.apple.com,
     // which the iOS config does list. On Android an allowNavigation entry is not
@@ -48,11 +55,10 @@ const config: CapacitorConfig = {
     // NO origin scoping, so it applies to every main-frame document the WebView
     // loads. That is shipped behaviour and a separate change.)
     //
-    // What stays is our own origins. Note that '*.pagespace.ai' grants the bridge
-    // to every pagespace.ai subdomain, so nothing that serves untrusted or
-    // user-authored content — a dev-preview origin, for instance — may be given a
-    // pagespace.ai hostname without revisiting this line.
-    allowNavigation: ['pagespace.ai', '*.pagespace.ai'],
+    // What stays is the app's own origin, and that is the point: every host added
+    // here is a host handed the native bridge, so this list should only ever grow
+    // for a navigation someone can name.
+    allowNavigation: ['pagespace.ai'],
     // Bundled retry screen (apps/android/public/index.html). Android reads this
     // in BridgeWebViewClient.onReceivedError/onReceivedHttpError for main-frame
     // requests and loads Bridge.getErrorUrl() — `https://localhost/index.html`,

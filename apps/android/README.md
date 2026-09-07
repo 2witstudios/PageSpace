@@ -10,9 +10,15 @@ Capacitor wrapper around the web app, mirroring `apps/ios`.
 ## Deep links: what ships, and what is deliberately deferred
 
 `AndroidManifest.xml` registers **one** deep-link intent filter: the `pagespace://` custom
-scheme, mirroring iOS's `CFBundleURLSchemes`. A custom scheme is claimed by the app outright — no
-domain verification, no server-side file — so the claim is effective as soon as the app is
-installed, on every supported API level.
+scheme, mirroring iOS's `CFBundleURLSchemes`. It needs no domain verification and no server-side
+file, so the registration takes effect as soon as the app is installed, on every supported API
+level.
+
+**Registration is not ownership.** Custom schemes are not exclusive on Android: any other
+installed app can register `pagespace://` as well and be offered in the disambiguation chooser, or
+be set as the user's default handler. That no browser competes for the scheme does not mean no app
+does — which is why the scheme must not be treated as an authentication return channel until the
+handoff it carries is bound to the app that started the flow (see below).
 
 It is **groundwork, not a live path**. `pagespace://auth-exchange?code=…` is what the Google and
 Apple OAuth callback routes redirect to, but only on their `platform === 'ios'` branch, and
@@ -70,6 +76,12 @@ for no gain, since verification cannot succeed anyway. Hence: deferred, not ship
 Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
 the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
 capture would strand users on `/dashboard` from every marketing, blog, or docs link.
+
+A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`
+authenticates possession of the one-time code alone, with no PKCE verifier and no binding to the
+app that began the flow, so whichever handler receives the code can redeem it for a session. That
+must be bound before any return channel — App Link or custom scheme — is treated as an
+authentication path.
 
 ```xml
 <intent-filter android:autoVerify="true">
