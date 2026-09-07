@@ -75,7 +75,6 @@ export const sessionRepository = {
     }) as Promise<SessionRecord | undefined>;
   },
 
-  // Look up a session by hash in ANY state (revoked, expired, or active). Used by the
   /**
    * A live session BY ID, for credentials derived from a session that do not
    * carry its token — today, the dev-preview cookie.
@@ -103,6 +102,7 @@ export const sessionRepository = {
     }) as Promise<SessionRecord | undefined>;
   },
 
+  // Look up a session by hash in ANY state (revoked, expired, or active). Used by the
   // failure-reason classifier when findActiveSession finds nothing, to split "revoked" vs
   // "grace-expired" vs "genuinely never existed". No revoked/expiry predicate, no user join.
   findSessionByHashAnyState: async (tokenHash: string): Promise<SessionAnyStateRecord | undefined> => {

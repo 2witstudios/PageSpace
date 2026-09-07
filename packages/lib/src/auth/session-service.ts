@@ -115,19 +115,6 @@ export class SessionService {
   }
 
   /**
-   * Validate token and return claims OR the reason it failed (D5).
-   *
-   * Behaviourally identical to the historical `validateSession` — same reject conditions, same
-   * revoke/touch side effects — but instead of collapsing every failure to `null`, it names the
-   * reason. When no ACTIVE session is found, it does a secondary any-state lookup to split
-   * `revoked` vs `expired` (incl. #2176's grace-expiries: revokedAt null, expiresAt in the past)
-   * vs a genuinely unknown `not_found`.
-   *
-   * `expectedType` scopes the token to one authentication surface: pass it at every boundary that
-   * only serves a single session type (e.g. 'user' for browser cookie/bearer auth) so a token
-   * leaked from one surface cannot be replayed on another.
-   */
-  /**
    * Is the session that minted a DERIVED credential still usable, for this
    * user? Read-only, and keyed on the session id rather than its token.
    *
@@ -168,6 +155,19 @@ export class SessionService {
     return true;
   }
 
+  /**
+   * Validate token and return claims OR the reason it failed (D5).
+   *
+   * Behaviourally identical to the historical `validateSession` — same reject conditions, same
+   * revoke/touch side effects — but instead of collapsing every failure to `null`, it names the
+   * reason. When no ACTIVE session is found, it does a secondary any-state lookup to split
+   * `revoked` vs `expired` (incl. #2176's grace-expiries: revokedAt null, expiresAt in the past)
+   * vs a genuinely unknown `not_found`.
+   *
+   * `expectedType` scopes the token to one authentication surface: pass it at every boundary that
+   * only serves a single session type (e.g. 'user' for browser cookie/bearer auth) so a token
+   * leaked from one surface cannot be replayed on another.
+   */
   async validateSessionWithReason(
     token: string,
     options?: { expectedType?: SessionClaims['type'] }
