@@ -401,6 +401,7 @@ export async function copySheetRows(
         rowHeights: tab.rowHeights,
         ranges: tab.ranges,
         conditionalFormats: tab.conditionalFormats,
+        regions: tab.regions,
       })
       .returning({ id: sheetTabs.id });
 
@@ -525,6 +526,7 @@ export async function materializeFromDocument(
           rowHeights: materialized.tab.rowHeights,
           ranges: materialized.tab.ranges,
           conditionalFormats: materialized.tab.conditionalFormats,
+          regions: materialized.tab.regions,
         })
         .returning({ id: sheetTabs.id });
 
@@ -804,6 +806,7 @@ export async function replaceFromDocument(
           rowHeights: materialized.tab.rowHeights,
           ranges: materialized.tab.ranges,
           conditionalFormats: materialized.tab.conditionalFormats,
+          regions: materialized.tab.regions,
           updatedAt: new Date(),
         })
         .where(eq(sheetTabs.id, tab.id));
@@ -2032,6 +2035,7 @@ function toStoredTab(row: typeof sheetTabs.$inferSelect): StoredTab & { id: stri
     rowHeights: row.rowHeights,
     ranges: row.ranges,
     conditionalFormats: row.conditionalFormats,
+    regions: row.regions,
   };
 }
 

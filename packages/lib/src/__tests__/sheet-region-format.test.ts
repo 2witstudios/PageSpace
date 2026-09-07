@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_REGION_THEME,
   columnRoleFormat,
+  createRegionResolver,
   regionTheme,
 } from '../sheets/region-format';
 import { PALETTE } from '../sheets/palette';
 import { applyNumberFormat, readableTextColor } from '../sheets/format';
-import type { ColumnRole, RegionColumn } from '../sheets/regions';
+import type { ColumnRole, RegionColumn, SheetRegion } from '../sheets/regions';
 
 const col = (role: ColumnRole, over: Partial<RegionColumn> = {}): RegionColumn => ({
   column: 'A',
@@ -121,5 +122,127 @@ describe('regionTheme', () => {
     // Pinned so a palette reorder is a deliberate change of default, not an
     // accidental one.
     expect(DEFAULT_REGION_THEME).toBe('slate');
+  });
+});
+
+describe('createRegionResolver', () => {
+  const budget = (over: Partial<SheetRegion> = {}): SheetRegion => ({
+    id: 'r1',
+    range: 'A1:D',
+    headerRows: 1,
+    theme: 'blue',
+    columns: [
+      { column: 'B', role: 'currency' },
+      { column: 'C', role: 'percent' },
+    ],
+    totalRows: [5],
+    ...over,
+  });
+
+  it('returns nothing when there are no regions', () => {
+    expect(createRegionResolver(undefined, 100)(0, 0)).toBeUndefined();
+    expect(createRegionResolver([], 100)(0, 0)).toBeUndefined();
+  });
+
+  it('formats the header band from the theme, without the column role', () => {
+    // A currency format on the word "Revenue" describes nothing.
+    const at = createRegionResolver([budget()], 50);
+    expect(at(0, 1)).toEqual(regionTheme('blue').header);
+    expect(at(0, 1)?.number).toBeUndefined();
+  });
+
+  it('applies the column role to body cells', () => {
+    const at = createRegionResolver([budget()], 50);
+    expect(at(1, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));
+    expect(at(1, 2)).toEqual(columnRoleFormat({ column: 'C', role: 'percent' }));
+  });
+
+  it('leaves an undeclared column inside the region unformatted', () => {
+    const at = createRegionResolver([budget()], 50);
+    expect(at(1, 0)).toBeUndefined();
+  });
+
+  it('layers total emphasis over the column role, keeping the role', () => {
+    // A total IS data — dropping its currency format would make the one row
+    // that matters most read differently from the column above it.
+    const at = createRegionResolver([budget()], 50);
+    const total = at(4, 1)!;
+    expect(total.number).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }).number);
+    expect(total.bold).toBe(true);
+    expect(total.background).toBe(regionTheme('blue').total.background);
+  });
+
+  it('reads total rows as the 1-based numbers a person declares', () => {
+    const at = createRegionResolver([budget({ totalRows: [5] })], 50);
+    expect(at(4, 1)?.bold).toBe(true);
+    expect(at(5, 1)?.bold).toBeUndefined();
+  });
+
+  it('covers rows that did not exist when the region was declared', () => {
+    // The row-append property: an open region reaches whatever the sheet grew to.
+    const at20 = createRegionResolver([budget()], 20);
+    const at5000 = createRegionResolver([budget()], 5000);
+    expect(at20(4999, 1)).toBeUndefined();
+    expect(at5000(4999, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));
+  });
+
+  it('stops at the region bounds', () => {
+    const at = createRegionResolver([budget({ range: 'B2:C10' })], 50);
+    expect(at(1, 0)).toBeUndefined();
+    expect(at(1, 3)).toBeUndefined();
+    expect(at(0, 1)).toBeUndefined();
+    expect(at(10, 1)).toBeUndefined();
+    expect(at(1, 1)).toBeDefined();
+  });
+
+  it('lets a later region layer over an earlier one where they overlap', () => {
+    const at = createRegionResolver(
+      [
+        budget({ id: 'a', theme: 'blue', columns: [{ column: 'B', role: 'currency' }] }),
+        budget({ id: 'b', theme: 'red', headerRows: 1 }),
+      ],
+      50
+    );
+    expect(at(0, 1)?.background).toBe(regionTheme('red').header.background);
+  });
+
+  it('honours headerRows of 0 and a multi-row header band', () => {
+    const none = createRegionResolver([budget({ headerRows: 0 })], 50);
+    expect(none(0, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));
+
+    const deep = createRegionResolver([budget({ headerRows: 3 })], 50);
+    expect(deep(2, 1)).toEqual(regionTheme('blue').header);
+    expect(deep(3, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));
+  });
+
+  it('defaults to a single header row when none is declared', () => {
+    const at = createRegionResolver([{ id: 'r', range: 'A1:D', columns: [{ column: 'A', role: 'number', decimals: 0 }] }], 50);
+    expect(at(0, 0)?.bold).toBe(true);
+    expect(at(1, 0)?.bold).toBeUndefined();
+  });
+
+  it('still themes a region that declares no columns at all', () => {
+    // Declaring only the shape of a table — header band, accent — is a complete
+    // and useful thing to say about it.
+    const at = createRegionResolver([{ id: 'r', range: 'A1:C', theme: 'green' }], 20);
+    expect(at(0, 0)).toEqual(regionTheme('green').header);
+    expect(at(1, 0)).toBeUndefined();
+  });
+
+  it('drops a region whose range cannot be located rather than failing the sheet', () => {
+    const at = createRegionResolver([{ id: 'bad', range: 'nonsense' }, budget()], 50);
+    expect(at(1, 1)).toEqual(columnRoleFormat({ column: 'B', role: 'currency' }));
+  });
+
+  it('returns nothing when every region is unusable', () => {
+    expect(createRegionResolver([{ id: 'bad', range: 'nonsense' }], 50)(0, 0)).toBeUndefined();
+  });
+
+  it('does not pay a spread for a text column, which formats nothing', () => {
+    const at = createRegionResolver(
+      [budget({ columns: [{ column: 'B', role: 'text' }], headerRows: 0, totalRows: [] })],
+      50
+    );
+    expect(at(1, 1)).toBeUndefined();
   });
 });

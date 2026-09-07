@@ -2010,6 +2010,13 @@
       "when": 1788708142844,
       "tag": "0286_lush_nightmare",
       "breakpoints": true
+    },
+    {
+      "idx": 287,
+      "version": "7",
+      "when": 1788752324444,
+      "tag": "0287_high_living_tribunal",
+      "breakpoints": true
     }
   ]
 }

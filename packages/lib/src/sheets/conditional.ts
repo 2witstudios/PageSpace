@@ -7,12 +7,17 @@
  * through `ConditionalContext`, which is what keeps this module testable
  * without an engine and out of an import cycle with one.
  *
- * Precedence is column default < conditional < explicit cell format. Note that
- * Excel and Google Sheets do the opposite — there, a conditional rule overrides
- * a manually applied fill. The choice here is that a colour someone deliberately
- * set on a cell is not silently overruled by a rule; it is worth revisiting when
- * import fidelity lands, because a workbook authored in Excel will render
- * differently under this precedence.
+ * Precedence is:
+ *
+ *     column default  <  region-derived  <  explicit cell format  <  conditional
+ *
+ * A rule wins over a manually applied fill, matching Excel and Google Sheets.
+ * This is the opposite of the order originally shipped here, which put an
+ * explicit cell format on top so that a colour someone deliberately set was
+ * never silently overruled. That reasoning was sound in isolation but made
+ * PageSpace the odd one out: a workbook imported from Excel would render
+ * differently than it did in Excel, and a rule that visibly failed to fire on
+ * exactly the cells someone had touched reads as a bug rather than as deference.
  */
 
 import type { CellFormat, SheetPrimitive } from './types';

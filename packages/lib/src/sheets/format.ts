@@ -169,16 +169,29 @@ export function isEmptyFormat(format: CellFormat | undefined): boolean {
 }
 
 /**
- * Merge a column default with a cell's own format, the cell winning per-field.
- * Exposed so callers resolve precedence identically everywhere.
+ * Merge the layers of a cell's presentation, weakest first:
+ *
+ *     column default  <  region-derived  <  the cell's own format
+ *
+ * A column default is a blanket statement about a column, a region says what an
+ * area *is*, and an explicit cell format is someone pointing at one cell — so
+ * each is more specific than the last, and more specific wins per field.
+ *
+ * (Conditional rules sit above all three, and are merged by the evaluator
+ * rather than here, because they depend on the cell's computed value.)
+ *
+ * Exposed so callers resolve precedence identically everywhere; a second
+ * implementation is how the grid and an export come to disagree.
  */
 export function resolveCellFormat(
   cellFormat: CellFormat | undefined,
-  columnFormat: CellFormat | undefined
+  columnFormat: CellFormat | undefined,
+  regionFormat?: CellFormat | undefined
 ): CellFormat | undefined {
-  if (!columnFormat) return cellFormat;
-  if (!cellFormat) return columnFormat;
-  return { ...columnFormat, ...cellFormat };
+  if (!columnFormat && !regionFormat) return cellFormat;
+  if (!cellFormat && !regionFormat) return columnFormat;
+  if (!cellFormat && !columnFormat) return regionFormat;
+  return { ...columnFormat, ...regionFormat, ...cellFormat };
 }
 
 const clampDecimals = (decimals: number | undefined, fallback: number): number => {

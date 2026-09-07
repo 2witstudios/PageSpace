@@ -12,9 +12,10 @@
  * (stored data crosses it), while these defaults are expected to be revised.
  */
 
+import { decodeColumnLabel } from './address';
 import { readableTextColor } from './format';
 import { PALETTE, type PaletteHue } from './palette';
-import type { ColumnRole, RegionColumn } from './regions';
+import { parseRegionRange, resolveRegionRows, type ColumnRole, type RegionColumn, type SheetRegion } from './regions';
 import type { CellFormat } from './types';
 
 /**
@@ -127,5 +128,104 @@ export function regionTheme(name?: string): RegionTheme {
       background: hue.tint,
       color: readableTextColor(hue.tint),
     },
+  };
+}
+
+/**
+ * Resolves the derived format at a cell, or `undefined` where no region covers
+ * it.
+ *
+ * A factory rather than a bare function because this is called once per cell of
+ * a full evaluation: everything that depends only on the region set — resolved
+ * bounds, per-column role formats, the theme's two treatments, the total-row
+ * lookup — is computed once here instead of per cell. The returned closure does
+ * a bounds test and at most three object spreads.
+ */
+export type RegionResolver = (row: number, column: number) => CellFormat | undefined;
+
+interface PreparedRegion {
+  rowStart: number;
+  rowEnd: number;
+  colStart: number;
+  colEnd: number;
+  headerEnd: number;
+  totalRows: ReadonlySet<number>;
+  columns: ReadonlyMap<number, CellFormat>;
+  header: CellFormat;
+  total: CellFormat;
+}
+
+const NO_REGIONS: RegionResolver = () => undefined;
+
+const prepare = (region: SheetRegion, rowCount: number): PreparedRegion | null => {
+  const bounds = parseRegionRange(region.range);
+  // Already validated by `parseRegion`, but this is also reachable with a region
+  // handed straight in, and a table that cannot be located formats nothing.
+  if (!bounds) return null;
+
+  const { rowStart, rowEnd } = resolveRegionRows(bounds, rowCount);
+  const theme = regionTheme(region.theme);
+
+  const columns = new Map<number, CellFormat>();
+  for (const column of region.columns ?? []) {
+    const format = columnRoleFormat(column);
+    // An empty format (role `text`) would still cost a spread per cell for
+    // nothing.
+    if (Object.keys(format).length > 0) columns.set(decodeColumnLabel(column.column), format);
+  }
+
+  const headerRows = region.headerRows ?? 1;
+
+  return {
+    rowStart,
+    rowEnd,
+    colStart: bounds.colStart,
+    colEnd: bounds.colEnd,
+    headerEnd: rowStart + headerRows - 1,
+    // Stored 1-based, compared 0-based: the row numbers a person reads are the
+    // row numbers they declare.
+    totalRows: new Set((region.totalRows ?? []).map((row) => row - 1)),
+    columns,
+    header: theme.header,
+    total: theme.total,
+  };
+};
+
+export function createRegionResolver(
+  regions: readonly SheetRegion[] | undefined,
+  rowCount: number
+): RegionResolver {
+  if (!regions || regions.length === 0) return NO_REGIONS;
+
+  const prepared = regions
+    .map((region) => prepare(region, rowCount))
+    .filter((region): region is PreparedRegion => region !== null);
+
+  if (prepared.length === 0) return NO_REGIONS;
+
+  return (row, column) => {
+    let format: CellFormat | undefined;
+
+    // Declaration order is precedence order: a later region layers over an
+    // earlier one where they overlap, matching how conditional rules stack.
+    for (const region of prepared) {
+      if (row < region.rowStart || row > region.rowEnd) continue;
+      if (column < region.colStart || column > region.colEnd) continue;
+
+      if (row <= region.headerEnd) {
+        // A header cell holds a label, not data, so the column's role format is
+        // deliberately not applied: a currency format on the word "Revenue"
+        // describes nothing.
+        format = { ...format, ...region.header };
+        continue;
+      }
+
+      const role = region.columns.get(column);
+      if (role) format = { ...format, ...role };
+      // A total IS data, so its role format stays and the emphasis layers over.
+      if (region.totalRows.has(row)) format = { ...format, ...region.total };
+    }
+
+    return format;
   };
 }
