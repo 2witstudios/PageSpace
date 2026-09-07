@@ -63,6 +63,15 @@ export interface DevPreviewStore {
    * and clear any stop intent — agreeing to share something is asking for it
    * to be on, and leaving it off would answer a click with silence.
    *
+   * Deliberately NOT instance-guarded, for the same reason `setStoppedByUser`
+   * is not: an approval written onto a row from a dead VM is already inert
+   * (the planner ignores stale rows and `describeServiceState` renders
+   * `stale`), and requiring the live instance would mean an un-attachable
+   * sprite could no longer accept a decision at all. The cost is that the
+   * action answers 200 for a sandbox that has since been rebuilt; the status
+   * read the caller makes next says `stale`, which is the honest answer and
+   * the one the UI renders.
+   *
    * Resolves the row AS WRITTEN, or `null` when the holder has no row OR the
    * row no longer targets `port`. That second case is the point: the port is
    * echoed back from the UI, and the write is filtered on it, so approval

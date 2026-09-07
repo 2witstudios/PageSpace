@@ -131,10 +131,11 @@ async function writeSandboxFile(request: APIRequestContext, user: SeededUser, wo
 }
 
 interface PreviewStatus {
+  // The state NAMES the port — there is no separate pending-port field, so a
+  // needs-approval status and the port awaiting a decision cannot disagree.
   state: { status: string; targetPort?: number; message: string };
   canOpen: boolean;
   canApprove: boolean;
-  pendingApprovalPort: number | null;
   openPath: string | null;
 }
 
@@ -277,7 +278,8 @@ test.describe('dev-server preview: the browser journey', () => {
     await runInShell(context, user, workspaceId, 'cd unlisted && node server.js');
 
     const pending = await waitForPreview(request, user, workspaceId, (preview) => preview.state.status === 'needs-approval', SANDBOX_TIMEOUT_MS);
-    expect(pending.pendingApprovalPort).toBe(9000);
+    expect(pending.state.targetPort).toBe(9000);
+    expect(pending.canApprove).toBe(true);
     expect(pending.canOpen).toBe(false);
 
     // The proxy refuses it — detection is not exposure.
