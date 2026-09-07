@@ -7,6 +7,69 @@ Capacitor wrapper around the web app, mirroring `apps/ios`.
 > prompt, token registration, build and signing — belongs to the Android client work and is not
 > documented here yet.
 
+## Why this config is not a copy of the iOS one
+
+`apps/ios/capacitor.config.ts` carries a long comment about `allowNavigation` and `errorPath`,
+added when the iOS shell bricked in PR #2010. Android's config sets the same two keys for
+different reasons, and its `allowNavigation` list is deliberately much shorter.
+
+### The iOS brick does not reproduce on Android
+
+iOS failed because `WebViewDelegationHandler.swift` falls back to a raw string-prefix test of the
+target URL against `server.url` — which carries the `/dashboard` path — so a top-level navigation
+to any other path failed it and was handed to Safari, leaving no document. Android's equivalent,
+`Bridge.launchIntent()`, compares host and scheme only:
+
+```java
+Uri appUri = Uri.parse(appUrl);
+if (
+    !(appUri.getHost().equals(url.getHost()) && url.getScheme().equals(appUri.getScheme())) &&
+    !appAllowNavigationMask.matches(url.getHost())
+) { /* ACTION_VIEW to the system browser */ return true; }
+```
+
+`https://pagespace.ai/signin` matches on both, so it already stayed in the WebView with no
+`allowNavigation` at all. The apex entry in the Android config states the app's own origin; it does
+not change behaviour.
+
+### `errorPath` is a real gap, and it is the reason the config changed
+
+`BridgeWebViewClient.onReceivedError` and `onReceivedHttpError` load `bridge.getErrorUrl()` for
+main-frame requests. With no `errorPath` configured that returns `null`, so a failed load left the
+WebView on its own error page. With it, Android serves `https://localhost/index.html` from the
+bundled assets — `public/index.html`, which carries the Retry button.
+
+Note that page gets **no Capacitor bridge**: `Bridge.loadWebView()` scopes
+`addDocumentStartJavaScript` to the `server.url` origin, so `Capacitor` and every plugin are
+undefined there. It uses plain DOM APIs only, and must keep doing so.
+
+### An `allowNavigation` entry grants the native plugin bridge
+
+This is the important divergence. On Android the list is not just a navigation allowlist:
+`Bridge.setAllowedOriginRules()` folds every entry into `allowedOriginRules`, and
+`MessageHandler.java:36` passes that set to
+`WebViewCompat.addWebMessageListener(webView, "androidBridge", ...)`. Any main-frame document from
+a listed origin can then call `androidBridge.postMessage()`, which reaches
+`Bridge.callPluginMethod()` and every registered plugin — including `PageSpaceKeychain`, backed by
+EncryptedSharedPreferences.
+
+So Android lists `pagespace.ai` and nothing else:
+
+- **`accounts.google.com` / `appleid.apple.com`** are not listed, though iOS lists them. Allowing
+  them would load a provider consent page in the privileged WebView. The apparent benefit was a
+  visible `disallowed_useragent` failure instead of a silent wrong-cookie-jar one when the web
+  OAuth fallback fires — not worth a native-trust grant to a third party. Provider pages belong in
+  a Custom Tab with a bound callback.
+- **`*.pagespace.ai`** is not listed either. `allowNavigation` governs top-level navigations only
+  (subresources from `assets.pagespace.ai` and friends never consult it), and the shell loads
+  `/dashboard` and stays there, so the wildcard enabled no navigation anyone could name while
+  granting the bridge to every subdomain that exists or ever will, tenant hosts included.
+
+**iOS has the same exposure and worse scoping**, and it is shipped: `JSExport.swift:20-21`
+registers the bridge as `WKUserScript(..., forMainFrameOnly: true)` on the WebView's
+`userContentController`, with no origin scoping at all, so it applies to every main-frame document
+the WebView loads. Changing that is separate work, tracked on the Android parity epic.
+
 ## Deep links: what ships, and what is deliberately deferred
 
 `AndroidManifest.xml` registers **one** deep-link intent filter: the `pagespace://` custom
