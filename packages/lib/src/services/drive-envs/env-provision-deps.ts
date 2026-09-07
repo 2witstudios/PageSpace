@@ -40,7 +40,7 @@ import {
   type SpriteHolderProvisionDeps,
   type SpriteHolderProvisionIntent,
 } from '../agent-workspaces/agent-workspace-sprite';
-import type { SandboxHost } from '../sandbox/sandbox-host';
+import { LocalEnvNotConnectedError, type SandboxHost } from '../sandbox/sandbox-host';
 import type { SubscriptionTier } from '../subscription-utils';
 import type { DriveEnvRecord, DriveEnvStore } from './drive-envs-store';
 import { isLocalEnvsEnabled } from './local-envs-enabled';
@@ -196,6 +196,21 @@ export interface EnsureDriveEnvSandboxDeps {
   resolveActorRole?: (input: { userId: string; driveId: string }) => Promise<ActorRole>;
   /** LOCAL envs only. `LOCAL_ENVS_ENABLED`; read from the environment when absent. */
   localEnvsEnabled?: boolean;
+  /**
+   * LOCAL envs only (t09). The `SandboxHost` that reaches this env's machine
+   * over the bridge, built per env and per requester — never the Sprite host,
+   * and never process-cached (the transport it closes over is bound to one
+   * grant principal).
+   *
+   * OPTIONAL, and its absence is a REFUSAL rather than a fallback. The bridge
+   * socket terminates in apps/web (`ws-env-connections.ts`), so a process that
+   * holds no registry — the realtime tier, which runs this exact same
+   * `ensureDriveEnvSandbox` — genuinely cannot reach the machine. It answers
+   * `substrate_unsupported`, which is now narrowed to mean precisely that:
+   * "this process cannot reach local environments". It never falls through to
+   * the Sprite host.
+   */
+  resolveLocalHost?: (input: { envId: string; requesterId: string }) => Promise<SandboxHost>;
 }
 
 /**
@@ -261,14 +276,10 @@ export async function ensureDriveEnvSandbox({
   const row = await deps.store.findById(envId);
   if (!row) return { ok: false, reason: 'provision_failed', detail: 'env_not_found' };
   // C1: a LOCAL env never reaches the Sprite host. The pure planners decide
-  // (via the gate); an allowed, connected machine is still refused here as
-  // `substrate_unsupported` until the local SandboxHost lands (t09) — a typed
-  // refusal, never a Sprite minted for a row the t05 CHECK would reject.
-  if (row.substrate === 'local') {
-    const verdict = await gateLocalEnvForRequester({ row, requesterId, deps });
-    if (!verdict.ok) return { ok: false, reason: 'local_refused', refusal: verdict.refusal, detail: verdict.cause ?? verdict.refusal };
-    return { ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' };
-  }
+  // (via the gate), and t09 replaces the flat refusal that stood here with the
+  // real local host — keeping every typed verdict for every case that still
+  // refuses, and changing only the connected-and-allowed one.
+  if (row.substrate === 'local') return ensureLocalEnvSandbox({ row, requesterId, deps });
   const payer = await deps.resolvePayer(row.driveId);
   if (!payer) return { ok: false, reason: 'provision_failed', detail: 'drive_not_found' };
   return ensureSpriteHolderSandbox({
@@ -279,4 +290,66 @@ export async function ensureDriveEnvSandbox({
     intent,
     deps: buildEnvProvisionDeps({ row, payer, requesterId, store: deps.store, host: deps.host }),
   });
+}
+
+/**
+ * Bind an allowed, connected LOCAL env to its machine.
+ *
+ * The shape of this function is the whole of t09's provision threading, and
+ * three things about it are load-bearing:
+ *
+ * - **The gate runs first and is unchanged.** Every refusal keeps the exact
+ *   typed verdict t06b established (`flag_disabled`, `code_exec_denied`,
+ *   `not_local`, `revoked`, `not_connected`, `bind_policy`) — this task
+ *   changes what happens after an `ok`, and nothing about what happens before.
+ * - **Nothing is written to the row.** Invariant 9 keeps every Sprite column
+ *   NULL on a local env, which is what makes it structurally invisible to
+ *   reclaim, storage billing and the egress predicates. So there is no
+ *   identity CAS, no stamp, no reclaim enqueue and no storage measurement
+ *   here — all of which the Sprite arm does, and every one of which would put
+ *   a local row into a query that must never see it. The returned `sandboxId`
+ *   is the DERIVED address (`localEnvSandboxId`), alive only for this request.
+ * - **`resumed: true`, always.** The machine was already running: PageSpace
+ *   did not create it and could not have. Reporting a `create` would tell the
+ *   caller's revival/measurement paths that a fresh filesystem exists.
+ */
+async function ensureLocalEnvSandbox({
+  row,
+  requesterId,
+  deps,
+}: {
+  row: DriveEnvRecord;
+  requesterId: string;
+  deps: EnsureDriveEnvSandboxDeps;
+}): Promise<EnsureSpriteHolderSandboxResult> {
+  const verdict = await gateLocalEnvForRequester({ row, requesterId, deps });
+  if (!verdict.ok) return { ok: false, reason: 'local_refused', refusal: verdict.refusal, detail: verdict.cause ?? verdict.refusal };
+
+  // No registry in this process (see `resolveLocalHost`). A typed refusal, and
+  // deliberately NOT a fall-through to `deps.host`, which is the Sprite host.
+  if (!deps.resolveLocalHost) {
+    return { ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' };
+  }
+
+  const localHost = await deps.resolveLocalHost({ envId: row.id, requesterId });
+  try {
+    const handle = await localHost.provision({
+      // The env id IS the name: a local machine has one identity, its
+      // enrollment, and there is no keyspace to fold — `deriveDriveEnvSpriteKey`
+      // exists to keep two Sprite holders from colliding on a shared namespace,
+      // and a local env holds no Sprite.
+      name: row.id,
+      substrate: { kind: 'local', envId: row.id },
+      options: {},
+    });
+    return { ok: true, sandboxId: handle.sandboxId, resumed: true };
+  } catch (error) {
+    // The connection dropped between the gate's reading and the bind. The
+    // refusal is the same word the gate would have used, so a caller sees one
+    // vocabulary for one condition however it was detected.
+    if (error instanceof LocalEnvNotConnectedError) {
+      return { ok: false, reason: 'local_refused', refusal: 'not_connected', detail: 'not_connected' };
+    }
+    return { ok: false, reason: 'provision_failed', detail: error instanceof Error ? error.message : String(error) };
+  }
 }
