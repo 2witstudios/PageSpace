@@ -28,9 +28,11 @@
                 first: android:autoVerify="true" only removes an unverified app
                 from link resolution on API 31+, and minSdkVersion is 23, so on
                 API 23-30 the filter would put PageSpace in the disambiguation
-                chooser. assetlinks.json cannot be served yet (no release signing
-                certificate) and nothing routes appUrlOpen, so picking it there
-                would land on /dashboard with the invite or auth token dropped.
+                chooser. No assetlinks.json can match a SHIPPED build (there is
+                no release signing certificate; a debug one can be verified
+                locally, which does not help a user's device) and nothing routes
+                appUrlOpen, so picking it there would land on /dashboard with the
+                invite or auth token dropped.
             -->
 
             <!--

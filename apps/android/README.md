@@ -141,7 +141,10 @@ fingerprint of the **release** signing certificate:
 ```
 
 No release keystore exists — signing and Play Console setup are outside the Android parity epic —
-so link verification cannot succeed on any Android version today.
+so **no build we could ship can be verified**. This is a statement about release-signed artifacts,
+not about the mechanism: a debug build can be verified locally against a debug-fingerprint
+assetlinks file, and that workflow is documented below. What is missing is the release certificate,
+and with it any possibility of verification on a user's device.
 
 ### Prerequisite 2 — link routing in the web app
 
@@ -162,8 +165,10 @@ version, not of `targetSdk`:
 | 23–30 (Android 6–11) | Filter stays eligible; PageSpace appears in the disambiguation chooser. |
 
 `minSdkVersion` is 23, so the second row is in scope. On those devices a user who picks PageSpace
-from the chooser lands on `/dashboard` with the token gone — strictly worse than the browser,
-for no gain, since verification cannot succeed anyway. Hence: deferred, not shipped.
+from the chooser lands on `/dashboard` with the token gone — strictly worse than the browser, and
+for no gain, since no shipped build can be verified. Hence: deferred, not shipped. (A debug build
+can be verified locally, but that changes nothing for a user's device, which is what the filter
+would affect.)
 
 Sourcing, since the two rows are not equally well documented. The 23–30 row follows from the
 docs: unverified deep links are "subject to the system disambiguation dialog", and "on Android 11
