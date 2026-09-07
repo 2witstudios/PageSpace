@@ -105,6 +105,11 @@ export class AndroidStorage implements PlatformStorage {
    * `shouldLogout: false`, i.e. retry later), whereas a `null` there would be
    * read as "device token is gone" and force the user to sign in again over
    * what may be a transient keystore fault.
+   *
+   * A store fault deliberately does *not* fall through to the legacy session
+   * either. A device whose keystore will not initialize cannot persist a
+   * refreshed session, so recovering a token here would only buy a session that
+   * evaporates on the next launch while hiding the fault that caused it.
    */
   async getStoredSession(): Promise<StoredSession | null> {
     let raw: string | null;
