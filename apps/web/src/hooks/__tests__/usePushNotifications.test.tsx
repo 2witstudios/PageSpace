@@ -78,6 +78,7 @@ import { usePushNotifications } from '../usePushNotifications';
 /** The key usePushNotifications persists a refusal under. */
 const DENIAL_KEY = 'push_permission_denied';
 
+
 /**
  * Handlers captured from PushNotifications.addListener, keyed by event name.
  * Held as `unknown` because the four handlers take four different payloads;
@@ -370,25 +371,48 @@ describe('usePushNotifications', () => {
   it('the in-memory flag still blocks when storage is unavailable, so a failed write cannot reopen the guard', async () => {
     // recordDenial swallows a failed write by design; hasPreviouslyDenied is the
     // half of the answer that does not depend on storage surviving.
+    //
+    // The whole localStorage object is replaced rather than spied on: whether
+    // jsdom routes these methods through Storage.prototype is an implementation
+    // detail, and if a spy on the prototype missed, the write would succeed and
+    // this test would pass vacuously — closing the guard for the ordinary
+    // reason instead of the in-memory one. Replacing the object cannot miss,
+    // and the setItem assertion below fails loudly if it somehow did.
     mockCheckPermissions.mockResolvedValue({ receive: 'denied' });
-    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+    const setItem = vi.fn(() => {
       throw new Error('QuotaExceededError');
     });
-    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
-
-    const { result } = renderHook(() => usePushNotifications());
-    await waitFor(() => expect(result.current.hasPreviouslyDenied).toBe(true));
-
-    let granted: boolean | undefined;
-    await act(async () => {
-      granted = await result.current.requestPermission();
+    const brokenStorage = {
+      getItem: vi.fn((_key: string): string | null => null),
+      setItem,
+      removeItem: vi.fn((_key: string): void => {}),
+      clear: vi.fn(),
+      key: vi.fn((_index: number): string | null => null),
+      length: 0,
+    };
+    const realStorage = Object.getOwnPropertyDescriptor(window, 'localStorage');
+    Object.defineProperty(window, 'localStorage', {
+      configurable: true,
+      value: brokenStorage,
     });
 
-    expect(granted).toBe(false);
-    expect(mockRequestPermissions).not.toHaveBeenCalled();
+    try {
+      const { result } = renderHook(() => usePushNotifications());
+      await waitFor(() => expect(result.current.hasPreviouslyDenied).toBe(true));
 
-    setItem.mockRestore();
-    getItem.mockRestore();
+      expect(setItem).toHaveBeenCalledWith(DENIAL_KEY, 'android');
+      expect(brokenStorage.getItem(DENIAL_KEY)).toBeNull();
+
+      let granted: boolean | undefined;
+      await act(async () => {
+        granted = await result.current.requestPermission();
+      });
+
+      expect(granted).toBe(false);
+      expect(mockRequestPermissions).not.toHaveBeenCalled();
+    } finally {
+      if (realStorage) Object.defineProperty(window, 'localStorage', realStorage);
+    }
   });
 
   it("regression: 'prompt-with-rationale' does NOT drop the record — the refusal still stands there", async () => {
