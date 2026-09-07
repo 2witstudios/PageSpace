@@ -117,7 +117,15 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   });
 
   const tokenRef = useRef<string | null>(null);
-  const hasRegisteredRef = useRef(false);
+  // The token the server was last told about, not a boolean "have we registered
+  // once?". FCM rotates a registration token on its own (app data cleared, a
+  // restore onto a new device, a periodic refresh), and Capacitor re-emits
+  // 'registration' with the new value while this hook stays mounted. A boolean
+  // would make that second event a no-op and leave the server holding a token
+  // that no longer routes anywhere — push delivery would stop until the next
+  // cold start. Comparing the value instead lets a *different* token through
+  // while still collapsing a repeat of the same one.
+  const registeredTokenRef = useRef<string | null>(null);
   const pushNotificationsRef = useRef<typeof import('@capacitor/push-notifications').PushNotifications | null>(null);
   const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => { });
   const listenersRef = useRef<(() => void)[]>([]);
@@ -237,7 +245,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
   // Register token with server
   const registerTokenWithServer = useCallback(async (token: string) => {
-    if (!isAuthenticated || hasRegisteredRef.current) return;
+    if (!isAuthenticated || registeredTokenRef.current === token) return;
 
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
@@ -252,7 +260,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
         deviceName,
       });
 
-      hasRegisteredRef.current = true;
+      registeredTokenRef.current = token;
       setState(prev => ({
         ...prev,
         isRegistered: true,
@@ -359,7 +367,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     try {
       await del('/api/notifications/push-tokens', { token: tokenRef.current });
       tokenRef.current = null;
-      hasRegisteredRef.current = false;
+      registeredTokenRef.current = null;
       setState(prev => ({ ...prev, isRegistered: false }));
       console.log('[PushNotifications] Token unregistered');
     } catch (error) {
@@ -374,7 +382,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       state.isSupported &&
       state.permissionStatus === 'granted' &&
       !state.isRegistered &&
-      !hasRegisteredRef.current &&
+      registeredTokenRef.current !== tokenRef.current &&
       tokenRef.current
     ) {
       registerTokenWithServer(tokenRef.current);
@@ -390,7 +398,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
   // Reset registration state when user changes
   useEffect(() => {
-    hasRegisteredRef.current = false;
+    registeredTokenRef.current = null;
     setState(prev => ({ ...prev, isRegistered: false }));
   }, [user?.id]);
 

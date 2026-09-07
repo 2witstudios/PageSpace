@@ -176,6 +176,51 @@ describe('usePushNotifications', () => {
     );
   });
 
+  it('regression: a rotated FCM token reaches the server — registration is tracked per token, not as a one-shot boolean', async () => {
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.isSupported).toBe(true));
+
+    const onRegistration = listeners.registration as (token: { value: string }) => void;
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-original' });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+
+    // FCM rotates the token while the hook stays mounted.
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-rotated' });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    expect(mockPost).toHaveBeenLastCalledWith('/api/notifications/push-tokens', {
+      token: 'fcm-token-rotated',
+      platform: 'android',
+      deviceId: 'device-abc',
+      deviceName: 'Pixel 8',
+    });
+  });
+
+  it('re-emitting the SAME token does not POST again', async () => {
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.isSupported).toBe(true));
+
+    const onRegistration = listeners.registration as (token: { value: string }) => void;
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-same' });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-same' });
+      await Promise.resolve();
+    });
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
   it('records the refusal when the user denies, and does not register', async () => {
     mockRequestPermissions.mockResolvedValue({ receive: 'denied' });
 
