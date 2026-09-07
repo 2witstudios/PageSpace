@@ -153,7 +153,43 @@ describe('buildDevPreviewStatus — pure fold', () => {
 
   it('a starting relay is openable (the frame will show it coming up); a down one is not', () => {
     assert({ given: 'starting', should: 'canOpen', actual: buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'starting' }), listeners: null }).canOpen, expected: true });
-    assert({ given: 'down', should: 'not canOpen but still canStop', actual: (() => { const s = buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'failed', error: 'x' }), listeners: null }); return [s.canOpen, s.canStop]; })(), expected: [false, true] });
+    assert({
+      given: 'down',
+      should: 'not canOpen, still canStop, AND canResume — a crashed relay is recoverable in one click instead of waiting for a port frame',
+      actual: (() => { const s = buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'failed', error: 'x' }), listeners: null }); return [s.canOpen, s.canStop, s.canResume]; })(),
+      expected: [false, true, true],
+    });
+  });
+
+  /**
+   * Restart is offered only where a reconcile can repair it. Not every `down`
+   * is the relay's fault: a direct server that stopped listening, and a
+   * healthy relay whose TARGET vanished, both plan to `none` — the button
+   * would refresh into the identical down state, which reads as a broken
+   * control rather than an honest "start your dev server again".
+   */
+  it('canResume follows the core\'s down.repairable, not the bare down status', () => {
+    const repairable = [
+      ['crashed relay', row(3000), relayService(3000, { status: 'failed', error: 'x' }), null],
+      ['relay never defined', row(3000), null, [{ port: 3000, pid: 7 }]],
+      ['relay pointed elsewhere', row(3000), relayService(4000), [{ port: 3000, pid: 7 }]],
+      ['leftover relay over a direct row', row(SPRITE_HTTP_PORT), relayService(3000), [{ port: SPRITE_HTTP_PORT, pid: 42 }]],
+    ] as const;
+    const notRepairable = [
+      ['relay up but the dev server exited', row(3000), relayService(3000), [{ port: SPRITE_HTTP_PORT, pid: 42 }]],
+      ['direct server stopped listening', row(SPRITE_HTTP_PORT), null, []],
+    ] as const;
+    for (const [name, r, relay, listeners] of repairable) {
+      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners });
+      assert({ given: name, should: 'be a repairable down that offers Restart', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', true, true] });
+    }
+    for (const [name, r, relay, listeners] of notRepairable) {
+      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners });
+      assert({ given: name, should: 'be down with NO Restart — a reconcile would change nothing', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', false, false] });
+    }
+    // …but an explicit user stop is always resumable, whatever the state says.
+    const stopped = buildDevPreviewStatus({ ...base, row: row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW }), relay: null, listeners: [] });
+    assert({ given: 'a user-stopped direct row whose server is also gone', should: 'still offer resume — the intent is the users to reverse', actual: stopped.canResume, expected: true });
   });
 
   it('carries the holder, the open path and detectedAt through', () => {
@@ -262,11 +298,32 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
     const { deps, store } = actionDeps({
       store: fakeStore(row(5173, { stoppedByUserAt: NOW })),
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed', error: 'exited with code 143' }), calls: trackedCalls }),
+      // A CURRENT snapshot: the dev server is up and 8080 is free, so the
+      // relay may honestly be started (see the slot-unknown case below).
+      readListeners: async () => [{ port: 5173, pid: 7 }],
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
     assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173, recorded: true } } });
     assert({ given: 'the resume', should: 'call services.start', actual: trackedCalls.includes(`start:${PREVIEW_RELAY_SERVICE_NAME}`), expected: true });
     assert({ given: 'the resume', should: 'leave stoppedByUserAt cleared', actual: store.current()?.stoppedByUserAt, expected: null });
+  });
+
+  it('RESUME with NO current snapshot refuses to start a relay blind — the intent is still cleared, so the detector\'s next frame starts it against real listeners', async () => {
+    const trackedCalls: string[] = [];
+    const store = fakeStore(row(5173, { stoppedByUserAt: NOW }));
+    const { deps } = actionDeps({
+      store,
+      attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
+      readListeners: async () => null,
+    });
+    assert({ given: 'no ports/watch snapshot', should: 'refuse rather than read unknown as "8080 is free"', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+    assert({ given: 'the refusal', should: 'still have cleared the stop — the user\'s ON stands', actual: store.current()?.stoppedByUserAt, expected: null });
+    assert({ given: 'the refusal', should: 'touch no service', actual: trackedCalls.some((c) => c.startsWith('start:') || c.startsWith('create:')), expected: false });
+  });
+
+  it('a DIRECT (8080) resume needs no snapshot — there is no relay to place', async () => {
+    const { deps } = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }), readListeners: async () => null });
+    assert({ given: 'a direct row and no snapshot', should: 'converge without refusing', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
   });
 
   it('RESUME against a slot a user process has since taken is REFUSED by the core (with the snapshot), not planned', async () => {

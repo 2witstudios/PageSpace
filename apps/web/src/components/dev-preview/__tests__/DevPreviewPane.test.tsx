@@ -224,7 +224,7 @@ describe('DevPreviewPane', () => {
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
     await screen.findByTestId('dev-preview-frame');
-    status = live({ canOpen: false, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The dev server on port 5173 is not listening any more.' } });
+    status = live({ canOpen: false, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: false, message: 'The dev server on port 5173 is not listening any more.' } });
     fireEvent.click(screen.getByTitle('Reload the preview'));
     await screen.findByText('Down · :5173');
     expect(screen.getByTestId('dev-preview-frame')).toBeInTheDocument();

@@ -11,7 +11,7 @@ describe('dev-preview copy', () => {
     expect(devPreviewBadge({ status: 'live', targetPort: 5173, via: 'relay', message: '' })).toEqual({ label: 'Live · :5173', tone: 'default' });
     expect(devPreviewBadge({ status: 'live', targetPort: 8080, via: 'direct', message: '' })).toEqual({ label: 'Live on :8080', tone: 'default' });
     expect(devPreviewBadge({ status: 'starting', targetPort: 3000, via: 'relay', message: '' }).tone).toBe('secondary');
-    expect(devPreviewBadge({ status: 'down', targetPort: 3000, via: 'relay', error: null, message: '' }).tone).toBe('destructive');
+    expect(devPreviewBadge({ status: 'down', targetPort: 3000, via: 'relay', error: null, repairable: true, message: '' }).tone).toBe('destructive');
     expect(devPreviewBadge({ status: 'blocked', targetPort: 3000, message: '' })).toEqual({ label: 'Port 8080 in use', tone: 'destructive' });
     expect(devPreviewBadge({ status: 'stopped', targetPort: 3000, stoppedAt: 'x', message: '' }).tone).toBe('outline');
     expect(devPreviewBadge({ status: 'stale', targetPort: 3000, message: '' }).label).toBe('Sandbox rebuilt');
@@ -22,7 +22,7 @@ describe('dev-preview copy', () => {
   it('offers an affordance line for every KNOWN dev server and none for "none"', () => {
     expect(devPreviewAffordanceText(preview({ status: 'live', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
     expect(devPreviewAffordanceText(preview({ status: 'starting', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
-    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, message: '' }))).toContain('not responding');
+    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: '' }))).toContain('not responding');
     expect(devPreviewAffordanceText(preview({ status: 'blocked', targetPort: 5173, message: '' }))).toContain('port 8080 is in use');
     expect(devPreviewAffordanceText(preview({ status: 'stopped', targetPort: 5173, stoppedAt: 'x', message: '' }))).toContain('switched off');
     expect(devPreviewAffordanceText(preview({ status: 'stale', targetPort: 5173, message: '' }))).toContain('started again');
@@ -44,7 +44,7 @@ describe('dev-preview copy', () => {
 
   it('the verb promises a live app only when the frame would show one', () => {
     expect(devPreviewAffordanceVerb({ ...preview({ status: 'live', targetPort: 1, via: 'relay', message: '' }), canOpen: true })).toBe('Preview');
-    expect(devPreviewAffordanceVerb(preview({ status: 'down', targetPort: 1, via: 'relay', error: null, message: '' }))).toBe('Details');
+    expect(devPreviewAffordanceVerb(preview({ status: 'down', targetPort: 1, via: 'relay', error: null, repairable: true, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'blocked', targetPort: 1, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'stale', targetPort: 1, message: '' }))).toBe('Details');
   });

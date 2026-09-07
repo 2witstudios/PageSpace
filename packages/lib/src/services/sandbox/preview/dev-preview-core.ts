@@ -312,6 +312,18 @@ export interface PlanDevServerServiceInput {
   relay: SandboxServiceInfo | null;
   /** Ports currently bound in the sprite. */
   listeners: readonly ListeningPort[];
+  /**
+   * Whether {@link PlanDevServerServiceInput.listeners} is a CURRENT snapshot
+   * of the sprite, or merely what the caller happens to hold. Default `true`
+   * — the detector plans on a frame it just observed. A caller reconciling
+   * without a live `ports/watch` snapshot (a user's resume while the watcher
+   * is starting up or reconnecting) passes `false`, and a plan that would
+   * START a relay is refused rather than made against an empty listener set:
+   * "unknown" must never be read as "8080 is free", the same rule
+   * `describeServiceState`'s `listeners: null` obeys. Nothing else changes —
+   * a direct 8080 row needs no relay, and stopping never needs the slot.
+   */
+  listenersKnown?: boolean;
   /** Chosen by the effects layer after probing the sprite; `'node'` is the verified default. */
   relayRuntime?: PreviewRelayRuntime;
   now: Date;
@@ -384,7 +396,14 @@ export type DevServerServicePlan =
         /** No instance id ⇒ no proof ⇒ no plan. */
         | 'instance-unknown'
         /** Something that is not our relay holds 8080 — the honest fallback is "run your server on 8080". */
-        | 'http-port-busy';
+        | 'http-port-busy'
+        /**
+         * A relay would have to be started, but no current listener snapshot
+         * proves 8080 is free. Refusing costs a retry; planning against an
+         * assumed-empty set would start a relay that may fail to bind and
+         * leave a state nobody can explain.
+         */
+        | 'slot-unknown';
       targetPort?: number;
     };
 
@@ -440,6 +459,12 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
+  // A relay is about to be started or re-pointed, and the slot can only be
+  // called free from a CURRENT snapshot. `already-relaying` returns above, so
+  // a healthy preview is unaffected — this refuses only a START planned blind.
+  if (input.listenersKnown === false) {
+    return { action: 'refuse', reason: 'slot-unknown', targetPort };
+  }
 
   const service = buildPreviewRelaySpec({ targetPort, runtime: relayRuntime });
   const rowIntent: DevPreviewRowIntent = {
@@ -494,7 +519,31 @@ export type DevPreviewServiceState =
   | { status: 'stopped'; targetPort: number; stoppedAt: Date; message: string }
   | { status: 'starting'; targetPort: number; via: 'relay'; message: string }
   | { status: 'live'; targetPort: number; via: 'relay' | 'direct'; message: string }
-  | { status: 'down'; targetPort: number; via: 'relay' | 'direct'; error: string | null; message: string }
+  | {
+      status: 'down';
+      targetPort: number;
+      via: 'relay' | 'direct';
+      error: string | null;
+      message: string;
+      /**
+       * Whether a RECONCILE (the `resume` user action, or the detector's next
+       * frame) can actually repair this. `down` covers two different
+       * situations and only one of them is ours to fix:
+       *
+       *  - `true` — the RELAY is the broken part: crashed, undefined,
+       *    pointing at the wrong port, or holding 8080 in front of a direct
+       *    row. {@link planDevServerService} answers `start-relay`,
+       *    `replace-relay` or `record-direct`, so one reconcile repairs it
+       *    and a Restart control is worth offering.
+       *  - `false` — the USER'S SERVER is the broken part: the direct row's
+       *    8080 server, or a relay's target, stopped listening. The planner
+       *    answers `already-direct` / `already-relaying` — nothing to do —
+       *    so a reconcile changes nothing and the status comes back down
+       *    with the same button. Only starting the dev server again fixes
+       *    it, and saying so is more honest than a control that no-ops.
+       */
+      repairable: boolean;
+    }
   | { status: 'blocked'; targetPort: number; message: string };
 
 /** Pure: does this relay service forward to `targetPort`, under either runtime? */
@@ -539,10 +588,13 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     // way round: a user process is what we want here, a live relay is a
     // leftover that has taken the port from under the user's server.
     if (holder === 'relay') {
-      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, message: `A leftover preview relay still holds port ${SPRITE_HTTP_PORT}; it will be removed on the next reconcile.` };
+      // Ours to fix: the reconcile plans `record-direct` with `removeRelay`.
+      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, repairable: true, message: `A leftover preview relay still holds port ${SPRITE_HTTP_PORT}; it will be removed on the next reconcile.` };
     }
     if (targetListening === false) {
-      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, message: `Nothing is listening on port ${SPRITE_HTTP_PORT} any more.` };
+      // NOT ours to fix: the planner answers `already-direct`. Only the user
+      // starting their server on 8080 again brings this back.
+      return { status: 'down', targetPort: row.targetPort, via: 'direct', error: null, repairable: false, message: `Nothing is listening on port ${SPRITE_HTTP_PORT} any more.` };
     }
     return { status: 'live', targetPort: row.targetPort, via: 'direct', message: `Serving port ${SPRITE_HTTP_PORT} directly.` };
   }
@@ -550,7 +602,8 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
   if (holder === 'user-process') return { status: 'blocked', targetPort: row.targetPort, message: HTTP_PORT_BUSY_MESSAGE };
 
   if (relay === null || relay.name !== row.relayServiceName) {
-    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.` };
+    // Ours to fix: the reconcile creates (or replaces) the relay.
+    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: true, message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.` };
   }
   // The relay has ONE name, so the name proves nothing about WHERE it forwards.
   // A replace whose service call landed but whose row write did not leaves the
@@ -559,23 +612,29 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
   // The runtime is not on the row, so either runtime's spec for this port is
   // accepted; anything else is a relay for another port.
   if (!relayTargets(relay, row.targetPort)) {
-    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The preview relay on this sandbox forwards to a different port than ${row.targetPort}; it will be re-pointed on the next reconcile.` };
+    // Ours to fix: the reconcile plans `replace-relay`.
+    return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: true, message: `The preview relay on this sandbox forwards to a different port than ${row.targetPort}; it will be re-pointed on the next reconcile.` };
   }
   if (relay.status === 'starting') {
     return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
   }
   if (relay.status === 'running') {
     if (targetListening === false) {
-      return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, message: `The dev server on port ${row.targetPort} is not listening any more.` };
+      // NOT ours to fix: the relay is up and correct, so the planner answers
+      // `already-relaying`. The user's dev server has to come back first.
+      return { status: 'down', targetPort: row.targetPort, via: 'relay', error: null, repairable: false, message: `The dev server on port ${row.targetPort} is not listening any more.` };
     }
     return { status: 'live', targetPort: row.targetPort, via: 'relay', message: `Relaying port ${SPRITE_HTTP_PORT} to your dev server on port ${row.targetPort}.` };
   }
   // failed / stopped / stopping / unknown — with no stopped-by-user intent this is a crash, whatever the platform calls it (§4).
+  // Ours to fix: a defined, correctly-pointed relay that is not running is
+  // exactly what `start-relay` via `'start'` restarts.
   return {
     status: 'down',
     targetPort: row.targetPort,
     via: 'relay',
     error: relay.error ?? null,
+    repairable: true,
     message: `The preview relay for port ${row.targetPort} is not running${relay.error ? ` (${relay.error})` : ''}.`,
   };
 }
