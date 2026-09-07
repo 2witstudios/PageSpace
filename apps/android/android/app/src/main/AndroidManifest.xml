@@ -35,41 +35,35 @@
 
             <!--
                 Custom scheme, mirroring CFBundleURLSchemes `pagespace` on iOS.
+                It needs no domain verification and no assetlinks.json, so the
+                registration takes effect as soon as the app is installed, on
+                every supported API level.
 
-                Groundwork, not yet live: this is the OAuth handoff target the
-                Google and Apple callback routes redirect to
-                (`pagespace://auth-exchange?code=...`), but only on the
+                Not live yet. This is the OAuth handoff target the Google and
+                Apple callback routes redirect to
+                (`pagespace://auth-exchange?code=...`), but only on their
                 `platform === 'ios'` branch, and oauth-state.ts types platform as
                 z.enum(['web','desktop','ios']) — 'android' is not a value it can
-                take. Nothing redirects here for Android until the native auth
-                work (epic phase B) teaches that path about Android. Registering
-                the scheme now means the manifest is not the blocker then.
+                take, so nothing redirects here for Android. Registering the
+                scheme now means the manifest is not the blocker when the native
+                auth phase teaches that path about Android.
 
-                READ BEFORE MAKING IT LIVE. A custom scheme is not an exclusive
-                claim on Android: any installed app may declare the same
-                `pagespace://` VIEW filter and become a chooser candidate or the
-                user's default handler. /api/auth/desktop/exchange authenticates
-                nothing but possession of the one-time code — it takes { code }
-                alone, with no PKCE verifier and no binding to the app that
-                started the flow, and answers with sessionToken, csrfToken and
-                deviceToken. So the moment a server path emits
-                `pagespace://auth-exchange?code=...` for Android, an app that wins
-                the scheme can redeem that code for the user's session.
-
-                Binding the exchange (an app-held PKCE verifier, or an App Link
-                return channel that a competing app cannot claim) is a
-                prerequisite for turning the handoff on — not for shipping this
-                filter, which is inert while nothing redirects to it. The same
-                weakness is live on iOS today, which registers this scheme and
-                does take the deep-link branch.
-
-                Unlike an https App Link this needs no domain verification and no
-                assetlinks.json, so the registration takes effect as soon as the
-                app is installed, on every supported API level. That is NOT the
-                same as owning the scheme: see the block above — another installed
-                app can register `pagespace://` too and be offered in the chooser
-                or set as the default handler. No browser competes for it, which
-                is not the same thing as no app competing for it.
+                READ BEFORE MAKING IT LIVE. Registration is not ownership: any
+                other installed app may declare the same `pagespace://` VIEW
+                filter and be offered in the chooser or set as the user's default
+                handler. (No browser competes for the scheme, which is not the
+                same as no app competing for it.) And
+                /api/auth/desktop/exchange authenticates nothing but possession
+                of the one-time code — it takes { code } alone, with no PKCE
+                verifier and no binding to the app that started the flow, then
+                answers with sessionToken, csrfToken and deviceToken. So the
+                moment a server path emits that redirect for Android, an app that
+                wins the scheme can redeem the code for the user's session. Bind
+                the exchange first — an app-held PKCE verifier, or a return
+                channel a competing app cannot claim. Shipping this filter is
+                fine meanwhile; it is inert while nothing redirects to it. The
+                same weakness is live on iOS, which does take the deep-link
+                branch.
 
                 MainActivity is already launchMode="singleTask", so an incoming
                 link reaches the running task through onNewIntent; BridgeActivity
