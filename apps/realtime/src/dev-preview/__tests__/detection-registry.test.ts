@@ -1,4 +1,10 @@
 import { describe, it, expect, vi } from 'vitest';
+// WITHOUT THIS IMPORT the `assert({ given, should, actual, expected })` calls
+// below silently resolve to vitest's global chai `assert`, which asserts
+// TRUTHINESS of its first argument — and an object literal is always truthy.
+// Eight of them passed unconditionally, one whole test asserted nothing at
+// all, and it typechecked and went green the entire time.
+import { assert } from '../../terminal/__tests__/riteway';
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import type { PortsWatchSocketLike } from '@pagespace/lib/services/sandbox/preview/ports-watch';
 import { createDetectionRegistry, nodeWebSocketFactory, type DetectionRegistryDeps } from '../detection-registry';
@@ -433,6 +439,41 @@ describe('createDetectionRegistry', () => {
 
     // Still exactly one replacement. Without the identity guard t2 tears down
     // t1's live watcher and opens a third socket.
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it('a failed re-arm leaves the sprite armable by the next explicit trigger', async () => {
+    // The property, not the race. When a re-arm's own attach fails the slot is
+    // left EMPTY, and the next explicit trigger must arm rather than stand
+    // down — for an unattended session nothing else would.
+    //
+    // NOT COVERED: the concurrent interleaving where a second trigger captured
+    // the stale entry BEFORE the slot emptied, and so re-reads `undefined`
+    // rather than a stale entry. That is the case the empty-vs-occupied
+    // distinction in `armIfMissing` exists for; every attempt to script it
+    // deterministically here produced a test that either passed with the fix
+    // removed or hung, and a test that cannot fail is worth nothing. The
+    // distinction is argued in the code instead.
+    let instance = 'inst-old';
+    let attaches = 0;
+    // 1 = the first arm's own start; 2 = the rebuild comparison; 3 = the
+    // re-arm's start, which is the one that fails.
+    const h = deps({
+      attach: async () => {
+        attaches += 1;
+        return attaches === 3 ? null : fakeHandle(instance);
+      },
+    });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(1);
+
+    instance = 'inst-new';
+    await registry.ensure({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(1);
+    expect(h.logs.some((l) => l.includes('not attachable'))).toBe(true);
+
+    await registry.ensure({ holder: HOLDER });
     expect(h.sockets).toHaveLength(2);
   });
 

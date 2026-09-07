@@ -263,15 +263,24 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       if (live === null || live.spriteInstanceId === existing.spriteInstanceId) return;
       // That attach was a full control-plane round trip, and two explicit
       // triggers for one holder are routine (a shell ensure and the signed
-      // watch call both fire, both `void`-ed). The map may have been re-armed
-      // meanwhile — by the other trigger, which has already done this exact
-      // work — so re-read before closing anything.
-      if (watchers.get(sandboxId) !== existing) return;
+      // watch call both fire, both `void`-ed). The map may have moved on
+      // meanwhile, and the two ways it can have moved need OPPOSITE answers:
+      //
+      //  - SOMETHING ELSE IS THERE ⇒ the other trigger already did this work.
+      //    Return, and above all do not close what it installed.
+      //  - THE SLOT IS EMPTY ⇒ the other trigger's re-arm FAILED and removed
+      //    its own entry (an attach that came back null right after a rebuild
+      //    is exactly when that happens). Returning here would leave the
+      //    sprite with no watcher at all while this trigger — explicit, and
+      //    deliberately un-throttled — had a perfectly good attach in hand.
+      //    Fall through and arm.
+      const current = watchers.get(sandboxId);
+      if (current !== undefined && current !== existing) return;
+      if (current === existing) existing.close();
       deps.log.info('dev-preview: sprite replaced under the same name, re-watching', {
         holderKind: holder.kind,
         holderId: holder.id,
       });
-      existing.close();
     }
     const now = deps.now().getTime();
     // Sweep as we go: the map only ever holds sprites armed within the
@@ -283,7 +292,16 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     }
     lastArmAt.set(sandboxId, now);
     // Reserve the slot synchronously so two concurrent arms start one watcher.
-    const reservation: Watcher = { detector: null, spriteInstanceId: null, close() { watchers.delete(sandboxId); } };
+    // Guarded by identity for the same reason the live entry's `close()` is:
+    // nothing calls this today, and that is exactly when a blind
+    // delete-by-key survives long enough to become someone's bug.
+    const reservation: Watcher = {
+      detector: null,
+      spriteInstanceId: null,
+      close() {
+        if (watchers.get(sandboxId) === reservation) watchers.delete(sandboxId);
+      },
+    };
     watchers.set(sandboxId, reservation);
     try {
       await start(holder, sandboxId);
