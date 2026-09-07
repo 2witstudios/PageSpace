@@ -66,11 +66,37 @@ Full app-launch details (prod build, `WEB_APP_URL`, session/CSRF seeding) are
 in the operator's `reference_running_web_app_locally` notes.
 
 ```bash
-export PAGESPACE_GATE_HOST=http://127.0.0.1:3000
+export PAGESPACE_GATE_HOST=http://127.0.0.1:3000        # the app itself
+export PAGESPACE_GATE_UPSTREAM=$PAGESPACE_GATE_HOST      # what the capture proxy forwards to
+export PAGESPACE_GATE_PROXY_PORT=8788
+export PAGESPACE_GATE_CREDENTIAL_HOST=http://127.0.0.1:8788   # the host `env enroll` runs against
 export PAGESPACE_GATE_CLI=$PWD/packages/cli/dist/bin.js
 export PAGESPACE_GATE_APP_TZ=UTC PAGESPACE_GATE_DEPLOYMENT_MODE=onprem PAGESPACE_GATE_S3_ENDPOINT=http://127.0.0.1:9000
 bun scripts/env-bridge-exit-gate/preflight.ts
 ```
+
+`PAGESPACE_GATE_UPSTREAM` is required by `bridge-proxy.ts` at startup — without
+it the proxy exits 2 before the daemon can dial it. `PAGESPACE_GATE_CREDENTIAL_HOST`
+must be the host `env enroll` was run against: the CLI stores credentials **per
+host**, so N08/N09 against the wrong host inspect an empty profile and pass for
+the wrong reason.
+
+### Create three local envs, not one
+
+The negatives need enrollments in three different states, and none can be
+recycled from another:
+
+| env | state | used by |
+|-----|-------|---------|
+| **A** | enrolled and connected — the machine under test | steps 1–5, R1–R3, N01, N04, N05, N06–N09 |
+| **B** | created, **never enrolled** | N02 (a wrong code must reach the code comparison) |
+| **C** | created **more than ten minutes** before the run | N03 (an expired code) |
+
+`enrollLocalDriveEnv` checks `enrolledAt`/`enrollmentCodeUsedAt` *before* it
+compares the code (`drive-envs.ts:310`), so a wrong code against env A answers
+`409 used` and never reaches the branch N02 exists to test. A `mismatch`
+consumes nothing, so env B survives N02 and can be reused if you need to repeat
+it.
 
 ### The policy file
 
@@ -121,9 +147,10 @@ The code is shown **once**. Then, on the machine — through the capture proxy,
 so the same run yields the frames the later negatives need:
 
 ```bash
+# PAGESPACE_GATE_UPSTREAM and PAGESPACE_GATE_PROXY_PORT must be exported (see Environment)
 bun scripts/env-bridge-exit-gate/bridge-proxy.ts &     # 127.0.0.1:8788 -> the app
-node "$PAGESPACE_GATE_CLI" env enroll <enrollmentId> <code> --host http://127.0.0.1:8788
-node "$PAGESPACE_GATE_CLI" env token  <enrollmentId>          --host http://127.0.0.1:8788
+node "$PAGESPACE_GATE_CLI" env enroll <enrollmentId> <code> --host "$PAGESPACE_GATE_CREDENTIAL_HOST"
+node "$PAGESPACE_GATE_CLI" env token  <enrollmentId>         --host "$PAGESPACE_GATE_CREDENTIAL_HOST"
 ```
 
 Use the **same host string** for enroll, token and connect: the CLI keys its
@@ -138,7 +165,7 @@ Sprite columns NULL; after `env token`, `lastSeenAt` is stamped
 ### 2 · Connect
 
 ```bash
-node "$PAGESPACE_GATE_CLI" env connect <enrollmentId> --host http://127.0.0.1:8788
+node "$PAGESPACE_GATE_CLI" env connect <enrollmentId> --host "$PAGESPACE_GATE_CREDENTIAL_HOST"
 ```
 
 Expect env status `connected` and the `hello` capabilities persisted
@@ -180,7 +207,10 @@ Each must fail safely, and the exact denial is the evidence.
 ### Identity (`N01`–`N11`) — carried from t06, never run
 
 ```bash
-PAGESPACE_GATE_ENROLLMENT_ID=… PAGESPACE_GATE_CODE=<the spent code> PAGESPACE_GATE_TOKEN=<mcp_…> \
+PAGESPACE_GATE_ENROLLMENT_ID=<env A> PAGESPACE_GATE_CODE=<A's spent code> PAGESPACE_GATE_TOKEN=<mcp_…> \
+PAGESPACE_GATE_FRESH_ENROLLMENT_ID=<env B> \
+PAGESPACE_GATE_EXPIRED_ENROLLMENT_ID=<env C> PAGESPACE_GATE_EXPIRED_CODE=<C's code> \
+PAGESPACE_GATE_SPENT_NONCE=… PAGESPACE_GATE_SPENT_SIGNATURE=… \
   bun scripts/env-bridge-exit-gate/identity-negatives.ts
 ```
 
@@ -198,12 +228,18 @@ PAGESPACE_GATE_ENROLLMENT_ID=… PAGESPACE_GATE_CODE=<the spent code> PAGESPACE_
 | N10 | flag off: `POST /envs { substrate:'local' }` | `501` |
 | N11 | flag off: `/api/env-bridge/*` | `404` |
 
-**N03** needs an enrollment older than ten minutes: create a second local env,
-wait, and pass `PAGESPACE_GATE_EXPIRED_ENROLLMENT_ID` / `_CODE`. **N04** needs
-the `(nonce, signature)` pair `env token` already spent; the proxy records it
-(`kind:"http"` lines in the transcript) — pass it as
-`PAGESPACE_GATE_SPENT_NONCE` / `_SIGNATURE`. Both are SKIPs otherwise, and a
-SKIP is not a pass.
+**N02** uses env B (above). **N03** uses env C. **N04** needs the
+`(nonce, signature)` pair `env token` already spent; the proxy records it
+(`kind:"http"` lines in the transcript) — pass it as `PAGESPACE_GATE_SPENT_NONCE`
+/ `_SIGNATURE`. Each is a SKIP without its input, and a SKIP is not a pass.
+
+**N04 runs before N05, and the order is load-bearing.** `issueLocalEnvChallenge`
+replaces a consumed challenge and clears `challengeUsedAt`, and
+`verifyChallengeResponse` compares the nonce *before* it looks at `usedAt` — so
+if N05 fetched its challenge first, N04's replay would answer
+`401 nonce_mismatch` instead of `401 used` and the replay defence would go
+untested. N05 also leaves its nonce pending and unconsumed, which is why no
+later row asks for another challenge (it would answer `challenge_pending`).
 
 **N10/N11 need the app restarted with `LOCAL_ENVS_ENABLED` unset**, so they are
 their own pass:

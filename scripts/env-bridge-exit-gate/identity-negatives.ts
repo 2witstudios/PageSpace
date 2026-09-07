@@ -12,7 +12,8 @@
  * Each check names the file whose behaviour it pins:
  *
  *   N01 code re-presented          → 409 `used`         apps/web/src/app/api/env-bridge/enroll/route.ts (STATUS_FOR_REASON)
- *   N02 wrong code                 → 401 `mismatch`     same
+ *   N02 wrong code                 → 401 `mismatch`     same (needs an UNCONSUMED enrollment:
+ *                                                        the used/enrolled guards run first)
  *   N03 expired code               → 410 `expired`      same (needs an aged enrollment; see README)
  *   N04 signed nonce replayed      → 401 `used`         apps/web/src/app/api/env-bridge/token/route.ts POST → redeemLocalEnvChallenge
  *   N05 signature from another key → 401 `bad_signature` packages/lib/src/env-bridge/challenge.ts verifyChallengeResponse
@@ -120,8 +121,20 @@ async function main(): Promise<number> {
 
   // N02 — a wrong code of the same shape. `mismatch`, never `not_found`: the
   // route must not distinguish a bad code from a bad enrollment id.
-  const wrong = await postJson('/api/env-bridge/enroll', { enrollmentId, code: `${'0'.repeat(usedCode.length)}`, machinePublicKey: strangerPublic });
-  expect('N02', '401 mismatch', outcome(wrong), 'a wrong code for a real enrollment');
+  //
+  // This MUST use an enrollment nothing has consumed. `enrollLocalDriveEnv`
+  // checks `enrolledAt`/`enrollmentCodeUsedAt` BEFORE it compares the code
+  // (drive-envs.ts:310), so against the enrollment N01 just spent every answer
+  // is `409 used` and the code-comparison branch is never reached — the gate
+  // would look green while proving nothing. A `mismatch` consumes nothing, so
+  // this env stays available afterwards.
+  const freshEnrollmentId = optional('PAGESPACE_GATE_FRESH_ENROLLMENT_ID');
+  if (freshEnrollmentId !== null) {
+    const wrong = await postJson('/api/env-bridge/enroll', { enrollmentId: freshEnrollmentId, code: '0'.repeat(usedCode.length), machinePublicKey: strangerPublic });
+    expect('N02', '401 mismatch', outcome(wrong), 'a wrong code for an UNCONSUMED enrollment');
+  } else {
+    skip('N02', '401 mismatch', 'set PAGESPACE_GATE_FRESH_ENROLLMENT_ID to an enrolled-but-unused env — see README "N02"');
+  }
 
   // N03 — an EXPIRED code, which needs a second env created >10 minutes before
   // this runs (or its `enrollmentCodeExpiresAt` moved back in SQL). Supplied
@@ -135,8 +148,28 @@ async function main(): Promise<number> {
     skip('N03', '410 expired', 'set PAGESPACE_GATE_EXPIRED_ENROLLMENT_ID / _CODE — see README "N03"');
   }
 
-  // N05 — a challenge answered by a key the server never pinned. Run BEFORE
-  // N04 so it spends its own nonce and cannot be confused with a replay.
+  // N04 — replay, and it must come BEFORE N05 (see there). `pagespace env token`
+  // has already spent a nonce; re-POSTing the same (nonce, signature) pair must
+  // be refused as `used` while that nonce is still the stored one. The operator
+  // captures that pair by running `env token` through the proxy (see
+  // bridge-proxy.ts) or from the daemon's own audit; without it this is a SKIP
+  // rather than a fabricated pass.
+  const spentNonce = optional('PAGESPACE_GATE_SPENT_NONCE');
+  const spentSignature = optional('PAGESPACE_GATE_SPENT_SIGNATURE');
+  if (spentNonce !== null && spentSignature !== null) {
+    const replayed = await postJson('/api/env-bridge/token', { enrollmentId, nonce: spentNonce, signature: spentSignature });
+    expect('N04', '401 used', outcome(replayed), 'replaying a challenge response that already minted a token');
+  } else {
+    skip('N04', '401 used', 'set PAGESPACE_GATE_SPENT_NONCE / _SIGNATURE — see README "N04"');
+  }
+
+  // N05 — a challenge answered by a key the server never pinned. Runs LAST of
+  // the challenge rows: `issueLocalEnvChallenge` REPLACES a consumed challenge
+  // and clears `challengeUsedAt`, and `verifyChallengeResponse` compares the
+  // nonce before it looks at `usedAt` — so issuing this challenge first would
+  // turn N04's replay into `401 nonce_mismatch` instead of `401 used`. The
+  // bad-signature POST below leaves this nonce pending and unconsumed, which is
+  // why nothing after it asks for another challenge.
   const challengeForStranger = await call(`/api/env-bridge/token?enrollmentId=${encodeURIComponent(enrollmentId)}`);
   const strangerNonce = challengeForStranger.json?.nonce;
   const strangerExp = challengeForStranger.json?.expiresAt;
@@ -149,20 +182,6 @@ async function main(): Promise<number> {
     expect('N05', '401 bad_signature', outcome(forged), 'a valid signature made by a key this env never pinned');
   } else {
     failed('N05', '401 bad_signature', new Error(`challenge refused: ${outcome(challengeForStranger)}`), 'could not obtain a nonce to forge against');
-  }
-
-  // N04 — replay. `pagespace env token` has already spent a nonce; re-POSTing
-  // the same (nonce, signature) pair must be refused as `used`. The operator
-  // captures that pair by running `env token` through the proxy (see
-  // bridge-proxy.ts) or from the daemon's own audit; without it this is a SKIP
-  // rather than a fabricated pass.
-  const spentNonce = optional('PAGESPACE_GATE_SPENT_NONCE');
-  const spentSignature = optional('PAGESPACE_GATE_SPENT_SIGNATURE');
-  if (spentNonce !== null && spentSignature !== null) {
-    const replayed = await postJson('/api/env-bridge/token', { enrollmentId, nonce: spentNonce, signature: spentSignature });
-    expect('N04', '401 used', outcome(replayed), 'replaying a challenge response that already minted a token');
-  } else {
-    skip('N04', '401 used', 'set PAGESPACE_GATE_SPENT_NONCE / _SIGNATURE — see README "N04"');
   }
 
   // N06 — the bridge token is not a web session. `expectedType:'user'` at the
@@ -198,10 +217,16 @@ async function main(): Promise<number> {
 
   // N08 / N09 — the machine credential is normalized out of the auth chain at
   // the door, so neither command can ever reach it.
-  const logout = cli(['logout', `--key=env:${enrollmentId}`]);
-  expect('N08', true, /not logged in/i.test(logout.out), `logout --key=env:<id> said: ${logout.out.trim().split('\n')[0] ?? '(silent)'}`);
-  const use = cli(['keys', 'use', `env:${enrollmentId}`]);
-  expect('N09', true, use.code !== 0, `keys use env:<id> exited ${use.code}: ${use.out.trim().split('\n')[0] ?? '(silent)'}`);
+  // `--host` is not optional here. Credentials are stored PER HOST, and the
+  // runbook enrolls through the capture proxy, so without it both commands
+  // inspect an empty profile on the default host and pass merely because
+  // nothing is there — proving nothing about machine credentials being kept out
+  // of the auth chain.
+  const credentialHost = optional('PAGESPACE_GATE_CREDENTIAL_HOST') ?? host;
+  const logout = cli(['logout', `--key=env:${enrollmentId}`, `--host=${credentialHost}`]);
+  expect('N08', true, /not logged in/i.test(logout.out), `logout --key=env:<id> --host=${credentialHost} said: ${logout.out.trim().split('\n')[0] ?? '(silent)'}`);
+  const use = cli(['keys', 'use', `env:${enrollmentId}`, `--host=${credentialHost}`]);
+  expect('N09', true, use.code !== 0, `keys use env:<id> --host=${credentialHost} exited ${use.code}: ${use.out.trim().split('\n')[0] ?? '(silent)'}`);
 
   return summarize('identity-negatives (flag on)');
 }
