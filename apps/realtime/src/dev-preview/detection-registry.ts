@@ -119,8 +119,11 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
         onFrame: (frame) => { void detector.onFrame(frame); },
         onClose: (info) => {
           current = null;
-          // The accumulated set no longer describes a live connection.
-          // Queued on the detector's chain, behind any frame still applying.
+          // The accumulated set no longer describes a live connection. Takes
+          // effect immediately — a reader between this close and the next
+          // connection's snapshot must not be answered from the dead one —
+          // while the detector's arrival epoch stops a frame still applying
+          // from claiming the NEXT connection's snapshot.
           detector.invalidateSnapshot();
           if (stopped) return;
           if (info.opened) attempts = 0;
