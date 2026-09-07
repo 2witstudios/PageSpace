@@ -10,7 +10,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import http from 'node:http';
 import net from 'node:net';
-import { once } from 'node:events';
+import { EventEmitter, once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { formatSocketHttpError, formatUpgradeResponse, tunnelWebSocketUpgrade, type TunnelSummary } from '../preview-ws-tunnel';
 
@@ -49,7 +49,11 @@ async function fakeSprite(mode: 'upgrade' | 'reject' | 'hang' = 'upgrade') {
 }
 
 /** A gateway that hands every upgrade on its socket to the tunnel — the realtime app's role. */
-async function gateway(upstreamUrl: URL, onClose: (s: TunnelSummary) => void, opts: { handshakeTimeoutMs?: number } = {}) {
+async function gateway(
+  upstreamUrl: URL,
+  onClose: (s: TunnelSummary) => void,
+  opts: Partial<Pick<Parameters<typeof tunnelWebSocketUpgrade>[0], 'handshakeTimeoutMs' | 'request'>> = {},
+) {
   const server = http.createServer((_req, res) => { res.writeHead(404); res.end(); });
   server.on('upgrade', (req, socket, head) => {
     const requestHeaders: Record<string, string> = {};
@@ -127,14 +131,64 @@ describe('tunnelWebSocketUpgrade', () => {
     expect(summary).toMatchObject({ outcome: 'upstream-rejected', upstreamStatus: 403 });
   });
 
+  /**
+   * "Cannot be reached" is driven by a server that OWNS its port for the whole
+   * test and drops every connection, rather than by connecting to a port we
+   * closed a moment ago.
+   *
+   * The closed-port version was a real flake and it cost master a red build
+   * (Security Tests on 8a02fef5, 2026-09-07; the identical commit passed on a
+   * re-run). Closing a listener does not RESERVE its port: between the close
+   * and the tunnel's connect, any other process on the runner — and CI runs
+   * several workspaces' suites at once, all binding port 0 — can be handed
+   * that exact ephemeral port. When that happens the connection is ACCEPTED,
+   * so the tunnel waits out its handshake bound, which defaults to
+   * `PREVIEW_PROXY_LIMITS.upstreamHeadersTimeoutMs` (60s), and vitest kills
+   * the test at 5s. That is why the failure was an opaque
+   * "Test timed out in 5000ms" with no assertion — the tell that the socket
+   * neither connected-and-failed nor was refused.
+   *
+   * A port cannot be reserved as "unbound", so the race cannot be closed while
+   * the test depends on nothing listening. Holding the port and dropping the
+   * connection instead is deterministic, and it exercises the SAME branch: the
+   * tunnel has one `req.on('error')` handler, and both ECONNREFUSED and a
+   * connection dropped before any response land in it as 502 / `upstream-error`.
+   * The literal refused errno is pinned separately, below, through the
+   * injectable `request` seam.
+   */
   it('answers 502 when the upstream cannot be reached at all', async () => {
-    const dead = net.createServer();
-    dead.listen(0, '127.0.0.1');
-    await once(dead, 'listening');
-    const deadPort = (dead.address() as AddressInfo).port;
-    await new Promise<void>((resolve) => dead.close(() => resolve()));
+    const unreachable = net.createServer((socket) => socket.destroy());
+    track(unreachable);
+    unreachable.listen(0, '127.0.0.1');
+    await once(unreachable, 'listening');
+    const deadPort = (unreachable.address() as AddressInfo).port;
+
     let summary: TunnelSummary | undefined;
     const port = await gateway(new URL(`http://127.0.0.1:${deadPort}/`), (s) => { summary = s; });
+    const c = await client(port, '/');
+    await once(c.socket, 'close');
+    expect(c.text().startsWith('HTTP/1.1 502 Bad Gateway\r\n')).toBe(true);
+    expect(summary?.outcome).toBe('upstream-error');
+  });
+
+  /**
+   * The literal ECONNREFUSED path, pinned without a socket at all. This file
+   * deliberately works against REAL sockets (see the header), and the case
+   * above keeps doing so; this one exists because the one thing real sockets
+   * cannot give us deterministically is "nothing is listening here".
+   */
+  it('answers 502 when the connection is REFUSED outright', async () => {
+    let summary: TunnelSummary | undefined;
+    const port = await gateway(new URL('http://127.0.0.1:9/'), (s) => { summary = s; }, {
+      // A `ClientRequest` double: the tunnel only ever calls `on`, `end` and
+      // `destroy` on it (nothing else is reachable before a response), so the
+      // double is complete for this path rather than a partial stand-in.
+      request: () => {
+        const req = Object.assign(new EventEmitter(), { end: () => {}, destroy: () => {} });
+        setImmediate(() => req.emit('error', Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:9'), { code: 'ECONNREFUSED' })));
+        return req as unknown as http.ClientRequest;
+      },
+    });
     const c = await client(port, '/');
     await once(c.socket, 'close');
     expect(c.text().startsWith('HTTP/1.1 502 Bad Gateway\r\n')).toBe(true);
