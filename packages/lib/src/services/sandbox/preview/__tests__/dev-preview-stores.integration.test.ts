@@ -121,7 +121,6 @@ describe('createDbDevPreviewStore', () => {
     // a particular VM's server, and the replacement inherits nothing.
     expect(await store.approvePort(holder, { port: 9000, spriteInstanceId: 'inst-other', at, byUserId: userId })).toBeNull();
     expect((await store.findByHolder(holder))?.approvedPort).toBeNull();
-    expect((await store.findByHolder(holder))?.approvedPort).toBeNull();
 
     const approved = await store.approvePort(holder, { port: 9000, spriteInstanceId: 'inst-ap', at, byUserId: userId });
     expect(approved).toMatchObject({ targetPort: 9000, approvedPort: 9000, stoppedByUserAt: null });

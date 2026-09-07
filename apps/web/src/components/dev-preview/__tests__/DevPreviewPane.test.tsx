@@ -22,7 +22,8 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   };
 });
 const mockToastError = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), success: vi.fn() } }));
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), info: (...args: unknown[]) => mockToastInfo(...args), success: vi.fn() } }));
 
 import { DEV_PREVIEW_FRAME_SANDBOX, DevPreviewPane, buildFrameSrc } from '../DevPreviewPane';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
@@ -214,6 +215,20 @@ describe('DevPreviewPane', () => {
     await screen.findByTestId('dev-preview-frame');
     expect(screen.getByTestId('dev-preview-status-line')).toHaveTextContent('Starting the preview relay for port 5173…');
     expect(screen.getByText('Starting · :5173')).toBeInTheDocument();
+  });
+
+  test('a DEFERRED action says so, rather than looking like it did nothing', async () => {
+    // The server answers 200 because the intent landed; only the relay start
+    // waits on a ports snapshot. Without a word the click looks inert while
+    // the pane still reads "not running".
+    mockPost.mockResolvedValueOnce({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
+    status = live({ canOpen: false, canStop: false, canResume: true, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay for port 5173 is not defined on this sandbox.' } });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTitle('Restart the preview');
+    fireEvent.click(screen.getByTitle('Restart the preview'));
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith('The preview will start shortly', expect.objectContaining({ description: expect.stringContaining('which ports are in use') })));
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test('a failed action toasts and still re-reads the status', async () => {

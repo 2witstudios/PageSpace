@@ -378,7 +378,15 @@ export type DevPreviewUserActionResult =
    * Nothing was written: the user agreed to share something else than what is
    * running now, and the honest answer is to show them the new port.
    */
-  | { ok: false; reason: 'port-changed' };
+  | { ok: false; reason: 'port-changed' }
+  /**
+   * An `approve` whose echoed sprite INSTANCE is not the one the row belongs
+   * to any more: the sandbox was rebuilt between the render and the click.
+   * Kept separate from `port-changed` because the port may be identical — a
+   * replacement VM commonly re-detects the same one — and telling the user
+   * their server moved ports would be a plainly false sentence.
+   */
+  | { ok: false; reason: 'instance-changed' };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -501,14 +509,20 @@ async function writeDevPreviewIntent({
   now: Date;
   userId: string;
   store: DevPreviewStore;
-}): Promise<{ ok: true; row: DevPreviewRow } | Extract<DevPreviewUserActionResult, { reason: 'port-changed' | 'no-preview' }>> {
+}): Promise<{ ok: true; row: DevPreviewRow } | Extract<DevPreviewUserActionResult, { reason: 'port-changed' | 'instance-changed' | 'no-preview' }>> {
   if (action.kind !== 'approve') {
     const row = await store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
     return row === null ? { ok: false, reason: 'no-preview' } : { ok: true, row };
   }
   const approved = await store.approvePort(holder, { port: action.port, spriteInstanceId: action.spriteInstanceId, at: now, byUserId: userId });
   if (approved !== null) return { ok: true, row: approved };
-  // Null means the filtered UPDATE matched nothing: either there is no row at
-  // all, or the row moved on to another port. Only the second is a conflict.
-  return (await store.findByHolder(holder)) === null ? { ok: false, reason: 'no-preview' } : { ok: false, reason: 'port-changed' };
+  // Null means the filtered UPDATE matched nothing, and the three causes read
+  // very differently to a user. Re-read to say which: no row at all, the
+  // server moved to another port, or the sandbox was rebuilt under it. The
+  // last is the one the instance echo was added for, and its port is usually
+  // UNCHANGED — reporting it as "moved to a different port" would be false.
+  const row = await store.findByHolder(holder);
+  if (row === null) return { ok: false, reason: 'no-preview' };
+  if (row.spriteInstanceId !== action.spriteInstanceId) return { ok: false, reason: 'instance-changed' };
+  return { ok: false, reason: 'port-changed' };
 }

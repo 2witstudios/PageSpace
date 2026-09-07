@@ -435,6 +435,22 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     assert({ given: 'a refused approve', should: 'never reach the sprite', actual: calls.includes('services.get'), expected: false });
   });
 
+  it('a REBUILT sandbox is its own answer, not "the port moved" — the port is usually identical', async () => {
+    // The replacement VM commonly re-detects the same port, so collapsing this
+    // into `port-changed` would tell the user their server moved when it did
+    // not, about the exact case the instance echo exists to catch.
+    const calls: string[] = [];
+    const store = fakeStore(row(9000, { relayServiceName: null, spriteInstanceId: 'inst-new' }), calls);
+    const { deps } = actionDeps({ calls, store, attach: async () => fakeHandle({ relay: null, calls }) });
+    assert({
+      given: 'a click made against the sandbox that has since been replaced',
+      should: 'say the sandbox was rebuilt, not that the port changed',
+      actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: 'inst-old' }, ...ACTOR, deps }),
+      expected: { ok: false, reason: 'instance-changed' },
+    });
+    assert({ given: 'a refused approve', should: 'record no consent', actual: store.current()?.approvedPort, expected: null });
+  });
+
   it('a holder with no row at all is no-preview, not port-changed', async () => {
     const { deps } = actionDeps({ store: fakeStore(null) });
     assert({ given: 'no row', should: 'be no-preview', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000, spriteInstanceId: INSTANCE }, ...ACTOR, deps }), expected: { ok: false, reason: 'no-preview' } });

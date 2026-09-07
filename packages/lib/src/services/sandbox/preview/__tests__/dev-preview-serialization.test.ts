@@ -104,9 +104,21 @@ function handleFor(log: string[], relay: SandboxServiceInfo | null): SandboxHand
       },
       list: async () => [],
       get: async () => current,
-      start: async (name) => { log.push(`start:${name}`); },
-      stop: async (name) => { log.push(`stop:${name}`); },
-      remove: async (name) => { log.push(`remove:${name}`); },
+      start: async (name) => {
+        log.push(`start:${name}`);
+        if (current) current = { ...current, status: 'running' };
+      },
+      stop: async (name) => {
+        log.push(`stop:${name}`);
+        // The platform leaves a stopped service `failed`, not `stopped`
+        // (spike §4) — a fake that left it `running` would let a later plan
+        // read a dead relay as live.
+        if (current) current = { ...current, status: 'failed' };
+      },
+      remove: async (name) => {
+        log.push(`remove:${name}`);
+        current = null;
+      },
     },
     urlInfo: async () => ({ url: null, auth: 'unknown' }),
     setUrlAuth: async () => {},

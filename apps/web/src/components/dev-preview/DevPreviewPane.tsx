@@ -164,7 +164,17 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
         ? { action: 'approve', port: action.port, spriteInstanceId: action.spriteInstanceId }
         : { action: action.kind };
       try {
-        await post(devPreviewActionsPath(open.statusPath), body);
+        // A DEFERRED action succeeded — the stop was cleared, the consent
+        // recorded — but the relay start is waiting on a ports snapshot, which
+        // can take a poll or two. Saying so beats silence: without this the
+        // click looks like it did nothing while the pane still reads "not
+        // running".
+        const answer = await post<{ deferred?: string }>(devPreviewActionsPath(open.statusPath), body);
+        if (answer?.deferred === 'awaiting-port-snapshot') {
+          toast.info('The preview will start shortly', {
+            description: 'Waiting for the sandbox to report which ports are in use.',
+          });
+        }
       } catch (actionError) {
         const failure =
           action.kind === 'stop' ? 'Could not switch the preview off'

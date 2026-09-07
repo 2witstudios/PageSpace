@@ -35,6 +35,9 @@ export function respondToDevPreviewUserAction({
     }
     // Neither of these is "there is nothing to switch", and answering 404
     // would tell the user their preview does not exist when it plainly does.
+    if (result.reason === 'instance-changed') {
+      return NextResponse.json({ error: 'This sandbox was rebuilt since the preview was shown. Check what is running and share it again.', reason: result.reason }, { status: 409 });
+    }
     if (result.reason === 'port-changed') {
       return NextResponse.json({ error: 'The dev server has moved to a different port since this was shown. Check the port and share it again.', reason: result.reason }, { status: 409 });
     }

@@ -136,6 +136,8 @@ interface PreviewStatus {
   state: { status: string; targetPort?: number; message: string };
   canOpen: boolean;
   canApprove: boolean;
+  /** Echoed back on an approve, so consent cannot follow a rebuilt sandbox. */
+  spriteInstanceId: string | null;
   openPath: string | null;
 }
 
@@ -323,11 +325,23 @@ test.describe('dev-server preview: the browser journey', () => {
     await expect(beforePage.getByRole('button', { name: 'Preview' })).toHaveCount(0);
     await beforePage.close();
 
+    // Both halves of the echo come from the status the UI would have rendered.
+    const shown = pending.spriteInstanceId;
+    expect(shown).not.toBeNull();
+
     // A port the row does not target cannot be approved by a click meant for it.
-    const wrongPort = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9001 });
+    const wrongPort = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9001, spriteInstanceId: shown });
     expect(wrongPort.status()).toBe(409);
 
-    const approved = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9000 });
+    // Nor can a click made against a different sandbox, even on the right port.
+    const wrongInstance = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9000, spriteInstanceId: 'sprite-that-is-not-this-one' });
+    expect(wrongInstance.status()).toBe(409);
+
+    // And an approve with no instance at all is not a well-formed action.
+    const noInstance = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9000 });
+    expect(noInstance.status()).toBe(400);
+
+    const approved = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9000, spriteInstanceId: shown });
     expect(approved.ok(), await approved.text()).toBe(true);
 
     await waitForPreview(request, user, workspaceId, (preview) => preview.canOpen, DETECTION_TIMEOUT_MS);
