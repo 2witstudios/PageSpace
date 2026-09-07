@@ -139,55 +139,53 @@ does not know, so the spec starts a server without the allow-list first and
 records what the user actually sees, then starts one with
 `server.allowedHosts` and asserts the app renders.
 
-## 6. Before you turn it on: the sprite-edge token question
+## 6. The sprite-edge token question — ANSWERED, it does not leak
 
 The proxy authenticates to the sprite edge with the **org-scoped** Sprites
-bearer token — `preview-forward.ts` sets `authorization: Bearer <token>`
+bearer token: `preview-forward.ts` sets `authorization: Bearer <token>`
 *after* the forwardable-header allowlist, so it deliberately survives the
-filter that strips the client's own credentials
-(`preview-proxy-policy.ts`, where `authorization` is absent from
-`FORWARDABLE_REQUEST_HEADERS`). The WebSocket half does the same
-(`preview-ws-tunnel.ts`). The in-sprite relay on 8080 is a **raw TCP pipe**
-(`preview-relay.ts` — `client.pipe(upstream)` over `net`, no HTTP parsing at
-all), so nothing on our side removes that header on the way in.
+filter that strips the client's own credentials (`preview-proxy-policy.ts`,
+where `authorization` is absent from `FORWARDABLE_REQUEST_HEADERS`). The
+in-sprite relay on 8080 is a **raw TCP pipe** (`preview-relay.ts` —
+`client.pipe(upstream)` over `net`, no HTTP parsing), so nothing on our side
+removes it on the way in. The open question was whether the EDGE strips it
+before forwarding inward — if not, a previewed dev server (agent-authored or
+npm-supply-chain code) could read an org-wide credential from its own headers.
 
-The whole question is therefore whether the **sprite edge** strips it before
-forwarding inward. The spike verified the edge *accepts* the header; it never
-verified the header stops there. If it does not, a previewed dev server —
-agent-authored or npm-supply-chain code — can read an org-wide credential out
-of its own request headers.
+**Checked against a real sprite on 2026-09-07: the edge strips it.**
 
-**The check:** run a server on 5173 in a real sprite that echoes its request
-headers, reach it through the preview origin, and read what arrived. Minutes,
-one sprite, delete it after. Do not accept "the page rendered" as an answer —
-read the headers the dev server actually received.
-
-**If it leaks**, in this order — the order matters, because rotating the token
-first leaves preview forwarding up and simply hands the dev server the NEW
-credential:
+Method: create a sprite, `updateURLSettings({ auth: 'sprite' })` — the only
+mode the preview path will proxy to (`preview-access.ts:263`) and the mode
+where the edge validates the bearer — run a server on 8080 that appends every
+request header it receives to a file, then fetch the sprite URL with the
+bearer plus a canary header, and read the file back out of the sprite.
 
 ```
-# 1. Stop forwarding NOW. A secret beats [env], so this overrides the config
-#    value without waiting on a --config deploy, and only the literal string
-#    'true' enables the feature.
-fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-web
-fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-realtime
-
-# 2. Confirm it actually took in the running processes, not just in the API.
-fly ssh console -a pagespace-web      -C 'printenv DEV_PREVIEW_ENABLED'
-fly ssh console -a pagespace-realtime -C 'printenv DEV_PREVIEW_ENABLED'
-
-# 3. Only then rotate.
-fly secrets set SPRITES_API_TOKEN=<new> -a pagespace-web -a pagespace-realtime
+Host: <sprite>.sprites.app
+User-Agent: node
+Sprite-Client-Ip: …
+Via: 1.1 fly.io
+X-Canary-Header: canary-value        <-- passthrough works
+X-Forwarded-For / -Port / -Proto / -Ssl
+X-Request-Start: …
 ```
 
-Setting the secret is the fast path precisely because of the precedence rule
-in §2: it wins over `[env]`, so it takes effect on the restart the secret
-change triggers, with no deploy. Comment the `[env]` flag back out afterwards
-so the config and the running state agree, then clear the secret.
+No `Authorization`, and the token value appears nowhere. The canary is the
+control that matters: headers plainly DO reach the dev server, so the absence
+of `Authorization` is the edge removing it, not the test failing to look.
 
-The real fix is an edge change or a header-stripping hop; nothing in the
-application can repair it.
+**Two limits on that result, both deliberate:**
+
+- It covers the **HTTP** half. The WebSocket half (`preview-ws-tunnel.ts`)
+  sends the same bearer on the upgrade request, and the upgrade takes a
+  different path through the edge. That has NOT been checked — worth doing
+  before HMR is relied on, by the same method against an upgrade request.
+- It used a freshly minted org token rather than the production
+  `SPRITES_API_TOKEN`. The edge's behaviour is a property of the edge and the
+  auth mode, not of which token is presented, so this is the same question —
+  but it is not literally the production credential.
+
+The script is disposable; re-run it with the recipe above if the edge changes.
 
 ## 7. Where the smoke runs
 
@@ -217,6 +215,40 @@ ground:
    pane; it serves.
 7. Sign out in another tab → the preview stops answering on the **next**
    request, not ten minutes later.
+
+## Turning it off
+
+The kill switch is `DEV_PREVIEW_ENABLED`, and it is GLOBAL — there is no
+per-drive rollout, so it exposes the feature to every user at once and takes
+it back from every user at once. Every entry point fails closed on the next
+request: the proxy 404s, the grant mint 404s, the WebSocket upgrade is
+refused, detection stops opening watch channels, and the cron sweep no-ops.
+
+The fast path is a **secret**, not an `[env]` edit, because of the precedence
+rule in §2 — a secret beats the config value and takes effect on the restart
+it triggers, with no `--config` deploy to wait for:
+
+```
+fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-web
+fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-realtime
+
+# Confirm it took in the RUNNING processes, not just in the API.
+fly ssh console -a pagespace-web      -C 'printenv DEV_PREVIEW_ENABLED'
+fly ssh console -a pagespace-realtime -C 'printenv DEV_PREVIEW_ENABLED'
+```
+
+Only the literal string `'true'` enables the feature, so `false` — or any
+other value — is off.
+
+Afterwards, comment the `[env]` flag back out and `fly secrets unset
+DEV_PREVIEW_ENABLED` on both apps, so the config and the running state agree
+again rather than drifting apart with a secret quietly overriding the file.
+
+**If a credential is ever implicated** — §6 says the edge strips the org token
+today, but if that changes, or the WebSocket half turns out to differ — the
+order matters: switch the feature off and CONFIRM it before rotating
+`SPRITES_API_TOKEN`. Rotating first while forwarding is still up simply hands
+the previewed dev server the new credential.
 
 ## Runtime behaviour worth knowing
 
