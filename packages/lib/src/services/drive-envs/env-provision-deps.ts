@@ -312,6 +312,16 @@ export async function ensureDriveEnvSandbox({
  * - **`resumed: true`, always.** The machine was already running: PageSpace
  *   did not create it and could not have. Reporting a `create` would tell the
  *   caller's revival/measurement paths that a fresh filesystem exists.
+ *
+ * The provision INTENT is deliberately not consulted, and that is not an
+ * oversight. `ensure` / `reprovision` / `attach` distinguish creating a VM,
+ * replacing one, and reconnecting without resurrecting — three things that
+ * only mean something to a substrate PageSpace mints. Here there is one
+ * machine, it exists whether or not anyone is looking at it, and binding to it
+ * creates nothing, so every intent resolves to the same read of the live
+ * socket. (`ensureAgentSessionSandbox` still refuses `attach` on an ended
+ * session before this is reached, so an ended row cannot be revived through
+ * it.)
  */
 async function ensureLocalEnvSandbox({
   row,

@@ -56,6 +56,19 @@ export async function DELETE(request: Request, context: RouteContext) {
   // the pane bound to this shell goes with the process, in the same transaction.
   const killed = await killShellById({ shellId, actingUserId: auth.userId });
   if (!killed.ok) {
+    // `unsupported` is a PERMANENT property of the machine's substrate — it has
+    // no interactive-stream surface on this seam at all (a local environment;
+    // M2 routes those PTYs elsewhere). 502 would say "upstream hiccup, try
+    // again", which is advice that can never come true, and it is logged at
+    // error level as though something broke. A 409 and a warn say what is
+    // actually the case. Everything else keeps the 502 it had.
+    if (killed.reason === 'unsupported') {
+      loggers.api.warn('Shell kill refused — this environment has no stream surface', { workspaceId, shellId });
+      return NextResponse.json(
+        { error: 'This environment does not support terminal sessions, so there is no shell process to close.', reason: killed.reason },
+        { status: 409 },
+      );
+    }
     loggers.api.error('Shell kill failed', undefined, { workspaceId, shellId });
     return NextResponse.json({ error: 'Could not close this shell', reason: killed.reason }, { status: 502 });
   }
