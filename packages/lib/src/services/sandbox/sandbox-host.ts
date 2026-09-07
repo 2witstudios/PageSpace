@@ -222,6 +222,32 @@ export class SandboxStreamOpenTimeoutError extends Error {
 }
 
 /**
+ * A control-plane READ did not answer in time — listing a sandbox's services,
+ * or resolving the sandbox itself.
+ *
+ * Only reads raise this, and that asymmetry is the whole design. These calls
+ * run inside a per-holder advisory lock (`dev-preview-lock.ts`), and the SDK
+ * exposes no `AbortSignal`, so the best available bound is to stop WAITING —
+ * the request itself keeps running until the runtime drops it. For a read
+ * that is free: nothing was mutated, so abandoning the wait costs only the
+ * work already done, and it releases a Postgres connection from a pool of 10
+ * that every advisory-lock consumer shares.
+ *
+ * A MUTATION is deliberately NOT bounded this way. Abandoning the wait there
+ * would release the lock while the create/start/stop is still in flight,
+ * letting the next holder plan against a sprite that is about to change under
+ * it — exactly the interleaving the lock exists to prevent. A hung mutation
+ * still pins its connection; bounding it honestly needs cancellation the SDK
+ * does not offer.
+ */
+export class SandboxControlPlaneTimeoutError extends Error {
+  constructor(public readonly operation: string, public readonly timeoutMs: number) {
+    super(`Sandbox control-plane read '${operation}' did not answer within ${timeoutMs}ms`);
+    this.name = 'SandboxControlPlaneTimeoutError';
+  }
+}
+
+/**
  * A port lifecycle notification observed on a machine's interactive stream —
  * a process inside the sandbox bound (or released) a TCP port. Data only:
  * whether that port is a dev server, whether it should be exposed, and what to

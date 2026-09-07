@@ -1,7 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { EventEmitter } from 'node:events';
 import { createSpriteSandboxHost, normalizeSpritePowerState } from '../sprite-sandbox-host';
-import { SandboxSpriteReplacedError, SandboxStreamOpenTimeoutError } from '../../sandbox-host';
+import { SandboxControlPlaneTimeoutError, SandboxSpriteReplacedError, SandboxStreamOpenTimeoutError } from '../../sandbox-host';
 import {
   createSpritesSandboxClient,
   spawnWithSelfHealingCwd,
@@ -974,5 +974,54 @@ describe('createSpriteSandboxHost', () => {
       ]);
       expect(nested).toEqual([{ type: 'port_closed', port: 3000 }]);
     });
+  });
+});
+
+describe('control-plane reads are time-bounded', () => {
+  async function handleWith(over: Partial<SpriteInstanceLike>) {
+    const { sdk } = makeSdk({ getSprite: async () => fakeSprite(over) });
+    const client = createSpritesSandboxClient({ sdk });
+    const host = createSpriteSandboxHost({ sdk, client });
+    return host.provision({ name: 'k', substrate: { kind: 'sprite' }, options });
+  }
+
+  it('given a listServices that never settles, should stop WAITING rather than pin its caller forever', async () => {
+    // These reads run inside the dev-preview advisory lock, over a pool of 10
+    // that every advisory-lock consumer shares. A hung read held that
+    // connection indefinitely, and ten of them starve every other holder —
+    // whose reconciles then defer. The SDK exposes no AbortSignal, so the
+    // request itself keeps running; abandoning the WAIT is the bound that is
+    // actually available, and it is free for a read because nothing was
+    // mutated.
+    const handle = await handleWith({ listServices: () => new Promise<never>(() => {}) });
+    vi.useFakeTimers();
+    try {
+      const settled = handle.services.get('anything').then(
+        () => 'resolved',
+        (error: unknown) => (error instanceof SandboxControlPlaneTimeoutError ? `timeout:${error.operation}` : `other:${String(error)}`),
+      );
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(await settled).toBe('timeout:services.get');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('given a deleteService that never settles, should leave the MUTATION unbounded on purpose', async () => {
+    // Abandoning the wait on a mutation would release the advisory lock while
+    // the delete is still in flight, letting the next holder plan against a
+    // sprite about to change under it — the exact interleaving the lock
+    // exists to prevent. Bounding it honestly needs cancellation the SDK does
+    // not offer, so it stays pending rather than lying about being over.
+    const handle = await handleWith({ deleteService: () => new Promise<never>(() => {}) });
+    vi.useFakeTimers();
+    try {
+      let settled = false;
+      void handle.services.remove('preview-relay').then(() => { settled = true; }, () => { settled = true; });
+      await vi.advanceTimersByTimeAsync(120_000);
+      expect(settled).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
