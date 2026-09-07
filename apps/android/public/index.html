@@ -46,7 +46,7 @@
     // remote load fails, so reload() would only re-render this file. Retry has to
     // re-target the server explicitly. pagespace.ai is the host of server.url, so
     // Bridge.launchIntent() keeps this in-app rather than punting it to Chrome.
-    // Keep in sync with server.url in capacitor.config.ts.
+    // Keep in sync with server.url + server.appStartPath in capacitor.config.ts.
     //
     // No Capacitor API is available on this page: Bridge.loadWebView() registers
     // the bridge script via addDocumentStartJavaScript scoped to the server.url

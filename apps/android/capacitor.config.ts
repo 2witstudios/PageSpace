@@ -6,8 +6,20 @@ const config: CapacitorConfig = {
   appName: 'PageSpace',
   webDir: './public', // Fallback for offline scenarios; app loads from server.url
   server: {
-    // Production: load directly to dashboard, bypassing landing page
-    url: 'https://pagespace.ai/dashboard',
+    // The landing path is `appStartPath`, NOT part of `url`, and the split
+    // matters on Android. Bridge.setAllowedOriginRules() puts getServerUrl()
+    // verbatim into the set MessageHandler hands to addWebMessageListener, and
+    // that API takes origin rules — `scheme://host[:port]`. A `url` carrying
+    // `/dashboard` is not one, and MessageHandler's catch for a rejected rule is
+    // `webView.addJavascriptInterface(this, "androidBridge")`, which enforces no
+    // origin restriction at all — so a path here risks trading the allowlist
+    // below for a bridge exposed to every document the WebView loads.
+    //
+    // Keeping `url` an origin is right either way, and Bridge appends
+    // appStartPath after the server.url branch, so appUrl is still
+    // https://pagespace.ai/dashboard and the app still bypasses the landing page.
+    url: 'https://pagespace.ai',
+    appStartPath: '/dashboard',
     cleartext: false,
     // Every host listed here is handed the NATIVE PLUGIN BRIDGE, not merely
     // permission to navigate. Bridge.setAllowedOriginRules() folds each entry
