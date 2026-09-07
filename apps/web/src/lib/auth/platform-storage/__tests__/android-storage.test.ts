@@ -161,6 +161,59 @@ describe('AndroidStorage', () => {
       expect(localStorage.getItem('browser_device_id')).toBe('web_abc123');
     });
 
+    it('clears a keychain session the bearer-less refresh supersedes', async () => {
+      // getStoredSession reads the keychain first, so a stale blob left here
+      // would shadow the token just written to the legacy store.
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'stale',
+          deviceId: 'web_abc123',
+          deviceToken: 'stale-device-token',
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'web_abc123',
+        deviceToken: 'rotated-device-token',
+      });
+
+      expect(keychainMock.remove).toHaveBeenCalledWith({ key: 'pagespace_session' });
+    });
+
+    it('does not overwrite a browser device id that already exists', async () => {
+      // browser_device_id belongs to getOrCreateDeviceId and is what every web
+      // sign-in binds its token to; overwriting it would make a divergence
+      // permanent rather than record a missing identity.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'a-minted-cuid',
+        deviceToken: 'rotated-device-token',
+      });
+
+      expect(localStorage.getItem('browser_device_id')).toBe('web_abc123');
+    });
+
+    it('throws rather than reporting success with nothing to store', async () => {
+      const storage = await importAndroidStorage();
+
+      await expect(
+        storage.storeSession({
+          sessionToken: '',
+          csrfToken: null,
+          deviceId: 'web_abc123',
+          deviceToken: null,
+        })
+      ).rejects.toThrow(/neither a bearer token nor a device token/);
+    });
+
     it('still recovers the session after a bearer-less refresh', async () => {
       localStorage.setItem('deviceToken', 'old-device-token');
       keychainMock.get.mockResolvedValue({ value: null });
@@ -176,6 +229,28 @@ describe('AndroidStorage', () => {
       const recovered = await storage.getStoredSession();
       expect(recovered?.deviceToken).toBe('rotated-device-token');
       expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
+    it('surfaces a failure to persist a rotated device token', async () => {
+      // The legacy store is the only home for it; swallowing the failure leaves
+      // the next refresh holding a token the server has rotated away.
+      const setItem = vi
+        .spyOn(Storage.prototype, 'setItem')
+        .mockImplementation(() => {
+          throw new Error('QuotaExceededError');
+        });
+      const storage = await importAndroidStorage();
+
+      await expect(
+        storage.storeSession({
+          sessionToken: '',
+          csrfToken: null,
+          deviceId: 'web_abc123',
+          deviceToken: 'rotated-device-token',
+        })
+      ).rejects.toThrow('QuotaExceededError');
+
+      setItem.mockRestore();
     });
 
     it('spends the legacy device token once the keychain holds the session', async () => {
@@ -450,12 +525,41 @@ describe('AndroidStorage', () => {
       vi.useRealTimers();
     });
 
-    it('falls back to preferences when the store cannot be read', async () => {
+    it('falls back to preferences when no store names a binding', async () => {
       preferencesStore.set('pagespace_device_id', 'preferences-id');
       keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
       const storage = await importAndroidStorage();
 
       expect(await storage.getDeviceId()).toBe('preferences-id');
+    });
+
+    it('still reports the legacy binding when the keychain refuses', async () => {
+      // A keystore that refuses is no reason to report the *wrong* id: the
+      // legacy binding needs no bridge to read, and answering with the
+      // preferences id instead is the mismatch the refresh route rejects as a
+      // stolen token.
+      preferencesStore.set('pagespace_device_id', 'preferences-id');
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
+    it('still reports the legacy binding when the keychain hangs', async () => {
+      vi.useFakeTimers();
+      preferencesStore.set('pagespace_device_id', 'preferences-id');
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      keychainMock.get.mockReturnValue(new Promise(() => {}));
+      const storage = await importAndroidStorage();
+
+      const pending = storage.getDeviceId();
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(await pending).toBe('web_abc123');
+      vi.useRealTimers();
     });
 
     it('lets the live binding outrank an id already in preferences', async () => {

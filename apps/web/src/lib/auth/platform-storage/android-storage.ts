@@ -57,12 +57,20 @@ function readLegacy(key: string): string | null {
   }
 }
 
-/** Write a key to localStorage, ignoring an unavailable store. */
+/**
+ * Write a key to localStorage.
+ *
+ * Deliberately *not* tolerant, unlike the read and clear helpers: this is the
+ * only place a rotated device token lands, so a swallowed failure here is the
+ * silent "persisted nothing" that leaves the next refresh holding a revoked
+ * token. Reads and clears can shrug at an unavailable store because neither
+ * loses information by failing.
+ */
 function writeLegacy(key: string, value: string): void {
   try {
     localStorage.setItem(key, value);
-  } catch {
-    // Private mode or a full quota — the caller has no better option either.
+  } catch (error) {
+    throw storageError('write', error);
   }
 }
 
@@ -204,8 +212,33 @@ export class AndroidStorage implements PlatformStorage {
     // device token: the web branch returns a new one when the old is near
     // expiry, and dropping it would revoke the client on the next refresh.
     if (!session.sessionToken) {
-      if (session.deviceToken) writeLegacy(LEGACY_DEVICE_TOKEN_KEY, session.deviceToken);
-      if (session.deviceId) writeLegacy(LEGACY_DEVICE_ID_KEYS[0], session.deviceId);
+      if (!session.deviceToken) {
+        // Nothing storable in either place, and the contract above promises a
+        // throw rather than a false success — `refreshBearerSession` reports
+        // "refreshed successfully" on the line after this call.
+        throw storageError('write', 'session carries neither a bearer token nor a device token');
+      }
+
+      // Any keychain session is superseded: the server has just told us this
+      // device's record is a cookie one. Leaving it would shadow the token
+      // written below, because `getStoredSession` reads the keychain first.
+      // Best-effort, for the same reason `clearSession` is.
+      try {
+        const keychain = await this.keychain();
+        await keychain.remove({ key: SESSION_KEY });
+      } catch (error) {
+        console.error(storageError('clear', error).message);
+      }
+
+      writeLegacy(LEGACY_DEVICE_TOKEN_KEY, session.deviceToken);
+      // Only when nothing claims the key. It belongs to `getOrCreateDeviceId`
+      // in `analytics/device-fingerprint` — the browser's stable identity, and
+      // what every web sign-in binds its device token to. Overwriting it with
+      // whatever `getDeviceInfo()` happened to report would make a divergence
+      // permanent instead of recording an identity that was missing.
+      if (session.deviceId && !readLegacyDeviceId()) {
+        writeLegacy(LEGACY_DEVICE_ID_KEYS[0], session.deviceId);
+      }
       return;
     }
 
@@ -279,12 +312,20 @@ export class AndroidStorage implements PlatformStorage {
           timeoutId = setTimeout(() => resolve(null), BOUND_DEVICE_ID_TIMEOUT_MS);
         }),
       ]);
-      return session?.deviceId || null;
+      if (session?.deviceId) return session.deviceId;
     } catch {
-      return null;
+      // fall through
     } finally {
       clearTimeout(timeoutId);
     }
+
+    // A keystore that hangs or refuses is no reason to report the *wrong* id.
+    // The legacy binding lives in localStorage and needs no bridge to read, so
+    // it still answers when the native store cannot — and answering with a
+    // minted id instead is precisely the mismatch that gets a refresh rejected
+    // as a stolen token. Falling back to preferences (the caller's next step)
+    // only happens once neither store names a binding.
+    return this.readLegacySession()?.deviceId || null;
   }
 
   /**
