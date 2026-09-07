@@ -9,6 +9,46 @@ const config: CapacitorConfig = {
     // Production: load directly to dashboard, bypassing landing page
     url: 'https://pagespace.ai/dashboard',
     cleartext: false,
+    // NOT the same trap as iOS. iOS bricked (PR #2010) because
+    // WebViewDelegationHandler.swift falls back to a raw string-prefix test of
+    // the target URL against server.url — which carries the `/dashboard` path —
+    // so any top-level navigation to another path failed it. Android's
+    // equivalent, Bridge.launchIntent(), compares only host and scheme:
+    //
+    //   !(appUri.getHost().equals(url.getHost()) && url.getScheme().equals(appUri.getScheme()))
+    //     && !appAllowNavigationMask.matches(url.getHost())
+    //
+    // `https://pagespace.ai/signin` therefore already stays in the WebView on
+    // Android with no allowNavigation at all. This list is here for the hosts
+    // that are NOT pagespace.ai, where Android does hand the URL to the system
+    // browser via ACTION_VIEW exactly as iOS hands it to Safari.
+    //
+    // The apex must still be listed separately: HostMask.Simple.matches() bails
+    // when `maskSize > 1 && hostSize != maskSize`, so '*.pagespace.ai' (3 dot
+    // components) does not match 'pagespace.ai' (2).
+    //
+    // Google/Apple are deliberate but imperfect, for the same reason as iOS.
+    // Android signs in through the NATIVE plugin (@capgo/capacitor-social-login),
+    // so the web fallback should never fire here. If it does, allowlisting keeps
+    // it in the WebView, where Google answers `disallowed_useragent` — a visible,
+    // diagnosable failure. Omitting them instead hands the consent screen to
+    // Chrome, where a successful sign-in drops the cookie in the WRONG cookie jar
+    // and the app stays silently logged out.
+    //
+    // Android-only caveat: Bridge.setAllowedOriginRules() also adds these hosts
+    // to WebViewLocalServer's `authorities`. That only changes behaviour while
+    // Capacitor's JS injector is still live — i.e. on a WebView too old for
+    // WebViewFeature.DOCUMENT_START_SCRIPT (pre-WebView 83), where a top-level
+    // HTML GET to these hosts would be proxied through HttpURLConnection. On any
+    // current WebView the injector is null and shouldInterceptRequest returns
+    // null, leaving the native network stack in charge.
+    allowNavigation: ['pagespace.ai', '*.pagespace.ai', 'accounts.google.com', 'appleid.apple.com'],
+    // Bundled retry screen (apps/android/public/index.html). Android reads this
+    // in BridgeWebViewClient.onReceivedError/onReceivedHttpError for main-frame
+    // requests and loads Bridge.getErrorUrl() — `https://localhost/index.html`,
+    // served from the bundled assets. Without it a failed load leaves the
+    // WebView showing its own error page.
+    errorPath: 'index.html',
   },
   android: {
     backgroundColor: '#0f0f0f',
