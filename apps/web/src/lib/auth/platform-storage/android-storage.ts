@@ -95,14 +95,18 @@ export class AndroidStorage implements PlatformStorage {
 
   async getSessionToken(): Promise<string | null> {
     const session = await this.getStoredSession();
-    return session?.sessionToken ?? null;
+    // A legacy cookie session carries an empty `sessionToken` — there is no
+    // bearer token to hand out, and `null` says that where `''` only implies it.
+    return session?.sessionToken || null;
   }
 
   /**
    * Read the stored session.
    *
-   * `null` means "there is no usable session here" — nothing stored, or stored
-   * bytes we cannot parse. A *store failure* is different information and is
+   * Every "the keychain holds nothing usable" path — absent, unparseable, or
+   * wrong-shaped — answers with the legacy session, so there is one rule rather
+   * than a distinction between kinds of emptiness. `null` therefore means no
+   * session at all. A *store failure* is different information and is
    * thrown, not flattened into `null`: every consumer of this method already
    * handles a rejection (`auth-fetch.ts:296-313` logs it and sends the request
    * unauthenticated; `refreshBearerSession` catches it and returns
@@ -130,12 +134,12 @@ export class AndroidStorage implements PlatformStorage {
     try {
       parsed = JSON.parse(raw) as Partial<StoredSession>;
     } catch {
-      // Corrupt payload is not a store fault — treat it as "no session".
-      return null;
+      // Unparseable bytes are not a store fault — the store answered.
+      return this.readLegacySession();
     }
 
     if (typeof parsed.sessionToken !== 'string' || typeof parsed.deviceId !== 'string') {
-      return null;
+      return this.readLegacySession();
     }
 
     // The optional fields get the same treatment as the required ones. `?? null`
@@ -143,7 +147,7 @@ export class AndroidStorage implements PlatformStorage {
     // hand back something that satisfies `StoredSession` only nominally; those
     // values then travel into a refresh request body.
     if (!isOptionalString(parsed.csrfToken) || !isOptionalString(parsed.deviceToken)) {
-      return null;
+      return this.readLegacySession();
     }
 
     return {

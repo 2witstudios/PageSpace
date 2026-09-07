@@ -179,9 +179,9 @@ export function isNativeApp(): boolean {
  * `platform-storage` that cannot call `useCapacitor()`. Components should
  * prefer `useCapacitor().capabilities`.
  *
- * @public Published API of the capability bridge. The call sites that consume
- * it (secure storage, push registration, badge sync) land in later leaves of
- * the Android parity epic, so knip cannot see a consumer yet.
+ * @public Published API of the capability bridge. `platform-storage` selects
+ * its implementation through this; the remaining call sites (push
+ * registration, badge sync) land in later leaves of the Android parity epic.
  */
 export function hasNativeCapability(capability: NativeCapability): boolean {
   return PLATFORM_CAPABILITIES[getPlatform()][capability];

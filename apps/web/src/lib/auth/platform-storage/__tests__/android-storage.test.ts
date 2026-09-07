@@ -238,6 +238,15 @@ describe('AndroidStorage', () => {
       });
     });
 
+    it('falls back to the legacy session when the stored bytes are unusable', async () => {
+      // One rule for every kind of emptiness: absent, unparseable, wrong shape.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockResolvedValue({ value: 'not json' });
+      const storage = await importAndroidStorage();
+
+      expect((await storage.getStoredSession())?.deviceToken).toBe('legacy-device-token');
+    });
+
     it('prefers the keychain session over the legacy one', async () => {
       localStorage.setItem('deviceToken', 'legacy-device-token');
       keychainMock.get.mockResolvedValue({
@@ -257,6 +266,14 @@ describe('AndroidStorage', () => {
       const storage = await importAndroidStorage();
 
       await expect(storage.getStoredSession()).rejects.toThrow(INIT_FAILURE);
+    });
+
+    it('reports no bearer token for a legacy cookie session', async () => {
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockResolvedValue({ value: null });
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getSessionToken()).toBeNull();
     });
 
     it('returns just the token from getSessionToken', async () => {
