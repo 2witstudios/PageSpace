@@ -359,6 +359,14 @@ meta-data, so both the small icon and the channel fall to Firebase's defaults in
 channel on a real device is a device-verification question, and adding a monochrome notification
 icon is its own asset task.
 
+One thing that will look like a bug during verification and is not: a push arriving while the app is
+in the **foreground** does nothing visible. The hook dispatches a `push:received` window event and
+nothing in the app listens for it — deliberately, on both platforms, because the foreground already
+has a better channel (the realtime socket drives `useNotificationStore`, which is what moves the
+in-app unread count and the badge). Tapping a notification *is* wired: `PushActionHandler` listens
+for `push:action` with no platform gate and routes on `data.type` / `data.pageId` / `data.driveId`,
+all of which the sender populates and FCM delivers as strings.
+
 **Badges.** `@capawesome/capacitor-badge` is now an Android dependency and `useNativeBadgeSync`
 (formerly `useIosBadgeSync`) projects the unread count on both platforms. The Android badge is a
 launcher feature: launchers that do not implement one reject or ignore the write, which the hook
