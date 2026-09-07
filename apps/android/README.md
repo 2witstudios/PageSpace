@@ -10,10 +10,17 @@ Capacitor wrapper around the web app, mirroring `apps/ios`.
 ## Deep links: what ships, and what is deliberately deferred
 
 `AndroidManifest.xml` registers **one** deep-link intent filter: the `pagespace://` custom
-scheme, mirroring iOS's `CFBundleURLSchemes`. This is what the Google and Apple OAuth callback
-routes redirect to (`pagespace://auth-exchange?code=…`). A custom scheme is claimed by the app
-outright — no domain verification, no server-side file — so it works as soon as the app is
+scheme, mirroring iOS's `CFBundleURLSchemes`. A custom scheme is claimed by the app outright — no
+domain verification, no server-side file — so the claim is effective as soon as the app is
 installed, on every supported API level.
+
+It is **groundwork, not a live path**. `pagespace://auth-exchange?code=…` is what the Google and
+Apple OAuth callback routes redirect to, but only on their `platform === 'ios'` branch, and
+`apps/web/src/lib/auth/oauth-state.ts` types the platform as `z.enum(['web', 'desktop', 'ios'])`
+— `'android'` is not a value it can take, so no server path emits a `pagespace://` redirect for
+Android today. (`/api/auth/google/native` does accept `'android'`, but it returns JSON to the
+native plugin rather than a deep link.) Teaching that path about Android belongs to the epic's
+native auth phase; registering the scheme now means the manifest will not be the blocker then.
 
 **Verified App Links for `https://pagespace.ai` are NOT registered.** Two prerequisites are
 missing, and the filter is a regression rather than groundwork until both land.

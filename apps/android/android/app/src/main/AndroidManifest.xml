@@ -35,8 +35,15 @@
 
             <!--
                 Custom scheme, mirroring CFBundleURLSchemes `pagespace` on iOS.
-                This is the OAuth handoff target: the Google and Apple callback
-                routes redirect to `pagespace://auth-exchange?code=...`.
+
+                Groundwork, not yet live: this is the OAuth handoff target the
+                Google and Apple callback routes redirect to
+                (`pagespace://auth-exchange?code=...`), but only on the
+                `platform === 'ios'` branch, and oauth-state.ts types platform as
+                z.enum(['web','desktop','ios']) — 'android' is not a value it can
+                take. Nothing redirects here for Android until the native auth
+                work (epic phase B) teaches that path about Android. Registering
+                the scheme now means the manifest is not the blocker then.
 
                 Unlike an https App Link this needs no domain verification and no
                 assetlinks.json — a custom scheme is claimed by the app outright —
