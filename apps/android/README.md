@@ -2,16 +2,39 @@
 
 Capacitor wrapper around the web app, mirroring `apps/ios`.
 
-> **Scope of this file today:** the server-side push requirements below (added with the FCM
-> sender) and the deep-link deployment dependency. Client-side setup — the runtime permission
-> prompt, token registration, build and signing — belongs to the Android client work and is not
-> documented here yet.
+> **Scope of this file today:** why the Capacitor config diverges from the iOS one, what deep
+> links ship and what is deferred, and the server-side push requirements. Client-side setup — the
+> runtime permission prompt, token registration, build and signing — belongs to the Android client
+> work and is not documented here yet.
 
 ## Why this config is not a copy of the iOS one
 
 `apps/ios/capacitor.config.ts` carries a long comment about `allowNavigation` and `errorPath`,
 added when the iOS shell bricked in PR #2010. Android's config sets the same two keys for
 different reasons, and its `allowNavigation` list is deliberately much shorter.
+
+### `server.url` must stay an origin — the path lives in `appStartPath`
+
+```ts
+url: 'https://pagespace.ai',
+appStartPath: '/dashboard',
+```
+
+Not cosmetic. `Bridge.setAllowedOriginRules()` puts `getServerUrl()` **verbatim** into the set
+`MessageHandler` hands to `WebViewCompat.addWebMessageListener`, and that API takes origin rules —
+`scheme://host[:port]`. A `url` carrying `/dashboard` is not one, and the catch for a rejected rule
+is `webView.addJavascriptInterface(this, "androidBridge")`, which enforces no origin restriction at
+all. Put the path back into `url` and the `allowNavigation` allowlist below may stop meaning
+anything.
+
+`Bridge` appends `appStartPath` *after* the `server.url` branch, so `appUrl` is still
+`https://pagespace.ai/dashboard` and the app still bypasses the landing page. The other
+`getServerUrl()` consumers are fine with an origin: `WebViewLocalServer.isMainUrl`/`isAllowedUrl`
+only null-check it, and `CapacitorCookieManager.getSanitizedDomain` wants a cookie domain.
+
+Whether androidx.webkit really rejects a path-bearing rule was read from the API contract, not
+observed on a device — worth confirming during device verification, and worth an upstream report to
+Capacitor if the catch turns out to be live.
 
 ### The iOS brick does not reproduce on Android
 
