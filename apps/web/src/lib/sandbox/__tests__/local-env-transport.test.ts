@@ -10,7 +10,7 @@
  * the file, in the same spirit as t08's `invariants.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 const sendGrant = vi.fn(async () => ({ type: 'exec_result' as const, grantId: 'g1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: 's' }));
@@ -107,18 +107,43 @@ describe('exactly ONE verification path exists for env-bridge results', () => {
   });
 });
 
-/** Every production (non-test) file under `src` whose text contains `needle`, repo-relative. */
+/**
+ * Every production (non-test) file under `root` whose text contains `needle`,
+ * as repo-relative paths.
+ *
+ * **Each pathname gets at most ONE direct filesystem call**, and that shape is
+ * deliberate rather than incidental: `readdirSync(…, { withFileTypes: true })`
+ * already answers "is this a directory" from the directory entry the readdir
+ * returned, so nothing here ever asks the filesystem a question about a path
+ * and then acts on that path a second time. The check-then-use pattern —
+ * `statSync(full).isDirectory()` followed by `readFileSync(full)`, or an
+ * `existsSync` guard before a read — is a filesystem race (CodeQL
+ * `js/file-system-race`), because the thing described by the first call need
+ * not still be the thing opened by the second. Tolerance for a file that
+ * vanishes between the readdir and the read belongs in a `try`/`catch` around
+ * the read, never in a second probe of the same path.
+ */
 function grepProduction(root: string, needle: string): string[] {
   const found: string[] = [];
   const walk = (dir: string, prefix: string) => {
-    for (const entry of readdirSync(dir)) {
-      const full = join(dir, entry);
-      if (statSync(full).isDirectory()) {
-        if (entry === '__tests__' || entry === 'node_modules') continue;
-        walk(full, `${prefix}${entry}/`);
-      } else if (entry.endsWith('.ts') && readFileSync(full, 'utf8').includes(needle)) {
-        found.push(`${prefix}${entry}`);
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      // Branch on the DIRENT readdir already gave us — never on a fresh stat.
+      if (entry.isDirectory()) {
+        if (entry.name === '__tests__' || entry.name === 'node_modules') continue;
+        walk(join(dir, entry.name), `${prefix}${entry.name}/`);
+        continue;
       }
+      if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+      let text: string;
+      try {
+        text = readFileSync(join(dir, entry.name), 'utf8');
+      } catch {
+        // Raced away between the readdir and the read: it is not a file that
+        // can contain the needle now, and re-probing the path is the very
+        // thing this helper refuses to do.
+        continue;
+      }
+      if (text.includes(needle)) found.push(`${prefix}${entry.name}`);
     }
   };
   walk(root, '');
