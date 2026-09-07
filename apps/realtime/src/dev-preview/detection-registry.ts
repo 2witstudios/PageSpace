@@ -57,6 +57,8 @@ export interface DetectionRegistryDeps {
   /** Test seam for the reconnect delay. */
   wait?: (ms: number) => Promise<void>;
   maxReconnects?: number;
+  /** The non-resetting ceiling for one watcher; a flapping channel is dropped and the read path re-arms it. */
+  maxTotalReconnects?: number;
 }
 
 /**
@@ -101,6 +103,8 @@ export interface DetectionRegistry {
 
 const DEFAULT_MAX_RECONNECTS = 5;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/** Roughly an hour of the longest backoff — long past "a blip", short of "forever". */
+const DEFAULT_MAX_TOTAL_RECONNECTS = 120;
 /**
  * How long a read-driven re-arm waits before trying a sprite again. The status
  * read fires every few seconds per viewer; without this, a sprite that cannot
@@ -111,6 +115,7 @@ export const REARM_COOLDOWN_MS = 30_000;
 export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionRegistry {
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
+  const maxTotalReconnects = deps.maxTotalReconnects ?? DEFAULT_MAX_TOTAL_RECONNECTS;
   /**
    * One entry per watched sprite: how to close it, and its detector — the
    * snapshot source for `listeners()`, null while the slot is only reserved.
@@ -124,6 +129,13 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   interface Watcher {
     close(): void;
     detector: DevPreviewDetector | null;
+    /**
+     * The Sprite INSTANCE this watcher's detector holds a handle to, or null
+     * while the reservation is still resolving. A sprite NAME is reused across
+     * re-creates, so this is the only way to notice that the VM behind the
+     * name has been replaced — see {@link armIfMissing}.
+     */
+    spriteInstanceId: string | null;
   }
   const watchers = new Map<string, Watcher>();
   /** sandboxId → when a re-arm was last attempted, so the read path cannot storm a sick sprite. */
@@ -145,9 +157,19 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     let stopped = false;
     let current: PortsWatchHandle | null = null;
     let attempts = 0;
+    // A SECOND, NON-RESETTING budget. `attempts` is reset by any connection
+    // that opens, which is right for a channel that drops once and recovers —
+    // but a channel that opens and dies immediately, over and over, resets it
+    // every time and reconnects forever, which the docblock's "past the budget
+    // the watcher is dropped" does not describe. Dropping such a watcher is
+    // cheap now: a status read re-arms it within a poll interval, so the
+    // ceiling costs at most that, and a flap that has survived it is a sprite
+    // problem rather than a connection problem.
+    let totalAttempts = 0;
 
     const entry: Watcher = {
       detector,
+      spriteInstanceId: handle.spriteInstanceId,
       close() {
         stopped = true;
         current?.close();
@@ -171,14 +193,15 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
           detector.invalidateSnapshot();
           if (stopped) return;
           if (info.opened) attempts = 0;
-          if (info.reason === 'no-token' || attempts >= maxReconnects) {
-            deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts });
+          if (info.reason === 'no-token' || attempts >= maxReconnects || totalAttempts >= maxTotalReconnects) {
+            deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts, totalAttempts });
             stopped = true;
             watchers.delete(sandboxId);
             return;
           }
           const delay = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)];
           attempts += 1;
+          totalAttempts += 1;
           void wait(delay).then(() => { if (!stopped) open(); });
         },
       });
@@ -196,7 +219,29 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
    * something just happened.
    */
   async function armIfMissing(holder: DevPreviewHolderRef, sandboxId: string, { throttled }: { throttled: boolean }): Promise<void> {
-    if (watchers.has(sandboxId)) return;
+    const existing = watchers.get(sandboxId);
+    if (existing !== undefined) {
+      // A NAME IS NOT AN IDENTITY. A rebuild re-creates the sprite under the
+      // same name, so a watcher armed against the old VM still answers
+      // `watchers.has` — and its detector holds a handle whose instance id is
+      // dead. It would then write rows naming a VM that no longer exists while
+      // its service calls land on the new one: every render says `stale`, the
+      // proxy 409s, and nothing recovers it short of a process restart. That
+      // is the ABA case `spriteInstanceId` exists for.
+      //
+      // Only an EXPLICIT trigger checks: those are the moments a VM can have
+      // just been replaced (a provision, a shell open, the signed watch call),
+      // and the check costs one control-plane attach, which never wakes a
+      // sprite. The throttled read path keeps its cheap short-circuit.
+      if (throttled || existing.spriteInstanceId === null) return;
+      const live = await deps.attach(sandboxId).catch(() => null);
+      if (live === null || live.spriteInstanceId === existing.spriteInstanceId) return;
+      deps.log.info('dev-preview: sprite replaced under the same name, re-watching', {
+        holderKind: holder.kind,
+        holderId: holder.id,
+      });
+      existing.close();
+    }
     const now = deps.now().getTime();
     // Sweep as we go: the map only ever holds sprites armed within the
     // cool-down, so it cannot grow with the number of sprites ever seen.
@@ -207,13 +252,16 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     }
     lastArmAt.set(sandboxId, now);
     // Reserve the slot synchronously so two concurrent arms start one watcher.
-    watchers.set(sandboxId, { detector: null, close() { watchers.delete(sandboxId); } });
+    const reservation: Watcher = { detector: null, spriteInstanceId: null, close() { watchers.delete(sandboxId); } };
+    watchers.set(sandboxId, reservation);
     try {
       await start(holder, sandboxId);
     } catch (error) {
-      // Whatever `start` had registered goes with the failure — the
-      // reservation, or the live entry if the throw came after it was set.
-      watchers.delete(sandboxId);
+      // Whatever `start` had registered goes with the failure — but only if it
+      // is still OURS. A `stopAll` and a fresh arm can both have happened while
+      // this one was failing, and deleting blindly would drop a live entry
+      // without closing it, leaking its reconnecting socket.
+      if (watchers.get(sandboxId) === reservation) watchers.delete(sandboxId);
       deps.log.error('dev-preview: watcher failed to start', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
     }
   }

@@ -24,10 +24,10 @@ function fakeSocketFactory() {
   return { sockets, createSocket };
 }
 
-function fakeHandle(): SandboxHandle {
+function fakeHandle(spriteInstanceId = 'inst'): SandboxHandle {
   return {
     sandboxId: 'sbx',
-    spriteInstanceId: 'inst',
+    spriteInstanceId,
     exec: async () => ({ exitCode: 1, stdout: '', stderr: '' }),
     writeFiles: async () => {},
     readFile: async () => null,
@@ -358,5 +358,50 @@ describe('createDetectionRegistry', () => {
     assert({ given: 'a dark deployment', should: 'be unavailable without even resolving the row', actual: await createDetectionRegistry(dark.deps).read({ holder: HOLDER }), expected: { detection: 'unavailable', listeners: null } });
     expect(h.sockets).toHaveLength(0);
     expect(dark.sockets).toHaveLength(0);
+  });
+
+  it('a sprite REBUILT under the same name is re-watched, and only an explicit trigger pays to notice', async () => {
+    // A name is reused across re-creates. A watcher armed against the old VM
+    // still answers `watchers.has`, and its detector holds a dead instance id —
+    // so it would write rows naming a VM that no longer exists while its
+    // service calls land on the new one: every render `stale`, the proxy 409,
+    // and no recovery short of a process restart.
+    let instance = 'inst-old';
+    const h = deps({ attach: async () => fakeHandle(instance) });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(1);
+
+    // Same VM: an explicit trigger checks and leaves the watcher alone.
+    await registry.ensure({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(1);
+
+    // Rebuilt: the explicit trigger notices and re-watches.
+    instance = 'inst-new';
+    await registry.ensure({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(2);
+    expect(h.logs.some((l) => l.includes('sprite replaced under the same name'))).toBe(true);
+
+    // The READ path does not pay for the check — it runs on every render, and
+    // an attach per render is exactly what the throttle exists to prevent.
+    instance = 'inst-newer';
+    await registry.read({ holder: HOLDER });
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it('drops a channel that flaps forever, because a status read re-arms it within a poll', async () => {
+    // `attempts` resets on any connection that OPENS, so a socket that opens
+    // and dies immediately would reconnect for ever — which is not what the
+    // budget claims to do.
+    const h = deps({ maxTotalReconnects: 3 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    for (let i = 0; i < 6 && h.sockets.length > 0; i += 1) {
+      const socket = h.sockets[h.sockets.length - 1];
+      socket.emit('open');
+      socket.emit('close', { code: 1006 });
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(h.logs.some((l) => l.includes('watch channel gone'))).toBe(true);
   });
 });
