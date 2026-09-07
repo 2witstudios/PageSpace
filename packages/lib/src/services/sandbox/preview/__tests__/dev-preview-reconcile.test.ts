@@ -139,6 +139,10 @@ describe('reconcileStoppedDevPreviews', () => {
     });
     assert({ given: 'an attach that throws for every candidate', should: 'count both failures and keep going', actual: await reconcileStoppedDevPreviews(thrower.deps), expected: { processed: 2, stopped: 0, skipped: 0, failed: 2 } });
     expect(warn).toHaveBeenCalledTimes(2);
+    // A holder that RELIABLY errors must still leave the window, or fifty of
+    // them sit at the head of every oldest-first batch forever — the same
+    // starvation this sweep exists to remove, narrowed to the failing rows.
+    assert({ given: 'holders whose work threw', should: 'stamp them anyway, as the retry backoff', actual: thrower.swept, expected: ['env:env1', 'workspace:ws1'] });
   });
 
   it('does nothing at all when the feature is dark — not even the listing query', async () => {
@@ -171,6 +175,11 @@ describe('reconcileStoppedDevPreviews', () => {
     const vanished = harness({ attach: async () => null });
     await reconcileStoppedDevPreviews(vanished.deps);
     assert({ given: 'a sprite the platform no longer has', should: 'stamp it rather than re-attach it every tick forever', actual: vanished.swept, expected: ['env:env1'] });
+
+    // A stamp that itself fails is bookkeeping, and must not turn a stop that
+    // DID happen into a reported failure.
+    const stampBroken = harness({ markSwept: async () => { throw new Error('db down'); }, log: { warn: () => {} } });
+    assert({ given: 'a stamp that throws after a successful stop', should: 'still report the stop', actual: await reconcileStoppedDevPreviews(stampBroken.deps), expected: { processed: 1, stopped: 1, skipped: 0, failed: 0 } });
 
     // Contended is the one case that must NOT be stamped: a live path owns the
     // holder, and if it does not finish the next tick has to be able to.

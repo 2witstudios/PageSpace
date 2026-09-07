@@ -96,8 +96,12 @@ export async function reconcileStoppedDevPreviews(deps: DevPreviewReconcileDeps)
 
   for (const candidate of candidates) {
     run.processed += 1;
+    // Stamped unless a live path owns the holder — set inside the lock body,
+    // so a `busy` outcome (where `fn` never runs) leaves it false.
+    let stamp = false;
     try {
       const outcome = await lock(candidate.holder, async () => {
+        stamp = true;
         // Re-read under the lock: the intent may have been cleared by a resume
         // between the listing query and now, and the sweep must never act on a
         // row it has not just seen.
@@ -127,15 +131,10 @@ export async function reconcileStoppedDevPreviews(deps: DevPreviewReconcileDeps)
         // row in the window so the next tick can pick it up if that path did
         // not finish.
         run.skipped += 1;
+      } else if (outcome.result === 'stopped') {
+        run.stopped += 1;
       } else {
-        // Looked at, so stamped — otherwise this row matches forever with a
-        // permanently old `updatedAt`, and since the batch is ordered
-        // oldest-first and capped, a handful of long-dead rows would occupy
-        // every tick and starve the holder that stopped a preview a minute
-        // ago. Stamping is also the retry backoff for the failure paths.
-        await deps.markSwept(candidate.holder);
-        if (outcome.result === 'stopped') run.stopped += 1;
-        else run.skipped += 1;
+        run.skipped += 1;
       }
     } catch (error) {
       run.failed += 1;
@@ -144,6 +143,30 @@ export async function reconcileStoppedDevPreviews(deps: DevPreviewReconcileDeps)
         holderId: candidate.holder.id,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    // STAMPED EVEN WHEN IT THREW, which is the whole point of doing it here
+    // rather than on the success path. A holder that reliably errors — a
+    // control plane that 500s on its relay, a `stop` the platform rejects —
+    // keeps its stop intent and its old `updatedAt`, and the candidate query
+    // is oldest-first and capped, so fifty such rows would sit at the head of
+    // every batch forever and starve the holder who stopped a preview a
+    // minute ago. That is the same head-of-line blocking this sweep was
+    // written to remove, just narrowed to the rows that fail. Stamping is the
+    // retry backoff; the row is picked up again one window later.
+    //
+    // Its own failure is swallowed on purpose: it is bookkeeping, and losing
+    // it must not turn a stop that DID happen into a reported failure.
+    if (stamp) {
+      try {
+        await deps.markSwept(candidate.holder);
+      } catch (error) {
+        deps.log?.warn('dev-preview: backstop sweep could not stamp a holder', {
+          holderKind: candidate.holder.kind,
+          holderId: candidate.holder.id,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
   return run;

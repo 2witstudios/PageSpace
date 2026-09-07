@@ -56,6 +56,16 @@ fly certs add "*.preview.pagespace.io" -a pagespace-proxy
 A wildcard certificate is DNS-01 only, so delegate `_acme-challenge` per Fly's
 documentation and wait for the certificate to verify before step 4.
 
+### A note on the migration
+
+`0287` adds a NOT NULL `sessionId` to `dev_preview_grants` and **clears the
+table first**. That is deliberate and costs nothing: a grant is a single-use
+sixty-second handshake token, so the worst any holder sees is "this preview
+link has expired, reopen the preview from PageSpace", and the next click mints
+a fresh one. Without the clear the migration would fail outright (23502) on
+any database that has ever held a grant — and all pending migrations run in
+one invocation, so it would take the whole release with it.
+
 ## 4. The cron
 
 `docker/cron/crontab` already carries the backstop sweep
