@@ -90,6 +90,12 @@ a listed origin can then call `androidBridge.postMessage()`, which reaches
 `Bridge.callPluginMethod()` and every registered plugin — including `PageSpaceKeychain`, backed by
 EncryptedSharedPreferences.
 
+The full set is wider than `allowNavigation`, which matters if you are auditing bridge access.
+`setAllowedOriginRules()` adds, in order: `scheme://hostname` (`https://localhost`, the bundled-asset
+origin — see the `errorPath` section above), then `server.url` if set, then every `allowNavigation`
+entry. So `allowNavigation` is the only part *we* control, and shortening it is the only lever this
+config has.
+
 So Android lists `pagespace.ai` and nothing else:
 
 - **`accounts.google.com` / `appleid.apple.com`** are not listed, though iOS lists them. Allowing
