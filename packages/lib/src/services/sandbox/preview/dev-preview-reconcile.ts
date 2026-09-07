@@ -59,6 +59,8 @@ export interface DevPreviewReconcileDeps {
    * still working through.
    */
   findStoppedWithRelay(input: { staleAfterMs: number; limit: number }): Promise<DevPreviewStopCandidate[]>;
+  /** Re-stamp the row so a holder this tick has looked at leaves the candidate window. */
+  markSwept(holder: DevPreviewHolderRef): Promise<void>;
   /** A control-plane attach; null when the platform no longer has the sprite. MUST NOT wake. */
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   previewStore: DevPreviewStore;
@@ -120,9 +122,21 @@ export async function reconcileStoppedDevPreviews(deps: DevPreviewReconcileDeps)
         const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
         return applied.action === 'stop-relay' ? ('stopped' as const) : ('skipped' as const);
       });
-      if (outcome.outcome === 'busy') run.skipped += 1;
-      else if (outcome.result === 'stopped') run.stopped += 1;
-      else run.skipped += 1;
+      if (outcome.outcome === 'busy') {
+        // A live path owns this holder and is doing the same work. Leave the
+        // row in the window so the next tick can pick it up if that path did
+        // not finish.
+        run.skipped += 1;
+      } else {
+        // Looked at, so stamped — otherwise this row matches forever with a
+        // permanently old `updatedAt`, and since the batch is ordered
+        // oldest-first and capped, a handful of long-dead rows would occupy
+        // every tick and starve the holder that stopped a preview a minute
+        // ago. Stamping is also the retry backoff for the failure paths.
+        await deps.markSwept(candidate.holder);
+        if (outcome.result === 'stopped') run.stopped += 1;
+        else run.skipped += 1;
+      }
     } catch (error) {
       run.failed += 1;
       deps.log?.warn('dev-preview: backstop sweep failed for a holder', {

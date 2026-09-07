@@ -33,6 +33,7 @@ const row = (over: Partial<DevPreviewRecord> = {}): DevPreviewRecord => ({
   detectedAt: NOW,
   stoppedByUserAt: NOW,
   approvedPort: null,
+  approvedAt: null,
   ...over,
 });
 
@@ -69,21 +70,24 @@ function fakeStore(current: DevPreviewRecord | null, calls: string[]): DevPrevie
     setStoppedByUser: async (_h, at) => { held = held === null ? null : { ...held, stoppedByUserAt: at }; return held; },
     approvePort: async () => null,
     findStoppedWithRelay: async () => [],
+    markSwept: async () => {},
   };
 }
 
 function harness(over: Partial<DevPreviewReconcileDeps> & { current?: DevPreviewRecord | null; relay?: SandboxServiceInfo | null } = {}) {
   const calls: string[] = [];
   const store = fakeStore(over.current === undefined ? row() : over.current, calls);
+  const swept: string[] = [];
   const deps: DevPreviewReconcileDeps = {
     findStoppedWithRelay: async () => [{ holder: HOLDER, sandboxId: 'sbx' }],
+    markSwept: async (holder) => { swept.push(`${holder.kind}:${holder.id}`); },
     attach: async () => fakeHandle(calls, over.relay === undefined ? relayService(5173) : over.relay),
     previewStore: store,
     featureEnabled: () => true,
     now: () => NOW,
     ...over,
   };
-  return { deps, calls };
+  return { deps, calls, swept };
 }
 
 describe('reconcileStoppedDevPreviews', () => {
@@ -149,5 +153,29 @@ describe('reconcileStoppedDevPreviews', () => {
     const { deps } = harness({ findStoppedWithRelay: async (input) => { asked = input; return []; } });
     await reconcileStoppedDevPreviews(deps);
     assert({ given: 'the listing', should: 'be capped and age-bounded', actual: asked, expected: { staleAfterMs: DEV_PREVIEW_SWEEP_STALE_AFTER_MS, limit: DEV_PREVIEW_SWEEP_LIMIT } });
+  });
+
+  it('STAMPS every holder it looked at, so a converged row cannot occupy the batch forever', async () => {
+    // The stop itself writes nothing, so without the stamp a converged row
+    // keeps matching the oldest-first, capped candidate query — fifty dead
+    // rows would fill every tick and starve the holder who stopped a preview
+    // a minute ago.
+    const stopped = harness();
+    await reconcileStoppedDevPreviews(stopped.deps);
+    assert({ given: 'a relay it stopped', should: 'stamp the row out of the window', actual: stopped.swept, expected: ['env:env1'] });
+
+    const nothingToDo = harness({ current: row({ stoppedByUserAt: null }) });
+    await reconcileStoppedDevPreviews(nothingToDo.deps);
+    assert({ given: 'a row that needed nothing', should: 'still stamp it', actual: nothingToDo.swept, expected: ['env:env1'] });
+
+    const vanished = harness({ attach: async () => null });
+    await reconcileStoppedDevPreviews(vanished.deps);
+    assert({ given: 'a sprite the platform no longer has', should: 'stamp it rather than re-attach it every tick forever', actual: vanished.swept, expected: ['env:env1'] });
+
+    // Contended is the one case that must NOT be stamped: a live path owns the
+    // holder, and if it does not finish the next tick has to be able to.
+    const busy = harness({ lock: async () => ({ outcome: 'busy' }) });
+    await reconcileStoppedDevPreviews(busy.deps);
+    assert({ given: 'a holder a live path owns', should: 'leave it in the window', actual: busy.swept, expected: [] });
   });
 });

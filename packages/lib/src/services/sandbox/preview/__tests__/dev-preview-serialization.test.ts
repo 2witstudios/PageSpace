@@ -34,6 +34,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
   const store: DevPreviewStore = {
     approvePort: async () => null,
     findStoppedWithRelay: async () => [],
+    markSwept: async () => {},
     findByHolder: async () => {
       log.push('read');
       if (pause !== null) {
@@ -52,7 +53,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
       }
       log.push(`upsert:${intent.targetPort}`);
       const { basedOnStoppedByUserAt: _guard, ...rest } = intent;
-      row = { id: 'r1', ...rest, stoppedByUserAt: null };
+      row = { id: 'r1', ...rest, stoppedByUserAt: null, approvedPort: null, approvedAt: null };
       return true;
     },
     setStoppedByUser: async (_holder, at) => {
@@ -128,6 +129,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     sandboxId: 'sbx',
     targetPort,
     relayServiceName: targetPort === 8080 ? null : PREVIEW_RELAY_SERVICE_NAME,
+    approvedAt: null,
     detectedAt: new Date('2026-09-07T11:00:00.000Z'),
     stoppedByUserAt: null, approvedPort: null,
     ...overrides,
@@ -148,6 +150,10 @@ describe('the web tier and the detector, serialized per holder', () => {
       probeRuntime: async () => 'node',
       lock,
     });
+
+    // The platform's connect snapshot, which the core requires before it will
+    // plan a relay start from an accumulated set.
+    await detector.onFrame({ type: 'port_list', ports: [] });
 
     // The detector enters its section and BLOCKS inside the read.
     const release = pauseNextRead();
@@ -228,6 +234,12 @@ describe('the web tier and the detector, serialized per holder', () => {
       probeRuntime: async () => 'node',
       lock: async (holder, fn) => (busy ? { outcome: 'busy' } : { outcome: 'acquired', result: await fn() }),
     });
+
+    // The connect snapshot lands while the lock is free, so the contention
+    // under test is about the port_opened frame and nothing else.
+    busy = false;
+    await detector.onFrame({ type: 'port_list', ports: [] });
+    busy = true;
 
     await detector.onFrame({ type: 'port_opened', port: 5173, pid: 3 });
     assert({ given: 'a contended frame', should: 'touch nothing', actual: calls, expected: [] });

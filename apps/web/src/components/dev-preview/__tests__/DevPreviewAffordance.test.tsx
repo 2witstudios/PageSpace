@@ -34,7 +34,6 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canStop: true,
     canResume: false,
     canApprove: false,
-    pendingApprovalPort: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -113,7 +112,6 @@ describe('DevPreviewAffordance', () => {
       canStop: true,
       canResume: false,
       canApprove: true,
-      pendingApprovalPort: 9000,
       state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
     });
     renderAffordance();

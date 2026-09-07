@@ -13,7 +13,7 @@ const ROW: DevPreviewRowIntent = {
   targetPort: 5173,
   relayServiceName: PREVIEW_RELAY_SERVICE_NAME,
   detectedAt: new Date('2026-09-06T00:00:00Z'),
-  stoppedByUserAt: null, approvedPort: null,
+  stoppedByUserAt: null,
   basedOnStoppedByUserAt: null,
 };
 
@@ -206,7 +206,7 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
       liveInstanceId: ROW.spriteInstanceId,
       sandboxId: ROW.sandboxId,
       holder: ROW.holder,
-      row: { spriteInstanceId: ROW.spriteInstanceId, sandboxId: ROW.sandboxId, targetPort: ROW.targetPort, relayServiceName: ROW.relayServiceName, detectedAt: ROW.detectedAt, stoppedByUserAt: null, approvedPort: null },
+      row: { spriteInstanceId: ROW.spriteInstanceId, sandboxId: ROW.sandboxId, targetPort: ROW.targetPort, relayServiceName: ROW.relayServiceName, detectedAt: ROW.detectedAt, stoppedByUserAt: null, approvedPort: null, approvedAt: null },
       detected: null,
       relay: null,
       listeners: [{ port: 5173, pid: 3 }],

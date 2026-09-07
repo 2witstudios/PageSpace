@@ -92,6 +92,10 @@ describe('createDetectionRegistry', () => {
     const registry = createDetectionRegistry(h.deps);
     await registry.ensure({ holder: HOLDER });
     h.sockets[0].emit('open');
+    // The platform sends a `port_list` on connect, always. The core will not
+    // plan a relay start from an accumulated set until it has, because before
+    // that the set says nothing about who holds port 8080.
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [] }) });
     h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_opened', port: 5173, pid: 3 }) });
     await new Promise((r) => setTimeout(r, 10));
     expect(h.upserts).toHaveLength(1);

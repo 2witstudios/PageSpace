@@ -29,7 +29,7 @@ vi.mock('../session-repository', () => ({
 }));
 vi.mock('../opaque-tokens', () => ({ generateOpaqueToken: vi.fn(), isValidTokenFormat: vi.fn(() => true) }));
 vi.mock('../token-utils', () => ({ hashToken: vi.fn((t: string) => `hashed_${t}`) }));
-vi.mock('../constants', () => ({ IDLE_TIMEOUT_MS: 0 }));
+vi.mock('../constants', () => ({ IDLE_TIMEOUT_MS: 15 * 60 * 1000 }));
 
 import { SessionService } from '../session-service';
 import { sessionRepository } from '../session-repository';
@@ -91,6 +91,23 @@ describe('isSessionUsableById', () => {
 
   it('is false when the user join came back empty rather than assuming the session is fine', async () => {
     vi.mocked(sessionRepository.findActiveSessionById).mockResolvedValue(row({ user: null }) as never);
+    expect(await service.isSessionUsableById('sess_abcdef123456', 'user-1')).toBe(false);
+  });
+
+  it('is false for a session idle past the policy — the revocation a background preview frame would otherwise outlive', async () => {
+    // A preview iframe left open makes no request that reaches
+    // `validateSession`, so the lazy idle revoke never fires and the row still
+    // reads active. Checking the policy here is what stops the preview
+    // outliving it by days.
+    vi.mocked(sessionRepository.findActiveSessionById).mockResolvedValue(row({ lastUsedAt: new Date(Date.now() - 20 * 60 * 1000) }) as never);
+    expect(await service.isSessionUsableById('sess_abcdef123456', 'user-1')).toBe(false);
+
+    vi.mocked(sessionRepository.findActiveSessionById).mockResolvedValue(row({ lastUsedAt: new Date(Date.now() - 60_000) }) as never);
+    expect(await service.isSessionUsableById('sess_abcdef123456', 'user-1')).toBe(true);
+
+    // With no `lastUsedAt` the clock runs from creation, exactly as
+    // `validateSessionWithReason` does.
+    vi.mocked(sessionRepository.findActiveSessionById).mockResolvedValue(row({ lastUsedAt: null, createdAt: new Date(Date.now() - 20 * 60 * 1000) }) as never);
     expect(await service.isSessionUsableById('sess_abcdef123456', 'user-1')).toBe(false);
   });
 

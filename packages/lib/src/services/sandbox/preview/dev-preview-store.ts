@@ -78,7 +78,38 @@ export interface DevPreviewStore {
    * working through.
    */
   findStoppedWithRelay(input: { staleAfterMs: number; limit: number; now: Date }): Promise<Array<{ holder: DevPreviewHolderRef; sandboxId: string }>>;
+  /**
+   * Re-stamp `updatedAt` on the holder's row, changing nothing else.
+   *
+   * The sweep needs this because a successful stop WRITES NOTHING — stopping
+   * a relay is a service call, and the row already says what the user wants.
+   * Without a stamp, a converged row keeps matching
+   * {@link DevPreviewStore.findStoppedWithRelay} forever with a permanently
+   * old `updatedAt`, and since that query is ordered oldest-first and capped,
+   * fifty long-dead rows would occupy every batch and a preview stopped a
+   * minute ago would never be reached. Stamping is the backoff: a row the
+   * sweep has looked at drops out of the window for `staleAfterMs`.
+   */
+  markSwept(holder: DevPreviewHolderRef): Promise<void>;
 }
+
+/**
+ * The `DevPreviewRow` slice, as columns. Written once: a new field on the row
+ * would otherwise need three coordinated edits (the read, and each of the two
+ * `returning` clauses), and missing one fails only at runtime, for only that
+ * one operation.
+ */
+const rowColumns = {
+  id: devPreviewServices.id,
+  spriteInstanceId: devPreviewServices.spriteInstanceId,
+  sandboxId: devPreviewServices.sandboxId,
+  targetPort: devPreviewServices.targetPort,
+  relayServiceName: devPreviewServices.relayServiceName,
+  detectedAt: devPreviewServices.detectedAt,
+  stoppedByUserAt: devPreviewServices.stoppedByUserAt,
+  approvedPort: devPreviewServices.approvedPort,
+  approvedAt: devPreviewServices.approvedAt,
+} as const;
 
 function holderColumn(holder: DevPreviewHolderRef) {
   return holder.kind === 'workspace' ? devPreviewServices.workspaceId : devPreviewServices.envId;
@@ -88,16 +119,7 @@ export function createDbDevPreviewStore(): DevPreviewStore {
   return {
     async findByHolder(holder) {
       const [row] = await db
-        .select({
-          id: devPreviewServices.id,
-          spriteInstanceId: devPreviewServices.spriteInstanceId,
-          sandboxId: devPreviewServices.sandboxId,
-          targetPort: devPreviewServices.targetPort,
-          relayServiceName: devPreviewServices.relayServiceName,
-          detectedAt: devPreviewServices.detectedAt,
-          stoppedByUserAt: devPreviewServices.stoppedByUserAt,
-          approvedPort: devPreviewServices.approvedPort,
-        })
+        .select(rowColumns)
         .from(devPreviewServices)
         .where(eq(holderColumn(holder), holder.id))
         .limit(1);
@@ -115,10 +137,10 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         relayServiceName: intent.relayServiceName,
         detectedAt: intent.detectedAt,
         stoppedByUserAt: intent.stoppedByUserAt,
-        approvedPort: intent.approvedPort ?? null,
-        // Only the INSERT path uses this, and there the planner saw no row
-        // (so it carried no approval forward). Kept paired for the CHECK.
-        approvedAt: intent.approvedPort == null ? null : intent.detectedAt,
+        // A brand-new row is a brand-new sprite instance: nothing is approved
+        // on it yet, and a detection is not consent.
+        approvedPort: null,
+        approvedAt: null,
       };
       const written = await db
         .insert(devPreviewServices)
@@ -152,12 +174,20 @@ export function createDbDevPreviewStore(): DevPreviewStore {
             relayServiceName: values.relayServiceName,
             detectedAt: values.detectedAt,
             stoppedByUserAt: values.stoppedByUserAt,
-            approvedPort: values.approvedPort,
-            // The planner never grants or revokes an approval — it only
-            // carries the row's own forward — so the stored timestamp is
-            // KEPT rather than restamped, and says when a person actually
-            // agreed. Cleared together with the port, for the CHECK.
-            approvedAt: values.approvedPort == null ? null : sql`${devPreviewServices.approvedAt}`,
+            // THE APPROVAL COLUMNS ARE NOT THE PLANNER'S TO WRITE. Only
+            // `approvePort` grants consent, so a detection frame must not
+            // carry a value it read moments ago — a user's Share landing in
+            // between would be silently wiped, and the stop guard above does
+            // not cover these columns. Expressed as SQL over the STORED row
+            // rather than a read-modify-write, so there is no window at all.
+            //
+            // The one thing a detection does decide is that a REBUILD clears
+            // consent: a replacement VM inherits nothing, this table's
+            // standing rule. Attribution is cleared with it, so the row never
+            // credits a consent that no longer exists.
+            approvedPort: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedPort} ELSE NULL END`,
+            approvedAt: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedAt} ELSE NULL END`,
+            approvedByUserId: sql`CASE WHEN ${devPreviewServices.spriteInstanceId} = ${sql.param(intent.spriteInstanceId, devPreviewServices.spriteInstanceId)} THEN ${devPreviewServices.approvedByUserId} ELSE NULL END`,
             // Not `now()`: `updatedAt` is a UTC wall-clock timestamp column and
             // `now()` resolves through the session TZ (see the SQL-now rule).
             updatedAt: sql`(now() at time zone 'utc')`,
@@ -172,16 +202,7 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         .update(devPreviewServices)
         .set({ stoppedByUserAt: at, updatedAt: sql`(now() at time zone 'utc')` })
         .where(eq(holderColumn(holder), holder.id))
-        .returning({
-          id: devPreviewServices.id,
-          spriteInstanceId: devPreviewServices.spriteInstanceId,
-          sandboxId: devPreviewServices.sandboxId,
-          targetPort: devPreviewServices.targetPort,
-          relayServiceName: devPreviewServices.relayServiceName,
-          detectedAt: devPreviewServices.detectedAt,
-          stoppedByUserAt: devPreviewServices.stoppedByUserAt,
-          approvedPort: devPreviewServices.approvedPort,
-        });
+        .returning(rowColumns);
       return row ?? null;
     },
 
@@ -210,6 +231,16 @@ export function createDbDevPreviewStore(): DevPreviewStore {
       }));
     },
 
+    async markSwept(holder) {
+      // `updatedAt` has an `$onUpdate` hook, but an UPDATE with no changed
+      // columns still needs a SET clause — so set it explicitly, in the same
+      // UTC wall-clock terms every other write here uses.
+      await db
+        .update(devPreviewServices)
+        .set({ updatedAt: sql`(now() at time zone 'utc')` })
+        .where(eq(holderColumn(holder), holder.id));
+    },
+
     async approvePort(holder, { port, at, byUserId }) {
       const [row] = await db
         .update(devPreviewServices)
@@ -219,16 +250,7 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         // user was shown. A dev server that moved between the render and the
         // click therefore cannot be approved by a click meant for the old one.
         .where(and(eq(holderColumn(holder), holder.id), eq(devPreviewServices.targetPort, port)))
-        .returning({
-          id: devPreviewServices.id,
-          spriteInstanceId: devPreviewServices.spriteInstanceId,
-          sandboxId: devPreviewServices.sandboxId,
-          targetPort: devPreviewServices.targetPort,
-          relayServiceName: devPreviewServices.relayServiceName,
-          detectedAt: devPreviewServices.detectedAt,
-          stoppedByUserAt: devPreviewServices.stoppedByUserAt,
-          approvedPort: devPreviewServices.approvedPort,
-        });
+        .returning(rowColumns);
       return row ?? null;
     },
   };

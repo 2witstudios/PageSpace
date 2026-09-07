@@ -152,7 +152,20 @@ export class SessionService {
     if (!session?.user) return false;
     if (session.userId !== userId) return false;
     if (session.user.suspendedAt) return false;
-    return session.tokenVersion === session.user.tokenVersion;
+    if (session.tokenVersion !== session.user.tokenVersion) return false;
+    // THE IDLE TIMEOUT APPLIES HERE TOO, and it is the revocation most likely
+    // to matter for a preview: a frame left open in a background tab makes no
+    // request that would trigger `validateSession`'s lazy revoke, so without
+    // this an idle-policy deployment would keep proxying into the sandbox
+    // until the session's own expiry — days, not minutes. Read-only like the
+    // rest of this method: the revoke is still written by the next real
+    // session use, and the preview is refused meanwhile either way.
+    if (IDLE_TIMEOUT_MS > 0) {
+      const lastActivity = session.lastUsedAt ?? session.createdAt;
+      const lastUsed = lastActivity instanceof Date ? lastActivity : new Date(lastActivity);
+      if (Date.now() - lastUsed.getTime() > IDLE_TIMEOUT_MS) return false;
+    }
+    return true;
   }
 
   async validateSessionWithReason(

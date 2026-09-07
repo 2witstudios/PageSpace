@@ -266,6 +266,7 @@ export function reconcileStoppedDevPreviewsForCron(): Promise<DevPreviewReconcil
   const store = deps.previewStore;
   return reconcileStoppedDevPreviews({
     findStoppedWithRelay: ({ staleAfterMs, limit }) => store.findStoppedWithRelay({ staleAfterMs, limit, now: new Date() }),
+    markSwept: (holder) => store.markSwept(holder),
     attach: deps.attach,
     previewStore: store,
     lock: createDevPreviewLock({ retries: [], log: loggers.realtime }),

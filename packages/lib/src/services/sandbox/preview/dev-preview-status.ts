@@ -34,6 +34,7 @@
 import type { CanRunCodeResult } from '../can-run-code';
 import type { SandboxHandle, SandboxServiceInfo } from '../sandbox-host';
 import {
+  DETECTION_UNAVAILABLE_MESSAGE,
   HTTP_PORT_BUSY_MESSAGE,
   describeHttpPortSlot,
   describeServiceState,
@@ -124,13 +125,11 @@ export interface DevPreviewStatus {
   canResume: boolean;
   /**
    * True when this reader may turn a detected-but-unshared port into a shared
-   * one — the preview is waiting on a decision and the caller has already
-   * established the reader may manage it. The PORT is carried beside it so
-   * the click can echo back what the user was actually shown.
+   * one. The PORT is not carried beside it: `state` already names it when
+   * this is true (`needs-approval` carries `targetPort`), and a second copy
+   * of the same fact is a second thing that can disagree.
    */
   canApprove: boolean;
-  /** The port awaiting a decision, or null. Echoed by the approve action. */
-  pendingApprovalPort: number | null;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
   /**
@@ -148,8 +147,13 @@ export interface DevPreviewStatus {
  * the platform could not ATTACH to is the core's own `instance-unknown`.)
  */
 export const SANDBOX_ABSENT_MESSAGE = 'This sandbox is not running, so there is no dev server to preview.';
-/** Shown when the sandbox is live but nothing is watching its ports, so the status may lag. */
-export const DETECTION_UNAVAILABLE_MESSAGE = 'Dev-server detection is not running right now, so this status may be out of date.';
+/**
+ * Re-exported for server callers that already import this module. The value
+ * itself lives in the pure core so the PANE can import it without pulling
+ * this module's `node:crypto` and database dependencies into the browser
+ * bundle — see the constant's own doc.
+ */
+export { DETECTION_UNAVAILABLE_MESSAGE };
 
 /**
  * Pure: who holds 8080, as a fact. A user process on 8080 is the USER'S OWN
@@ -228,7 +232,6 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     canStop: actionable && row.stoppedByUserAt === null,
     canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
     canApprove: actionable && state.status === 'needs-approval',
-    pendingApprovalPort: state.status === 'needs-approval' ? state.targetPort : null,
     detectedAt: row?.detectedAt ?? null,
     detection,
   };
@@ -395,6 +398,9 @@ export async function applyDevPreviewUserAction({
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
   const lock = deps.lock ?? unlocked;
+  // Bound once: the locked path and the contended fallback make the SAME
+  // write, and only where it happens differs.
+  const writeIntent = () => writeDevPreviewIntent({ holder, action, now, userId, store: deps.previewStore });
 
   // RESUME IS COMPUTE. `services.start` brings a process up inside the sprite
   // and, on a suspended sprite, is a billed wake — the same posture the proxy
@@ -422,9 +428,9 @@ export async function applyDevPreviewUserAction({
   const locked = await lock(holder, async (): Promise<DevPreviewUserActionResult> => {
     // The write returns the row as written, and the plan is made from THAT —
     // no second read.
-    const row = await writeIntent(holder, action, now, userId, deps.previewStore);
-    if (row === 'port-changed') return { ok: false, reason: 'port-changed' };
-    if (row === null) return { ok: false, reason: 'no-preview' };
+    const written = await writeIntent();
+    if (!written.ok) return written;
+    const row = written.row;
 
     const handle = await deps.attach(row.sandboxId);
     if (handle === null) return { ok: true, applied: null };
@@ -456,29 +462,36 @@ export async function applyDevPreviewUserAction({
   // are entitled to, so record it unserialized — the row's compare-and-set
   // keeps that write safe on its own — and defer the relay work to the
   // detector's next frame or the backstop sweep.
-  const contendedRow = await writeIntent(holder, action, now, userId, deps.previewStore);
-  if (contendedRow === 'port-changed') return { ok: false, reason: 'port-changed' };
-  if (contendedRow === null) return { ok: false, reason: 'no-preview' };
+  const contended = await writeIntent();
+  if (!contended.ok) return contended;
   return { ok: true, applied: null, lockContended: true };
 }
 
 /**
  * The one durable write a user action makes, before any plan: the stop
- * intent, or the approval. Both return the row AS WRITTEN so the plan can be
- * made from it without a second read; `'port-changed'` is the approve-only
- * outcome where the row no longer targets the port the user was shown.
+ * intent, or the approval. Returns the row AS WRITTEN so the plan can be made
+ * from it without a second read, or the refusal to hand straight back.
  */
-async function writeIntent(
-  holder: DevPreviewHolderRef,
-  action: DevPreviewUserAction,
-  now: Date,
-  userId: string,
-  store: DevPreviewStore,
-): Promise<DevPreviewRow | null | 'port-changed'> {
-  if (action.kind !== 'approve') return store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
+async function writeDevPreviewIntent({
+  holder,
+  action,
+  now,
+  userId,
+  store,
+}: {
+  holder: DevPreviewHolderRef;
+  action: DevPreviewUserAction;
+  now: Date;
+  userId: string;
+  store: DevPreviewStore;
+}): Promise<{ ok: true; row: DevPreviewRow } | Extract<DevPreviewUserActionResult, { reason: 'port-changed' | 'no-preview' }>> {
+  if (action.kind !== 'approve') {
+    const row = await store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
+    return row === null ? { ok: false, reason: 'no-preview' } : { ok: true, row };
+  }
   const approved = await store.approvePort(holder, { port: action.port, at: now, byUserId: userId });
-  if (approved !== null) return approved;
+  if (approved !== null) return { ok: true, row: approved };
   // Null means the filtered UPDATE matched nothing: either there is no row at
   // all, or the row moved on to another port. Only the second is a conflict.
-  return (await store.findByHolder(holder)) === null ? null : 'port-changed';
+  return (await store.findByHolder(holder)) === null ? { ok: false, reason: 'no-preview' } : { ok: false, reason: 'port-changed' };
 }

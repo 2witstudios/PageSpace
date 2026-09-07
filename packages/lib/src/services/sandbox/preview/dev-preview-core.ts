@@ -123,6 +123,8 @@ export interface DevPreviewRow {
    * inherited one. See {@link requiresPreviewApproval}.
    */
   approvedPort: number | null;
+  /** When that consent was given; `null` exactly when `approvedPort` is. */
+  approvedAt: Date | null;
 }
 
 /**
@@ -148,12 +150,6 @@ export interface DevPreviewRowIntent {
   relayServiceName: string | null;
   detectedAt: Date;
   stoppedByUserAt: null;
-  /**
-   * The approval to carry forward — the row's existing one, untouched. A
-   * detection never grants approval and never revokes one: only the explicit
-   * `approve` action writes this column.
-   */
-  approvedPort: number | null;
   /**
    * THE USER-INTENT GUARD (optimistic concurrency, not a value to write).
    *
@@ -497,7 +493,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   if (
     detected !== null && row !== null && detected.port !== row.targetPort
     && detected.likelihood === 'unlisted'
-    && (KNOWN_DEV_SERVER_PORTS.has(row.targetPort) || isPreviewApproved(row, row.targetPort))
+    && isPreviewShareable(row, row.targetPort)
     && listeners.some((entry) => entry.port === row.targetPort)
   ) {
     return { action: 'none', reason: 'current-target-preferred', staleRowIgnored };
@@ -510,6 +506,20 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   const detectedAt = detected ? now : row?.detectedAt ?? now;
   if (targetPort === null) return { action: 'none', reason: 'nothing-detected', staleRowIgnored };
 
+  // ONE row shape, three plans. Only `relayServiceName` differs between them,
+  // and the approval and intent guards must be identical in all three — which
+  // is exactly the kind of thing three hand-copied literals stop being.
+  const rowFor = (relayServiceName: string | null): DevPreviewRowIntent => ({
+    holder,
+    spriteInstanceId: liveInstanceId,
+    sandboxId,
+    targetPort,
+    relayServiceName,
+    detectedAt,
+    stoppedByUserAt: null,
+    basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
+  });
+
   if (targetPort === SPRITE_HTTP_PORT) {
     // The user's own server on 8080 — reachable through the URL as-is. A relay
     // that is still defined is a leftover from an earlier target and must go.
@@ -519,7 +529,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return {
       action: 'record-direct',
       removeRelay: relay !== null,
-      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, approvedPort: row?.approvedPort ?? null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
+      row: rowFor(null),
     };
   }
 
@@ -531,7 +541,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
       action: 'await-approval',
       targetPort,
       removeRelay: relay !== null,
-      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, approvedPort: row?.approvedPort ?? null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
+      row: rowFor(null),
     };
   }
 
@@ -546,17 +556,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   }
 
   const service = buildPreviewRelaySpec({ targetPort, runtime: relayRuntime });
-  const rowIntent: DevPreviewRowIntent = {
-    holder,
-    spriteInstanceId: liveInstanceId,
-    sandboxId,
-    targetPort,
-    relayServiceName: service.name,
-    detectedAt,
-    stoppedByUserAt: null,
-    approvedPort: row?.approvedPort ?? null,
-    basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
-  };
+  const rowIntent = rowFor(service.name);
 
   if (relay !== null && relayServiceMatches(relay, service)) {
     if (isRelayAlive(relay)) {
@@ -638,6 +638,20 @@ export function needsApprovalMessage(targetPort: number): string {
   return `A dev server is running on port ${targetPort}. It is not a usual dev-server port, so it is not being shared until you say so.`;
 }
 
+/**
+ * Shown when the sandbox is live but nothing is watching its ports, so the
+ * status on screen may lag.
+ *
+ * It lives HERE, in the pure core, rather than beside the status model that
+ * produces it, because the preview PANE renders it — and importing a value
+ * from `dev-preview-status.ts` drags that module's whole dependency graph
+ * (the grant signer's `node:crypto`, the store's database client) into the
+ * browser bundle. `tsc` is perfectly happy with that; `next build` is not.
+ * The core imports nothing but types, which is what makes it safe to reach
+ * for from client code.
+ */
+export const DETECTION_UNAVAILABLE_MESSAGE = 'Dev-server detection is not running right now, so this status may be out of date.';
+
 /** The honest fallback copy for a held slot — the ONE place it is worded. */
 export const HTTP_PORT_BUSY_MESSAGE =
   `Port ${SPRITE_HTTP_PORT} is already in use by something that is not the preview relay. Run your dev server on port ${SPRITE_HTTP_PORT} to preview it, or free the port.`;
@@ -664,20 +678,26 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     };
   }
 
-  // Detected, recorded, and serving NOTHING — no relay for a non-8080 target
-  // means the sprite URL (which routes to 8080 alone) reaches nothing. Two
-  // reasons land here and they read very differently to a user: waiting on a
-  // person, or a relay this reconcile has not created yet.
-  if (row.relayServiceName === null && row.targetPort !== SPRITE_HTTP_PORT) {
-    if (isPreviewApproved(row, row.targetPort)) {
-      return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
-    }
-    return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
-  }
-
   const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);
 
   const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
+
+  // Detected, recorded, and serving NOTHING — no relay for a non-8080 target
+  // means the sprite URL (which routes to 8080 alone) reaches nothing. Three
+  // reasons land here and they read very differently to a user.
+  if (row.relayServiceName === null && row.targetPort !== SPRITE_HTTP_PORT) {
+    if (!isPreviewApproved(row, row.targetPort)) {
+      return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
+    }
+    // Approved, and the slot is TAKEN: the relay was planned and refused, and
+    // no future reconcile will get further while the port is held. Saying
+    // "starting…" here would be a lie that never resolves, and it would hide
+    // the one thing the user can act on — asked BEFORE the starting case, and
+    // only when a snapshot actually proves it (`listeners: null` leaves the
+    // slot unknown, which is not evidence of a problem).
+    if (holder === 'user-process') return { status: 'blocked', targetPort: row.targetPort, message: HTTP_PORT_BUSY_MESSAGE };
+    return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
+  }
 
   if (row.relayServiceName === null) {
     // Direct: the user's server on 8080 is the whole path, so the slot holder

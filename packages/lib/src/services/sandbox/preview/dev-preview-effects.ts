@@ -146,44 +146,45 @@ export async function applyDevServerServicePlan({
   services: SandboxServicesApi;
   store: DevPreviewRowWriter;
 }): Promise<AppliedDevServerServicePlan> {
+  // THE ORDER, ENCODED ONCE. Every plan that carries a row writes it here,
+  // before the switch and therefore before any service call — so a new arm
+  // cannot get the ordering wrong by forgetting to copy two lines, and a
+  // refused write costs no sprite mutation for ALL of them at once.
+  if ('row' in plan) {
+    const recorded = await store.upsert(plan.row);
+    if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
+  }
+
   switch (plan.action) {
     case 'start-relay': {
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
       if (plan.via === 'create') {
         await services.create({ name: plan.service.name, command: plan.service.command, args: plan.service.args });
       } else if (plan.via === 'start') {
         await services.start(plan.service.name);
       }
-      return { action: 'start-relay', via: plan.via, targetPort: plan.service.targetPort, recorded };
+      return { action: 'start-relay', via: plan.via, targetPort: plan.service.targetPort, recorded: true };
     }
     case 'replace-relay': {
-      // Row first (see the docblock). A refusal here leaves the OLD relay
-      // running and the row still naming it — which is exactly right: the
-      // refusal means the user's stop landed, and the next reconcile plans
-      // `stop-relay` against a row that can still find the relay to stop.
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
+      // A refusal above leaves the OLD relay running and the row still naming
+      // it — which is exactly right: the refusal means the user's stop landed,
+      // and the next reconcile plans `stop-relay` against a row that can still
+      // find the relay to stop.
       // Remove-then-create, never an in-place PUT with a different command:
       // what the platform does with a DIFFERENT command under the same name is
       // unverified (`relayServiceMatches`'s doc), and the core plans around it.
       await services.remove(plan.service.name);
       await services.create({ name: plan.service.name, command: plan.service.command, args: plan.service.args });
-      return { action: 'replace-relay', previousTargetPort: plan.previousTargetPort, targetPort: plan.service.targetPort, recorded };
+      return { action: 'replace-relay', previousTargetPort: plan.previousTargetPort, targetPort: plan.service.targetPort, recorded: true };
     }
     case 'record-direct': {
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
       if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
-      return { action: 'record-direct', removedRelay: plan.removeRelay, recorded };
+      return { action: 'record-direct', removedRelay: plan.removeRelay, recorded: true };
     }
     case 'await-approval': {
-      // Row first, like every other arm. A refusal means the user's stop
-      // landed in between, and a stopped preview needs no approval prompt.
-      const recorded = await store.upsert(plan.row);
-      if (!recorded) return { action: 'skipped', reason: 'intent-changed', mutated: 'none' };
+      // A refusal above means the user's stop landed in between, and a
+      // stopped preview needs no approval prompt.
       if (plan.removeRelay) await services.remove(PREVIEW_RELAY_SERVICE_NAME);
-      return { action: 'await-approval', targetPort: plan.targetPort, removedRelay: plan.removeRelay, recorded };
+      return { action: 'await-approval', targetPort: plan.targetPort, removedRelay: plan.removeRelay, recorded: true };
     }
     case 'stop-relay': {
       // The mirror of the row guard, for the effect that writes nothing: a

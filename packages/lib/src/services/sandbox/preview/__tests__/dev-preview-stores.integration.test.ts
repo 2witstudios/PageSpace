@@ -55,13 +55,13 @@ describe('createDbDevPreviewStore', () => {
   const holder = { kind: 'env', id: envId } as const;
 
   it('upserts by holder: a re-create on a new instance REPLACES the holder row and clears the stop intent', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-a', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-a', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     // Simulate the user switching it off on the old instance.
     await db.update(devPreviewServices).set({ stoppedByUserAt: NOW }).where(eq(devPreviewServices.envId, envId));
     const before = await store.findByHolder(holder);
     expect(before?.stoppedByUserAt).toEqual(NOW);
 
-    await store.upsert({ holder, spriteInstanceId: 'inst-b', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-b', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const rows = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ spriteInstanceId: 'inst-b', targetPort: 3000, stoppedByUserAt: null, workspaceId: null });
@@ -71,38 +71,38 @@ describe('createDbDevPreviewStore', () => {
   });
 
   it('THE INTENT GUARD: a write planned before a user\'s stop is refused on the SAME instance (the click survives), while a re-create on a NEW instance replaces the row and the dead VM\'s stop with it', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const stoppedAt = new Date('2026-09-06T13:00:00.000Z');
     await store.setStoppedByUser(holder, stoppedAt);
 
     // A detection frame that read the row BEFORE the stop (guard: null) must
     // not clear it — the write is refused and the row is untouched.
-    const refused = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    const refused = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     expect(refused).toBe(false);
     expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 5173, stoppedByUserAt: stoppedAt });
 
     // A frame that DID see the stop (guard: that timestamp) writes normally.
-    const accepted = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: stoppedAt });
+    const accepted = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: stoppedAt });
     expect(accepted).toBe(true);
     expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 3000, stoppedByUserAt: null });
 
     // A REBUILD: the stored row names a dead instance, so its stop dies with
     // the VM and the re-create replaces it even with a null guard.
     await store.setStoppedByUser(holder, stoppedAt);
-    const recreated = await store.upsert({ holder, spriteInstanceId: 'inst-rebuilt', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    const recreated = await store.upsert({ holder, spriteInstanceId: 'inst-rebuilt', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     expect(recreated).toBe(true);
     expect(await store.findByHolder(holder)).toMatchObject({ spriteInstanceId: 'inst-rebuilt', targetPort: 5173, stoppedByUserAt: null });
   });
 
   it('a direct (8080) row carries no relay name, as the CHECK requires', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-c', sandboxId: 'sbx', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-c', sandboxId: 'sbx', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 8080, relayServiceName: null });
   });
 
   it('an UNSHARED unlisted port is a legal row — a non-8080 target with no relay, which serves nothing', async () => {
     // The old CHECK made this shape illegal, which is why it had to be
     // relaxed: consent has to be recordable before the relay exists.
-    await store.upsert({ holder, spriteInstanceId: 'inst-u', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-u', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 9000, relayServiceName: null, approvedPort: null });
     // A relay pointed at 8080 would be a loop, and that half of the CHECK stands.
     await expect(
@@ -111,7 +111,7 @@ describe('createDbDevPreviewStore', () => {
   });
 
   it('approvePort records consent for exactly the port shown, clears the stop, and REFUSES a port the row no longer targets', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-ap', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-ap', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     await store.setStoppedByUser(holder, NOW);
 
     const at = new Date('2026-09-06T12:45:00.000Z');
@@ -125,12 +125,12 @@ describe('createDbDevPreviewStore', () => {
 
     // A later detection carries the approval and its ORIGINAL timestamp
     // forward: the planner never grants or revokes, so nothing is restamped.
-    await store.upsert({ holder, spriteInstanceId: 'inst-ap', sandboxId: 'sbx', targetPort: 9000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date(NOW.getTime() + 60_000), stoppedByUserAt: null, approvedPort: 9000, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-ap', sandboxId: 'sbx', targetPort: 9000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date(NOW.getTime() + 60_000), stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const [after] = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(after).toMatchObject({ approvedPort: 9000, approvedAt: at });
 
     // And a REBUILD carries nothing: a new instance replaces the row wholesale.
-    await store.upsert({ holder, spriteInstanceId: 'inst-new', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-new', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const [rebuilt] = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(rebuilt).toMatchObject({ approvedPort: null, approvedAt: null });
     expect(await store.approvePort({ kind: 'workspace', id: createId() }, { port: 9000, at, byUserId: userId })).toBeNull();
@@ -144,7 +144,7 @@ describe('createDbDevPreviewStore', () => {
     const ask = () => store.findStoppedWithRelay({ staleAfterMs: 2 * 60 * 1000, limit: 50, now: new Date(Date.now() + 10 * 60 * 1000) });
 
     // Switched off with a relay: a candidate, but only once it has aged.
-    await store.upsert({ holder, spriteInstanceId: 'inst-s', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-s', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     await store.setStoppedByUser(holder, NOW);
     // Not yet aged: the row was written a moment ago.
     expect(await store.findStoppedWithRelay({ staleAfterMs: 2 * 60 * 1000, limit: 50, now: new Date() })).toEqual([]);
@@ -155,9 +155,24 @@ describe('createDbDevPreviewStore', () => {
     expect(await ask()).toEqual([]);
 
     // Switched off but with no relay recorded: nothing to stop.
-    await store.upsert({ holder, spriteInstanceId: 'inst-s2', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-s2', sandboxId: 'sbx', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     await store.setStoppedByUser(holder, NOW);
     expect(await ask()).toEqual([]);
+  });
+
+  it('markSwept re-stamps updatedAt and NOTHING else, which is what takes a converged row out of the sweep window', async () => {
+    await store.upsert({ holder, spriteInstanceId: 'inst-sw', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    await store.setStoppedByUser(holder, NOW);
+    const before = await store.findByHolder(holder);
+    const stale = () => store.findStoppedWithRelay({ staleAfterMs: 0, limit: 50, now: new Date(Date.now() + 60_000) });
+    expect(await stale()).toHaveLength(1);
+
+    await store.markSwept(holder);
+    // The row itself is untouched — the stop intent, the target and the relay
+    // name are facts a sweep does not get to change.
+    expect(await store.findByHolder(holder)).toEqual(before);
+    // But it has left the window it was in.
+    expect(await store.findStoppedWithRelay({ staleAfterMs: 60_000, limit: 50, now: new Date() })).toEqual([]);
   });
 
   it('answers null for a holder with no row', async () => {
@@ -165,7 +180,7 @@ describe('createDbDevPreviewStore', () => {
   });
 
   it('setStoppedByUser writes ONLY the intent column and returns the row as written, clears it on null, and answers null for a holder with no row', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-d', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-d', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const stoppedAt = new Date('2026-09-06T12:30:00.000Z');
     const written = await store.setStoppedByUser(holder, stoppedAt);
     expect(written).toMatchObject({ spriteInstanceId: 'inst-d', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, stoppedByUserAt: stoppedAt });

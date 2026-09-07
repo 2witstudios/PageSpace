@@ -145,6 +145,14 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
       detected,
       relay,
       listeners: [...listeners.values()],
+      // UNKNOWN IS NEVER 'FREE', here too. The accumulated set is only a
+      // current picture of the sprite once THIS connection's `port_list` has
+      // landed; before that — or after `invalidateSnapshot` on a drop, while
+      // a frame is still queued on the chain — it is a dead connection's
+      // leftovers. Handing it over as if it were current is exactly what
+      // `slot-unknown` was added to prevent: the core would read 8080 as free
+      // and start a relay that cannot bind.
+      listenersKnown: snapshotKnown,
       now: now(),
     };
     let plan = planDevServerService({ ...input, relayRuntime: runtime });

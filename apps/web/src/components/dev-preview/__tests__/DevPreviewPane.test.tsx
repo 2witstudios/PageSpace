@@ -52,7 +52,6 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     canStop: true,
     canResume: false,
     canApprove: false,
-    pendingApprovalPort: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -180,7 +179,6 @@ describe('DevPreviewPane', () => {
       canStop: true,
       canResume: false,
       canApprove: true,
-      pendingApprovalPort: 9000,
       state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
     });
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
@@ -199,7 +197,7 @@ describe('DevPreviewPane', () => {
   });
 
   test('a viewer who may not manage is offered NO way to share, however unshared the preview is', async () => {
-    status = live({ canManage: false, canOpen: false, canApprove: true, pendingApprovalPort: 9000, state: { status: 'needs-approval', targetPort: 9000, message: 'not shared' } });
+    status = live({ canManage: false, canOpen: false, canApprove: true, state: { status: 'needs-approval', targetPort: 9000, message: 'not shared' } });
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
     await screen.findByTestId('dev-preview-placeholder');

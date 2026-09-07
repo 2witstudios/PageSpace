@@ -36,6 +36,7 @@ function relayRow(targetPort: number, overrides: Partial<DevPreviewRow> = {}): D
     detectedAt: new Date('2026-09-05T11:00:00.000Z'),
     stoppedByUserAt: null,
     approvedPort: null,
+    approvedAt: null,
     ...overrides,
   };
 }
@@ -210,7 +211,7 @@ describe('planDevServerService', () => {
         action: 'start-relay',
         via: 'create',
         service: buildPreviewRelaySpec({ targetPort: 5173 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -282,7 +283,7 @@ describe('planDevServerService', () => {
         action: 'replace-relay',
         previousTargetPort: 5173,
         service: buildPreviewRelaySpec({ targetPort: 3000 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -295,7 +296,7 @@ describe('planDevServerService', () => {
       expected: {
         action: 'record-direct',
         removeRelay: false,
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
     const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }) }));
@@ -394,7 +395,7 @@ describe('resolveDevPreviewHolder — the holder is whoever OWNS the sprite poin
   it('has two sessions in one env converge on ONE row intent', () => {
     const envHolder = resolveDevPreviewHolder({ id: 'ws-1', envId: 'env-1' });
     const first = planDevServerService(planInput({ holder: envHolder, detected: detected(5173) }));
-    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
+    const second = planDevServerService(planInput({ holder: resolveDevPreviewHolder({ id: 'ws-2', envId: 'env-1' }), row: first.action === 'start-relay' ? { ...first.row, stoppedByUserAt: null, approvedPort: null, approvedAt: null } : null, relay: relayService(5173), detected: detected(5173) }));
     assert({ given: 'session ws-1 detecting 5173 in env-1', should: 'write an env-keyed row', actual: first.action === 'start-relay' ? first.row.holder : first.action, expected: { kind: 'env', id: 'env-1' } });
     assert({ given: 'session ws-2 then detecting the same server', should: 'find the env row already relaying and write nothing new', actual: second, expected: { action: 'none', reason: 'already-relaying', staleRowIgnored: false } });
   });
@@ -603,7 +604,7 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
         action: 'await-approval',
         targetPort: 9000,
         removeRelay: false,
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, approvedPort: null, basedOnStoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 9000, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -644,6 +645,14 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
 
     const approved = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null });
     assert({ given: 'approved but the relay is not created yet', should: 'read as starting, never as "serving 8080 directly"', actual: approved.status, expected: 'starting' });
+
+    // The relay was planned and REFUSED because a stranger holds 8080. Saying
+    // "starting…" would be a lie that never resolves and would hide the one
+    // thing the user can act on.
+    const held = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: [{ port: 8080, pid: 99 }] });
+    assert({ given: 'approved while a user process holds 8080', should: 'say the port is busy, not "starting"', actual: [held.status, held.message], expected: ['blocked', HTTP_PORT_BUSY_MESSAGE] });
+    // With no snapshot the slot is UNKNOWN, which is not evidence of a problem.
+    assert({ given: 'approved with no listener snapshot', should: 'stay starting rather than invent a blockage', actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null }).status, expected: 'starting' });
 
     const off = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), relay: null, listeners: null });
     assert({ given: 'a switched-off unapproved preview', should: 'read as stopped, not as a pending decision', actual: off.status, expected: 'stopped' });

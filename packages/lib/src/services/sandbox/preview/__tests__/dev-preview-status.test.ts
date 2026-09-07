@@ -39,6 +39,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
     detectedAt: new Date('2026-09-06T11:00:00.000Z'),
     stoppedByUserAt: null,
     approvedPort: null,
+    approvedAt: null,
     ...overrides,
   };
 }
@@ -80,10 +81,12 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
       // The real store refuses when the stored intent has moved since the plan's read.
       if (current !== null && (current.stoppedByUserAt?.getTime() ?? null) !== (intent.basedOnStoppedByUserAt?.getTime() ?? null)) return false;
       const { basedOnStoppedByUserAt: _guard, ...row } = intent;
-      current = { id: 'r1', ...row, stoppedByUserAt: null };
+      // The real store never lets a planner write the approval columns.
+      current = { id: 'r1', ...row, stoppedByUserAt: null, approvedPort: current?.approvedPort ?? null, approvedAt: current?.approvedAt ?? null };
       return true;
     },
     findStoppedWithRelay: async () => [],
+    markSwept: async () => {},
     approvePort: async (_holder, { port, at }) => {
       calls.push(`approvePort:${port}`);
       // The real store filters the UPDATE on the row's current target, so a
@@ -441,12 +444,21 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     assert({ given: 'a refused wake gate', should: 'write no consent', actual: store.current()?.approvedPort, expected: null });
   });
 
+  it('with no listener snapshot the CONSENT still lands and only the relay defers — the user is not asked twice', async () => {
+    // The realtime tier is unreachable, so nothing proves 8080 is free and the
+    // core refuses a blind start. What must NOT happen is losing the approval:
+    // the user agreed, and the detector's next frame starts it for real.
+    const { deps, store } = pending({ readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
+    assert({ given: 'an approve with no ports snapshot', should: 'defer the relay, honestly', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'approve', port: 9000 }, ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+    assert({ given: 'the deferral', should: 'still have recorded the consent', actual: store.current()?.approvedPort, expected: 9000 });
+  });
+
   it('the status offers the decision only where it can be taken: needs-approval, on this instance', () => {
     const base = { holder: ENV, sandbox: 'attached' as const, detection: 'watching' as const, openPath: '/o' };
     const waiting = buildDevPreviewStatus({ ...base, liveInstanceId: INSTANCE, row: row(9000, { relayServiceName: null }), relay: null, listeners: null });
-    assert({ given: 'an unshared 9000', should: 'offer approval, naming the port, and offer no open', actual: [waiting.state.status, waiting.canApprove, waiting.pendingApprovalPort, waiting.canOpen], expected: ['needs-approval', true, 9000, false] });
+    assert({ given: 'an unshared 9000', should: 'offer approval, naming the port, and offer no open', actual: [waiting.state.status, waiting.canApprove, waiting.state.status === 'needs-approval' && waiting.state.targetPort, waiting.canOpen], expected: ['needs-approval', true, 9000, false] });
     const live = buildDevPreviewStatus({ ...base, liveInstanceId: INSTANCE, row: row(5173), relay: relayService(5173), listeners: null });
-    assert({ given: 'a live known-port preview', should: 'have nothing to approve', actual: [live.canApprove, live.pendingApprovalPort], expected: [false, null] });
+    assert({ given: 'a live known-port preview', should: 'have nothing to approve', actual: live.canApprove, expected: false });
     const stale = buildDevPreviewStatus({ ...base, liveInstanceId: 'other-instance', row: row(9000, { relayServiceName: null }), relay: null, listeners: null });
     assert({ given: 'a row from a dead VM', should: 'offer nothing to approve', actual: stale.canApprove, expected: false });
   });

@@ -29,9 +29,10 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   server has moved since the screen was drawn, PageSpace says so rather than sharing the new one.
   Approval is per port and per sandbox, so a rebuilt sandbox asks again. **Signing out ends the
   preview:** the preview page is tied to the session that opened it, so signing out or revoking a
-  device cuts it off on its very next request instead of letting it linger. Off by default: the whole surface is absent until
-  `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
-  ops work (wildcard DNS, certificate, and the Caddy block) to land first.
+  device cuts it off on its very next request instead of letting it linger. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
 - **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
   ends built so far are joined. An agent session bound to a local Environment whose machine is
   connected now runs its commands and reads and writes its files on that machine, through the same

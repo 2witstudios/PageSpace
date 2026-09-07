@@ -223,10 +223,16 @@ test.describe('dev-server preview: the browser journey', () => {
     const frame = page.frameLocator('[data-testid="dev-preview-frame"]');
 
     // Without `allowedHosts` the dev server answers the proxy with its own
-    // refusal, so the app does NOT render. Asserted by absence of the marker,
-    // with the frame plainly mounted — if this ever renders, Vite or the
-    // platform changed and the changelog warning can go.
-    await expect(frame.locator('#app')).not.toHaveText('first render', { timeout: 15_000 });
+    // refusal, so the app does NOT render.
+    //
+    // A bare `not.toHaveText` would be VACUOUS here: it passes the instant the
+    // element is absent, which is also what an empty frame looks like. So wait
+    // for the frame to actually have rendered SOMETHING first, then assert
+    // that something is not the app. If this ever fails because the marker
+    // appeared, Vite or the platform changed and the changelog warning can go.
+    const blocked = frame.locator('body');
+    await expect(blocked).not.toBeEmpty({ timeout: 30_000 });
+    await expect(blocked).not.toContainText('first render');
 
     // ---- with the allow-list: the app renders, and HMR works ----------------
     await writeSandboxFile(request, user, workspaceId, 'preview-smoke/vite.config.js', VITE_CONFIG_WITH_HOSTS);
@@ -323,7 +329,14 @@ test.describe('dev-server preview: the browser journey', () => {
     expect(signOut.ok(), await signOut.text()).toBe(true);
 
     await page.getByTitle('Reload the preview').click();
-    await expect(frame.locator('body')).not.toContainText('still here', { timeout: 30_000 });
+    // Same anti-vacuity rule as the allowedHosts case: wait for the frame to
+    // have rendered SOMETHING (the refusal, or the sign-in the re-mint lands
+    // on) before asserting it is no longer the app. The exact copy is not
+    // asserted — a revoked session and a signed-out app origin produce
+    // different pages, and both are correct answers to "this is over".
+    const after = frame.locator('body');
+    await expect(after).not.toBeEmpty({ timeout: 30_000 });
+    await expect(after).not.toContainText('still here');
     expect(live.openPath).not.toBeNull();
   });
 });

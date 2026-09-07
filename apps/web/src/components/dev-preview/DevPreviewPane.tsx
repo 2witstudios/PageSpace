@@ -64,9 +64,11 @@ import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
 import { isDevPreviewReauthMessageFor } from '@pagespace/lib/services/sandbox/preview/dev-preview-contract';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { devPreviewActionsPath, useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
+// Type-only, so nothing from that module reaches the browser bundle.
+import type { DevPreviewUserAction } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
+import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { devPreviewApprovalAudience, devPreviewBadge } from './dev-preview-copy';
 
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
@@ -151,18 +153,20 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
   }, [open.holder, reload]);
 
   const runAction = useCallback(
-    async (action: 'stop' | 'resume' | { approvePort: number }) => {
+    // The SERVER's own action type, not a client-side lookalike: the route's
+    // body parser produces exactly this shape, so one union spans the wire.
+    async (action: DevPreviewUserAction) => {
       setActioning(true);
       // The approve body ECHOES the port the user was just shown; the server
       // refuses it with a 409 if the dev server has moved since, rather than
       // sharing whatever is running now.
-      const body = typeof action === 'string' ? { action } : { action: 'approve', port: action.approvePort };
+      const body = action.kind === 'approve' ? { action: 'approve', port: action.port } : { action: action.kind };
       try {
         await post(devPreviewActionsPath(open.statusPath), body);
       } catch (actionError) {
         const failure =
-          action === 'stop' ? 'Could not switch the preview off'
-          : action === 'resume' ? 'Could not switch the preview on'
+          action.kind === 'stop' ? 'Could not switch the preview off'
+          : action.kind === 'resume' ? 'Could not switch the preview on'
           : 'Could not share the preview';
         toast.error(failure, { description: actionError instanceof Error ? actionError.message : 'Please try again.' });
       } finally {
@@ -218,7 +222,7 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
               size="sm"
               className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
               disabled={actioning}
-              onClick={() => void runAction('stop')}
+              onClick={() => void runAction({ kind: 'stop' })}
               // Nothing is being served while a decision is pending, so "Stop"
               // would name an act that has not happened. The same write does
               // the honest thing: put the offer away.
@@ -237,7 +241,7 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
               size="sm"
               className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
               disabled={actioning}
-              onClick={() => void runAction('resume')}
+              onClick={() => void runAction({ kind: 'resume' })}
               title={preview.state.status === 'stopped' ? 'Switch the preview back on' : 'Restart the preview'}
             >
               <Play className="size-3.5" aria-hidden="true" />
@@ -267,28 +271,45 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
       ) : (
         <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-xs text-muted-foreground" data-testid="dev-preview-placeholder">
           <p className="max-w-sm">{preview ? preview.state.message : 'Loading preview status…'}</p>
-          {preview?.canManage && preview.canApprove && preview.pendingApprovalPort !== null && (
+          {preview?.canManage && preview.canApprove && preview.state.status === 'needs-approval' && (
             // The decision lives HERE and not on the affordance row: this is
             // the surface that can state who would be able to see it, and
             // sharing something should not be a one-click side effect of a
-            // line in a list.
-            <>
-              <p className="max-w-sm">{devPreviewApprovalAudience(preview.holder)}</p>
-              <Button
-                size="sm"
-                className="h-7 gap-1 px-3"
-                disabled={actioning}
-                onClick={() => void runAction({ approvePort: preview.pendingApprovalPort as number })}
-                title={`Share port ${preview.pendingApprovalPort}`}
-              >
-                <Share2 className="size-3.5" aria-hidden="true" />
-                Share :{preview.pendingApprovalPort}
-              </Button>
-            </>
+            // line in a list. The port comes off the NARROWED state, so the
+            // button's label and the request it sends cannot name different
+            // ports.
+            <ApprovalControl port={preview.state.targetPort} holder={preview.holder} disabled={actioning} onShare={runAction} />
           )}
         </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * The one explicit act that turns a detected port into a shared one, under the
+ * sentence that says who would then be able to reach it. Split out so the port
+ * is bound ONCE, where the state was narrowed.
+ */
+function ApprovalControl({
+  port,
+  holder,
+  disabled,
+  onShare,
+}: {
+  port: number;
+  holder: DevPreviewStatusDTO['holder'];
+  disabled: boolean;
+  onShare: (action: DevPreviewUserAction) => void;
+}) {
+  return (
+    <>
+      <p className="max-w-sm">{devPreviewApprovalAudience(holder)}</p>
+      <Button size="sm" className="h-7 gap-1 px-3" disabled={disabled} onClick={() => onShare({ kind: 'approve', port })} title={`Share port ${port}`}>
+        <Share2 className="size-3.5" aria-hidden="true" />
+        Share :{port}
+      </Button>
+    </>
   );
 }
 
