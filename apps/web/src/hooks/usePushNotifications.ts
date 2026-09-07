@@ -126,6 +126,10 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   // cold start. Comparing the value instead lets a *different* token through
   // while still collapsing a repeat of the same one.
   const registeredTokenRef = useRef<string | null>(null);
+  // Tokens whose POST is in flight. registeredTokenRef is only written after the
+  // request resolves, so it cannot suppress a duplicate 'registration' event
+  // that arrives while the first request is still open.
+  const inFlightTokensRef = useRef(new Set<string>());
   const pushNotificationsRef = useRef<typeof import('@capacitor/push-notifications').PushNotifications | null>(null);
   const registerTokenWithServerRef = useRef<(token: string) => Promise<void>>(async () => { });
   const listenersRef = useRef<(() => void)[]>([]);
@@ -245,8 +249,13 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
   // Register token with server
   const registerTokenWithServer = useCallback(async (token: string) => {
-    if (!isAuthenticated || registeredTokenRef.current === token) return;
+    if (
+      !isAuthenticated ||
+      registeredTokenRef.current === token ||
+      inFlightTokensRef.current.has(token)
+    ) return;
 
+    inFlightTokensRef.current.add(token);
     setState(prev => ({ ...prev, isLoading: true, error: null }));
 
     try {
@@ -275,6 +284,9 @@ export function usePushNotifications(): PushNotificationState & PushNotification
         error: error instanceof Error ? error.message : 'Failed to register token',
         isLoading: false,
       }));
+    } finally {
+      // Cleared on failure too, so a retry of the same token is not locked out.
+      inFlightTokensRef.current.delete(token);
     }
   }, [isAuthenticated, platform]);
 

@@ -221,6 +221,56 @@ describe('usePushNotifications', () => {
     expect(mockPost).toHaveBeenCalledTimes(1);
   });
 
+  it('regression: two registration events with the same token before the first POST resolves send only one request', async () => {
+    let releasePost: (value: unknown) => void = () => {};
+    mockPost.mockImplementation(
+      () => new Promise((resolve) => { releasePost = resolve; })
+    );
+
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.isSupported).toBe(true));
+
+    const onRegistration = listeners.registration as (token: { value: string }) => void;
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-dup' });
+      onRegistration({ value: 'fcm-token-dup' });
+      await Promise.resolve();
+    });
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      releasePost({ success: true, tokenId: 't1' });
+      await Promise.resolve();
+    });
+
+    expect(mockPost).toHaveBeenCalledTimes(1);
+  });
+
+  it('a failed registration does not lock the same token out of a retry', async () => {
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mockPost.mockRejectedValueOnce(new Error('network down'));
+
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.isSupported).toBe(true));
+
+    const onRegistration = listeners.registration as (token: { value: string }) => void;
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-retry' });
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(result.current.error).toBe('network down'));
+
+    mockPost.mockResolvedValue({ success: true, tokenId: 't1' });
+    await act(async () => {
+      onRegistration({ value: 'fcm-token-retry' });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(mockPost).toHaveBeenCalledTimes(2));
+    consoleError.mockRestore();
+  });
+
   it('records the refusal when the user denies, and does not register', async () => {
     mockRequestPermissions.mockResolvedValue({ receive: 'denied' });
 
