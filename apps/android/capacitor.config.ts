@@ -44,11 +44,12 @@ const config: CapacitorConfig = {
     //
     // Android-only caveat: Bridge.setAllowedOriginRules() also adds these hosts
     // to WebViewLocalServer's `authorities`. That only changes behaviour while
-    // Capacitor's JS injector is still live — i.e. on a WebView too old for
-    // WebViewFeature.DOCUMENT_START_SCRIPT (pre-WebView 83), where a top-level
-    // HTML GET to these hosts would be proxied through HttpURLConnection. On any
-    // current WebView the injector is null and shouldInterceptRequest returns
-    // null, leaving the native network stack in charge.
+    // Capacitor's JS injector is still live — i.e. on a WebView too old to report
+    // WebViewFeature.DOCUMENT_START_SCRIPT, where a top-level HTML GET to these
+    // hosts would be proxied through HttpURLConnection. Where the feature is
+    // supported, Bridge.loadWebView() sets the injector to null and
+    // shouldInterceptRequest returns null, leaving the native network stack in
+    // charge.
     allowNavigation: ['pagespace.ai', '*.pagespace.ai', 'accounts.google.com', 'appleid.apple.com'],
     // Bundled retry screen (apps/android/public/index.html). Android reads this
     // in BridgeWebViewClient.onReceivedError/onReceivedHttpError for main-frame
