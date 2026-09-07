@@ -45,6 +45,24 @@
                 work (epic phase B) teaches that path about Android. Registering
                 the scheme now means the manifest is not the blocker then.
 
+                READ BEFORE MAKING IT LIVE. A custom scheme is not an exclusive
+                claim on Android: any installed app may declare the same
+                `pagespace://` VIEW filter and become a chooser candidate or the
+                user's default handler. /api/auth/desktop/exchange authenticates
+                nothing but possession of the one-time code — it takes { code }
+                alone, with no PKCE verifier and no binding to the app that
+                started the flow, and answers with sessionToken, csrfToken and
+                deviceToken. So the moment a server path emits
+                `pagespace://auth-exchange?code=...` for Android, an app that wins
+                the scheme can redeem that code for the user's session.
+
+                Binding the exchange (an app-held PKCE verifier, or an App Link
+                return channel that a competing app cannot claim) is a
+                prerequisite for turning the handoff on — not for shipping this
+                filter, which is inert while nothing redirects to it. The same
+                weakness is live on iOS today, which registers this scheme and
+                does take the deep-link branch.
+
                 Unlike an https App Link this needs no domain verification and no
                 assetlinks.json — a custom scheme is claimed by the app outright —
                 so it works as soon as the app is installed, on every supported

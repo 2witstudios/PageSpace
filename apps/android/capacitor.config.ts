@@ -19,38 +19,40 @@ const config: CapacitorConfig = {
     //     && !appAllowNavigationMask.matches(url.getHost())
     //
     // `https://pagespace.ai/signin` therefore already stays in the WebView on
-    // Android with no allowNavigation at all. This list is here for the hosts
-    // that are NOT pagespace.ai, where Android does hand the URL to the system
-    // browser via ACTION_VIEW exactly as iOS hands it to Safari.
+    // Android with no allowNavigation at all. The entry that earns its place is
+    // the wildcard: a navigation to any pagespace.ai SUBDOMAIN fails the host
+    // equality test and would be handed to Chrome via ACTION_VIEW.
     //
-    // The apex must still be listed separately: HostMask.Simple.matches() bails
-    // when `maskSize > 1 && hostSize != maskSize`, so '*.pagespace.ai' (3 dot
-    // components) does not match 'pagespace.ai' (2).
+    // The apex is listed alongside it because one mask cannot cover both —
+    // HostMask.Simple.matches() bails when `maskSize > 1 && hostSize != maskSize`,
+    // so '*.pagespace.ai' (3 dot components) does not match 'pagespace.ai' (2) —
+    // and because leaving the app's own host implicit here invites someone to
+    // 'tidy up' the wildcard later without noticing what it covered.
     //
-    // Google/Apple are deliberate but imperfect, and the reasoning differs from
-    // iOS in one important way. On iOS the web OAuth fallback should never fire,
-    // because sign-in goes through the native plugin. On Android it is currently
-    // the ONLY path: isNativeGoogleAuthAvailable() in ios-google-auth.ts is
-    // `isCapacitorApp() && getPlatform() === 'ios'`, so until the epic's native
-    // auth phase generalizes it, Android takes the browser fallback every time.
+    // Deliberately NOT listed here: accounts.google.com and appleid.apple.com,
+    // which the iOS config does list. On Android an allowNavigation entry is not
+    // just a navigation permit — it is a grant of the native plugin bridge.
+    // Bridge.setAllowedOriginRules() folds every entry into allowedOriginRules,
+    // and MessageHandler passes that set straight to
+    // WebViewCompat.addWebMessageListener(webView, "androidBridge", ...). Any
+    // main-frame document from a listed origin can therefore call
+    // androidBridge.postMessage(), which reaches Bridge.callPluginMethod() and
+    // every registered plugin — including PageSpaceKeychain, the
+    // EncryptedSharedPreferences store. Handing that to a third-party consent
+    // page to make a broken OAuth fallback fail more visibly is not a trade worth
+    // making; the provider pages belong in a Custom Tab with a bound callback,
+    // which is the native auth phase's job.
     //
-    // Both outcomes are broken, and this picks the diagnosable one. Allowlisted,
-    // the consent screen loads in the WebView and Google answers
-    // `disallowed_useragent` — a visible failure. Omitted, it goes to Chrome,
-    // where a successful sign-in drops the cookie in the WRONG cookie jar and the
-    // app stays silently logged out. Nobody is hitting either today: there is no
-    // shipped Android build (versionCode is still 1), and native auth should land
-    // before there is one. The real fix is native sign-in, not this list.
+    // (The same two hosts in apps/ios/capacitor.config.ts are worse, not better:
+    // iOS registers the bridge as a WKUserScript with forMainFrameOnly: true and
+    // NO origin scoping, so it applies to every main-frame document the WebView
+    // loads. That is shipped behaviour and a separate change.)
     //
-    // Android-only caveat: Bridge.setAllowedOriginRules() also adds these hosts
-    // to WebViewLocalServer's `authorities`. That only changes behaviour while
-    // Capacitor's JS injector is still live — i.e. on a WebView too old to report
-    // WebViewFeature.DOCUMENT_START_SCRIPT, where a top-level HTML GET to these
-    // hosts would be proxied through HttpURLConnection. Where the feature is
-    // supported, Bridge.loadWebView() sets the injector to null and
-    // shouldInterceptRequest returns null, leaving the native network stack in
-    // charge.
-    allowNavigation: ['pagespace.ai', '*.pagespace.ai', 'accounts.google.com', 'appleid.apple.com'],
+    // What stays is our own origins. Note that '*.pagespace.ai' grants the bridge
+    // to every pagespace.ai subdomain, so nothing that serves untrusted or
+    // user-authored content — a dev-preview origin, for instance — may be given a
+    // pagespace.ai hostname without revisiting this line.
+    allowNavigation: ['pagespace.ai', '*.pagespace.ai'],
     // Bundled retry screen (apps/android/public/index.html). Android reads this
     // in BridgeWebViewClient.onReceivedError/onReceivedHttpError for main-frame
     // requests and loads Bridge.getErrorUrl() — `https://localhost/index.html`,
