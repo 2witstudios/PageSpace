@@ -10,12 +10,16 @@
  *
  *   - AUDIENCE is `users.subscriptionTier = 'free'` only. Paid tiers are not
  *     affected and are not mailed.
- *   - This is a RELATIONSHIP message (a notice of a change to the recipient's
- *     existing plan), not a marketing broadcast. CAN-SPAM exempts it from the
- *     commercial requirements, and it has to reach every affected account, so
- *     it does NOT honour the PRODUCT_UPDATE opt-out and carries no unsubscribe
- *     link. The GDPR rights-request and erasure-suppression exclusions still
- *     apply — those are legal must-skips, not preferences.
+ *   - This is a notice of a change to the recipient's existing plan, so its
+ *     CONTENT is a relationship message rather than marketing. It is still sent
+ *     as opt-outable bulk mail by explicit decision (2026-09-07): anyone who
+ *     turned PRODUCT_UPDATE email off is SKIPPED, and every message carries a
+ *     one-click unsubscribe link plus List-Unsubscribe headers. The tradeoff is
+ *     accepted knowingly — an unsubscribed free user will not learn by email
+ *     that their credits changed; the in-app credits card, the plan page and
+ *     the marketing/terms copy all state the new contract. The GDPR
+ *     rights-request and erasure-suppression exclusions apply on top, as legal
+ *     must-skips rather than preferences.
  *   - Each email quotes the recipient's CURRENT spendable balance (one LEFT JOIN
  *     on credit_balances), so "what you keep" is a number, not a promise.
  *
@@ -39,9 +43,11 @@ import { fileURLToPath } from 'node:url';
 import { getMigrationDb } from '@pagespace/db/db';
 import { users } from '@pagespace/db/schema/auth';
 import { creditBalances } from '@pagespace/db/schema/credits';
+import { emailNotificationPreferences } from '@pagespace/db/schema/email-notifications';
 import { dataSubjectRequests } from '@pagespace/db/schema/data-subject-requests';
 import { and, eq, inArray, isNotNull, isNull, ne, or } from '@pagespace/db/operators';
 import { sendEmail } from '@pagespace/lib/services/email-service';
+import { generateUnsubscribeToken } from '@pagespace/lib/services/notification-email-service';
 import { listSuppressedEmails } from '@pagespace/lib/compliance/erasure/resend-suppression-client';
 import { decryptUserRow } from '@pagespace/lib/auth/user-repository';
 import { isValidEmail } from '@pagespace/lib/validators/email';
@@ -56,6 +62,7 @@ import {
   findUnreachableUrls,
   isLocalhostUrl,
   LedgerWriteFailed,
+  listUnsubscribeHeaders,
   loadSentEmails,
   openLedger,
   parseArgs,
@@ -77,6 +84,9 @@ interface Recipient {
 }
 
 const EMAIL_SUBJECT = 'Free plan credits are changing';
+
+/** The opt-out channel this notice belongs to; anyone who disabled it is skipped. */
+const NOTIFICATION_TYPE = 'PRODUCT_UPDATE' as const;
 
 /**
  * Namespace for the per-recipient Resend idempotency key. Stable across
@@ -105,6 +115,20 @@ function defaultLogPath(): string {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** userIds that have explicitly turned PRODUCT_UPDATE email off. */
+async function loadOptedOutUserIds(): Promise<Set<string>> {
+  const rows = await db
+    .select({ userId: emailNotificationPreferences.userId })
+    .from(emailNotificationPreferences)
+    .where(
+      and(
+        eq(emailNotificationPreferences.notificationType, NOTIFICATION_TYPE),
+        eq(emailNotificationPreferences.emailEnabled, false),
+      ),
+    );
+  return new Set(rows.map((r) => r.userId));
 }
 
 /** userIds we are forbidden to contact because of a GDPR rights request — see the SDK launch script's identical function for the full rationale. */
@@ -142,7 +166,7 @@ async function main(): Promise<number> {
   console.log(`  Mode:          ${opts.live ? 'LIVE SEND' : 'DRY RUN (no sends) — pass --live to send'}`);
   console.log(
     `  Audience:      FREE tier, ${opts.includeUnverified ? 'including unverified addresses' : 'verified addresses only'}` +
-      ' (suspended accounts always excluded; PRODUCT_UPDATE opt-out NOT applied — plan-change notice)',
+      ' (suspended accounts, PRODUCT_UPDATE opt-outs, suppressed and GDPR-restricted users all excluded)',
   );
   console.log(`  Ledger:        ${opts.logPath}`);
   console.log(`  Plan page:     ${planUrl}`);
@@ -202,6 +226,11 @@ async function main(): Promise<number> {
     console.log(`↩️  Resuming: ${alreadySent.size} recipient(s) already recorded in the ledger.\n`);
   }
 
+  const optedOut = await loadOptedOutUserIds();
+  if (optedOut.size > 0) {
+    console.log(`🔕 ${optedOut.size} user(s) have product-update email turned off and will be skipped.\n`);
+  }
+
   const rightsRestricted = await loadRightsRestrictedUserIds();
   if (rightsRestricted.size > 0) {
     console.log(`⚖️  ${rightsRestricted.size} user(s) excluded by a GDPR rights request.\n`);
@@ -253,7 +282,7 @@ async function main(): Promise<number> {
     );
   }
 
-  const propsFor = ({ userId, userName }: Recipient) => ({
+  const propsFor = ({ userId, userName }: Recipient, unsubscribeUrl: string) => ({
     userName,
     ...(balanceByUserId.get(userId) ?? {}),
     starterCredits,
@@ -261,21 +290,29 @@ async function main(): Promise<number> {
     minTopup,
     planUrl,
     usageUrl,
+    unsubscribeUrl,
     postalAddress,
   });
 
   const sendOne = async (recipient: Recipient): Promise<void> => {
+    const token = await generateUnsubscribeToken(recipient.userId, NOTIFICATION_TYPE);
+    const unsubscribeUrl = `${baseUrl}/api/notifications/unsubscribe/${token}`;
     await sendEmail({
       to: recipient.email,
       subject: EMAIL_SUBJECT,
-      react: FreeCreditsChangeEmail(propsFor(recipient)),
+      react: FreeCreditsChangeEmail(propsFor(recipient, unsubscribeUrl)),
+      // One-click opt-out from the mail client itself, not just the footer link.
+      headers: listUnsubscribeHeaders(unsubscribeUrl),
       idempotencyKey: `${IDEMPOTENCY_PREFIX}:${recipient.userId}`,
     });
   };
 
   /** Dry-run: render the real template so a template error still surfaces, and send nothing. */
   const renderOne = (recipient: Recipient): Promise<string> =>
-    renderEmailToHtml(FreeCreditsChangeEmail(propsFor(recipient)));
+    renderEmailToHtml(
+      // A dry run mints no token: that would be a DB write.
+      FreeCreditsChangeEmail(propsFor(recipient, `${baseUrl}/api/notifications/unsubscribe/<token>`)),
+    );
 
   let result;
   try {
@@ -288,9 +325,7 @@ async function main(): Promise<number> {
       isValidEmail,
       alreadySent,
       suppressed,
-      // Plan-change notice: reaches every Free account regardless of the
-      // PRODUCT_UPDATE preference (see the file header).
-      optedOut: new Set<string>(),
+      optedOut,
       rightsRestricted,
       sendOne,
       renderOne,
@@ -316,6 +351,7 @@ async function main(): Promise<number> {
   console.log(`  ${opts.live ? 'Sent' : 'Would send'}:            ${sent}`);
   console.log(`  Skipped (already sent):  ${skipped['already-sent']}`);
   console.log(`  Skipped (suppressed):    ${skipped.suppressed}`);
+  console.log(`  Skipped (opted out):     ${skipped['opted-out']}`);
   console.log(`  Skipped (GDPR request):  ${skipped['rights-restricted']}`);
   console.log(`  Skipped (invalid email): ${skipped['invalid-email']}`);
   console.log(`  Errors:                  ${errors.length}`);

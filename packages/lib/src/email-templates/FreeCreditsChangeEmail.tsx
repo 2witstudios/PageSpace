@@ -39,10 +39,16 @@ interface FreeCreditsChangeEmailProps {
   /** In-app usage/credits page — where top-ups are bought. */
   usageUrl: string;
   /**
-   * The sender's physical postal address. This is a RELATIONSHIP message (a notice of a
-   * change to the recipient's existing plan), which CAN-SPAM exempts from the commercial
-   * requirements — so there is deliberately no unsubscribe link, and the address is
-   * optional. Rendered in the footer when provided.
+   * One-click unsubscribe link for product-update email. The send script skips
+   * anyone who already opted out and passes this to everyone it does mail, so the
+   * footer link is the opt-out of record; it stays optional only for previews.
+   */
+  unsubscribeUrl?: string;
+  /**
+   * The sender's physical postal address, from COMPANY_POSTAL_ADDRESS. The content of
+   * this notice is a relationship message (a change to the recipient's existing plan),
+   * which CAN-SPAM exempts from the commercial requirements, so the send script warns
+   * rather than refusing when it is unset. Rendered in the footer when provided.
    */
   postalAddress?: string;
 }
@@ -101,6 +107,8 @@ const darkButton = {
   boxShadow: '0 2px 8px rgba(0, 0, 0, 0.28), 0 1px 2px rgba(0, 0, 0, 0.18)',
 };
 
+const darkFooterLink = { ...emailStyles.link, color: INK };
+
 // The "what you keep" card is the one fact people will look for, so it gets
 // the tinted, left-ruled treatment rather than the plain callout.
 const keepCard = {
@@ -125,6 +133,7 @@ export function FreeCreditsChangeEmail({
   minTopup,
   planUrl,
   usageUrl,
+  unsubscribeUrl,
   postalAddress,
 }: FreeCreditsChangeEmailProps) {
   return (
@@ -216,6 +225,13 @@ export function FreeCreditsChangeEmail({
               You are receiving this notice because your PageSpace account is
               on the Free plan.
             </Text>
+            {unsubscribeUrl ? (
+              <Text style={emailStyles.footerText}>
+                <Link href={unsubscribeUrl} style={darkFooterLink}>
+                  Unsubscribe from product update emails
+                </Link>
+              </Text>
+            ) : null}
             {postalAddress ? (
               <Text style={emailStyles.footerText}>{postalAddress}</Text>
             ) : null}
