@@ -66,8 +66,9 @@ async function projectNativeBadge(unreadCount: number, platform: Platform): Prom
  * stays a second, best-effort writer to the same native badge — an
  * unrelated silent push could have overwritten it correctly-but-stale value
  * while the app was backgrounded, even if unreadCount itself hasn't changed.
- * Re-syncing on resume matters on Android for the plainer reason too: the count
- * can have moved on the server while the app was away.
+ * That second writer is the APNs `badge` field specifically, so the race is
+ * iOS's; on Android the resume re-sync earns its place for the plainer reason
+ * that the count can have moved on the server while the app was away.
  */
 export function useNativeBadgeSync(): void {
   const { capabilities, platform, isReady } = useCapacitor();
