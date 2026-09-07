@@ -47,6 +47,11 @@
     // re-target the server explicitly. pagespace.ai is the host of server.url, so
     // Bridge.launchIntent() keeps this in-app rather than punting it to Chrome.
     // Keep in sync with server.url in capacitor.config.ts.
+    //
+    // No Capacitor API is available on this page: Bridge.loadWebView() registers
+    // the bridge script via addDocumentStartJavaScript scoped to the server.url
+    // origin only, so `Capacitor` and every plugin are undefined at
+    // https://localhost. Plain DOM APIs only.
     document.getElementById('retry').addEventListener('click', function () {
       window.location.href = 'https://pagespace.ai/dashboard';
     });
