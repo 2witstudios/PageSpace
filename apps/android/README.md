@@ -148,10 +148,18 @@ and with it any possibility of verification on a user's device.
 
 ### Prerequisite 2 — link routing in the web app
 
-Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform. A
-captured link therefore opens the app at its configured start URL (`server.url` + `appStartPath`,
-so `/dashboard`), not at the linked path: the invite token or auth callback code in the URL is
-silently dropped.
+Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform, so a
+captured link never reaches the path it names. What the user sees depends on whether the app was
+already running, and the two cases differ:
+
+| Start | What happens |
+|---|---|
+| **Cold** | The app launches and loads its start URL (`server.url` + `appStartPath`, so `/dashboard`). The linked path is dropped. |
+| **Warm** (`singleTask`, app already running) | The intent arrives via `onNewIntent`; `Bridge.onNewIntent` only notifies plugins — it never calls `loadUrl` — so `AppPlugin` fires `appUrlOpen` into a void and **the WebView stays exactly where it was.** Nothing visible happens at all. |
+
+Either way the invite token or auth callback code is silently dropped. Do not rely on a
+reset-to-`/dashboard` guarantee: it holds only on a cold launch, which matters both for device
+verification and for whoever implements the routing.
 
 ### Why `autoVerify` alone is not enough here
 
@@ -165,8 +173,9 @@ version, not of `targetSdk`:
 | 23–30 (Android 6–11) | Filter stays eligible; PageSpace appears in the disambiguation chooser. |
 
 `minSdkVersion` is 23, so the second row is in scope. On those devices a user who picks PageSpace
-from the chooser lands on `/dashboard` with the token gone — strictly worse than the browser, and
-for no gain, since no shipped build can be verified. Hence: deferred, not shipped. (A debug build
+from the chooser gets, per the table above, either the dashboard (cold) or no visible change at all
+(warm) — with the token gone in both cases. Strictly worse than the browser, and for no gain, since
+no shipped build can be verified. Hence: deferred, not shipped. (A debug build
 can be verified locally, but that changes nothing for a user's device, which is what the filter
 would affect.)
 

@@ -31,8 +31,10 @@
                 chooser. No assetlinks.json can match a SHIPPED build (there is
                 no release signing certificate; a debug one can be verified
                 locally, which does not help a user's device) and nothing routes
-                appUrlOpen, so picking it there would land on /dashboard with the
-                invite or auth token dropped.
+                appUrlOpen, so picking it there drops the invite or auth token —
+                landing on /dashboard from a cold start, or doing nothing visible
+                at all if the app is already running, since Bridge.onNewIntent
+                notifies plugins without reloading the WebView.
             -->
 
             <!--
@@ -72,6 +74,11 @@
                 forwards that to Bridge.onNewIntent, and @capacitor/app's
                 AppPlugin.handleOnNewIntent turns an ACTION_VIEW intent into an
                 `appUrlOpen` event. No second task is started.
+
+                Note what that does NOT do: Bridge.onNewIntent only notifies
+                plugins, never loadUrl. So on a warm start the WebView stays on
+                whatever route it was showing — the event fires into a void while
+                no listener exists. Only a cold launch loads the start URL.
             -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
