@@ -69,9 +69,20 @@ main-frame requests. With no `errorPath` configured that returns `null`, so a fa
 WebView on its own error page. With it, Android serves `https://localhost/index.html` from the
 bundled assets — `public/index.html`, which carries the Retry button.
 
-That page has no `window.Capacitor` — `Bridge.loadWebView()` scopes
-`addDocumentStartJavaScript` to the `server.url` origin, so the JS wrapper and its plugin proxies
-are undefined there. **It is not, however, outside the native bridge**, and it would be a mistake
+That page has no `window.Capacitor`, and it is worth knowing that this holds for two *different*
+reasons depending on the device, because only one of them is about origin scoping:
+
+- **WebView supports `DOCUMENT_START_SCRIPT`:** `Bridge.loadWebView()` registers the wrapper via
+  `addDocumentStartJavaScript` scoped to the `server.url` origin, and sets the injector to null.
+  Nothing is injected at `https://localhost`.
+- **WebView does not:** the injector stays live and `WebViewLocalServer` *does* inject the runtime
+  into locally-served HTML — at `handleLocalRequest` line 449, `ext.equals(".html") && jsInjector
+  != null`. That branch is never reached for this page, because `isErrorUrl()` is tested at line
+  374 and returns a raw, non-injected stream first.
+
+The second one is a load-bearing coincidence, so treat it as a constraint: the exemption is keyed
+on the request URL matching `bridge.getErrorUrl()` exactly. Serve this fallback from any other
+local path and legacy WebViews *will* inject the Capacitor runtime into it. **It is not, however, outside the native bridge**, and it would be a mistake
 to treat it as a sandbox: `Bridge.setAllowedOriginRules()` adds `scheme://hostname` —
 `https://localhost` — to the allowed-origin set *unconditionally*, before it looks at
 `allowNavigation` at all, so `MessageHandler` exposes `androidBridge` on this origin. Code that
