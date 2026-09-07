@@ -82,7 +82,20 @@ reasons depending on the device, because only one of them is about origin scopin
 
 The second one is a load-bearing coincidence, so treat it as a constraint: the exemption is keyed
 on the request URL matching `bridge.getErrorUrl()` exactly. Serve this fallback from any other
-local path and legacy WebViews *will* inject the Capacitor runtime into it. **It is not, however, outside the native bridge**, and it would be a mistake
+local path and legacy WebViews *will* inject the Capacitor runtime into it.
+
+**How the app itself gets its wrapper on those legacy WebViews**, since it is not obvious and is
+worth knowing before anyone touches `server.url`: `initWebView()` puts the `server.url` authority
+into `WebViewLocalServer`'s `authorities`, and with `server.url` set `isAllowedUrl()` is
+unconditionally true, so the top-level `pagespace.ai` HTML request takes `handleProxyRequest` —
+fetched through `HttpURLConnection`, with cookies copied to and from `CookieManager` by hand, and
+the runtime injected into the response. Where `DOCUMENT_START_SCRIPT` is supported the injector is
+null and that method returns null, leaving the WebView's own network stack in charge.
+
+Note this is driven by `server.url`, **not** by the `pagespace.ai` entry in `allowNavigation`:
+`initWebView()` runs at `Bridge.java:223` and adds that authority, before `setAllowedOriginRules()`
+at line 224 adds the `allowNavigation` hosts. Removing the apex entry would not change the network
+path or the injection. **It is not, however, outside the native bridge**, and it would be a mistake
 to treat it as a sandbox: `Bridge.setAllowedOriginRules()` adds `scheme://hostname` —
 `https://localhost` — to the allowed-origin set *unconditionally*, before it looks at
 `allowNavigation` at all, so `MessageHandler` exposes `androidBridge` on this origin. Code that
