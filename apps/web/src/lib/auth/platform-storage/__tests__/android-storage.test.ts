@@ -390,6 +390,20 @@ describe('AndroidStorage', () => {
       expect(preferencesMock.set).toHaveBeenCalledTimes(1);
     });
 
+    it('sees a binding established after an earlier call', async () => {
+      // The instance is a module-level singleton and a passkey sign-in happens
+      // in-page, so memoizing the first answer would report a minted id against
+      // a token bound to browser_device_id until the next reload.
+      const storage = await importAndroidStorage();
+      const minted = await storage.getDeviceId();
+
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+      expect(minted).not.toBe('web_abc123');
+    });
+
     it('does not cache a failed resolution', async () => {
       preferencesMock.get.mockRejectedValueOnce(new Error('preferences unavailable'));
       const storage = await importAndroidStorage();

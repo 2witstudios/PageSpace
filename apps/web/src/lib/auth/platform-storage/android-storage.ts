@@ -57,7 +57,11 @@ function clearLegacy(key: string): void {
 
 /** The device id the legacy web flow registered, if it left one. */
 function readLegacyDeviceId(): string | null {
-  return LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((value) => !!value) ?? null;
+  for (const key of LEGACY_DEVICE_ID_KEYS) {
+    const value = readLegacy(key);
+    if (value) return value;
+  }
+  return null;
 }
 
 /**
@@ -219,16 +223,21 @@ export class AndroidStorage implements PlatformStorage {
    * `getDeviceId` is a read-then-write. Two callers that both reach the read
    * before either writes each mint a CUID2, return *different* identities, and
    * leave only one of them persisted — so a refresh could register a device id
-   * that is not the one on disk. Caching the promise makes the first caller the
+   * that is not the one on disk. Sharing the promise makes the first caller the
    * only one that can create an id.
+   *
+   * Strictly *in-flight*, never a memo: it is cleared once settled. This
+   * instance is a module-level singleton, so memoizing would freeze the first
+   * answer for the life of the page — and a passkey sign-in happens in-page,
+   * establishing a device-token binding *after* an earlier call may already
+   * have minted an id. A later caller has to be able to see that binding
+   * (`resolveDeviceId`), which a memo would hide until the next reload.
    */
   private deviceIdPromise: Promise<string> | null = null;
 
   async getDeviceId(): Promise<string> {
-    this.deviceIdPromise ??= this.resolveDeviceId().catch((error: unknown) => {
-      // A failed attempt must not be cached, or every later call replays it.
+    this.deviceIdPromise ??= this.resolveDeviceId().finally(() => {
       this.deviceIdPromise = null;
-      throw error;
     });
     return this.deviceIdPromise;
   }
