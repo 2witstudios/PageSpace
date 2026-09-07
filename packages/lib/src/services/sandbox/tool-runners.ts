@@ -993,10 +993,16 @@ export async function runBashInSandbox({
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
-  const checkpointed = await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
-  if (!checkpointed.ok) return fail(checkpointed.reason);
-
   try {
+    // INSIDE the try, so the `finally` below releases the code-execution slot
+    // on this refusal exactly as it does on every other exit. Returning between
+    // `openSession` and this block would leak the slot for the life of the
+    // process — invisibly, since nothing downstream fails: the semaphore just
+    // fills up and eventually stops code execution for that user on EVERY
+    // substrate, not only the local one that was refused.
+    const checkpointed = await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
+    if (!checkpointed.ok) return fail(checkpointed.reason);
+
     const startedAt = deps.now();
     let run: SandboxRunResult;
     try {

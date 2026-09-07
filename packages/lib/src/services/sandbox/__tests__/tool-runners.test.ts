@@ -766,6 +766,37 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
       expect(created).toEqual([]);
     });
 
+    /**
+     * The refusal happens AFTER the code-execution slot is acquired, so it must
+     * go through the same `finally` every other exit does. A leaked slot is
+     * invisible — nothing downstream fails — until the semaphore fills and
+     * stops code execution for that user on EVERY substrate, not just the local
+     * one that was refused.
+     */
+    it('should RELEASE the code-execution slot it acquired — a refusal must not leak the semaphore', async () => {
+      const { checkpoint } = makeCheckpointDeps();
+      const { deps, slots } = makeDeps({ checkpoint, reconnect: async () => makeSandbox({ capabilities: localCaps }) });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(slots.acquired).toBe(1);
+      expect(slots.released).toBe(slots.acquired);
+    });
+
+    it('should release it on the typed-error path too', async () => {
+      const { checkpoint } = makeCheckpointDeps({
+        createCheckpoint: async () => {
+          throw new LocalEnvUnsupportedError('createCheckpoint', 'env-1');
+        },
+      });
+      const { deps, slots } = makeDeps({ checkpoint, reconnect: async () => makeSandbox() });
+
+      await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(slots.released).toBe(slots.acquired);
+    });
+
     it('CONTROL: the same batch on a sandbox advertising checkpoint:true runs — proving the refusals above are load-bearing', async () => {
       const { checkpoint, created } = makeCheckpointDeps();
       const { deps } = makeDeps({
