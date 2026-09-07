@@ -73,6 +73,7 @@ describe('AndroidStorage', () => {
     keychainMock.set.mockReset();
     keychainMock.remove.mockReset();
     preferencesStore.clear();
+    localStorage.clear();
     preferencesMock.get.mockClear();
     preferencesMock.set.mockClear();
     setPlatform('android');
@@ -177,11 +178,56 @@ describe('AndroidStorage', () => {
       expect(await storage.getStoredSession()).toBeNull();
     });
 
+    it('returns null when an optional field is the wrong shape', async () => {
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'device-1',
+          deviceToken: 42,
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getStoredSession()).toBeNull();
+    });
+
     it('returns null for a corrupt payload', async () => {
       keychainMock.get.mockResolvedValue({ value: 'not json' });
       const storage = await importAndroidStorage();
 
       expect(await storage.getStoredSession()).toBeNull();
+    });
+
+    it('falls back to the device token the web sign-in flow left behind', async () => {
+      // Until native sign-in lands, Android signs in through the web flow,
+      // which writes only localStorage (useAuth.ts, PasskeyLoginButton.tsx).
+      // Ignoring it would strand a valid token and force a re-auth on the
+      // first cookie expiry.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'legacy-device-id');
+      keychainMock.get.mockResolvedValue({ value: null });
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getStoredSession()).toEqual({
+        sessionToken: '',
+        csrfToken: null,
+        deviceId: 'legacy-device-id',
+        deviceToken: 'legacy-device-token',
+      });
+    });
+
+    it('prefers the keychain session over the legacy one', async () => {
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'device-1',
+          deviceToken: 'native-device-token',
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      expect((await storage.getStoredSession())?.deviceToken).toBe('native-device-token');
     });
 
     it('throws rather than reporting "no session" when the store is broken', async () => {
@@ -259,6 +305,38 @@ describe('AndroidStorage', () => {
 
       expect(iosId).toBe(androidId);
       expect(preferencesMock.set).toHaveBeenCalledTimes(1);
+    });
+
+    it('adopts the id the web flow already registered for this device', async () => {
+      // Minting a fresh id beside a legacy device token bound to the old one
+      // would register a device the token does not match.
+      localStorage.setItem('browser_device_id', 'legacy-device-id');
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('legacy-device-id');
+      expect(preferencesStore.get('pagespace_device_id')).toBe('legacy-device-id');
+    });
+
+    it('gives concurrent callers one id and writes once', async () => {
+      const storage = await importAndroidStorage();
+
+      const ids = await Promise.all([
+        storage.getDeviceId(),
+        storage.getDeviceId(),
+        storage.getDeviceId(),
+      ]);
+
+      expect(new Set(ids).size).toBe(1);
+      expect(preferencesMock.set).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not cache a failed resolution', async () => {
+      preferencesMock.get.mockRejectedValueOnce(new Error('preferences unavailable'));
+      const storage = await importAndroidStorage();
+
+      await expect(storage.getDeviceId()).rejects.toThrow('preferences unavailable');
+
+      expect(await storage.getDeviceId()).toBe(preferencesStore.get('pagespace_device_id'));
     });
 
     it('reports the device id through getDeviceInfo', async () => {

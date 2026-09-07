@@ -21,6 +21,32 @@ const SESSION_KEY = 'pagespace_session';
 const DEVICE_ID_KEY = 'pagespace_device_id';
 
 /**
+ * Where the pre-native Android session lives.
+ *
+ * Until native sign-in lands, every Android sign-in runs the *web* flow inside
+ * the WebView, and that flow writes its device token to `localStorage` —
+ * `useAuth.ts` captures the `ps_device_token` cookie into `deviceToken`, and
+ * `PasskeyLoginButton` writes the same key. Android read those keys through
+ * `WebStorage` before this class existed. Reading only the keychain would leave
+ * that token stranded: `refreshBearerSession` would see no device token and
+ * return `shouldLogout: true` on the first cookie expiry, forcing a re-auth it
+ * had the credentials to avoid. So the keychain is checked first and these are
+ * the fallback, and the next successful refresh writes the result into the
+ * keychain — a one-way migration that needs no separate step.
+ */
+const LEGACY_DEVICE_TOKEN_KEY = 'deviceToken';
+const LEGACY_DEVICE_ID_KEYS = ['browser_device_id', 'deviceId'] as const;
+
+/** Read a key from localStorage, treating an unavailable store as absent. */
+function readLegacy(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Wrap a native rejection in an Error that names the operation.
  *
  * The Android plugin rejects — it does not resolve with a failure flag — when
@@ -34,6 +60,11 @@ const DEVICE_ID_KEY = 'pagespace_device_id';
 function storageError(operation: string, cause: unknown): Error {
   const detail = cause instanceof Error ? cause.message : String(cause);
   return new Error(`[Android] Secure storage ${operation} failed: ${detail}`, { cause });
+}
+
+/** `undefined`, `null` and strings are all legal for an optional session field. */
+function isOptionalString(value: unknown): value is string | null | undefined {
+  return value === undefined || value === null || typeof value === 'string';
 }
 
 export class AndroidStorage implements PlatformStorage {
@@ -70,7 +101,7 @@ export class AndroidStorage implements PlatformStorage {
       throw storageError('read', error);
     }
 
-    if (!raw) return null;
+    if (!raw) return this.readLegacySession();
 
     let parsed: Partial<StoredSession>;
     try {
@@ -81,6 +112,14 @@ export class AndroidStorage implements PlatformStorage {
     }
 
     if (typeof parsed.sessionToken !== 'string' || typeof parsed.deviceId !== 'string') {
+      return null;
+    }
+
+    // The optional fields get the same treatment as the required ones. `?? null`
+    // alone would wave through any non-null value — a number, an object — and
+    // hand back something that satisfies `StoredSession` only nominally; those
+    // values then travel into a refresh request body.
+    if (!isOptionalString(parsed.csrfToken) || !isOptionalString(parsed.deviceToken)) {
       return null;
     }
 
@@ -132,12 +171,52 @@ export class AndroidStorage implements PlatformStorage {
     this.dispatchAuthEvent('auth:cleared');
   }
 
+  /**
+   * The session the web sign-in flow left in `localStorage`, if any.
+   *
+   * Deliberately shaped exactly like `WebStorage.getStoredSession()` — an empty
+   * `sessionToken`, because a cookie session has no bearer token to hand out,
+   * and the device token that makes silent recovery work.
+   */
+  private readLegacySession(): StoredSession | null {
+    const deviceToken = readLegacy(LEGACY_DEVICE_TOKEN_KEY);
+    if (!deviceToken) return null;
+    const deviceId =
+      LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((value) => !!value) ?? '';
+    return { sessionToken: '', csrfToken: null, deviceId, deviceToken };
+  }
+
+  /**
+   * In-flight device-id resolution, shared by concurrent callers.
+   *
+   * `getDeviceId` is a read-then-write. Two callers that both reach the read
+   * before either writes each mint a CUID2, return *different* identities, and
+   * leave only one of them persisted — so a refresh could register a device id
+   * that is not the one on disk. Caching the promise makes the first caller the
+   * only one that can create an id.
+   */
+  private deviceIdPromise: Promise<string> | null = null;
+
   async getDeviceId(): Promise<string> {
+    this.deviceIdPromise ??= this.resolveDeviceId().catch((error: unknown) => {
+      // A failed attempt must not be cached, or every later call replays it.
+      this.deviceIdPromise = null;
+      throw error;
+    });
+    return this.deviceIdPromise;
+  }
+
+  private async resolveDeviceId(): Promise<string> {
     const { Preferences } = await import('@capacitor/preferences');
     const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
     if (value) return value;
-    // CUID2 for consistency across the codebase (matches iOS and web).
-    const id = createId();
+
+    // Adopt the id the web flow already registered for this device rather than
+    // minting a second one beside a device token that is bound to the first —
+    // the same migration reasoning as `readLegacySession`. CUID2 otherwise, for
+    // consistency across the codebase (matches iOS and web).
+    const id =
+      LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((legacy) => !!legacy) ?? createId();
     await Preferences.set({ key: DEVICE_ID_KEY, value: id });
     return id;
   }
