@@ -43,6 +43,8 @@ import { PREVIEW_RELAY_SERVICE_NAME, type PreviewRelayRuntime } from './preview-
 export interface DevPreviewRowWriter {
   upsert(intent: DevPreviewRowIntent): Promise<boolean>;
   findByHolder(holder: DevPreviewHolderRef): Promise<{ stoppedByUserAt: Date | null } | null>;
+  /** Clear the stopped relay's name from the row — see the store's own doc for why this is not optional. */
+  markRelayStopped(input: { holder: DevPreviewHolderRef; relayServiceName: string }): Promise<void>;
 }
 
 /** Bounded so a hung probe cannot hold the detection loop. */
@@ -194,6 +196,11 @@ export async function applyDevServerServicePlan({
       const current = await store.findByHolder(plan.holder);
       if (current === null || current.stoppedByUserAt === null) return { action: 'skipped', reason: 'resumed', mutated: 'none' };
       await services.stop(plan.relayServiceName);
+      // Service-call-then-write, the one place that order is right: the row
+      // must not stop naming a relay that is still running. Recording it is
+      // what lets the backstop sweep's candidate window drain instead of
+      // re-processing this holder every few minutes forever.
+      await store.markRelayStopped({ holder: plan.holder, relayServiceName: plan.relayServiceName });
       return { action: 'stop-relay', relayServiceName: plan.relayServiceName };
     }
     case 'none':

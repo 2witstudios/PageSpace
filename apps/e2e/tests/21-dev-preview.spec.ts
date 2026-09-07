@@ -163,13 +163,34 @@ async function waitForPreview(
   throw new Error(`preview never reached the expected state; last seen: ${JSON.stringify(last)}`);
 }
 
-/** Type a command into the session's real terminal and press Enter. */
-async function runInShell(context: BrowserContext, user: SeededUser, workspaceId: string, command: string) {
+/**
+ * Type a command into the session's real terminal and press Enter.
+ *
+ * `interruptFirst` sends Ctrl-C before the command. It is not optional
+ * politeness: this reaches the SAME PTY every time, so a second `npm run dev`
+ * typed while the first one is still in the foreground goes into Vite's stdin
+ * as shortcut keystrokes, not into a shell — the command silently never runs,
+ * and the assertion that follows fails minutes later for a reason that has
+ * nothing to do with the preview.
+ */
+async function runInShell(
+  context: BrowserContext,
+  user: SeededUser,
+  workspaceId: string,
+  command: string,
+  { interruptFirst = false }: { interruptFirst?: boolean } = {},
+) {
   const page = await context.newPage();
   await page.goto(`/dashboard/${user.driveId}/agents?workspace=${workspaceId}`);
   const terminal = page.locator('.xterm-helper-textarea').first();
   await terminal.waitFor({ state: 'attached', timeout: SANDBOX_TIMEOUT_MS });
   await terminal.focus();
+  if (interruptFirst) {
+    await page.keyboard.press('Control+C');
+    // Give the foreground process time to die and the shell to draw a prompt;
+    // typing into a dying Vite is the same failure by a shorter route.
+    await page.waitForTimeout(3_000);
+  }
   await page.keyboard.type(`${command}\n`);
   return page;
 }
@@ -237,7 +258,10 @@ test.describe('dev-server preview: the browser journey', () => {
 
     // ---- with the allow-list: the app renders, and HMR works ----------------
     await writeSandboxFile(request, user, workspaceId, 'preview-smoke/vite.config.js', VITE_CONFIG_WITH_HOSTS);
-    await runInShell(context, user, workspaceId, 'cd preview-smoke && npm run dev');
+    // Ctrl-C first: the first server still owns this PTY and port 5173, and a
+    // Vite that cannot bind its port moves to 5174 while the relay keeps
+    // pointing at 5173.
+    await runInShell(context, user, workspaceId, 'cd preview-smoke && npm run dev', { interruptFirst: true });
     await page.getByTitle('Reload the preview').click();
     await expect(frame.locator('#app')).toHaveText('first render', { timeout: SANDBOX_TIMEOUT_MS });
 
@@ -282,9 +306,19 @@ test.describe('dev-server preview: the browser journey', () => {
     expect(pending.canApprove).toBe(true);
     expect(pending.canOpen).toBe(false);
 
-    // The proxy refuses it — detection is not exposure.
-    const refused = await request.get(pending.openPath as string, { headers: { cookie: `session=${user.sessionToken}` } });
-    expect(refused.ok()).toBe(false);
+    // Detection is not exposure, asserted where it is actually decided. A bare
+    // request to the open route would 403 at the cross-site-embed gate (an
+    // `APIRequestContext` sends no `Sec-Fetch-*` headers, and that gate fails
+    // closed) — which is the same answer an APPROVED preview would give, so it
+    // would prove nothing. What the pane offers is the honest signal at this
+    // layer: no way to open it, and the server-side refusal itself is covered
+    // exhaustively by the forward gate's own tests.
+    const beforePage = await context.newPage();
+    await beforePage.goto(`/dashboard/${user.driveId}/agents?workspace=${workspaceId}`);
+    await beforePage.getByTestId('dev-preview-affordance').waitFor({ timeout: DETECTION_TIMEOUT_MS });
+    await expect(beforePage.getByRole('button', { name: 'Details' })).toBeVisible();
+    await expect(beforePage.getByRole('button', { name: 'Preview' })).toHaveCount(0);
+    await beforePage.close();
 
     // A port the row does not target cannot be approved by a click meant for it.
     const wrongPort = await sessionPost(request, `/api/agent-workspaces/${workspaceId}/preview/actions`, user, { action: 'approve', port: 9001 });

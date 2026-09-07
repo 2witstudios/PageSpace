@@ -100,6 +100,23 @@ export interface DevPreviewStore {
    * sweep has looked at drops out of the window for `staleAfterMs`.
    */
   markSwept(holder: DevPreviewHolderRef): Promise<void>;
+  /**
+   * Record that a relay named on the row has been STOPPED: clear
+   * `relayServiceName`, and only while the row still names that relay and
+   * still carries the stop intent the caller acted on.
+   *
+   * This is what makes the sweep's candidate window DRAIN. Stopping a relay
+   * is a service call that writes nothing, so without it a stopped row keeps
+   * naming a relay that is no longer running and re-enters the window every
+   * `staleAfterMs` for the life of the record — sixty stopped previews would
+   * burn the whole batch on rows with nothing left to do. Clearing the name
+   * is also simply true: the row no longer describes anything serving.
+   *
+   * Nothing else changes shape. A stopped row renders `stopped` before the
+   * relay is consulted at all, and a later resume plans from the LIVE service
+   * read rather than this column, so it still restarts the same relay.
+   */
+  markRelayStopped(input: { holder: DevPreviewHolderRef; relayServiceName: string }): Promise<void>;
 }
 
 /**
@@ -248,6 +265,22 @@ export function createDbDevPreviewStore(): DevPreviewStore {
         .update(devPreviewServices)
         .set({ updatedAt: sql`(now() at time zone 'utc')` })
         .where(eq(holderColumn(holder), holder.id));
+    },
+
+    async markRelayStopped({ holder, relayServiceName }) {
+      await db
+        .update(devPreviewServices)
+        .set({ relayServiceName: null, updatedAt: sql`(now() at time zone 'utc')` })
+        .where(
+          and(
+            eq(holderColumn(holder), holder.id),
+            // Only the relay we actually stopped, and only while the stop
+            // still stands: a resume or a re-point that landed in between
+            // owns this column now.
+            eq(devPreviewServices.relayServiceName, relayServiceName),
+            isNotNull(devPreviewServices.stoppedByUserAt),
+          ),
+        );
     },
 
     async approvePort(holder, { port, at, byUserId }) {

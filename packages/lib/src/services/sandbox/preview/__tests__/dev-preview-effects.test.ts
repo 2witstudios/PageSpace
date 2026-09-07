@@ -45,13 +45,18 @@ function fakeServices(failing: Partial<Record<keyof SandboxServicesApi, Error>> 
 function fakeStore({ accepts = true, stoppedByUserAt = null as Date | null, missing = false } = {}) {
   const written: DevPreviewRowIntent[] = [];
   const reads: string[] = [];
+  const stopped: string[] = [];
   return {
     store: {
       upsert: async (intent: DevPreviewRowIntent) => { written.push(intent); return accepts; },
       findByHolder: async (holder: { kind: string; id: string }) => { reads.push(`${holder.kind}:${holder.id}`); return missing ? null : { stoppedByUserAt }; },
+      markRelayStopped: async ({ holder, relayServiceName }: { holder: { kind: string; id: string }; relayServiceName: string }) => {
+        stopped.push(`${holder.kind}:${holder.id}:${relayServiceName}`);
+      },
     },
     written,
     reads,
+    stopped,
   };
 }
 
@@ -101,12 +106,18 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
 
   const stopPlan: DevServerServicePlan = { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay', holder: ROW.holder, stoppedByUserAt: STOPPED_AT };
 
-  it('stop-relay: confirms the stop still stands, then stops the named relay and writes nothing (the intent is already on the row)', async () => {
+  it('stop-relay: confirms the stop still stands, stops the named relay, and RECORDS that it is stopped', async () => {
     const { services, calls } = fakeServices();
-    const { store, written, reads } = fakeStore({ stoppedByUserAt: STOPPED_AT });
+    const { store, written, reads, stopped } = fakeStore({ stoppedByUserAt: STOPPED_AT });
     const applied = await applyDevServerServicePlan({ plan: stopPlan, services, store });
-    assert({ given: 'stop plan, intent still set', should: 'read the intent then stop only', actual: { calls, written, reads }, expected: { calls: ['stop:pagespace-preview-relay'], written: [], reads: ['env:e1'] } });
+    assert({ given: 'stop plan, intent still set', should: 'read the intent, then stop, writing no ROW', actual: { calls, written, reads }, expected: { calls: ['stop:pagespace-preview-relay'], written: [], reads: ['env:e1'] } });
     assert({ given: 'the stop', should: 'report it', actual: applied, expected: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
+    // The row must stop naming a relay that is no longer running — AFTER the
+    // service call, never before. Without this the backstop sweep's candidate
+    // window never drains: the row keeps matching every few minutes for the
+    // life of the record, and a batch of stopped previews crowds out the
+    // holder who stopped one a minute ago.
+    assert({ given: 'a relay that was actually stopped', should: 'record it on the row', actual: stopped, expected: ['env:e1:pagespace-preview-relay'] });
   });
 
   it('USER INTENT WINS: a stop-relay planned before the user RESUMED stops nothing (the intent is gone), and a row write the guard refuses reports skipped', async () => {
@@ -116,9 +127,9 @@ describe('applyDevServerServicePlan — obeys the plan, adds nothing', () => {
     const resumedStore = fakeStore({ stoppedByUserAt: null });
     assert({
       given: 'a stop-relay for a stop the user has cleared',
-      should: 'stop nothing and report skipped/resumed',
-      actual: { applied: await applyDevServerServicePlan({ plan: stopPlan, services: resumed.services, store: resumedStore.store }), calls: resumed.calls },
-      expected: { applied: { action: 'skipped', reason: 'resumed', mutated: 'none' }, calls: [] },
+      should: 'stop nothing, record nothing, and report skipped/resumed',
+      actual: { applied: await applyDevServerServicePlan({ plan: stopPlan, services: resumed.services, store: resumedStore.store }), calls: resumed.calls, stopped: resumedStore.stopped },
+      expected: { applied: { action: 'skipped', reason: 'resumed', mutated: 'none' }, calls: [], stopped: [] },
     });
     const gone = fakeServices();
     const goneStore = fakeStore({ missing: true });

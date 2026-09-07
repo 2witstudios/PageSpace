@@ -55,7 +55,7 @@ function deps(over: Partial<PreviewAccessDeps> & { calls?: string[] } = {}): Pre
     canRunCode: async () => track('canRunCode', { ok: true as const }),
     isSessionUsable: async () => track('isSessionUsable', true),
     attach: async () => track('attach', fakeHandle({ relay: runningRelay() })),
-    previewStore: { findByHolder: async () => track('findRow', liveRow()), upsert: async () => true, setStoppedByUser: async () => null, approvePort: async () => null, findStoppedWithRelay: async () => [], markSwept: async () => {} },
+    previewStore: { findByHolder: async () => track('findRow', liveRow()), upsert: async () => true, setStoppedByUser: async () => null, approvePort: async () => null, findStoppedWithRelay: async () => [], markSwept: async () => {}, markRelayStopped: async () => {} },
     featureEnabled: () => true,
     now: () => NOW,
     ...over,
@@ -154,7 +154,7 @@ describe('resolvePreviewTarget — the gather, in order', () => {
   });
 
   it('no row, no sprite, or a vanished sprite is no-preview', async () => {
-    assert({ given: 'no row', should: 'no-preview', actual: (await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: deps({ previewStore: { findByHolder: async () => null, upsert: async () => true, setStoppedByUser: async () => null, approvePort: async () => null, findStoppedWithRelay: async () => [], markSwept: async () => {} } }) })).decision.kind === 'refuse' && 'no-preview', expected: 'no-preview' });
+    assert({ given: 'no row', should: 'no-preview', actual: (await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: deps({ previewStore: { findByHolder: async () => null, upsert: async () => true, setStoppedByUser: async () => null, approvePort: async () => null, findStoppedWithRelay: async () => [], markSwept: async () => {}, markRelayStopped: async () => {} } }) })).decision.kind === 'refuse' && 'no-preview', expected: 'no-preview' });
     const noSprite = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: deps({ findEnv: async () => env({ sandboxId: null }) }) });
     assert({ given: 'no sprite pointer', should: 'no-preview without attaching', actual: noSprite.decision.kind === 'refuse' && noSprite.decision.reason, expected: 'no-preview' });
     const vanished = await resolvePreviewTarget({ holder, userId: USER, sessionId: SESSION, deps: deps({ attach: async () => null }) });

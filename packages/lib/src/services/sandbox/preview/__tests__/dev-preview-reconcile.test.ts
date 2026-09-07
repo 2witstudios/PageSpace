@@ -71,6 +71,7 @@ function fakeStore(current: DevPreviewRecord | null, calls: string[]): DevPrevie
     approvePort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
+    markRelayStopped: async () => {},
   };
 }
 

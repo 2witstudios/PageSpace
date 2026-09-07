@@ -17,7 +17,7 @@
 DELETE FROM "dev_preview_grants";--> statement-breakpoint
 ALTER TABLE "dev_preview_grants" ADD COLUMN IF NOT EXISTS "sessionId" text NOT NULL;--> statement-breakpoint
 DO $$ BEGIN
-	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dev_preview_grants_sessionId_sessions_id_fk') THEN
+	IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'dev_preview_grants_sessionId_sessions_id_fk' AND conrelid = '"dev_preview_grants"'::regclass) THEN
 		ALTER TABLE "dev_preview_grants" ADD CONSTRAINT "dev_preview_grants_sessionId_sessions_id_fk" FOREIGN KEY ("sessionId") REFERENCES "public"."sessions"("id") ON DELETE cascade ON UPDATE no action;
 	END IF;
 END $$;

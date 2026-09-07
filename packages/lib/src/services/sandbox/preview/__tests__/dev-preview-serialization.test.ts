@@ -35,6 +35,7 @@ function sharedStore(initial: DevPreviewRecord | null) {
     approvePort: async () => null,
     findStoppedWithRelay: async () => [],
     markSwept: async () => {},
+    markRelayStopped: async () => {},
     findByHolder: async () => {
       log.push('read');
       if (pause !== null) {

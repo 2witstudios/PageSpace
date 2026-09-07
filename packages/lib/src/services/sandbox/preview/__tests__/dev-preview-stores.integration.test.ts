@@ -175,6 +175,30 @@ describe('createDbDevPreviewStore', () => {
     expect(await store.findStoppedWithRelay({ staleAfterMs: 60_000, limit: 50, now: new Date() })).toEqual([]);
   });
 
+  it('markRelayStopped drains the sweep window, and only for the relay that was stopped while the stop still stands', async () => {
+    await store.upsert({ holder, spriteInstanceId: 'inst-rs', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    await store.setStoppedByUser(holder, NOW);
+    const window = () => store.findStoppedWithRelay({ staleAfterMs: 0, limit: 50, now: new Date(Date.now() + 60_000) });
+    expect(await window()).toHaveLength(1);
+
+    // A relay name that is not the one on the row changes nothing — this is
+    // the guard against clearing a relay somebody else just re-pointed.
+    await store.markRelayStopped({ holder, relayServiceName: 'some-other-relay' });
+    expect(await window()).toHaveLength(1);
+
+    await store.markRelayStopped({ holder, relayServiceName: PREVIEW_RELAY_SERVICE_NAME });
+    const after = await store.findByHolder(holder);
+    expect(after).toMatchObject({ relayServiceName: null, stoppedByUserAt: NOW, targetPort: 5173 });
+    // Drained: the row no longer names a relay, so it is not a candidate at
+    // any age. Without this it re-enters every window for the life of the row.
+    expect(await window()).toEqual([]);
+
+    // And the guard the other way: a RESUMED row is not the caller's to clear.
+    await store.upsert({ holder, spriteInstanceId: 'inst-rs2', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    await store.markRelayStopped({ holder, relayServiceName: PREVIEW_RELAY_SERVICE_NAME });
+    expect((await store.findByHolder(holder))?.relayServiceName).toBe(PREVIEW_RELAY_SERVICE_NAME);
+  });
+
   it('answers null for a holder with no row', async () => {
     expect(await store.findByHolder({ kind: 'workspace', id: createId() })).toBeNull();
   });
