@@ -212,9 +212,19 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
             </Button>
           )}
           {preview?.canManage && preview.canResume && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" disabled={actioning} onClick={() => void runAction('resume')} title="Switch the preview back on">
+            // One action, two honest names: a preview the user switched off is
+            // RESUMED; a relay that is down (crashed, or a reconcile has not
+            // caught up) is RESTARTED. Both ask the server for the same thing.
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+              disabled={actioning}
+              onClick={() => void runAction('resume')}
+              title={preview.state.status === 'stopped' ? 'Switch the preview back on' : 'Restart the preview'}
+            >
               <Play className="size-3.5" aria-hidden="true" />
-              Resume
+              {preview.state.status === 'stopped' ? 'Resume' : 'Restart'}
             </Button>
           )}
           <Button variant="ghost" size="sm" className="h-7 px-2 text-muted-foreground hover:text-foreground" onClick={closePreview} title="Close the preview pane">

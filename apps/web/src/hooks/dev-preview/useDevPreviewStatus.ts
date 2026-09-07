@@ -140,13 +140,34 @@ export function useDevPreviewStatus(
     () => devPreviewRefreshInterval({ polling, pauseWhenIdle, idleStreak: idleStreak.current, intervalMs }),
     [polling, pauseWhenIdle, intervalMs],
   );
+  // SWR applies `refreshWhenHidden`/`refreshWhenOffline` to its OWN interval
+  // timer, not to a retry we schedule, and it cannot cancel ours on unmount.
+  // So the retry re-asks the same conditions AT FIRE TIME (still polling? tab
+  // visible? online?) and the pending timer is cleared when the hook goes away
+  // or its policy changes — otherwise a hidden tab or a collapsed row would
+  // keep calling the status route after everything else had stopped.
+  const retryTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearRetry = useCallback(() => {
+    if (retryTimer.current !== null) {
+      clearTimeout(retryTimer.current);
+      retryTimer.current = null;
+    }
+  }, []);
   const onErrorRetry = useCallback<NonNullable<SWRConfiguration['onErrorRetry']>>(
     (_error, _key, _config, revalidate, { retryCount }) => {
       const ms = nextInterval();
-      if (ms > 0) setTimeout(() => void revalidate({ retryCount }), ms);
+      if (ms <= 0) return;
+      clearRetry();
+      retryTimer.current = setTimeout(() => {
+        retryTimer.current = null;
+        const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+        const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+        if (nextInterval() > 0 && visible && online) void revalidate({ retryCount });
+      }, ms);
     },
-    [nextInterval],
+    [nextInterval, clearRetry],
   );
+  useEffect(() => clearRetry, [clearRetry, key, polling, pauseWhenIdle, intervalMs]);
 
   const { data, error, isLoading, mutate } = useSWR<{ preview: DevPreviewStatusDTO }>(
     key,

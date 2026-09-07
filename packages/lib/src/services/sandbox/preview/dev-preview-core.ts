@@ -312,6 +312,18 @@ export interface PlanDevServerServiceInput {
   relay: SandboxServiceInfo | null;
   /** Ports currently bound in the sprite. */
   listeners: readonly ListeningPort[];
+  /**
+   * Whether {@link PlanDevServerServiceInput.listeners} is a CURRENT snapshot
+   * of the sprite, or merely what the caller happens to hold. Default `true`
+   * — the detector plans on a frame it just observed. A caller reconciling
+   * without a live `ports/watch` snapshot (a user's resume while the watcher
+   * is starting up or reconnecting) passes `false`, and a plan that would
+   * START a relay is refused rather than made against an empty listener set:
+   * "unknown" must never be read as "8080 is free", the same rule
+   * `describeServiceState`'s `listeners: null` obeys. Nothing else changes —
+   * a direct 8080 row needs no relay, and stopping never needs the slot.
+   */
+  listenersKnown?: boolean;
   /** Chosen by the effects layer after probing the sprite; `'node'` is the verified default. */
   relayRuntime?: PreviewRelayRuntime;
   now: Date;
@@ -384,7 +396,14 @@ export type DevServerServicePlan =
         /** No instance id ⇒ no proof ⇒ no plan. */
         | 'instance-unknown'
         /** Something that is not our relay holds 8080 — the honest fallback is "run your server on 8080". */
-        | 'http-port-busy';
+        | 'http-port-busy'
+        /**
+         * A relay would have to be started, but no current listener snapshot
+         * proves 8080 is free. Refusing costs a retry; planning against an
+         * assumed-empty set would start a relay that may fail to bind and
+         * leave a state nobody can explain.
+         */
+        | 'slot-unknown';
       targetPort?: number;
     };
 
@@ -439,6 +458,12 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
 
   if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
+  }
+  // A relay is about to be started or re-pointed, and the slot can only be
+  // called free from a CURRENT snapshot. `already-relaying` returns above, so
+  // a healthy preview is unaffected — this refuses only a START planned blind.
+  if (input.listenersKnown === false) {
+    return { action: 'refuse', reason: 'slot-unknown', targetPort };
   }
 
   const service = buildPreviewRelaySpec({ targetPort, runtime: relayRuntime });

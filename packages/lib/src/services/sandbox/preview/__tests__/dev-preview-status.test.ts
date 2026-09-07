@@ -152,7 +152,12 @@ describe('buildDevPreviewStatus — pure fold', () => {
 
   it('a starting relay is openable (the frame will show it coming up); a down one is not', () => {
     assert({ given: 'starting', should: 'canOpen', actual: buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'starting' }), listeners: null }).canOpen, expected: true });
-    assert({ given: 'down', should: 'not canOpen but still canStop', actual: (() => { const s = buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'failed', error: 'x' }), listeners: null }); return [s.canOpen, s.canStop]; })(), expected: [false, true] });
+    assert({
+      given: 'down',
+      should: 'not canOpen, still canStop, AND canResume — a crashed relay is recoverable in one click instead of waiting for a port frame',
+      actual: (() => { const s = buildDevPreviewStatus({ ...base, row: row(3000), relay: relayService(3000, { status: 'failed', error: 'x' }), listeners: null }); return [s.canOpen, s.canStop, s.canResume]; })(),
+      expected: [false, true, true],
+    });
   });
 
   it('carries the holder, the open path and detectedAt through', () => {
@@ -261,11 +266,32 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
     const { deps, store } = actionDeps({
       store: fakeStore(row(5173, { stoppedByUserAt: NOW })),
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed', error: 'exited with code 143' }), calls: trackedCalls }),
+      // A CURRENT snapshot: the dev server is up and 8080 is free, so the
+      // relay may honestly be started (see the slot-unknown case below).
+      readListeners: async () => [{ port: 5173, pid: 7 }],
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
     assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173, recorded: true } } });
     assert({ given: 'the resume', should: 'call services.start', actual: trackedCalls.includes(`start:${PREVIEW_RELAY_SERVICE_NAME}`), expected: true });
     assert({ given: 'the resume', should: 'leave stoppedByUserAt cleared', actual: store.current()?.stoppedByUserAt, expected: null });
+  });
+
+  it('RESUME with NO current snapshot refuses to start a relay blind — the intent is still cleared, so the detector\'s next frame starts it against real listeners', async () => {
+    const trackedCalls: string[] = [];
+    const store = fakeStore(row(5173, { stoppedByUserAt: NOW }));
+    const { deps } = actionDeps({
+      store,
+      attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
+      readListeners: async () => null,
+    });
+    assert({ given: 'no ports/watch snapshot', should: 'refuse rather than read unknown as "8080 is free"', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+    assert({ given: 'the refusal', should: 'still have cleared the stop — the user\'s ON stands', actual: store.current()?.stoppedByUserAt, expected: null });
+    assert({ given: 'the refusal', should: 'touch no service', actual: trackedCalls.some((c) => c.startsWith('start:') || c.startsWith('create:')), expected: false });
+  });
+
+  it('a DIRECT (8080) resume needs no snapshot — there is no relay to place', async () => {
+    const { deps } = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }), readListeners: async () => null });
+    assert({ given: 'a direct row and no snapshot', should: 'converge without refusing', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
   });
 
   it('RESUME against a slot a user process has since taken is REFUSED by the core (with the snapshot), not planned', async () => {
