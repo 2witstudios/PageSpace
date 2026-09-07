@@ -435,6 +435,21 @@ describe('AndroidStorage', () => {
       expect((await storage.getStoredSession())?.deviceToken).toBe('native-device-token');
     });
 
+    it('does not hang on a keychain read that never settles', async () => {
+      // getDeviceInfo sits inside refreshBearerSession with no timeout of its
+      // own, so a hung native call would leave the refresh pending forever.
+      vi.useFakeTimers();
+      preferencesStore.set('pagespace_device_id', 'preferences-id');
+      keychainMock.get.mockReturnValue(new Promise(() => {}));
+      const storage = await importAndroidStorage();
+
+      const pending = storage.getDeviceId();
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(await pending).toBe('preferences-id');
+      vi.useRealTimers();
+    });
+
     it('falls back to preferences when the store cannot be read', async () => {
       preferencesStore.set('pagespace_device_id', 'preferences-id');
       keychainMock.get.mockRejectedValue(new Error(INIT_FAILURE));

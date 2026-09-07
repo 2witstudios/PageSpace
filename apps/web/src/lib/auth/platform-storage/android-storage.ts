@@ -34,6 +34,17 @@ const DEVICE_ID_KEY = 'pagespace_device_id';
  * the fallback, and the next successful refresh writes the result into the
  * keychain — a one-way migration that needs no separate step.
  */
+/**
+ * How long the device-id lookup will wait on the keychain before falling back.
+ *
+ * A native call can hang indefinitely — the hazard `getSessionTokenWithTimeout`
+ * and `useSigninRecovery` already guard against, both with the same 3s — and
+ * `getDeviceInfo` sits inside `refreshBearerSession` with no timeout of its
+ * own, so a hung read here would leave a refresh pending forever. The binding
+ * is worth waiting a moment for, never worth hanging on.
+ */
+const BOUND_DEVICE_ID_TIMEOUT_MS = 3000;
+
 const LEGACY_DEVICE_TOKEN_KEY = 'deviceToken';
 const LEGACY_DEVICE_ID_KEYS = ['browser_device_id', 'deviceId'] as const;
 
@@ -260,11 +271,19 @@ export class AndroidStorage implements PlatformStorage {
    * `getDeviceInfo`.
    */
   private async boundDeviceId(): Promise<string | null> {
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
     try {
-      const session = await this.getStoredSession();
+      const session = await Promise.race([
+        this.getStoredSession(),
+        new Promise<null>((resolve) => {
+          timeoutId = setTimeout(() => resolve(null), BOUND_DEVICE_ID_TIMEOUT_MS);
+        }),
+      ]);
       return session?.deviceId || null;
     } catch {
       return null;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 
