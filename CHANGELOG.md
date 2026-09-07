@@ -7,6 +7,13 @@ All notable user-facing changes to PageSpace are documented here. Format follows
 
 ### Added
 
+- **Android app: a failed load now offers a Retry instead of a dead end (not yet distributed)** —
+  the Android shell had no bundled error screen, so launching without connectivity left the WebView
+  on Chrome's own error page with nothing to do. It now falls back to a PageSpace screen with a
+  working Retry button, matching iOS. Nobody can see this yet: the Android app has no release build
+  and is not distributed, so this lands as groundwork for the build that will be. Opening a
+  `pagespace.ai` web link from elsewhere still opens your browser, unchanged.
+
 - **Dev-server preview: see the app you're building, live, from inside its session (ships dark)** —
   when a dev server (Vite, Next, anything that binds a port) starts inside an agent session or a
   drive Environment, PageSpace notices and shows one quiet line in that session's header or beneath

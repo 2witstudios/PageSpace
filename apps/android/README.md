@@ -2,9 +2,271 @@
 
 Capacitor wrapper around the web app, mirroring `apps/ios`.
 
-> **Scope of this file today:** only the server-side push requirements below, added with the FCM
-> sender. Client-side setup — the runtime permission prompt, token registration, build and signing
-> — belongs to the Android client work and is not documented here yet.
+> **Scope of this file today:** why the Capacitor config diverges from the iOS one, what deep
+> links ship and what is deferred, and the server-side push requirements. Client-side setup — the
+> runtime permission prompt, token registration, build and signing — belongs to the Android client
+> work and is not documented here yet.
+
+## Why this config is not a copy of the iOS one
+
+`apps/ios/capacitor.config.ts` carries a long comment about `allowNavigation` and `errorPath`,
+added when the iOS shell bricked in PR #2010. Android sets those two keys for different reasons,
+splits `server.url` in a way iOS does not need to, and keeps a deliberately much shorter
+`allowNavigation` list. Three divergences, in the order they matter:
+
+### `server.url` must stay an origin — the path lives in `appStartPath`
+
+```ts
+url: 'https://pagespace.ai',
+appStartPath: '/dashboard',
+```
+
+Not cosmetic. `Bridge.setAllowedOriginRules()` puts `getServerUrl()` **verbatim** into the set
+`MessageHandler` hands to `WebViewCompat.addWebMessageListener`, and that API takes origin rules —
+`scheme://host[:port]`. A `url` carrying `/dashboard` is not one, and the catch for a rejected rule
+is `webView.addJavascriptInterface(this, "androidBridge")`, which enforces no origin restriction at
+all. Put the path back into `url` and the `allowNavigation` allowlist below may stop meaning
+anything.
+
+`Bridge` appends `appStartPath` *after* the `server.url` branch, so `appUrl` is still
+`https://pagespace.ai/dashboard` and the app still bypasses the landing page. The other
+`getServerUrl()` consumers are fine with an origin: `WebViewLocalServer.isMainUrl`/`isAllowedUrl`
+only null-check it, and `CapacitorCookieManager.getSanitizedDomain` wants a cookie domain.
+
+The rejection is documented, not inferred. `WebViewCompat.addWebMessageListener`'s javadoc gives
+the rule grammar as `SCHEME "://" [ HOSTNAME_PATTERN [ ":" PORT ] ]` — which has no path
+production, so `https://pagespace.ai/dashboard` is not expressible as a rule — and declares
+`@throws IllegalArgumentException If one of the allowedOriginRules is invalid`.
+
+What is still unobserved is the runtime consequence: that Capacitor's catch is therefore taken and
+`addJavascriptInterface` really does replace the origin-scoped listener on a device. Worth
+confirming during device verification, and worth an upstream report to Capacitor if so, since any
+app with a path in `server.url` inherits it silently.
+
+### The iOS brick does not reproduce on Android
+
+iOS failed because `WebViewDelegationHandler.swift` falls back to a raw string-prefix test of the
+target URL against `server.url` — which carries the `/dashboard` path — so a top-level navigation
+to any other path failed it and was handed to Safari, leaving no document. Android's equivalent,
+`Bridge.launchIntent()`, compares host and scheme only:
+
+```java
+Uri appUri = Uri.parse(appUrl);
+if (
+    !(appUri.getHost().equals(url.getHost()) && url.getScheme().equals(appUri.getScheme())) &&
+    !appAllowNavigationMask.matches(url.getHost())
+) { /* ACTION_VIEW to the system browser */ return true; }
+```
+
+`https://pagespace.ai/signin` matches on both, so it already stayed in the WebView with no
+`allowNavigation` at all. The apex entry in the Android config states the app's own origin; it does
+not change behaviour.
+
+### `errorPath` is a real gap, and it is the reason the config changed
+
+`BridgeWebViewClient.onReceivedError` and `onReceivedHttpError` load `bridge.getErrorUrl()` for
+main-frame requests. With no `errorPath` configured that returns `null`, so a failed load left the
+WebView on its own error page. With it, Android serves `https://localhost/index.html` from the
+bundled assets — `public/index.html`, which carries the Retry button.
+
+That page has no `window.Capacitor`, and it is worth knowing that this holds for two *different*
+reasons depending on the device, because only one of them is about origin scoping:
+
+- **WebView supports `DOCUMENT_START_SCRIPT`:** `Bridge.loadWebView()` registers the wrapper via
+  `addDocumentStartJavaScript` scoped to the `server.url` origin, and sets the injector to null.
+  Nothing is injected at `https://localhost`.
+- **WebView does not:** the injector stays live and `WebViewLocalServer` *does* inject the runtime
+  into locally-served HTML — at `handleLocalRequest` line 449, `ext.equals(".html") && jsInjector
+  != null`. That branch is never reached for this page, because `isErrorUrl()` is tested at line
+  374 and returns a raw, non-injected stream first.
+
+The second one is a load-bearing coincidence, so treat it as a constraint: the exemption is keyed
+on the request URL matching `bridge.getErrorUrl()` exactly. Serve this fallback from any other
+local path and legacy WebViews *will* inject the Capacitor runtime into it.
+
+**How the app itself gets its wrapper on those legacy WebViews**, since it is not obvious and is
+worth knowing before anyone touches `server.url`: `initWebView()` puts the `server.url` authority
+into `WebViewLocalServer`'s `authorities`, and with `server.url` set `isAllowedUrl()` is
+unconditionally true, so the top-level `pagespace.ai` HTML request takes `handleProxyRequest` —
+fetched through `HttpURLConnection`, with cookies copied to and from `CookieManager` by hand, and
+the runtime injected into the response. Where `DOCUMENT_START_SCRIPT` is supported the injector is
+null and that method returns null, leaving the WebView's own network stack in charge.
+
+Note this is driven by `server.url`, **not** by the `pagespace.ai` entry in `allowNavigation`:
+`initWebView()` runs at `Bridge.java:223` and adds that authority, before `setAllowedOriginRules()`
+at line 224 adds the `allowNavigation` hosts. Removing the apex entry would not change the network
+path or the injection. **It is not, however, outside the native bridge**, and it would be a mistake
+to treat it as a sandbox: `Bridge.setAllowedOriginRules()` adds `scheme://hostname` —
+`https://localhost` — to the allowed-origin set *unconditionally*, before it looks at
+`allowNavigation` at all, so `MessageHandler` exposes `androidBridge` on this origin. Code that
+knows the message protocol can call registered plugins directly.
+
+The retry page uses plain DOM APIs only and should keep doing so, but that is a discipline, not a
+boundary the platform enforces.
+
+### An `allowNavigation` entry grants the native plugin bridge
+
+This is the important divergence. On Android the list is not just a navigation allowlist:
+`Bridge.setAllowedOriginRules()` folds every entry into `allowedOriginRules`, and
+`MessageHandler.java:36` passes that set to
+`WebViewCompat.addWebMessageListener(webView, "androidBridge", ...)`. Any main-frame document from
+a listed origin can then call `androidBridge.postMessage()`, which reaches
+`Bridge.callPluginMethod()` and every registered plugin — including `PageSpaceKeychain`, backed by
+EncryptedSharedPreferences.
+
+The full set is wider than `allowNavigation`, which matters if you are auditing bridge access.
+`setAllowedOriginRules()` adds, in order: `scheme://hostname` (`https://localhost`, the bundled-asset
+origin — see the `errorPath` section above), then `server.url` if set, then every `allowNavigation`
+entry. So `allowNavigation` is the only part *we* control, and shortening it is the only lever this
+config has.
+
+So Android lists `pagespace.ai` and nothing else:
+
+- **`accounts.google.com` / `appleid.apple.com`** are not listed, though iOS lists them. Allowing
+  them would load a provider consent page in the privileged WebView. The apparent benefit was a
+  visible `disallowed_useragent` failure instead of a silent wrong-cookie-jar one when the web
+  OAuth fallback fires — not worth a native-trust grant to a third party. Provider pages belong in
+  a Custom Tab with a bound callback.
+- **`*.pagespace.ai`** is not listed either. `allowNavigation` governs top-level navigations only
+  (subresources from `assets.pagespace.ai` and friends never consult it), and the shell loads
+  `/dashboard` and stays there, so the wildcard enabled no navigation anyone could name while
+  granting the bridge to every subdomain that exists or ever will, tenant hosts included.
+
+**iOS has the same exposure and worse scoping**, and it is shipped: `JSExport.swift:20-21`
+registers the bridge as `WKUserScript(..., forMainFrameOnly: true)` on the WebView's
+`userContentController`, with no origin scoping at all, so it applies to every main-frame document
+the WebView loads. Changing that is separate work, tracked on the Android parity epic.
+
+## Deep links: what ships, and what is deliberately deferred
+
+`AndroidManifest.xml` registers **one** deep-link intent filter: the `pagespace://` custom
+scheme, mirroring iOS's `CFBundleURLSchemes`. It needs no domain verification and no server-side
+file, so the registration takes effect as soon as the app is installed, on every supported API
+level.
+
+**Registration is not ownership.** Custom schemes are not exclusive on Android: any other
+installed app can register `pagespace://` as well and be offered in the disambiguation chooser, or
+be set as the user's default handler. That no browser competes for the scheme does not mean no app
+does — which is why the scheme must not be treated as an authentication return channel until the
+handoff it carries is bound to the app that started the flow (see below).
+
+It is **groundwork, not a live path**. `pagespace://auth-exchange?code=…` is what the Google and
+Apple OAuth callback routes redirect to, but only on their `platform === 'ios'` branch, and
+`apps/web/src/lib/auth/oauth-state.ts` types the platform as `z.enum(['web', 'desktop', 'ios'])`
+— `'android'` is not a value it can take, so no server path emits a `pagespace://` redirect for
+Android today. (`/api/auth/google/native` does accept `'android'`, but it returns JSON to the
+native plugin rather than a deep link.) Teaching that path about Android belongs to the epic's
+native auth phase; registering the scheme now means the manifest will not be the blocker then.
+
+**Verified App Links for `https://pagespace.ai` are NOT registered.** Two prerequisites are
+missing, and the filter is a regression rather than groundwork until both land.
+
+### Prerequisite 1 — assetlinks.json, which needs a release signing certificate
+
+`/.well-known/assetlinks.json` must be served from `pagespace.ai` carrying the SHA-256
+fingerprint of the **release** signing certificate:
+
+```json
+[{
+  "relation": ["delegate_permission/common.handle_all_urls"],
+  "target": {
+    "namespace": "android_app",
+    "package_name": "ai.pagespace.android",
+    "sha256_cert_fingerprints": ["<release cert SHA-256, colon-separated hex>"]
+  }
+}]
+```
+
+No release keystore exists — signing and Play Console setup are outside the Android parity epic —
+so **no build we could ship can be verified**. This is a statement about release-signed artifacts,
+not about the mechanism: a debug build can be verified locally against a debug-fingerprint
+assetlinks file, and that workflow is documented below. What is missing is the release certificate,
+and with it any possibility of verification on a user's device.
+
+### Prerequisite 2 — link routing in the web app
+
+Nothing listens for the `@capacitor/app` plugin's `appUrlOpen` event, on **either** platform, so a
+captured link never reaches the path it names. What the user sees depends on whether the app was
+already running, and the two cases differ:
+
+| Start | What happens |
+|---|---|
+| **Cold** | The app launches and loads its start URL (`server.url` + `appStartPath`, so `/dashboard`). The linked path is dropped. |
+| **Warm** (`singleTask`, app already running) | The intent arrives via `onNewIntent`; `Bridge.onNewIntent` only notifies plugins — it never calls `loadUrl` — so `AppPlugin` fires `appUrlOpen` into a void and **the WebView stays exactly where it was.** Nothing visible happens at all. |
+
+Either way the invite token or auth callback code is silently dropped. Do not rely on a
+reset-to-`/dashboard` guarantee: it holds only on a cold launch, which matters both for device
+verification and for whoever implements the routing.
+
+### Why `autoVerify` alone is not enough here
+
+`android:autoVerify="true"` is often described as making an unverified filter degrade safely to
+the browser. That is true only on **API 31+**, and it is a behaviour of the *device's* platform
+version, not of `targetSdk`:
+
+| Device API level | Filter present, verification fails |
+|---|---|
+| 31+ (Android 12+) | App is not a candidate; link opens in the browser. Safe. |
+| 23–30 (Android 6–11) | Filter stays eligible; PageSpace appears in the disambiguation chooser. |
+
+`minSdkVersion` is 23, so the second row is in scope. On those devices a user who picks PageSpace
+from the chooser gets, per the table above, either the dashboard (cold) or no visible change at all
+(warm) — with the token gone in both cases. Strictly worse than the browser, and for no gain, since
+no shipped build can be verified. Hence: deferred, not shipped. (A debug build
+can be verified locally, but that changes nothing for a user's device, which is what the filter
+would affect.)
+
+Sourcing, since the two rows are not equally well documented. The 23–30 row follows from the
+docs: unverified deep links are "subject to the system disambiguation dialog", and "on Android 11
+(API level 30) and lower, the system establishes your app as the default handler for the specified
+URL patterns only if it finds a matching Digital Asset Links file for all hosts in the manifest" —
+i.e. failing verification costs you *default* status, not candidacy. The 31+ row is the
+well-established behaviour change that Codex review identified; I did not find it stated in one
+quotable sentence in the official docs.
+
+That gap does not affect the decision, which is why it is recorded rather than chased: **deferring
+is the safe choice under either reading.** If 31+ really does drop the app from resolution, the
+filter is inert and costs nothing to omit; if it does not, the filter would be actively harmful on
+every supported version. The filter only becomes worth adding once verification can actually
+succeed — which is prerequisite 1.
+
+### The filter to add, once both prerequisites are met
+
+Paths mirror `apps/web/public/.well-known/apple-app-site-association` so the two platforms capture
+the same links. Widening beyond these paths should still wait on prerequisite 2 — whole-host
+capture would strand users on `/dashboard` from every marketing, blog, or docs link.
+
+A third prerequisite applies to the auth-callback paths specifically: `/api/auth/desktop/exchange`
+authenticates possession of the one-time code alone, with no PKCE verifier and no binding to the
+app that began the flow, so whichever handler receives the code can redeem it for a session. That
+must be bound before any return channel — App Link or custom scheme — is treated as an
+authentication path.
+
+```xml
+<intent-filter android:autoVerify="true">
+    <action android:name="android.intent.action.VIEW" />
+    <category android:name="android.intent.category.DEFAULT" />
+    <category android:name="android.intent.category.BROWSABLE" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/auth/callback/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/api/auth/callback/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/invite/" />
+    <data android:scheme="https" android:host="pagespace.ai" android:pathPrefix="/join/" />
+</intent-filter>
+```
+
+To exercise it before a release certificate exists, serve the same `assetlinks.json` with the
+**debug** keystore's fingerprint:
+
+```bash
+keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey -storepass android
+adb shell pm verify-app-links --re-verify ai.pagespace.android
+adb shell pm get-app-links ai.pagespace.android
+```
+
+Both `pm` subcommands arrived with the API 31 verification system, so this checks the top row of
+the table above. Confirming the API 23–30 behaviour — that an unverified filter stays chooser-
+eligible — needs an older device or emulator image, and is the row that matters for the decision
+to defer.
 
 ## Server-side push requirements (production `pagespace-web`)
 
