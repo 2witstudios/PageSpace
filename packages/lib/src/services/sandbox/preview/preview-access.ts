@@ -186,6 +186,25 @@ export async function resolvePreviewTarget({
     return { decision: decidePreviewForward({ featureEnabled, authz, state: null, power: null, wakeAuthorization: 'not-consulted' }) as Extract<PreviewForwardDecision, { kind: 'refuse' }>, authorization };
   }
 
+  // A substrate with no preview surface is refused BEFORE the gather below:
+  // three of those four calls would reject with `LocalEnvUnsupportedError`,
+  // and `Promise.all` would surface whichever lost the race as an unhandled
+  // fault rather than as an answer this function is allowed to give.
+  // `=== false` — see `workspace-shells.ts`'s `killShellProcess` for why only a
+  // DECLARED absence refuses here.
+  if (handle.capabilities?.preview === false) {
+    return {
+      decision: {
+        kind: 'refuse',
+        reason: 'preview-unsupported',
+        status: 409,
+        message: 'This environment does not support dev previews.',
+        detail: 'substrate_has_no_preview_surface',
+      },
+      authorization,
+    };
+  }
+
   const [row, relay, power, urlInfo] = await Promise.all([
     deps.previewStore.findByHolder(holder),
     handle.services.get(PREVIEW_RELAY_SERVICE_NAME),

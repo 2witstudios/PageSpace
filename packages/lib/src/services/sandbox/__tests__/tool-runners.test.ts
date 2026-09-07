@@ -7,6 +7,8 @@ import {
   editSandboxFile,
   MAX_WRITE_BYTES,
   CHECKPOINT_TIMEOUT_MS,
+  DENIAL_MESSAGES,
+  localRefusalToToolDenial,
   type SandboxActorContext,
   type SandboxRunDeps,
 } from '../tool-runners';
@@ -15,6 +17,7 @@ import type { CodeExecutionAuditInput } from '../audit';
 import { SANDBOX_ROOT } from '../sandbox-paths';
 import { DEFAULT_READ_LINES, SANDBOX_MAX_OUTPUT_BYTES, MAX_LINE_BYTES } from '../execution-policy';
 import { LINE_ELISION_MARKER } from '../output-limit';
+import { LocalEnvUnsupportedError } from '../sandbox-host';
 
 const NOW = new Date('2026-06-01T12:00:00.000Z');
 
@@ -694,6 +697,87 @@ describe('runBashInSandbox — pre-batch checkpoint (Sprites Platform Alignment 
     expect(result).toMatchObject({ success: true });
     expect(created).toEqual([{ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' }]);
     expect(order).toEqual(['checkpoint', 'run']);
+  });
+
+  /**
+   * C13 / invariant 12. A substrate that CANNOT snapshot its filesystem must
+   * not run a destructive agent batch unprotected — and the refusal has to be
+   * observable at the CALLER, not merely thrown by the host, because the
+   * caller is the thing that decides whether the command runs.
+   */
+  describe('a substrate that cannot checkpoint fails CLOSED (C13, invariant 12)', () => {
+    const localCaps = { exec: true, fs: true, stream: false, checkpoint: false, preview: false, services: false } as const;
+
+    it('given a sandbox advertising checkpoint:false, should REFUSE the batch with a typed reason and run nothing', async () => {
+      const { checkpoint, created } = makeCheckpointDeps();
+      let ran = 0;
+      const { deps } = makeDeps({
+        checkpoint,
+        reconnect: async () =>
+          makeSandbox({
+            capabilities: localCaps,
+            runCommand: async () => {
+              ran += 1;
+              return { exitCode: 0, stdout: 'ok', stderr: '' };
+            },
+          }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(ran).toBe(0);
+      expect(created).toEqual([]);
+    });
+
+    it('given the host itself throws the typed unsupported error, should ALSO refuse — never swallow it as a fail-open checkpoint failure', async () => {
+      const { checkpoint } = makeCheckpointDeps({
+        createCheckpoint: async () => {
+          throw new LocalEnvUnsupportedError('createCheckpoint', 'env-1');
+        },
+      });
+      let ran = 0;
+      const { deps } = makeDeps({
+        checkpoint,
+        // No advertised capabilities at all: the error is the ONLY signal, so
+        // this row proves the second net works on its own.
+        reconnect: async () =>
+          makeSandbox({
+            runCommand: async () => {
+              ran += 1;
+              return { exitCode: 0, stdout: 'ok', stderr: '' };
+            },
+          }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: false, reason: 'checkpoint_unsupported' });
+      expect(ran).toBe(0);
+    });
+
+    it('given checkpoint:false but the POLICY wants no checkpoint (flag off), should still run — there is nothing to be unprotected about', async () => {
+      const { checkpoint, created } = makeCheckpointDeps({ isEnabled: () => false });
+      const { deps } = makeDeps({ checkpoint, reconnect: async () => makeSandbox({ capabilities: localCaps }) });
+
+      const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: true });
+      expect(created).toEqual([]);
+    });
+
+    it('CONTROL: the same batch on a sandbox advertising checkpoint:true runs — proving the refusals above are load-bearing', async () => {
+      const { checkpoint, created } = makeCheckpointDeps();
+      const { deps } = makeDeps({
+        checkpoint,
+        reconnect: async () => makeSandbox({ capabilities: { ...localCaps, checkpoint: true } }),
+      });
+
+      const result = await runBashInSandbox({ command: 'rm -rf /workspace', ctx: makeCtx({ turnId: 'turn-1' }), deps });
+
+      expect(result).toMatchObject({ success: true });
+      expect(created).toEqual([{ sandboxId: 'sbx-1', comment: 'pagespace-pre-agent-turn-1' }]);
+    });
   });
 
   it('given the flag off, should never call createCheckpoint', async () => {
@@ -1834,3 +1918,46 @@ describe('readSandboxFileForCopy', () => {
     expect(result.content).toBe(tricky);
   });
 });
+
+/**
+ * Requirement 6: a caller who cannot tell "your machine is not connected" from
+ * "your machine's owner denied you" debugs the wrong layer. Both the reason
+ * word and the copy the agent actually reads are pinned here.
+ */
+describe('a LOCAL environment\'s two refusals stay distinguishable all the way to the agent', () => {
+  it('should map not_connected and bind_policy to reasons of their own', () => {
+    expect(localRefusalToToolDenial('not_connected')).toBe('local_not_connected');
+    expect(localRefusalToToolDenial('bind_policy')).toBe('local_bind_denied');
+    expect(localRefusalToToolDenial('not_connected')).not.toBe(localRefusalToToolDenial('bind_policy'));
+  });
+
+  it.each(['flag_disabled', 'code_exec_denied', 'not_local', 'revoked', 'substrate_unsupported', undefined])(
+    'should leave %s to the caller\'s generic provisioning fault — the requester can do nothing about it',
+    (refusal) => {
+      expect(localRefusalToToolDenial(refusal)).toBeNull();
+    },
+  );
+
+  it('should give each one COPY that names who can fix it, and never the same sentence twice', () => {
+    const notConnected = DENIAL_MESSAGES.local_not_connected;
+    const denied = DENIAL_MESSAGES.local_bind_denied;
+
+    expect(notConnected).toContain('pagespace env connect');
+    expect(denied).toContain('owner');
+    expect(denied).toContain('Retrying will not help');
+    expect(notConnected).not.toBe(denied);
+    expect(notConnected).not.toBe(DENIAL_MESSAGES.provision_failed);
+    expect(denied).not.toBe(DENIAL_MESSAGES.provision_failed);
+  });
+
+  it.each(['local_not_connected', 'local_bind_denied', 'checkpoint_unsupported'] as const)(
+    'given acquire answers %s, the agent should receive that reason with its own message',
+    async (reason) => {
+      const { deps } = makeDeps({ acquireSandbox: async () => ({ ok: false, reason }) });
+      const result = await runBashInSandbox({ command: 'echo hi', ctx: makeCtx(), deps });
+
+      expect(result).toEqual({ success: false, reason, error: DENIAL_MESSAGES[reason] });
+    },
+  );
+});
+

@@ -24,6 +24,20 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   preview domain to `server.allowedHosts`. Off by default: the whole surface is absent until
   `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
   ops work (wildcard DNS, certificate, and the Caddy block) to land first.
+- **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
+  ends built so far are joined. An agent session bound to a local Environment whose machine is
+  connected now runs its commands and reads and writes its files on that machine, through the same
+  tools it uses everywhere else — nothing about the agent changes. Two refusals are kept apart
+  where you will see them, because they have different owners: "no connected machine — run
+  `pagespace env connect`" is yours to fix in seconds, while "the machine owner's policy does not
+  allow you to run code here" can only be changed by whoever enrolled it, and retrying will not
+  help. What a local Environment cannot do, it now says plainly instead of pretending: terminal
+  panes, dev-server previews and filesystem checkpoints are refused with a reason rather than
+  quietly appearing empty — and because a checkpoint is the safety net taken before a destructive
+  batch of commands, a batch that would need one is refused outright rather than run without it.
+  Closing a session bound to a local Environment never touches the computer: nothing is shut down,
+  nothing is billed, and the machine's own `env disconnect` and Ctrl-C still win. Still off by
+  default (`LOCAL_ENVS_ENABLED`), and still no local terminals.
 - **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
   enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
   keeps a live, outbound-only connection to PageSpace and answers requests to run a command or

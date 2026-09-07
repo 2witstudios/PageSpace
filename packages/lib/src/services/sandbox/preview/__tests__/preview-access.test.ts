@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import type { SandboxHandle, SandboxServiceInfo } from '../../sandbox-host';
+import { LocalEnvUnsupportedError, SPRITE_SANDBOX_CAPABILITIES, type SandboxCapabilities, type SandboxHandle, type SandboxServiceInfo } from '../../sandbox-host';
 import { authorizePreviewHolder, resolvePreviewTarget, type PreviewAccessDeps, type PreviewEnvRow, type PreviewSessionRow } from '../preview-access';
 import type { DevPreviewRecord } from '../dev-preview-store';
 import { buildPreviewRelaySpec, PREVIEW_RELAY_SERVICE_NAME } from '../preview-relay';
@@ -23,8 +23,9 @@ const runningRelay = (targetPort = 5173): SandboxServiceInfo => {
   return { name: spec.name, command: spec.command, args: spec.args, status: 'running', pid: 1 };
 };
 
-function fakeHandle(over: Partial<{ power: 'running' | 'paused' | 'unknown'; url: string | null; auth: 'sprite' | 'public' | 'unknown'; relay: SandboxServiceInfo | null; instance: string | null }> = {}): SandboxHandle {
+function fakeHandle(over: Partial<{ power: 'running' | 'paused' | 'unknown'; url: string | null; auth: 'sprite' | 'public' | 'unknown'; relay: SandboxServiceInfo | null; instance: string | null; capabilities: SandboxCapabilities }> = {}): SandboxHandle {
   return {
+    capabilities: over.capabilities ?? SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: 'sbx-env',
     spriteInstanceId: over.instance === undefined ? 'inst-1' : over.instance,
     exec: async () => ({ exitCode: 0, stdout: '', stderr: '' }),
@@ -169,5 +170,46 @@ describe('resolvePreviewTarget — the gather, in order', () => {
     const d = deps({ attach: async () => fakeHandle({ relay: { ...runningRelay(), status: 'failed', error: 'exited with code 143' } }) });
     const target = await resolvePreviewTarget({ holder, userId: USER, deps: d });
     assert({ given: 'failed relay', should: 'preview-down 502', actual: target.decision.kind === 'refuse' && [target.decision.reason, target.decision.status], expected: ['preview-down', 502] });
+  });
+});
+
+/**
+ * t09: a LOCAL environment has no dev-preview surface at all — `urlInfo`,
+ * `powerState` and `services.*` all refuse with a typed error. Three of the
+ * four calls in this function's gather would reject, so without the
+ * capability check the whole flow faults on whichever lost the race.
+ */
+describe('resolvePreviewTarget — a substrate with no preview surface', () => {
+  const holder = { kind: 'env', id: 'env1' } as const;
+  const noPreview: SandboxCapabilities = { ...SPRITE_SANDBOX_CAPABILITIES, preview: false, services: false };
+
+  const localHandle = (): SandboxHandle => {
+    const refuse = () => Promise.reject(new LocalEnvUnsupportedError('urlInfo', 'env1'));
+    return {
+      ...fakeHandle({ capabilities: noPreview }),
+      urlInfo: refuse,
+      powerState: refuse,
+      services: { create: refuse, list: refuse, get: refuse, start: refuse, stop: refuse, remove: refuse },
+    } as SandboxHandle;
+  };
+
+  it('should refuse with a typed preview-unsupported reason rather than faulting on the refusing members', async () => {
+    const target = await resolvePreviewTarget({ holder, userId: USER, deps: deps({ attach: async () => localHandle() }) });
+
+    expect(target.decision).toMatchObject({ kind: 'refuse', reason: 'preview-unsupported', status: 409 });
+  });
+
+  it('should never TOUCH the refusing members — the advertised capability answers first', async () => {
+    let touched = 0;
+    const handle = { ...localHandle(), powerState: async () => { touched += 1; return 'running' as const; } } as SandboxHandle;
+
+    await resolvePreviewTarget({ holder, userId: USER, deps: deps({ attach: async () => handle }) });
+
+    expect(touched).toBe(0);
+  });
+
+  it('CONTROL: the same request against a Sprite handle still forwards — proving the refusal above is load-bearing', async () => {
+    const target = await resolvePreviewTarget({ holder, userId: USER, deps: deps() });
+    expect(target.decision.kind).toBe('forward');
   });
 });

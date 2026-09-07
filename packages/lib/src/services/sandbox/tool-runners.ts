@@ -45,6 +45,7 @@ import {
 } from './checkpoint-policy';
 import { getValidatedEnv } from '../../config/env-validation';
 import type { ExecutableSandbox, SandboxRunResult } from './sandbox-client/types';
+import { LocalEnvUnsupportedError } from './sandbox-host';
 import type { CodeExecutionAuditInput, CodeExecutionAnomaly } from './audit';
 import type { UsageTrackingOutcome } from '../../monitoring/ai-monitoring';
 
@@ -247,7 +248,17 @@ export interface SandboxRunDeps {
   /** Ensures the caller's agent-session sandbox is provisioned and live (lifecycle deps already injected). */
   acquireSandbox: (input: AcquireSandboxRequest) => Promise<SandboxAcquireResult>;
   /** Reconnect to the executable handle for an acquired sandbox id. */
-  reconnect: (sandboxId: string) => Promise<ExecutableSandbox | null>;
+  /**
+   * Re-open the machine `acquireSandbox` just addressed.
+   *
+   * `principal` is WHO the reconnected handle acts as, and it is a parameter
+   * rather than something the implementation infers because a second
+   * substrate needs it: a LOCAL environment (the user's own computer) signs
+   * the acting identity into every request it sends, and its owner's local
+   * approval prompt names that identity. A Sprite implementation ignores it —
+   * a Sprite is addressed by name and was authorized at the gate.
+   */
+  reconnect: (sandboxId: string, principal: SandboxReconnectPrincipal) => Promise<ExecutableSandbox | null>;
   quota: SandboxQuotaDeps;
   buildEnv: () => Record<string, string>;
   audit: (input: CodeExecutionAuditInput) => Promise<void>;
@@ -362,6 +373,17 @@ const AUTHZ_DENY_REASONS = new Set([
 ]);
 
 
+/**
+ * Who a reconnected sandbox acts as — the acting user, the session that owns
+ * the machine, and the conversation the request came through. Assembled from
+ * facts the runner already holds; see `SandboxRunDeps.reconnect`.
+ */
+export interface SandboxReconnectPrincipal {
+  userId: string;
+  workspaceId: string;
+  conversationId: string;
+}
+
 export type SandboxToolDenialReason =
   | 'kill_switch_off'
   | 'tier_ineligible'
@@ -386,6 +408,24 @@ export type SandboxToolDenialReason =
   | 'provision_failed'
   | 'execution_failed'
   | 'not_found'
+  /**
+   * The substrate cannot take a filesystem checkpoint, and the checkpoint
+   * policy says this batch needs one (invariant 12). A REFUSAL, not a
+   * fallback: proceeding would run a destructive agent batch on the user's own
+   * machine with no restore point, which is exactly the silent safety
+   * degradation the advertised `checkpoint: false` exists to stop.
+   */
+  | 'checkpoint_unsupported'
+  /**
+   * The user's own computer holds no live bridge connection. Kept DISTINCT
+   * from `local_bind_denied` on purpose: this one the requester fixes
+   * themselves in seconds (`pagespace env connect`), that one only the
+   * machine's owner can fix, elsewhere. An agent told merely "could not
+   * provision" debugs the wrong layer.
+   */
+  | 'local_not_connected'
+  /** The machine owner's bind policy denies this actor. See `local_not_connected` for why the two are separate reasons. */
+  | 'local_bind_denied'
   | 'error';
 
 export type BashToolResult =
@@ -471,8 +511,43 @@ export const DENIAL_MESSAGES: Record<SandboxToolDenialReason, string> = {
   provision_failed: 'Could not provision a sandbox for this run.',
   execution_failed: 'Command execution failed or timed out.',
   not_found: 'File not found.',
+  checkpoint_unsupported:
+    'This environment cannot take a filesystem checkpoint, and a checkpoint is required before running commands here. '
+    + 'Nothing was run — a destructive batch with no restore point is refused rather than attempted.',
+  local_not_connected:
+    'The local environment this session is bound to has no connected machine. '
+    + 'Run `pagespace env connect` on that computer, then retry.',
+  local_bind_denied:
+    "The machine owner's policy does not allow you to run code on this local environment. "
+    + 'Retrying will not help — the environment owner has to change its bind policy.',
   error: 'Code execution could not be completed.',
 };
+
+/**
+ * How a LOCAL env's server-side refusal reaches the AGENT.
+ *
+ * Two of the six verdicts get a word of their own, and the split is the whole
+ * point: `not_connected` is fixed by the requester in seconds
+ * (`pagespace env connect` on their machine), while `bind_policy` can only be
+ * fixed by the environment's OWNER, elsewhere, and retrying never helps. An
+ * agent handed the same sentence for both debugs the wrong layer — and so does
+ * the human reading its transcript.
+ *
+ * Everything else maps to `null`, meaning "keep the caller's generic
+ * provisioning fault with its detail": `flag_disabled` and `substrate_unsupported`
+ * are deployment facts the requester can do nothing about, `revoked` and
+ * `not_local` describe a row rather than an action, and `code_exec_denied`
+ * already carries `can-run-code`'s own cause.
+ *
+ * Lives here, next to `DENIAL_MESSAGES`, so the vocabulary and the copy cannot
+ * drift apart, and so every entry point that surfaces a local refusal asks one
+ * function.
+ */
+export function localRefusalToToolDenial(refusal: string | undefined): SandboxToolDenialReason | null {
+  if (refusal === 'not_connected') return 'local_not_connected';
+  if (refusal === 'bind_policy') return 'local_bind_denied';
+  return null;
+}
 
 function fail(
   reason: SandboxToolDenialReason,
@@ -681,7 +756,11 @@ export async function openSession(
       }
       return { ok: false, reason: reasonFromAcquire(acquired) };
     }
-    const sandbox = await deps.reconnect(acquired.sandboxId);
+    const sandbox = await deps.reconnect(acquired.sandboxId, {
+      userId: ctx.userId,
+      workspaceId: acquired.workspaceId,
+      conversationId: ctx.conversationId,
+    });
     if (!sandbox) {
       deps.quota.releaseSlot({ userId: ctx.userId });
       safeLogError(deps.logger, 'Sandbox reconnect returned no handle', {
@@ -784,6 +863,12 @@ function withCheckpointTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
  * to create their own — see that function's doc for why this closes the race
  * regardless of exact timing between callers.
  */
+/**
+ * Whether the destructive batch may proceed. `ok: false` means NOTHING ran and
+ * the caller must refuse with the named reason — never swallow it.
+ */
+type CheckpointGateVerdict = { ok: true } | { ok: false; reason: 'checkpoint_unsupported' };
+
 async function maybeCheckpointBeforeBatch({
   ctx,
   deps,
@@ -792,9 +877,9 @@ async function maybeCheckpointBeforeBatch({
   ctx: SandboxActorContext;
   deps: SandboxRunDeps;
   sandbox: ExecutableSandbox;
-}): Promise<void> {
+}): Promise<CheckpointGateVerdict> {
   const checkpoint = deps.checkpoint;
-  if (!checkpoint || !ctx.turnId) return;
+  if (!checkpoint || !ctx.turnId) return { ok: true };
   const turnId = ctx.turnId;
 
   try {
@@ -806,7 +891,22 @@ async function maybeCheckpointBeforeBatch({
         lastCheckpointTurnId: state.lastCheckpointTurnId,
       })
     ) {
-      return;
+      return { ok: true };
+    }
+    // INVARIANT 12, and the one place fail-open flips to fail-closed. Above
+    // this line the policy has just said this batch NEEDS a restore point; a
+    // substrate that advertises it cannot make one is therefore refused, not
+    // silently run unprotected. The check sits AFTER `shouldCheckpoint` on
+    // purpose: when the policy wants no checkpoint at all (flag off, or one
+    // already taken this turn) there is nothing to be unprotected about, and
+    // refusing there would lock a local environment out of every batch for a
+    // reason unrelated to safety.
+    if (sandbox.capabilities?.checkpoint === false) {
+      safeLogWarn(deps.logger, 'Pre-agent checkpoint unsupported on this substrate — refusing the batch', {
+        sandboxId: sandbox.sandboxId,
+        turnId,
+      });
+      return { ok: false, reason: 'checkpoint_unsupported' };
     }
     await coalesceCheckpointAttempt(sandbox.sandboxId, async () => {
       await withCheckpointTimeout(
@@ -816,12 +916,27 @@ async function maybeCheckpointBeforeBatch({
       checkpoint.recordCheckpoint(sandbox.sandboxId, { lastCheckpointAt: deps.now(), lastCheckpointTurnId: turnId });
     });
   } catch (error) {
+    // The SECOND net, independent of the advertised capability: a substrate
+    // whose `createCheckpoint` says "unsupported" is refused even if it never
+    // declared a capability at all. Every OTHER failure keeps the documented
+    // fail-open behavior — a Sprite whose checkpoint call errored or timed out
+    // is still a sandbox with a restore path, and blocking agent work on
+    // checkpoint availability is what the timeout above exists to prevent.
+    if (error instanceof LocalEnvUnsupportedError) {
+      safeLogWarn(deps.logger, 'Pre-agent checkpoint unsupported on this substrate — refusing the batch', {
+        sandboxId: sandbox.sandboxId,
+        turnId,
+        error: error.message,
+      });
+      return { ok: false, reason: 'checkpoint_unsupported' };
+    }
     safeLogWarn(deps.logger, 'Pre-agent checkpoint failed (proceeding without one)', {
       sandboxId: sandbox.sandboxId,
       turnId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
+  return { ok: true };
 }
 
 export async function runBashInSandbox({
@@ -878,7 +993,8 @@ export async function runBashInSandbox({
   const session = await openSession(ctx, deps);
   if (!session.ok) return fail(session.reason);
 
-  await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
+  const checkpointed = await maybeCheckpointBeforeBatch({ ctx, deps, sandbox: session.sandbox });
+  if (!checkpointed.ok) return fail(checkpointed.reason);
 
   try {
     const startedAt = deps.now();

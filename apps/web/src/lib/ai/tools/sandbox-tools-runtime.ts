@@ -25,7 +25,7 @@ import { eq } from '@pagespace/db/operators';
 import { db } from '@pagespace/db/db';
 import { drives, pages } from '@pagespace/db/schema/core';
 import { users } from '@pagespace/db/schema/auth';
-import { defaultBuildEnv, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
+import { defaultBuildEnv, localRefusalToToolDenial, type SandboxRunDeps } from '@pagespace/lib/services/sandbox/tool-runners';
 import { isCodeExecutionEnabled } from '@pagespace/lib/services/sandbox/can-run-code';
 import {
   screenToolOutput,
@@ -37,6 +37,9 @@ import {
   getCheckpointState,
   recordCheckpoint,
 } from '@pagespace/lib/services/sandbox/checkpoint-policy';
+import { parseLocalEnvSandboxId } from '@pagespace/lib/services/sandbox/sandbox-host';
+import { adaptSandboxHandleToExecutableSandbox } from '@pagespace/lib/services/sandbox/sandbox-client/sandbox-host-adapter';
+import { resolveSandboxHostForSandboxId } from '@/lib/agent-workspaces/sandbox-host-registry';
 import type { ExecSandboxClient } from '@pagespace/lib/services/sandbox/sandbox-client/types';
 import {
   acquireCodeExecutionSlot,
@@ -217,6 +220,19 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
             ? { ok: false, reason: 'no_drive_access' }
             : { ok: false, reason: 'provision_failed', cause: provisioned.denial };
         }
+        // A LOCAL env's refusal keeps its own vocabulary all the way to the
+        // agent. Collapsing every one of them into `provision_failed` is the
+        // defect this branch exists to prevent: "your computer is not
+        // connected" (the requester fixes it in seconds with
+        // `pagespace env connect`) and "the machine owner's bind policy denies
+        // you" (only the owner can fix it, elsewhere) are different problems
+        // with different owners, and an agent told the same sentence for both
+        // debugs the wrong layer. Every OTHER local refusal is a provisioning
+        // fault and keeps its detail.
+        if (provisioned.reason === 'local_refused') {
+          const denial = localRefusalToToolDenial(provisioned.refusal);
+          if (denial) return { ok: false, reason: denial };
+        }
         return { ok: false, reason: 'provision_failed', cause: provisioned.detail ?? provisioned.reason };
       }
 
@@ -239,7 +255,32 @@ export function buildRealSandboxRunDeps(): SandboxRunDeps {
         pageId: input.agentPageId,
       };
     },
-    reconnect: async (sandboxId) => (await getSandboxClient()).get({ sandboxId }),
+    /**
+     * Re-open the machine `acquireSandbox` just returned the address of.
+     *
+     * Routed through the host REGISTRY rather than straight at the Sprites
+     * client, which is what makes an agent tool call reach a user's own
+     * computer without a single change to any tool runner: the runner still
+     * asks for an `ExecutableSandbox` by id and still drives `runCommand` /
+     * `writeFiles` / `readFileToBuffer` on it. A local env holds no
+     * `drive_envs.sandboxId` (invariant 9), so its address is derived
+     * (`local-env:<envId>`) and the registry's parse — not a database read —
+     * decides which substrate answers.
+     *
+     * The PRINCIPAL is bound here, from the acting request, because this is
+     * the layer that has one: it is signed into every grant the machine
+     * receives and it is what the owner's local ask prompt names.
+     */
+    reconnect: async (sandboxId, principal) => {
+      if (parseLocalEnvSandboxId(sandboxId) === null) return (await getSandboxClient()).get({ sandboxId });
+      const host = await resolveSandboxHostForSandboxId(sandboxId, {
+        userId: principal.userId,
+        sessionId: principal.workspaceId,
+        conversationId: principal.conversationId,
+      });
+      const handle = await host.attach({ sandboxId });
+      return handle === null ? null : adaptSandboxHandleToExecutableSandbox(handle);
+    },
     quota: {
       acquireSlot: acquireCodeExecutionSlot,
       releaseSlot: releaseCodeExecutionSlot,

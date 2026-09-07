@@ -9,6 +9,7 @@ import {
 import { shellDtoSchema } from '../../../agent-workspaces/shells-contract';
 import { SANDBOX_ROOT } from '../../sandbox/sandbox-paths';
 import { NOW, OWNER_ID, SESSION_ID, makeSessionShellStore, makeShellRecord, makeSpriteHost } from './fakes';
+import { LocalEnvUnsupportedError, type SandboxHandle } from '../../sandbox/sandbox-host';
 
 const SANDBOX_ID = 'pgs-ses-abc';
 
@@ -277,6 +278,73 @@ describe('killSessionShellById', () => {
 
     expect(result).toEqual({ ok: true, killed: true });
     expect(store.rows.has('shell-x')).toBe(false);
+  });
+
+  /**
+   * t09: a LOCAL environment has no interactive-stream surface on this seam
+   * (M2 routes local PTYs through apps/realtime instead), so `killSession`
+   * refuses. The row must be KEPT and the answer must be its own word:
+   * reporting success would drop the only pointer to a process this seam
+   * cannot reach, and reporting `error` would advise a retry that can never
+   * succeed.
+   */
+  describe('a substrate with no stream surface', () => {
+    const noStream = { exec: true, fs: true, stream: false, checkpoint: false, preview: false, services: false } as const;
+
+    function localDeps(store: ReturnType<typeof makeSessionShellStore>, host: ReturnType<typeof makeSpriteHost>, over: Partial<SandboxHandle> = {}) {
+      return {
+        store: store.store,
+        resolveSessionSandboxId: async () => SANDBOX_ID,
+        host: {
+          ...host.host,
+          attach: async () => ({ ...(await host.host.attach({ sandboxId: SANDBOX_ID }))!, capabilities: noStream, ...over }),
+        } as typeof host.host,
+      };
+    }
+
+    it('should answer the typed unsupported and KEEP the row', async () => {
+      const store = makeSessionShellStore([makeShellRecord({ id: 'shell-x', spriteExecId: 'stream-1' })]);
+      const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+
+      const result = await killSessionShellById({ shellId: 'shell-x', deps: localDeps(store, host) });
+
+      expect(result).toEqual({ ok: false, reason: 'unsupported' });
+      expect(store.rows.has('shell-x')).toBe(true);
+    });
+
+    it('should never CALL killSession — the advertised capability answers first', async () => {
+      const store = makeSessionShellStore([makeShellRecord({ id: 'shell-x', spriteExecId: 'stream-1' })]);
+      const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+      let called = 0;
+
+      await killSessionShellById({
+        shellId: 'shell-x',
+        deps: localDeps(store, host, { killSession: async () => { called += 1; } }),
+      });
+
+      expect(called).toBe(0);
+    });
+
+    it('given a handle that advertises nothing but THROWS the typed error, should still answer unsupported', async () => {
+      const store = makeSessionShellStore([makeShellRecord({ id: 'shell-x', spriteExecId: 'stream-1' })]);
+      const host = makeSpriteHost({ seed: { [SANDBOX_ID]: { instanceId: 'inst-1' } } });
+      const deps = {
+        store: store.store,
+        resolveSessionSandboxId: async () => SANDBOX_ID,
+        host: {
+          ...host.host,
+          attach: async () => ({
+            ...(await host.host.attach({ sandboxId: SANDBOX_ID }))!,
+            killSession: async () => {
+              throw new LocalEnvUnsupportedError('killSession', 'env-1');
+            },
+          }),
+        } as typeof host.host,
+      };
+
+      expect(await killSessionShellById({ shellId: 'shell-x', deps })).toEqual({ ok: false, reason: 'unsupported' });
+      expect(store.rows.has('shell-x')).toBe(true);
+    });
   });
 
   it('given an unreachable control plane, should KEEP the row so a retry can find the process', async () => {
