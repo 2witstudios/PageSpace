@@ -331,10 +331,63 @@ describe('ensureDriveEnvSandbox', () => {
       expect(noopStore.recordStorageMeasurement).not.toHaveBeenCalled();
     });
 
-    it('given this PROCESS holds no bridge registry (the realtime tier), should still refuse substrate_unsupported rather than fall through to the Sprite host', async () => {
+    /**
+     * `substrate_unsupported` survives t09 with ONE narrowed meaning: this
+     * PROCESS cannot reach local environments. The bridge socket terminates in
+     * apps/web and the realtime tier runs this same function, so it must
+     * refuse rather than fall through to `deps.host` — the Sprite host. It is
+     * easy to mistake for the old blanket refusal, so the distinction is
+     * pinned: an allowed, connected machine reaches this verdict ONLY when the
+     * registry seam is absent, and the same row WITH the seam binds.
+     */
+    it('given this PROCESS holds no bridge registry (the realtime tier), should refuse substrate_unsupported rather than fall through to the Sprite host', async () => {
       const { result, host } = await ensureLocal({ sibling: sibling(), local: null });
       expect(result).toEqual({ ok: false, reason: 'local_refused', refusal: 'substrate_unsupported', detail: 'substrate_unsupported' });
       expect(host.provision).not.toHaveBeenCalled();
+    });
+
+    it('substrate_unsupported should mean ONLY that — the identical row binds as soon as the registry seam is supplied', async () => {
+      const withoutRegistry = await ensureLocal({ sibling: sibling(), local: null });
+      const withRegistry = await ensureLocal({ sibling: sibling() });
+
+      expect(withoutRegistry.result).toMatchObject({ ok: false, refusal: 'substrate_unsupported' });
+      expect(withRegistry.result).toMatchObject({ ok: true });
+    });
+
+    /**
+     * Invariant 9, stated as the thing that would break it. The address a
+     * local bind hands back is DERIVED — `local-env:<envId>` — and it exists
+     * only inside the request. Persisting it anywhere would put the row into
+     * the reclaim, storage-billing and egress predicates that key on those
+     * columns, which is exactly the visibility a local env must never have.
+     */
+    it('should never hand the derived address to the STORE — not as a Sprite pointer, not in any other argument', async () => {
+      const { result } = await ensureLocal({ sibling: sibling() });
+      expect(result).toMatchObject({ ok: true, sandboxId: localEnvSandboxId(ENV_ID) });
+
+      const everyArgument = JSON.stringify(
+        Object.values(noopStore).map((fn) => fn.mock.calls),
+      );
+      expect(everyArgument).not.toContain(localEnvSandboxId(ENV_ID));
+      expect(everyArgument).not.toContain('local-env:');
+    });
+
+    it("should leave the row's sandboxId NULL after a bind, an exec and a reconnect", async () => {
+      const local = spyLocalHost();
+      const { result } = await ensureLocal({ sibling: sibling(), local });
+      if (!result.ok) throw new Error(`expected a bind, got ${JSON.stringify(result)}`);
+
+      // The full round trip a tool call makes: bind, run, re-open by address.
+      const handle = await local.host.provision({ name: ENV_ID, substrate: { kind: 'local', envId: ENV_ID }, options: {} });
+      await local.host.attach({ sandboxId: handle.sandboxId });
+
+      // The row this env provisioned from is unchanged: t05's CHECK keeps these
+      // NULL, and nothing here even attempted to write them.
+      expect(localRow.sandboxId).toBeNull();
+      expect(localRow.spriteInstanceId).toBeNull();
+      expect(localRow.spriteKey).toBeNull();
+      expect(noopStore.updateSpriteIdentity).not.toHaveBeenCalled();
+      expect(noopStore.enqueueReclaim).not.toHaveBeenCalled();
     });
 
     it('given the connection drops between the gate and the bind, should answer the SAME not_connected word the gate would have used', async () => {

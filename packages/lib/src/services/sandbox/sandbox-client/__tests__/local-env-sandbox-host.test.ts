@@ -286,6 +286,31 @@ describe('createLocalEnvSandboxHost — the seven undefined surfaces refuse LOUD
   });
 });
 
+/**
+ * The address is DERIVED and never persisted (invariant 9 keeps every Sprite
+ * column NULL on a local row), so the parse is the only thing standing between
+ * a Sprite name and a local route. It must claim exactly the addresses this
+ * module mints and nothing that merely resembles one.
+ */
+describe('the local sandbox ADDRESS', () => {
+  it('should round-trip the env id it was minted from', () => {
+    expect(parseLocalEnvSandboxId(localEnvSandboxId('env-9'))).toBe('env-9');
+    expect(localEnvSandboxId('env-9')).toBe('local-env:env-9');
+  });
+
+  it.each([
+    ['a bare prefix with no env id', 'local-env:'],
+    ['a hyphen where the colon belongs', 'local-env-abc123'],
+    ['the prefix in the middle rather than at the start', 'pgs-env-local-env:abc'],
+    ['a Sprite name that merely starts with the same letters', 'local-environment-sprite'],
+    ['the derived name of a real drive env', 'pgs-env-9f2c1ab4'],
+    ['a session Sprite name', 'pgs-ses-9f2c1ab4'],
+    ['an empty id', ''],
+  ])('should NOT claim %s', (_case, sandboxId) => {
+    expect(parseLocalEnvSandboxId(sandboxId)).toBeNull();
+  });
+});
+
 describe('createLocalEnvSandboxHost — the module stays I/O-free', () => {
   const source = readFileSync(join(__dirname, '..', 'local-env-sandbox-host.ts'), 'utf8');
 

@@ -70,8 +70,25 @@ describe('resolveSandboxHostForSandboxId', () => {
     expect(await resolveSandboxHostForSandboxId('pgs-env-abc123', PRINCIPAL)).toBe(spriteHost);
   });
 
-  it('given a bare prefix with no env id, should NOT be treated as a local address', async () => {
-    expect(await resolveSandboxHostForSandboxId('local-env:', PRINCIPAL)).toBe(spriteHost);
+  /**
+   * The parse is what decides which substrate answers, so a Sprite name it
+   * mis-claims is a real Sprite silently routed at a machine that does not
+   * exist. Every one of these is close enough to the prefix to be a plausible
+   * near-miss, and every one must stay a Sprite.
+   */
+  it.each([
+    ['a bare prefix with no env id', 'local-env:'],
+    ['a hyphen where the colon belongs', 'local-env-abc123'],
+    ['the prefix in the middle rather than at the start', 'pgs-env-local-env:abc'],
+    ['a Sprite name that merely starts with the same letters', 'local-environment-sprite'],
+    ['the derived name of a real drive env', 'pgs-env-9f2c1ab4'],
+    ['a session Sprite name', 'pgs-ses-9f2c1ab4'],
+  ])('given %s, should resolve to the Sprite host', async (_case, sandboxId) => {
+    expect(await resolveSandboxHostForSandboxId(sandboxId, PRINCIPAL)).toBe(spriteHost);
+  });
+
+  it('CONTROL: the one shape that IS a local address does route locally — so the rows above are not vacuous', async () => {
+    expect(await resolveSandboxHostForSandboxId('local-env:env-1', PRINCIPAL)).not.toBe(spriteHost);
   });
 });
 

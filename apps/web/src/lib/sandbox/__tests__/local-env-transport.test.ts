@@ -10,7 +10,7 @@
  * the file, in the same spirit as t08's `invariants.test.ts`.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 const sendGrant = vi.fn(async () => ({ type: 'exec_result' as const, grantId: 'g1', exitCode: 0, stdoutB64: '', stderrB64: '', truncated: false, sig: 's' }));
@@ -109,7 +109,6 @@ describe('exactly ONE verification path exists for env-bridge results', () => {
 
 /** Every production (non-test) file under `src` whose text contains `needle`, repo-relative. */
 function grepProduction(root: string, needle: string): string[] {
-  const { readdirSync, statSync } = require('node:fs') as typeof import('node:fs');
   const found: string[] = [];
   const walk = (dir: string, prefix: string) => {
     for (const entry of readdirSync(dir)) {
