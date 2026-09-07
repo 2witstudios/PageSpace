@@ -19,10 +19,17 @@
  *    because a teardown path remembers to. If either FK loses `cascade`, or
  *    the one-holder CHECK goes, a row can outlive its sprite's owner or be
  *    owned by nobody.
- *  - **A relay iff the target is not 8080.** The CHECK is the whole "one
- *    slot, relocated to 8080" decision in one line. Relaxing it is the
- *    documented migration seam for real httpPort routing — and must be a
- *    deliberate edit here, with the constant it names.
+ *  - **A relay never points at 8080.** A relay from 8080 to 8080 is a loop.
+ *    The other half of the old biconditional — "a non-8080 target always has
+ *    a relay" — was deliberately dropped when consent arrived: a detected but
+ *    unshared port, and an approved one whose relay is not created yet, are
+ *    both legal and both serve nothing (the sprite URL routes to 8080 alone).
+ *    Relaxing this remaining half is the documented migration seam for real
+ *    httpPort routing, and must be a deliberate edit here.
+ *  - **Consent is per PORT, and paired with its time.** `approvedPort` names
+ *    the port a person agreed to share, so a dev server that moves is a new
+ *    decision rather than an inherited one, and `approvedAt` cannot drift
+ *    away from it.
  *  - **NO public-exposure column.** v1 has no public bit — not a disabled one,
  *    none. Adding one is a migration plus a containment ruling. A column whose
  *    name mentions public/expose/visibility appearing here is that decision
@@ -94,7 +101,8 @@ describe('dev_preview_services', () => {
         { column: 'envId', table: getTableConfig(driveEnvs).name, onDelete: 'cascade' },
       ]),
     );
-    expect(fks).toHaveLength(2);
+    // Plus the approver attribution FK; the holder FKs are the two that cascade.
+    expect(fks).toHaveLength(3);
     expect(columns.workspaceId.notNull).toBe(false);
     expect(columns.envId.notNull).toBe(false);
     // One row per HOLDER, structurally — the upsert's conflict targets. Partial,
@@ -111,17 +119,36 @@ describe('dev_preview_services', () => {
     expect(oneHolder.replace(/\s+/g, ' ')).toContain('workspaceId IS NULL) <> ( envId IS NULL)');
   });
 
-  it('carries a relay iff the target is not the 8080 slot, and the target is a TCP port', () => {
+  it('never points a relay at the 8080 slot itself, and the target is a TCP port', () => {
     expect(DEV_PREVIEW_SPRITE_HTTP_PORT).toBe(8080);
     expect(columns.targetPort.notNull).toBe(true);
     expect(columns.relayServiceName.notNull).toBe(false);
-    expect(checkSql('dev_preview_services_relay_iff_not_8080_check').replace(/\s+/g, ' ')).toContain('= ( relayServiceName IS NULL)');
+    expect(checkSql('dev_preview_services_relay_never_8080_check').replace(/\s+/g, ' ')).toContain('relayServiceName IS NULL OR');
     // The literal 8080 is a `sql.raw` chunk the renderer above cannot see — so
     // the migration text, which is what Postgres enforces, is asserted directly.
     expect(migrationSql).toContain(
-      'CONSTRAINT "dev_preview_services_relay_iff_not_8080_check" CHECK (("dev_preview_services"."targetPort" = 8080) = ("dev_preview_services"."relayServiceName" IS NULL))',
+      'CONSTRAINT "dev_preview_services_relay_never_8080_check" CHECK ("dev_preview_services"."relayServiceName" IS NULL OR "dev_preview_services"."targetPort" <> 8080)',
     );
+    // The biconditional it replaced is GONE from the live schema — a detected
+    // but unshared port is a legal row, and re-adding the other half would
+    // make consent unrecordable.
+    expect(config.checks.map((entry) => entry.name)).not.toContain('dev_preview_services_relay_iff_not_8080_check');
+    expect(migrationSql).toContain('DROP CONSTRAINT "dev_preview_services_relay_iff_not_8080_check"');
     expect(checkSql('dev_preview_services_target_port_range_check')).toContain('BETWEEN 1 AND 65535');
+  });
+
+  it('records CONSENT per port, paired with its time, and never lets attribution grant it', () => {
+    expect(columns.approvedPort.notNull).toBe(false);
+    expect(columns.approvedAt.notNull).toBe(false);
+    // Paired, so a port can never be approved at no time and vice versa.
+    expect(checkSql('dev_preview_services_approved_paired_check').replace(/\s+/g, ' ')).toContain('approvedPort IS NULL) = ( approvedAt IS NULL)');
+    expect(checkSql('dev_preview_services_approved_port_range_check')).toContain('BETWEEN 1 AND 65535');
+    // Attribution only: nullable, and `set null` so deleting the approver
+    // cannot cascade away a live preview — and cannot be read as authority.
+    const approver = config.foreignKeys.map((fk) => ({ column: fk.reference().columns.map((c) => c.name).join(','), onDelete: fk.onDelete }))
+      .find((fk) => fk.column === 'approvedByUserId');
+    expect(approver?.onDelete).toBe('set null');
+    expect(columns.approvedByUserId.notNull).toBe(false);
   });
 
   it('stores stopped-by-user INTENT and detection time, and no status', () => {
@@ -132,11 +159,14 @@ describe('dev_preview_services', () => {
 
   it('has NO public-exposure column at all', () => {
     const names = Object.keys(columns).map((name) => name.toLowerCase());
+    // `approved*` is consent to SHARE a port with people who already have
+    // access, which is not exposure to the public — the banned list is about
+    // a column that would make a sandbox reachable without PageSpace's gate.
     for (const banned of ['public', 'expos', 'visib', 'auth']) {
       expect(names.filter((name) => name.includes(banned)), `no column mentioning "${banned}"`).toEqual([]);
     }
     expect(Object.keys(columns).sort()).toEqual(
-      ['createdAt', 'detectedAt', 'envId', 'id', 'relayServiceName', 'sandboxId', 'spriteInstanceId', 'stoppedByUserAt', 'targetPort', 'updatedAt', 'workspaceId'],
+      ['approvedAt', 'approvedByUserId', 'approvedPort', 'createdAt', 'detectedAt', 'envId', 'id', 'relayServiceName', 'sandboxId', 'spriteInstanceId', 'stoppedByUserAt', 'targetPort', 'updatedAt', 'workspaceId'],
     );
   });
 

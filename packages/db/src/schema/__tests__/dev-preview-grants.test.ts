@@ -38,7 +38,14 @@ describe('dev_preview_grants schema', () => {
   it('cascades with the user and names the holder polymorphically', () => {
     const userFk = config.foreignKeys.find((fk) => fk.reference().foreignTable === users);
     expect(userFk?.onDelete).toBe('cascade');
-    expect(config.foreignKeys).toHaveLength(1);
+    // A grant names the SESSION that opened it, not just the person: the
+    // preview cookie it mints carries that session id, and the per-request
+    // gather refuses the cookie the moment the session is revoked. The FK
+    // cascades so a deleted session takes its unredeemed grants with it.
+    const sessionFk = config.foreignKeys.find((fk) => fk.reference().columns.some((c) => c.name === 'sessionId'));
+    expect(sessionFk?.onDelete).toBe('cascade');
+    expect(columns.sessionId.notNull).toBe(true);
+    expect(config.foreignKeys).toHaveLength(2);
     expect(columns.holderKind.notNull).toBe(true);
     expect(columns.holderId.notNull).toBe(true);
     expect(config.checks.map((c) => c.name)).toEqual(['dev_preview_grants_holder_kind_check']);
