@@ -23,34 +23,14 @@
             </intent-filter>
 
             <!--
-                Verified App Links for https://pagespace.ai are deliberately NOT
-                registered yet. They need two things that do not exist, and
-                shipping the filter before both would be a regression, not
-                groundwork:
-
-                  1. /.well-known/assetlinks.json served from pagespace.ai with
-                     the RELEASE signing certificate's SHA-256 fingerprint. No
-                     release keystore exists — signing and Play Console are
-                     outside the Android parity epic — so verification cannot
-                     succeed on ANY Android version today.
-                  2. Link routing in the web app. Nothing listens for the
-                     @capacitor/app plugin's `appUrlOpen` event (on either
-                     platform), so a captured link opens the app at server.url
-                     (/dashboard) and the linked path — an invite token, an auth
-                     callback code — is silently dropped.
-
-                android:autoVerify="true" does not make an unverified filter safe
-                on the devices this app supports. Exclusive resolution of verified
-                links is a behaviour of the DEVICE's platform version (API 31+),
-                not of targetSdk: on API 31+ a failed-verification filter takes
-                the app out of the running and the link opens in the browser, but
-                minSdkVersion is 23, and on API 23-30 the same filter stays
-                eligible and PageSpace appears in the disambiguation chooser.
-                Picking it there would land the user on /dashboard with the token
-                gone — worse than the browser, for no gain.
-
-                The exact filter to add, and the order the prerequisites have to
-                land in, are written up in apps/android/README.md.
+                No https App Links filter here, deliberately. Do not add one back
+                without reading the "Deep links" section of apps/android/README.md
+                first: android:autoVerify="true" only removes an unverified app
+                from link resolution on API 31+, and minSdkVersion is 23, so on
+                API 23-30 the filter would put PageSpace in the disambiguation
+                chooser. assetlinks.json cannot be served yet (no release signing
+                certificate) and nothing routes appUrlOpen, so picking it there
+                would land on /dashboard with the invite or auth token dropped.
             -->
 
             <!--
