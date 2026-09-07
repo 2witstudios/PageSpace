@@ -222,7 +222,7 @@ describe('DevPreviewPane', () => {
     // waits on a ports snapshot. Without a word the click looks inert while
     // the pane still reads "not running".
     mockPost.mockResolvedValueOnce({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
-    status = live({ canOpen: false, canStop: false, canResume: true, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay for port 5173 is not defined on this sandbox.' } });
+    status = live({ canOpen: false, canStop: false, canResume: true, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay for port 5173 is not defined on this sandbox.' } });
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
     renderPane();
     await screen.findByTitle('Restart the preview');

@@ -714,6 +714,9 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
       targetPort: row.targetPort,
       via: 'relay',
       error: null,
+      // Ours to fix, and the reason this branch says `down` at all: the row
+      // names no relay, so a reconcile plans `start-relay` via `create`.
+      repairable: true,
       message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.`,
     };
   }

@@ -20,7 +20,7 @@ const respond = (result: DevPreviewUserActionResult, holder: typeof ENV | typeof
     userId: 'u1',
     route: 'POST /api/x',
     holder,
-    action: 'resume',
+    action: { kind: 'resume' },
     result,
   });
 
