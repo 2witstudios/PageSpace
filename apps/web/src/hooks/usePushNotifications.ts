@@ -31,8 +31,10 @@ type PermissionStatus = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied
  * This record answers it directly, in one place, on every platform.
  *
  * It is a cache of the OS's answer, never a second source of truth: the
- * permission-check effect clears it the moment the OS stops holding a refusal,
- * so it can never outlive the refusal it stands for.
+ * permission-check effect makes it agree with the OS in both directions on
+ * every launch — dropped the moment the OS stops holding a refusal, written
+ * when the OS is holding one this client never saw it collect — so it can
+ * neither outlive the refusal it stands for nor miss one.
  */
 const DENIAL_STORAGE_KEY = 'push_permission_denied';
 
@@ -52,7 +54,9 @@ function recordDenial(platform: Platform): void {
   try {
     localStorage.setItem(DENIAL_STORAGE_KEY, platform);
   } catch {
-    // Storage unavailable: the native permission state is still the backstop.
+    // Swallowed by design. Two things still hold the refusal: `hasPreviouslyDenied`
+    // in state for the rest of this session, and the OS itself on the next launch,
+    // which the permission-check effect reads back.
   }
 }
 
