@@ -3,9 +3,9 @@
 Capacitor wrapper around the web app, mirroring `apps/ios`.
 
 > **Scope of this file today:** why the Capacitor config diverges from the iOS one, what deep
-> links ship and what is deferred, and the server-side push requirements. Client-side setup — the
-> runtime permission prompt, token registration, build and signing — belongs to the Android client
-> work and is not documented here yet.
+> links ship and what is deferred, the server-side push requirements, and the client-side push
+> permission and registration path. Build and signing belong to the release work and are not
+> documented here yet.
 
 ## Why this config is not a copy of the iOS one
 
@@ -317,3 +317,41 @@ Once the secret is set, three sends confirm the whole path:
 
 Only a token-specific verdict from FCM deactivates a device. Credential, project, quota, outage
 and malformed-message rejections never count against a phone, however many times they occur.
+
+## Client-side push: permission and registration
+
+`POST_NOTIFICATIONS` is declared in `AndroidManifest.xml`. It has to be: on API 33+ (targetSdk is
+36) it is a dangerous permission that starts out ungranted, and an *undeclared* dangerous
+permission cannot be requested at all — the request resolves denied with no dialog shown. On API 32
+and below the OS ignores the declaration, and `@capacitor/push-notifications` resolves
+`requestPermissions()` as granted without asking.
+
+The runtime request and the token round trip live in the shared web layer, in
+`apps/web/src/hooks/usePushNotifications.ts` and `apps/web/src/components/PushNotificationManager.tsx`
+— the same code iOS runs. What changed for Android is only the gate: the hook now asks
+`useCapacitor().capabilities.push` (the table in `apps/web/src/lib/capacitor-bridge.ts`) instead of
+comparing the platform to `'ios'`. On registration the FCM token POSTs to
+`/api/notifications/push-tokens` with `platform: 'android'`, which that route has always accepted.
+
+**A refusal is remembered.** The hook writes a `push_permission_denied` record to `localStorage`
+and declines to call `requestPermissions()` again while it stands, so the dialog does not return on
+every cold start. This is not redundant with the OS state: after one refusal Android reports
+`'prompt-with-rationale'` from `checkPermissions()` and would still allow the ask. The record is
+dropped as soon as `checkPermissions()` reads `granted` — which is what happens when the user turns
+notifications on from system settings — and an explicitly user-initiated retry can pass
+`requestPermission({ ignoreRecordedDenial: true })` to ask anyway.
+
+**Badges.** `@capawesome/capacitor-badge` is now an Android dependency and `useNativeBadgeSync`
+(formerly `useIosBadgeSync`) projects the unread count on both platforms. The Android badge is a
+launcher feature: launchers that do not implement one reject or ignore the write, which the hook
+logs and otherwise treats as a no-op. The iOS-only authorization gate inside it is conditional, not
+removed — see the comment there for the one-shot option cap it defends against.
+
+Adding that dependency means `capacitor.settings.gradle` and `app/capacitor.build.gradle` are stale
+until someone runs `bun run --filter '@pagespace/android' sync` (`cap sync android`); both files are
+generated, and until they are regenerated the Badge plugin is not compiled into the APK and
+`Badge.set()` rejects at runtime (silently, per the above). Do that before the first build.
+
+**Not verified on a device.** Nothing here has been exercised on real hardware — there is no
+release build yet. The permission dialog, the FCM token round trip and badge behaviour across
+launchers are all the device-verification task's to confirm.

@@ -5,8 +5,62 @@ import { useCapacitor } from './useCapacitor';
 import { useAuth } from './useAuth';
 import { post, del } from '@/lib/auth/auth-fetch';
 import { getOrCreateDeviceId, getDeviceName } from '@/lib/analytics';
+import type { Platform } from '@/lib/capacitor-bridge';
 
-type PermissionStatus = 'prompt' | 'granted' | 'denied' | 'unknown';
+/**
+ * `PermissionState` from `@capacitor/core`, plus the pre-native-answer state.
+ *
+ * All four native values are listed deliberately. Android reports
+ * `'prompt-with-rationale'` from `checkPermissions()` once the user has refused
+ * the POST_NOTIFICATIONS dialog at least once and the OS would still allow
+ * another ask (Capacitor caches that in SharedPreferences from the request
+ * result, so it survives a relaunch — see Bridge.validatePermissions/
+ * getPermissionStates in @capacitor/android), and `'denied'` once the OS has
+ * stopped allowing the ask at all. Omitting it and casting would have typed a
+ * value the native layer really does return as one it cannot.
+ */
+type PermissionStatus = 'prompt' | 'prompt-with-rationale' | 'granted' | 'denied' | 'unknown';
+
+/**
+ * Where a refusal is remembered across launches.
+ *
+ * The native permission state already survives a relaunch on both platforms,
+ * but it says different things on each — iOS reports 'denied', Android reports
+ * 'prompt-with-rationale' until the OS gives up and only then 'denied' — so
+ * "has this user already said no?" is not one native value to compare against.
+ * This record answers it directly, in one place, on every platform.
+ */
+const DENIAL_STORAGE_KEY = 'push_permission_denied';
+
+/** Read the recorded refusal. Storage can throw (Safari private mode); never let that break registration. */
+function hasRecordedDenial(): boolean {
+  if (typeof window === 'undefined') return false;
+  try {
+    return localStorage.getItem(DENIAL_STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
+}
+
+/** Remember that the user refused, so the next launch does not ask again. */
+function recordDenial(platform: Platform): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.setItem(DENIAL_STORAGE_KEY, platform);
+  } catch {
+    // Storage unavailable: the native permission state is still the backstop.
+  }
+}
+
+/** Forget the refusal — the user granted permission, possibly from system settings. */
+function clearRecordedDenial(): void {
+  if (typeof window === 'undefined') return;
+  try {
+    localStorage.removeItem(DENIAL_STORAGE_KEY);
+  } catch {
+    // Nothing to do; a stale record only costs an un-asked prompt.
+  }
+}
 
 interface PushNotificationState {
   isSupported: boolean;
@@ -14,10 +68,22 @@ interface PushNotificationState {
   isRegistered: boolean;
   isLoading: boolean;
   error: string | null;
+  /**
+   * Whether this device has already refused the permission.
+   *
+   * Exposed so a settings surface can offer "enable notifications in system
+   * settings" instead of a button that silently does nothing.
+   */
+  hasPreviouslyDenied: boolean;
 }
 
 interface PushNotificationActions {
-  requestPermission: () => Promise<boolean>;
+  /**
+   * @param options.ignoreRecordedDenial - ask again even though the user
+   * already refused. For an explicitly user-initiated retry only; the
+   * automatic path must never pass it, or the prompt returns every launch.
+   */
+  requestPermission: (options?: { ignoreRecordedDenial?: boolean }) => Promise<boolean>;
   registerToken: () => Promise<boolean>;
   unregisterToken: () => Promise<void>;
 }
@@ -35,8 +101,9 @@ interface ActionPerformed {
 }
 
 export function usePushNotifications(): PushNotificationState & PushNotificationActions {
-  const { isNative, platform, isReady } = useCapacitor();
+  const { capabilities, platform, isReady } = useCapacitor();
   const { isAuthenticated, user } = useAuth();
+  const canPush = capabilities.push;
 
   const [state, setState] = useState<PushNotificationState>({
     isSupported: false,
@@ -44,6 +111,9 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     isRegistered: false,
     isLoading: false,
     error: null,
+    // Read inside the effect below rather than here: this initial state is also
+    // what the server renders, and localStorage does not exist there.
+    hasPreviouslyDenied: false,
   });
 
   const tokenRef = useRef<string | null>(null);
@@ -56,15 +126,20 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   // isSupported unlocks the permission-check effect and, from consumers like
   // PushNotificationManager, an immediate registerToken()/register() call —
   // if that raced ahead of the 'registration' listener being attached, the
-  // APNs token event could fire with no listener present to catch it.
+  // device-token event (APNs on iOS, FCM on Android) could fire with no
+  // listener present to catch it.
   // Registering listeners first guarantees they exist by the time anything
   // downstream can trigger a native registration.
   useEffect(() => {
     if (!isReady) return;
 
     const checkSupport = async () => {
-      // Only supported on iOS for now
-      if (isNative && platform === 'ios') {
+      // Capability, not platform: both native shells ship
+      // @capacitor/push-notifications (APNs on iOS, FCM on Android), so the
+      // question this asks is "can this platform receive a push?", answered by
+      // the single table in capacitor-bridge.ts rather than by an equality
+      // check that has to be found and edited per platform.
+      if (canPush) {
         try {
           const { PushNotifications } = await import('@capacitor/push-notifications');
           pushNotificationsRef.current = PushNotifications;
@@ -113,7 +188,11 @@ export function usePushNotifications(): PushNotificationState & PushNotification
             () => actionListener.remove(),
           );
 
-          setState(prev => ({ ...prev, isSupported: true }));
+          setState(prev => ({
+            ...prev,
+            isSupported: true,
+            hasPreviouslyDenied: hasRecordedDenial(),
+          }));
         } catch {
           setState(prev => ({ ...prev, isSupported: false }));
         }
@@ -128,7 +207,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       listenersRef.current.forEach(remove => remove());
       listenersRef.current = [];
     };
-  }, [isNative, platform, isReady]);
+  }, [canPush, isReady]);
 
   // Check permission status
   useEffect(() => {
@@ -140,9 +219,13 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
       try {
         const result = await PushNotifications.checkPermissions();
+        // The user may have granted it from system settings since the refusal.
+        // Drop the record so the auto-registration path is unblocked again.
+        if (result.receive === 'granted') clearRecordedDenial();
         setState(prev => ({
           ...prev,
-          permissionStatus: result.receive as PermissionStatus,
+          permissionStatus: result.receive,
+          hasPreviouslyDenied: result.receive === 'granted' ? false : prev.hasPreviouslyDenied,
         }));
       } catch (error) {
         console.error('[PushNotifications] Error checking permissions:', error);
@@ -191,8 +274,20 @@ export function usePushNotifications(): PushNotificationState & PushNotification
   registerTokenWithServerRef.current = registerTokenWithServer;
 
   // Request permission and register for push notifications
-  const requestPermission = useCallback(async (): Promise<boolean> => {
+  const requestPermission = useCallback(async (
+    options?: { ignoreRecordedDenial?: boolean }
+  ): Promise<boolean> => {
     if (!state.isSupported || !pushNotificationsRef.current) {
+      return false;
+    }
+
+    // A refusal is final until the user revisits it. Without this the automatic
+    // registration path in PushNotificationManager would call straight back
+    // into requestPermissions() on every cold start — on Android the OS still
+    // allows that ask while it reports 'prompt-with-rationale', so the dialog
+    // really would reappear each launch.
+    if (!options?.ignoreRecordedDenial && hasRecordedDenial()) {
+      setState(prev => ({ ...prev, hasPreviouslyDenied: true, isLoading: false }));
       return false;
     }
 
@@ -204,16 +299,19 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       const permResult = await PushNotifications.requestPermissions();
 
       if (permResult.receive === 'granted') {
-        setState(prev => ({ ...prev, permissionStatus: 'granted' }));
+        clearRecordedDenial();
+        setState(prev => ({ ...prev, permissionStatus: 'granted', hasPreviouslyDenied: false }));
 
-        // Register with APNs
+        // Register with the platform push service (APNs on iOS, FCM on Android)
         await PushNotifications.register();
 
         return true;
       } else {
+        recordDenial(platform);
         setState(prev => ({
           ...prev,
-          permissionStatus: permResult.receive as PermissionStatus,
+          permissionStatus: permResult.receive,
+          hasPreviouslyDenied: true,
           isLoading: false,
         }));
         return false;
@@ -227,7 +325,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       }));
       return false;
     }
-  }, [state.isSupported]);
+  }, [state.isSupported, platform]);
 
   // Manually register token (if already have permission)
   const registerToken = useCallback(async (): Promise<boolean> => {

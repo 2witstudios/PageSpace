@@ -55,13 +55,17 @@ const PLATFORM_CAPABILITIES: Record<
   }),
   // PageSpaceSecureStoragePlugin (registered in MainActivity.java as
   // "PageSpaceKeychain"), @capgo/capacitor-social-login (Google only),
-  // Firebase Messaging via the Gradle build. The badge plugin is not yet in
-  // apps/android/package.json.
+  // Firebase Messaging via the Gradle build, @capawesome/capacitor-badge.
+  //
+  // `badge: true` states that the plugin is a declared dependency and the shared
+  // code path is wired, not that every device will show a count: the Android
+  // badge is drawn by the launcher, and launchers that do not implement one
+  // ignore or reject the write. useNativeBadgeSync treats that as a no-op.
   android: Object.freeze({
     secureStore: true,
     nativeAuth: true,
     push: true,
-    badge: false,
+    badge: true,
   }),
   // A plain browser tab has none of these.
   web: Object.freeze({

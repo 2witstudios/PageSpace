@@ -34,7 +34,7 @@ This is a **remote-loading** app. The WebView loads the live site directly:
 Push is driven from the web layer (`apps/web/src/hooks/usePushNotifications.ts`), device tokens
 POST to `/api/notifications/push-tokens`, and the server sends via
 `packages/lib/src/notifications/push-notifications.ts` (ES256 JWT over HTTP/2 to APNs). The app
-icon badge is projected from the unread count (`useIosBadgeSync.ts` + `deriveBadgeCount`).
+icon badge is projected from the unread count (`useNativeBadgeSync.ts` + `deriveBadgeCount`).
 
 ### Server-side push requirements (production `pagespace-web`)
 

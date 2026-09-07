@@ -489,7 +489,7 @@ describe('capacitor-bridge', () => {
     // exhaustively so a wrong flag anywhere fails a named test.
     const TRUTH_TABLE = {
       ios: { secureStore: true, nativeAuth: true, push: true, badge: true },
-      android: { secureStore: true, nativeAuth: true, push: true, badge: false },
+      android: { secureStore: true, nativeAuth: true, push: true, badge: true },
       web: { secureStore: false, nativeAuth: false, push: false, badge: false },
     } as const;
 
@@ -584,7 +584,7 @@ describe('capacitor-bridge', () => {
       });
     });
 
-    it('returns the full Android capability set with badge unsupported', async () => {
+    it('returns the full Android capability set', async () => {
       setupCapacitorMock(true, 'android');
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
@@ -593,7 +593,7 @@ describe('capacitor-bridge', () => {
         secureStore: true,
         nativeAuth: true,
         push: true,
-        badge: false,
+        badge: true,
       });
     });
 
@@ -609,7 +609,7 @@ describe('capacitor-bridge', () => {
     });
 
     it('returns a frozen table entry callers cannot corrupt', async () => {
-      setupCapacitorMock(true, 'android');
+      removeCapacitorMock();
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
 
@@ -699,18 +699,19 @@ describe('capacitor-bridge', () => {
   describe('capability consumers', () => {
     it('needs no call-site change when a platform gains a capability', async () => {
       // Consumers ask hasNativeCapability('badge'); they never name a platform.
-      // Adding badge support to Android is a one-line table edit, and this
-      // simulated consumer picks it up unchanged.
+      // Android gaining badge support was exactly this: a one-line table edit
+      // that useNativeBadgeSync picked up unchanged. The unsupported side is a
+      // browser tab, which is where a consumer must still skip.
       const consumer = (
         bridge: typeof import('../capacitor-bridge')
       ): string => (bridge.hasNativeCapability('badge') ? 'sync' : 'skip');
 
-      setupCapacitorMock(true, 'android');
+      removeCapacitorMock();
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
       expect(consumer(capacitorBridge)).toBe('skip');
 
-      setupCapacitorMock(true, 'ios');
+      setupCapacitorMock(true, 'android');
       vi.resetModules();
       capacitorBridge = await import('../capacitor-bridge');
       expect(consumer(capacitorBridge)).toBe('sync');
