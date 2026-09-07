@@ -103,7 +103,13 @@ export interface DetectionRegistry {
 
 const DEFAULT_MAX_RECONNECTS = 5;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
-/** Roughly an hour of the longest backoff — long past "a blip", short of "forever". */
+/**
+ * How long a connection must stay up to count as HEALTHY, clearing both
+ * reconnect budgets. Comfortably longer than a flap (which dies in
+ * milliseconds) and far shorter than any real session.
+ */
+const HEALTHY_CONNECTION_MS = 60_000;
+/** Consecutive connections that did not survive, before the watcher is retired. A flap burns these in a couple of minutes. */
 const DEFAULT_MAX_TOTAL_RECONNECTS = 120;
 /**
  * How long a read-driven re-arm waits before trying a sprite again. The status
@@ -166,6 +172,8 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     // ceiling costs at most that, and a flap that has survived it is a sprite
     // problem rather than a connection problem.
     let totalAttempts = 0;
+    /** When the CURRENT connection attempt was opened, for judging whether it survived. */
+    let attemptStartedAt = deps.now().getTime();
 
     const entry: Watcher = {
       detector,
@@ -173,11 +181,19 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       close() {
         stopped = true;
         current?.close();
-        watchers.delete(sandboxId);
+        // BY IDENTITY, never by key. A sandbox NAME can be re-armed while an
+        // old entry is still held by a caller that read the map before the
+        // swap; deleting blindly would drop the LIVE watcher and orphan it —
+        // socket open, detector still writing rows, nothing able to reach it.
+        // The re-arm path guards its own call site as well, so this is the
+        // second line rather than the first: it is what keeps any FUTURE
+        // caller of `close()` from reintroducing the same bug.
+        if (watchers.get(sandboxId) === entry) watchers.delete(sandboxId);
       },
     };
 
     const open = () => {
+      attemptStartedAt = deps.now().getTime();
       current = openPortsWatch({
         url,
         token: deps.spritesToken(),
@@ -192,7 +208,16 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
           // from claiming the NEXT connection's snapshot.
           detector.invalidateSnapshot();
           if (stopped) return;
+          // A connection that OPENED and then SURVIVED is a healthy channel
+          // being recycled — an idle cut, a load balancer, a deploy — and it
+          // clears both budgets. One that opened and died at once is the flap
+          // the second budget exists for, and `info.opened` alone cannot tell
+          // them apart: it is true for both, which is why counting every
+          // reconnect would retire a perfectly healthy long-lived watcher and
+          // leave an unattended session with no detection at all.
+          const survived = info.opened && deps.now().getTime() - attemptStartedAt >= HEALTHY_CONNECTION_MS;
           if (info.opened) attempts = 0;
+          if (survived) totalAttempts = 0;
           if (info.reason === 'no-token' || attempts >= maxReconnects || totalAttempts >= maxTotalReconnects) {
             deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts, totalAttempts });
             stopped = true;
@@ -236,6 +261,12 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       if (throttled || existing.spriteInstanceId === null) return;
       const live = await deps.attach(sandboxId).catch(() => null);
       if (live === null || live.spriteInstanceId === existing.spriteInstanceId) return;
+      // That attach was a full control-plane round trip, and two explicit
+      // triggers for one holder are routine (a shell ensure and the signed
+      // watch call both fire, both `void`-ed). The map may have been re-armed
+      // meanwhile — by the other trigger, which has already done this exact
+      // work — so re-read before closing anything.
+      if (watchers.get(sandboxId) !== existing) return;
       deps.log.info('dev-preview: sprite replaced under the same name, re-watching', {
         holderKind: holder.kind,
         holderId: holder.id,

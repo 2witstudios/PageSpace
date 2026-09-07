@@ -389,6 +389,71 @@ describe('createDetectionRegistry', () => {
     expect(h.sockets).toHaveLength(2);
   });
 
+  it('two explicit triggers racing a rebuild leave exactly ONE watcher, never an orphan', async () => {
+    // The interleaving is SCRIPTED, because the orphan only appears in one
+    // order: the second trigger's comparison must resolve AFTER the first has
+    // already installed its replacement. Then closing the stale entry by KEY
+    // deletes the live replacement — socket open, detector still writing rows,
+    // nothing able to reach it — and a second watcher starts beside it.
+    let instance = 'inst-old';
+    const pending: Array<() => void> = [];
+    const flush = () => new Promise((r) => setTimeout(r, 0));
+    const h = deps({
+      attach: async () => {
+        await new Promise<void>((resolve) => pending.push(resolve));
+        return fakeHandle(instance);
+      },
+    });
+    const registry = createDetectionRegistry(h.deps);
+
+    const initial = registry.ensure({ holder: HOLDER });
+    await flush();
+    pending.shift()?.();                     // the first arm's own attach
+    await initial;
+    expect(h.sockets).toHaveLength(1);
+
+    instance = 'inst-new';
+    const t1 = registry.ensure({ holder: HOLDER });
+    await flush();                            // t1's comparison attach is queued
+    const t2 = registry.ensure({ holder: HOLDER });
+    await flush();                            // t2's comparison attach is queued behind it
+
+    pending.shift()?.();                      // t1 compares: mismatch, closes, reserves, attaches again
+    await flush();
+    const t1Start = pending.pop();            // t1's re-arm attach, queued last
+    t1Start?.();
+    await t1;
+    expect(h.sockets).toHaveLength(2);         // t1's replacement is LIVE
+
+    pending.shift()?.();                      // only now does t2 compare, against a map that moved on
+    await t2;
+    await flush();
+    while (pending.length > 0) pending.shift()?.();
+    await flush();
+
+    // Still exactly one replacement. Without the identity guard t2 tears down
+    // t1's live watcher and opens a third socket.
+    expect(h.sockets).toHaveLength(2);
+  });
+
+  it('a channel that stays up is NOT retired, however many times it is recycled', async () => {
+    // The lifetime ceiling exists for a flap. Counting clean recycles too
+    // would retire a healthy long-lived watcher, and an unattended session —
+    // nobody rendering status, so nothing to re-arm it — would lose detection
+    // for the life of the sprite, which is the case detection exists for.
+    const h = deps({ maxTotalReconnects: 2 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    for (let i = 0; i < 5 && h.sockets.length > 0; i += 1) {
+      const socket = h.sockets[h.sockets.length - 1];
+      socket.emit('open');
+      clock.now = new Date(clock.now.getTime() + 5 * 60 * 1000);
+      socket.emit('close', { code: 1006 });
+      await new Promise((r) => setTimeout(r, 0));
+    }
+    expect(h.logs.some((l) => l.includes('watch channel gone'))).toBe(false);
+  });
+
   it('drops a channel that flaps forever, because a status read re-arms it within a poll', async () => {
     // `attempts` resets on any connection that OPENS, so a socket that opens
     // and dies immediately would reconnect for ever — which is not what the

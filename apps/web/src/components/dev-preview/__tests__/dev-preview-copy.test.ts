@@ -22,7 +22,9 @@ describe('dev-preview copy', () => {
   it('offers an affordance line for every KNOWN dev server and none for "none"', () => {
     expect(devPreviewAffordanceText(preview({ status: 'live', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
     expect(devPreviewAffordanceText(preview({ status: 'starting', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
-    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: '' }))).toContain('not responding');
+    // Not "the dev server is not responding": a `down` preview is as often a
+    // relay that was never created, and the server itself may be fine.
+    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: '' }))).toBe('Preview of :5173 is not running');
     expect(devPreviewAffordanceText(preview({ status: 'blocked', targetPort: 5173, message: '' }))).toContain('port 8080 is in use');
     expect(devPreviewAffordanceText(preview({ status: 'stopped', targetPort: 5173, stoppedAt: 'x', message: '' }))).toContain('switched off');
     expect(devPreviewAffordanceText(preview({ status: 'stale', targetPort: 5173, message: '' }))).toContain('started again');

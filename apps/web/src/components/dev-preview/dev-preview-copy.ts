@@ -54,7 +54,11 @@ export function devPreviewAffordanceText(preview: DevPreviewStatusDTO): string |
     case 'starting':
       return `Dev server detected on :${state.targetPort}`;
     case 'down':
-      return `Dev server on :${state.targetPort} is not responding`;
+      // "not running", not "not responding": a `down` preview is as often a
+      // relay that was never created — the dev server itself may be perfectly
+      // healthy, and telling the user it is not responding sends them looking
+      // in the wrong place. The pane's status line carries the precise reason.
+      return `Preview of :${state.targetPort} is not running`;
     case 'blocked':
       return `Dev server on :${state.targetPort} — port 8080 is in use`;
     case 'stopped':
