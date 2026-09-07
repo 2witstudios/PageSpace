@@ -226,10 +226,17 @@ ordinary status text or, with `--show-token`, exactly the one `PAGESPACE_TOKEN=�
 
 `pagespace env connect` lets PageSpace run commands and read and write files **on this computer,
 under your own user account**. Nothing runs unless a policy file you own allows it, and in `ask`
-mode you see the exact command first — but once you approve something, it runs with your
-privileges, exactly as if you had typed it into this terminal yourself. It can read any file you
-can read, change any file you can change, reach anything on your network that you can reach, and
-use any credential sitting in your home directory. There is no sandbox around it.
+mode you see the exact command before it runs. Two things follow from approving one, and the
+second surprises people:
+
+- It runs with your privileges, exactly as if you had typed it into this terminal yourself. It can
+  read any file you can read, change any file you can change, reach anything on your network that
+  you can reach, and use any credential sitting in your home directory. There is no sandbox
+  around it.
+- You see the **first** command of each kind, and approving it covers **every later command of
+  that kind for the rest of that session, unseen**. The approval is remembered per user, session
+  and operation — not per command — so after you approve one `exec`, the next `exec` from that
+  same user and session runs with no prompt at all, whatever it is.
 
 The `roots` in your policy file confine the paths an agent can **name** — the working directory it
 asks for, and the files it asks to read or write. They do **not** confine what a program does once
@@ -238,9 +245,9 @@ it has started. A command approved with a working directory inside a root can st
 daemon to open them. Actually confining a running process needs operating-system sandboxing,
 which this daemon does not do.
 
-So the question at the prompt is not "may this touch that folder". It is "may this run as me".
-Answer it the way you would answer a stranger asking you to paste a command into your own shell.
-Two practical consequences:
+So the question at the prompt is not "may this touch that folder". It is "may this, and everything
+like it for the rest of this session, run as me". Answer it the way you would answer a stranger
+asking for your shell for the afternoon. Two practical consequences:
 
 - Run the daemon as an ordinary user, never as root, and prefer a machine — or a separate account —
   that does not hold secrets you would not hand to whoever is driving the agent.
@@ -260,15 +267,24 @@ What the daemon does guarantee is narrower than "safe", and worth knowing exactl
 - Revoking the environment in PageSpace **deletes this machine's key** and stops the daemon;
   Ctrl-C and `pagespace env disconnect` stop it too, and kill anything it started.
 
+One consequence of the two facts above, worth seeing once before you pick a mode: an agent that
+reads a file on this machine can be *steered* by what that file says — a README, a dependency's
+source, a downloaded document can all contain text aimed at the agent rather than at you. If the
+agent then runs a command, and you have already approved an `exec` in that session, **that command
+runs without a prompt**. This is inherent to agents reading content nobody vetted, not a defect in
+this daemon; the defences that apply here are the ordinary ones — keep `principals` short, keep
+`ops` narrow, stop the daemon when you are not using it, and read
+`~/.pagespace/env-audit.jsonl` when you want to know what actually ran.
+
 ### The three modes, in practice
 
 - **`deny`** — nothing runs, ever. The daemon still connects, so the Environment shows as connected.
 - **`ask`** — the safe default to start with. An operation listed in `ops` runs without asking;
   anything else stops and prompts you in this terminal, showing the exact command, working
-  directory, paths, environment and limits. Approving covers further requests for that same
-  operation from the same user and session while the daemon runs — not forever, and not for
-  other people. Declining refuses that request and asks again next time. `ask` needs a terminal:
-  a headless machine cannot use it.
+  directory, paths, environment and limits. As above, approving covers further requests for that
+  same operation from the same user and session while the daemon runs — those later commands are
+  never shown to you — but not forever, and not for other people. Declining refuses that request
+  and asks again next time. `ask` needs a terminal: a headless machine cannot use it.
 - **`allowlist`** — only the operations in `ops` run; everything else is denied with no prompt.
 
 **`allowlist` allowlists operations, not executables.** `ops` holds `exec`, `fs_read` and
