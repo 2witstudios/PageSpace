@@ -12,12 +12,7 @@
  * that it would not is visible as a duplicate.
  */
 
-import type {
-  SandboxHandle,
-  SandboxHost,
-  SandboxStream,
-  SandboxStreamSessionInfo,
-} from '../../sandbox/sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxHost, type SandboxStream, type SandboxStreamSessionInfo } from '../../sandbox/sandbox-host';
 import { SandboxSpriteReplacedError } from '../../sandbox/sandbox-host';
 import type {
   AgentSessionRecord,
@@ -332,6 +327,9 @@ export function makeHandle(
     kill: () => {},
   };
   return {
+    // Every fake in this file describes a SPRITE — the substrate that serves
+    // the whole seam. A local env advertises its own, narrower set.
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId,
     spriteInstanceId: instanceId,
     egressPolicyToken,

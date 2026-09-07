@@ -1823,9 +1823,18 @@ export function createSessionTools(deps: SessionToolsDeps): {
 
         const killed = await deps.killShell({ shellId, actingUserId: actor.userId });
         if (!killed.ok) {
+          // The MODEL reads the sentence, not the reason code. Telling it to
+          // retry a refusal that is a permanent property of the machine's
+          // substrate is the same defect as collapsing two refusals into one
+          // word — worse, in fact, because it actively instructs a loop. A
+          // local environment has no interactive-stream surface on this seam at
+          // all, so there is no process here and there never was.
           return {
             success: false,
-            error: `Could not close shell "${shellId}" — its process may still be running. Retry.`,
+            error:
+              killed.reason === 'unsupported'
+                ? `Shell "${shellId}" runs in an environment with no terminal support, so there is no process to close. Do not retry.`
+                : `Could not close shell "${shellId}" — its process may still be running. Retry.`,
             reason: killed.reason,
           };
         }

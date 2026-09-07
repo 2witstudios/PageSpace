@@ -40,6 +40,20 @@ export type GrantFrameType = GrantFrame['type'];
 
 export const GRANT_FRAME_TYPES: readonly GrantFrameType[] = ['grant_exec', 'grant_fs_read', 'grant_fs_write', 'grant_pty_open'];
 
+/**
+ * A grant frame BEFORE its grant + signature are attached — what a caller
+ * (the local `SandboxHost`) hands the bridge to send.
+ *
+ * Defined here, beside the projection, rather than beside the signer: both the
+ * host that BUILDS one (`services/sandbox/sandbox-client/local-env-sandbox-host.ts`,
+ * in this package) and the signer that consumes one (apps/web's
+ * `grant-signer.ts`) need it, and a second declaration of the same mapped type
+ * is exactly the drift `grantRequestForFrame` exists to prevent one layer down.
+ */
+export type UnsignedGrantFrame = {
+  [K in GrantFrameType]: Omit<Extract<GrantFrame, { type: K }>, 'grant' | 'sig'>;
+}[GrantFrameType];
+
 export interface ExecGrantArgs {
   readonly cmd: string;
   readonly args: readonly string[];

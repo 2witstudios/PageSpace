@@ -36,6 +36,11 @@ export function adaptSandboxHandleToExecutableSandbox(handle: SandboxHandle): Ex
     // identity guard downstream silently degrades to name-only.
     spriteInstanceId: handle.spriteInstanceId ?? null,
     egressPolicyToken: handle.egressPolicyToken,
+    // WHAT this substrate can serve. Dropping it here would be invisible in
+    // exactly the way `spriteInstanceId` was: every call still "works" while
+    // the checkpoint gate silently loses its only structural signal that a
+    // local env cannot snapshot its filesystem (invariant 12).
+    capabilities: handle.capabilities,
     runCommand: (args) => handle.exec(args),
     writeFiles: (files) => handle.writeFiles(files),
     readFileToBuffer: (args) => handle.readFile(args),

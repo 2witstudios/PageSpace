@@ -105,4 +105,21 @@ describe('DELETE /api/agent-workspaces/[workspaceId]/shells/[shellId]', () => {
     const response = await del();
     expect(response.status).toBe(502);
   });
+
+  /**
+   * 502 means "upstream hiccup, try again". A substrate with no
+   * interactive-stream surface (a local environment) has no shell process and
+   * never will, so a retry can never succeed — the status has to say something
+   * a client can act on correctly.
+   */
+  it('given an environment with NO terminal support, should 409 rather than 502 — the refusal is permanent', async () => {
+    mockKillShellById.mockResolvedValue({ ok: false, reason: 'unsupported' });
+
+    const response = await del();
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual(
+      expect.objectContaining({ reason: 'unsupported', error: expect.stringContaining('does not support terminal sessions') }),
+    );
+  });
 });

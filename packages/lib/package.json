@@ -1018,6 +1018,11 @@
       "import": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js",
       "require": "./dist/services/sandbox/sandbox-client/sprite-sandbox-host.js"
     },
+    "./services/sandbox/sandbox-client/local-env-sandbox-host": {
+      "types": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.d.ts",
+      "import": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js",
+      "require": "./dist/services/sandbox/sandbox-client/local-env-sandbox-host.js"
+    },
     "./services/sandbox/sandbox-client/sandbox-host-adapter": {
       "types": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.d.ts",
       "import": "./dist/services/sandbox/sandbox-client/sandbox-host-adapter.js",

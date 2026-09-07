@@ -94,7 +94,8 @@ export interface WorkspacePaneState {
 /** A kill's outcome, plus what it left the layout looking like. `panes` is null when there was no workspace to look at. */
 export type KillShellResult =
   | { ok: true; killed: boolean; panes: WorkspacePaneState | null }
-  | { ok: false; reason: 'error' };
+  /** `unsupported` is carried through from {@link KillSessionShellResult} rather than collapsed: it is permanent, so a caller must not advise a retry. */
+  | Extract<KillSessionShellResult, { ok: false }>;
 
 /** A spawn's outcome, plus the pane it landed in. */
 export type SpawnShellResult =
@@ -351,7 +352,10 @@ export async function killShellById(input: {
       resolveSessionSandboxId: async (workspaceId) => resolveOwningSandboxId(sessionStore, workspaceId),
     },
   });
-  if (!ptyKill.ok) return { ok: false, reason: 'error' };
+  // Passed through rather than collapsed to `error`: `unsupported` is a
+  // permanent property of the substrate, and telling the caller to retry it
+  // would be advice that can never come true.
+  if (!ptyKill.ok) return ptyKill;
 
   let killed: KillSessionShellResult = { ok: false, reason: 'error' };
   // The pane this kill closes, read from the tree the decision ran against —

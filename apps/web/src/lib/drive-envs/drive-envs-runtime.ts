@@ -283,8 +283,33 @@ export async function ensureEnvSandboxForSession(input: {
     envId: input.envId,
     intent: input.intent,
     requesterId: input.requesterId,
-    deps: { store, host, resolvePayer: resolveDriveEnvPayer, liveConnection },
+    deps: {
+      store,
+      host,
+      resolvePayer: resolveDriveEnvPayer,
+      liveConnection,
+      resolveLocalHost: localHostResolver,
+    },
   });
+}
+
+/**
+ * The LOCAL-env `SandboxHost` factory this process hands the provisioner
+ * (t09). Loaded lazily, for the same reason `liveConnectionReader` is: the
+ * registry builds its logger at import and many suites stub the logging
+ * module.
+ *
+ * NO grant principal, deliberately. A provision is a BIND — it asks whether
+ * the machine is connected and nothing else, and it has no conversation to
+ * name. So it gets the connectivity-only transport, whose `sendGrant` refuses
+ * rather than signing under an invented identity: if some future edit tries to
+ * run a command from the provisioning path, it fails loudly instead of
+ * attributing the command to a principal nobody authorized. Grants are sent
+ * from the tool path, through a transport built for the acting principal.
+ */
+async function localHostResolver({ envId }: { envId: string }) {
+  const { resolveSandboxHost } = await import('@/lib/agent-workspaces/sandbox-host-registry');
+  return resolveSandboxHost({ kind: 'local', envId });
 }
 
 /**
@@ -312,6 +337,10 @@ export async function gateLocalEnvBind(input: { envId: string; requesterId: stri
  * exactly the same ones.
  */
 export async function rebuildEnv(input: { envId: string; requesterId: string }): Promise<RebuildDriveEnvResult> {
+  // No `resolveLocalHost` on this path, and that is not an omission:
+  // `rebuildDriveEnv` refuses a local env with `substrate_unsupported` before
+  // it ever reaches the provisioner (rebuild is destroy-and-re-mint, and a
+  // local env has no Sprite to destroy).
   const [store, host, liveConnection] = await Promise.all([getDriveEnvStore(), getSandboxHost(), liveConnectionReader()]);
   return rebuildDriveEnv({
     envId: input.envId,

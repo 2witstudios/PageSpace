@@ -89,7 +89,16 @@ export type PreviewForwardDecision =
         | 'http-port-busy'
         | 'preview-down'
         | 'preview-starting'
-        | 'wake-denied';
+        | 'wake-denied'
+        /**
+         * The machine's substrate has no dev-preview surface at all — a LOCAL
+         * environment (the user's own computer) advertises `preview: false`
+         * and its `urlInfo`/`powerState`/`services` members refuse with a
+         * typed error. Distinct from `preview-down`, which means a machine
+         * that HAS the surface is not serving on it: this one will never
+         * become available, so a client must not retry.
+         */
+        | 'preview-unsupported';
       /** Suggested HTTP status; the caller's not-found/denied policy may collapse it. */
       status: 403 | 404 | 409 | 502 | 503;
       /** Human copy for the response body — never a sprite name, URL or token. */

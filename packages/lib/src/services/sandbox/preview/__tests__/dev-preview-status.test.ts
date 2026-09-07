@@ -4,7 +4,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import type { SandboxHandle, SandboxServiceInfo } from '../../sandbox-host';
+import { SPRITE_SANDBOX_CAPABILITIES, type SandboxHandle, type SandboxServiceInfo } from '../../sandbox-host';
 import type { DevPreviewHolderRef, DevPreviewRow } from '../dev-preview-core';
 import { HTTP_PORT_BUSY_MESSAGE, describeServiceState } from '../dev-preview-core';
 import type { DevPreviewRecord, DevPreviewStore } from '../dev-preview-store';
@@ -45,6 +45,7 @@ function row(targetPort: number, overrides: Partial<DevPreviewRecord> = {}): Dev
 function fakeHandle(over: { relay?: SandboxServiceInfo | null; instance?: string | null; calls?: string[] } = {}): SandboxHandle {
   const calls = over.calls ?? [];
   return {
+    capabilities: SPRITE_SANDBOX_CAPABILITIES,
     sandboxId: 'sbx',
     spriteInstanceId: over.instance === undefined ? INSTANCE : over.instance,
     exec: async () => { calls.push('exec'); return { exitCode: 1, stdout: '', stderr: '' }; },
