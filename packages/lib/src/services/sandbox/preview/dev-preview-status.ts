@@ -93,11 +93,18 @@ export interface DevPreviewStatus {
   canStop: boolean;
   /**
    * True when the preview can be (re)started by hand: the user switched it
-   * off, or the relay is DOWN — a crashed relay, or one a reconcile has not
-   * caught up with — and one click should be able to ask for it back rather
-   * than leaving the user waiting for a port frame that may never come.
-   * Both go through the same `resume` action (clearing an already-null stop
-   * intent is a no-op; the reconcile is the point).
+   * off, or it is DOWN IN A WAY A RECONCILE REPAIRS — the core's
+   * `down.repairable` (a crashed, missing or mis-pointed relay, or a
+   * leftover relay in front of a direct row) — and one click should be able
+   * to ask for it back rather than leaving the user waiting for a port frame
+   * that may never come. Both go through the same `resume` action (clearing
+   * an already-null stop intent is a no-op; the reconcile is the point).
+   *
+   * A `down` the reconcile CANNOT repair — the user's own dev server stopped
+   * listening, so the planner answers `already-direct`/`already-relaying` —
+   * deliberately offers nothing: a Restart that provably no-ops and leaves
+   * the same button on screen is worse than no button, and the state's
+   * message already says what actually has to happen.
    */
   canResume: boolean;
   /** When the dev server this row answers was detected, or null with no row. */
@@ -185,7 +192,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     openPath,
     canOpen: state.status === 'live' || state.status === 'starting',
     canStop: actionable && row.stoppedByUserAt === null,
-    canResume: actionable && (row.stoppedByUserAt !== null || state.status === 'down'),
+    canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
     detectedAt: row?.detectedAt ?? null,
   };
 }

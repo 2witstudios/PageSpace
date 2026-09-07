@@ -114,6 +114,41 @@ describe('useDevPreviewStatus — the hook against real SWR', () => {
     expect(calls).toBeGreaterThanOrEqual(3);
   });
 
+  it('a retry that comes due while the tab is HIDDEN is re-armed, not dropped: the status recovers on return without a mutate or a remount', async () => {
+    // The freeze this guards: SWR skips its interval while an error is
+    // cached and `revalidateOnFocus` is off, so the retry timer is the only
+    // thing that can un-freeze the status. Dropping it because the tab
+    // happened to be hidden at fire time froze the pane at its last good
+    // answer until the user remounted it.
+    let hidden = true;
+    const visibility = vi.spyOn(document, 'visibilityState', 'get').mockImplementation(() => (hidden ? 'hidden' : 'visible'));
+    try {
+      let calls = 0;
+      let failing = true;
+      mockFetchJSON.mockImplementation(async () => {
+        calls += 1;
+        if (failing) throw new ApiRequestError('boom', 500);
+        return { preview: preview({ state: { status: 'live', targetPort: 1, via: 'relay', message: '' }, canOpen: true }) };
+      });
+      const { result } = renderHook(() => useDevPreviewStatus('/p', { intervalMs: 30 }), { wrapper });
+      await waitFor(() => expect(result.current.error).toBeDefined());
+      const afterFirstError = calls;
+
+      // Many retry windows pass while hidden: NOTHING is requested (the
+      // `refreshWhenHidden: false` property this must not break)...
+      await new Promise((r) => setTimeout(r, 250));
+      expect(calls).toBe(afterFirstError);
+
+      // ...and coming back recovers on the very next window, with no mutate.
+      failing = false;
+      hidden = false;
+      await waitFor(() => expect(result.current.preview?.state.status).toBe('live'), { timeout: 3000 });
+      expect(result.current.error).toBeUndefined();
+    } finally {
+      visibility.mockRestore();
+    }
+  });
+
   it('with pauseWhenIdle: false an idle holder keeps being polled (the console header / pane case)', async () => {
     renderHook(() => useDevPreviewStatus('/p', { intervalMs: 15, pauseWhenIdle: false }), { wrapper });
     await waitFor(() => expect(mockFetchJSON.mock.calls.length).toBeGreaterThan(IDLE_ANSWERS_BEFORE_PAUSE + 2));

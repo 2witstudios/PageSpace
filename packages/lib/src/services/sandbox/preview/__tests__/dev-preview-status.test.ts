@@ -160,6 +160,37 @@ describe('buildDevPreviewStatus — pure fold', () => {
     });
   });
 
+  /**
+   * Restart is offered only where a reconcile can repair it. Not every `down`
+   * is the relay's fault: a direct server that stopped listening, and a
+   * healthy relay whose TARGET vanished, both plan to `none` — the button
+   * would refresh into the identical down state, which reads as a broken
+   * control rather than an honest "start your dev server again".
+   */
+  it('canResume follows the core\'s down.repairable, not the bare down status', () => {
+    const repairable = [
+      ['crashed relay', row(3000), relayService(3000, { status: 'failed', error: 'x' }), null],
+      ['relay never defined', row(3000), null, [{ port: 3000, pid: 7 }]],
+      ['relay pointed elsewhere', row(3000), relayService(4000), [{ port: 3000, pid: 7 }]],
+      ['leftover relay over a direct row', row(SPRITE_HTTP_PORT), relayService(3000), [{ port: SPRITE_HTTP_PORT, pid: 42 }]],
+    ] as const;
+    const notRepairable = [
+      ['relay up but the dev server exited', row(3000), relayService(3000), [{ port: SPRITE_HTTP_PORT, pid: 42 }]],
+      ['direct server stopped listening', row(SPRITE_HTTP_PORT), null, []],
+    ] as const;
+    for (const [name, r, relay, listeners] of repairable) {
+      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners });
+      assert({ given: name, should: 'be a repairable down that offers Restart', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', true, true] });
+    }
+    for (const [name, r, relay, listeners] of notRepairable) {
+      const s = buildDevPreviewStatus({ ...base, row: r, relay, listeners });
+      assert({ given: name, should: 'be down with NO Restart — a reconcile would change nothing', actual: [s.state.status, s.state.status === 'down' && s.state.repairable, s.canResume], expected: ['down', false, false] });
+    }
+    // …but an explicit user stop is always resumable, whatever the state says.
+    const stopped = buildDevPreviewStatus({ ...base, row: row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW }), relay: null, listeners: [] });
+    assert({ given: 'a user-stopped direct row whose server is also gone', should: 'still offer resume — the intent is the users to reverse', actual: stopped.canResume, expected: true });
+  });
+
   it('carries the holder, the open path and detectedAt through', () => {
     const status = buildDevPreviewStatus({ ...base, holder: WS, openPath: '/api/agent-workspaces/ws1/preview/open', row: row(5173), relay: relayService(5173), listeners: null });
     assert({ given: 'a workspace reader', should: 'echo holder, openPath, detectedAt', actual: [status.holder, status.openPath, status.detectedAt], expected: [WS, '/api/agent-workspaces/ws1/preview/open', new Date('2026-09-06T11:00:00.000Z')] });

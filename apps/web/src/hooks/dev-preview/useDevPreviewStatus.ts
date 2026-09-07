@@ -106,7 +106,10 @@ export function devPreviewRefreshInterval({
  *    an error is cached, so without a retry policy one transient 500 would
  *    stop the status forever. `onErrorRetry` re-asks at the same disciplined
  *    interval (never faster, never past the idle stop), keeping the last
- *    good answer on screen meanwhile.
+ *    good answer on screen meanwhile. Hidden or offline at fire time it does
+ *    not request — and does not give up either: it re-arms and asks again,
+ *    because with an error cached and `revalidateOnFocus: false` this timer
+ *    is the ONLY thing that can unfreeze the status.
  *
  * The interval callback is memoized: SWR restarts its timer whenever that
  * function's identity changes, so an inline arrow in a component that
@@ -155,15 +158,34 @@ export function useDevPreviewStatus(
   }, []);
   const onErrorRetry = useCallback<NonNullable<SWRConfiguration['onErrorRetry']>>(
     (_error, _key, _config, revalidate, { retryCount }) => {
-      const ms = nextInterval();
-      if (ms <= 0) return;
-      clearRetry();
-      retryTimer.current = setTimeout(() => {
-        retryTimer.current = null;
-        const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
-        const online = typeof navigator === 'undefined' || navigator.onLine !== false;
-        if (nextInterval() > 0 && visible && online) void revalidate({ retryCount });
-      }, ms);
+      const schedule = (): void => {
+        const ms = nextInterval();
+        // 0 is the DISCIPLINED stop — `polling: false`, or the idle pause.
+        // Dropping the timer there is correct: the policy that re-arms it
+        // (expand, pane closed) re-renders the hook.
+        if (ms <= 0) return;
+        clearRetry();
+        retryTimer.current = setTimeout(() => {
+          retryTimer.current = null;
+          const visible = typeof document === 'undefined' || document.visibilityState !== 'hidden';
+          const online = typeof navigator === 'undefined' || navigator.onLine !== false;
+          // HIDDEN OR OFFLINE IS A REASON TO WAIT, NEVER A REASON TO GIVE UP.
+          // This timer is the ONLY thing that can un-freeze the status once an
+          // error is cached: SWR skips interval revalidation while it holds
+          // one, and `revalidateOnFocus: false` means coming back to the tab
+          // revalidates nothing. Dropping it here left the status frozen at
+          // the last good answer until a manual `mutate()` or a remount. So
+          // re-arm at the same disciplined interval and re-ask next time —
+          // no request is made while hidden or offline, which is the property
+          // `refreshWhenHidden: false` was protecting in the first place.
+          if (!visible || !online) {
+            schedule();
+            return;
+          }
+          if (nextInterval() > 0) void revalidate({ retryCount });
+        }, ms);
+      };
+      schedule();
     },
     [nextInterval, clearRetry],
   );

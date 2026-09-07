@@ -74,7 +74,7 @@ describe('decidePreviewForward — order of refusal', () => {
     [{ status: 'instance-unknown', message: 'unknown' }, 'instance-unknown', 409],
     [{ status: 'stopped', targetPort: 3000, stoppedAt: new Date(0), message: 'off' }, 'stopped-by-user', 409],
     [{ status: 'blocked', targetPort: 3000, message: 'busy' }, 'http-port-busy', 409],
-    [{ status: 'down', targetPort: 3000, via: 'relay', error: null, message: 'down' }, 'preview-down', 502],
+    [{ status: 'down', targetPort: 3000, via: 'relay', error: null, repairable: true, message: 'down' }, 'preview-down', 502],
     [{ status: 'starting', targetPort: 3000, via: 'relay', message: 'starting' }, 'preview-starting', 503],
   ] as const)('refuses a %o preview and never routes it (the stale-instance rule)', (state, reason, status) => {
     const decision = decidePreviewForward(input({ state: state as DevPreviewServiceState, power: 'paused' }));

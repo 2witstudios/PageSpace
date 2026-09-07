@@ -467,13 +467,13 @@ describe('describeServiceState', () => {
       given: 'relay failed with an error and no stop intent',
       should: 'be down carrying the error',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173, { status: 'failed', error: 'exited with code 1' }), listeners: [] }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'exited with code 1', message: 'The preview relay for port 5173 is not running (exited with code 1).' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: 'exited with code 1', repairable: true, message: 'The preview relay for port 5173 is not running (exited with code 1).' },
     });
     assert({
       given: 'a relay row but no relay defined',
       should: 'be down with a null error',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: null, listeners: [] }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay for port 5173 is not defined on this sandbox.' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay for port 5173 is not defined on this sandbox.' },
     });
   });
 
@@ -483,7 +483,7 @@ describe('describeServiceState', () => {
       given: 'row=5173 but the (single-named) relay service is running for 3000 — a replace whose row write was lost',
       should: 'be down naming the mismatch, not live',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(3000), listeners: null }),
-      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, message: 'The preview relay on this sandbox forwards to a different port than 5173; it will be re-pointed on the next reconcile.' },
+      expected: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay on this sandbox forwards to a different port than 5173; it will be re-pointed on the next reconcile.' },
     });
     assert({
       given: 'the same mismatch while the relay is starting',
@@ -524,8 +524,39 @@ describe('describeServiceState', () => {
       given: 'direct row, but a leftover relay is still running on 8080',
       should: 'be down naming the leftover relay (same slot-holder read as the relay branch)',
       actual: describeServiceState({ liveInstanceId: INSTANCE, row, relay: relayService(5173), listeners: [{ port: 8080, pid: 42 }] }),
-      expected: { status: 'down', targetPort: 8080, via: 'direct', error: null, message: 'A leftover preview relay still holds port 8080; it will be removed on the next reconcile.' },
+      expected: { status: 'down', targetPort: 8080, via: 'direct', error: null, repairable: true, message: 'A leftover preview relay still holds port 8080; it will be removed on the next reconcile.' },
     });
+  });
+
+  /**
+   * `down.repairable` is a PROMISE ABOUT THE PLANNER, so it is asserted
+   * against the planner rather than restated: for every `down` a reconcile
+   * can reach, run the exact plan a resume would run (`detected: null`, same
+   * row, same relay, same snapshot) and require `repairable` to equal
+   * "this plan does something". A `none` plan (`already-direct` /
+   * `already-relaying`) is a Restart button that provably no-ops.
+   */
+  it('repairable says exactly whether a reconcile\'s plan would change anything', () => {
+    const cases: { name: string; row: DevPreviewRow; relay: SandboxServiceInfo | null; listeners: readonly { port: number; pid?: number }[] }[] = [
+      { name: 'relay crashed', row: relayRow(5173), relay: relayService(5173, { status: 'failed', error: 'boom' }), listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay undefined', row: relayRow(5173), relay: null, listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay pointed elsewhere', row: relayRow(5173), relay: relayService(3000), listeners: [{ port: 5173, pid: 7 }] },
+      { name: 'relay running, target gone', row: relayRow(5173), relay: relayService(5173), listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }] },
+      { name: 'direct row, leftover relay on 8080', row: relayRow(SPRITE_HTTP_PORT), relay: relayService(5173), listeners: [{ port: SPRITE_HTTP_PORT, pid: 42 }] },
+      { name: 'direct row, server gone', row: relayRow(SPRITE_HTTP_PORT), relay: null, listeners: [] },
+    ];
+    for (const { name, row, relay, listeners } of cases) {
+      const state = describeServiceState({ liveInstanceId: INSTANCE, row, relay, listeners });
+      expect(state.status, `${name} should be down`).toBe('down');
+      if (state.status !== 'down') continue;
+      const plan = planDevServerService(planInput({ row, relay, listeners, detected: null }));
+      assert({
+        given: name,
+        should: 'mark repairable iff the resume\'s own plan is not a no-op',
+        actual: [state.repairable, plan.action === 'none' ? `none:${plan.reason}` : plan.action],
+        expected: [plan.action !== 'none', plan.action === 'none' ? `none:${plan.reason}` : plan.action],
+      });
+    }
   });
 
   it('has no public-exposure state anywhere in its vocabulary', () => {
