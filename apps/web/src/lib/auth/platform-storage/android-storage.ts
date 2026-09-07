@@ -46,6 +46,20 @@ function readLegacy(key: string): string | null {
   }
 }
 
+/** Drop a key from localStorage, ignoring an unavailable store. */
+function clearLegacy(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    // A store we cannot write to holds nothing we need to clear.
+  }
+}
+
+/** The device id the legacy web flow registered, if it left one. */
+function readLegacyDeviceId(): string | null {
+  return LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((value) => !!value) ?? null;
+}
+
 /**
  * Wrap a native rejection in an Error that names the operation.
  *
@@ -147,6 +161,11 @@ export class AndroidStorage implements PlatformStorage {
     } catch (error) {
       throw storageError('write', error);
     }
+    // The keychain now holds the session, so the legacy copy is spent. Dropping
+    // it here is what makes the migration one-way: `readLegacySession` stops
+    // firing, and with it `resolveDeviceId`'s legacy branch, so the device
+    // identity settles on the value already persisted to preferences.
+    clearLegacy(LEGACY_DEVICE_TOKEN_KEY);
   }
 
   /**
@@ -168,6 +187,11 @@ export class AndroidStorage implements PlatformStorage {
     } catch (error) {
       console.error(storageError('clear', error).message);
     }
+    // Clear everything `getStoredSession` can read, or the legacy fallback
+    // would hand the just-revoked device token straight back to the next
+    // refresh. The device *id* stays, as it does on web and in preferences —
+    // logout ends a session, not a device's identity.
+    clearLegacy(LEGACY_DEVICE_TOKEN_KEY);
     this.dispatchAuthEvent('auth:cleared');
   }
 
@@ -181,9 +205,7 @@ export class AndroidStorage implements PlatformStorage {
   private readLegacySession(): StoredSession | null {
     const deviceToken = readLegacy(LEGACY_DEVICE_TOKEN_KEY);
     if (!deviceToken) return null;
-    const deviceId =
-      LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((value) => !!value) ?? '';
-    return { sessionToken: '', csrfToken: null, deviceId, deviceToken };
+    return { sessionToken: '', csrfToken: null, deviceId: readLegacyDeviceId() ?? '', deviceToken };
   }
 
   /**
@@ -209,14 +231,27 @@ export class AndroidStorage implements PlatformStorage {
   private async resolveDeviceId(): Promise<string> {
     const { Preferences } = await import('@capacitor/preferences');
     const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
+
+    // While a legacy device token is live, the id the web flow registered is
+    // the device's real identity and outranks anything in preferences.
+    // `/api/auth/device/refresh` enforces strict binding: a deviceId that does
+    // not match the one the token was issued against is treated as a stolen
+    // token and answered 401 (`device/refresh/route.ts` via
+    // `shouldAllowDeviceRefresh`). Every web sign-in path binds the token to
+    // `getOrCreateDeviceId()` — i.e. `browser_device_id` — so reporting a
+    // preferences id minted by an earlier refresh attempt would guarantee that
+    // 401 and force a re-auth. Preferences is caught up to the live binding
+    // rather than allowed to contradict it.
+    const legacyId = readLegacy(LEGACY_DEVICE_TOKEN_KEY) ? readLegacyDeviceId() : null;
+    if (legacyId) {
+      if (legacyId !== value) await Preferences.set({ key: DEVICE_ID_KEY, value: legacyId });
+      return legacyId;
+    }
+
     if (value) return value;
 
-    // Adopt the id the web flow already registered for this device rather than
-    // minting a second one beside a device token that is bound to the first —
-    // the same migration reasoning as `readLegacySession`. CUID2 otherwise, for
-    // consistency across the codebase (matches iOS and web).
-    const id =
-      LEGACY_DEVICE_ID_KEYS.map(readLegacy).find((legacy) => !!legacy) ?? createId();
+    // CUID2 for consistency across the codebase (matches iOS and web).
+    const id = createId();
     await Preferences.set({ key: DEVICE_ID_KEY, value: id });
     return id;
   }

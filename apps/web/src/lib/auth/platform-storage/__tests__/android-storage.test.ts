@@ -135,6 +135,28 @@ describe('AndroidStorage', () => {
       });
     });
 
+    it('spends the legacy device token once the keychain holds the session', async () => {
+      // One-way migration: leaving it would keep the legacy fallback (and the
+      // legacy device-id branch) firing against a session that has moved.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.set.mockResolvedValue({ success: true });
+      const storage = await importAndroidStorage();
+
+      await storage.storeSession(session);
+
+      expect(localStorage.getItem('deviceToken')).toBeNull();
+    });
+
+    it('keeps the legacy token when the keychain write fails', async () => {
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      keychainMock.set.mockRejectedValue(new Error(INIT_FAILURE));
+      const storage = await importAndroidStorage();
+
+      await expect(storage.storeSession(session)).rejects.toThrow(INIT_FAILURE);
+
+      expect(localStorage.getItem('deviceToken')).toBe('legacy-device-token');
+    });
+
     it('surfaces an EncryptedSharedPreferences init failure as an error', async () => {
       keychainMock.set.mockRejectedValue(new Error(INIT_FAILURE));
       const storage = await importAndroidStorage();
@@ -261,6 +283,21 @@ describe('AndroidStorage', () => {
       window.removeEventListener('auth:cleared', listener);
     });
 
+    it('clears the legacy device token too, so the fallback cannot resurrect it', async () => {
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      keychainMock.remove.mockResolvedValue({ success: true });
+      keychainMock.get.mockResolvedValue({ value: null });
+      const storage = await importAndroidStorage();
+
+      await storage.clearSession();
+
+      expect(localStorage.getItem('deviceToken')).toBeNull();
+      expect(await storage.getStoredSession()).toBeNull();
+      // Logout ends a session, not the device's identity.
+      expect(localStorage.getItem('browser_device_id')).toBe('web_abc123');
+    });
+
     it('still completes the logout when the store rejects', async () => {
       keychainMock.remove.mockRejectedValue(new Error(INIT_FAILURE));
       vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -307,14 +344,37 @@ describe('AndroidStorage', () => {
       expect(preferencesMock.set).toHaveBeenCalledTimes(1);
     });
 
-    it('adopts the id the web flow already registered for this device', async () => {
-      // Minting a fresh id beside a legacy device token bound to the old one
-      // would register a device the token does not match.
-      localStorage.setItem('browser_device_id', 'legacy-device-id');
+    it('adopts the id bound to a live legacy device token', async () => {
+      // /api/auth/device/refresh enforces strict binding — a deviceId that does
+      // not match the one the token was issued against is answered 401 as a
+      // stolen token. Every web sign-in path binds to browser_device_id.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
       const storage = await importAndroidStorage();
 
-      expect(await storage.getDeviceId()).toBe('legacy-device-id');
-      expect(preferencesStore.get('pagespace_device_id')).toBe('legacy-device-id');
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+      expect(preferencesStore.get('pagespace_device_id')).toBe('web_abc123');
+    });
+
+    it('lets the live binding outrank an id already in preferences', async () => {
+      // A refresh attempt before sign-in mints a preferences id; reporting that
+      // one against a token bound to browser_device_id is the guaranteed 401.
+      preferencesStore.set('pagespace_device_id', 'minted-before-sign-in');
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).toBe('web_abc123');
+      expect(preferencesStore.get('pagespace_device_id')).toBe('web_abc123');
+    });
+
+    it('ignores a legacy id with no live token behind it', async () => {
+      // No token means no binding to preserve, so the native store keeps the
+      // repo's own id format rather than inheriting a browser fingerprint.
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getDeviceId()).not.toBe('web_abc123');
     });
 
     it('gives concurrent callers one id and writes once', async () => {
