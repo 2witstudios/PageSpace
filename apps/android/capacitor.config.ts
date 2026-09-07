@@ -9,8 +9,10 @@ const config: CapacitorConfig = {
     // The landing path is `appStartPath`, NOT part of `url`, and the split
     // matters on Android. Bridge.setAllowedOriginRules() puts getServerUrl()
     // verbatim into the set MessageHandler hands to addWebMessageListener, and
-    // that API takes origin rules — `scheme://host[:port]`. A `url` carrying
-    // `/dashboard` is not one, and MessageHandler's catch for a rejected rule is
+    // that API documents its rule grammar as SCHEME "://" [ HOSTNAME_PATTERN
+    // [ ":" PORT ] ] — no path production — and throws IllegalArgumentException
+    // for an invalid rule. A `url` carrying `/dashboard` is not expressible as a
+    // rule, and MessageHandler's catch for a rejected rule is
     // `webView.addJavascriptInterface(this, "androidBridge")`, which enforces no
     // origin restriction at all — so a path here risks trading the allowlist
     // below for a bridge exposed to every document the WebView loads.

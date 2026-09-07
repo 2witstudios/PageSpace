@@ -33,9 +33,15 @@ anything.
 `getServerUrl()` consumers are fine with an origin: `WebViewLocalServer.isMainUrl`/`isAllowedUrl`
 only null-check it, and `CapacitorCookieManager.getSanitizedDomain` wants a cookie domain.
 
-Whether androidx.webkit really rejects a path-bearing rule was read from the API contract, not
-observed on a device — worth confirming during device verification, and worth an upstream report to
-Capacitor if the catch turns out to be live.
+The rejection is documented, not inferred. `WebViewCompat.addWebMessageListener`'s javadoc gives
+the rule grammar as `SCHEME "://" [ HOSTNAME_PATTERN [ ":" PORT ] ]` — which has no path
+production, so `https://pagespace.ai/dashboard` is not expressible as a rule — and declares
+`@throws IllegalArgumentException If one of the allowedOriginRules is invalid`.
+
+What is still unobserved is the runtime consequence: that Capacitor's catch is therefore taken and
+`addJavascriptInterface` really does replace the origin-scoped listener on a device. Worth
+confirming during device verification, and worth an upstream report to Capacitor if so, since any
+app with a path in `server.url` inherits it silently.
 
 ### The iOS brick does not reproduce on Android
 
