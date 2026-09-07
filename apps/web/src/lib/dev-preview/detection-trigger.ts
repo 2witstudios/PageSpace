@@ -12,35 +12,24 @@
  * Fire-and-forget on purpose: a missed trigger costs a preview until the next
  * ensure or shell open (realtime hooks its own shell path too), never a
  * failed provision. Dark unless the feature is configured — realtime would
- * refuse anyway, but the request is not even made.
+ * refuse anyway, but the request is not even made (`postSignedDevPreviewCall`).
  */
 
-import { createSignedBroadcastHeaders } from '@pagespace/lib/auth/broadcast-auth';
 import { loggers } from '@pagespace/lib/logging/logger-config';
-import { isDevPreviewConfigured } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
-
-const DEV_PREVIEW_WATCH_ROUTE = '/api/dev-preview/watch';
+import { postSignedDevPreviewCall } from './realtime-call';
 
 interface DevPreviewWatchRequest {
   /** Only the holder travels; realtime re-derives the sprite from the holder's row. */
   holder: DevPreviewHolderRef;
 }
 
+const WATCH_TIMEOUT_MS = 5_000;
+
 export function requestDevPreviewWatch(input: DevPreviewWatchRequest, fetchImpl: typeof fetch = fetch): void {
-  if (!isDevPreviewConfigured()) return;
-  const realtimeUrl = process.env.INTERNAL_REALTIME_URL;
-  if (!realtimeUrl) return;
-  const body = JSON.stringify(input);
-  void fetchImpl(`${realtimeUrl}${DEV_PREVIEW_WATCH_ROUTE}`, {
-    method: 'POST',
-    headers: createSignedBroadcastHeaders(body),
-    body,
-    // A signed internal call never follows a redirect: the signature is for
-    // THIS body at THIS URL, and a redirect would replay it elsewhere.
-    redirect: 'error',
-    signal: AbortSignal.timeout(5000),
-  }).catch((error: unknown) => {
+  const call = postSignedDevPreviewCall('/api/dev-preview/watch', JSON.stringify(input), { timeoutMs: WATCH_TIMEOUT_MS, fetchImpl });
+  if (call === null) return;
+  call.catch((error: unknown) => {
     loggers.realtime.warn('dev-preview: watch trigger failed', {
       holderKind: input.holder.kind,
       holderId: input.holder.id,

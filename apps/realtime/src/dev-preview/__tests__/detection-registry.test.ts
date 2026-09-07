@@ -51,7 +51,7 @@ function deps(over: Partial<DetectionRegistryDeps> = {}) {
     featureEnabled: () => true,
     resolveHolderSandboxId: async (holder) => (holder.id === 'gone-holder' ? null : `sbx-${holder.id}`),
     attach: async () => fakeHandle(),
-    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); } },
+    store: { findByHolder: async () => null, upsert: async (intent) => { upserts.push(intent); return true; }, setStoppedByUser: async () => null },
     createSocket: factory.createSocket,
     spritesToken: () => 'tok',
     spritesApiBaseUrl: () => 'https://api.sprites.dev',
@@ -94,6 +94,88 @@ describe('createDetectionRegistry', () => {
     await new Promise((r) => setTimeout(r, 10));
     expect(h.upserts).toHaveLength(1);
     expect(h.upserts[0]).toMatchObject({ holder: HOLDER, targetPort: 5173, spriteInstanceId: 'inst' });
+  });
+
+  it('listeners(): null before any watch AND until the connection\'s port_list has APPLIED (the detector owns that); the accumulated snapshot after it; null again once the watcher is gone or the feature is dark', async () => {
+    const h = deps();
+    const registry = createDetectionRegistry(h.deps);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    await registry.ensure({ holder: HOLDER });
+    // Watching, socket open, but no `port_list` yet: the detector's empty
+    // array is NOT a known-empty snapshot — it is nothing yet. Unknown.
+    h.sockets[0].emit('open');
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_opened', port: 3000, pid: 1 }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }, { port: 8080, pid: 9 }] }) });
+    // (Arrived-but-not-applied is the detector's own contract, tested there.)
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_closed', port: 8080 }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
+    // A holder whose row has no live sprite is never answered from someone else's watcher.
+    expect(await registry.listeners({ holder: { kind: 'env', id: 'gone-holder' } })).toBeNull();
+    registry.stopAll();
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    const dark = createDetectionRegistry(deps({ featureEnabled: () => false }).deps);
+    expect(await dark.listeners({ holder: HOLDER })).toBeNull();
+  });
+
+  it('listeners(): a DROPPED connection answers null through the reconnect backoff (the old array is stale), and is known again only after the new connection delivers its port_list', async () => {
+    const h = deps({ maxReconnects: 3 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    h.sockets[0].emit('open');
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }] }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
+    // Drop: reconnect is pending (the waits fake resolves at once, so a second socket exists) — still unknown until IT snapshots.
+    h.sockets[0].emit('close', { code: 1006 });
+    await new Promise((r) => setImmediate(r));
+    expect(registry.watching()).toEqual(['sbx-env1']);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    h.sockets[1].emit('open');
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    h.sockets[1].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 8080, pid: 42 }] }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 8080, pid: 42 }]);
+  });
+
+  it('listeners(): a port_list whose socket dropped before the detector applied it never marks the NEXT connection fresh', async () => {
+    const h = deps({ maxReconnects: 3 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    h.sockets[0].emit('open');
+    // Arrives on connection 1, then connection 1 drops before the chain has applied it.
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }] }) });
+    h.sockets[0].emit('close', { code: 1006 });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(h.sockets).toHaveLength(2);
+    h.sockets[1].emit('open');
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+  });
+
+  it('a failing start leaves no entry behind (a malformed API base URL throws before the channel opens)', async () => {
+    const h = deps({ spritesApiBaseUrl: () => 'not a url' });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    expect(registry.watching()).toEqual([]);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
+    expect(h.logs.some((l) => l.startsWith('error:dev-preview: watcher failed to start'))).toBe(true);
+  });
+
+  it('listeners(): a watcher dropped past its reconnect budget answers null, not a stale snapshot', async () => {
+    const h = deps({ maxReconnects: 0 });
+    const registry = createDetectionRegistry(h.deps);
+    await registry.ensure({ holder: HOLDER });
+    h.sockets[0].emit('open');
+    h.sockets[0].emit('message', { data: JSON.stringify({ type: 'port_list', ports: [{ port: 5173, pid: 3 }] }) });
+    await new Promise((r) => setTimeout(r, 10));
+    expect(await registry.listeners({ holder: HOLDER })).toEqual([{ port: 5173, pid: 3 }]);
+    h.sockets[0].emit('close', { code: 1006 });
+    await new Promise((r) => setImmediate(r));
+    expect(registry.watching()).toEqual([]);
+    expect(await registry.listeners({ holder: HOLDER })).toBeNull();
   });
 
   it('watches nothing for a holder whose row has no live sprite — the caller never names the sprite', async () => {

@@ -66,6 +66,8 @@ import { partitionSessionsByEnv, type EnvGroup } from './env-groups';
 import { RowMenu, type RowMenuItem } from './RowMenu';
 import { DeleteDriveEnvDialog, DriveEnvNameDialog, RebuildDriveEnvDialog } from './DriveEnvDialogs';
 import { DriveEnvAppPane } from './DriveEnvAppPane';
+import { DevPreviewAffordance } from '@/components/dev-preview/DevPreviewAffordance';
+import { envDevPreviewPath } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDriveEnvs } from '@/hooks/drive-envs/useDriveEnvs';
 import { reportDriveEnvWriteFailure, type DriveEnvWriteOutcome } from '@/hooks/drive-envs/drive-env-writes';
 import type { DriveEnvStatus } from '@pagespace/lib/drive-envs/env-contract';
@@ -1031,6 +1033,27 @@ function DriveEnvRow({
             <div className="px-2 py-1 text-xs text-muted-foreground">No sessions running in here</div>
           )}
         </div>
+      )}
+      {/*
+          The environment's dev-server preview affordance — "Dev server detected
+          on :5173 — Preview" — beneath its sessions, the way the published-app
+          pane sits on the env. Withheld from an ORPHAN (no env to read) and a
+          LOCAL env (no sprite, so no preview — the status route would 404 it
+          as `env_not_sprite`). Polls only while the row is EXPANDED (its one
+          disclosure — this tree has no collapsible drive group), and stops on
+          its own after four idle answers until the row is toggled. Stop/resume
+          are OWNER/ADMIN, decided server-side and carried in the status
+          (`preview.canManage`), the env-write bar the actions route enforces.
+          Dark ⇒ renders nothing.
+        */}
+      {!isOrphan && !isLocal && (
+        <DevPreviewAffordance
+          statusPath={envDevPreviewPath(driveId, group.envId)}
+          driveId={driveId}
+          title={displayName}
+          active={expanded}
+          className="ml-4 border-l border-border py-1 pl-3"
+        />
       )}
       {!isOrphan && (
         <DriveEnvAppPane

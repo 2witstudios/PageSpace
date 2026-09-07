@@ -66,8 +66,27 @@ export interface DevPreviewDetectorDeps {
 export interface DevPreviewDetector {
   /** Feed one watch frame. Resolves when its effects (if any) have landed; never rejects. */
   onFrame(frame: PortsWatchFrame): Promise<void>;
-  /** The listener snapshot as accumulated so far (for a status render that already holds it). */
-  listeners(): ListeningPort[];
+  /**
+   * The listener set as accumulated by the CURRENT connection, or `null`
+   * when no `port_list` has been APPLIED since the last
+   * {@link DevPreviewDetector.invalidateSnapshot} — before the first
+   * snapshot, and between a socket drop and the next connection's snapshot.
+   * Only an applied snapshot describes the connection; a frame that has
+   * arrived but sits behind the serialized chain does not, and handing the
+   * pre-snapshot set out as known would let a render call 8080 free (or a
+   * resume start a relay onto an occupied port). `null` renders as "slot
+   * unknown", never as "free".
+   */
+  listeners(): ListeningPort[] | null;
+  /**
+   * The watch connection dropped: the accumulated set no longer describes a
+   * live connection. QUEUED on the frame chain, so a `port_list` from the
+   * dropped connection that is still waiting to apply lands BEFORE the
+   * invalidation and can never mark the next connection's snapshot known —
+   * FIFO ordering makes that correct by construction, with no generation
+   * bookkeeping outside the detector.
+   */
+  invalidateSnapshot(): void;
 }
 
 type Detected = Extract<DevServerClassification, { kind: 'dev-server' }>;
@@ -76,6 +95,8 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
   const { holder, handle, store, now, log } = deps;
   const probe = deps.probeRuntime ?? probeRelayRuntime;
   const listeners = new Map<number, ListeningPort>();
+  /** True once a `port_list` has been applied and no invalidation has landed since. */
+  let snapshotKnown = false;
   let runtime: PreviewRelayRuntime | undefined;
   let chain: Promise<void> = Promise.resolve();
 
@@ -110,6 +131,7 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
     if (frame.type === 'port_list') {
       listeners.clear();
       for (const port of frame.ports) listeners.set(port.port, port);
+      snapshotKnown = true;
       // A snapshot is every port bound BEFORE we attached. Classify each
       // against the current relay and plan ONE candidate: the row's own
       // target if it is still listening (a reconnect must never re-point a
@@ -152,6 +174,11 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
       chain = next;
       return next;
     },
-    listeners: () => [...listeners.values()],
+    listeners: () => (snapshotKnown ? [...listeners.values()] : null),
+    invalidateSnapshot() {
+      chain = chain.then(() => {
+        snapshotKnown = false;
+      });
+    },
   };
 }

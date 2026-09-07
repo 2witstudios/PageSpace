@@ -275,8 +275,9 @@ vi.mock('../dev-preview/preview-upgrade', () => ({
   previewHolderForUpgrade: (req: unknown, apex: unknown) => mockPreviewHolderForUpgrade(req, apex),
 }));
 const mockRegistryEnsure = vi.fn<(input: unknown) => Promise<void>>().mockResolvedValue(undefined);
+const mockRegistryListeners = vi.fn<(input: unknown) => Promise<unknown>>().mockResolvedValue(null);
 vi.mock('../dev-preview/detection-registry', () => ({
-  createDetectionRegistry: () => ({ ensure: mockRegistryEnsure, watching: () => [], stopAll: vi.fn() }),
+  createDetectionRegistry: () => ({ ensure: mockRegistryEnsure, listeners: mockRegistryListeners, watching: () => [], stopAll: vi.fn() }),
   nodeWebSocketFactory: vi.fn(),
 }));
 vi.mock('../dev-preview/preview-runtime', () => ({
@@ -2542,6 +2543,86 @@ describe('requestListener - /api/dev-preview/watch', () => {
 
     expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
     expect(mockRegistryEnsure).not.toHaveBeenCalled();
+  });
+});
+
+describe('requestListener - /api/dev-preview/listeners', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('given a valid signature and a holder, should answer the registry snapshot for that holder (sprite re-derived, never the caller\'s claim)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryListeners.mockResolvedValueOnce([{ port: 5173, pid: 3 }]);
+    const body = JSON.stringify({ holder: { kind: 'workspace', id: 'ws1' }, sandboxId: 'ignored-caller-claim' });
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(body));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(mockRegistryListeners).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' } });
+    expect(res.writeHead).toHaveBeenCalledWith(200, { 'Content-Type': 'application/json' });
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ listeners: [{ port: 5173, pid: 3 }] }));
+  });
+
+  it('given no snapshot in hand, should answer listeners: null (honest unknown, not an empty list)', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryListeners.mockResolvedValueOnce(null);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.end).toHaveBeenCalledWith(JSON.stringify({ listeners: null }));
+  });
+
+  it('given a bad signature, should 401 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(false);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: {} });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(401, { 'Content-Type': 'application/json' });
+    expect(mockRegistryListeners).not.toHaveBeenCalled();
+  });
+
+  it('given a signed but malformed body, should 400 without touching the registry', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'drive', id: 'x' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(400, { 'Content-Type': 'application/json' });
+    expect(mockRegistryListeners).not.toHaveBeenCalled();
+  });
+
+  it('given a registry failure, should 500 and log', async () => {
+    vi.mocked(verifyBroadcastSignature).mockReturnValue(true);
+    mockRegistryListeners.mockRejectedValueOnce(new Error('boom'));
+    const req = createMockReq({ method: 'POST', url: '/api/dev-preview/listeners', headers: { 'x-broadcast-signature': 'valid-sig' } });
+    const res = createMockRes();
+
+    capturedRequestListener!(req, res);
+    req._emit('data', Buffer.from(JSON.stringify({ holder: { kind: 'env', id: 'env1' } })));
+    req._emit('end');
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(res.writeHead).toHaveBeenCalledWith(500, { 'Content-Type': 'application/json' });
+    expect(loggers.realtime.error).toHaveBeenCalledWith('dev-preview: listeners read failed', expect.any(Error));
   });
 });
 

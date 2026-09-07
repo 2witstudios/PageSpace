@@ -206,7 +206,7 @@ describe('planDevServerService', () => {
         action: 'start-relay',
         via: 'create',
         service: buildPreviewRelaySpec({ targetPort: 5173 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -278,7 +278,7 @@ describe('planDevServerService', () => {
         action: 'replace-relay',
         previousTargetPort: 5173,
         service: buildPreviewRelaySpec({ targetPort: 3000 }),
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
   });
@@ -291,7 +291,7 @@ describe('planDevServerService', () => {
       expected: {
         action: 'record-direct',
         removeRelay: false,
-        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null },
+        row: { holder: HOLDER, spriteInstanceId: INSTANCE, sandboxId: 'pgs-sbx-abc', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null },
       },
     });
     const plan = planDevServerService(planInput({ detected: detected(8080, 5), row: relayRow(5173), relay: relayService(5173, { status: 'failed' }) }));
@@ -344,7 +344,7 @@ describe('planDevServerService', () => {
       given: 'a stopped row, but the relay is still running',
       should: 'plan stop-relay',
       actual: planDevServerService(planInput({ row: stopped, relay: relayService(5173) })),
-      expected: { action: 'stop-relay', relayServiceName: PREVIEW_RELAY_SERVICE_NAME },
+      expected: { action: 'stop-relay', relayServiceName: PREVIEW_RELAY_SERVICE_NAME, holder: HOLDER, stoppedByUserAt: stopped.stoppedByUserAt! },
     });
     assert({
       given: 'a stopped row and a detection on a DIFFERENT port',

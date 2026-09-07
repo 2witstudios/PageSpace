@@ -46,13 +46,13 @@ describe('createDbDevPreviewStore', () => {
   const holder = { kind: 'env', id: envId } as const;
 
   it('upserts by holder: a re-create on a new instance REPLACES the holder row and clears the stop intent', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-a', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-a', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     // Simulate the user switching it off on the old instance.
     await db.update(devPreviewServices).set({ stoppedByUserAt: NOW }).where(eq(devPreviewServices.envId, envId));
     const before = await store.findByHolder(holder);
     expect(before?.stoppedByUserAt).toEqual(NOW);
 
-    await store.upsert({ holder, spriteInstanceId: 'inst-b', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-b', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     const rows = await db.select().from(devPreviewServices).where(eq(devPreviewServices.envId, envId));
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ spriteInstanceId: 'inst-b', targetPort: 3000, stoppedByUserAt: null, workspaceId: null });
@@ -61,13 +61,48 @@ describe('createDbDevPreviewStore', () => {
     expect(after).toMatchObject({ id: rows[0].id, spriteInstanceId: 'inst-b', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, stoppedByUserAt: null });
   });
 
+  it('THE INTENT GUARD: a write planned before a user\'s stop is refused on the SAME instance (the click survives), while a re-create on a NEW instance replaces the row and the dead VM\'s stop with it', async () => {
+    await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    const stoppedAt = new Date('2026-09-06T13:00:00.000Z');
+    await store.setStoppedByUser(holder, stoppedAt);
+
+    // A detection frame that read the row BEFORE the stop (guard: null) must
+    // not clear it — the write is refused and the row is untouched.
+    const refused = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    expect(refused).toBe(false);
+    expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 5173, stoppedByUserAt: stoppedAt });
+
+    // A frame that DID see the stop (guard: that timestamp) writes normally.
+    const accepted = await store.upsert({ holder, spriteInstanceId: 'inst-guard', sandboxId: 'sbx', targetPort: 3000, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: stoppedAt });
+    expect(accepted).toBe(true);
+    expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 3000, stoppedByUserAt: null });
+
+    // A REBUILD: the stored row names a dead instance, so its stop dies with
+    // the VM and the re-create replaces it even with a null guard.
+    await store.setStoppedByUser(holder, stoppedAt);
+    const recreated = await store.upsert({ holder, spriteInstanceId: 'inst-rebuilt', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    expect(recreated).toBe(true);
+    expect(await store.findByHolder(holder)).toMatchObject({ spriteInstanceId: 'inst-rebuilt', targetPort: 5173, stoppedByUserAt: null });
+  });
+
   it('a direct (8080) row carries no relay name, as the CHECK requires', async () => {
-    await store.upsert({ holder, spriteInstanceId: 'inst-c', sandboxId: 'sbx', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null });
+    await store.upsert({ holder, spriteInstanceId: 'inst-c', sandboxId: 'sbx', targetPort: 8080, relayServiceName: null, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
     expect(await store.findByHolder(holder)).toMatchObject({ targetPort: 8080, relayServiceName: null });
   });
 
   it('answers null for a holder with no row', async () => {
     expect(await store.findByHolder({ kind: 'workspace', id: createId() })).toBeNull();
+  });
+
+  it('setStoppedByUser writes ONLY the intent column and returns the row as written, clears it on null, and answers null for a holder with no row', async () => {
+    await store.upsert({ holder, spriteInstanceId: 'inst-d', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: NOW, stoppedByUserAt: null, basedOnStoppedByUserAt: null });
+    const stoppedAt = new Date('2026-09-06T12:30:00.000Z');
+    const written = await store.setStoppedByUser(holder, stoppedAt);
+    expect(written).toMatchObject({ spriteInstanceId: 'inst-d', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, stoppedByUserAt: stoppedAt });
+    expect(await store.findByHolder(holder)).toEqual(written);
+    expect((await store.setStoppedByUser(holder, null))?.stoppedByUserAt).toBeNull();
+    expect((await store.findByHolder(holder))?.stoppedByUserAt).toBeNull();
+    expect(await store.setStoppedByUser({ kind: 'workspace', id: createId() }, stoppedAt)).toBeNull();
   });
 });
 

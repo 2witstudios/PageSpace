@@ -31,9 +31,17 @@ import {
   derivePreviewCookieKey,
 } from '@pagespace/lib/services/sandbox/preview/preview-grant';
 import type { DevPreviewHolderRef } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import {
+  applyDevPreviewUserAction,
+  gatherDevPreviewStatus,
+  type DevPreviewStatusResult,
+  type DevPreviewUserAction,
+  type DevPreviewUserActionResult,
+} from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
 import { createRequestScopedSandboxHost } from '@/lib/sandbox/sprites-client';
 import { findSessionRecord } from '@/lib/agent-workspaces/agent-workspaces-runtime';
 import { getDriveEnvStore, resolveDriveEnvPayer } from '@/lib/drive-envs/drive-envs-runtime';
+import { readDevPreviewListeners } from './listeners-source';
 
 let previewStore: DevPreviewStore | null = null;
 let grantsStore: DevPreviewGrantsStore | null = null;
@@ -172,4 +180,56 @@ export async function openPreviewForUser({
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
   const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, now: new Date() });
   return { ok: true, redirectTo: buildPreviewAuthRedirect(buildPreviewHost(mintFor, apex), grant.id) };
+}
+
+/**
+ * The status read behind the detection affordance and the preview pane's
+ * chrome — the same rows-only authorization and control-plane attach as the
+ * proxy, plus the realtime tier's listener snapshot (never a probe). The
+ * caller has authenticated the session and run its own route gate; this
+ * re-asks through the shared gather so the read can never answer for a holder
+ * the proxy would refuse.
+ */
+export function readDevPreviewStatusForUser({
+  authorizeAs,
+  holder = authorizeAs,
+  userId,
+}: {
+  authorizeAs: DevPreviewHolderRef;
+  holder?: DevPreviewHolderRef;
+  userId: string;
+}): Promise<DevPreviewStatusResult> {
+  return gatherDevPreviewStatus({ authorizeAs, holder, userId, deps: { ...buildPreviewAccessDeps(), readListeners: readDevPreviewListeners } });
+}
+
+/** The rows-only access decision for a holder, as the write routes ask it before applying a user action. */
+export function authorizePreviewHolderForUser({ holder, userId }: { holder: DevPreviewHolderRef; userId: string }): Promise<PreviewAuthorization> {
+  return authorizePreviewHolder({ holder, userId, deps: buildPreviewAccessDeps() });
+}
+
+/**
+ * The user's stop/resume, through the core and the effects layer. The caller
+ * has ALREADY authorized the write (session access, or drive owner/admin for
+ * an env) — this binding only supplies the real store, host and snapshot.
+ */
+export function applyDevPreviewUserActionForHolder({
+  holder,
+  action,
+  userId,
+  wakeSubject,
+}: {
+  holder: DevPreviewHolderRef;
+  action: DevPreviewUserAction;
+  userId: string;
+  /** `PreviewAuthorization.wakeSubject` — the payer the resume wake gate is asked about. */
+  wakeSubject: { driveId: string | null; ownerId: string };
+}): Promise<DevPreviewUserActionResult> {
+  const deps = buildPreviewAccessDeps();
+  return applyDevPreviewUserAction({
+    holder,
+    action,
+    userId,
+    wakeSubject,
+    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },
+  });
 }

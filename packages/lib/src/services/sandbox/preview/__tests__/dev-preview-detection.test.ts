@@ -21,6 +21,8 @@ function harness(overrides: {
   instance?: string | null;
   runtime?: 'node' | 'socat';
   failCreate?: boolean;
+  /** What the PLANNER sees, when the stored row has already moved on (the stop/detection race). */
+  readsAheadOfWrites?: DevPreviewRecord | null;
 } = {}) {
   let relay: SandboxServiceInfo | null = overrides.relay ?? null;
   let row: DevPreviewRecord | null = overrides.row ?? null;
@@ -40,11 +42,25 @@ function harness(overrides: {
     remove: async (name) => { calls.push(`remove:${name}`); relay = null; },
   };
   const store: DevPreviewStore = {
-    findByHolder: async () => row,
+    // `readsAheadOfWrites` models the real race: the planner reads the row as
+    // it was, and by the time the write lands the STORED row has moved on
+    // (a user's stop). The write then meets the same compare-and-set the real
+    // store applies.
+    findByHolder: async () => overrides.readsAheadOfWrites ?? row,
     upsert: async (intent: DevPreviewRowIntent) => {
       calls.push(`upsert:${intent.targetPort}:${intent.relayServiceName ?? 'direct'}`);
+      const storedIntent = row === null || row.spriteInstanceId !== intent.spriteInstanceId ? null : row.stoppedByUserAt;
+      const guardHolds = row !== null && row.spriteInstanceId !== intent.spriteInstanceId
+        ? true
+        : (storedIntent?.getTime() ?? null) === (intent.basedOnStoppedByUserAt?.getTime() ?? null);
+      if (!guardHolds) {
+        calls.push('upsert-refused');
+        return false;
+      }
       row = { id: 'r', spriteInstanceId: intent.spriteInstanceId, sandboxId: intent.sandboxId, targetPort: intent.targetPort, relayServiceName: intent.relayServiceName, detectedAt: intent.detectedAt, stoppedByUserAt: null };
+      return true;
     },
+    setStoppedByUser: async () => null,
   };
   const deps: DevPreviewDetectorDeps = {
     holder: HOLDER,
@@ -70,6 +86,8 @@ function harness(overrides: {
 describe('createDevPreviewDetector — port_opened', () => {
   it('a dev server on 5173 with no relay: probes the runtime once, creates the relay, records the row', async () => {
     const h = harness();
+    // An (empty) snapshot first: the accumulated set is only KNOWN once a port_list has applied.
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
     await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
     assert({ given: 'fresh detection', should: 'create relay → upsert', actual: h.calls, expected: ['create:5173', `upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`] });
     assert({ given: 'fresh detection', should: 'probe exactly once', actual: h.probes(), expected: 1 });
@@ -84,6 +102,7 @@ describe('createDevPreviewDetector — port_opened', () => {
 
   it('does not probe when the plan touches no relay (a database port, our own relay bind, a port_closed)', async () => {
     const h = harness({ relay: relayInfo(5173) });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
     await h.detector.onFrame({ type: 'port_opened', port: 5432 });
     await h.detector.onFrame({ type: 'port_opened', port: 8080, pid: 7 });
     await h.detector.onFrame({ type: 'port_closed', port: 5173 });
@@ -177,5 +196,35 @@ describe('createDevPreviewDetector — discipline', () => {
     assert({ given: 'create threw', should: 'log and write nothing', actual: { calls: h.calls, row: h.row() }, expected: { calls: ['create:5173'], row: null } });
     expect(h.logs.some((l) => l.startsWith('error:dev-preview: frame failed:bind failed'))).toBe(true);
     await expect(h.detector.onFrame({ type: 'port_closed', port: 5173 })).resolves.toBeUndefined();
+  });
+
+  it('owns snapshot validity: listeners() is null until a port_list has APPLIED, and invalidateSnapshot() is queued on the chain so a snapshot behind it lands first', async () => {
+    const { detector } = harness();
+    assert({ given: 'no frame yet', should: 'know nothing', actual: detector.listeners(), expected: null });
+    void detector.onFrame({ type: 'port_opened', port: 5173, pid: 3 });
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'an increment with no snapshot', should: 'still know nothing', actual: detector.listeners(), expected: null });
+    const applied = detector.onFrame({ type: 'port_list', ports: [{ port: 3000, pid: 9 }] });
+    assert({ given: 'a snapshot that has ARRIVED but not applied', should: 'still be null', actual: detector.listeners(), expected: null });
+    await applied;
+    assert({ given: 'an applied snapshot', should: 'be known', actual: detector.listeners(), expected: [{ port: 3000, pid: 9 }] });
+    // Drop: a snapshot from the dropped connection is still queued AHEAD of the invalidation.
+    const late = detector.onFrame({ type: 'port_list', ports: [{ port: 4000 }] });
+    detector.invalidateSnapshot();
+    await late;
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'invalidation queued after a late snapshot', should: 'end unknown', actual: detector.listeners(), expected: null });
+    await detector.onFrame({ type: 'port_list', ports: [{ port: 5000 }] });
+    assert({ given: 'the next connection\'s snapshot', should: 'be known again', actual: detector.listeners(), expected: [{ port: 5000 }] });
+  });
+
+  it('USER INTENT WINS THE RACE: a frame that planned from a row read BEFORE the user\'s stop starts the relay but cannot clear the stop — the click survives, and the next frame plans from the row that won', async () => {
+    const stoppedAt = new Date('2026-09-06T13:00:00.000Z');
+    const stored = { id: 'r', spriteInstanceId: 'inst-1', sandboxId: 'sbx', targetPort: 5173, relayServiceName: PREVIEW_RELAY_SERVICE_NAME, detectedAt: new Date('2026-09-06T12:00:00.000Z'), stoppedByUserAt: stoppedAt };
+    // The planner reads the PRE-stop row; the store already holds the stop.
+    const h = harness({ row: stored, readsAheadOfWrites: { ...stored, stoppedByUserAt: null }, relay: relayInfo(5173, 'node', 'failed') });
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, pid: 11 });
+    assert({ given: 'a stop that landed after the plan\'s read', should: 'attempt the write and be refused by the guard', actual: h.calls.includes('upsert-refused'), expected: true });
+    assert({ given: 'the refused write', should: 'leave the user\'s stop intact', actual: h.row()?.stoppedByUserAt, expected: stoppedAt });
   });
 });

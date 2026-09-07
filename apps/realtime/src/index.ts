@@ -57,6 +57,7 @@ import { buildAppLogHandlers, type AppLogSocketLike } from './app-logs/app-log-h
 import { handleShellActivityRequest } from './terminal/shell-activity';
 import { buildPreviewUpgradeHandler, previewHolderForUpgrade } from './dev-preview/preview-upgrade';
 import { createDetectionRegistry, nodeWebSocketFactory } from './dev-preview/detection-registry';
+import { readDevPreviewHolderBody } from './dev-preview/holder-body';
 import {
   buildRealtimePreviewAccessDeps,
   createConnectScopedSandboxHost,
@@ -1022,12 +1023,19 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ success: false, error: 'Internal error' }));
             });
         });
-    } else if (req.method === 'POST' && req.url === '/api/dev-preview/watch') {
-        // The web tier just ensured a sprite (a session provision) and asks for a
-        // dev-server watcher on its HOLDER. Signed like every other web→realtime
-        // call; the body names only a holder — which sprite that holder is on
-        // is re-derived from the holder's own row inside the registry, so a
-        // signed-but-wrong sprite name can never be watched.
+    } else if (req.method === 'POST' && (req.url === '/api/dev-preview/watch' || req.url === '/api/dev-preview/listeners')) {
+        // The two dev-preview calls from the web tier share ONE prologue:
+        // signed like every other web→realtime call, and the body names only
+        // a HOLDER — which sprite that holder is on is re-derived from the
+        // holder's own row inside the registry, so a signed-but-wrong sprite
+        // name can never be watched or read (`readDevPreviewHolderBody`).
+        //   watch     — a session ensure just happened: start a dev-server
+        //               watcher on the holder's live sprite (202, idempotent).
+        //   listeners — a status render asks for the snapshot this process's
+        //               watcher already holds; `null` is the honest "no
+        //               snapshot in hand" (never-probe-to-render: the sprite
+        //               is not touched to answer).
+        const isWatch = req.url === '/api/dev-preview/watch';
         readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
             if (!verifySignature(signatureHeader, body)) {
@@ -1035,24 +1043,26 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ error: 'Authentication failed' }));
                 return;
             }
-            let parsed: { holder?: { kind?: unknown; id?: unknown } };
-            try {
-                parsed = JSON.parse(body);
-            } catch {
+            const holder = readDevPreviewHolderBody(body);
+            if (holder === null) {
                 res.writeHead(400, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify({ error: 'Malformed body' }));
                 return;
             }
-            const kind = parsed?.holder?.kind;
-            const id = parsed?.holder?.id;
-            if ((kind !== 'workspace' && kind !== 'env') || typeof id !== 'string' || id.length === 0) {
-                res.writeHead(400, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: 'Malformed body' }));
+            if (isWatch) {
+                void devPreviewRegistry.ensure({ holder });
+                res.writeHead(202, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ accepted: true }));
                 return;
             }
-            void devPreviewRegistry.ensure({ holder: { kind, id } });
-            res.writeHead(202, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ accepted: true }));
+            devPreviewRegistry.listeners({ holder }).then((listeners) => {
+                res.writeHead(200, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ listeners }));
+            }).catch((error: unknown) => {
+                loggers.realtime.error('dev-preview: listeners read failed', error instanceof Error ? error : new Error(String(error)));
+                res.writeHead(500, { 'Content-Type': 'application/json' });
+                res.end(JSON.stringify({ error: 'Internal error' }));
+            });
         });
     } else if (req.method === 'POST' && req.url === '/api/kick') {
         // Kick API: Remove user from rooms on permission revocation

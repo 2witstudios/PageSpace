@@ -127,6 +127,10 @@ export interface DevPreviewRow {
  * has already proven the stop intent does not apply (it was for another
  * instance, or the user cleared it), so the write must clear it too — a
  * merge that skipped the column would resurrect a stop from a dead VM.
+ *
+ * That clearing is exactly why the write is GUARDED by
+ * {@link DevPreviewRowIntent.basedOnStoppedByUserAt}: clearing an intent the
+ * planner never saw would silently undo a user's click.
  */
 export interface DevPreviewRowIntent {
   holder: DevPreviewHolderRef;
@@ -137,6 +141,19 @@ export interface DevPreviewRowIntent {
   relayServiceName: string | null;
   detectedAt: Date;
   stoppedByUserAt: null;
+  /**
+   * THE USER-INTENT GUARD (optimistic concurrency, not a value to write).
+   *
+   * The stop intent this plan was made against — `null` when the planner saw
+   * no stop (the usual case, including "no row at all"). The write must land
+   * ONLY while the stored intent still equals this; if a user's stop arrived
+   * between the read and the write, the row now carries a timestamp, the
+   * update is refused, and the intent survives. Without it the detector's
+   * `stoppedByUserAt: null` clobbers a click that landed a millisecond
+   * earlier, and — since nothing later necessarily re-plans — the user's
+   * "off" is lost for good rather than "self-corrected".
+   */
+  basedOnStoppedByUserAt: Date | null;
 }
 
 // -----------------------------------------------------------------------------
@@ -194,7 +211,7 @@ export interface ClassifyDetectedDevServerInput {
    * is defined. Needed to recognise the relay's OWN bind on 8080: with a pid
    * on both sides they are compared; with either pid missing, a running or
    * starting relay is assumed to be the 8080 listener (a wrong assumption
-   * self-corrects — see `httpPortSlotHolder`).
+   * self-corrects — see `describeHttpPortSlot`).
    */
   relay: SandboxServiceInfo | null;
 }
@@ -242,14 +259,19 @@ export interface HttpPortSlotInput {
 export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
 
 /**
- * Who holds 8080. A listener whose pid matches a live relay — or whose pid is
- * unknown while a relay is live — is the relay; any other listener is a user
- * process. A live relay with no listener in the snapshot still holds the slot
- * (the snapshot may predate its bind). Misattributing a user process to the
- * relay is self-correcting: the planned relay fails to bind, lands in
- * `failed`, and the next call sees a non-live relay beside a listener.
+ * Pure: WHO holds 8080 — `'none'` (free), `'relay'` (ours), `'user-process'`
+ * (something that is not our relay). {@link isHttpPortSlotFree} is this
+ * `=== 'none'`; the UI asks this fuller form so it can say which of the two
+ * holders is in the way and how to release it, instead of surfacing a 409.
+ *
+ * A listener whose pid matches a live relay — or whose pid is unknown while a
+ * relay is live — is the relay; any other listener is a user process. A live
+ * relay with no listener in the snapshot still holds the slot (the snapshot
+ * may predate its bind). Misattributing a user process to the relay is
+ * self-correcting: the planned relay fails to bind, lands in `failed`, and
+ * the next call sees a non-live relay beside a listener.
  */
-function httpPortSlotHolder({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
+export function describeHttpPortSlot({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
   const listener = listeners.find((entry) => entry.port === SPRITE_HTTP_PORT);
   const relayAlive = isRelayAlive(relay);
   if (!listener) return relayAlive ? 'relay' : 'none';
@@ -260,7 +282,7 @@ function httpPortSlotHolder({ listeners, relay }: HttpPortSlotInput): HttpPortSl
 
 /** Pure: is 8080 free — no relay, no user process? The one-slot question, relocated to the port that is actually routed. */
 export function isHttpPortSlotFree(input: HttpPortSlotInput): boolean {
-  return httpPortSlotHolder(input) === 'none';
+  return describeHttpPortSlot(input) === 'none';
 }
 
 // -----------------------------------------------------------------------------
@@ -326,6 +348,17 @@ export type DevServerServicePlan =
       /** The user switched the preview off and the relay is still up: `services.stop(relayServiceName)`. */
       action: 'stop-relay';
       relayServiceName: string;
+      /** Whose preview it is — the effects layer re-reads this holder's row to confirm the stop still stands. */
+      holder: DevPreviewHolderRef;
+      /**
+       * The stop intent this plan acts on — the same guard
+       * {@link DevPreviewRowIntent.basedOnStoppedByUserAt} applies to writes,
+       * for the one effect that is destructive without writing. The effects
+       * layer confirms a stop intent still stands before stopping the relay,
+       * so a frame planned before a user's RESUME cannot stop the relay after
+       * it (the mirror of the clobber the row guard refuses).
+       */
+      stoppedByUserAt: Date;
     }
   | {
       action: 'none';
@@ -368,7 +401,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
 
   if (row?.stoppedByUserAt) {
     if (row.relayServiceName !== null && isRelayAlive(relay)) {
-      return { action: 'stop-relay', relayServiceName: row.relayServiceName };
+      return { action: 'stop-relay', relayServiceName: row.relayServiceName, holder, stoppedByUserAt: row.stoppedByUserAt };
     }
     return { action: 'none', reason: 'user-stopped', staleRowIgnored };
   }
@@ -400,11 +433,11 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     return {
       action: 'record-direct',
       removeRelay: relay !== null,
-      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null },
+      row: { holder, spriteInstanceId: liveInstanceId, sandboxId, targetPort, relayServiceName: null, detectedAt, stoppedByUserAt: null, basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null },
     };
   }
 
-  if (httpPortSlotHolder({ listeners, relay }) === 'user-process') {
+  if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
 
@@ -417,6 +450,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     relayServiceName: service.name,
     detectedAt,
     stoppedByUserAt: null,
+    basedOnStoppedByUserAt: row?.stoppedByUserAt ?? null,
   };
 
   if (relay !== null && relayServiceMatches(relay, service)) {
@@ -497,7 +531,7 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
 
   const targetListening = listeners === null ? null : listeners.some((entry) => entry.port === row.targetPort);
 
-  const holder = httpPortSlotHolder({ listeners: listeners ?? [], relay });
+  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
 
   if (row.relayServiceName === null) {
     // Direct: the user's server on 8080 is the whole path, so the slot holder
