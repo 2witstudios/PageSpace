@@ -58,6 +58,14 @@ export function respondToDevPreviewUserAction({
       { status: 404 },
     );
   }
-  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, applied: result.applied?.action ?? null } });
-  return NextResponse.json({ ok: true, applied: result.applied });
+  // A CONTENDED action is the same answer as `slot-unknown` and was left
+  // silent one branch away from it: the intent landed, only the relay work
+  // waits — here for the holder's lock rather than for a ports snapshot. The
+  // pane only speaks when the body NAMES a deferral, so without a marker the
+  // click produced nothing while the pane still read "not running". The two
+  // markers stay distinct because the wait is not the same wait, and the copy
+  // that explains it should not have to guess.
+  const deferred = result.lockContended === true ? { deferred: 'awaiting-reconcile' as const } : {};
+  auditRequest(request, { eventType: 'data.write', userId, resourceType: 'dev_preview', resourceId, details: { route, ...audited, applied: result.applied?.action ?? null, ...deferred } });
+  return NextResponse.json({ ok: true, applied: result.applied, ...deferred });
 }

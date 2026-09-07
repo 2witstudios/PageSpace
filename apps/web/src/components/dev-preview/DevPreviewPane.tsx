@@ -165,14 +165,18 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
         : { action: action.kind };
       try {
         // A DEFERRED action succeeded — the stop was cleared, the consent
-        // recorded — but the relay start is waiting on a ports snapshot, which
+        // recorded — but the relay start is still waiting on something, which
         // can take a poll or two. Saying so beats silence: without this the
         // click looks like it did nothing while the pane still reads "not
-        // running".
+        // running". ANY marker is worth a word; the two we send differ only
+        // in what is being waited on, so the sentence names it rather than
+        // asserting the wrong cause.
         const answer = await post<{ deferred?: string }>(devPreviewActionsPath(open.statusPath), body);
-        if (answer?.deferred === 'awaiting-port-snapshot') {
+        if (answer?.deferred !== undefined) {
           toast.info('The preview will start shortly', {
-            description: 'Waiting for the sandbox to report which ports are in use.',
+            description: answer.deferred === 'awaiting-reconcile'
+              ? 'Another change to this preview is being applied first.'
+              : 'Waiting for the sandbox to report which ports are in use.',
           });
         }
       } catch (actionError) {
@@ -268,6 +272,24 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
       </div>
 
       <DevPreviewStatusLine preview={preview} frameMounted={frameArmed} />
+
+      {/*
+        The decision has to stay reachable AFTER the frame has been armed.
+        `frameArmed` latches on the first openable answer and never clears, so
+        putting the only Share control in its `else` branch meant a preview
+        that went live and then moved to a NEW unlisted port — approval is
+        recorded per port, so the new one is unapproved — re-entered
+        `needs-approval` with no way to say yes: the frame was still mounted,
+        and the user's only options were Dismiss or closing the pane. The
+        control renders above the frame in that state instead, so it does not
+        depend on how the pane happened to open.
+      */}
+      {frameArmed && preview?.canManage && preview.canApprove && preview.state.status === 'needs-approval' && (
+        <div className="flex shrink-0 flex-col items-center gap-2 border-b border-border px-3 py-3 text-center text-xs text-muted-foreground">
+          <p className="max-w-sm">{preview.state.message}</p>
+          <ApprovalControl port={preview.state.targetPort} spriteInstanceId={preview.spriteInstanceId} holder={preview.holder} disabled={actioning} onShare={runAction} />
+        </div>
+      )}
 
       {frameArmed ? (
         <iframe

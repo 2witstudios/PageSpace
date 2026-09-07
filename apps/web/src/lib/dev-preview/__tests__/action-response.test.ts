@@ -33,6 +33,26 @@ describe('respondToDevPreviewUserAction', () => {
     expect(await res.json()).toEqual({ ok: true, applied: { action: 'start-relay' } });
   });
 
+  it('a CONTENDED action names its deferral too — the same silence, one branch over', () => {
+    // `lockContended` is documented as the same shape as `slot-unknown`: the
+    // intent landed, only the relay work waits. It was dropping the marker,
+    // so the pane — which speaks only when the body names one — said nothing
+    // over a click that had taken effect.
+    const res = respond({ ok: true, applied: null, lockContended: true });
+    expect(res.status).toBe(200);
+    return res.json().then((body: unknown) => {
+      expect(body).toEqual({ ok: true, applied: null, deferred: 'awaiting-reconcile' });
+      expect(vi.mocked(auditRequest).mock.calls[0]?.[1]).toMatchObject({
+        details: { route: 'POST /api/x', action: 'resume', applied: null, deferred: 'awaiting-reconcile' },
+      });
+    });
+  });
+
+  it('an UNCONTENDED success carries no deferral marker, so the pane stays quiet', async () => {
+    const res = respond({ ok: true, applied: null });
+    expect(await res.json()).toEqual({ ok: true, applied: null });
+  });
+
   it('slot-unknown is a DEFERRAL, not a failure: 200, ok:true, and the deferral named', async () => {
     const res = respond({ ok: false, reason: 'slot-unknown' });
     // The intent is already written — the resume cleared the stop — and only

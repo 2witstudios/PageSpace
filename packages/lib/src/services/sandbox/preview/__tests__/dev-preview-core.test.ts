@@ -633,6 +633,41 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
     assert({ given: 'an unlisted port with no listener snapshot', should: 'still be await-approval, not slot-unknown', actual: blind.action, expected: 'await-approval' });
   });
 
+  it('a LIVE relay that already forwards to the target survives an unknown listener snapshot', () => {
+    // The guard exists to refuse a START planned blind. This relay is not a
+    // start: it is already running and already pointed at 5173, and it is
+    // itself what holds 8080 — so the question the guard asks is answered
+    // without a snapshot. Refusing here told a user whose preview was
+    // ALREADY SERVING that it would start shortly.
+    const serving = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173), listenersKnown: false }));
+    assert({
+      given: 'a live relay on the row target with no listener snapshot',
+      should: 'be a no-op, not refused as slot-unknown',
+      actual: [serving.action, serving.action === 'none' && serving.reason],
+      expected: ['none', 'already-relaying'],
+    });
+
+    // Same relay, row does not name it: recording the row touches no process,
+    // so it also needs no snapshot.
+    const unrecorded = planDevServerService(planInput({ row: null, relay: relayService(5173), detected: detected(5173), listenersKnown: false }));
+    assert({
+      given: 'a live matching relay the row does not know about, snapshot unknown',
+      should: 'record it rather than refuse',
+      actual: [unrecorded.action, unrecorded.action === 'start-relay' && unrecorded.via],
+      expected: ['start-relay', 'already-running'],
+    });
+
+    // The counterweight: a relay that is NOT alive has to be started, which
+    // is a real process start on 8080, so it still waits for a snapshot.
+    const dead = planDevServerService(planInput({ row: relayRow(5173), relay: relayService(5173, { status: 'failed' }), listenersKnown: false }));
+    assert({
+      given: 'a matching but DEAD relay with no listener snapshot',
+      should: 'still refuse, because restarting it is a real start',
+      actual: [dead.action, dead.action === 'refuse' && dead.reason],
+      expected: ['refuse', 'slot-unknown'],
+    });
+  });
+
   it('a STOP still outranks approval — the user switching it off is never overridden by a pending decision', () => {
     const stopped = planDevServerService(planInput({ row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), detected: { kind: 'dev-server', port: 9000, likelihood: 'unlisted' } }));
     assert({ given: 'an unlisted port on a switched-off preview', should: 'stay off', actual: [stopped.action, stopped.action === 'none' && stopped.reason], expected: ['none', 'user-stopped'] });

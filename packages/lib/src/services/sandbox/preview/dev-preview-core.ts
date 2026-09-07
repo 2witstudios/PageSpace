@@ -548,23 +548,35 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
   if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
-  // A relay is about to be started or re-pointed, and the slot can only be
-  // called free from a CURRENT snapshot. `already-relaying` returns above, so
-  // a healthy preview is unaffected — this refuses only a START planned blind.
-  if (input.listenersKnown === false) {
-    return { action: 'refuse', reason: 'slot-unknown', targetPort };
-  }
 
   const service = buildPreviewRelaySpec({ targetPort, runtime: relayRuntime });
   const rowIntent = rowFor(service.name);
 
+  // A relay that is ALREADY LIVE and already forwards to `targetPort` is
+  // decided BEFORE the unknown-slot guard, and must stay that way: neither
+  // answer below starts anything, and the question the guard exists to ask —
+  // "is 8080 free?" — has an answer that needs no snapshot, because this
+  // relay is itself the thing holding it. Ordering these the other way round
+  // refused a preview that was already serving, told the user it would start
+  // shortly, and (via `describeServiceState`) made a `down` that the planner
+  // was supposed to answer `already-relaying` for report a plan of `refuse`.
+  if (relay !== null && relayServiceMatches(relay, service) && isRelayAlive(relay)) {
+    if (row?.targetPort === targetPort) return { action: 'none', reason: 'already-relaying', staleRowIgnored };
+    // Relay is right and live but the row does not say so (a lost write, or
+    // a row from a previous target): record it without touching the process.
+    return { action: 'start-relay', via: 'already-running', service, row: rowIntent };
+  }
+
+  // Everything from here DOES mutate the sprite — a start, a re-point, a
+  // create — and the slot can only be called free from a CURRENT snapshot.
+  // This refuses only a start planned blind.
+  if (input.listenersKnown === false) {
+    return { action: 'refuse', reason: 'slot-unknown', targetPort };
+  }
+
+  // Matching but not alive: restarting it is a real process start, so it
+  // waits for the guard above.
   if (relay !== null && relayServiceMatches(relay, service)) {
-    if (isRelayAlive(relay)) {
-      if (row?.targetPort === targetPort) return { action: 'none', reason: 'already-relaying', staleRowIgnored };
-      // Relay is right and live but the row does not say so (a lost write, or
-      // a row from a previous target): record it without touching the process.
-      return { action: 'start-relay', via: 'already-running', service, row: rowIntent };
-    }
     return { action: 'start-relay', via: 'start', service, row: rowIntent };
   }
   if (relay !== null) {

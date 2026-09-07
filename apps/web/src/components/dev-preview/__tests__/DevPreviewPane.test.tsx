@@ -175,6 +175,38 @@ describe('DevPreviewPane', () => {
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
   });
 
+  test('the Share control survives the frame having been armed — a live preview that MOVES to a new unlisted port can still be approved', async () => {
+    // `frameArmed` latches on the first openable answer and never clears, so
+    // the only Share control living in its `else` branch was unreachable for
+    // the whole life of the open. Approval is per PORT, so a preview that
+    // went live on 5173 and then moved to 9000 re-enters `needs-approval`
+    // with the frame still mounted — and the user could only Dismiss.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      status = live({ spriteInstanceId: 'inst-live' });
+      act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+      renderPane();
+      // The frame arms here, and `frameArmed` never clears again.
+      await vi.waitFor(() => expect(screen.getByTestId('dev-preview-frame')).toBeInTheDocument());
+
+      // The SAME mount then sees the server move to an unapproved port.
+      status = live({
+        canOpen: false,
+        canApprove: true,
+        spriteInstanceId: 'inst-live',
+        state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      await vi.waitFor(() => expect(screen.getByTitle('Share port 9000')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByTitle('Share port 9000'));
+      await vi.waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'approve', port: 9000, spriteInstanceId: 'inst-live' }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+  });
+
   test('NEEDS APPROVAL: no frame, the audience is stated, and Share posts the PORT that was shown', async () => {
     status = live({
       canOpen: false,
