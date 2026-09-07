@@ -3,15 +3,19 @@
  * credit_balances row and asks the pure evaluateGate whether the user may spend.
  * Never calls Stripe; the hot path stays a single indexed read.
  *
- * A missing balance row is lazy-initialized from the tier's monthly allowance
- * (this is how a brand-new free user gets their trial allowance without a Stripe
- * subscription) and then re-evaluated.
+ * A missing balance row is lazy-initialized from the tier's allowance (this is how a
+ * brand-new free user gets their ONE-TIME starter grant without a Stripe
+ * subscription — the `free-init-<userId>` ledger key makes it happen exactly once)
+ * and then re-evaluated.
  *
- * Free / no-subscription users get their periodic top-up HERE: there's no
- * invoice.paid to drive a refill, so when the period has expired the gate ADDS the
- * tier allowance to the carry balance (rollover) and rolls the window forward. This is
- * the imperative shell, so it owns the real clock; the period math stays trivial
- * and the rollover itself comes from the pure computeMonthlyRefill.
+ * Paid tiers WITHOUT a renewal-capable subscription (comped/founder accounts) get
+ * their periodic top-up HERE: there's no invoice.paid to drive a refill, so when the
+ * period has expired the gate ADDS the tier allowance to the carry balance (rollover)
+ * and rolls the window forward. Which tiers refill at all is data
+ * (TIER_ALLOWANCE_REFILLS): the free tier does NOT — its allowance is a single grant,
+ * so an expired free window is simply left alone. This is the imperative shell, so
+ * it owns the real clock; the period math stays trivial and the rollover itself
+ * comes from the pure computeMonthlyRefill.
  */
 
 import { db } from '@pagespace/db/db';
@@ -31,6 +35,8 @@ import {
 import {
   RESERVE_FLOOR_CENTS,
   TIER_MONTHLY_ALLOWANCE_CENTS,
+  allowanceRefills,
+  isOneTimeAllowanceTier,
   CREDIT_HOLD_ESTIMATE_CENTS,
   CREDIT_HOLD_TTL_SECONDS,
   MAX_FREE_INFLIGHT,
@@ -92,6 +98,23 @@ interface BalanceRow {
  * subscription" filter converge on one definition instead of drifting copies.
  */
 export const RENEWAL_CAPABLE_STATUSES = ['active', 'trialing', 'past_due', 'unpaid'];
+
+/**
+ * The ledger row for a tier's first-ever allowance grant. The stripeRef is
+ * USER-scoped (no timestamp) on purpose: the partial unique index on stripeRef makes
+ * it the exactly-once key shared by the lazy-init path and the bare-row starter-grant
+ * path, so whichever lands first wins and the other is a no-op.
+ */
+function starterGrantLedgerRow(userId: string, monthly: number) {
+  return {
+    userId,
+    entryType: 'monthly_grant',
+    bucket: 'monthly',
+    amountCents: monthly,
+    stripeRef: `free-init-${userId}`,
+    consumeStatus: 'applied',
+  } as const;
+}
 
 /**
  * Whether ANY of the user's subscriptions could still deliver an invoice-driven
@@ -228,10 +251,12 @@ export async function canConsumeAI(
   let row = await readBalance();
 
   // Gate-driven monthly reset for users whose refill can never come from Stripe.
-  // Free users have no invoice.paid to drive a refill, so the gate rolls their
-  // window when it has expired (monthlyPeriodEnd < now) or was never stamped
-  // (monthlyPeriodEnd IS NULL — e.g. a top-up funding row created bare before the
-  // user's first AI request). Paid tiers get the same roll ONLY when no
+  // Only tiers that REFILL (TIER_ALLOWANCE_REFILLS) are eligible: the free tier's
+  // allowance is a one-time starter grant, so an expired or never-stamped free
+  // window is left alone and the user spends down what they have (plus top-ups).
+  // A refilling tier rolls here when its window has expired (monthlyPeriodEnd < now)
+  // or was never stamped (monthlyPeriodEnd IS NULL — e.g. a top-up funding row
+  // created bare before the user's first AI request), and ONLY when no
   // renewal-capable subscription exists (comped/founder accounts — see
   // hasRenewalCapableSubscription): with a live subscription, invoice.paid stays
   // authoritative (keyed to the invoice stripeRef), because resetting here would
@@ -256,10 +281,13 @@ export async function canConsumeAI(
   // through unchecked casts, and a legacy/unknown value (e.g. 'normal') reaching
   // computeMonthlyRefill would silently rewrite the account to the free allowance.
   const tierHasAllowance = tier in TIER_MONTHLY_ALLOWANCE_CENTS;
+  // Free never refills, so the (rare) subscription lookup is only ever reached by a
+  // refilling tier with an expired window.
   if (
     windowExpired &&
     tierHasAllowance &&
-    (tier === 'free' || !(await hasRenewalCapableSubscription(db, userId)))
+    allowanceRefills(tier) &&
+    !(await hasRenewalCapableSubscription(db, userId))
   ) {
     const newEnd = addOneMonth(now);
     await db.transaction(async (tx) => {
@@ -285,13 +313,13 @@ export async function canConsumeAI(
         return;
       }
 
-      // Paid tiers: RE-CHECK the subscription state on the transaction right before
+      // RE-CHECK the subscription state on the transaction right before
       // granting. The unlocked pre-check races a concurrent checkout — if the
       // customer.subscription.* webhook committed a renewal-capable row since,
       // invoice.paid now owns this user's refill and granting here would double it.
       // (Not fully serialized against the webhook's own transaction, but it shrinks
       // the race from "any time since the pre-check" to the instant before commit.)
-      if (tier !== 'free' && (await hasRenewalCapableSubscription(tx, userId))) {
+      if (await hasRenewalCapableSubscription(tx, userId)) {
         return;
       }
 
@@ -328,10 +356,10 @@ export async function canConsumeAI(
           entryType: 'monthly_grant',
           bucket: 'monthly',
           amountCents: refill.monthlyAllowanceCents,
-          // 'free-reset' kept verbatim for the free tier (pre-existing ledger rows use
-          // it); paid no-subscription rolls get their own prefix so they're
-          // distinguishable in the ledger.
-          stripeRef: `${tier === 'free' ? 'free' : 'gate'}-reset-${userId}-${now.toISOString()}`,
+          // Historical free-tier rolls (before free became a one-time grant) were
+          // keyed 'free-reset-…'; only refilling tiers reach here now, so every new
+          // row gets the 'gate-reset-' prefix.
+          stripeRef: `gate-reset-${userId}-${now.toISOString()}`,
           consumeStatus: 'applied',
         })
         .onConflictDoNothing(STRIPE_REF_ARBITER);
@@ -369,17 +397,44 @@ export async function canConsumeAI(
       if (balanceInserted.length > 0) {
         await tx
           .insert(creditLedger)
-          .values({
-            userId,
-            entryType: 'monthly_grant',
-            bucket: 'monthly',
-            amountCents: monthly,
-            stripeRef: `free-init-${userId}`,
-            consumeStatus: 'applied',
-          })
+          .values(starterGrantLedgerRow(userId, monthly))
           .onConflictDoNothing(STRIPE_REF_ARBITER);
       }
     });
+  }
+
+  // Starter grant for a NON-refilling tier whose row already exists but was never
+  // granted. A top-up purchase before the user's first AI call (or a top-up racing
+  // the lazy-init above, caught on the next call) creates a bare credit_balances
+  // row with no period stamped.
+  // A refilling tier gets such a row rolled by the reset path; free is excluded from
+  // that path, so without this branch a user who bought credits first would
+  // permanently miss the advertised starter grant. Eligibility is decided by the
+  // LEDGER, not by the row: the user-scoped `free-init-<userId>` key is inserted
+  // FIRST, and the balance is funded only when that insert actually lands — so a
+  // concurrent init, or a grant already recorded under the old monthly scheme, can
+  // never double-fund. The increment is one relative UPDATE, atomic against a
+  // concurrent top-up's own locked write to the same row.
+  if (row && row.monthlyPeriodEnd === null && isOneTimeAllowanceTier(tier)) {
+    const monthly = TIER_MONTHLY_ALLOWANCE_CENTS[tier];
+    await db.transaction(async (tx) => {
+      const granted = await tx
+        .insert(creditLedger)
+        .values(starterGrantLedgerRow(userId, monthly))
+        .onConflictDoNothing(STRIPE_REF_ARBITER)
+        .returning({ id: creditLedger.id });
+      if (granted.length === 0) return;
+      await tx
+        .update(creditBalances)
+        .set({
+          monthlyRemainingCents: sql`${creditBalances.monthlyRemainingCents} + ${monthly}`,
+          monthlyAllowanceCents: monthly,
+          monthlyPeriodStart: now,
+          monthlyPeriodEnd: addOneMonth(now),
+        })
+        .where(eq(creditBalances.userId, userId));
+    });
+    row = await readBalance();
   }
 
   const estCost = reservationCents(opts.estCostCents ?? CREDIT_HOLD_ESTIMATE_CENTS);
@@ -439,8 +494,9 @@ export async function canConsumeAI(
     // Rollover: the monthly bucket is always spendable — credits never expire. A paid user
     // whose window has lapsed continues to spend from their carried balance; the renewal
     // invoice.paid will then add the new allowance on top of whatever remains (not reset).
-    // Free users were handled by the addOneMonth reset above and never reach here with an
-    // expired window. The gate still does NOT refill paid tiers — invoice.paid is
+    // A free user's allowance is a one-time grant (never refilled), so an expired free
+    // window is simply a user spending down what they have — no reset applies to it.
+    // The gate still does NOT refill paid tiers — invoice.paid is
     // authoritative for that — so there is no double-grant risk: the refill reads the
     // current DB balance inside its own transaction and adds the allowance to whatever is
     // there, exactly accounting for any spend that happened during the gap.
@@ -545,9 +601,9 @@ export async function canConsumeAI(
  * The decision RULE is the one `evaluateGate` applies — spendable above the
  * reserve floor, debt netted, billing-disabled deployments unlimited — reached
  * through `readSpendableCents`, which shares its arithmetic with the display read
- * (including the free-tier lapsed-window rollover the gate applies lazily, so a
- * free user whose month has ticked over is not parked for the gap between the
- * rollover being due and the next AI call performing it).
+ * (including the pending one-time starter grant on a bare free row, which the gate
+ * applies lazily on the next call — so a free user who topped up before their first
+ * AI request is not read as broke for the gap before that call).
  *
  * It reads the funded-balance columns and NOTHING else: ONE indexed row, no
  * aggregate. Going through `getCreditBalance` here would also run its `SUM` over

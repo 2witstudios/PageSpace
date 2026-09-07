@@ -125,6 +125,39 @@ export interface FrameLimits {
   readonly maxFrameBytes: number;
 }
 
+/**
+ * Bytes an `fs_read_result` spends on everything BUT the content: the JSON
+ * envelope, a grantId, `found`, and a base64 Ed25519 signature (88 chars).
+ * Generous on purpose — a grantId is ~42 chars today, this allows ~300.
+ */
+export const FS_READ_ENVELOPE_OVERHEAD_BYTES = 512;
+
+/**
+ * The largest RAW file an `fs_read_result` can carry and still decode under
+ * `limits.maxFrameBytes` on the other end: base64 expands 3 → 4, and the
+ * envelope needs its own room. A daemon must check the file's size against
+ * this BEFORE reading it — a bigger file would be read, encoded, sent, and
+ * refused as oversized by the server, so the request could never get a
+ * usable answer.
+ */
+export function fsReadContentCeiling(limits: FrameLimits): number {
+  const forContent = limits.maxFrameBytes - FS_READ_ENVELOPE_OVERHEAD_BYTES;
+  return forContent <= 0 ? 0 : Math.floor(forContent / 4) * 3;
+}
+
+/**
+ * The largest RAW stdout+stderr total an `exec_result` can carry and still
+ * decode under `limits.maxFrameBytes`. Both streams are base64 (3 → 4) and
+ * share the frame with the signed envelope, so the daemon must clamp the
+ * command's captured-output cap to this BEFORE running — a policy `maxBytes`
+ * near or above the frame limit would otherwise produce a completed reply the
+ * server rejects as oversized. Same allowance as `fsReadContentCeiling`; the
+ * exec envelope's extra field name and `exitCode`/`truncated` fit inside it.
+ */
+export function execOutputCeiling(limits: FrameLimits): number {
+  return fsReadContentCeiling(limits);
+}
+
 function reject(reason: DecodeFrameReason): DecodeFrameVerdict {
   return { ok: false, reason };
 }

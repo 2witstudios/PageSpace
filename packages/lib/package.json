@@ -1378,6 +1378,11 @@
       "import": "./dist/email-templates/AgentSandboxLaunchEmail.js",
       "require": "./dist/email-templates/AgentSandboxLaunchEmail.js"
     },
+    "./email-templates/FreeCreditsChangeEmail": {
+      "types": "./dist/email-templates/FreeCreditsChangeEmail.d.ts",
+      "import": "./dist/email-templates/FreeCreditsChangeEmail.js",
+      "require": "./dist/email-templates/FreeCreditsChangeEmail.js"
+    },
     "./email-templates/render-email": {
       "types": "./dist/email-templates/render-email.d.ts",
       "import": "./dist/email-templates/render-email.js",
@@ -2679,6 +2684,9 @@
       ],
       "email-templates/AgentSandboxLaunchEmail": [
         "./dist/email-templates/AgentSandboxLaunchEmail.d.ts"
+      ],
+      "email-templates/FreeCreditsChangeEmail": [
+        "./dist/email-templates/FreeCreditsChangeEmail.d.ts"
       ],
       "email-templates/PaymentReceiptEmail": [
         "./dist/email-templates/PaymentReceiptEmail.d.ts"

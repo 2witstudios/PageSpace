@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`pagespace env connect <enrollmentId>` / `env disconnect <enrollmentId>` / `env policy` — the
+  bridge daemon: serve this machine as a local Environment (exec + files).** `env connect` earns a
+  short-lived socket token from the machine key on every (re)connect, sends a machine-signed hello,
+  then answers signed requests from PageSpace: each one carries a server-signed, single-use grant
+  bound to exactly what was asked, is checked against **your** local policy file
+  (`~/.pagespace/env-policy.json` — mode `ask` / `allowlist` / `deny`, allowed users, ops, roots,
+  env allowlist, output and time caps), and only then runs, with the confined working directory
+  and a scrubbed environment (loader hooks such as `LD_PRELOAD` never reach a child). No policy
+  file, an unreadable one, or one not owned by you / writable by others means **everything is
+  denied** — the daemon still connects so the Environment shows as connected. `ask` mode prompts in
+  the terminal once per user + session + operation and refuses to start without a TTY. Every
+  decision is appended to `~/.pagespace/env-audit.jsonl` with the grant id the server also logs. A
+  server-signed revoke deletes the machine key and exits; Ctrl-C or `env disconnect` closes the
+  socket and kills every child process group. Reconnects with backoff after a server restart. The
+  daemon never listens on a port. PTY sessions are not served yet (advertised `pty:false`). Requires
+  `LOCAL_ENVS_ENABLED=true` on the deployment. Adds `ws` as a runtime dependency.
+
 - **`pagespace env enroll <enrollmentId> <code>` and `pagespace env token <enrollmentId>` — bind
   this machine to a local Environment.** `enroll` generates an Ed25519 keypair on the machine,
   presents the one-time code with the public half, and stores the private half in the credential

@@ -1,5 +1,5 @@
 import { blogPosts } from "@/app/blog/[slug]/data";
-import { MONTHLY_CREDITS } from "@/lib/credits";
+import { FREE_STARTER_CREDITS } from "@/lib/credits";
 
 export interface SearchEntry {
   title: string;
@@ -117,7 +117,7 @@ const faqEntries: SearchEntry[] = [
   },
   {
     title: "Is there a free plan?",
-    description: `Yes. Free plan includes 500 MB storage and ${MONTHLY_CREDITS.free}/month of credits. No credit card required.`,
+    description: `Yes. Free plan includes 500 MB storage and ${FREE_STARTER_CREDITS} credits to get started. No credit card required.`,
     href: "/faq#is-there-a-free-plan",
     category: "FAQ",
     keywords: "free plan pricing cost no credit card credits",
@@ -125,15 +125,15 @@ const faqEntries: SearchEntry[] = [
   {
     title: "How do credits work?",
     description:
-      "Every plan includes a monthly credit allowance. Each AI action draws down credits based on the model's real cost; unused credits roll over and accumulate — they never expire.",
+      "Free accounts start with a one-time grant of credits; paid plans include a monthly allowance. Each AI action draws down credits based on the model's real cost. Credits never expire — on paid plans, unused monthly credits roll over and accumulate.",
     href: "/faq#how-ai-credits-work",
     category: "FAQ",
-    keywords: "credits metered usage allowance rollover monthly billing",
+    keywords: "credits metered usage allowance starter grant rollover monthly billing",
   },
   {
     title: "What happens when I run out of credits?",
     description:
-      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits or your next monthly allowance is added at your billing renewal.",
+      "Documents, tasks, channels, and collaboration keep working. AI pauses until you buy more credits, upgrade, or — on paid plans — your next monthly allowance is added at your billing renewal.",
     href: "/faq#hit-daily-ai-limit",
     category: "FAQ",
     keywords: "out of credits ai limit reset buy more top up quota",

@@ -103,7 +103,7 @@ export default function PrivacyPolicy() {
               When you use AI features, we work with external AI providers, each subject to that provider&#39;s own privacy policy. Provider routing is managed by PageSpace at the deployment level — you no longer supply or store provider API keys yourself. Supported providers include:
             </p>
             <ul className="list-disc pl-6 mb-4">
-              <li><strong>Model providers:</strong> your prompts and the relevant context are sent to AI model providers — including Anthropic (Claude), OpenAI (GPT), Google (Gemini), xAI (Grok), and, via the OpenRouter routing provider, additional third-party models — to generate responses. AI usage is metered against your plan&#39;s monthly credit allowance; Free plans use a curated set of models, and paid plans unlock the full catalogue.</li>
+              <li><strong>Model providers:</strong> your prompts and the relevant context are sent to AI model providers — including Anthropic (Claude), OpenAI (GPT), Google (Gemini), xAI (Grok), and, via the OpenRouter routing provider, additional third-party models — to generate responses. AI usage is metered against your credits (a one-time starter grant on Free, a monthly allowance on paid plans); Free plans use a curated set of models, and paid plans unlock the full catalogue.</li>
               <li><strong>Ollama (on-premises/local option):</strong> for self-hosted deployments, PageSpace supports Ollama, which runs models locally — your prompts and content never leave your own infrastructure when using this option.</li>
             </ul>
             <p className="mb-4">

@@ -228,6 +228,9 @@ A drive owner or admin can create an Environment with `substrate: "local"` and i
 ```text
 pagespace env enroll <enrollmentId> <code> [--host <url>]
 pagespace env token <enrollmentId> [--host <url>]
+pagespace env connect <enrollmentId> [--host <url>]
+pagespace env disconnect <enrollmentId>
+pagespace env policy [--json]
 ```
 
 `env enroll` generates an Ed25519 keypair **on this machine**, sends the server the public half
@@ -235,11 +238,79 @@ with the code, and stores the private half — plus the server signing key it pi
 this machine's credential store under the profile `env:<enrollmentId>`. The private key is never
 printed (not even with `--json`) and never leaves the machine. A refused enrollment discards the
 key. `env token` proves possession of that key (the server issues a nonce, the machine signs it)
-and prints a short-lived bridge token — the round trip `env connect` will perform on every
+and prints a short-lived bridge token — the round trip `env connect` performs on every
 reconnect. Neither command needs a login: the code, then the key, are the machine's credentials,
 and the machine credential is never used to authenticate ordinary commands (`logout` and
 `keys use` refuse it). The deployment must set `LOCAL_ENVS_ENABLED=true`; otherwise these
 endpoints do not exist.
+
+### `env connect` — the bridge daemon
+
+`env connect` is the daemon that makes the Environment usable. It opens an **outbound** socket to
+PageSpace (it never listens on a port), earns a fresh token from the machine key on every
+(re)connect, sends a machine-signed `hello`, and then serves requests. Every request carries a
+grant signed by the server key pinned at enrollment; the daemon verifies the signature, expiry,
+env, single-use nonce and that the grant is bound to exactly this request **before** consulting
+your policy, and runs nothing unless the policy allows it. Results are signed with the machine key
+so the server can verify them. Everything is appended to `~/.pagespace/env-audit.jsonl`
+(`PAGESPACE_ENV_AUDIT_LOG` to move it) as one JSON line per decision with the `grantId` the server
+also audits. Ctrl-C, `env disconnect` (which signals the running daemon's pid from
+`~/.pagespace/env-connect.<enrollmentId>.pid`), or a server-signed revoke stops it; a revoke also
+deletes the machine key. After a server restart it reconnects with exponential backoff.
+
+In this release the daemon serves `exec`, `fs_read` and `fs_write`; PTY sessions are advertised as
+unsupported.
+
+**Platform:** `env connect` runs on macOS and Linux only. It relies on POSIX process groups to
+kill a timed-out command and on `O_NOFOLLOW` to open files safely, neither of which Windows
+provides, so on Windows it refuses to start with a clear message. `env enroll`, `env token`,
+`env disconnect` and `env policy` work everywhere.
+
+**Transport:** the host must be `https://` (the daemon sends this machine's proof of possession
+and a short-lived bearer token, and the socket is `wss://`). Plain `http://` is accepted only for
+the loopback hosts used in local development (`localhost`, `127.0.0.1`, `::1`), matching the CLI's
+OAuth loopback policy. Token redemption refuses to follow redirects.
+
+**Stopping it:** `env connect` writes its process identity (pid, start time, `argv0`) to
+`~/.pagespace/env-connect.<enrollmentId>.pid` and refreshes it periodically. `env disconnect`
+validates that record — it must be ours, recent, and the process must still be alive — before
+sending `SIGTERM`, and removes a stale file rather than risk signalling a reused pid.
+
+### The policy file
+
+The daemon reads `~/.pagespace/env-policy.json` (or the path in `PAGESPACE_ENV_POLICY`). **You**
+own this file; PageSpace never sees or edits it. It must be owned by the user running `env connect`
+and must not be writable by group or world (`chmod 600`) — otherwise it is ignored. **No policy file,
+or one that is unreadable, invalid, wrongly owned or writable by others, means every request is
+denied** (`no_policy`); the daemon still connects so you can see the Environment and fix the file.
+`pagespace env policy` prints what is in force, or why the file is being ignored.
+
+```json
+{
+  "mode": "ask",
+  "principals": ["usr_01hzx…"],
+  "ops": ["fs_read"],
+  "roots": ["/Users/me/code/my-project"],
+  "envAllowlist": ["CI", "NODE_ENV"],
+  "maxBytes": 1048576,
+  "maxTimeoutMs": 120000
+}
+```
+
+- `mode` — `ask`: ops listed in `ops` run without prompting, anything else prompts in the terminal
+  (once per user + session + op; needs a TTY, so a headless machine must use another mode).
+  `allowlist`: only ops in `ops` run; anything else is denied. `deny`: nothing runs.
+- `principals` — PageSpace user ids allowed to drive this machine. A request from anyone else is
+  denied `principal_not_allowed`, whatever the server thinks.
+- `ops` — any of `exec`, `fs_read`, `fs_write` (`pty_open` is reserved for a later release).
+- `roots` — absolute directories every working directory and every file path must resolve inside
+  (symlinks are resolved; `..` is refused). Note that roots confine the paths an agent *names*, not
+  what a command does once it runs.
+- `envAllowlist` — environment variable names the server may set for a command. Loader and
+  interpreter hooks (`LD_*`, `DYLD_*`, `PATH`, `NODE_OPTIONS`, …) are refused even if listed.
+- `maxBytes` / `maxTimeoutMs` — caps on captured output and wall-clock per command; a request that
+  asks for more is clamped, and a command that outlives its timeout has its whole process group
+  killed. Both are optional (defaults 1 MiB and 120 s).
 
 ## `pagespace mcp`
 

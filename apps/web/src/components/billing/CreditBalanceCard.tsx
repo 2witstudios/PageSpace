@@ -35,7 +35,9 @@ export function CreditBalanceCard() {
           Credits
         </CardTitle>
         <CardDescription>
-          Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.
+          {isFree
+            ? 'Credits power AI features. Your starter credits are a one-time grant; buy top-up credits (they never expire) or upgrade for a monthly allowance.'
+            : 'Credits power AI features. Your monthly allowance renews each billing period; purchased top-up credits never expire.'}
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -79,7 +81,9 @@ export function CreditBalanceCard() {
               <div className="text-sm text-muted-foreground space-y-0.5">
                 {balance.debt > 0 && (
                   <div className="text-red-600 dark:text-red-400">
-                    In the red — add credits to keep using AI (or it clears at your next renewal).
+                    {isFree
+                      ? 'In the red — add credits to keep using AI.'
+                      : 'In the red — add credits to keep using AI (or it clears at your next renewal).'}
                   </div>
                 )}
                 {balance.topup.remaining > 0 && (

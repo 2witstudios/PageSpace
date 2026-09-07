@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { decodeFrame, encodeFrame, FRAME_TYPES, type Frame } from '../frame-codec';
+import { decodeFrame, encodeFrame, FRAME_TYPES, FS_READ_ENVELOPE_OVERHEAD_BYTES, fsReadContentCeiling, execOutputCeiling, type Frame } from '../frame-codec';
 
 const LIMITS = { maxFrameBytes: 64 * 1024 };
 const B64 = Buffer.from('hello').toString('base64');
@@ -193,5 +193,35 @@ describe('frame-codec — the wire protocol as pure data (invariant 6: unknown o
   it('given an already-parsed object (not a wire string), should decode it the same way', () => {
     expect(decodeFrame(SAMPLES.ping, LIMITS)).toEqual({ ok: true, frame: SAMPLES.ping });
     expect(decodeFrame({ type: 'nope' }, LIMITS)).toEqual({ ok: false, reason: 'unknown_type' });
+  });
+});
+
+describe('fsReadContentCeiling — the largest RAW file an fs_read_result can carry inside maxFrameBytes', () => {
+  it('a result at exactly the ceiling, with a long grantId and a real-size signature, still fits the frame limit; one byte more would not', () => {
+    const limits = { maxFrameBytes: 64 * 1024 };
+    const ceiling = fsReadContentCeiling(limits);
+    expect(ceiling).toBeGreaterThan(0);
+    expect(FS_READ_ENVELOPE_OVERHEAD_BYTES).toBeGreaterThanOrEqual(256);
+    const frame = (raw: number): Frame => ({ type: 'fs_read_result', grantId: `grant_${'x'.repeat(64)}`, found: true, contentB64: Buffer.alloc(raw, 1).toString('base64'), sig: Buffer.alloc(64, 2).toString('base64') });
+    expect(decodeFrame(encodeFrame(frame(ceiling)), limits)).toMatchObject({ ok: true });
+    expect(Buffer.byteLength(encodeFrame(frame(ceiling)))).toBeLessThanOrEqual(limits.maxFrameBytes);
+    expect(Buffer.byteLength(encodeFrame(frame(ceiling + FS_READ_ENVELOPE_OVERHEAD_BYTES)))).toBeGreaterThan(limits.maxFrameBytes);
+  });
+
+  it('scales with the limit and never goes negative', () => {
+    expect(fsReadContentCeiling({ maxFrameBytes: 1024 * 1024 })).toBeGreaterThan(fsReadContentCeiling({ maxFrameBytes: 64 * 1024 }));
+    expect(fsReadContentCeiling({ maxFrameBytes: 10 })).toBe(0);
+  });
+});
+
+describe('execOutputCeiling — the largest raw stdout+stderr an exec_result can carry inside maxFrameBytes', () => {
+  it('a result whose two streams total exactly the ceiling still decodes under the limit; one envelope more does not', () => {
+    const limits = { maxFrameBytes: 64 * 1024 };
+    const ceiling = execOutputCeiling(limits);
+    expect(ceiling).toBeGreaterThan(0);
+    const frame = (rawTotal: number): Frame => ({ type: 'exec_result', grantId: `grant_${'x'.repeat(64)}`, exitCode: 0, stdoutB64: Buffer.alloc(Math.ceil(rawTotal / 2), 1).toString('base64'), stderrB64: Buffer.alloc(Math.floor(rawTotal / 2), 2).toString('base64'), truncated: true, sig: Buffer.alloc(64, 3).toString('base64') });
+    expect(decodeFrame(encodeFrame(frame(ceiling)), limits)).toMatchObject({ ok: true });
+    expect(Buffer.byteLength(encodeFrame(frame(ceiling + FS_READ_ENVELOPE_OVERHEAD_BYTES)))).toBeGreaterThan(limits.maxFrameBytes);
+    expect(execOutputCeiling({ maxFrameBytes: 10 })).toBe(0);
   });
 });

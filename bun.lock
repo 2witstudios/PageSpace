@@ -461,10 +461,13 @@
         "@modelcontextprotocol/sdk": "^1.29.0",
         "@napi-rs/keyring": "^1.3.0",
         "@pagespace/sdk": "^2.3.0",
+        "ws": "^8.18.3",
         "zod": "^4.1.8",
       },
       "devDependencies": {
         "@pagespace/lib": "workspace:*",
+        "@types/ws": "^8.18.1",
+        "esbuild": "^0.25.12",
       },
     },
     "packages/db": {
@@ -559,9 +562,9 @@
     },
   },
   "trustedDependencies": [
-    "sharp",
-    "msw",
     "esbuild",
+    "msw",
+    "sharp",
     "electron-winstaller",
     "unrs-resolver",
     "tesseract.js",

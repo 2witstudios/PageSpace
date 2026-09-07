@@ -24,6 +24,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   preview domain to `server.allowedHosts`. Off by default: the whole surface is absent until
   `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
   ops work (wildcard DNS, certificate, and the Caddy block) to land first.
+- **Local Environments: the bridge daemon — `pagespace env connect` (opt-in groundwork)** — an
+  enrolled computer can now actually serve its Environment. Running `pagespace env connect` on it
+  keeps a live, outbound-only connection to PageSpace and answers requests to run a command or
+  read/write a file, but only after each request's server-signed grant verifies on the machine
+  and the machine owner's own local policy file allows it: who may drive the machine, which
+  operations, inside which directories, with which environment variables, and with what output
+  and time caps. Without a policy file the machine connects but denies everything. A prompt mode
+  asks the owner in their terminal before an unlisted operation runs. Every decision is written to
+  a local audit log carrying the same grant id PageSpace records, so the two sides can be
+  compared. Deleting the Environment revokes the machine: its key is deleted on the spot and it
+  stops reconnecting. Terminal (PTY) sessions on local machines are not served yet. Still off by
+  default (`LOCAL_ENVS_ENABLED`).
 - **Local Environments: your enrolled computer can now hold a live connection, and you can
   revoke it (opt-in, groundwork)** — an enrolled machine connects to PageSpace over a socket
   addressed to its Environment, proves it is the machine you enrolled with a signed hello
@@ -337,6 +349,17 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   the only hint was a count inside the expanded row.
 
 ### Changed
+
+- **Free plan credits are now a one-time starter grant instead of a monthly allowance** — new
+  free accounts still get 5 credits to try AI with, granted once on their first AI call, but
+  that grant no longer refills or accumulates month over month. Credits you already have never
+  expire, and nothing is taken away: free accounts that had built up a balance keep it. To keep
+  going after the starter credits are spent, buy a top-up pack (top-ups never expire) or upgrade
+  to a paid plan, which includes a monthly allowance that rolls over. The credits card, the plan
+  comparison, the out-of-credits message, and the pricing, FAQ, terms, and docs pages now say
+  "5 credits to start" for Free rather than "5/month", and free accounts no longer show a
+  "Renews" date. Every Free account receives a one-time email explaining the change, quoting
+  the exact balance they keep, and pointing to top-ups and the Pro plan.
 
 - **Dark mode is now a lighter charcoal instead of near-black** — every dark surface (page,
   sidebar, cards, popovers, menus, borders, and the glass panels) moved up one step so text no
