@@ -480,6 +480,7 @@
         "src/services/sandbox/preview/ports-watch.ts",
         "src/services/sandbox/preview/dev-preview-detection.ts",
         "src/services/sandbox/preview/dev-preview-status.ts",
+        "src/services/sandbox/preview/dev-preview-lock.ts",
         "src/services/sandbox/preview/dev-preview-contract.ts",
         "src/services/sandbox/preview/preview-access.ts",
         "src/services/sandbox/preview/preview-ws-tunnel.ts",

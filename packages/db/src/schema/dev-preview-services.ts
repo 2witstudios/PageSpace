@@ -1,6 +1,7 @@
 import { pgTable, text, integer, timestamp, uniqueIndex, check } from 'drizzle-orm/pg-core';
 import { relations, sql } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
+import { users } from './auth';
 import { agentWorkspaces } from './agent-workspaces';
 import { driveEnvs } from './drive-envs';
 
@@ -187,6 +188,48 @@ export const devPreviewServices = pgTable(
      */
     stoppedByUserAt: timestamp('stoppedByUserAt', { mode: 'date' }),
 
+    // -------------------------------------------------------------------------
+    // Consent to SHARE — see `requiresPreviewApproval` in the decision core.
+    // -------------------------------------------------------------------------
+
+    /**
+     * The port a person explicitly agreed to share, or NULL for none.
+     *
+     * A dev server on a usual dev-server port (vite, next, astro…) is what the
+     * user asked for by running the tool, and is relayed on detection. Any
+     * other port is a guess — an admin UI, a debug listener, someone else's
+     * service — and starting the relay is the act of EXPOSURE: from that
+     * moment the port is reachable by everyone the holder's preview is
+     * reachable by, which for an env is every accepted member of the drive.
+     * So an unlisted port is detected and named, and shares nothing until
+     * this column names it.
+     *
+     * Named by PORT rather than a boolean flag so approval is per-port BY
+     * CONSTRUCTION: a server that moves to another unlisted port is a new
+     * decision, and no schema reading can blur the two. Like
+     * `stoppedByUserAt`, it lives on the row and therefore DIES WITH THE
+     * SPRITE INSTANCE — a replacement VM inherits nothing, which is this
+     * table's existing rule rather than a new one.
+     *
+     * The rule for WHICH ports need this is deliberately not in SQL: the port
+     * list is TypeScript, and a duplicate list in a CHECK would drift. The
+     * security property is structural regardless — the sprite URL routes to
+     * 8080 alone, so a row with no `relayServiceName` serves nothing.
+     */
+    approvedPort: integer('approvedPort'),
+
+    /** When that approval was given. Paired with `approvedPort` (CHECK below). */
+    approvedAt: timestamp('approvedAt', { mode: 'date' }),
+
+    /**
+     * Who gave it — ATTRIBUTION ONLY. Never consulted for authorization: the
+     * right to approve is decided per request by `canManageDevPreview`, so a
+     * user who later loses that right cannot lend it through this column.
+     * Nullable and `set null` on delete: a deleted user must not cascade away
+     * a live approval, because that would silently drop a working preview.
+     */
+    approvedByUserId: text('approvedByUserId').references(() => users.id, { onDelete: 'set null' }),
+
     createdAt: timestamp('createdAt', { mode: 'date' }).defaultNow().notNull(),
     updatedAt: timestamp('updatedAt', { mode: 'date' }).notNull().$onUpdate(() => new Date()),
   },
@@ -219,12 +262,30 @@ export const devPreviewServices = pgTable(
     ),
 
     /**
-     * A relay exists iff the target is not 8080. See `relayServiceName`; this
-     * is the CHECK the migration seam in the table docblock would relax.
+     * A relay NEVER points at 8080 (that would be a loop). The other half of
+     * the old biconditional — "a non-8080 target always has a relay" — is
+     * gone, because two legal states now have a non-8080 target and no relay:
+     * a detected port awaiting approval, and an approved one whose relay this
+     * reconcile has not created yet (the approval write lands before
+     * `services.create`, and forbidding that intermediate state would force a
+     * transaction across the database and the Sprites API). Nothing is
+     * exposed by either: the sprite URL routes to 8080 alone.
      */
-    relayIffNot8080Check: check(
-      'dev_preview_services_relay_iff_not_8080_check',
-      sql`(${table.targetPort} = ${sql.raw(String(DEV_PREVIEW_SPRITE_HTTP_PORT))}) = (${table.relayServiceName} IS NULL)`,
+    relayNever8080Check: check(
+      'dev_preview_services_relay_never_8080_check',
+      sql`${table.relayServiceName} IS NULL OR ${table.targetPort} <> ${sql.raw(String(DEV_PREVIEW_SPRITE_HTTP_PORT))}`,
+    ),
+
+    /** An approved port is a TCP port. */
+    approvedPortRangeCheck: check(
+      'dev_preview_services_approved_port_range_check',
+      sql`${table.approvedPort} IS NULL OR ${table.approvedPort} BETWEEN 1 AND 65535`,
+    ),
+
+    /** An approval has a time. Attribution may be NULL (the approver's account can be deleted). */
+    approvedPairedCheck: check(
+      'dev_preview_services_approved_paired_check',
+      sql`(${table.approvedPort} IS NULL) = (${table.approvedAt} IS NULL)`,
     ),
   }),
 );

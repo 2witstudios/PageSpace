@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
+import { devPreviewAffordanceText, devPreviewAffordanceVerb, devPreviewApprovalAudience, devPreviewBadge, shouldShowDevPreviewAffordance } from '../dev-preview-copy';
 import type { DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 
 function preview(state: DevPreviewStatusDTO['state']): DevPreviewStatusDTO {
-  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, detectedAt: null };
+  return { holder: { kind: 'env', id: 'e' }, canManage: false, sandbox: 'attached', detection: 'watching', state, slot: { known: false }, openPath: '/o', canOpen: false, canStop: false, canResume: false, canApprove: false, spriteInstanceId: null, detectedAt: null };
 }
 
 describe('dev-preview copy', () => {
@@ -22,7 +22,9 @@ describe('dev-preview copy', () => {
   it('offers an affordance line for every KNOWN dev server and none for "none"', () => {
     expect(devPreviewAffordanceText(preview({ status: 'live', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
     expect(devPreviewAffordanceText(preview({ status: 'starting', targetPort: 5173, via: 'relay', message: '' }))).toBe('Dev server detected on :5173');
-    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: '' }))).toContain('not responding');
+    // Not "the dev server is not responding": a `down` preview is as often a
+    // relay that was never created, and the server itself may be fine.
+    expect(devPreviewAffordanceText(preview({ status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: '' }))).toBe('Preview of :5173 is not running');
     expect(devPreviewAffordanceText(preview({ status: 'blocked', targetPort: 5173, message: '' }))).toContain('port 8080 is in use');
     expect(devPreviewAffordanceText(preview({ status: 'stopped', targetPort: 5173, stoppedAt: 'x', message: '' }))).toContain('switched off');
     expect(devPreviewAffordanceText(preview({ status: 'stale', targetPort: 5173, message: '' }))).toContain('started again');
@@ -47,5 +49,18 @@ describe('dev-preview copy', () => {
     expect(devPreviewAffordanceVerb(preview({ status: 'down', targetPort: 1, via: 'relay', error: null, repairable: true, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'blocked', targetPort: 1, message: '' }))).toBe('Details');
     expect(devPreviewAffordanceVerb(preview({ status: 'stale', targetPort: 1, message: '' }))).toBe('Details');
+  });
+});
+
+describe('needs-approval copy', () => {
+  it('names the port in the badge and the line, and never claims the preview is live', () => {
+    const state = { status: 'needs-approval' as const, targetPort: 9000, message: 'not shared yet' };
+    expect(devPreviewBadge(state)).toEqual({ label: 'Needs your OK · :9000', tone: 'secondary' });
+    expect(devPreviewAffordanceText(preview(state))).toBe('Dev server detected on :9000 — not shared yet');
+  });
+
+  it('states the audience per holder kind — the sentence that makes "share" mean something', () => {
+    expect(devPreviewApprovalAudience({ kind: 'env', id: 'e' })).toContain('drive');
+    expect(devPreviewApprovalAudience({ kind: 'workspace', id: 'w' })).toContain('session');
   });
 });

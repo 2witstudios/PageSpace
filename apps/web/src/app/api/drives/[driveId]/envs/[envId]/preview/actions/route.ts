@@ -35,7 +35,7 @@ export async function POST(request: Request, context: { params: Promise<{ driveI
     if (isAuthError(auth)) return auth.error;
 
     const action = readDevPreviewUserAction(await request.json().catch(() => null));
-    if (action === null) return NextResponse.json({ error: 'action must be "stop" or "resume"' }, { status: 400 });
+    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", or "approve" with the port shown' }, { status: 400 });
 
     const holder = { kind: 'env', id: envId } as const;
     // The ONE manage rule (`canManageDevPreview`), asked before any row is

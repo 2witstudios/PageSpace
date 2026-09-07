@@ -22,7 +22,8 @@ vi.mock('@/lib/auth/auth-fetch', async (importOriginal) => {
   };
 });
 const mockToastError = vi.hoisted(() => vi.fn());
-vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), success: vi.fn() } }));
+const mockToastInfo = vi.hoisted(() => vi.fn());
+vi.mock('sonner', () => ({ toast: { error: (...args: unknown[]) => mockToastError(...args), info: (...args: unknown[]) => mockToastInfo(...args), success: vi.fn() } }));
 
 import { DEV_PREVIEW_FRAME_SANDBOX, DevPreviewPane, buildFrameSrc } from '../DevPreviewPane';
 import { ApiRequestError } from '@/lib/auth/auth-fetch';
@@ -44,12 +45,15 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: OPEN.holder,
     canManage: true,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: true, holder: 'relay', pid: null, message: 'Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.' },
     openPath: OPEN.openPath,
     canOpen: true,
     canStop: true,
     canResume: false,
+    canApprove: false,
+    spriteInstanceId: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -171,6 +175,71 @@ describe('DevPreviewPane', () => {
     expect(screen.queryByTitle('Switch the preview off')).toBeNull();
   });
 
+  test('the Share control survives the frame having been armed — a live preview that MOVES to a new unlisted port can still be approved', async () => {
+    // `frameArmed` latches on the first openable answer and never clears, so
+    // the only Share control living in its `else` branch was unreachable for
+    // the whole life of the open. Approval is per PORT, so a preview that
+    // went live on 5173 and then moved to 9000 re-enters `needs-approval`
+    // with the frame still mounted — and the user could only Dismiss.
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      status = live({ spriteInstanceId: 'inst-live' });
+      act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+      renderPane();
+      // The frame arms here, and `frameArmed` never clears again.
+      await vi.waitFor(() => expect(screen.getByTestId('dev-preview-frame')).toBeInTheDocument());
+
+      // The SAME mount then sees the server move to an unapproved port.
+      status = live({
+        canOpen: false,
+        canApprove: true,
+        spriteInstanceId: 'inst-live',
+        state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(30_000); });
+      await vi.waitFor(() => expect(screen.getByTitle('Share port 9000')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByTitle('Share port 9000'));
+      await vi.waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'approve', port: 9000, spriteInstanceId: 'inst-live' }));
+    } finally {
+      vi.useRealTimers();
+    }
+
+  });
+
+  test('NEEDS APPROVAL: no frame, the audience is stated, and Share posts the PORT that was shown', async () => {
+    status = live({
+      canOpen: false,
+      canStop: true,
+      canResume: false,
+      canApprove: true,
+      spriteInstanceId: 'inst-live',
+      state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+    });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    // Nothing is served, so nothing is framed — the pane must not imply it is.
+    await screen.findByTestId('dev-preview-placeholder');
+    expect(screen.queryByTestId('dev-preview-frame')).toBeNull();
+    expect(screen.getByText('Needs your OK · :9000')).toBeInTheDocument();
+    // "Share" is meaningless without saying with whom.
+    expect(screen.getByText('Everyone with access to this drive will be able to open it.')).toBeInTheDocument();
+    // Stop is honest here: nothing is running to switch off.
+    expect(screen.getByTitle('Dismiss this preview')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByTitle('Share port 9000'));
+    // The instance travels with the port: both are echoed from what was rendered.
+    await waitFor(() => expect(mockPost).toHaveBeenCalledWith(ACTIONS_PATH, { action: 'approve', port: 9000, spriteInstanceId: 'inst-live' }));
+  });
+
+  test('a viewer who may not manage is offered NO way to share, however unshared the preview is', async () => {
+    status = live({ canManage: false, canOpen: false, canApprove: true, state: { status: 'needs-approval', targetPort: 9000, message: 'not shared' } });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTestId('dev-preview-placeholder');
+    expect(screen.queryByTitle('Share port 9000')).toBeNull();
+  });
+
   test('STARTING: the frame is up AND the status line explains the relay is coming up (the one time both show)', async () => {
     status = live({ state: { status: 'starting', targetPort: 5173, via: 'relay', message: 'Starting the preview relay for port 5173…' } });
     act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
@@ -178,6 +247,20 @@ describe('DevPreviewPane', () => {
     await screen.findByTestId('dev-preview-frame');
     expect(screen.getByTestId('dev-preview-status-line')).toHaveTextContent('Starting the preview relay for port 5173…');
     expect(screen.getByText('Starting · :5173')).toBeInTheDocument();
+  });
+
+  test('a DEFERRED action says so, rather than looking like it did nothing', async () => {
+    // The server answers 200 because the intent landed; only the relay start
+    // waits on a ports snapshot. Without a word the click looks inert while
+    // the pane still reads "not running".
+    mockPost.mockResolvedValueOnce({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
+    status = live({ canOpen: false, canStop: false, canResume: true, state: { status: 'down', targetPort: 5173, via: 'relay', error: null, repairable: true, message: 'The preview relay for port 5173 is not defined on this sandbox.' } });
+    act(() => useDevPreviewPaneStore.getState().openPreview(OPEN));
+    renderPane();
+    await screen.findByTitle('Restart the preview');
+    fireEvent.click(screen.getByTitle('Restart the preview'));
+    await waitFor(() => expect(mockToastInfo).toHaveBeenCalledWith('The preview will start shortly', expect.objectContaining({ description: expect.stringContaining('which ports are in use') })));
+    expect(mockToastError).not.toHaveBeenCalled();
   });
 
   test('a failed action toasts and still re-reads the status', async () => {

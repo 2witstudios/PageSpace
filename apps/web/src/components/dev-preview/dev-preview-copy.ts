@@ -25,6 +25,8 @@ export function devPreviewBadge(state: DevPreviewStateDTO): { label: string; ton
       return { label: 'Port 8080 in use', tone: 'destructive' };
     case 'stopped':
       return { label: `Off · :${state.targetPort}`, tone: 'outline' };
+    case 'needs-approval':
+      return { label: `Needs your OK · :${state.targetPort}`, tone: 'secondary' };
     case 'stale':
       return { label: 'Sandbox rebuilt', tone: 'outline' };
     case 'instance-unknown':
@@ -52,11 +54,17 @@ export function devPreviewAffordanceText(preview: DevPreviewStatusDTO): string |
     case 'starting':
       return `Dev server detected on :${state.targetPort}`;
     case 'down':
-      return `Dev server on :${state.targetPort} is not responding`;
+      // "not running", not "not responding": a `down` preview is as often a
+      // relay that was never created — the dev server itself may be perfectly
+      // healthy, and telling the user it is not responding sends them looking
+      // in the wrong place. The pane's status line carries the precise reason.
+      return `Preview of :${state.targetPort} is not running`;
     case 'blocked':
       return `Dev server on :${state.targetPort} — port 8080 is in use`;
     case 'stopped':
       return `Preview of :${state.targetPort} is switched off`;
+    case 'needs-approval':
+      return `Dev server detected on :${state.targetPort} — not shared yet`;
     case 'stale':
       return `Preview of :${state.targetPort} needs the dev server started again`;
     case 'instance-unknown':
@@ -81,4 +89,18 @@ export function devPreviewAffordanceVerb(preview: DevPreviewStatusDTO): 'Preview
 /** Whether the affordance should render at all for this status. */
 export function shouldShowDevPreviewAffordance(preview: DevPreviewStatusDTO | undefined): preview is DevPreviewStatusDTO {
   return preview !== undefined && devPreviewAffordanceText(preview) !== null;
+}
+
+/**
+ * WHO would be able to reach the preview once it is shared — the sentence the
+ * approval control is placed under, because "share" means nothing without it.
+ * An env's preview is viewable by every accepted member of the drive (the
+ * env routes' own GET bar); a session's is viewable by whoever may open that
+ * session. Neither is a guess: both restate the access decision the proxy
+ * enforces on every request.
+ */
+export function devPreviewApprovalAudience(holder: DevPreviewStatusDTO['holder']): string {
+  return holder.kind === 'env'
+    ? 'Everyone with access to this drive will be able to open it.'
+    : 'Anyone who can open this session will be able to open it.';
 }

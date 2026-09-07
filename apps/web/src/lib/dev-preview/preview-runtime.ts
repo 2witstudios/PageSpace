@@ -11,11 +11,15 @@
  */
 
 import { NextResponse } from 'next/server';
+import { loggers } from '@pagespace/lib/logging/logger-config';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { isDevPreviewEnabled, resolveDevPreviewApex } from '@pagespace/lib/services/sandbox/preview/dev-preview-env';
 import { createDbDevPreviewStore, type DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
+import { createDevPreviewLock, DEV_PREVIEW_USER_ACTION_RETRIES, type DevPreviewLock } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
+import { reconcileStoppedDevPreviews, type DevPreviewReconcileRun } from '@pagespace/lib/services/sandbox/preview/dev-preview-reconcile';
 import { createDbDevPreviewGrantsStore, type DevPreviewGrantsStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-grants-store';
 import {
   authorizePreviewHolder,
@@ -44,6 +48,19 @@ import { getDriveEnvStore, resolveDriveEnvPayer } from '@/lib/drive-envs/drive-e
 import { readDevPreviewListeners } from './listeners-source';
 
 let previewStore: DevPreviewStore | null = null;
+let previewLock: DevPreviewLock | null = null;
+
+/**
+ * The user-action lock, bound lazily — building it resolves the advisory-lock
+ * pool, and this module is imported by routes that never take a lock. The
+ * retry budget is human-latency shaped: a click contends with at most a
+ * handful of control-plane calls, so it almost always acquires, and past the
+ * budget the action records the intent and defers the relay work.
+ */
+function getPreviewLock(): DevPreviewLock {
+  previewLock ??= createDevPreviewLock({ retries: DEV_PREVIEW_USER_ACTION_RETRIES, log: loggers.realtime });
+  return previewLock;
+}
 let grantsStore: DevPreviewGrantsStore | null = null;
 
 function getPreviewStore(): DevPreviewStore {
@@ -91,6 +108,7 @@ function buildPreviewAccessDeps(): PreviewAccessDeps {
       return payer ? { payerId: payer.payerId } : null;
     },
     canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
+    isSessionUsable: ({ sessionId, userId }) => sessionService.isSessionUsableById(sessionId, userId),
     attach: async (sandboxId) => {
       const host = await createRequestScopedSandboxHost();
       return host.attach({ sandboxId }).catch(() => null);
@@ -101,9 +119,9 @@ function buildPreviewAccessDeps(): PreviewAccessDeps {
   };
 }
 
-/** The whole gather for one proxied request. */
-export function resolvePreviewTargetForRequest(holder: DevPreviewHolderRef, userId: string): Promise<PreviewTarget> {
-  return resolvePreviewTarget({ holder, userId, deps: buildPreviewAccessDeps() });
+/** The whole gather for one proxied request. `sessionId` comes from the cookie's claims. */
+export function resolvePreviewTargetForRequest(holder: DevPreviewHolderRef, userId: string, sessionId: string): Promise<PreviewTarget> {
+  return resolvePreviewTarget({ holder, userId, sessionId, deps: buildPreviewAccessDeps() });
 }
 
 /**
@@ -167,18 +185,21 @@ export async function openPreviewForUser({
   authorizeAs,
   mintFor = authorizeAs,
   userId,
+  sessionId,
 }: {
   /** The holder whose access decision governs — the session the user came through, or the env. */
   authorizeAs: DevPreviewHolderRef;
   /** The holder whose preview origin the grant opens — the env for an env-bound session (the holder rule). */
   mintFor?: DevPreviewHolderRef;
   userId: string;
+  /** The session doing the opening; carried into the grant and the cookie so revoking it cuts the preview. */
+  sessionId: string;
 }): Promise<OpenPreviewResult> {
   const apex = isDevPreviewEnabled() ? resolveDevPreviewApex() : null;
   if (apex === null) return { ok: false, reason: 'not-configured' };
   const authorization: PreviewAuthorization = await authorizePreviewHolder({ holder: authorizeAs, userId, deps: buildPreviewAccessDeps() });
   if (!authorization.allowed) return { ok: false, reason: 'not-authorized', detail: authorization.reason };
-  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, now: new Date() });
+  const grant = await getPreviewGrantsStore().mint({ holder: mintFor, userId, sessionId, now: new Date() });
   return { ok: true, redirectTo: buildPreviewAuthRedirect(buildPreviewHost(mintFor, apex), grant.id) };
 }
 
@@ -230,6 +251,27 @@ export function applyDevPreviewUserActionForHolder({
     action,
     userId,
     wakeSubject,
-    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, now: deps.now },
+    deps: { previewStore: deps.previewStore, attach: deps.attach, readListeners: readDevPreviewListeners, canRunCode: deps.canRunCode, lock: getPreviewLock(), now: deps.now },
+  });
+}
+
+/**
+ * The backstop sweep, bound to the real store, host and lock — see
+ * `dev-preview-reconcile.ts` for why it exists and why it can only ever stop
+ * a relay, never start one. The lock takes NO retries here: busy means a live
+ * path already owns the holder and is doing the same work.
+ */
+export function reconcileStoppedDevPreviewsForCron(): Promise<DevPreviewReconcileRun> {
+  const deps = buildPreviewAccessDeps();
+  const store = deps.previewStore;
+  return reconcileStoppedDevPreviews({
+    findStoppedWithRelay: ({ staleAfterMs, limit }) => store.findStoppedWithRelay({ staleAfterMs, limit, now: new Date() }),
+    markSwept: (holder) => store.markSwept(holder),
+    attach: deps.attach,
+    previewStore: store,
+    lock: createDevPreviewLock({ retries: [], log: loggers.realtime }),
+    featureEnabled: isDevPreviewEnabled,
+    now: deps.now,
+    log: loggers.realtime,
   });
 }

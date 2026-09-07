@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { createHmac } from 'node:crypto';
 import { assert } from '../../__tests__/riteway';
 import {
   PREVIEW_COOKIE_NAME,
@@ -80,7 +81,7 @@ describe('preview hosts', () => {
 });
 
 describe('the cookie token', () => {
-  const claims = { holder: { kind: 'workspace' as const, id: 'ws1' }, userId: 'u1', expiresAt: NOW.getTime() + 60_000 };
+  const claims = { holder: { kind: 'workspace' as const, id: 'ws1' }, userId: 'u1', sessionId: 'sess1', expiresAt: NOW.getTime() + 60_000 };
 
   it('round-trips under the same key', () => {
     const token = signPreviewCookie(claims, KEY);
@@ -95,7 +96,7 @@ describe('the cookie token', () => {
   it('rejects a payload edit (holder swap) even with the original signature', () => {
     const token = signPreviewCookie(claims, KEY);
     const [v, , sig] = token.split('.');
-    const swapped = Buffer.from(JSON.stringify({ k: 'workspace', h: 'ws2', u: 'u1', e: claims.expiresAt })).toString('base64url');
+    const swapped = Buffer.from(JSON.stringify({ k: 'workspace', h: 'ws2', u: 'u1', s: 'sess1', e: claims.expiresAt })).toString('base64url');
     assert({ given: 'a swapped holder', should: 'bad-signature', actual: verifyPreviewCookie(`${v}.${swapped}.${sig}`, KEY, NOW), expected: { ok: false, reason: 'bad-signature' } });
   });
 
@@ -107,6 +108,38 @@ describe('the cookie token', () => {
   it.each(['', 'v1', 'v0.a.b', 'v1.!!.??', 'v1.a.b.c'])('rejects malformed %s', (token) => {
     const result = verifyPreviewCookie(token, KEY, NOW);
     assert({ given: token, should: 'not verify', actual: result.ok, expected: false });
+  });
+
+  it('carries the SESSION, and refuses a payload that omits or malforms it', () => {
+    // A cookie with no session id is a v1 cookie: it would authenticate a
+    // person with nothing to revoke. It must not verify.
+    const signed = signPreviewCookie(claims, KEY);
+    expect(signed.startsWith('v2.')).toBe(true);
+    const result = verifyPreviewCookie(signed, KEY, NOW);
+    assert({ given: 'a v2 cookie', should: 'carry the minting session', actual: result.ok && result.claims.sessionId, expected: 'sess1' });
+
+    // Re-signed OVER THE MODIFIED BODY, which is the whole point: reusing the
+    // original signature would make every case below fail on `bad-signature`
+    // before the claim check ran, and the assertion would pass without testing
+    // anything. The MAC covers `v2.<payload>`, matching `signPreviewCookie`.
+    const resign = (payload: Record<string, unknown>) => {
+      const body = Buffer.from(JSON.stringify(payload)).toString('base64url');
+      const sig = createHmac('sha256', KEY).update(`v2.${body}`).digest().toString('base64url');
+      return { body, sig };
+    };
+    for (const payload of [
+      { k: 'workspace', h: 'ws1', u: 'u1', e: claims.expiresAt },
+      { k: 'workspace', h: 'ws1', u: 'u1', s: '', e: claims.expiresAt },
+      { k: 'workspace', h: 'ws1', u: 'u1', s: 42, e: claims.expiresAt },
+    ]) {
+      const { body, sig } = resign(payload);
+      assert({ given: JSON.stringify(payload), should: 'not verify', actual: verifyPreviewCookie(`v2.${body}.${sig}`, KEY, NOW).ok, expected: false });
+    }
+  });
+
+  it('treats a v1 cookie as malformed, which routes to the silent re-handshake', () => {
+    const [, body, sig] = signPreviewCookie(claims, KEY).split('.');
+    assert({ given: 'a v1-versioned token', should: 'be malformed, never accepted', actual: verifyPreviewCookie(`v1.${body}.${sig}`, KEY, NOW), expected: { ok: false, reason: 'malformed' } });
   });
 
   it('never verifies with an empty key, and never signs with one', () => {

@@ -55,7 +55,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { ExternalLink, Play, RefreshCw, Square, X } from 'lucide-react';
+import { ExternalLink, Play, RefreshCw, Share2, Square, X } from 'lucide-react';
 import { toast } from 'sonner';
 
 import { Badge } from '@/components/ui/badge';
@@ -64,9 +64,12 @@ import { ApiRequestError, post } from '@/lib/auth/auth-fetch';
 import { isDevPreviewReauthMessageFor } from '@pagespace/lib/services/sandbox/preview/dev-preview-contract';
 import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapability';
 import { devPreviewActionsPath, useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
+// Type-only, so nothing from that module reaches the browser bundle.
+import type { DevPreviewUserAction } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingSession } from '@/stores/useEditingSession';
-import { devPreviewBadge } from './dev-preview-copy';
+import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
+import { devPreviewApprovalAudience, devPreviewBadge } from './dev-preview-copy';
 
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
 const PANE_POLL_MS = 5_000;
@@ -150,14 +153,38 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
   }, [open.holder, reload]);
 
   const runAction = useCallback(
-    async (action: 'stop' | 'resume') => {
+    // The SERVER's own action type, not a client-side lookalike: the route's
+    // body parser produces exactly this shape, so one union spans the wire.
+    async (action: DevPreviewUserAction) => {
       setActioning(true);
+      // The approve body ECHOES the port the user was just shown; the server
+      // refuses it with a 409 if the dev server has moved since, rather than
+      // sharing whatever is running now.
+      const body = action.kind === 'approve'
+        ? { action: 'approve', port: action.port, spriteInstanceId: action.spriteInstanceId }
+        : { action: action.kind };
       try {
-        await post(devPreviewActionsPath(open.statusPath), { action });
+        // A DEFERRED action succeeded — the stop was cleared, the consent
+        // recorded — but the relay start is still waiting on something, which
+        // can take a poll or two. Saying so beats silence: without this the
+        // click looks like it did nothing while the pane still reads "not
+        // running". ANY marker is worth a word; the two we send differ only
+        // in what is being waited on, so the sentence names it rather than
+        // asserting the wrong cause.
+        const answer = await post<{ deferred?: string }>(devPreviewActionsPath(open.statusPath), body);
+        if (answer?.deferred !== undefined) {
+          toast.info('The preview will start shortly', {
+            description: answer.deferred === 'awaiting-reconcile'
+              ? 'Another change to this preview is being applied first.'
+              : 'Waiting for the sandbox to report which ports are in use.',
+          });
+        }
       } catch (actionError) {
-        toast.error(action === 'stop' ? 'Could not switch the preview off' : 'Could not switch the preview on', {
-          description: actionError instanceof Error ? actionError.message : 'Please try again.',
-        });
+        const failure =
+          action.kind === 'stop' ? 'Could not switch the preview off'
+          : action.kind === 'resume' ? 'Could not switch the preview on'
+          : 'Could not share the preview';
+        toast.error(failure, { description: actionError instanceof Error ? actionError.message : 'Please try again.' });
       } finally {
         setActioning(false);
         mutate();
@@ -206,9 +233,19 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
             </a>
           </Button>
           {preview?.canManage && preview.canStop && (
-            <Button variant="ghost" size="sm" className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground" disabled={actioning} onClick={() => void runAction('stop')} title="Switch the preview off">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
+              disabled={actioning}
+              onClick={() => void runAction({ kind: 'stop' })}
+              // Nothing is being served while a decision is pending, so "Stop"
+              // would name an act that has not happened. The same write does
+              // the honest thing: put the offer away.
+              title={preview.state.status === 'needs-approval' ? 'Dismiss this preview' : 'Switch the preview off'}
+            >
               <Square className="size-3.5" aria-hidden="true" />
-              Stop
+              {preview.state.status === 'needs-approval' ? 'Dismiss' : 'Stop'}
             </Button>
           )}
           {preview?.canManage && preview.canResume && (
@@ -220,7 +257,7 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
               size="sm"
               className="h-7 gap-1 px-2 text-muted-foreground hover:text-foreground"
               disabled={actioning}
-              onClick={() => void runAction('resume')}
+              onClick={() => void runAction({ kind: 'resume' })}
               title={preview.state.status === 'stopped' ? 'Switch the preview back on' : 'Restart the preview'}
             >
               <Play className="size-3.5" aria-hidden="true" />
@@ -236,6 +273,24 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
 
       <DevPreviewStatusLine preview={preview} frameMounted={frameArmed} />
 
+      {/*
+        The decision has to stay reachable AFTER the frame has been armed.
+        `frameArmed` latches on the first openable answer and never clears, so
+        putting the only Share control in its `else` branch meant a preview
+        that went live and then moved to a NEW unlisted port — approval is
+        recorded per port, so the new one is unapproved — re-entered
+        `needs-approval` with no way to say yes: the frame was still mounted,
+        and the user's only options were Dismiss or closing the pane. The
+        control renders above the frame in that state instead, so it does not
+        depend on how the pane happened to open.
+      */}
+      {frameArmed && preview?.canManage && preview.canApprove && preview.state.status === 'needs-approval' && (
+        <div className="flex shrink-0 flex-col items-center gap-2 border-b border-border px-3 py-3 text-center text-xs text-muted-foreground">
+          <p className="max-w-sm">{preview.state.message}</p>
+          <ApprovalControl port={preview.state.targetPort} spriteInstanceId={preview.spriteInstanceId} holder={preview.holder} disabled={actioning} onShare={runAction} />
+        </div>
+      )}
+
       {frameArmed ? (
         <iframe
           key={frameSrc}
@@ -248,11 +303,51 @@ function OpenDevPreviewPane({ open }: { open: OpenDevPreview }) {
           data-testid="dev-preview-frame"
         />
       ) : (
-        <div className="flex min-h-0 flex-1 items-center justify-center p-6 text-center text-xs text-muted-foreground" data-testid="dev-preview-placeholder">
-          {preview ? preview.state.message : 'Loading preview status…'}
+        <div className="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-xs text-muted-foreground" data-testid="dev-preview-placeholder">
+          <p className="max-w-sm">{preview ? preview.state.message : 'Loading preview status…'}</p>
+          {preview?.canManage && preview.canApprove && preview.state.status === 'needs-approval' && (
+            // The decision lives HERE and not on the affordance row: this is
+            // the surface that can state who would be able to see it, and
+            // sharing something should not be a one-click side effect of a
+            // line in a list. The port comes off the NARROWED state, so the
+            // button's label and the request it sends cannot name different
+            // ports.
+            <ApprovalControl port={preview.state.targetPort} spriteInstanceId={preview.spriteInstanceId} holder={preview.holder} disabled={actioning} onShare={runAction} />
+          )}
         </div>
       )}
     </aside>
+  );
+}
+
+/**
+ * The one explicit act that turns a detected port into a shared one, under the
+ * sentence that says who would then be able to reach it. Split out so the port
+ * is bound ONCE, where the state was narrowed.
+ */
+function ApprovalControl({
+  port,
+  spriteInstanceId,
+  holder,
+  disabled,
+  onShare,
+}: {
+  port: number;
+  /** Null only when nothing is attached, in which case there is nothing to share. */
+  spriteInstanceId: string | null;
+  holder: DevPreviewStatusDTO['holder'];
+  disabled: boolean;
+  onShare: (action: DevPreviewUserAction) => void;
+}) {
+  if (spriteInstanceId === null) return null;
+  return (
+    <>
+      <p className="max-w-sm">{devPreviewApprovalAudience(holder)}</p>
+      <Button size="sm" className="h-7 gap-1 px-3" disabled={disabled} onClick={() => onShare({ kind: 'approve', port, spriteInstanceId })} title={`Share port ${port}`}>
+        <Share2 className="size-3.5" aria-hidden="true" />
+        Share :{port}
+      </Button>
+    </>
   );
 }
 
@@ -273,12 +368,18 @@ function DevPreviewStatusLine({ preview, frameMounted }: { preview: DevPreviewSt
   // for a held slot is the core's, carried by the `blocked` state's message.
   // A direct row's own server on 8080 is not worth a line.
   const showSlot = preview.slot.known && preview.slot.holder === 'user-process' && !(preview.state.status === 'live' && preview.state.via === 'direct');
-  if (!showState && !showSlot) return null;
+  // Nothing is watching this sandbox's ports, so what is shown may lag. Said
+  // only for a LIVE sandbox: with none attached there is nothing to detect,
+  // and the state message already says that. `'arming'` says nothing — it
+  // resolves within a poll, and a flicker on every first render is noise.
+  const showDetection = preview.detection === 'unavailable' && preview.sandbox === 'attached';
+  if (!showState && !showSlot && !showDetection) return null;
   const tone = preview.state.status === 'blocked' ? 'text-destructive' : 'text-muted-foreground';
   return (
     <div className={`shrink-0 space-y-0.5 border-b border-border px-2 py-1 text-xs ${tone}`} data-testid="dev-preview-status-line">
       {showState && <div>{preview.state.message}</div>}
       {showSlot && preview.slot.known && <div>{preview.slot.message}</div>}
+      {showDetection && <div>{DETECTION_UNAVAILABLE_MESSAGE}</div>}
     </div>
   );
 }

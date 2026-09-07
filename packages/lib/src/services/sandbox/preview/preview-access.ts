@@ -66,6 +66,12 @@ export interface PreviewAccessDeps {
   resolveDrivePayer(driveId: string): Promise<{ payerId: string } | null>;
   /** The centralized code-execution gate — consulted ONLY when a forward would be a wake. */
   canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
+  /**
+   * Is the PageSpace session that minted this preview's cookie still usable?
+   * The preview origin holds a signed cookie naming the session, never the
+   * session's token, so this is the only way revocation can reach it.
+   */
+  isSessionUsable(input: { sessionId: string; userId: string }): Promise<boolean>;
   /** A control-plane attach to the holder's sprite; null when the platform no longer has it. Must not wake. */
   attach(sandboxId: string): Promise<SandboxHandle | null>;
   previewStore: DevPreviewStore;
@@ -164,21 +170,48 @@ export type PreviewTarget =
 export async function resolvePreviewTarget({
   holder,
   userId,
+  sessionId,
   deps,
 }: {
   holder: DevPreviewHolderRef;
   userId: string;
+  /**
+   * The session that minted the cookie this request carries. REQUIRED, so
+   * neither tier can forget to pass it and still compile — this function is
+   * the one place both proxy entry points funnel through, which is why the
+   * check lives here rather than in each of them.
+   */
+  sessionId: string;
   deps: PreviewAccessDeps;
 }): Promise<PreviewTarget> {
   const featureEnabled = deps.featureEnabled();
+  // A dark deployment answers first and asks nothing of anyone: no session
+  // query, no row read. `decidePreviewForward` owns the copy and the status
+  // so the two proxy tiers cannot drift from the gate.
+  if (!featureEnabled) {
+    const authorization: PreviewAuthorization = { allowed: false, reason: 'feature-disabled' };
+    const decision = decidePreviewForward({ featureEnabled, authz: authorization, state: null, power: null, wakeAuthorization: 'not-consulted' });
+    return { decision: decision as Extract<PreviewForwardDecision, { kind: 'refuse' }>, authorization };
+  }
+
+  // THE SESSION MUST STILL BE USABLE, and this is checked BEFORE the holder is
+  // even looked up — the preview cookie names a session, never carries its
+  // token, so this is the only path revocation has to a live preview. Placing
+  // it here preserves this module's order property in its strongest form: a
+  // request from a killed session causes no holder read, no `getSprite` and
+  // certainly no wake. Signing out, revoking a device, or a `tokenVersion`
+  // bump therefore cuts the preview on its very next request rather than
+  // whenever the cookie happens to expire. Opaque refusal, like every other
+  // denial in this family.
+  if (!(await deps.isSessionUsable({ sessionId, userId }))) {
+    return {
+      decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' },
+      authorization: { allowed: false, reason: 'session_revoked' },
+    };
+  }
+
   const authorization = await authorizePreviewHolder({ holder, userId, deps });
   const authz: PreviewAuthz = authorization.allowed ? { allowed: true } : authorization;
-
-  // A refused user, or a dark feature, gets its answer from rows alone.
-  const early = decidePreviewForward({ featureEnabled, authz, state: null, power: null, wakeAuthorization: 'not-consulted' });
-  if (early.kind === 'refuse' && (early.reason === 'feature-disabled' || early.reason === 'not-authorized')) {
-    return { decision: early, authorization };
-  }
   if (!authorization.allowed) return { decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: authorization.reason }, authorization };
 
   const handle = authorization.sandboxId === null ? null : await deps.attach(authorization.sandboxId);

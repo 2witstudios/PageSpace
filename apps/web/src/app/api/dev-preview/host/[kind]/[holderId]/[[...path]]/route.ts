@@ -142,7 +142,9 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
       });
       return NextResponse.json({ error: 'This preview link has expired. Reopen the preview from PageSpace.' }, { status: 403, headers: { 'cache-control': 'no-store' } });
     }
-    const cookie = signPreviewCookie({ holder, userId: consumed.userId, expiresAt: consumed.cookieExpiresAt.getTime() }, cookieKey);
+    // The grant carries the session that opened it; the cookie carries it on,
+    // so revoking that session cuts this preview on its very next request.
+    const cookie = signPreviewCookie({ holder, userId: consumed.userId, sessionId: consumed.sessionId, expiresAt: consumed.cookieExpiresAt.getTime() }, cookieKey);
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId: consumed.userId, holder, method: 'GET', path, outcome: 'forwarded', reason: 'grant-redeemed', status: 302, transport: 'http' }));
     return new NextResponse(null, {
       status: 302,
@@ -182,10 +184,10 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
     }
     return NextResponse.json({ error: 'Preview session expired. Reopen the preview from PageSpace.', reason }, { status: 401, headers: { 'set-cookie': buildClearPreviewCookieHeader(), 'cache-control': 'no-store' } });
   }
-  const userId = verified.claims.userId;
+  const { userId, sessionId } = verified.claims;
 
   // ---- authorize + decide, per request ---------------------------------------
-  const target = await resolvePreviewTargetForRequest(holder, userId);
+  const target = await resolvePreviewTargetForRequest(holder, userId, sessionId);
   if (!('spriteUrl' in target)) {
     const { reason, status, message, detail } = target.decision;
     if (reason === 'not-authorized' || reason === 'wake-denied') {
@@ -199,8 +201,39 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
       });
     }
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId, holder, method: request.method, path, outcome: 'refused', reason, status, durationMs: Date.now() - startedAt, transport: 'http' }));
+
+    // A DEAD SESSION IS A RE-AUTH, NOT A DEAD END. The cookie is well-formed
+    // and correctly signed; the session it names is simply gone — and the
+    // commonest way for that to happen is not a sign-out but a ROTATION: a
+    // device refresh mints a replacement session row and grace-expires the
+    // old one, which fires on a desktop unlock, an app foregrounding, any
+    // 401. The user is still signed in, on a page that still works, and
+    // without this the frame would sit on `404 {"error":"Not found"}` for the
+    // rest of the cookie's life while the dashboard around it reports the
+    // preview healthy. So the stale cookie is cleared and the same re-auth
+    // path a missing cookie takes is served: framed, it asks the dashboard to
+    // re-point at `/preview/open`, which mints a grant from the session the
+    // user actually has now. Refused subresources clear the cookie too, so
+    // the frame's next navigation re-auths rather than accumulating 404s.
+    const staleSession = detail === 'session_revoked';
+    if (staleSession && isNavigation(request)) {
+      const [appOrigin, openPath] = [resolveAppOrigin(), await resolvePreviewOpenPath(holder)];
+      if (appOrigin !== null && openPath !== null) {
+        return new NextResponse(buildReauthPage({ appOrigin, openPath, holder }), {
+          status: 401,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': `default-src 'none'; script-src '${REAUTH_SCRIPT_HASH}'; frame-ancestors ${appOrigin}`,
+            'set-cookie': buildClearPreviewCookieHeader(),
+            'cache-control': 'no-store',
+          },
+        });
+      }
+    }
+
     const headers: Record<string, string> = { 'cache-control': 'no-store' };
     if (status === 503) headers['retry-after'] = '2';
+    if (staleSession) headers['set-cookie'] = buildClearPreviewCookieHeader();
     return NextResponse.json({ error: message, reason }, { status, headers });
   }
 

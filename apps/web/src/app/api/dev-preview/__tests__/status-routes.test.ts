@@ -137,7 +137,7 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, applied: { action: 'stop-relay', relayServiceName: 'pagespace-preview-relay' } });
     expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, userId: 'u1' });
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: 'stop', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'stop' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceType: 'dev_preview', details: expect.objectContaining({ action: 'stop', applied: 'stop-relay' }) }));
   });
 
@@ -160,7 +160,39 @@ describe('POST /api/agent-workspaces/[workspaceId]/preview/actions', () => {
 
     vi.mocked(isPrincipalDriveOwnerOrAdmin).mockResolvedValueOnce(true);
     expect((await sessionAction(post({ action: 'resume' }), wsCtx)).status).toBe(200);
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+  });
+
+  it('a DEFERRED relay is a success, not a toast: the intent landed and only the start waits', async () => {
+    // `post()` throws on any 4xx, so answering `slot-unknown` with a 409 made
+    // the pane say "Could not switch the preview on" over a click that had
+    // already cleared the stop. It is the same shape as a contended lock,
+    // which is reported as a success.
+    vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'slot-unknown' });
+    const res = await sessionAction(post({ action: 'resume' }), wsCtx);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true, applied: null, deferred: 'awaiting-port-snapshot' });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      eventType: 'data.write',
+      details: expect.objectContaining({ deferred: 'awaiting-port-snapshot' }),
+    }));
+  });
+
+  it('APPROVE carries the port through, and a port that moved answers 409 rather than sharing the wrong thing', async () => {
+    const res = await sessionAction(post({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' }), wsCtx);
+    expect(res.status).toBe(200);
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'workspace', id: 'ws1' }, action: { kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+    expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', details: expect.objectContaining({ action: 'approve', port: 9000 }) }));
+
+    // A body with no port is not an approve at all — 400 before anything runs.
+    vi.mocked(applyDevPreviewUserActionForHolder).mockClear();
+    expect((await sessionAction(post({ action: 'approve' }), wsCtx)).status).toBe(400);
+    expect(applyDevPreviewUserActionForHolder).not.toHaveBeenCalled();
+
+    vi.mocked(applyDevPreviewUserActionForHolder).mockResolvedValueOnce({ ok: false, reason: 'port-changed' });
+    const moved = await sessionAction(post({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' }), wsCtx);
+    expect(moved.status).toBe(409);
+    expect(await moved.json()).toMatchObject({ reason: 'port-changed' });
   });
 
   it('BILLING: a resume the wake gate refuses is a 403 with the gate reason, audited', async () => {
@@ -239,7 +271,7 @@ describe('POST /api/drives/[driveId]/envs/[envId]/preview/actions', () => {
     const res = await envAction(post({ action: 'resume' }), envCtx);
     expect(res.status).toBe(200);
     expect(authorizePreviewHolderForUser).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, userId: 'u1' });
-    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: 'resume', userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
+    expect(applyDevPreviewUserActionForHolder).toHaveBeenCalledWith({ holder: { kind: 'env', id: 'env1' }, action: { kind: 'resume' }, userId: 'u1', wakeSubject: { driveId: 'd1', ownerId: 'o' } });
     expect(auditRequest).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ eventType: 'data.write', resourceId: 'env:env1', details: expect.objectContaining({ action: 'resume' }) }));
   });
 

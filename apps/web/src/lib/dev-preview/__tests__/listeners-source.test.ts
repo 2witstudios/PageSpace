@@ -31,10 +31,10 @@ afterEach(() => {
 
 describe('readDevPreviewListeners', () => {
   it('POSTs the holder, signed, to the listeners route with redirect: error and a timeout, and returns the cleaned snapshot', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 'x' }, { port: 1, pid: 'y' }] })));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 'x' }, { port: 1, pid: 'y' }] })));
     const result = await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch);
     // Parsed with the watch channel's own reader: a non-integer pid is dropped, the port is kept; a non-integer port is dropped.
-    expect(result).toEqual([{ port: 5173, pid: 3 }, { port: 8080 }, { port: 1 }]);
+    expect(result).toEqual({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 1 }] });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://realtime.internal:3001/api/dev-preview/listeners');
     expect(init.method).toBe('POST');
@@ -44,26 +44,47 @@ describe('readDevPreviewListeners', () => {
     expect((init.headers as Record<string, string>)['X-Broadcast-Signature']).toMatch(/^sig:/);
   });
 
-  it('answers null (honest unknown) for: realtime says null, a non-array, a non-2xx, a network failure (logged), a dark feature, no realtime URL', async () => {
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: null }))) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: 'nope' }))) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch)).toBeNull();
+  it('answers "unknown, and nothing is watching" for every failure: a non-array, a bogus detection, a non-2xx, a network failure (logged), a dark feature, no realtime URL', async () => {
+    const UNKNOWN = { detection: 'unavailable', listeners: null };
+    // A null snapshot from a WATCHING realtime keeps that fact: the ports are
+    // unknown, but detection IS running — a different sentence for the UI.
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ detection: 'watching', listeners: null }))) as unknown as typeof fetch)).toEqual({ detection: 'watching', listeners: null });
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: 'nope' }))) as unknown as typeof fetch)).toEqual(UNKNOWN);
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ detection: 'bogus', listeners: [] }))) as unknown as typeof fetch)).toEqual({ detection: 'unavailable', listeners: [] });
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch)).toEqual(UNKNOWN);
+    expect(await readDevPreviewListeners(HOLDER, (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch)).toEqual(UNKNOWN);
     expect(loggers.realtime.warn).toHaveBeenCalledWith('dev-preview: listeners read failed', expect.objectContaining({ error: 'ECONNREFUSED' }));
 
     const fetchImpl = vi.fn();
     vi.mocked(isDevPreviewConfigured).mockReturnValueOnce(false);
-    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toEqual(UNKNOWN);
     delete process.env.INTERNAL_REALTIME_URL;
-    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toEqual(UNKNOWN);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 
 describe('readDevPreviewUserAction', () => {
-  it('accepts exactly stop / resume', () => {
-    expect(readDevPreviewUserAction({ action: 'stop' })).toBe('stop');
-    expect(readDevPreviewUserAction({ action: 'resume' })).toBe('resume');
+  it('accepts exactly stop / resume / approve-with-a-port', () => {
+    expect(readDevPreviewUserAction({ action: 'stop' })).toEqual({ kind: 'stop' });
+    expect(readDevPreviewUserAction({ action: 'resume' })).toEqual({ kind: 'resume' });
+    expect(readDevPreviewUserAction({ action: 'approve', port: 9000, spriteInstanceId: 'inst-1' })).toEqual({ kind: 'approve', port: 9000, spriteInstanceId: 'inst-1' });
     for (const bad of [{ action: 'start' }, {}, null, 'stop', 7, { action: 1 }]) expect(readDevPreviewUserAction(bad)).toBeNull();
+    // The ECHOED PORT is what binds the click to the port on screen, so a
+    // missing or nonsensical one is not an approve at all — never a default.
+    for (const bad of [
+      { action: 'approve' },
+      { action: 'approve', port: '9000', spriteInstanceId: 'i' },
+      { action: 'approve', port: 0, spriteInstanceId: 'i' },
+      { action: 'approve', port: 65536, spriteInstanceId: 'i' },
+      { action: 'approve', port: 90.5, spriteInstanceId: 'i' },
+      { action: 'approve', port: null, spriteInstanceId: 'i' },
+      // The INSTANCE is as required as the port — an approve without it is not
+      // bound to the sandbox the user was looking at.
+      { action: 'approve', port: 9000 },
+      { action: 'approve', port: 9000, spriteInstanceId: '' },
+      { action: 'approve', port: 9000, spriteInstanceId: 42 },
+      { action: 'approve', port: 9000, spriteInstanceId: 'x'.repeat(201) },
+    ]) expect(readDevPreviewUserAction(bad)).toBeNull();
   });
 });

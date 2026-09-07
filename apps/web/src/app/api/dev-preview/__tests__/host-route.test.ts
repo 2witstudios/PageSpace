@@ -45,7 +45,7 @@ const HOLDER: Holder = { kind: 'env', id: 'env1' };
 const consume = vi.fn();
 
 function cookie(holder: Holder = HOLDER, expiresAt = Date.now() + 60_000): string {
-  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', expiresAt }, KEY)}`;
+  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', sessionId: 'sess1', expiresAt }, KEY)}`;
 }
 
 function req(path: string, init: { host?: string; method?: string; body?: string; headers?: Record<string, string> } = {}): NextRequest {
@@ -84,12 +84,12 @@ describe('the host must be a preview host naming the holder in the path', () => 
 describe('the handshake: /__pagespace/auth', () => {
   it('consumes the grant, installs the host-only cookie, and redirects to /', async () => {
     const cookieExpiresAt = new Date(Date.now() + 3600_000);
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt });
     const res = await GET(req('/__pagespace/auth?grant=g1'), ctx());
     expect(res.status).toBe(302);
     expect(res.headers.get('location')).toBe('/');
     const set = res.headers.get('set-cookie') ?? '';
-    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v1\\.`));
+    expect(set).toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=v2\\.`));
     expect(set).toContain('Secure; HttpOnly; SameSite=None; Partitioned');
     expect(set).not.toMatch(/domain=/i);
     expect(consume).toHaveBeenCalledWith({ id: 'g1', now: expect.any(Date) });
@@ -98,7 +98,7 @@ describe('the handshake: /__pagespace/auth', () => {
   it('refuses an unknown/used grant and a grant minted for another host, and audits both', async () => {
     consume.mockResolvedValueOnce(null);
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(403);
-    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', cookieExpiresAt: new Date() });
+    consume.mockResolvedValueOnce({ holder: { kind: 'env', id: 'env2' }, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date() });
     expect((await GET(req('/__pagespace/auth?grant=g2'), ctx())).status).toBe(403);
     expect(vi.mocked(auditRequest).mock.calls.map((c) => (c[1].details as { reason: string }).reason)).toEqual(['grant-invalid', 'grant-holder-mismatch']);
   });
@@ -111,7 +111,7 @@ describe('the handshake: /__pagespace/auth', () => {
 
   it('answers 503 when the cookie key is not configured — BEFORE consuming the single-use grant', async () => {
     vi.mocked(getPreviewCookieKey).mockReturnValue(Buffer.alloc(0));
-    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', cookieExpiresAt: new Date(Date.now() + 1000) });
+    consume.mockResolvedValue({ holder: HOLDER, userId: 'u1', sessionId: 'sess1', cookieExpiresAt: new Date(Date.now() + 1000) });
     expect((await GET(req('/__pagespace/auth?grant=g1'), ctx())).status).toBe(503);
     expect(consume).not.toHaveBeenCalled();
   });
@@ -189,8 +189,43 @@ describe('authorize + decide, per request', () => {
     const res = await POST(req('/api/items?x=%2F', { method: 'POST', body: 'b', headers: { cookie: cookie(), 'content-type': 'text/plain' } }), ctx());
     expect(res).toBe(upstream);
     expect(forwardPreviewRequest).toHaveBeenCalledWith(expect.objectContaining({ pathAndQuery: '/api/items?x=%2F', spriteUrl: 'https://ps-x-org.sprites.app', token: 'org-token', appOrigin: 'https://app.pagespace.ai' }));
-    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1');
+    // The SESSION travels grant → cookie → gather; without it revocation could
+    // not reach a live preview at all.
+    expect(resolvePreviewTargetForRequest).toHaveBeenCalledWith(HOLDER, 'u1', 'sess1');
     expect(loggers.security.info).toHaveBeenCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', status: 201, wake: true, method: 'POST', path: '/api/items' }));
+  });
+
+  it('a session that is GONE re-auths instead of dead-ending — a rotation is the usual cause, and the user is still signed in', async () => {
+    // Device refresh mints a replacement session and grace-expires the old
+    // one, on a desktop unlock or an app foregrounding. Without this the frame
+    // sits on a bare 404 for the rest of the cookie's life while the dashboard
+    // around it reports the preview healthy.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' },
+      authorization: { allowed: false, reason: 'session_revoked' },
+    });
+    const framed = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(framed.status).toBe(401);
+    expect(framed.headers.get('content-type')).toContain('text/html');
+    // The stale cookie must go, or the re-auth page's re-mint races it.
+    expect(framed.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // A subresource cannot render a page, but it still clears the cookie so
+    // the frame's next navigation re-auths rather than piling up 404s.
+    const subresource = await GET(req('/main.js', { headers: { cookie: cookie(), 'sec-fetch-dest': 'script' } }), ctx());
+    expect(subresource.status).toBe(404);
+    expect(subresource.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // Every OTHER refusal is unchanged — a stopped preview is not a re-auth,
+    // and clearing the cookie there would make the user redo the handshake for
+    // something they switched off themselves.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'stopped-by-user', status: 409, message: 'switched off' },
+      authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' },
+    });
+    const stopped = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(stopped.status).toBe(409);
+    expect(stopped.headers.get('set-cookie')).toBeNull();
   });
 
   it('turns forwarder failures into 413/502/504 and logs them as limit/upstream outcomes', async () => {

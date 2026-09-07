@@ -12,7 +12,7 @@ const NOW = new Date('2026-09-06T12:00:00Z');
 const HOLDER = { kind: 'env', id: 'env1' } as const;
 
 function cookieFor(holder = HOLDER, key = KEY): string {
-  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', expiresAt: NOW.getTime() + 60_000 }, key)}`;
+  return `${PREVIEW_COOKIE_NAME}=${signPreviewCookie({ holder, userId: 'u1', sessionId: 'sess1', expiresAt: NOW.getTime() + 60_000 }, key)}`;
 }
 
 function req(over: Partial<{ host: string; cookie: string; url: string; extra: Record<string, string> }> = {}): IncomingMessage {
@@ -87,6 +87,33 @@ describe('buildPreviewUpgradeHandler', () => {
       expect(s.destroyed()).toBe(true);
     }
     expect(resolveTarget).not.toHaveBeenCalled();
+  });
+
+  it('carries the cookie SESSION into the gather, so a revoked session cannot hold a socket open either', async () => {
+    const seen: Array<[unknown, string, string]> = [];
+    const d = deps({ resolveTarget: async (holder, userId, sessionId) => { seen.push([holder, userId, sessionId]); return forward; } });
+    const s = fakeSocket();
+    await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor() }), s.socket, Buffer.alloc(0));
+    expect(seen).toEqual([[HOLDER, 'u1', 'sess1']]);
+
+    // And the refusal the gather gives a revoked session closes the upgrade.
+    const revoked = deps({ resolveTarget: async () => ({ decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' }, authorization: { allowed: false, reason: 'session_revoked' } }) });
+    const s2 = fakeSocket();
+    expect(await buildPreviewUpgradeHandler(revoked.deps)(req({ cookie: cookieFor() }), s2.socket, Buffer.alloc(0))).toBe(true);
+    expect(s2.written.join('')).toMatch(/^HTTP\/1\.1 404 /);
+    expect(revoked.tunnelled).toHaveLength(0);
+  });
+
+  it('bounds the tunnel by the COOKIE\'s expiry, so a socket cannot outlive the credential that opened it', async () => {
+    // The gather runs once, at upgrade, and HMR traffic resets the idle cut
+    // forever — so without this a revoked session, a removed drive member or a
+    // switched-off preview would keep streaming while the HTTP half refuses.
+    const d = deps();
+    const s = fakeSocket();
+    await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor() }), s.socket, Buffer.alloc(0));
+    expect(d.tunnelled).toHaveLength(1);
+    // The cookie in this fixture expires 60s after the fixed clock.
+    expect(d.tunnelled[0].maxLifetimeMs).toBe(60_000);
   });
 
   it('refuses with the gate status when the gather refuses, and logs the refusal with attribution', async () => {

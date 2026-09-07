@@ -34,6 +34,7 @@
 import type { CanRunCodeResult } from '../can-run-code';
 import type { SandboxHandle, SandboxServiceInfo } from '../sandbox-host';
 import {
+  DETECTION_UNAVAILABLE_MESSAGE,
   HTTP_PORT_BUSY_MESSAGE,
   describeHttpPortSlot,
   describeServiceState,
@@ -45,6 +46,7 @@ import {
   type ListeningPort,
 } from './dev-preview-core';
 import { applyDevServerServicePlan, type AppliedDevServerServicePlan } from './dev-preview-effects';
+import { unlocked, type DevPreviewLock } from './dev-preview-lock';
 import type { DevPreviewStore } from './dev-preview-store';
 import { authorizePreviewHolder, type PreviewAccessDeps, type PreviewAuthorization } from './preview-access';
 import { buildPreviewOpenPath } from './preview-grant';
@@ -65,6 +67,20 @@ import { PREVIEW_RELAY_SERVICE_NAME, SPRITE_HTTP_PORT } from './preview-relay';
 export type DevPreviewSlotReport =
   | { known: false }
   | { known: true; holder: HttpPortSlotHolder; pid: number | null; message: string };
+
+/**
+ * Whether DETECTION is running for this holder — orthogonal to what the
+ * preview is doing, which is why it is a sibling field rather than a new
+ * member of the core's state union (that union is mutation-tested and
+ * switched on exhaustively by the UI copy).
+ */
+export type DevPreviewDetection = 'watching' | 'arming' | 'unavailable';
+
+/** What the realtime tier answered: the snapshot it holds, and whether it is watching at all. */
+export interface DevPreviewListenersRead {
+  detection: DevPreviewDetection;
+  listeners: readonly ListeningPort[] | null;
+}
 
 /** Whether the holder's sprite could be reached for this render. */
 export type DevPreviewSandboxReach =
@@ -107,8 +123,28 @@ export interface DevPreviewStatus {
    * message already says what actually has to happen.
    */
   canResume: boolean;
+  /**
+   * True when this reader may turn a detected-but-unshared port into a shared
+   * one. The PORT is not carried beside it: `state` already names it when
+   * this is true (`needs-approval` carries `targetPort`), and a second copy
+   * of the same fact is a second thing that can disagree.
+   */
+  canApprove: boolean;
+  /**
+   * The sprite instance this status describes, or null when none is attached.
+   * The approve action echoes it back, so consent cannot drift onto a VM that
+   * replaced the one the user was looking at.
+   */
+  spriteInstanceId: string | null;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
+  /**
+   * Whether anything is watching this holder's ports right now. `unavailable`
+   * means the status shown may be out of date — it is NOT a claim that the
+   * sandbox is idle, which is exactly the conflation a bare `listeners: null`
+   * used to force.
+   */
+  detection: DevPreviewDetection;
 }
 
 /**
@@ -117,6 +153,13 @@ export interface DevPreviewStatus {
  * the platform could not ATTACH to is the core's own `instance-unknown`.)
  */
 export const SANDBOX_ABSENT_MESSAGE = 'This sandbox is not running, so there is no dev server to preview.';
+/**
+ * Re-exported for server callers that already import this module. The value
+ * itself lives in the pure core so the PANE can import it without pulling
+ * this module's `node:crypto` and database dependencies into the browser
+ * bundle — see the constant's own doc.
+ */
+export { DETECTION_UNAVAILABLE_MESSAGE };
 
 /**
  * Pure: who holds 8080, as a fact. A user process on 8080 is the USER'S OWN
@@ -153,11 +196,12 @@ export interface BuildDevPreviewStatusInput {
   relay: SandboxServiceInfo | null;
   /** The realtime tier's `ports/watch` snapshot, or null when none is in hand. */
   listeners: readonly ListeningPort[] | null;
+  detection: DevPreviewDetection;
   openPath: string | null;
 }
 
 /** Pure: the whole read model from what the gather collected. */
-export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
+export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
   // Absent is the one reach the core cannot describe (it is asked about a
   // sprite); unreachable IS the core's `instance-unknown` (no live instance
   // id can be proven), so it is worded there and nowhere else.
@@ -193,7 +237,10 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     canOpen: state.status === 'live' || state.status === 'starting',
     canStop: actionable && row.stoppedByUserAt === null,
     canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
+    canApprove: actionable && state.status === 'needs-approval',
+    spriteInstanceId: sandbox === 'attached' ? liveInstanceId : null,
     detectedAt: row?.detectedAt ?? null,
+    detection,
   };
 }
 
@@ -202,7 +249,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
 // -----------------------------------------------------------------------------
 
 /** The realtime tier's listener snapshot for a holder's sprite, or null when it holds none (or cannot be asked). Never a probe. */
-export type DevPreviewListenersReader = (holder: DevPreviewHolderRef) => Promise<readonly ListeningPort[] | null>;
+export type DevPreviewListenersReader = (holder: DevPreviewHolderRef) => Promise<DevPreviewListenersRead>;
 
 export type DevPreviewStatusDeps = Pick<
   PreviewAccessDeps,
@@ -243,21 +290,22 @@ export async function gatherDevPreviewStatus({
 
   if (authorization.sandboxId === null) {
     const row = await deps.previewStore.findByHolder(holder);
-    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'absent', liveInstanceId: null, row, relay: null, listeners: null, openPath }) };
+    // Realtime is deliberately not asked about a holder with no sprite.
+    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'absent', liveInstanceId: null, row, relay: null, listeners: null, detection: 'unavailable', openPath }) };
   }
 
-  const [handle, row, listeners] = await Promise.all([
+  const [handle, row, read] = await Promise.all([
     deps.attach(authorization.sandboxId),
     deps.previewStore.findByHolder(holder),
     deps.readListeners(holder),
   ]);
   if (handle === null) {
-    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, openPath }) };
+    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, detection: read.detection, openPath }) };
   }
   const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
   return {
     ok: true,
-    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners, openPath }),
+    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners: read.listeners, detection: read.detection, openPath }),
   };
 }
 
@@ -265,7 +313,27 @@ export async function gatherDevPreviewStatus({
 // User actions
 // -----------------------------------------------------------------------------
 
-export type DevPreviewUserAction = 'stop' | 'resume';
+/**
+ * What a user may do to a preview. A discriminated union rather than a bare
+ * string because `approve` carries the PORT the user was shown: echoing it
+ * back is what binds the click to the thing on screen, so a dev server that
+ * moved between the render and the click can never be shared by a click that
+ * meant the old one.
+ */
+export type DevPreviewUserAction =
+  | { kind: 'stop' }
+  | { kind: 'resume' }
+  | {
+      kind: 'approve';
+      port: number;
+      /**
+       * The sprite INSTANCE the decision was made against. Echoed for the same
+       * reason `port` is: a rebuild replaces the row and can detect the same
+       * port again, so a click made against the old sandbox would otherwise
+       * approve a different VM's server of the same number.
+       */
+      spriteInstanceId: string;
+    };
 
 export interface DevPreviewUserActionDeps {
   previewStore: DevPreviewStore;
@@ -274,12 +342,25 @@ export interface DevPreviewUserActionDeps {
   readListeners: DevPreviewListenersReader;
   /** The centralized code-execution gate — consulted on every RESUME (see below). */
   canRunCode(input: { userId: string; driveId: string | null; ownerId: string }): Promise<CanRunCodeResult>;
+  /**
+   * Serializes this holder's read → plan → apply against the realtime
+   * detector's. Defaults to no serialization (pure unit surfaces); the web
+   * binding supplies the real Postgres advisory lock.
+   */
+  lock?: DevPreviewLock;
   now(): Date;
 }
 
 export type DevPreviewUserActionResult =
   /** The intent is recorded and the relay was reconciled (or there was nothing to reconcile). */
-  | { ok: true; applied: AppliedDevServerServicePlan | null }
+  /**
+   * `lockContended` means the INTENT was recorded but the relay work was
+   * deferred — the detector held this holder's lock past the retry budget, or
+   * the lock pool was degraded. Deliberately not an `ok: false` reason: the
+   * action-response helper maps unrecognised refusals onto "no preview to
+   * switch", which would be a lie about a click that took effect.
+   */
+  | { ok: true; applied: AppliedDevServerServicePlan | null; lockContended?: true }
   /** The holder has no preview row — nothing to switch. */
   | { ok: false; reason: 'no-preview' }
   /** A RESUME the holder's payer may not spend compute on — the wake gate said no. Nothing was written. */
@@ -291,7 +372,21 @@ export type DevPreviewUserActionResult =
    * detector's next frame starts the relay against a real snapshot; the
    * caller should say "starting shortly" rather than claim a failure.
    */
-  | { ok: false; reason: 'slot-unknown' };
+  | { ok: false; reason: 'slot-unknown' }
+  /**
+   * An `approve` whose echoed port is not the port the row targets any more.
+   * Nothing was written: the user agreed to share something else than what is
+   * running now, and the honest answer is to show them the new port.
+   */
+  | { ok: false; reason: 'port-changed' }
+  /**
+   * An `approve` whose echoed sprite INSTANCE is not the one the row belongs
+   * to any more: the sandbox was rebuilt between the render and the click.
+   * Kept separate from `port-changed` because the port may be identical — a
+   * replacement VM commonly re-detects the same one — and telling the user
+   * their server moved ports would be a plainly false sentence.
+   */
+  | { ok: false; reason: 'instance-changed' };
 
 /**
  * Record the intent, then reconcile ONCE through the core and the effects
@@ -327,6 +422,10 @@ export async function applyDevPreviewUserAction({
   deps: DevPreviewUserActionDeps;
 }): Promise<DevPreviewUserActionResult> {
   const now = deps.now();
+  const lock = deps.lock ?? unlocked;
+  // Bound once: the locked path and the contended fallback make the SAME
+  // write, and only where it happens differs.
+  const writeIntent = () => writeDevPreviewIntent({ holder, action, now, userId, store: deps.previewStore });
 
   // RESUME IS COMPUTE. `services.start` brings a process up inside the sprite
   // and, on a suspended sprite, is a billed wake — the same posture the proxy
@@ -338,47 +437,92 @@ export async function applyDevPreviewUserAction({
   // purpose: a refused resume that had already cleared `stoppedByUserAt`
   // would leave the row "on", and the detector's next frame would restart
   // the relay anyway — the exact bypass the gate exists to close.
-  if (action === 'resume') {
+  // An APPROVE is the same kind of act — it exists to make the relay start —
+  // so it is gated identically.
+  if (action.kind === 'resume' || action.kind === 'approve') {
     const wake = await deps.canRunCode({ userId, ...wakeSubject });
     if (!wake.ok) return { ok: false, reason: 'wake-not-allowed', detail: wake.reason };
   }
 
-  // The write returns the row as written, and the plan is made from THAT —
-  // no second read. RACE WITH THE DETECTOR, stated rather than hidden: the
-  // detector plans per `ports/watch` frame from a row it reads at frame
-  // time. A frame that read the row BEFORE this write and applies AFTER it
-  // can `start-relay` and upsert `stoppedByUserAt: null`, undoing a stop;
-  // the reverse frame can stop-relay after a resume. The window is one frame
-  // wide, it exists only while a port is opening in the same second the user
-  // clicks, and it is self-correcting in the honest direction: the very next
-  // frame plans from whichever write landed last, and the status the user
-  // sees is always the fold of the real row and the real relay — so a lost
-  // click shows as "still live" / "still off", and clicking again wins.
-  // Serializing the two writers would need a lock spanning the realtime and
-  // web tiers for a one-frame window; not worth a lock.
-  const row = await deps.previewStore.setStoppedByUser(holder, action === 'stop' ? now : null);
-  if (row === null) return { ok: false, reason: 'no-preview' };
+  // ONE CRITICAL SECTION, serialized per holder against the realtime
+  // detector (`dev-preview-lock.ts`). The two writers used to interleave
+  // read → plan → apply freely; the comment that stood here argued the window
+  // was one frame wide and self-correcting, which was wrong on both counts —
+  // convergence assumed a later frame that may never come. Under the lock the
+  // plan is made from the row it acts on.
+  const locked = await lock(holder, async (): Promise<DevPreviewUserActionResult> => {
+    // The write returns the row as written, and the plan is made from THAT —
+    // no second read.
+    const written = await writeIntent();
+    if (!written.ok) return written;
+    const row = written.row;
 
-  const handle = await deps.attach(row.sandboxId);
-  if (handle === null) return { ok: true, applied: null };
+    const handle = await deps.attach(row.sandboxId);
+    if (handle === null) return { ok: true, applied: null };
 
-  const [relay, listeners] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
-  // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
-  // empty set would let the core read 8080 as free and start a relay that may
-  // fail to bind; `listenersKnown` makes the core refuse that instead, and the
-  // detector — which plans on a frame it just saw — starts it a moment later.
-  const plan = planDevServerService({
-    liveInstanceId: handle.spriteInstanceId,
-    sandboxId: handle.sandboxId,
-    row,
-    holder,
-    detected: null,
-    relay,
-    listeners: listeners ?? [],
-    listenersKnown: listeners !== null,
-    now,
+    const [relay, read] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
+    const listeners = read.listeners;
+    // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
+    // empty set would let the core read 8080 as free and start a relay that may
+    // fail to bind; `listenersKnown` makes the core refuse that instead, and the
+    // detector — which plans on a frame it just saw — starts it a moment later.
+    const plan = planDevServerService({
+      liveInstanceId: handle.spriteInstanceId,
+      sandboxId: handle.sandboxId,
+      row,
+      holder,
+      detected: null,
+      relay,
+      listeners: listeners ?? [],
+      listenersKnown: listeners !== null,
+      now,
+    });
+    if (plan.action === 'refuse' && plan.reason === 'slot-unknown') return { ok: false, reason: 'slot-unknown' };
+    const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
+    return { ok: true, applied };
   });
-  if (plan.action === 'refuse' && plan.reason === 'slot-unknown') return { ok: false, reason: 'slot-unknown' };
-  const applied = await applyDevServerServicePlan({ plan, services: handle.services, store: deps.previewStore });
-  return { ok: true, applied };
+  if (locked.outcome === 'acquired') return locked.result;
+
+  // CONTENDED (or the lock pool is degraded). The user's INTENT is what they
+  // are entitled to, so record it unserialized — the row's compare-and-set
+  // keeps that write safe on its own — and defer the relay work to the
+  // detector's next frame or the backstop sweep.
+  const contended = await writeIntent();
+  if (!contended.ok) return contended;
+  return { ok: true, applied: null, lockContended: true };
+}
+
+/**
+ * The one durable write a user action makes, before any plan: the stop
+ * intent, or the approval. Returns the row AS WRITTEN so the plan can be made
+ * from it without a second read, or the refusal to hand straight back.
+ */
+async function writeDevPreviewIntent({
+  holder,
+  action,
+  now,
+  userId,
+  store,
+}: {
+  holder: DevPreviewHolderRef;
+  action: DevPreviewUserAction;
+  now: Date;
+  userId: string;
+  store: DevPreviewStore;
+}): Promise<{ ok: true; row: DevPreviewRow } | Extract<DevPreviewUserActionResult, { reason: 'port-changed' | 'instance-changed' | 'no-preview' }>> {
+  if (action.kind !== 'approve') {
+    const row = await store.setStoppedByUser(holder, action.kind === 'stop' ? now : null);
+    return row === null ? { ok: false, reason: 'no-preview' } : { ok: true, row };
+  }
+  const approved = await store.approvePort(holder, { port: action.port, spriteInstanceId: action.spriteInstanceId, at: now, byUserId: userId });
+  if (approved !== null) return { ok: true, row: approved };
+  // Null means the filtered UPDATE matched nothing, and the three causes read
+  // very differently to a user. Re-read to say which: no row at all, the
+  // server moved to another port, or the sandbox was rebuilt under it. The
+  // last is the one the instance echo was added for, and its port is usually
+  // UNCHANGED — reporting it as "moved to a different port" would be false.
+  const row = await store.findByHolder(holder);
+  if (row === null) return { ok: false, reason: 'no-preview' };
+  if (row.spriteInstanceId !== action.spriteInstanceId) return { ok: false, reason: 'instance-changed' };
+  return { ok: false, reason: 'port-changed' };
 }

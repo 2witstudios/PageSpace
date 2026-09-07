@@ -21,9 +21,18 @@ All notable user-facing changes to PageSpace are documented here. Format follows
   server again a moment later. Reading the status never wakes a sleeping sandbox. One thing to know
   about your own dev server: the preview reaches it through PageSpace's hostname, so a server that
   checks the `Host` header (Vite 6 and newer do) needs that hostname allowed — for Vite, add the
-  preview domain to `server.allowedHosts`. Off by default: the whole surface is absent until
-  `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`, which needs the preview-origin
-  ops work (wildcard DNS, certificate, and the Caddy block) to land first.
+  preview domain to `server.allowedHosts`. **Sharing an unusual port is your call:** a server on a
+  usual dev-server port (Vite, Next, Astro, Django and friends) is previewed as soon as it is
+  detected, but anything else — an admin panel on :9000, a debug listener — is only *named*
+  ("Dev server detected on :9000 — not shared yet") until you open the pane, read who would be able
+  to reach it, and press Share. The port you press Share on is the port that gets shared: if the
+  server has moved since the screen was drawn, PageSpace says so rather than sharing the new one.
+  Approval is per port and per sandbox, so a rebuilt sandbox asks again. **Signing out ends the
+  preview:** the preview page is tied to the session that opened it, so signing out or revoking a
+  device cuts it off on its very next request instead of letting it linger. Off by default: the
+  whole surface is absent until `DEV_PREVIEW_ENABLED` is set with a dedicated `DEV_PREVIEW_APEX`,
+  which needs the preview-origin ops work (wildcard DNS, certificate, and the Caddy block) to land
+  first.
 - **Local Environments: an agent can now reach your own computer (opt-in groundwork)** — the two
   ends built so far are joined. An agent session bound to a local Environment whose machine is
   connected now runs its commands and reads and writes its files on that machine, through the same

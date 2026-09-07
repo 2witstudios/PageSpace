@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
-import { buildPortsWatchUrl, openPortsWatch, readPortsWatchFrame, type PortsWatchFrame, type PortsWatchSocketLike } from '../ports-watch';
+import { buildPortsWatchUrl, openPortsWatch, readPortsWatchFrame, resolveSpritesApiBaseUrl, type PortsWatchFrame, type PortsWatchSocketLike } from '../ports-watch';
 
 describe('buildPortsWatchUrl', () => {
   it('derives the wss endpoint from the API base and encodes the sprite name', () => {
@@ -110,5 +110,44 @@ describe('openPortsWatch', () => {
     openPortsWatch({ url: 'wss://api/x', token: 't', createSocket: () => { throw new Error('no ws'); }, onFrame: () => {}, onClose: (info) => closes.push(info) });
     await new Promise((r) => setImmediate(r));
     expect(closes).toEqual([{ opened: false, reason: 'open-failed: no ws' }]);
+  });
+});
+
+describe('resolveSpritesApiBaseUrl', () => {
+  it('prefers the explicit override and falls back to the platform default', () => {
+    const saved = process.env.SPRITES_API_URL;
+    try {
+      delete process.env.SPRITES_API_URL;
+      assert({ given: 'no override', should: 'use the platform default', actual: resolveSpritesApiBaseUrl(), expected: 'https://api.sprites.dev' });
+      process.env.SPRITES_API_URL = 'https://sprites.internal';
+      assert({ given: 'an override', should: 'use it', actual: resolveSpritesApiBaseUrl(), expected: 'https://sprites.internal' });
+      // An empty string is not a base URL; falling back beats opening a watch
+      // against `wss:///v1/...`.
+      process.env.SPRITES_API_URL = '';
+      assert({ given: 'an empty override', should: 'fall back rather than accept it', actual: resolveSpritesApiBaseUrl(), expected: 'https://api.sprites.dev' });
+    } finally {
+      if (saved === undefined) delete process.env.SPRITES_API_URL;
+      else process.env.SPRITES_API_URL = saved;
+    }
+  });
+});
+
+describe('openPortsWatch — closing a watch that never opened', () => {
+  it('fires onClose EXACTLY once, whichever way it ended', async () => {
+    // The registry's reconnect budget counts `onClose` calls, so a handle that
+    // fired twice would burn two attempts for one failure — and a `close()`
+    // from `stopAll` arriving after a failure must not resurrect the callback.
+    const noToken: Array<{ reason: string }> = [];
+    const handle = openPortsWatch({ url: 'wss://x', token: '', createSocket: () => { throw new Error('unused'); }, onFrame: () => {}, onClose: (info) => noToken.push(info) });
+    handle.close();
+    handle.close();
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'a no-token watch closed twice', should: 'report exactly one close', actual: noToken.length, expected: 1 });
+
+    const failed: Array<{ reason: string }> = [];
+    const broken = openPortsWatch({ url: 'wss://x', token: 't', createSocket: () => { throw new Error('no ws'); }, onFrame: () => {}, onClose: (info) => failed.push(info) });
+    broken.close();
+    await new Promise((r) => setTimeout(r, 0));
+    assert({ given: 'a watch whose socket could not be created, then closed', should: 'report exactly one close', actual: failed.length, expected: 1 });
   });
 });

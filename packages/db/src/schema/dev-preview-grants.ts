@@ -1,6 +1,7 @@
 import { pgTable, text, timestamp, index, check } from 'drizzle-orm/pg-core';
 import { sql } from 'drizzle-orm';
 import { users } from './auth';
+import { sessions } from './sessions';
 
 /**
  * Dev-preview GRANTS — the single-use handoff between the app origin and a
@@ -40,6 +41,17 @@ export const devPreviewGrants = pgTable(
     userId: text('userId')
       .notNull()
       .references(() => users.id, { onDelete: 'cascade' }),
+    /**
+     * The PageSpace session that minted this grant, carried into the cookie so
+     * the per-request gather can reject a preview whose session has been
+     * revoked. NOT NULL: grants are ephemeral (a 60-second redemption window,
+     * swept opportunistically) and the feature is dark, so there is nothing to
+     * backfill and no reason to admit a grant that cannot be revoked. Cascades
+     * like `userId` — a deleted session takes its outstanding grants with it.
+     */
+    sessionId: text('sessionId')
+      .notNull()
+      .references(() => sessions.id, { onDelete: 'cascade' }),
     /** Until when the grant may be redeemed. */
     expiresAt: timestamp('expiresAt', { mode: 'date' }).notNull(),
     /** Until when the cookie the redemption installs authenticates. */

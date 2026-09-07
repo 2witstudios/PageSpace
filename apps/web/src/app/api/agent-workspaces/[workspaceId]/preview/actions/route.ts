@@ -46,7 +46,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     if (isAuthError(auth)) return auth.error;
 
     const action = readDevPreviewUserAction(await request.json().catch(() => null));
-    if (action === null) return NextResponse.json({ error: 'action must be "stop" or "resume"' }, { status: 400 });
+    if (action === null) return NextResponse.json({ error: 'action must be "stop", "resume", or "approve" with the port shown' }, { status: 400 });
 
     const session = await findSessionRecord(workspaceId);
     if (!session) return workspaceNotFoundOrDenied(request, auth.userId, workspaceId, 'session_not_found', ROUTE);
@@ -58,7 +58,7 @@ export async function POST(request: Request, context: { params: Promise<{ worksp
     if (!manage.allowed) {
       // A denial AFTER the family gate: the caller already knows the session
       // exists, so a genuine 403 leaks nothing new (the `provisioningDenied` precedent).
-      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action, reason: manage.reason }, riskScore: 0.5 });
+      auditRequest(request, { eventType: 'authz.access.denied', userId: auth.userId, resourceType: 'dev_preview', resourceId: `${holder.kind}:${holder.id}`, details: { route: ROUTE, action: action.kind, reason: manage.reason }, riskScore: 0.5 });
       return NextResponse.json({ error: manage.message }, { status: 403 });
     }
 

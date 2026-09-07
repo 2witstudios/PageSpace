@@ -12,6 +12,12 @@
  *  - a SESSION's own preview (an ephemeral session on its own sprite) is the
  *    session OWNER's — the end-session precedent: the person whose compute it
  *    is may always release it, and nobody else gets to flip it under them.
+ *
+ * This same bar governs APPROVING an unlisted port for sharing, which is the
+ * strictest thing the action route does — it makes a port reachable by
+ * everyone the preview is reachable by. So a plain drive member may VIEW an
+ * env's approved preview and can never approve one; the person who agrees is
+ * the person who could already stop it.
  */
 
 import type { AuthResult } from '@/lib/auth';

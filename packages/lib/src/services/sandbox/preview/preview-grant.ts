@@ -102,16 +102,25 @@ export const PREVIEW_GRANT_QUERY_PARAM = 'grant';
 export const PREVIEW_GRANT_TTL_MS = 60_000;
 /**
  * How long a redeemed cookie authenticates before the frame must re-open.
- * MINUTES, not hours: the cookie is not yet bound to the PageSpace session
- * that minted it (see {@link PreviewCookieClaims}), so its lifetime is the
- * window in which a logged-out user's preview keeps answering. The re-mint
+ * MINUTES, not hours, though no longer because of the session gap that used
+ * to be described here: the cookie now names its minting session and the
+ * per-request gather rejects it the moment that session is revoked
+ * ({@link PreviewCookieClaims}). A short life is simply cheap — the re-mint
  * path (a cookie-less navigation is sent back to `/preview/open`) makes an
- * expiry an invisible re-handshake, so short is cheap.
+ * expiry an invisible re-handshake — and it bounds the blast radius of the
+ * one thing a signature cannot express: a cookie copied off the wire.
  */
 export const PREVIEW_COOKIE_TTL_MS = 10 * 60 * 1000;
 
 const COOKIE_KEY_LABEL = 'pagespace:dev-preview-cookie:v1';
-const TOKEN_VERSION = 'v1';
+/**
+ * Bumped to v2 when the session id joined the claims. No compatibility shim
+ * and none is needed: the feature is dark everywhere, so no v1 cookie exists
+ * in the wild — and even if one did, it verifies as `malformed`, which routes
+ * to the re-auth page and mints a v2. That is a silent re-handshake, not an
+ * outage.
+ */
+const TOKEN_VERSION = 'v2';
 const HOLDER_ID_SHAPE = /^[a-z0-9]{1,64}$/;
 
 // -----------------------------------------------------------------------------
@@ -119,19 +128,25 @@ const HOLDER_ID_SHAPE = /^[a-z0-9]{1,64}$/;
 // -----------------------------------------------------------------------------
 
 /**
- * What the cookie asserts. KNOWN GAP, stated here: the claims name the user
- * but NOT the PageSpace session that minted the grant, so logging out (or
- * revoking that session) does not invalidate a live preview cookie — only
- * its expiry ({@link PREVIEW_COOKIE_TTL_MS}, minutes) or a change in the
- * user's drive access (re-checked on every request) does. The follow-up is
- * to carry the minting session id here and have the per-request gather
- * check it is still valid. Key rotation: rotating `SANDBOX_SESSION_SECRET`
- * invalidates every live cookie at once (the derived key changes), which
- * self-heals through the same re-mint path — there is no rotation window.
+ * What the cookie asserts: the holder, the user, the SESSION that minted it,
+ * and an expiry.
+ *
+ * The session id is what makes revocation work. Without it the cookie named a
+ * person, so signing out, revoking a device, or bumping `tokenVersion` left a
+ * live preview answering until the cookie expired — minutes during which a
+ * session someone had deliberately killed was still serving a sandbox. The
+ * per-request gather now checks the session is still usable, so revocation
+ * takes effect on the very next request.
+ *
+ * Key rotation: rotating `SANDBOX_SESSION_SECRET` invalidates every live
+ * cookie at once (the derived key changes), which self-heals through the
+ * re-mint path — there is no rotation window.
  */
 export interface PreviewCookieClaims {
   holder: DevPreviewHolderRef;
   userId: string;
+  /** The PageSpace session that minted the grant this cookie was redeemed from. */
+  sessionId: string;
   /** Epoch ms. */
   expiresAt: number;
 }
@@ -153,7 +168,7 @@ function mac(key: Buffer, payload: string): Buffer {
 /** Pure: mint the cookie value for `claims`. Throws on an empty key — minting must never produce an unverifiable token. */
 export function signPreviewCookie(claims: PreviewCookieClaims, key: Buffer): string {
   if (key.length === 0) throw new Error('preview cookie key is not configured');
-  const payload = b64url(JSON.stringify({ k: claims.holder.kind, h: claims.holder.id, u: claims.userId, e: claims.expiresAt }));
+  const payload = b64url(JSON.stringify({ k: claims.holder.kind, h: claims.holder.id, u: claims.userId, s: claims.sessionId, e: claims.expiresAt }));
   return `${TOKEN_VERSION}.${payload}.${b64url(mac(key, payload))}`;
 }
 
@@ -176,7 +191,7 @@ export function verifyPreviewCookie(token: string, key: Buffer, now: Date): Veri
   }
   if (given.length !== expected.length || !timingSafeEqual(given, expected)) return { ok: false, reason: 'bad-signature' };
 
-  let parsed: { k?: unknown; h?: unknown; u?: unknown; e?: unknown };
+  let parsed: { k?: unknown; h?: unknown; u?: unknown; s?: unknown; e?: unknown };
   try {
     parsed = JSON.parse(Buffer.from(payload, 'base64url').toString('utf8')) as typeof parsed;
   } catch {
@@ -186,12 +201,14 @@ export function verifyPreviewCookie(token: string, key: Buffer, now: Date): Veri
     (parsed.k !== 'workspace' && parsed.k !== 'env')
     || typeof parsed.h !== 'string' || !HOLDER_ID_SHAPE.test(parsed.h)
     || typeof parsed.u !== 'string' || parsed.u.length === 0
+    // Shape-checked like the holder id: this value reaches a WHERE clause.
+    || typeof parsed.s !== 'string' || !HOLDER_ID_SHAPE.test(parsed.s)
     || typeof parsed.e !== 'number' || !Number.isFinite(parsed.e)
   ) {
     return { ok: false, reason: 'malformed' };
   }
   if (parsed.e <= now.getTime()) return { ok: false, reason: 'expired' };
-  return { ok: true, claims: { holder: { kind: parsed.k, id: parsed.h }, userId: parsed.u, expiresAt: parsed.e } };
+  return { ok: true, claims: { holder: { kind: parsed.k, id: parsed.h }, userId: parsed.u, sessionId: parsed.s, expiresAt: parsed.e } };
 }
 
 /** Pure: the `Set-Cookie` header that installs `token` until `expiresAt`. */

@@ -10,17 +10,30 @@
  * (`dev-preview-detection.ts`), which plans and applies relay effects
  * through the core.
  *
- * FAIL CLOSED, BOUNDED. When the channel closes it is reopened with backoff
- * up to a small budget; past the budget the watcher is dropped and the fact
- * is logged. Nothing falls back to the TTY channel or to an exec probe (both
- * would miss or wake — see `ports-watch.ts`). A sprite that hibernates drops
- * the channel; a later ensure/shell re-asserts the watcher. A watcher whose
- * sprite the platform no longer has (attach → null) is dropped at once.
+ * FAIL CLOSED, BOUNDED — AND RECOVERABLE. When the channel closes it is
+ * reopened with backoff up to a small budget; past the budget the watcher is
+ * dropped and the fact is logged. Nothing falls back to the TTY channel or to
+ * an exec probe (both would miss or wake — see `ports-watch.ts`).
+ *
+ * Every drop is terminal FOR THAT CHANNEL, deliberately: recovery never
+ * resurrects a timer that might outlive the sprite, it re-derives the holder's
+ * live sandbox from its ROW. What makes a drop survivable is that the status
+ * READ re-arms a missing watcher (`read`, below) — which also covers the case
+ * no reconnect can: this process restarting and losing every watcher it had.
+ * Without that, a dropped watcher meant detection was over for that sprite
+ * until somebody happened to open a shell or provision a session again.
+ *
+ * The re-arm is throttled, because the read happens on every status render:
+ * an unattachable or hibernated sprite must not be re-attacked several times a
+ * minute. One holder nobody is looking at and nobody shells into still gets no
+ * watcher — that costs one poll interval of relay-start latency the moment
+ * someone does look, and nothing else.
  */
 
 import type { SandboxHandle } from '@pagespace/lib/services/sandbox/sandbox-host';
 import type { DevPreviewHolderRef, ListeningPort } from '@pagespace/lib/services/sandbox/preview/dev-preview-core';
 import { createDevPreviewDetector, type DevPreviewDetector, type DevPreviewDetectorLog } from '@pagespace/lib/services/sandbox/preview/dev-preview-detection';
+import type { DevPreviewLock } from '@pagespace/lib/services/sandbox/preview/dev-preview-lock';
 import type { DevPreviewStore } from '@pagespace/lib/services/sandbox/preview/dev-preview-store';
 import { buildPortsWatchUrl, openPortsWatch, type PortsWatchHandle, type PortsWatchSocketFactory } from '@pagespace/lib/services/sandbox/preview/ports-watch';
 
@@ -34,30 +47,55 @@ export interface DetectionRegistryDeps {
   spritesToken(): string;
   spritesApiBaseUrl(): string;
   log: DevPreviewDetectorLog;
+  /**
+   * Serializes a frame's read → plan → apply against the web tier's stop and
+   * resume. Optional so the unit surface needs no Postgres; `index.ts` binds
+   * the real advisory lock.
+   */
+  lock?: DevPreviewLock;
   now(): Date;
   /** Test seam for the reconnect delay. */
   wait?: (ms: number) => Promise<void>;
   maxReconnects?: number;
+  /** The non-resetting ceiling for one watcher; a flapping channel is dropped and the read path re-arms it. */
+  maxTotalReconnects?: number;
+}
+
+/**
+ * Whether detection is actually running for a holder right now — a fact the
+ * old `listeners()` could not express, because `null` meant both "no snapshot
+ * yet" and "nobody is watching at all".
+ */
+export type DevPreviewDetection = 'watching' | 'arming' | 'unavailable';
+
+export interface DevPreviewDetectionRead {
+  detection: DevPreviewDetection;
+  listeners: ListeningPort[] | null;
 }
 
 export interface DetectionRegistry {
   /** Watch the holder's live sprite (re-derived from the holder's row). Idempotent per sprite. */
   ensure(input: { holder: DevPreviewHolderRef }): Promise<void>;
   /**
-   * The listener snapshot the holder's watcher holds for its CURRENT
-   * connection, or `null` when there is no such snapshot: no watcher for the
-   * holder's live sprite (never watched, dropped past the reconnect budget,
-   * or the sprite is on another instance's channel), a connection that has
-   * not yet delivered its initial `port_list`, or a dropped connection
-   * waiting out the reconnect backoff. In those last two windows the
-   * detector's array is stale or merely empty, and handing it out as a KNOWN
-   * snapshot would let a render call 8080 free (and a resume start a relay
-   * onto an occupied port); "unknown" is the honest answer there. This is
-   * the ONLY listener source a status render may use — it is already in
-   * hand, so answering costs the sprite nothing (the never-probe-to-render
-   * rule). `null` renders as "slot unknown", never as "free".
+   * What this process knows about the holder's ports, and whether it is
+   * watching at all — plus the re-arm that makes a lost watcher recoverable.
+   *
+   * `listeners` is the snapshot for the CURRENT connection, or `null` when
+   * there is no such snapshot: no watcher, a connection that has not yet
+   * delivered its `port_list`, or a dropped connection waiting out the
+   * backoff. In those windows the detector's array is stale or merely empty,
+   * and handing it out as KNOWN would let a render call 8080 free (and a
+   * resume start a relay onto an occupied port). This is the ONLY listener
+   * source a status render may use — it is already in hand, so answering
+   * costs the sprite nothing (the never-probe-to-render rule).
+   *
+   * `detection` separates the two meanings `null` used to conflate, so the UI
+   * can say "the ports are not known right now" instead of implying the
+   * sandbox is idle. When nothing is watching a holder that HAS a live
+   * sprite, this fires a throttled re-arm and answers `'arming'`; the caller
+   * is never made to wait for it.
    */
-  listeners(input: { holder: DevPreviewHolderRef }): Promise<ListeningPort[] | null>;
+  read(input: { holder: DevPreviewHolderRef }): Promise<DevPreviewDetectionRead>;
   /** Sprites currently watched — for tests and for a status line. */
   watching(): string[];
   stopAll(): void;
@@ -65,10 +103,25 @@ export interface DetectionRegistry {
 
 const DEFAULT_MAX_RECONNECTS = 5;
 const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000];
+/**
+ * How long a connection must stay up to count as HEALTHY, clearing both
+ * reconnect budgets. Comfortably longer than a flap (which dies in
+ * milliseconds) and far shorter than any real session.
+ */
+const HEALTHY_CONNECTION_MS = 60_000;
+/** Consecutive connections that did not survive, before the watcher is retired. A flap burns these in a couple of minutes. */
+const DEFAULT_MAX_TOTAL_RECONNECTS = 120;
+/**
+ * How long a read-driven re-arm waits before trying a sprite again. The status
+ * read fires every few seconds per viewer; without this, a sprite that cannot
+ * be attached (hibernated, gone) would be retried on every render.
+ */
+export const REARM_COOLDOWN_MS = 30_000;
 
 export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionRegistry {
   const wait = deps.wait ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   const maxReconnects = deps.maxReconnects ?? DEFAULT_MAX_RECONNECTS;
+  const maxTotalReconnects = deps.maxTotalReconnects ?? DEFAULT_MAX_TOTAL_RECONNECTS;
   /**
    * One entry per watched sprite: how to close it, and its detector — the
    * snapshot source for `listeners()`, null while the slot is only reserved.
@@ -82,8 +135,17 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
   interface Watcher {
     close(): void;
     detector: DevPreviewDetector | null;
+    /**
+     * The Sprite INSTANCE this watcher's detector holds a handle to, or null
+     * while the reservation is still resolving. A sprite NAME is reused across
+     * re-creates, so this is the only way to notice that the VM behind the
+     * name has been replaced — see {@link armIfMissing}.
+     */
+    spriteInstanceId: string | null;
   }
   const watchers = new Map<string, Watcher>();
+  /** sandboxId → when a re-arm was last attempted, so the read path cannot storm a sick sprite. */
+  const lastArmAt = new Map<string, number>();
 
   async function start(holder: DevPreviewHolderRef, sandboxId: string): Promise<void> {
     const reservation = watchers.get(sandboxId);
@@ -96,27 +158,53 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       watchers.delete(sandboxId);
       return;
     }
-    const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log });
+    const detector = createDevPreviewDetector({ holder, handle, store: deps.store, now: deps.now, log: deps.log, lock: deps.lock });
     const url = buildPortsWatchUrl(deps.spritesApiBaseUrl(), sandboxId);
     let stopped = false;
     let current: PortsWatchHandle | null = null;
     let attempts = 0;
+    // A SECOND, NON-RESETTING budget. `attempts` is reset by any connection
+    // that opens, which is right for a channel that drops once and recovers —
+    // but a channel that opens and dies immediately, over and over, resets it
+    // every time and reconnects forever, which the docblock's "past the budget
+    // the watcher is dropped" does not describe. Dropping such a watcher is
+    // cheap now: a status read re-arms it within a poll interval, so the
+    // ceiling costs at most that, and a flap that has survived it is a sprite
+    // problem rather than a connection problem.
+    let totalAttempts = 0;
+    /** When the CURRENT connection attempt was opened, for judging whether it survived. */
+    let attemptStartedAt = deps.now().getTime();
 
     const entry: Watcher = {
       detector,
+      spriteInstanceId: handle.spriteInstanceId,
       close() {
         stopped = true;
         current?.close();
-        watchers.delete(sandboxId);
+        // BY IDENTITY, never by key. A sandbox NAME can be re-armed while an
+        // old entry is still held by a caller that read the map before the
+        // swap; deleting blindly would drop the LIVE watcher and orphan it —
+        // socket open, detector still writing rows, nothing able to reach it.
+        // The re-arm path guards its own call site as well, so this is the
+        // second line rather than the first: it is what keeps any FUTURE
+        // caller of `close()` from reintroducing the same bug.
+        if (watchers.get(sandboxId) === entry) watchers.delete(sandboxId);
       },
     };
 
     const open = () => {
+      // Set on the OPEN event below, not here: the handshake can take seconds,
+      // and counting it as uptime would let a channel that keeps failing to
+      // stay up look like one being healthily recycled — which clears the
+      // ceiling that exists to retire it. Until it opens this stays at the
+      // attempt's start, which can only make `survived` stricter.
+      attemptStartedAt = deps.now().getTime();
       current = openPortsWatch({
         url,
         token: deps.spritesToken(),
         createSocket: deps.createSocket,
         onFrame: (frame) => { void detector.onFrame(frame); },
+        onOpen: () => { attemptStartedAt = deps.now().getTime(); },
         onClose: (info) => {
           current = null;
           // The accumulated set no longer describes a live connection. Takes
@@ -126,15 +214,25 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
           // from claiming the NEXT connection's snapshot.
           detector.invalidateSnapshot();
           if (stopped) return;
+          // A connection that OPENED and then SURVIVED is a healthy channel
+          // being recycled — an idle cut, a load balancer, a deploy — and it
+          // clears both budgets. One that opened and died at once is the flap
+          // the second budget exists for, and `info.opened` alone cannot tell
+          // them apart: it is true for both, which is why counting every
+          // reconnect would retire a perfectly healthy long-lived watcher and
+          // leave an unattended session with no detection at all.
+          const survived = info.opened && deps.now().getTime() - attemptStartedAt >= HEALTHY_CONNECTION_MS;
           if (info.opened) attempts = 0;
-          if (info.reason === 'no-token' || attempts >= maxReconnects) {
-            deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts });
+          if (survived) totalAttempts = 0;
+          if (info.reason === 'no-token' || attempts >= maxReconnects || totalAttempts >= maxTotalReconnects) {
+            deps.log.warn('dev-preview: watch channel gone, detection stopped for this sprite', { holderKind: holder.kind, holderId: holder.id, reason: info.reason, attempts, totalAttempts });
             stopped = true;
             watchers.delete(sandboxId);
             return;
           }
           const delay = BACKOFF_MS[Math.min(attempts, BACKOFF_MS.length - 1)];
           attempts += 1;
+          totalAttempts += 1;
           void wait(delay).then(() => { if (!stopped) open(); });
         },
       });
@@ -145,6 +243,84 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
     deps.log.info('dev-preview: watching sprite', { holderKind: holder.kind, holderId: holder.id });
   }
 
+  /**
+   * Start a watcher for a sprite that has none. `throttled` is for the read
+   * path, which runs on every status render; explicit triggers (a shell open,
+   * a provision, the signed watch call) are never throttled — they mean
+   * something just happened.
+   */
+  async function armIfMissing(holder: DevPreviewHolderRef, sandboxId: string, { throttled }: { throttled: boolean }): Promise<void> {
+    const existing = watchers.get(sandboxId);
+    if (existing !== undefined) {
+      // A NAME IS NOT AN IDENTITY. A rebuild re-creates the sprite under the
+      // same name, so a watcher armed against the old VM still answers
+      // `watchers.has` — and its detector holds a handle whose instance id is
+      // dead. It would then write rows naming a VM that no longer exists while
+      // its service calls land on the new one: every render says `stale`, the
+      // proxy 409s, and nothing recovers it short of a process restart. That
+      // is the ABA case `spriteInstanceId` exists for.
+      //
+      // Only an EXPLICIT trigger checks: those are the moments a VM can have
+      // just been replaced (a provision, a shell open, the signed watch call),
+      // and the check costs one control-plane attach, which never wakes a
+      // sprite. The throttled read path keeps its cheap short-circuit.
+      if (throttled || existing.spriteInstanceId === null) return;
+      const live = await deps.attach(sandboxId).catch(() => null);
+      if (live === null || live.spriteInstanceId === existing.spriteInstanceId) return;
+      // That attach was a full control-plane round trip, and two explicit
+      // triggers for one holder are routine (a shell ensure and the signed
+      // watch call both fire, both `void`-ed). The map may have moved on
+      // meanwhile, and the two ways it can have moved need OPPOSITE answers:
+      //
+      //  - SOMETHING ELSE IS THERE ⇒ the other trigger already did this work.
+      //    Return, and above all do not close what it installed.
+      //  - THE SLOT IS EMPTY ⇒ the other trigger's re-arm FAILED and removed
+      //    its own entry (an attach that came back null right after a rebuild
+      //    is exactly when that happens). Returning here would leave the
+      //    sprite with no watcher at all while this trigger — explicit, and
+      //    deliberately un-throttled — had a perfectly good attach in hand.
+      //    Fall through and arm.
+      const current = watchers.get(sandboxId);
+      if (current !== undefined && current !== existing) return;
+      if (current === existing) existing.close();
+      deps.log.info('dev-preview: sprite replaced under the same name, re-watching', {
+        holderKind: holder.kind,
+        holderId: holder.id,
+      });
+    }
+    const now = deps.now().getTime();
+    // Sweep as we go: the map only ever holds sprites armed within the
+    // cool-down, so it cannot grow with the number of sprites ever seen.
+    for (const [key, at] of lastArmAt) if (now - at >= REARM_COOLDOWN_MS) lastArmAt.delete(key);
+    if (throttled) {
+      const last = lastArmAt.get(sandboxId);
+      if (last !== undefined && now - last < REARM_COOLDOWN_MS) return;
+    }
+    lastArmAt.set(sandboxId, now);
+    // Reserve the slot synchronously so two concurrent arms start one watcher.
+    // Guarded by identity for the same reason the live entry's `close()` is:
+    // nothing calls this today, and that is exactly when a blind
+    // delete-by-key survives long enough to become someone's bug.
+    const reservation: Watcher = {
+      detector: null,
+      spriteInstanceId: null,
+      close() {
+        if (watchers.get(sandboxId) === reservation) watchers.delete(sandboxId);
+      },
+    };
+    watchers.set(sandboxId, reservation);
+    try {
+      await start(holder, sandboxId);
+    } catch (error) {
+      // Whatever `start` had registered goes with the failure — but only if it
+      // is still OURS. A `stopAll` and a fresh arm can both have happened while
+      // this one was failing, and deleting blindly would drop a live entry
+      // without closing it, leaking its reconnecting socket.
+      if (watchers.get(sandboxId) === reservation) watchers.delete(sandboxId);
+      deps.log.error('dev-preview: watcher failed to start', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
+    }
+  }
+
   return {
     async ensure({ holder }) {
       if (!deps.featureEnabled()) return;
@@ -153,24 +329,23 @@ export function createDetectionRegistry(deps: DetectionRegistryDeps): DetectionR
       // any) that holder is on right now.
       const sandboxId = await deps.resolveHolderSandboxId(holder);
       if (sandboxId === null) return;
-      if (watchers.has(sandboxId)) return;
-      // Reserve the slot synchronously so two concurrent ensures start one watcher.
-      watchers.set(sandboxId, { detector: null, close() { watchers.delete(sandboxId); } });
-      try {
-        await start(holder, sandboxId);
-      } catch (error) {
-        // Whatever `start` had registered goes with the failure — the
-        // reservation, or the live entry if the throw came after it was set.
-        watchers.delete(sandboxId);
-        deps.log.error('dev-preview: watcher failed to start', error instanceof Error ? error : new Error(String(error)), { holderKind: holder.kind, holderId: holder.id });
-      }
+      await armIfMissing(holder, sandboxId, { throttled: false });
     },
-    async listeners({ holder }) {
-      if (!deps.featureEnabled()) return null;
+    async read({ holder }) {
+      if (!deps.featureEnabled()) return { detection: 'unavailable', listeners: null };
       // Same rule as `ensure`: the sprite is the holder's ROW's, never a claim.
       const sandboxId = await deps.resolveHolderSandboxId(holder);
-      if (sandboxId === null) return null;
-      return watchers.get(sandboxId)?.detector?.listeners() ?? null;
+      if (sandboxId === null) return { detection: 'unavailable', listeners: null };
+      const entry = watchers.get(sandboxId);
+      if (entry === undefined) {
+        // Nothing is watching a holder that HAS a live sprite — a restart, an
+        // exhausted budget, an unattachable moment that has passed. Re-arm and
+        // tell the caller so; never await it inside a render.
+        void armIfMissing(holder, sandboxId, { throttled: true });
+        return { detection: 'arming', listeners: null };
+      }
+      if (entry.detector === null) return { detection: 'arming', listeners: null };
+      return { detection: 'watching', listeners: entry.detector.listeners() };
     },
     watching: () => [...watchers.keys()],
     stopAll() {

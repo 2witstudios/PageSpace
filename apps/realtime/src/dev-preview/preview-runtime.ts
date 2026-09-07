@@ -9,6 +9,7 @@ import { db } from '@pagespace/db/db';
 import { eq } from '@pagespace/db/operators';
 import { drives } from '@pagespace/db/schema/core';
 import { canRunCode } from '@pagespace/lib/services/sandbox/can-run-code';
+import { sessionService } from '@pagespace/lib/auth/session-service';
 import { getSandboxSessionSecret } from '@pagespace/lib/services/sandbox/machine-session-manager';
 import { resolveDriveMembership } from '@pagespace/lib/services/agent-workspaces/agent-workspace-tenant';
 import { createDbAgentSessionStore } from '@pagespace/lib/services/agent-workspaces/agent-workspaces-store';
@@ -63,6 +64,7 @@ export function buildRealtimePreviewAccessDeps(): PreviewAccessDeps {
       return drive ? { payerId: drive.ownerId } : null;
     },
     canRunCode: ({ userId, driveId, ownerId }) => canRunCode({ userId, driveId: driveId ?? undefined, ownerId, requestOrigin: 'user' }),
+    isSessionUsable: ({ sessionId, userId }) => sessionService.isSessionUsableById(sessionId, userId),
     attach: async (sandboxId) => {
       try {
         return await (await createConnectScopedSandboxHost()).attach({ sandboxId });

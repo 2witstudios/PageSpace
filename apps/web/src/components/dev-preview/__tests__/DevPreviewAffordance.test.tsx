@@ -26,12 +26,15 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: { kind: 'workspace', id: 'ws1' },
     canManage: true,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: false },
     openPath: '/api/agent-workspaces/ws1/preview/open',
     canOpen: true,
     canStop: true,
     canResume: false,
+    canApprove: false,
+    spriteInstanceId: null,
     detectedAt: '2026-09-06T11:00:00.000Z',
     ...over,
   };
@@ -102,6 +105,22 @@ describe('DevPreviewAffordance', () => {
     expect(screen.getByText('Preview of :3000 is switched off')).toHaveAttribute('title', 'Preview of port 3000 is switched off.');
     expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
+  test('an UNSHARED port still gets its line — detection is not exposure — but the verb is "Details", never "Preview"', async () => {
+    preview = status({
+      canOpen: false,
+      canStop: true,
+      canResume: false,
+      canApprove: true,
+      state: { status: 'needs-approval', targetPort: 9000, message: 'A dev server is running on port 9000. It is not a usual dev-server port, so it is not being shared until you say so.' },
+    });
+    renderAffordance();
+    await screen.findByText('Dev server detected on :9000 — not shared yet');
+    expect(screen.getByRole('button', { name: 'Details' })).toBeInTheDocument();
+    // Sharing is never a click on a row in a list: the decision lives in the
+    // pane, which is the surface that states who would be able to see it.
+    expect(screen.queryByRole('button', { name: /Share/ })).toBeNull();
   });
 
   test('an unknown status renders neutral copy and "Details" rather than crashing the row', async () => {
