@@ -46,11 +46,9 @@ Set the same apex on every app that participates. There is no default
 anywhere: an app that misses the variable keeps the feature dark, which is the
 failure mode you want.
 
-**Not `fly secrets set`.** `fly.toml [env]` OVERRIDES a secret of the same
-name, so a value set both places is silently shadowed — the same trap the
-sandbox gate flags carry a warning about in `fly.web.toml`. Neither of these
-is a secret. They live in `[env]`, and `DEV_PREVIEW_APEX` is already there for
-all three apps as of `PageSpace-Deploy` #27:
+Neither value is a secret, so both live in `[env]`, where they are reviewable
+and travel with the deploy. `DEV_PREVIEW_APEX` is already there for all three
+apps as of `PageSpace-Deploy` #27:
 
 ```toml
 # fly/fly.proxy.toml, fly/fly.web.toml, fly/fly.realtime.toml
@@ -59,13 +57,31 @@ all three apps as of `PageSpace-Deploy` #27:
   # DEV_PREVIEW_ENABLED = "true"   # web + realtime only; uncomment to go live
 ```
 
+**Precedence, because the tree gets this backwards.** `fly.web.toml` and
+`fly.realtime.toml` both carry a comment claiming `[env]` overrides a
+same-named secret. It is the other way round —
+[Fly's configuration reference](https://fly.io/docs/reference/configuration/):
+*"Secrets take precedence over env variables with the same name."* Nobody has
+noticed because `CODE_EXECUTION_ENABLED` and `SANDBOX_CONTAINMENT_VERIFIED`
+are set BOTH ways on `pagespace-web` with the same value, so the two readings
+agree by accident. So: do not also `fly secrets set` either preview variable —
+a secret would win and silently mask the value in the config the reviews see.
+
 `[env]` changes only take effect on a **`--config` deploy** (`deploy-fly.sh`);
 an image-only CI deploy preserves the running config, so a deploy that "went
-green" is not evidence the variable landed. Check the running process:
+green" is not evidence the variable landed. Check the running processes —
+**all three**, because a partial rollout passes any single-app check while the
+origin the browser is sent to is not the origin a server will accept:
 
 ```
-fly ssh console -a pagespace-proxy -C 'printenv DEV_PREVIEW_APEX'
+for app in pagespace-proxy pagespace-web pagespace-realtime; do
+  echo "== $app"
+  fly ssh console -a "$app" -C 'printenv DEV_PREVIEW_APEX DEV_PREVIEW_ENABLED' || true
+done
 ```
+
+`pagespace-proxy` should report the apex and no flag; web and realtime should
+report both once you are live.
 
 The apex alone is inert — `isDevPreviewConfigured()` requires the flag too —
 so shipping the apex is a no-op for users and can go out well ahead of the
@@ -146,9 +162,32 @@ headers, reach it through the preview origin, and read what arrived. Minutes,
 one sprite, delete it after. Do not accept "the page rendered" as an answer —
 read the headers the dev server actually received.
 
-**If it leaks:** unset `DEV_PREVIEW_ENABLED` immediately and rotate
-`SPRITES_API_TOKEN`. The fix is an edge change or a header-stripping hop;
-nothing in the application can repair it.
+**If it leaks**, in this order — the order matters, because rotating the token
+first leaves preview forwarding up and simply hands the dev server the NEW
+credential:
+
+```
+# 1. Stop forwarding NOW. A secret beats [env], so this overrides the config
+#    value without waiting on a --config deploy, and only the literal string
+#    'true' enables the feature.
+fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-web
+fly secrets set DEV_PREVIEW_ENABLED=false -a pagespace-realtime
+
+# 2. Confirm it actually took in the running processes, not just in the API.
+fly ssh console -a pagespace-web      -C 'printenv DEV_PREVIEW_ENABLED'
+fly ssh console -a pagespace-realtime -C 'printenv DEV_PREVIEW_ENABLED'
+
+# 3. Only then rotate.
+fly secrets set SPRITES_API_TOKEN=<new> -a pagespace-web -a pagespace-realtime
+```
+
+Setting the secret is the fast path precisely because of the precedence rule
+in §2: it wins over `[env]`, so it takes effect on the restart the secret
+change triggers, with no deploy. Comment the `[env]` flag back out afterwards
+so the config and the running state agree, then clear the secret.
+
+The real fix is an edge change or a header-stripping hop; nothing in the
+application can repair it.
 
 ## 7. Where the smoke runs
 
@@ -179,19 +218,29 @@ ground:
 7. Sign out in another tab → the preview stops answering on the **next**
    request, not ten minutes later.
 
-## Known gaps, open on purpose
+## Runtime behaviour worth knowing
 
-- **A deferred reconcile is never retried.** If the holder's advisory lock is
-  unavailable when a `port_opened` frame arrives, the detector logs
-  `deferred` and drops it. The cron sweep cannot recover it — its WHERE clause
-  requires `stoppedByUserAt IS NOT NULL AND relayServiceName IS NOT NULL`, so
-  a preview that never started is invisible to it — and a dev server that
-  binds once emits no further frames. The user sees no preview and no error.
-- **The advisory lock has no time bound.** `services.get/list/remove` and
-  `getSprite` carry no timeout, and `services.create/start/stop` bound only
-  the log-stream drain, not the HTTP call. The advisory pool is `max: 10` and
-  shared with every other advisory-lock consumer, so hung Sprites calls
-  degrade more than the preview.
+- **A refused reconcile is retried, three times across ~21s.** If the holder's
+  advisory lock is unavailable when a `port_opened` frame arrives, the
+  detector no longer drops it — dropping it meant a running dev server got no
+  preview and no error, because a quiet server emits no further frames, the
+  backstop sweep only sees rows that are switched OFF and still name a relay,
+  and a healthy watcher is never recycled. The retry is cancelled when the
+  connection drops (the next `port_list` reconciles instead), when a newer
+  frame reconciles ahead of it, and when the detected port itself closes. Past
+  the budget it gives up with a `warn` rather than retrying forever.
+- **Control-plane READS are bounded at 15s.** `services.list` and
+  `services.get` stop waiting rather than pinning an advisory-lock connection
+  from a pool of ten that every lock consumer shares.
+- **Control-plane MUTATIONS are deliberately NOT bounded.** `services.create`,
+  `start`, `stop` and `remove` still wait indefinitely. Abandoning the wait
+  would release the lock while the mutation is in flight, letting the next
+  holder plan against a sprite about to change under it — the exact
+  interleaving the lock exists to prevent — and the Sprites SDK exposes no
+  `AbortSignal`, so there is no way to end the call rather than the wait. A
+  hung mutation still holds its connection. That is the remaining gap.
+- **`getSprite` is likewise unbounded**, for the same reason: it is reached
+  through the same SDK surface.
 
-Both are tracked as follow-up work. Neither is a security issue, and the
-kill switch covers both.
+The kill switch covers all of it: unset the flag and every entry point fails
+closed on the next request.

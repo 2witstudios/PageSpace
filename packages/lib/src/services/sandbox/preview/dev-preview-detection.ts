@@ -145,6 +145,16 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
   let chain: Promise<void> = Promise.resolve();
   /** Cancels the pending deferred-reconcile retry, or `null` when none is armed. */
   let cancelRetry: (() => void) | null = null;
+  /**
+   * Bumped by every cancel. A fired retry captures the generation it was armed
+   * in and re-checks it once it reaches the front of the chain, because
+   * `cancelRetry` is already `null` by then — firing is not running, and
+   * between the two a newer frame can reconcile and be superseded by the very
+   * work it was supposed to replace.
+   */
+  let retryGeneration = 0;
+  /** The port the pending retry would act on, so a close of THAT port can cancel it. */
+  let pendingRetryPort: number | null = null;
 
   const context = () => ({ holderKind: holder.kind, holderId: holder.id, spriteInstanceId: handle.spriteInstanceId });
 
@@ -191,10 +201,23 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
       log.warn('dev-preview: giving up on a deferred reconcile', { ...context(), attempts: DEFERRED_RETRY_DELAYS_MS.length });
       return;
     }
+    // Captured AFTER the cancel above, which is what bumps the counter.
+    const generation = retryGeneration;
+    pendingRetryPort = detected?.port ?? null;
     cancelRetry = schedule(() => {
+      // Fired, but not yet run: everything from here is queued behind whatever
+      // is already on the chain, and `cancelRetry` no longer refers to it.
       cancelRetry = null;
       const next = chain
         .then(async () => {
+          // The generation is the ONLY thing that can stop a fired retry. A
+          // newer frame that reconciled while this sat in the queue has
+          // already cancelled — running now would re-point the relay back to
+          // the port the newer frame moved away from.
+          if (generation !== retryGeneration) {
+            log.info('dev-preview: deferred retry superseded', { ...context(), attempt: attempt + 1 });
+            return;
+          }
           const applied = await reconcile(detected, attempt + 1);
           log.info('dev-preview: deferred reconcile retried', { ...context(), attempt: attempt + 1, applied: applied.action });
         })
@@ -206,6 +229,10 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
   }
 
   function cancelDeferredRetry(): void {
+    // Unconditional: a retry that has FIRED has already dropped its canceller,
+    // and the bump is the only thing that still reaches it.
+    retryGeneration += 1;
+    pendingRetryPort = null;
     if (cancelRetry === null) return;
     cancelRetry();
     cancelRetry = null;
@@ -273,6 +300,16 @@ export function createDevPreviewDetector(deps: DevPreviewDetectorDeps): DevPrevi
     if (frame.type === 'port_closed') {
       // Best-effort on the wire (spike §5, §9): bookkeeping only, never a teardown.
       listeners.delete(frame.port);
+      // ...except for a pending retry FOR THIS PORT, which is now known to be
+      // for a server that has gone. The planner takes `detected.port` without
+      // requiring it to still be listening, so letting that retry run would
+      // create a relay and a row pointing at nothing. A close of any OTHER
+      // port still leaves the retry alone — that distinction is the whole
+      // reason `onFrame` does not cancel blindly.
+      if (pendingRetryPort === frame.port) {
+        log.info('dev-preview: deferred retry cancelled, its port closed', { ...context(), port: frame.port });
+        cancelDeferredRetry();
+      }
       return;
     }
 
