@@ -695,14 +695,27 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners }: 
     if (!isPreviewShareable(row, row.targetPort)) {
       return { status: 'needs-approval', targetPort: row.targetPort, message: needsApprovalMessage(row.targetPort) };
     }
-    // Approved, and the slot is TAKEN: the relay was planned and refused, and
-    // no future reconcile will get further while the port is held. Saying
-    // "starting…" here would be a lie that never resolves, and it would hide
-    // the one thing the user can act on — asked BEFORE the starting case, and
-    // only when a snapshot actually proves it (`listeners: null` leaves the
-    // slot unknown, which is not evidence of a problem).
+    // The slot is TAKEN: the relay was planned and refused, and no future
+    // reconcile gets further while the port is held. Asked BEFORE the case
+    // below, and only when a snapshot actually proves it (`listeners: null`
+    // leaves the slot unknown, which is not evidence of a problem).
     if (holder === 'user-process') return { status: 'blocked', targetPort: row.targetPort, message: HTTP_PORT_BUSY_MESSAGE };
-    return { status: 'starting', targetPort: row.targetPort, via: 'relay', message: `Starting the preview relay for port ${row.targetPort}…` };
+    // DOWN, not "starting…". A relay is normally created in the same call that
+    // clears the stop or records the consent, so this shape means that create
+    // did NOT happen — the slot could not be proven free, the holder's lock
+    // was contended, the call failed. Nothing necessarily converges it: the
+    // sweep only handles rows that are still switched OFF, and the detector
+    // needs a port frame a dev server that is already listening will not
+    // emit. Saying "starting" would promise an arrival that never comes and
+    // would take away the one control that fixes it — `down` is what puts the
+    // Restart button back.
+    return {
+      status: 'down',
+      targetPort: row.targetPort,
+      via: 'relay',
+      error: null,
+      message: `The preview relay for port ${row.targetPort} is not defined on this sandbox.`,
+    };
   }
 
   if (row.relayServiceName === null) {

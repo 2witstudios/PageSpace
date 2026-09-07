@@ -454,6 +454,22 @@ describe('approve — one explicit act, bound to the port the user was shown', (
     assert({ given: 'the deferral', should: 'still have recorded the consent', actual: store.current()?.approvedPort, expected: 9000 });
   });
 
+  it('a resume that could NOT start the relay stays recoverable in one click', async () => {
+    // Resume clears the stop first, so a plan that then refuses (no ports
+    // snapshot, a contended lock, a held slot) leaves a row with no relay and
+    // no stop intent. That must offer Restart, not a Preview button onto a
+    // frame the proxy will 503 — nothing else converges it: the sweep only
+    // handles rows still switched OFF, and the detector needs a port frame a
+    // server that is already listening will not emit.
+    const calls: string[] = [];
+    const store = fakeStore(row(5173, { relayServiceName: null, stoppedByUserAt: NOW }), calls);
+    const { deps } = actionDeps({ calls, store, attach: async () => fakeHandle({ relay: null, calls }), readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
+    assert({ given: 'a resume with no ports snapshot', should: 'defer the relay honestly', actual: await applyDevPreviewUserAction({ holder: ENV, action: { kind: 'resume' }, ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
+
+    const after = buildDevPreviewStatus({ holder: ENV, sandbox: 'attached', liveInstanceId: INSTANCE, detection: 'unavailable', openPath: '/o', row: store.current(), relay: null, listeners: null });
+    assert({ given: 'the row it left behind', should: 'be down, restartable, and NOT openable', actual: [after.state.status, after.canResume, after.canOpen], expected: ['down', true, false] });
+  });
+
   it('the status offers the decision only where it can be taken: needs-approval, on this instance', () => {
     const base = { holder: ENV, sandbox: 'attached' as const, detection: 'watching' as const, openPath: '/o' };
     const waiting = buildDevPreviewStatus({ ...base, liveInstanceId: INSTANCE, row: row(9000, { relayServiceName: null }), relay: null, listeners: null });

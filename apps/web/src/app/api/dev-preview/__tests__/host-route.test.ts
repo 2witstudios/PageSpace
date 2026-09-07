@@ -195,6 +195,39 @@ describe('authorize + decide, per request', () => {
     expect(loggers.security.info).toHaveBeenCalledWith('dev-preview.access', expect.objectContaining({ outcome: 'forwarded', status: 201, wake: true, method: 'POST', path: '/api/items' }));
   });
 
+  it('a session that is GONE re-auths instead of dead-ending — a rotation is the usual cause, and the user is still signed in', async () => {
+    // Device refresh mints a replacement session and grace-expires the old
+    // one, on a desktop unlock or an app foregrounding. Without this the frame
+    // sits on a bare 404 for the rest of the cookie's life while the dashboard
+    // around it reports the preview healthy.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'not-authorized', status: 404, message: 'Not found', detail: 'session_revoked' },
+      authorization: { allowed: false, reason: 'session_revoked' },
+    });
+    const framed = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(framed.status).toBe(401);
+    expect(framed.headers.get('content-type')).toContain('text/html');
+    // The stale cookie must go, or the re-auth page's re-mint races it.
+    expect(framed.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // A subresource cannot render a page, but it still clears the cookie so
+    // the frame's next navigation re-auths rather than piling up 404s.
+    const subresource = await GET(req('/main.js', { headers: { cookie: cookie(), 'sec-fetch-dest': 'script' } }), ctx());
+    expect(subresource.status).toBe(404);
+    expect(subresource.headers.get('set-cookie') ?? '').toMatch(new RegExp(`^${PREVIEW_COOKIE_NAME}=;`));
+
+    // Every OTHER refusal is unchanged — a stopped preview is not a re-auth,
+    // and clearing the cookie there would make the user redo the handshake for
+    // something they switched off themselves.
+    vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({
+      decision: { kind: 'refuse', reason: 'stopped-by-user', status: 409, message: 'switched off' },
+      authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' },
+    });
+    const stopped = await GET(req('/', { headers: { cookie: cookie(), 'sec-fetch-dest': 'iframe' } }), ctx());
+    expect(stopped.status).toBe(409);
+    expect(stopped.headers.get('set-cookie')).toBeNull();
+  });
+
   it('turns forwarder failures into 413/502/504 and logs them as limit/upstream outcomes', async () => {
     vi.mocked(resolvePreviewTargetForRequest).mockResolvedValue({ decision: { kind: 'forward', wake: false }, authorization: { allowed: true, driveId: 'd', wakeSubject: { driveId: 'd', ownerId: 'o' }, sandboxId: 's' }, spriteUrl: 'https://ps-x-org.sprites.app', handle: {} as never });
     vi.mocked(forwardPreviewRequest).mockResolvedValueOnce({ kind: 'refused', status: 413, reason: 'request-too-large' });

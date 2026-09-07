@@ -260,8 +260,11 @@ test.describe('dev-server preview: the browser journey', () => {
     await writeSandboxFile(request, user, workspaceId, 'preview-smoke/vite.config.js', VITE_CONFIG_WITH_HOSTS);
     // Ctrl-C first: the first server still owns this PTY and port 5173, and a
     // Vite that cannot bind its port moves to 5174 while the relay keeps
-    // pointing at 5173.
-    await runInShell(context, user, workspaceId, 'cd preview-smoke && npm run dev', { interruptFirst: true });
+    // pointing at 5173. And NO `cd`: it is the same shell, so it is already in
+    // `preview-smoke` from the first command — a second `cd` fails, `&&`
+    // short-circuits, and the server never starts. The two facts are the same
+    // fact: if the PTY were not shared, the Ctrl-C would interrupt nothing.
+    await runInShell(context, user, workspaceId, 'npm run dev', { interruptFirst: true });
     await page.getByTitle('Reload the preview').click();
     await expect(frame.locator('#app')).toHaveText('first render', { timeout: SANDBOX_TIMEOUT_MS });
 

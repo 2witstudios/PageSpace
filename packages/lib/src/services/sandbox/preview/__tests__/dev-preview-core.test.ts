@@ -643,8 +643,13 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
     assert({ given: 'a recorded but unapproved 9000', should: 'be needs-approval naming the port', actual: [waiting.status, waiting.status === 'needs-approval' && waiting.targetPort], expected: ['needs-approval', 9000] });
     expect(waiting.message).toContain('9000');
 
+    // DOWN, not "starting…": the relay is created in the same call that
+    // records the consent, so a row in this shape means that create did not
+    // happen and nothing necessarily retries it. `down` is what keeps the
+    // Restart control on screen; "starting" would promise an arrival that
+    // never comes.
     const approved = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null });
-    assert({ given: 'approved but the relay is not created yet', should: 'read as starting, never as "serving 8080 directly"', actual: approved.status, expected: 'starting' });
+    assert({ given: 'approved but no relay was created', should: 'read as down and stay recoverable', actual: [approved.status, approved.status === 'down' && approved.via], expected: ['down', 'relay'] });
 
     // The relay was planned and REFUSED because a stranger holds 8080. Saying
     // "starting…" would be a lie that never resolves and would hide the one
@@ -652,7 +657,7 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
     const held = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: [{ port: 8080, pid: 99 }] });
     assert({ given: 'approved while a user process holds 8080', should: 'say the port is busy, not "starting"', actual: [held.status, held.message], expected: ['blocked', HTTP_PORT_BUSY_MESSAGE] });
     // With no snapshot the slot is UNKNOWN, which is not evidence of a problem.
-    assert({ given: 'approved with no listener snapshot', should: 'stay starting rather than invent a blockage', actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null }).status, expected: 'starting' });
+    assert({ given: 'approved with no listener snapshot', should: 'stay down rather than invent a blockage', actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, approvedPort: 9000 }), relay: null, listeners: null }).status, expected: 'down' });
 
     // A row can reach the relay-less branch with an ORDINARY dev-server port:
     // a stop records that the relay is gone, and the resume clears the stop
@@ -660,7 +665,7 @@ describe('sharing an UNLISTED port is a decision, not a default', () => {
     // that never needed any — the whole Share affordance would appear on a
     // vite server the user has been previewing all along.
     const resumedKnownPort = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173, { relayServiceName: null }), relay: null, listeners: null });
-    assert({ given: 'a known dev port whose relay was stopped and then resumed', should: 'read as starting, never as needs-approval', actual: resumedKnownPort.status, expected: 'starting' });
+    assert({ given: 'a known dev port whose relay was stopped and then resumed', should: 'read as down — recoverable in one click — never as needs-approval', actual: resumedKnownPort.status, expected: 'down' });
 
     const off = describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(9000, { relayServiceName: null, stoppedByUserAt: NOW }), relay: null, listeners: null });
     assert({ given: 'a switched-off unapproved preview', should: 'read as stopped, not as a pending decision', actual: off.status, expected: 'stopped' });

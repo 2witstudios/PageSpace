@@ -104,6 +104,18 @@ describe('buildPreviewUpgradeHandler', () => {
     expect(revoked.tunnelled).toHaveLength(0);
   });
 
+  it('bounds the tunnel by the COOKIE\'s expiry, so a socket cannot outlive the credential that opened it', async () => {
+    // The gather runs once, at upgrade, and HMR traffic resets the idle cut
+    // forever — so without this a revoked session, a removed drive member or a
+    // switched-off preview would keep streaming while the HTTP half refuses.
+    const d = deps();
+    const s = fakeSocket();
+    await buildPreviewUpgradeHandler(d.deps)(req({ cookie: cookieFor() }), s.socket, Buffer.alloc(0));
+    expect(d.tunnelled).toHaveLength(1);
+    // The cookie in this fixture expires 60s after the fixed clock.
+    expect(d.tunnelled[0].maxLifetimeMs).toBe(60_000);
+  });
+
   it('refuses with the gate status when the gather refuses, and logs the refusal with attribution', async () => {
     const d = deps({
       resolveTarget: async () => ({ decision: { kind: 'refuse', reason: 'stale-instance', status: 409, message: 'rebuilt' }, authorization: { allowed: false, reason: 'x' } }),

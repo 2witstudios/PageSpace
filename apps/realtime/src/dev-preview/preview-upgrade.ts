@@ -124,6 +124,16 @@ export function buildPreviewUpgradeHandler(deps: PreviewUpgradeDeps) {
       requestHeaders: flatten(req.headers),
       upstreamUrl,
       token: deps.spritesToken(),
+      // THE SOCKET MAY NOT OUTLIVE THE COOKIE THAT OPENED IT. The gather runs
+      // once, at upgrade; the idle cut alone never fires while HMR keeps
+      // talking, so without a ceiling a tunnel authorized minutes ago would
+      // keep piping into the sandbox after the session was revoked, the member
+      // was removed from the drive, or the preview was switched off — all of
+      // which the HTTP half refuses on its very next request. Tying it to the
+      // cookie's own expiry makes the two halves agree: the client reconnects
+      // and goes back through the gather, which is where every one of those
+      // checks lives.
+      maxLifetimeMs: Math.max(1, verified.claims.expiresAt - deps.now().getTime()),
       onClose: (summary: TunnelSummary) => {
         deps.log.info('dev-preview.access', buildPreviewAccessLog({
           userId,

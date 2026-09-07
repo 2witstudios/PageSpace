@@ -201,8 +201,39 @@ async function handle(request: NextRequest, context: RouteContext): Promise<Resp
       });
     }
     loggers.security.info('dev-preview.access', buildPreviewAccessLog({ userId, holder, method: request.method, path, outcome: 'refused', reason, status, durationMs: Date.now() - startedAt, transport: 'http' }));
+
+    // A DEAD SESSION IS A RE-AUTH, NOT A DEAD END. The cookie is well-formed
+    // and correctly signed; the session it names is simply gone — and the
+    // commonest way for that to happen is not a sign-out but a ROTATION: a
+    // device refresh mints a replacement session row and grace-expires the
+    // old one, which fires on a desktop unlock, an app foregrounding, any
+    // 401. The user is still signed in, on a page that still works, and
+    // without this the frame would sit on `404 {"error":"Not found"}` for the
+    // rest of the cookie's life while the dashboard around it reports the
+    // preview healthy. So the stale cookie is cleared and the same re-auth
+    // path a missing cookie takes is served: framed, it asks the dashboard to
+    // re-point at `/preview/open`, which mints a grant from the session the
+    // user actually has now. Refused subresources clear the cookie too, so
+    // the frame's next navigation re-auths rather than accumulating 404s.
+    const staleSession = detail === 'session_revoked';
+    if (staleSession && isNavigation(request)) {
+      const [appOrigin, openPath] = [resolveAppOrigin(), await resolvePreviewOpenPath(holder)];
+      if (appOrigin !== null && openPath !== null) {
+        return new NextResponse(buildReauthPage({ appOrigin, openPath, holder }), {
+          status: 401,
+          headers: {
+            'content-type': 'text/html; charset=utf-8',
+            'content-security-policy': `default-src 'none'; script-src '${REAUTH_SCRIPT_HASH}'; frame-ancestors ${appOrigin}`,
+            'set-cookie': buildClearPreviewCookieHeader(),
+            'cache-control': 'no-store',
+          },
+        });
+      }
+    }
+
     const headers: Record<string, string> = { 'cache-control': 'no-store' };
     if (status === 503) headers['retry-after'] = '2';
+    if (staleSession) headers['set-cookie'] = buildClearPreviewCookieHeader();
     return NextResponse.json({ error: message, reason }, { status, headers });
   }
 
