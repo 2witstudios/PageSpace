@@ -1,3 +1,4 @@
+import { ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON } from '@pagespace/lib/env-bridge/bridge-session';
 import type { WebSocket } from 'ws';
 import { logger } from '@pagespace/lib/logging/logger-config';
 import { sessionService } from '@pagespace/lib/auth/session-service';
@@ -65,8 +66,7 @@ export interface RegisterEnvConnectionInput {
 }
 
 /** The close a superseded socket receives. 1000 (normal): the daemon must NOT treat it as a failure and reconnect into a fight with its replacement. */
-export const ENV_SUPERSEDED_CLOSE_CODE = 1000;
-export const ENV_SUPERSEDED_CLOSE_REASON = 'env_superseded';
+export { ENV_SUPERSEDED_CLOSE_CODE, ENV_SUPERSEDED_CLOSE_REASON };
 
 export const ENV_STALE_CONNECTION_TIMEOUT_MS = 60 * 60 * 1000; // 1 hour
 const CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes

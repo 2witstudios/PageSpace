@@ -24,11 +24,12 @@
 import { resolveConfig } from '../config/resolve.js';
 import { createCredentialStore } from '../credentials/store.js';
 import type { CredentialStore } from '../credentials/store.js';
-import { machineProfileName, type MachineHostCredential } from '../credentials/serialize.js';
+import { machineProfileName, type HostCredential, type MachineHostCredential } from '../credentials/serialize.js';
 import { EXIT_RUNTIME_ERROR, EXIT_SUCCESS, EXIT_USAGE_ERROR } from '../exit-codes.js';
 import type { CommandHandler } from '../router/router.js';
-import { encodeChallenge, generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypair.js';
+import { generateMachineKeypair, signWithMachineKey } from '../env-bridge/keypair.js';
 import type { GenerateMachineKeypair, SignWithMachineKey } from '../env-bridge/keypair.js';
+import { BridgeTokenError, mintBridgeToken, postJson, refusalOf } from '../env-bridge/token.js';
 
 type Fetch = typeof globalThis.fetch;
 
@@ -53,29 +54,28 @@ export interface EnvTokenHandlerDeps {
   readonly now: () => number;
 }
 
-function hostFor(ctx: Parameters<CommandHandler>[0], flags: { host?: string }): string {
+/** The deployment this machine talks to: `--host`, else PAGESPACE_API_URL, else the default — exactly as `login` resolves it. */
+export function resolveHostFor(ctx: Parameters<CommandHandler>[0], flags: { host?: string }): string {
   return resolveConfig({ flags: { host: flags.host }, env: { PAGESPACE_API_URL: ctx.env.PAGESPACE_API_URL }, credential: null }).host;
 }
 
-/** The server's refusal, as a one-line reason the user can act on; never the raw body. */
-async function refusal(response: Response): Promise<string> {
-  const body = (await response.json().catch(() => null)) as { reason?: unknown; error?: unknown } | null;
-  const reason = typeof body?.reason === 'string' ? body.reason : typeof body?.error === 'string' ? body.error : `HTTP ${response.status}`;
-  return `${reason} (HTTP ${response.status})`;
-}
-
-async function postJson(fetch: Fetch, url: string, body: unknown): Promise<Response> {
-  return fetch(url, { method: 'POST', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify(body) });
+/**
+ * A machine credential the server has actually pinned. A pending record
+ * (enroll interrupted after the store write) is NOT enrolled: the server
+ * never saw its key, so it can neither mint a token nor connect.
+ */
+export function isEnrolledMachineCredential(credential: HostCredential | null): credential is MachineHostCredential {
+  return credential !== null && credential.kind === 'machine' && credential.serverKeyId !== PENDING;
 }
 
 export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
-    const [, , enrollmentId, code] = intent.args;
+    const [enrollmentId, code] = intent.args;
     if (!enrollmentId || !code) {
       ctx.stderr.write('Usage: pagespace env enroll <enrollmentId> <code> [--host <url>] [--json]\n');
       return EXIT_USAGE_ERROR;
     }
-    const host = hostFor(ctx, intent.flags);
+    const host = resolveHostFor(ctx, intent.flags);
 
     const pair = deps.generateKeypair();
     const store = deps.createCredentialStore();
@@ -109,13 +109,26 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
     if (!response.ok) {
       // The key never existed as far as anyone else is concerned.
       await store.delete(host, profile).catch(() => undefined);
-      ctx.stderr.write(`Enrollment refused: ${await refusal(response)}\n`);
+      ctx.stderr.write(`Enrollment refused: ${await refusalOf(response)}\n`);
       return EXIT_RUNTIME_ERROR;
     }
     const result = (await response.json()) as { enrollmentId: string; envId: string; serverKeyId: string; serverPublicKey: string };
 
     const credential: MachineHostCredential = { ...pending, envId: result.envId, serverPublicKey: result.serverPublicKey, serverKeyId: result.serverKeyId };
-    await store.set(host, credential, profile);
+    // (Codex C11) The code is spent and the server has pinned this key. The
+    // pending record already proved the store writable moments ago, so a
+    // failure here is transient far more often than not: retry once, and if
+    // it still fails say exactly what state things are in and how to
+    // recover — never the key.
+    const saved = await storeWithOneRetry(store, host, credential, profile);
+    if (!saved.ok) {
+      ctx.stderr.write(
+        `Enrolled on the server as environment ${result.envId}, but this machine's credential store refused the final write twice: ${saved.error}\n` +
+          `The server has pinned this machine's key; a pending record under profile "${profile}" still holds it locally, but "env token" and "env connect" will not use a pending record.\n` +
+          `To recover: make the credential store writable (keychain access, or a writable ~/.pagespace), then delete environment ${result.envId} in PageSpace, create a new local environment, and run "pagespace env enroll" again with its code.\n`,
+      );
+      return EXIT_RUNTIME_ERROR;
+    }
 
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify({ enrollmentId: result.enrollmentId, envId: result.envId, serverKeyId: result.serverKeyId, host })}\n`);
@@ -129,37 +142,44 @@ export function createEnvEnrollHandler(deps: EnvEnrollHandlerDeps): CommandHandl
   };
 }
 
+async function storeWithOneRetry(store: CredentialStore, host: string, credential: MachineHostCredential, profile: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  let lastError = '';
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    try {
+      await store.set(host, credential, profile);
+      return { ok: true };
+    } catch (error) {
+      lastError = messageOf(error);
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
 export function createEnvTokenHandler(deps: EnvTokenHandlerDeps): CommandHandler {
   return async (ctx, intent) => {
-    const [, , enrollmentId] = intent.args;
+    const [enrollmentId] = intent.args;
     if (!enrollmentId) {
       ctx.stderr.write('Usage: pagespace env token <enrollmentId> [--host <url>] [--json]\n');
       return EXIT_USAGE_ERROR;
     }
-    const host = hostFor(ctx, intent.flags);
+    const host = resolveHostFor(ctx, intent.flags);
 
     const credential = await deps.createCredentialStore().get(host, machineProfileName(enrollmentId));
-    // A pending record (enroll was interrupted after the store write) is not
-    // enrolled either: the server never pinned its key.
-    if (!credential || credential.kind !== 'machine' || credential.serverKeyId === PENDING) {
+    if (!isEnrolledMachineCredential(credential)) {
       ctx.stderr.write(`No machine credential for enrollment ${enrollmentId} on ${host}. Run "pagespace env enroll <enrollmentId> <code>" first.\n`);
       return EXIT_RUNTIME_ERROR;
     }
 
-    const challengeResponse = await deps.fetch(`${host}/api/env-bridge/token?enrollmentId=${encodeURIComponent(enrollmentId)}`, { headers: { accept: 'application/json' } });
-    if (!challengeResponse.ok) {
-      ctx.stderr.write(`Challenge refused: ${await refusal(challengeResponse)}\n`);
-      return EXIT_RUNTIME_ERROR;
+    let minted: Awaited<ReturnType<typeof mintBridgeToken>>;
+    try {
+      minted = await mintBridgeToken({ host, credential, fetch: deps.fetch, sign: deps.sign });
+    } catch (error) {
+      if (error instanceof BridgeTokenError) {
+        ctx.stderr.write(`${error.message}\n`);
+        return EXIT_RUNTIME_ERROR;
+      }
+      throw error;
     }
-    const challenge = (await challengeResponse.json()) as { nonce: string; expiresAt: string };
-
-    const signature = deps.sign(credential.privateKey, encodeChallenge({ nonce: challenge.nonce, enrollmentId, exp: Date.parse(challenge.expiresAt) }));
-    const redeemResponse = await postJson(deps.fetch, `${host}/api/env-bridge/token`, { enrollmentId, nonce: challenge.nonce, signature });
-    if (!redeemResponse.ok) {
-      ctx.stderr.write(`Token refused: ${await refusal(redeemResponse)}\n`);
-      return EXIT_RUNTIME_ERROR;
-    }
-    const minted = (await redeemResponse.json()) as { token: string; expiresInMs: number; envId: string };
 
     if (intent.flags.json) {
       ctx.stdout.write(`${JSON.stringify({ token: minted.token, expiresInMs: minted.expiresInMs, envId: minted.envId })}\n`);
