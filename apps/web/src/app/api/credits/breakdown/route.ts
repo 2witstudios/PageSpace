@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth, isAuthError } from '@/lib/auth/auth-helpers';
 import { getUserUsageBreakdown } from '@/lib/subscription/usage-breakdown-query';
+import { resolveTier } from '@pagespace/lib/billing/credit-balance';
 import { auditRequest } from '@pagespace/lib/audit/audit-log';
 import { loggers } from '@pagespace/lib/logging/logger-config';
 
@@ -16,7 +17,7 @@ export async function GET(request: NextRequest) {
 
     const { userId } = auth;
 
-    const breakdown = await getUserUsageBreakdown(userId);
+    const breakdown = await getUserUsageBreakdown(userId, await resolveTier(userId));
 
     auditRequest(request, {
       eventType: 'data.read',

@@ -184,14 +184,16 @@ describe('MONTHLY_CREDITS (credit unit strings — regression guard)', () => {
 });
 
 describe('monthlyCreditsPhrase', () => {
-  it('free tier phrase contains the credit count and the word "credits"', () => {
+  it('free tier phrase is a one-time starter grant — count + "credits", never "/month"', () => {
     expect(monthlyCreditsPhrase('free')).toContain(MONTHLY_CREDITS.free);
     expect(monthlyCreditsPhrase('free')).toContain('credits');
+    expect(monthlyCreditsPhrase('free')).not.toContain('/month');
+    expect(monthlyCreditsPhrase('free')).toBe('5 credits to start');
   });
 
-  it('pro tier phrase contains the credit count and the word "credits"', () => {
+  it('pro tier phrase contains the credit count and "/month" (refilling tier)', () => {
     expect(monthlyCreditsPhrase('pro')).toContain(MONTHLY_CREDITS.pro);
-    expect(monthlyCreditsPhrase('pro')).toContain('credits');
+    expect(monthlyCreditsPhrase('pro')).toContain('credits/month');
   });
 
   it('founder tier phrase contains the credit count and the word "credits"', () => {

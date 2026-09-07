@@ -16,7 +16,7 @@ import { BuyCreditsButton } from '@/components/billing/BuyCreditsButton';
 import { UpgradeTierButton } from '@/components/billing/UpgradeTierButton';
 import { centsToCredits, formatCreditCount } from '@/lib/subscription/credits';
 
-/** Percentage of monthly allowance remaining below which we warn the user. */
+/** Percentage of the allowance remaining below which we warn the user. */
 const LOW_BALANCE_THRESHOLD_PCT = 15;
 
 export function CreditBalance() {
@@ -107,7 +107,7 @@ export function CreditBalance() {
             </p>
             {debt > 0 && (
               <p className="text-xs text-primary-foreground/80">
-                Overage clears at your next renewal or with a top-up
+                {isFree ? 'Overage clears with a top-up' : 'Overage clears at your next renewal or with a top-up'}
               </p>
             )}
             {topupCredits > 0 && (

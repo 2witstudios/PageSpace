@@ -16,6 +16,7 @@
  */
 import {
   TIER_MONTHLY_ALLOWANCE_CENTS,
+  TIER_ALLOWANCE_REFILLS,
   CREDIT_PACKS,
   CREDIT_TOPUP_MIN_CENTS,
   CREDIT_TOPUP_MAX_CENTS,
@@ -98,9 +99,24 @@ export const MONTHLY_CREDITS: Record<SubscriptionTier, string> = {
   business: formatCreditCount(TIER_MONTHLY_ALLOWANCE_CENTS.business),
 };
 
-/** "5 credits/month" style phrase for a tier. */
+/** Whether a tier's allowance is re-granted every billing period (free is a one-time grant). */
+const CREDITS_REFILL: Record<SubscriptionTier, boolean> = TIER_ALLOWANCE_REFILLS;
+
+/**
+ * Allowance phrase for a tier: "15 credits/month" for refilling paid tiers,
+ * "5 credits to start" for the free tier's one-time starter grant.
+ */
 export function monthlyCreditsPhrase(tier: SubscriptionTier): string {
-  return `${MONTHLY_CREDITS[tier]} credits/month`;
+  return CREDITS_REFILL[tier]
+    ? `${MONTHLY_CREDITS[tier]} credits/month`
+    : `${MONTHLY_CREDITS[tier]} credits to start`;
+}
+
+/** Short table-cell form: "15 credits/mo" or "5 credits to start". */
+export function creditsCellPhrase(tier: SubscriptionTier, cents: number): string {
+  return CREDITS_REFILL[tier]
+    ? `${formatCreditCount(cents)} credits/mo`
+    : `${formatCreditCount(cents)} credits to start`;
 }
 
 /** Buyable top-up packs, sorted by ascending credit value. */
