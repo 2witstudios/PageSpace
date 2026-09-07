@@ -230,28 +230,35 @@ export function usePushNotifications(): PushNotificationState & PushNotification
 
       try {
         const result = await PushNotifications.checkPermissions();
-        // Keep the record in step with the OS, which is the real authority on
-        // whether this user has refused. Two states mean it is no longer
-        // holding a refusal against them:
-        //   'granted' — turned on from system settings since.
+        // Mirror the OS in BOTH directions. It is the real authority on whether
+        // this user has refused, and the record is only a cache of its answer,
+        // so every launch makes the cache agree with it:
+        //   'granted' — turned on from system settings since. Clear.
         //   'prompt'  — the OS has forgotten the refusal and would ask again.
         //               Android 11+ auto-revokes and RESETS permissions for an
         //               app that goes unused, landing exactly here; without
         //               this the record would outlive the refusal it stands for
-        //               and the user could never be asked again.
-        // 'denied' and 'prompt-with-rationale' both mean the refusal stands.
+        //               and the user could never be asked again. Clear.
+        //   'denied' / 'prompt-with-rationale' — the refusal stands. Write it,
+        //               because the OS can be holding one this client never saw
+        //               it collect: a user who refused on a build that predates
+        //               this record has exactly that state, and so does one
+        //               whose localStorage write failed. Without this the guard
+        //               would reopen and `hasPreviouslyDenied` would claim the
+        //               user had never said no.
         //
-        // Clearing BEFORE the setState below is what makes the ordering safe:
+        // Syncing BEFORE the setState below is what makes the ordering safe:
         // PushNotificationManager waits for permissionStatus to leave 'unknown'
         // before it calls requestPermission(), and this setState is the only
         // thing that moves it — so the record is always already in step by the
         // time requestPermission() reads it. Do not reorder these two.
         const osHasNoRefusal = result.receive === 'granted' || result.receive === 'prompt';
         if (osHasNoRefusal) clearRecordedDenial();
+        else recordDenial(platform);
         setState(prev => ({
           ...prev,
           permissionStatus: result.receive,
-          hasPreviouslyDenied: osHasNoRefusal ? false : prev.hasPreviouslyDenied,
+          hasPreviouslyDenied: !osHasNoRefusal,
         }));
       } catch (error) {
         console.error('[PushNotifications] Error checking permissions:', error);
@@ -259,7 +266,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     };
 
     checkPermission();
-  }, [state.isSupported]);
+  }, [state.isSupported, platform]);
 
   // Register token with server
   const registerTokenWithServer = useCallback(async (token: string) => {
@@ -320,7 +327,11 @@ export function usePushNotifications(): PushNotificationState & PushNotification
     // requestPermissions() on every cold start: on Android the OS still allows
     // that ask while it reports 'prompt-with-rationale', so the dialog really
     // would reappear each launch.
-    if (hasRecordedDenial()) {
+    //
+    // `state.hasPreviouslyDenied` is the in-memory half of the same answer, and
+    // it is what holds when storage is unavailable — every writer of the record
+    // sets it too, but `recordDenial` swallows a failed write by design.
+    if (hasRecordedDenial() || state.hasPreviouslyDenied) {
       setState(prev => ({ ...prev, hasPreviouslyDenied: true, isLoading: false }));
       return false;
     }
@@ -359,7 +370,7 @@ export function usePushNotifications(): PushNotificationState & PushNotification
       }));
       return false;
     }
-  }, [state.isSupported, platform]);
+  }, [state.isSupported, state.hasPreviouslyDenied, platform]);
 
   // Manually register token (if already have permission)
   const registerToken = useCallback(async (): Promise<boolean> => {

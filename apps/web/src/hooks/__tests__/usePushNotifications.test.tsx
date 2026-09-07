@@ -330,6 +330,67 @@ describe('usePushNotifications', () => {
     expect(mockRegister).toHaveBeenCalledTimes(1);
   });
 
+  it("regression: an OS refusal with NO local record still blocks — a user who refused on a build predating the record has exactly this state", async () => {
+    // No DENIAL_KEY at all, but the OS is holding a refusal this client never
+    // saw it collect. Before the OS->record direction was mirrored, the guard
+    // reopened and hasPreviouslyDenied claimed the user had never said no.
+    expect(localStorage.getItem(DENIAL_KEY)).toBeNull();
+    mockCheckPermissions.mockResolvedValue({ receive: 'prompt-with-rationale' });
+
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.hasPreviouslyDenied).toBe(true));
+    expect(localStorage.getItem(DENIAL_KEY)).toBe('android');
+
+    let granted: boolean | undefined;
+    await act(async () => {
+      granted = await result.current.requestPermission();
+    });
+
+    expect(granted).toBe(false);
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+  });
+
+  it("regression: an OS 'denied' with no local record does the same", async () => {
+    expect(localStorage.getItem(DENIAL_KEY)).toBeNull();
+    mockCheckPermissions.mockResolvedValue({ receive: 'denied' });
+
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.hasPreviouslyDenied).toBe(true));
+    expect(localStorage.getItem(DENIAL_KEY)).toBe('android');
+
+    let granted: boolean | undefined;
+    await act(async () => {
+      granted = await result.current.requestPermission();
+    });
+
+    expect(granted).toBe(false);
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+  });
+
+  it('the in-memory flag still blocks when storage is unavailable, so a failed write cannot reopen the guard', async () => {
+    // recordDenial swallows a failed write by design; hasPreviouslyDenied is the
+    // half of the answer that does not depend on storage surviving.
+    mockCheckPermissions.mockResolvedValue({ receive: 'denied' });
+    const setItem = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('QuotaExceededError');
+    });
+    const getItem = vi.spyOn(Storage.prototype, 'getItem').mockReturnValue(null);
+
+    const { result } = renderHook(() => usePushNotifications());
+    await waitFor(() => expect(result.current.hasPreviouslyDenied).toBe(true));
+
+    let granted: boolean | undefined;
+    await act(async () => {
+      granted = await result.current.requestPermission();
+    });
+
+    expect(granted).toBe(false);
+    expect(mockRequestPermissions).not.toHaveBeenCalled();
+
+    setItem.mockRestore();
+    getItem.mockRestore();
+  });
+
   it("regression: 'prompt-with-rationale' does NOT drop the record — the refusal still stands there", async () => {
     localStorage.setItem(DENIAL_KEY, 'android');
     mockCheckPermissions.mockResolvedValue({ receive: 'prompt-with-rationale' });

@@ -340,8 +340,11 @@ every cold start. This is not redundant with the OS state: after one refusal And
 
 The record is a cache of the OS's answer, never a second source of truth. The permission-check
 effect runs once per mount, so the sync below happens on the next launch rather than the moment a
-setting changes; it drops the record whenever `checkPermissions()` reports a state that is not
-holding a refusal —
+setting changes; it makes the record agree with the OS in both directions. It writes one when
+`checkPermissions()` reports `denied` or `prompt-with-rationale` — the OS can be holding a refusal
+this client never saw it collect, which is exactly the state of a user who refused on a build
+predating the record, or one whose storage write failed — and it drops one whenever the OS reports a
+state that is not holding a refusal —
 `granted` (the user turned notifications on from system settings) or `prompt` (the OS has forgotten
 the refusal and would ask again, which is where **Android 11+ lands after auto-revoking permissions
 for an app that went unused**). `denied` and `prompt-with-rationale` both keep it. There is
