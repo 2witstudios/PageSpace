@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { assert } from '../../__tests__/riteway';
 import type { SandboxServiceInfo, SandboxServicesApi } from '../../sandbox-host';
-import { createDevPreviewDetector, type DevPreviewDetectorDeps } from '../dev-preview-detection';
+import { createDevPreviewDetector, DEFERRED_RETRY_DELAYS_MS, type DevPreviewDetectorDeps } from '../dev-preview-detection';
 import type { DevPreviewRecord, DevPreviewStore } from '../dev-preview-store';
 import type { DevPreviewRowIntent } from '../dev-preview-core';
 import { buildPreviewRelaySpec, PREVIEW_RELAY_SERVICE_NAME } from '../preview-relay';
@@ -23,6 +23,8 @@ function harness(overrides: {
   failCreate?: boolean;
   /** What the PLANNER sees, when the stored row has already moved on (the stop/detection race). */
   readsAheadOfWrites?: DevPreviewRecord | null;
+  /** Refuse the holder's lock this many times, then acquire. */
+  lockBusyTimes?: number;
 } = {}) {
   let relay: SandboxServiceInfo | null = overrides.relay ?? null;
   let row: DevPreviewRecord | null = overrides.row ?? null;
@@ -85,8 +87,43 @@ function harness(overrides: {
     },
     probeRuntime: async () => { probes += 1; return overrides.runtime ?? 'node'; },
   };
+  // A scripted lock: contention is a FACT here, not a timing hope.
+  let busyLeft = overrides.lockBusyTimes ?? 0;
+  if (overrides.lockBusyTimes !== undefined) {
+    deps.lock = async (_holder, run) => {
+      if (busyLeft > 0) { busyLeft -= 1; calls.push('lock-busy'); return { outcome: 'busy' }; }
+      calls.push('lock-acquired');
+      return { outcome: 'acquired', result: await run() };
+    };
+  }
+  /** Refuse the NEXT `n` lock acquisitions — lets a test settle first, then contend. */
+  const setBusy = (n: number) => { busyLeft = n; };
+  // Timers as data: every armed retry is captured and fired by hand, so the
+  // test asserts the SCHEDULE, not a wall clock.
+  const timers: { ms: number; run: () => void; cancelled: boolean }[] = [];
+  deps.schedule = (run, ms) => {
+    const entry = { ms, run, cancelled: false };
+    timers.push(entry);
+    return () => { entry.cancelled = true; };
+  };
   const detector = createDevPreviewDetector(deps);
-  return { detector, calls, logs, probes: () => probes, relay: () => relay, row: () => row };
+  /**
+   * Fire the newest armed, uncancelled timer and let its work settle. It must
+   * NOT go through `onFrame` — a frame cancels the pending retry, which is
+   * exactly the thing under test.
+   */
+  const fired = new Set<{ ms: number }>();
+  const fire = async (): Promise<boolean> => {
+    const next = [...timers].reverse().find((t) => !t.cancelled && !fired.has(t));
+    if (next === undefined) return false;
+    fired.add(next);
+    next.run();
+    // The retry queues onto the detector's internal chain; drain the macrotask
+    // queue so every awaited store/service call has settled.
+    for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0));
+    return true;
+  };
+  return { detector, calls, logs, probes: () => probes, relay: () => relay, row: () => row, timers, fire, setBusy };
 }
 
 describe('createDevPreviewDetector — port_opened', () => {
@@ -281,5 +318,172 @@ describe('createDevPreviewDetector — discipline', () => {
 
     await h.detector.onFrame({ type: 'port_list', ports: [{ port: 5173, pid: 11 }] });
     assert({ given: 'the snapshot arriving', should: 'start the relay for real', actual: h.calls, expected: [`upsert:5173:${PREVIEW_RELAY_SERVICE_NAME}`, 'create:5173'] });
+  });
+});
+
+describe('createDevPreviewDetector — a deferred reconcile is retried', () => {
+  it('a frame refused by the lock is RE-ATTEMPTED, and the retry starts the relay', async () => {
+    // The gap this closes: a dev server binds once and then sits quiet, so
+    // there is no second frame; the backstop sweep only ever sees rows that
+    // are switched OFF and still name a relay, so a preview that never
+    // started is invisible to it; a healthy watcher is never recycled, so no
+    // reconnect snapshot arrives; and the status read plans nothing. Drop the
+    // frame and the user's running dev server simply never gets a preview,
+    // with no error anywhere.
+    const h = harness({ lockBusyTimes: 0 });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
+    h.setBusy(1);
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+
+    assert({
+      given: 'a port_opened whose reconcile the lock refused',
+      should: 'have started NOTHING yet, and armed exactly one retry',
+      actual: [h.calls.filter((c) => c.startsWith('create')).length, h.timers.filter((t) => !t.cancelled).length],
+      expected: [0, 1],
+    });
+    assert({
+      given: 'the first retry',
+      should: 'be armed at the first delay in the schedule',
+      actual: h.timers[0]?.ms,
+      expected: DEFERRED_RETRY_DELAYS_MS[0],
+    });
+
+    assert({ given: 'the armed retry firing', should: 'have run', actual: await h.fire(), expected: true });
+    assert({
+      given: 'a lock that is now free',
+      should: 'create the relay for the port the dropped frame carried',
+      actual: h.calls.filter((c) => c.startsWith('create:')),
+      expected: ['create:5173'],
+    });
+  });
+
+  it('gives up after a BOUNDED number of attempts rather than retrying forever', async () => {
+    const h = harness({ lockBusyTimes: 0 });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
+    h.setBusy(99);
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+
+    let fires = 0;
+    while (await h.fire()) fires += 1;
+    assert({
+      given: 'a lock that never frees',
+      should: 'retry exactly as many times as the schedule has delays, then stop',
+      actual: fires,
+      expected: DEFERRED_RETRY_DELAYS_MS.length,
+    });
+    assert({
+      given: 'the exhausted schedule',
+      should: 'say so rather than failing silently',
+      actual: h.logs.some((l) => l.startsWith('warn:dev-preview: giving up on a deferred reconcile')),
+      expected: true,
+    });
+    assert({
+      given: 'every attempt refused',
+      should: 'never have touched the sprite',
+      actual: h.calls.filter((c) => c.startsWith('create') || c.startsWith('start')),
+      expected: [],
+    });
+  });
+
+  it('a retry that has already FIRED is still superseded by the newer frame it queued behind', async () => {
+    // Firing is not running. The timer callback drops its canceller and
+    // appends to the chain, so between those two points a newer frame can
+    // reconcile — and without a generation check the stale retry then runs
+    // LAST and re-points the relay back to the port the newer frame left.
+    const h = harness({ lockBusyTimes: 0 });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
+    h.setBusy(1);
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+
+    // The ORDER is the whole point: the newer frame is queued FIRST and is
+    // still in flight, and the timer fires while it is — so the retry lands
+    // BEHIND it on the chain and would otherwise get the last word.
+    const newer = h.detector.onFrame({ type: 'port_opened', port: 3000, address: '10.0.0.1', pid: 384 });
+    const armed = h.timers.filter((t) => !t.cancelled);
+    armed[armed.length - 1]?.run();
+    await newer;
+    for (let i = 0; i < 8; i += 1) await new Promise((r) => setTimeout(r, 0));
+
+    assert({
+      given: 'a fired-but-queued retry for 5173 and a newer frame that took 3000',
+      should: 'leave the relay on 3000 — the stale retry must not re-point it',
+      actual: h.calls.filter((c) => c.startsWith('create:')),
+      expected: ['create:3000'],
+    });
+    assert({
+      given: 'the superseded retry',
+      should: 'say so rather than silently doing nothing',
+      actual: h.logs.some((l) => l.startsWith('info:dev-preview: deferred retry superseded')),
+      expected: true,
+    });
+  });
+
+  it('a retry whose OWN port closes is cancelled — a relay to a server that has gone is worse than none', async () => {
+    const h = harness({ lockBusyTimes: 0 });
+    await h.detector.onFrame({ type: 'port_list', ports: [] });
+    h.setBusy(1);
+    await h.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+    await h.detector.onFrame({ type: 'port_closed', port: 5173 });
+
+    assert({
+      given: 'the detected port closing before the retry fires',
+      should: 'cancel it — the planner takes detected.port without checking it still listens',
+      actual: h.timers.filter((t) => !t.cancelled).length,
+      expected: 0,
+    });
+    await h.fire();
+    assert({
+      given: 'the cancelled retry',
+      should: 'never create a relay for the closed port',
+      actual: h.calls.filter((c) => c.startsWith('create:')),
+      expected: [],
+    });
+  });
+
+  it('a NEW frame supersedes the pending retry, and a dropped connection cancels it', async () => {
+    const superseded = harness({ lockBusyTimes: 0 });
+    await superseded.detector.onFrame({ type: 'port_list', ports: [] });
+    superseded.setBusy(1);
+    await superseded.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+    await superseded.detector.onFrame({ type: 'port_opened', port: 3000, address: '10.0.0.1', pid: 384 });
+    assert({
+      given: 'a newer frame that RECONCILES arriving before the retry fires',
+      should: 'leave no armed retry — the successful reconcile supersedes it',
+      actual: superseded.timers.filter((t) => !t.cancelled).length,
+      expected: 0,
+    });
+
+    // The counterweight, and the reason `onFrame` does NOT cancel blindly: a
+    // frame that reconciles NOTHING must leave the pending retry alone, or an
+    // unrelated port closing would silently reintroduce the dropped-frame bug.
+    const unrelated = harness({ lockBusyTimes: 0 });
+    await unrelated.detector.onFrame({ type: 'port_list', ports: [] });
+    unrelated.setBusy(1);
+    await unrelated.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+    await unrelated.detector.onFrame({ type: 'port_closed', port: 4321 });
+    assert({
+      given: 'an unrelated port_closed while a retry is pending',
+      should: 'leave the retry armed',
+      actual: unrelated.timers.filter((t) => !t.cancelled).length,
+      expected: 1,
+    });
+    assert({
+      given: 'that still-armed retry firing',
+      should: 'start the relay the dropped frame was for',
+      actual: (await unrelated.fire()) && unrelated.calls.filter((c) => c.startsWith('create:')).length === 1,
+      expected: true,
+    });
+
+    const dropped = harness({ lockBusyTimes: 0 });
+    await dropped.detector.onFrame({ type: 'port_list', ports: [] });
+    dropped.setBusy(1);
+    await dropped.detector.onFrame({ type: 'port_opened', port: 5173, address: '10.0.0.1', pid: 383 });
+    dropped.detector.invalidateSnapshot();
+    assert({
+      given: 'the watch connection dropping',
+      should: 'cancel the retry — the next connection reconciles from a real snapshot',
+      actual: dropped.timers.filter((t) => !t.cancelled).length,
+      expected: 0,
+    });
   });
 });
