@@ -31,10 +31,10 @@ afterEach(() => {
 
 describe('readDevPreviewListeners', () => {
   it('POSTs the holder, signed, to the listeners route with redirect: error and a timeout, and returns the cleaned snapshot', async () => {
-    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 'x' }, { port: 1, pid: 'y' }] })));
+    const fetchImpl = vi.fn(async () => new Response(JSON.stringify({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 'x' }, { port: 1, pid: 'y' }] })));
     const result = await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch);
     // Parsed with the watch channel's own reader: a non-integer pid is dropped, the port is kept; a non-integer port is dropped.
-    expect(result).toEqual([{ port: 5173, pid: 3 }, { port: 8080 }, { port: 1 }]);
+    expect(result).toEqual({ detection: 'watching', listeners: [{ port: 5173, pid: 3 }, { port: 8080 }, { port: 1 }] });
     const [url, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('http://realtime.internal:3001/api/dev-preview/listeners');
     expect(init.method).toBe('POST');
@@ -44,18 +44,22 @@ describe('readDevPreviewListeners', () => {
     expect((init.headers as Record<string, string>)['X-Broadcast-Signature']).toMatch(/^sig:/);
   });
 
-  it('answers null (honest unknown) for: realtime says null, a non-array, a non-2xx, a network failure (logged), a dark feature, no realtime URL', async () => {
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: null }))) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: 'nope' }))) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch)).toBeNull();
-    expect(await readDevPreviewListeners(HOLDER, (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch)).toBeNull();
+  it('answers "unknown, and nothing is watching" for every failure: a non-array, a bogus detection, a non-2xx, a network failure (logged), a dark feature, no realtime URL', async () => {
+    const UNKNOWN = { detection: 'unavailable', listeners: null };
+    // A null snapshot from a WATCHING realtime keeps that fact: the ports are
+    // unknown, but detection IS running — a different sentence for the UI.
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ detection: 'watching', listeners: null }))) as unknown as typeof fetch)).toEqual({ detection: 'watching', listeners: null });
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ listeners: 'nope' }))) as unknown as typeof fetch)).toEqual(UNKNOWN);
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response(JSON.stringify({ detection: 'bogus', listeners: [] }))) as unknown as typeof fetch)).toEqual({ detection: 'unavailable', listeners: [] });
+    expect(await readDevPreviewListeners(HOLDER, (async () => new Response('{}', { status: 500 })) as unknown as typeof fetch)).toEqual(UNKNOWN);
+    expect(await readDevPreviewListeners(HOLDER, (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch)).toEqual(UNKNOWN);
     expect(loggers.realtime.warn).toHaveBeenCalledWith('dev-preview: listeners read failed', expect.objectContaining({ error: 'ECONNREFUSED' }));
 
     const fetchImpl = vi.fn();
     vi.mocked(isDevPreviewConfigured).mockReturnValueOnce(false);
-    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toEqual(UNKNOWN);
     delete process.env.INTERNAL_REALTIME_URL;
-    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toBeNull();
+    expect(await readDevPreviewListeners(HOLDER, fetchImpl as unknown as typeof fetch)).toEqual(UNKNOWN);
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 });

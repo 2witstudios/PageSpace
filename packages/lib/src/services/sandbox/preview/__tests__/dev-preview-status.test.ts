@@ -94,7 +94,7 @@ function fakeStore(initial: DevPreviewRecord | null, calls: string[] = []): DevP
 // -----------------------------------------------------------------------------
 
 describe('buildDevPreviewStatus — pure fold', () => {
-  const base = { holder: ENV, sandbox: 'attached' as const, liveInstanceId: INSTANCE, openPath: '/api/drives/d1/envs/env1/preview/open' };
+  const base = { holder: ENV, sandbox: 'attached' as const, liveInstanceId: INSTANCE, detection: 'watching' as const, openPath: '/api/drives/d1/envs/env1/preview/open' };
 
   it('an absent sandbox is "none" with the absent message, whatever the row says', () => {
     const status = buildDevPreviewStatus({ ...base, sandbox: 'absent', liveInstanceId: null, row: row(5173), relay: null, listeners: null });
@@ -211,7 +211,7 @@ function statusDeps(over: Partial<DevPreviewStatusDeps> & { calls?: string[] } =
     resolveDrivePayer: async () => track('payer', { payerId: 'owner' }),
     attach: async () => track('attach', fakeHandle({ relay: relayService(5173), calls })),
     previewStore: fakeStore(row(5173), calls),
-    readListeners: async () => track('readListeners', [{ port: 5173, pid: 7 }, { port: SPRITE_HTTP_PORT, pid: 42 }]),
+    readListeners: async () => track('readListeners', { detection: 'watching', listeners: [{ port: 5173, pid: 7 }, { port: SPRITE_HTTP_PORT, pid: 42 }] }),
     ...over,
   };
 }
@@ -258,7 +258,7 @@ describe('gatherDevPreviewStatus — authorize, attach, fold; never a probe', ()
   });
 
   it('a null snapshot from realtime renders the LAST-KNOWN state honestly (relay status carries it) with the slot unknown', async () => {
-    const d = statusDeps({ readListeners: async () => null });
+    const d = statusDeps({ readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
     const result = await gatherDevPreviewStatus({ authorizeAs: ENV, holder: ENV, userId: 'u1', deps: d });
     if (!result.ok) throw new Error('expected ok');
     assert({ given: 'no snapshot', should: 'still be live, slot unknown', actual: [result.status.state.status, result.status.slot], expected: ['live', { known: false }] });
@@ -275,7 +275,7 @@ function actionDeps(over: Partial<DevPreviewUserActionDeps> & { calls?: string[]
   const deps: DevPreviewUserActionDeps = {
     previewStore: store,
     attach: async () => fakeHandle({ relay: relayService(5173), calls }),
-    readListeners: async () => null,
+    readListeners: async () => ({ detection: 'unavailable', listeners: null }),
     canRunCode: async (input) => { calls.push(`canRunCode:${input.userId}:${input.driveId}:${input.ownerId}`); return { ok: true }; },
     now: () => NOW,
     ...over,
@@ -300,7 +300,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed', error: 'exited with code 143' }), calls: trackedCalls }),
       // A CURRENT snapshot: the dev server is up and 8080 is free, so the
       // relay may honestly be started (see the slot-unknown case below).
-      readListeners: async () => [{ port: 5173, pid: 7 }],
+      readListeners: async () => ({ detection: 'watching', listeners: [{ port: 5173, pid: 7 }] }),
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
     assert({ given: 'a stopped relay', should: 'start it and re-record the row', actual: result, expected: { ok: true, applied: { action: 'start-relay', via: 'start', targetPort: 5173, recorded: true } } });
@@ -314,7 +314,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
     const { deps } = actionDeps({
       store,
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
-      readListeners: async () => null,
+      readListeners: async () => ({ detection: 'unavailable', listeners: null }),
     });
     assert({ given: 'no ports/watch snapshot', should: 'refuse rather than read unknown as "8080 is free"', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: false, reason: 'slot-unknown' } });
     assert({ given: 'the refusal', should: 'still have cleared the stop — the user\'s ON stands', actual: store.current()?.stoppedByUserAt, expected: null });
@@ -322,7 +322,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
   });
 
   it('a DIRECT (8080) resume needs no snapshot — there is no relay to place', async () => {
-    const { deps } = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }), readListeners: async () => null });
+    const { deps } = actionDeps({ store: fakeStore(row(SPRITE_HTTP_PORT, { stoppedByUserAt: NOW })), attach: async () => fakeHandle({ relay: null }), readListeners: async () => ({ detection: 'unavailable', listeners: null }) });
     assert({ given: 'a direct row and no snapshot', should: 'converge without refusing', actual: await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps }), expected: { ok: true, applied: { action: 'none', reason: 'already-direct', staleRowIgnored: false } } });
   });
 
@@ -331,7 +331,7 @@ describe('applyDevPreviewUserAction — intent first, then ONE reconcile through
     const { deps } = actionDeps({
       store: fakeStore(row(5173, { stoppedByUserAt: NOW })),
       attach: async () => fakeHandle({ relay: relayService(5173, { status: 'failed' }), calls: trackedCalls }),
-      readListeners: async () => [{ port: SPRITE_HTTP_PORT, pid: 999 }],
+      readListeners: async () => ({ detection: 'watching', listeners: [{ port: SPRITE_HTTP_PORT, pid: 999 }] }),
     });
     const result = await applyDevPreviewUserAction({ holder: ENV, action: 'resume', ...ACTOR, deps });
     assert({ given: 'foreign 8080 listener', should: 'refuse http-port-busy', actual: result, expected: { ok: true, applied: { action: 'refuse', reason: 'http-port-busy', targetPort: 5173 } } });

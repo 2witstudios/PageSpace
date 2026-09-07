@@ -26,6 +26,7 @@ function status(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: { kind: 'workspace', id: 'ws1' },
     canManage: true,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: false },
     openPath: '/api/agent-workspaces/ws1/preview/open',

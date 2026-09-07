@@ -31,6 +31,7 @@ function preview(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: { kind: 'env', id: 'e' },
     canManage: false,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'none', message: 'nothing' },
     slot: { known: false },
     openPath: '/o',

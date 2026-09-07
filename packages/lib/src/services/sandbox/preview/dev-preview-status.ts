@@ -67,6 +67,20 @@ export type DevPreviewSlotReport =
   | { known: false }
   | { known: true; holder: HttpPortSlotHolder; pid: number | null; message: string };
 
+/**
+ * Whether DETECTION is running for this holder — orthogonal to what the
+ * preview is doing, which is why it is a sibling field rather than a new
+ * member of the core's state union (that union is mutation-tested and
+ * switched on exhaustively by the UI copy).
+ */
+export type DevPreviewDetection = 'watching' | 'arming' | 'unavailable';
+
+/** What the realtime tier answered: the snapshot it holds, and whether it is watching at all. */
+export interface DevPreviewListenersRead {
+  detection: DevPreviewDetection;
+  listeners: readonly ListeningPort[] | null;
+}
+
 /** Whether the holder's sprite could be reached for this render. */
 export type DevPreviewSandboxReach =
   /** The holder has no live sprite right now (never provisioned, torn down, session ended). */
@@ -110,6 +124,13 @@ export interface DevPreviewStatus {
   canResume: boolean;
   /** When the dev server this row answers was detected, or null with no row. */
   detectedAt: Date | null;
+  /**
+   * Whether anything is watching this holder's ports right now. `unavailable`
+   * means the status shown may be out of date — it is NOT a claim that the
+   * sandbox is idle, which is exactly the conflation a bare `listeners: null`
+   * used to force.
+   */
+  detection: DevPreviewDetection;
 }
 
 /**
@@ -118,6 +139,8 @@ export interface DevPreviewStatus {
  * the platform could not ATTACH to is the core's own `instance-unknown`.)
  */
 export const SANDBOX_ABSENT_MESSAGE = 'This sandbox is not running, so there is no dev server to preview.';
+/** Shown when the sandbox is live but nothing is watching its ports, so the status may lag. */
+export const DETECTION_UNAVAILABLE_MESSAGE = 'Dev-server detection is not running right now, so this status may be out of date.';
 
 /**
  * Pure: who holds 8080, as a fact. A user process on 8080 is the USER'S OWN
@@ -154,11 +177,12 @@ export interface BuildDevPreviewStatusInput {
   relay: SandboxServiceInfo | null;
   /** The realtime tier's `ports/watch` snapshot, or null when none is in hand. */
   listeners: readonly ListeningPort[] | null;
+  detection: DevPreviewDetection;
   openPath: string | null;
 }
 
 /** Pure: the whole read model from what the gather collected. */
-export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
+export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, relay, listeners, detection, openPath }: BuildDevPreviewStatusInput): DevPreviewStatus {
   // Absent is the one reach the core cannot describe (it is asked about a
   // sprite); unreachable IS the core's `instance-unknown` (no live instance
   // id can be proven), so it is worded there and nowhere else.
@@ -195,6 +219,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
     canStop: actionable && row.stoppedByUserAt === null,
     canResume: actionable && (row.stoppedByUserAt !== null || (state.status === 'down' && state.repairable)),
     detectedAt: row?.detectedAt ?? null,
+    detection,
   };
 }
 
@@ -203,7 +228,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
 // -----------------------------------------------------------------------------
 
 /** The realtime tier's listener snapshot for a holder's sprite, or null when it holds none (or cannot be asked). Never a probe. */
-export type DevPreviewListenersReader = (holder: DevPreviewHolderRef) => Promise<readonly ListeningPort[] | null>;
+export type DevPreviewListenersReader = (holder: DevPreviewHolderRef) => Promise<DevPreviewListenersRead>;
 
 export type DevPreviewStatusDeps = Pick<
   PreviewAccessDeps,
@@ -244,21 +269,22 @@ export async function gatherDevPreviewStatus({
 
   if (authorization.sandboxId === null) {
     const row = await deps.previewStore.findByHolder(holder);
-    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'absent', liveInstanceId: null, row, relay: null, listeners: null, openPath }) };
+    // Realtime is deliberately not asked about a holder with no sprite.
+    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'absent', liveInstanceId: null, row, relay: null, listeners: null, detection: 'unavailable', openPath }) };
   }
 
-  const [handle, row, listeners] = await Promise.all([
+  const [handle, row, read] = await Promise.all([
     deps.attach(authorization.sandboxId),
     deps.previewStore.findByHolder(holder),
     deps.readListeners(holder),
   ]);
   if (handle === null) {
-    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, openPath }) };
+    return { ok: true, status: buildDevPreviewStatus({ holder, sandbox: 'unreachable', liveInstanceId: null, row, relay: null, listeners: null, detection: read.detection, openPath }) };
   }
   const relay = await handle.services.get(PREVIEW_RELAY_SERVICE_NAME);
   return {
     ok: true,
-    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners, openPath }),
+    status: buildDevPreviewStatus({ holder, sandbox: 'attached', liveInstanceId: handle.spriteInstanceId, row, relay, listeners: read.listeners, detection: read.detection, openPath }),
   };
 }
 
@@ -373,7 +399,8 @@ export async function applyDevPreviewUserAction({
     const handle = await deps.attach(row.sandboxId);
     if (handle === null) return { ok: true, applied: null };
 
-    const [relay, listeners] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
+    const [relay, read] = await Promise.all([handle.services.get(PREVIEW_RELAY_SERVICE_NAME), deps.readListeners(holder)]);
+    const listeners = read.listeners;
     // `listeners: null` is UNKNOWN, never "nothing is bound". Coercing it to an
     // empty set would let the core read 8080 as free and start a relay that may
     // fail to bind; `listenersKnown` makes the core refuse that instead, and the

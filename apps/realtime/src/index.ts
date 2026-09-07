@@ -1039,7 +1039,10 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
         //   listeners — a status render asks for the snapshot this process's
         //               watcher already holds; `null` is the honest "no
         //               snapshot in hand" (never-probe-to-render: the sprite
-        //               is not touched to answer).
+        //               is not touched to answer). It ALSO re-arms a missing
+        //               watcher, throttled — this is what makes detection
+        //               survive a restart or an exhausted reconnect budget,
+        //               since nothing else would ever start one again.
         const isWatch = req.url === '/api/dev-preview/watch';
         readCappedBody(body => {
             const signatureHeader = req.headers['x-broadcast-signature'] as string;
@@ -1060,9 +1063,9 @@ const requestListener = (req: IncomingMessage, res: ServerResponse) => {
                 res.end(JSON.stringify({ accepted: true }));
                 return;
             }
-            devPreviewRegistry.listeners({ holder }).then((listeners) => {
+            devPreviewRegistry.read({ holder }).then((read) => {
                 res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ listeners }));
+                res.end(JSON.stringify(read));
             }).catch((error: unknown) => {
                 loggers.realtime.error('dev-preview: listeners read failed', error instanceof Error ? error : new Error(String(error)));
                 res.writeHead(500, { 'Content-Type': 'application/json' });

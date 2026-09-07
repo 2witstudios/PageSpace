@@ -44,6 +44,7 @@ function live(over: Partial<DevPreviewStatusDTO> = {}): DevPreviewStatusDTO {
     holder: OPEN.holder,
     canManage: true,
     sandbox: 'attached',
+    detection: 'watching',
     state: { status: 'live', targetPort: 5173, via: 'relay', message: 'Relaying port 8080 to your dev server on port 5173.' },
     slot: { known: true, holder: 'relay', pid: null, message: 'Port 8080 is held by the preview relay, forwarding to your dev server on port 5173.' },
     openPath: OPEN.openPath,

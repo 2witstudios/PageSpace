@@ -40,8 +40,19 @@ export interface DevPreviewStore {
    * row — the one column the platform cannot report (an explicit stop lands a
    * service in `failed`, indistinguishable from a crash — spike §4). Writes
    * ONLY that column: the row's instance, target and relay name are facts
-   * about the sprite and a user action changes none of them. Resolves the
-   * row AS WRITTEN (the same slice `findByHolder` returns, so the caller can
+   * about the sprite and a user action changes none of them.
+   *
+   * UNCONDITIONAL, deliberately — no compare-and-set, no instance guard. This
+   * records the user's OWN intent, which is the newest fact by definition; a
+   * CAS here would let a detection frame refuse a person's Stop, inverting the
+   * rule the rest of this file exists to uphold. An instance guard would be
+   * inert as well as harmful: a stop written onto a stale row is already
+   * ignored by the planner and rendered `stale`, while requiring the live
+   * instance would mean an un-attachable sprite could no longer accept a Stop
+   * at all. The guard that belongs here is the one on `upsert`, which replaces
+   * a whole row.
+   *
+   * Resolves the row AS WRITTEN (the same slice `findByHolder` returns, so the caller can
    * plan from it without a second read), or `null` when the holder has no
    * row (nothing to switch off) — a caller never reports "switched off" for
    * a preview that does not exist.

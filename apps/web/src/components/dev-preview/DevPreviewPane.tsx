@@ -66,6 +66,7 @@ import { useDevPreviewCapability } from '@/hooks/dev-preview/useDevPreviewCapabi
 import { devPreviewActionsPath, useDevPreviewStatus, type DevPreviewStatusDTO } from '@/hooks/dev-preview/useDevPreviewStatus';
 import { useDevPreviewPaneStore, type OpenDevPreview } from '@/stores/useDevPreviewPaneStore';
 import { useEditingSession } from '@/stores/useEditingSession';
+import { DETECTION_UNAVAILABLE_MESSAGE } from '@pagespace/lib/services/sandbox/preview/dev-preview-status';
 import { devPreviewBadge } from './dev-preview-copy';
 
 /** The open pane polls faster than the affordance: its chrome should notice a relay crash within a few seconds. */
@@ -273,12 +274,18 @@ function DevPreviewStatusLine({ preview, frameMounted }: { preview: DevPreviewSt
   // for a held slot is the core's, carried by the `blocked` state's message.
   // A direct row's own server on 8080 is not worth a line.
   const showSlot = preview.slot.known && preview.slot.holder === 'user-process' && !(preview.state.status === 'live' && preview.state.via === 'direct');
-  if (!showState && !showSlot) return null;
+  // Nothing is watching this sandbox's ports, so what is shown may lag. Said
+  // only for a LIVE sandbox: with none attached there is nothing to detect,
+  // and the state message already says that. `'arming'` says nothing — it
+  // resolves within a poll, and a flicker on every first render is noise.
+  const showDetection = preview.detection === 'unavailable' && preview.sandbox === 'attached';
+  if (!showState && !showSlot && !showDetection) return null;
   const tone = preview.state.status === 'blocked' ? 'text-destructive' : 'text-muted-foreground';
   return (
     <div className={`shrink-0 space-y-0.5 border-b border-border px-2 py-1 text-xs ${tone}`} data-testid="dev-preview-status-line">
       {showState && <div>{preview.state.message}</div>}
       {showSlot && preview.slot.known && <div>{preview.slot.message}</div>}
+      {showDetection && <div>{DETECTION_UNAVAILABLE_MESSAGE}</div>}
     </div>
   );
 }
