@@ -11,6 +11,7 @@ import type { DevPreviewRecord, DevPreviewStore } from '../dev-preview-store';
 import {
   SANDBOX_ABSENT_MESSAGE,
   applyDevPreviewUserAction,
+  probeDevPreviewPorts,
   buildDevPreviewStatus,
   describeSlotMessage,
   gatherDevPreviewStatus,
@@ -544,7 +545,7 @@ describe('select — a person names the port, and the plan is made from a probe,
     const { deps } = actionDeps({
       calls,
       store,
-      attach: async () => fakeHandle({ relay: null, calls }),
+      attach: async () => { calls.push('attach'); return fakeHandle({ relay: null, calls }); },
       // The watch snapshot is deliberately EMPTY of the target: this is the
       // Next.js case, where detection never saw the port and no row exists.
       readListeners: async () => ({ detection: 'watching', listeners: [] }),
@@ -628,5 +629,48 @@ describe('select — a person names the port, and the plan is made from a probe,
     const result = await applyDevPreviewUserAction({ holder: ENV, action: select(9000), ...ACTOR, sandboxId: 'sbx', deps });
     assert({ given: 'a pick of 9000 while 5173 is previewed', should: 're-point the relay', actual: result.ok && result.applied?.action, expected: 'replace-relay' });
     assert({ given: 'the row afterwards', should: 'target and pin 9000', actual: [store.current()?.targetPort, store.current()?.selectedByUserAt], expected: [9000, NOW] });
+  });
+});
+
+describe('probeDevPreviewPorts — the list is copy, classified server-side, and writes nothing', () => {
+  const PROBE = { ok: true as const, ports: [{ port: 3000, pid: 2311 }, { port: 9000, pid: 8 }, { port: 5432, pid: 9 }, { port: SPRITE_HTTP_PORT, pid: 42 }] };
+  function listing(overrides: Partial<DevPreviewUserActionDeps> & { store?: ReturnType<typeof fakeStore>; calls?: string[] } = {}) {
+    const calls = overrides.calls ?? [];
+    const store = overrides.store ?? fakeStore(null, calls);
+    const { deps } = actionDeps({ calls, store, attach: async () => { calls.push('attach'); return fakeHandle({ relay: relayService(3000), calls }); }, readListeners: async () => ({ detection: 'watching', listeners: [] }), probe: async () => { calls.push('probe'); return PROBE; }, ...overrides });
+    return { deps, calls, store };
+  }
+
+  it('classifies every probed port and marks which one is current', async () => {
+    const calls: string[] = [];
+    const { deps } = listing({ calls, store: fakeStore(row(3000), calls) });
+    const result = await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'four probed ports with a relay live on 3000', should: 'return them classified, 3000 current', actual: result.ok && result.ports.map((p) => [p.port, p.kind, 'reason' in p ? p.reason : p.likelihood, p.current]), expected: [[3000, 'dev-server', 'known-dev-port', true], [9000, 'dev-server', 'unlisted', false], [5432, 'ignored', 'non-http-service-port', false], [SPRITE_HTTP_PORT, 'ignored', 'relay-own-listener', false]] });
+    assert({ given: 'the listing', should: 'echo the live instance for the pick to bind to', actual: result.ok && result.spriteInstanceId, expected: INSTANCE });
+    assert({ given: 'the listing', should: 'write nothing', actual: calls.some((c) => c.startsWith('selectPort') || c.startsWith('upsert') || c.startsWith('create:')), expected: false });
+  });
+
+  it('a row on a DEAD instance marks nothing current — that is a dead VM\'s fact', async () => {
+    const { deps } = listing({ store: fakeStore(row(3000, { spriteInstanceId: 'inst-dead' })) });
+    const result = await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: 'sbx', deps });
+    assert({ given: 'a stale row targeting 3000', should: 'report no current port', actual: result.ok && [result.currentPort, result.ports.some((p) => p.current)], expected: [null, false] });
+  });
+
+  it('is wake-gated BEFORE attaching — a probe is a billed exec', async () => {
+    const { deps, calls } = listing({ canRunCode: async () => ({ ok: false as const, reason: 'tier_ineligible' }) });
+    assert({ given: 'a payer who may not run code', should: 'refuse the wake', actual: await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'wake-not-allowed', detail: 'tier_ineligible' } });
+    assert({ given: 'that refusal', should: 'neither attach nor probe', actual: calls.some((c) => c === 'attach' || c === 'probe'), expected: false });
+  });
+
+  it('a holder with no sandbox, or a handle with no instance, has nothing to list', async () => {
+    const none = listing();
+    assert({ given: 'no row and no sandbox on the authorization', should: 'be unavailable', actual: await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: null, deps: none.deps }), expected: { ok: false, reason: 'sandbox-unavailable' } });
+    const noInstance = listing({ attach: async () => fakeHandle({ relay: null, instance: null }) });
+    assert({ given: 'a handle with no sprite instance', should: 'be unavailable rather than exec on nothing', actual: await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: 'sbx', deps: noInstance.deps }), expected: { ok: false, reason: 'sandbox-unavailable' } });
+  });
+
+  it('passes a probe failure through by name, never as an empty list', async () => {
+    const { deps } = listing({ probe: async () => ({ ok: false, reason: 'unavailable' }) });
+    assert({ given: 'no ss in the image', should: 'say probe-failed with the detail', actual: await probeDevPreviewPorts({ holder: ENV, ...ACTOR, sandboxId: 'sbx', deps }), expected: { ok: false, reason: 'probe-failed', detail: 'unavailable' } });
   });
 });
