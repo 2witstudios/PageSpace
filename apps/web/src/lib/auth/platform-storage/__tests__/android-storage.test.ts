@@ -211,6 +211,32 @@ describe('AndroidStorage', () => {
       setItem.mockRestore();
     });
 
+    it('does not fail a landed token write because the id write could not', async () => {
+      // Reporting failure for a refresh that actually persisted sends the
+      // caller back into the rate limiter for nothing.
+      const real = Storage.prototype.setItem;
+      const setItem = vi
+        .spyOn(Storage.prototype, 'setItem')
+        .mockImplementation(function (this: Storage, key: string, value: string) {
+          if (key === 'browser_device_id') throw new Error('QuotaExceededError');
+          real.call(this, key, value);
+        });
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+      const storage = await importAndroidStorage();
+
+      await expect(
+        storage.storeSession({
+          sessionToken: '',
+          csrfToken: null,
+          deviceId: 'web_abc123',
+          deviceToken: 'rotated-device-token',
+        })
+      ).resolves.toBeUndefined();
+
+      expect(localStorage.getItem('deviceToken')).toBe('rotated-device-token');
+      setItem.mockRestore();
+    });
+
     it('does not overwrite a browser device id that already exists', async () => {
       // browser_device_id belongs to getOrCreateDeviceId and is what every web
       // sign-in binds its token to; overwriting it would make a divergence
@@ -573,6 +599,48 @@ describe('AndroidStorage', () => {
       const storage = await importAndroidStorage();
 
       expect(await storage.getDeviceId()).toBe('web_abc123');
+    });
+
+    it('answers a timed-out read the way the successful one did', async () => {
+      // refreshBearerSession reads the session, then asks for the id through a
+      // second bridge call on the same budget. If the first lands and the
+      // second times out, answering from the legacy store pairs the keychain's
+      // token with the legacy id — read as a stolen token, 401, and
+      // clearSession then destroys both credentials over a slow keystore.
+      vi.useFakeTimers();
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      localStorage.setItem('browser_device_id', 'web_abc123');
+      keychainMock.get.mockResolvedValueOnce({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'native-device-id',
+          deviceToken: 'native-device-token',
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      // Read 1 — the one auth-fetch makes for itself — succeeds.
+      expect((await storage.getStoredSession())?.deviceId).toBe('native-device-id');
+
+      // Read 2, inside getDeviceInfo, hangs.
+      keychainMock.get.mockReturnValue(new Promise(() => {}));
+      const pending = storage.getDeviceId();
+      await vi.advanceTimersByTimeAsync(3000);
+
+      expect(await pending).toBe('native-device-id');
+      vi.useRealTimers();
+    });
+
+    it('publishes a minted id where the server binding will look for it', async () => {
+      // A live token with no id recorded: minting only into preferences would
+      // leave the native and web identities permanently divergent, where
+      // WebStorage mints straight into browser_device_id.
+      localStorage.setItem('deviceToken', 'legacy-device-token');
+      const storage = await importAndroidStorage();
+
+      const id = await storage.getDeviceId();
+
+      expect(localStorage.getItem('browser_device_id')).toBe(id);
     });
 
     it('still reports the legacy binding when the keychain hangs', async () => {

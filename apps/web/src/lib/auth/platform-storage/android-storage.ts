@@ -156,18 +156,18 @@ export class AndroidStorage implements PlatformStorage {
       throw storageError('read', error);
     }
 
-    if (!raw) return this.readLegacySession();
+    if (!raw) return this.remember(this.readLegacySession());
 
     let parsed: Partial<StoredSession>;
     try {
       parsed = JSON.parse(raw) as Partial<StoredSession>;
     } catch {
       // Unparseable bytes are not a store fault — the store answered.
-      return this.readLegacySession();
+      return this.remember(this.readLegacySession());
     }
 
     if (typeof parsed.sessionToken !== 'string' || typeof parsed.deviceId !== 'string') {
-      return this.readLegacySession();
+      return this.remember(this.readLegacySession());
     }
 
     // The optional fields get the same treatment as the required ones. `?? null`
@@ -175,15 +175,37 @@ export class AndroidStorage implements PlatformStorage {
     // hand back something that satisfies `StoredSession` only nominally; those
     // values then travel into a refresh request body.
     if (!isOptionalString(parsed.csrfToken) || !isOptionalString(parsed.deviceToken)) {
-      return this.readLegacySession();
+      return this.remember(this.readLegacySession());
     }
 
-    return {
+    return this.remember({
       sessionToken: parsed.sessionToken,
       csrfToken: parsed.csrfToken ?? null,
       deviceId: parsed.deviceId,
       deviceToken: parsed.deviceToken ?? null,
-    };
+    });
+  }
+
+  /**
+   * The device id of the last session a read actually returned.
+   *
+   * `refreshBearerSession` reads the session itself and then asks for the
+   * device id separately, and both reads cross the same native bridge with the
+   * same 3s budget. When the first lands and the second times out, answering
+   * from the legacy store would pair the *keychain's* device token with the
+   * *legacy* id — which the refresh route reads as a stolen token, 401s, and
+   * then `clearSession` destroys both credentials over what was only a slow
+   * keystore. This remembers what the successful read said, so the second
+   * question can be answered the same way as the first.
+   *
+   * Consulted only when a live read fails, so it cannot pin a stale answer the
+   * way memoizing `deviceIdPromise` would.
+   */
+  private lastKnownDeviceId: string | null = null;
+
+  private remember(session: StoredSession | null): StoredSession | null {
+    if (session?.deviceId) this.lastKnownDeviceId = session.deviceId;
+    return session;
   }
 
   /**
@@ -241,8 +263,16 @@ export class AndroidStorage implements PlatformStorage {
       // what every web sign-in binds its device token to. Overwriting it with
       // whatever `getDeviceInfo()` happened to report would make a divergence
       // permanent instead of recording an identity that was missing.
+      // Best-effort, unlike the token above: the token has nowhere else to
+      // live, but failing this write after that one landed would report a
+      // failure for a refresh that succeeded, sending the caller back into the
+      // rate limiter.
       if (session.deviceId && !readLegacyDeviceId()) {
-        writeLegacy(LEGACY_DEVICE_ID_KEYS[0], session.deviceId);
+        try {
+          writeLegacy(LEGACY_DEVICE_ID_KEYS[0], session.deviceId);
+        } catch (error) {
+          console.error(storageError('write', error).message);
+        }
       }
       return;
     }
@@ -303,9 +333,9 @@ export class AndroidStorage implements PlatformStorage {
   /**
    * The device id the session currently in force is bound to, if any.
    *
-   * A store fault is not fatal here — the caller falls back to preferences —
-   * so unlike `getStoredSession` this swallows it. Losing the binding degrades
-   * a refresh; failing to answer at all would break every caller of
+   * A store fault is not fatal here — the fallbacks below still name a binding
+   * — so unlike `getStoredSession` this swallows it. Losing the binding
+   * degrades a refresh; failing to answer at all would break every caller of
    * `getDeviceInfo`.
    */
   private async boundDeviceId(): Promise<string | null> {
@@ -325,12 +355,13 @@ export class AndroidStorage implements PlatformStorage {
     }
 
     // A keystore that hangs or refuses is no reason to report the *wrong* id.
-    // The legacy binding lives in localStorage and needs no bridge to read, so
-    // it still answers when the native store cannot — and answering with a
-    // minted id instead is precisely the mismatch that gets a refresh rejected
-    // as a stolen token. Falling back to preferences (the caller's next step)
-    // only happens once neither store names a binding.
-    return this.readLegacySession()?.deviceId || null;
+    // What the last successful read said comes first — it is the only answer
+    // that stays consistent with a session already read through this same
+    // instance. Then the legacy binding, which lives in localStorage and needs
+    // no bridge to read. Only once neither names a binding does the caller fall
+    // through to preferences, and a minted id there is precisely the mismatch
+    // that gets a refresh rejected as a stolen token.
+    return this.lastKnownDeviceId ?? this.readLegacySession()?.deviceId ?? null;
   }
 
   /**
@@ -383,6 +414,20 @@ export class AndroidStorage implements PlatformStorage {
     // CUID2 for consistency across the codebase (matches iOS and web).
     const id = createId();
     await Preferences.set({ key: DEVICE_ID_KEY, value: id });
+
+    // If a legacy device token is live but named no id, publish the minted one
+    // where the *server* binding will look for it. `WebStorage.getDeviceId`
+    // mints straight into `browser_device_id`, so its two identities converge;
+    // minting only into preferences — which no web sign-in path reads — would
+    // leave them permanently divergent.
+    if (readLegacy(LEGACY_DEVICE_TOKEN_KEY) && !readLegacyDeviceId()) {
+      try {
+        writeLegacy(LEGACY_DEVICE_ID_KEYS[0], id);
+      } catch (error) {
+        console.error(storageError('write', error).message);
+      }
+    }
+
     return id;
   }
 
