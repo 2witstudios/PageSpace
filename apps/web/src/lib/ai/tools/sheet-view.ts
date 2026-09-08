@@ -381,15 +381,27 @@ function documentTabs(sheet: SheetData): SheetTabSummary[] {
  * with rows — an empty sheet, or another tab's data — that an agent has no way
  * to tell apart from the truth.
  */
-function windowFromDocument(
-  content: unknown,
-  pageId: string,
-  tabIndex: number,
-  fromRow: number,
-  limit: number,
-  only?: ReadonlySet<string>,
-  includeFormatting?: boolean,
-): SheetWindow {
+interface DocumentWindowOptions {
+  content: unknown;
+  pageId: string;
+  tabIndex: number;
+  /** 0-based row index to start at. */
+  fromRow: number;
+  limit: number;
+  /** Column letters to keep; omitted means every column each row has. */
+  only?: ReadonlySet<string>;
+  includeFormatting?: boolean;
+}
+
+function windowFromDocument({
+  content,
+  pageId,
+  tabIndex,
+  fromRow,
+  limit,
+  only,
+  includeFormatting,
+}: DocumentWindowOptions): SheetWindow {
   const parsed = parseSheetContentSafe(content);
   if (!parsed.ok) {
     throw new SheetDocumentUnreadableError(
@@ -549,7 +561,12 @@ function documentCellFormats(
     if (!wanted.has(decoded.row)) continue;
     const label = encodeColumnLabel(decoded.column);
     if (only && !only.has(label)) continue;
-    entries.push({ row: decoded.row, label, address: address.toUpperCase(), format });
+    // Re-encoded from the decoded position rather than passed through, so this
+    // key is formed by exactly the expression the row-store path uses. The
+    // parser already normalises these addresses (`normalizeCellAddress` on the
+    // way in), so this is not fixing an observed mismatch — it is refusing to
+    // depend on that guarantee for a key an agent writes back to.
+    entries.push({ row: decoded.row, label, address: `${label}${decoded.row + 1}`, format });
   }
 
   entries.sort((a, b) => a.row - b.row || compareColumnLabels(a.label, b.label));
@@ -607,15 +624,15 @@ export async function loadSheetWindow(
 
   const storedTabs = await listTabs(pageId);
   if (storedTabs.length === 0) {
-    return windowFromDocument(
-      options.documentContent,
+    return windowFromDocument({
+      content: options.documentContent,
       pageId,
       tabIndex,
       fromRow,
       limit,
       only,
-      options.includeFormatting,
-    );
+      includeFormatting: options.includeFormatting,
+    });
   }
 
   const tabs = toTabSummaries(storedTabs);
