@@ -38,6 +38,37 @@ const nativeAuthSchema = z.object({
 });
 
 /**
+ * The Google OAuth clients a token from `platform` may name as its audience.
+ *
+ * `null` means this deployment has not configured what that platform needs, and
+ * the caller answers 500.
+ *
+ * The Android SDK has no client id of its own: `native-google-auth.ts`
+ * initializes it with the **web** client id (`webClientId`, the plugin's
+ * required Android field) and the ID token it returns carries the web client as
+ * its audience. So the iOS client id is not merely unnecessary for Android — it
+ * is meaningless there. Requiring it unconditionally, as this route used to,
+ * made native Google sign-in return 500 on any deployment that configured
+ * Android but never registered an iOS OAuth client. Nothing reached that state
+ * before, because no client could send `platform: 'android'` at all.
+ *
+ * iOS is deliberately unchanged: it has always accepted a token minted for
+ * either client, and narrowing that here would be an unrelated behaviour change
+ * to a shipping platform.
+ */
+function acceptedAudiences(platform: 'ios' | 'android'): string[] | null {
+  const webClientId = process.env.GOOGLE_OAUTH_CLIENT_ID;
+  if (!webClientId) return null;
+
+  if (platform === 'ios') {
+    const iosClientId = process.env.GOOGLE_OAUTH_IOS_CLIENT_ID;
+    return iosClientId ? [webClientId, iosClientId] : null;
+  }
+
+  return [webClientId];
+}
+
+/**
  * Native Google Sign-In endpoint for iOS/Android apps.
  * Receives a Google ID token from the native SDK and creates a session.
  */
@@ -78,9 +109,12 @@ export async function POST(req: Request) {
     const { idToken, platform, deviceId, deviceName, inviteToken, returnUrl: rawReturnUrl } = validation.data;
     const returnUrl = rawReturnUrl && isSafeReturnUrl(rawReturnUrl) ? rawReturnUrl : undefined;
 
-    // Validate required environment variables
-    if (!process.env.GOOGLE_OAUTH_CLIENT_ID || !process.env.GOOGLE_OAUTH_IOS_CLIENT_ID) {
+    // Which OAuth clients a token from this platform may be issued to, or null
+    // when this deployment has not configured what the platform needs.
+    const audience = acceptedAudiences(platform);
+    if (!audience) {
       loggers.auth.error('Missing Google OAuth client IDs', {
+        platform,
         hasWebClientId: !!process.env.GOOGLE_OAUTH_CLIENT_ID,
         hasIosClientId: !!process.env.GOOGLE_OAUTH_IOS_CLIENT_ID,
       });
@@ -88,14 +122,7 @@ export async function POST(req: Request) {
     }
 
     // Verify the ID token with Google
-    // Accept both iOS client ID and web client ID for backend verification
-    const ticket = await client.verifyIdToken({
-      idToken,
-      audience: [
-        process.env.GOOGLE_OAUTH_CLIENT_ID, // Web client ID
-        process.env.GOOGLE_OAUTH_IOS_CLIENT_ID, // iOS client ID
-      ],
-    });
+    const ticket = await client.verifyIdToken({ idToken, audience });
 
     const payload = ticket.getPayload();
     if (!payload?.email) {
