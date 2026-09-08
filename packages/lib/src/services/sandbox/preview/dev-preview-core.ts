@@ -304,6 +304,15 @@ export interface HttpPortSlotInput {
   listeners: readonly ListeningPort[];
   /** The relay service as reported now, or null when none is defined. */
   relay: SandboxServiceInfo | null;
+  /**
+   * Where `listeners` came from (see {@link ListenerSource}). Decides whether
+   * a listener's PID may contradict a running relay: a `watch` pid can be
+   * STALE — the relay restarted under a new pid and the channel never said
+   * so (seen in production: the first re-pick rendered a healthy relay as
+   * "held by another process (pid <old relay>)") — so only a fresh `probe`
+   * pid may. Defaults to `'watch'`.
+   */
+  listenerSource?: ListenerSource;
 }
 
 /**
@@ -350,18 +359,23 @@ export type HttpPortSlotHolder = 'none' | 'relay' | 'user-process';
  * `=== 'none'`; the UI asks this fuller form so it can say which of the two
  * holders is in the way and how to release it, instead of surfacing a 409.
  *
- * A listener whose pid matches a live relay — or whose pid is unknown while a
- * relay is live — is the relay; any other listener is a user process. A live
- * relay with no listener in the snapshot still holds the slot (the snapshot
- * may predate its bind). Misattributing a user process to the relay is
- * self-correcting: the planned relay fails to bind, lands in `failed`, and
- * the next call sees a non-live relay beside a listener.
+ * A live relay holds the slot: a `running` relay bound 8080 or it would have
+ * failed, so a listener beside it is the relay itself — even when the
+ * snapshot's pid disagrees, because a `watch` pid may be stale (the relay
+ * restarted; the channel never reported it). Only a fresh `probe` pid that
+ * differs from the relay's names a user process. No live relay and a
+ * listener is a user process; a live relay with no listener in the snapshot
+ * still holds the slot (the snapshot may predate its bind). Misattributing
+ * a user process to the relay is self-correcting: the planned relay fails
+ * to bind, lands in `failed`, and the next call sees a non-live relay beside
+ * a listener.
  */
-export function describeHttpPortSlot({ listeners, relay }: HttpPortSlotInput): HttpPortSlotHolder {
+export function describeHttpPortSlot({ listeners, relay, listenerSource = 'watch' }: HttpPortSlotInput): HttpPortSlotHolder {
   const listener = listeners.find((entry) => entry.port === SPRITE_HTTP_PORT);
   const relayAlive = isRelayAlive(relay);
   if (!listener) return relayAlive ? 'relay' : 'none';
   if (!relayAlive) return 'user-process';
+  if (listenerSource !== 'probe') return 'relay';
   const pidsAgree = listener.pid === undefined || relay.pid === undefined || listener.pid === relay.pid;
   return pidsAgree ? 'relay' : 'user-process';
 }
@@ -632,7 +646,7 @@ export function planDevServerService(input: PlanDevServerServiceInput): DevServe
     };
   }
 
-  if (describeHttpPortSlot({ listeners, relay }) === 'user-process') {
+  if (describeHttpPortSlot({ listeners, relay, listenerSource: input.listenerSource }) === 'user-process') {
     return { action: 'refuse', reason: 'http-port-busy', targetPort };
   }
 
@@ -788,7 +802,7 @@ export function describeServiceState({ liveInstanceId, row, relay, listeners, li
 
   const targetListening = isPortListening(listeners, row.targetPort, listenerSource);
 
-  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay });
+  const holder = describeHttpPortSlot({ listeners: listeners ?? [], relay, listenerSource });
 
   // Detected, recorded, and serving NOTHING — no relay for a non-8080 target
   // means the sprite URL (which routes to 8080 alone) reaches nothing. Three

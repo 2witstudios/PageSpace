@@ -223,7 +223,7 @@ export function buildDevPreviewStatus({ holder, sandbox, liveInstanceId, row, re
 
   let slot: DevPreviewSlotReport = { known: false };
   if (sandbox === 'attached' && listeners !== null) {
-    const slotHolder = describeHttpPortSlot({ listeners, relay });
+    const slotHolder = describeHttpPortSlot({ listeners, relay, listenerSource });
     const listener = listeners.find((entry) => entry.port === SPRITE_HTTP_PORT);
     const pid = slotHolder === 'user-process' && listener?.pid !== undefined ? listener.pid : null;
     slot = {
