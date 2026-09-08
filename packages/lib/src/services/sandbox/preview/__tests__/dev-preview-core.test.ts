@@ -4,6 +4,7 @@ import type { SandboxServiceInfo } from '../../sandbox-host';
 import {
   classifyDetectedDevServer,
   isHttpPortSlotFree,
+  describeHttpPortSlot,
   planDevServerService,
   describeServiceState,
   resolveDevPreviewHolder,
@@ -183,10 +184,28 @@ describe('isHttpPortSlotFree — "is 8080 free: no relay, no user process"', () 
       expected: false,
     });
     assert({
-      given: 'a listener on 8080 whose pid differs from the running relay',
-      should: 'not be free',
-      actual: isHttpPortSlotFree({ listeners: [{ port: 8080, pid: 9 }], relay: relayService(5173, { pid: 42 }) }),
+      given: 'a PROBED listener on 8080 whose pid differs from the running relay',
+      should: 'not be free — a fresh pid that is not the relay is a user process',
+      actual: isHttpPortSlotFree({ listeners: [{ port: 8080, pid: 9 }], relay: relayService(5173, { pid: 42 }), listenerSource: 'probe' }),
       expected: false,
+    });
+  });
+
+  it('a running relay owns 8080 whatever a WATCH pid says — that pid can be stale', () => {
+    // Production, first re-pick: the relay restarted as pid 4698, the watch
+    // snapshot still said pid 11264, and the pane read "held by another
+    // process (pid 11264)". The channel never reports a re-bind it missed.
+    assert({
+      given: 'relay running as pid 4698, watch snapshot says pid 11264 on 8080',
+      should: 'attribute the slot to the relay',
+      actual: describeHttpPortSlot({ listeners: [{ port: 8080, pid: 11264 }], relay: relayService(3000, { pid: 4698 }) }),
+      expected: 'relay',
+    });
+    assert({
+      given: 'the same disagreement from a PROBE',
+      should: 'attribute it to a user process',
+      actual: describeHttpPortSlot({ listeners: [{ port: 8080, pid: 11264 }], relay: relayService(3000, { pid: 4698 }), listenerSource: 'probe' }),
+      expected: 'user-process',
     });
   });
 });
@@ -235,12 +254,18 @@ describe('planDevServerService', () => {
     });
   });
 
-  it('refuses when a foreign pid holds 8080 even though the relay claims to be running', () => {
+  it('refuses when a PROBED foreign pid holds 8080 even though the relay claims to be running — but not on a watch pid', () => {
     assert({
-      given: 'relay running as pid 42, but pid 9 listens on 8080',
+      given: 'relay running as pid 42, but a probe says pid 9 listens on 8080',
       should: 'refuse with http-port-busy — the relay is not the one being served',
-      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] })),
+      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }], listenerSource: 'probe' })),
       expected: { action: 'refuse', reason: 'http-port-busy', targetPort: 5173 },
+    });
+    assert({
+      given: 'the same disagreement from the watch snapshot',
+      should: 'NOT refuse — the pid may be the relay\'s previous incarnation',
+      actual: planDevServerService(planInput({ detected: detected(5173), row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] })).action,
+      expected: 'none',
     });
   });
 
@@ -526,10 +551,16 @@ describe('describeServiceState', () => {
       expected: { status: 'blocked', targetPort: 5173, message: HTTP_PORT_BUSY_MESSAGE },
     });
     assert({
-      given: 'a relay row, relay RUNNING as pid 42, pid 9 on 8080',
-      should: 'still be blocked — a running relay that lost the bind is not serving',
-      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] }).status,
+      given: 'a relay row, relay RUNNING as pid 42, a PROBE says pid 9 on 8080',
+      should: 'still be blocked — a fresh pid that is not the relay is a stranger on the slot',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }], listenerSource: 'probe' }).status,
       expected: 'blocked',
+    });
+    assert({
+      given: 'the same, but the pid comes from the WATCH snapshot',
+      should: 'NOT be blocked — a relay that lost its bind exits and stops being running; a stale watch pid is the relay\'s previous incarnation (production, first re-pick)',
+      actual: describeServiceState({ liveInstanceId: INSTANCE, row: relayRow(5173), relay: relayService(5173, { pid: 42 }), listeners: [{ port: 8080, pid: 9 }] }).status,
+      expected: 'live',
     });
   });
 
