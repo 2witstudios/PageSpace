@@ -328,6 +328,13 @@ export function rangeAnchor(range: string): { row: number; column: number } | nu
   }
 }
 
+/**
+ * The coercion `matchesCondition` applies to both sides of a numeric
+ * comparison, exported so a write path can ask "would this operand compare
+ * against anything?" with the same answer the evaluator will give.
+ */
+export const asComparableNumber = (value: SheetPrimitive): number | null => asNumber(value);
+
 const asNumber = (value: SheetPrimitive): number | null => {
   if (typeof value === 'number') return Number.isFinite(value) ? value : null;
   if (typeof value === 'boolean' || value === '') return null;
@@ -721,6 +728,25 @@ export const VALUELESS_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
 
 /** Operators needing a second bound. */
 export const RANGE_OPERATORS: ReadonlySet<ConditionalOperator> = new Set(['between', 'notBetween']);
+
+/**
+ * Operators that compare NUMBERS, and match nothing at all when their operand
+ * is not one.
+ *
+ * Taken from `matchesCondition` below and deliberately excluding `equal` /
+ * `notEqual`, which fall back to a text comparison so `= "done"` works on a
+ * status column. For everything in this set `asComparableNumber(condition.value)`
+ * returning null means the rule is false for every cell it covers — stored,
+ * valid-looking and inert.
+ */
+export const NUMERIC_OPERATORS: ReadonlySet<ConditionalOperator> = new Set([
+  'greaterThan',
+  'greaterThanOrEqual',
+  'lessThan',
+  'lessThanOrEqual',
+  'between',
+  'notBetween',
+]);
 
 const isObject = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);

@@ -810,6 +810,126 @@ describe('planFormatOps — nothing the parser would quietly rewrite', () => {
     ).toHaveLength(1);
   });
 
+  it('refuses an unknown key NESTED inside a format', () => {
+    // The top-level key check cannot see this one, and `cellFormatSchema`
+    // strips it from the nested object just as quietly: the rule parses, the
+    // renderer ignores the misspelling and shows the default currency, and the
+    // field is gone entirely on the next load.
+    const message = refusalOf([
+      {
+        type: 'setCellFormat',
+        range: 'A1',
+        patch: { number: { kind: 'currency', curreny: 'EUR' } } as never,
+      },
+    ]);
+    expect(message).toContain('patch.number.curreny');
+
+    // And the top-level clearing behaviour has to survive the same check: a raw
+    // `undefined` is not a loss, whatever zod does with it.
+    const patch = { bold: undefined, number: { kind: 'currency' as const, currency: 'EUR' } };
+    const step = plan([{ type: 'setCellFormat', range: 'A1', patch }]).steps[0];
+    if (step.type !== 'setCellFormat') throw new Error('expected a setCellFormat step');
+    expect(step.patch).toBe(patch);
+  });
+
+  it('refuses a non-numeric operand for an operator that compares numbers', () => {
+    // A non-blank operand passes the missing-value check and still makes the
+    // rule inert: `matchesCondition` coerces it, gets null, and returns false
+    // for every cell.
+    const cell = (condition: unknown) => ({ ...rule('cf_1'), condition });
+
+    expect(
+      refusalOf([
+        { type: 'addConditionalRule', rule: cell({ operator: 'greaterThan', value: 'abc' }) },
+      ])
+    ).toContain('compares numbers, and value is "abc"');
+    expect(
+      refusalOf([
+        {
+          type: 'addConditionalRule',
+          rule: cell({ operator: 'between', value: '1', value2: 'ten' }),
+        },
+      ])
+    ).toContain('value2 is "ten"');
+
+    // `equal` and the text operators are deliberately NOT in that set — they
+    // fall back to a text comparison, so `= "done"` is a real rule.
+    for (const operator of ['equal', 'notEqual', 'contains', 'startsWith']) {
+      expect(
+        plan([{ type: 'addConditionalRule', rule: cell({ operator, value: 'done' }) }])
+          .conditionalFormats
+      ).toHaveLength(1);
+    }
+    expect(
+      plan([{ type: 'addConditionalRule', rule: cell({ operator: 'greaterThan', value: ' 10 ' }) }])
+        .conditionalFormats
+    ).toHaveLength(1);
+  });
+
+  it('refuses a formula calling a function this build does not implement', () => {
+    // Parsing proves the grammar, not the vocabulary: `FormulaParser` accepts
+    // any identifier followed by parentheses, and `evaluateFunction` then
+    // throws for a name it does not implement — once per covered cell.
+    const formula = (body: string) => ({
+      id: 'cf_1',
+      kind: 'formula',
+      ranges: ['A1:A9'],
+      formula: body,
+      format: { bold: true },
+    });
+
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=BROKEN()') }])).toContain(
+      'calls BROKEN(), which this sheet does not implement'
+    );
+    // Nested inside an expression, which is why the check walks the whole tree.
+    expect(
+      refusalOf([{ type: 'addConditionalRule', rule: formula('=SUM(A1:A9) + NOPE(1)') }])
+    ).toContain('calls NOPE()');
+    // Under a unary operator too, which is its own branch of the walk.
+    expect(refusalOf([{ type: 'addConditionalRule', rule: formula('=-NOPE(1)>0') }])).toContain(
+      'calls NOPE()'
+    );
+    // Real functions still pass, including nested and lazily-evaluated ones.
+    for (const body of ['=SUM(A1:A9)>0', '=IF(A1>1, 2, 3)', '=IFERROR(SUM(A1:A9), 0)']) {
+      expect(plan([{ type: 'addConditionalRule', rule: formula(body) }]).conditionalFormats)
+        .toHaveLength(1);
+    }
+  });
+
+  it('refuses a value nested past what it will verify, rather than dying on it', () => {
+    // The parsers preserve unknown fields on purpose, so a caller can attach an
+    // arbitrarily deep value to an otherwise valid region. An unbounded walk
+    // over it is a RangeError, which escapes as a 500 — the one outcome
+    // `SheetFormatError` exists to prevent.
+    //
+    let deep: Record<string, unknown> = { end: true };
+    for (let i = 0; i < 5_000; i++) deep = { next: deep };
+
+    // Refused wherever it sits, including where the identity fast path would
+    // have skipped the walk entirely. That shortcut is a performance
+    // optimisation, not a verification — accepting a value BECAUSE it was too
+    // deep to look at would turn the bound into a hole, and this module's whole
+    // claim is that what it stores has been checked.
+    for (const region of [
+      { id: 'r1', range: 'A1:F', columns: [{ column: 'B', role: 'text', extra: deep }] },
+      { id: 'r1', range: 'A1:F', extra: deep },
+    ]) {
+      expect(refusalOf([{ type: 'upsertRegion', region }])).toContain('nested more than');
+    }
+
+    // Twelve levels is far past anything these shapes reach on their own — the
+    // deepest is `borders.top.color`, at three — so nothing real is caught.
+    expect(
+      plan([
+        {
+          type: 'setCellFormat',
+          range: 'A1',
+          patch: { borders: { top: { style: 'thin', color: '#123456' } } },
+        },
+      ]).steps
+    ).toHaveLength(1);
+  });
+
   it('refuses a theme the palette does not have, which would render as another colour', () => {
     // `parseRegion` accepts any lowercase word and `hueByName` then falls back
     // to the default at RENDER time — so this is a sanitization the comparator

@@ -65,11 +65,13 @@ import {
   MAX_CONDITIONAL_RANGE_CELLS,
   MAX_CONDITIONAL_RULES,
   MAX_CONDITIONAL_TOTAL_CELLS,
+  NUMERIC_OPERATORS,
   RANGE_OPERATORS,
   SCALE_ANCHOR_TYPES,
   VALUED_ANCHOR_TYPES,
   VALUELESS_OPERATORS,
   addressesOfRange,
+  asComparableNumber,
   parseConditionalRule,
   parseConditionalRules,
   type ConditionalRule,
@@ -82,6 +84,7 @@ import {
   MIN_COLUMN_WIDTH,
   MIN_ROW_HEIGHT,
 } from './format-ops';
+import { isSupportedFunction } from './functions';
 import { PALETTE } from './palette';
 import { FormulaParser, tokenize } from './parser';
 import {
@@ -91,7 +94,7 @@ import {
   parseRegions,
   type SheetRegion,
 } from './regions';
-import type { CellFormat } from './types';
+import type { ASTNode, CellFormat } from './types';
 
 /**
  * A caller-supplied op that cannot be applied.
@@ -374,6 +377,23 @@ function validateCellFormatPatch(
     return refuseOp(index, type, `${[label, ...issue.path].join('.')}: ${issue.message}`);
   }
 
+  // The key check above only sees the TOP level, and `cellFormatSchema` strips
+  // unknown keys from a NESTED object just as quietly: `{number: {kind:
+  // 'currency', curreny: 'EUR'}}` parses successfully, renders as the default
+  // currency, and loses the misspelled field on the next load. Comparing the
+  // caller's object against what zod made of it catches that at any depth —
+  // and leaves the top-level `undefined` clearing alone, since a raw undefined
+  // is never a loss.
+  const nested = sanitizedPathOrRefuse(patch, result.data, index, type, label);
+  if (nested) {
+    return refuseOp(
+      index,
+      type,
+      `${label}.${nested} is not something this sheet can store. It would be dropped, and the field ` +
+        'it belongs to rendered as if you had never set it.'
+    );
+  }
+
   // Deliberately `patch`, never `result.data`. See above.
   return patch as CellFormat;
 }
@@ -455,6 +475,46 @@ function validateFreeze(
 }
 
 /**
+ * How deep a caller-supplied value may nest before this module stops trying to
+ * verify it.
+ *
+ * The parsers preserve unknown fields ON PURPOSE, so a request can carry an
+ * arbitrarily nested value attached to an otherwise valid rule. Walking that
+ * without a bound is a `RangeError` — which escapes as a 500, the one outcome
+ * `SheetFormatError` exists to prevent. Twelve is far past anything the rule
+ * and region shapes reach on their own; the deepest is `borders.top.color`, at
+ * three.
+ */
+const MAX_COMPARE_DEPTH = 12;
+
+/**
+ * Whether a value nests deeper than the comparison will follow.
+ *
+ * Checked BEFORE comparing rather than guarded during it, which is what lets
+ * the comparison itself stay a plain recursive walk with nothing to say about
+ * depth. Iterative, with its own stack: a recursive depth probe on a
+ * caller-supplied value is the very stack overflow it exists to prevent.
+ */
+function nestsTooDeep(value: unknown): boolean {
+  const stack: Array<{ value: unknown; depth: number }> = [{ value, depth: 0 }];
+
+  while (stack.length > 0) {
+    const current = stack.pop() as { value: unknown; depth: number };
+    if (current.depth > MAX_COMPARE_DEPTH) return true;
+
+    if (Array.isArray(current.value)) {
+      for (const entry of current.value) stack.push({ value: entry, depth: current.depth + 1 });
+    } else if (isObject(current.value)) {
+      for (const key of Object.keys(current.value)) {
+        stack.push({ value: current.value[key], depth: current.depth + 1 });
+      }
+    }
+  }
+
+  return false;
+}
+
+/**
  * A stable string for a value, with the normalizations the parsers are allowed
  * to perform already applied: whitespace and case on strings, key order on
  * objects, and absent-vs-undefined.
@@ -504,10 +564,18 @@ function canonical(value: unknown): string {
  * what catches a truncated `ranges` array and a dropped column declaration.
  */
 function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string | null {
-  // Absent and explicitly-undefined are the same thing over the wire, since
-  // JSON cannot express undefined. An explicit `null` is NOT the same thing and
-  // deliberately falls through to the comparison below — see `canonical`.
-  if (raw === undefined) return null;
+  // Absent and explicitly-undefined need no case of their own. The object walk
+  // below visits the keys of RAW only, so a key the parser added is never
+  // reached, and a key the caller set to `undefined` against a parser that
+  // dropped it compares `<absent>` to `<absent>` at the bottom. An explicit
+  // `null` is NOT the same thing and deliberately falls through to that same
+  // comparison; see `canonical`.
+  //
+  // An identity fast path (`raw === stored`) used to sit here, on the grounds
+  // that the parsers preserve an unknown field by passing the same reference
+  // through. It was removed: `nestsTooDeep` already bounds the walk, so it
+  // optimised a bounded operation, and no test could tell whether it was there
+  // — an object cannot be sanitized into itself, so it never changed an answer.
 
   if (Array.isArray(raw) || Array.isArray(stored)) {
     if (!Array.isArray(raw) || !Array.isArray(stored)) return path;
@@ -531,6 +599,32 @@ function firstSanitizedPath(raw: unknown, stored: unknown, path: string): string
   }
 
   return canonical(raw) === canonical(stored) ? null : path;
+}
+
+/**
+ * `firstSanitizedPath`, with the depth bound applied first.
+ *
+ * Every caller wants the same thing from a value nested past what this module
+ * will verify: refuse it. Silently accepting what could not be checked would
+ * make the bound a hole rather than a limit.
+ */
+function sanitizedPathOrRefuse(
+  raw: unknown,
+  stored: unknown,
+  index: number,
+  type: string,
+  label: string
+): string | null {
+  if (nestsTooDeep(raw)) {
+    return refuseOp(
+      index,
+      type,
+      `${label} is nested more than ${MAX_COMPARE_DEPTH} levels deep, which is past what this sheet ` +
+        'will check for silent changes. Flatten it.'
+    );
+  }
+
+  return firstSanitizedPath(raw, stored, '');
 }
 
 /**
@@ -574,6 +668,38 @@ const anchorProblem = (anchor: unknown, needsColor: boolean): string | null => {
 };
 
 /**
+ * The first function in a parsed formula that this build does not implement.
+ *
+ * Iterative rather than recursive: the input is a caller-supplied formula, and
+ * a walk whose depth follows it is a stack overflow escaping as a 500. (The
+ * parser would usually blow up first and be caught above, but "usually" is not
+ * a bound.)
+ */
+function firstUnsupportedFunction(root: ASTNode): string | null {
+  const stack: ASTNode[] = [root];
+
+  while (stack.length > 0) {
+    const node = stack.pop() as ASTNode;
+    switch (node.type) {
+      case 'FunctionCall':
+        if (!isSupportedFunction(node.name)) return node.name.toUpperCase();
+        for (const argument of node.args) stack.push(argument);
+        break;
+      case 'UnaryExpression':
+        stack.push(node.argument);
+        break;
+      case 'BinaryExpression':
+        stack.push(node.left, node.right);
+        break;
+      default:
+        break;
+    }
+  }
+
+  return null;
+}
+
+/**
  * Why a rule that stores faithfully would still not do what was asked, or null
  * when there is nothing wrong with it.
  *
@@ -601,6 +727,23 @@ function ruleRenderProblem(rule: ConditionalRule): string | null {
     if (RANGE_OPERATORS.has(operator) && (typeof value2 !== 'string' || value2.trim() === '')) {
       return `A "${operator}" rule needs both bounds: value and value2.`;
     }
+
+    // Present but not a number, for an operator that only compares numbers.
+    // `matchesCondition` coerces the operand and returns false for every cell
+    // once that yields null — the same inert rule as a missing value, reached a
+    // different way. `equal`/`notEqual` are absent from the set on purpose:
+    // they fall back to a text comparison, so `= "done"` is a real rule.
+    if (NUMERIC_OPERATORS.has(operator)) {
+      for (const [field, operand] of [['value', value], ['value2', value2]] as const) {
+        if (operand === undefined) continue;
+        if (asComparableNumber(operand) === null) {
+          return (
+            `A "${operator}" rule compares numbers, and ${field} is "${operand}". It would match no ` +
+            'cell at all.'
+          );
+        }
+      }
+    }
   }
 
   // A formula that does not parse. `parseConditionalRule` asks only that it be
@@ -610,20 +753,29 @@ function ruleRenderProblem(rule: ConditionalRule): string | null {
   // "valid" means the same thing here as where it runs.
   if (rule.kind === 'formula') {
     const body = rule.formula.trim().replace(/^=/, '');
-    let parsed = false;
+    let ast: ASTNode | null = null;
     try {
       const tokens = tokenize(body);
-      if (tokens.length > 0) {
-        new FormulaParser(tokens).parse();
-        parsed = true;
-      }
+      if (tokens.length > 0) ast = new FormulaParser(tokens).parse();
     } catch {
-      parsed = false;
+      ast = null;
     }
-    if (!parsed) {
+    if (!ast) {
       return (
         `"${rule.formula}" is not a formula this sheet can evaluate. Stored as written it throws once ` +
         'per covered cell and formats none of them.'
+      );
+    }
+
+    // Parsing proves the grammar, not the vocabulary: `FormulaParser` accepts
+    // any identifier followed by parentheses, and `evaluateFunction` then
+    // throws for a name it does not implement — once per covered cell, with the
+    // same nothing to show for it.
+    const unsupported = firstUnsupportedFunction(ast);
+    if (unsupported) {
+      return (
+        `"${rule.formula}" calls ${unsupported}(), which this sheet does not implement. Stored as ` +
+        'written it throws once per covered cell and formats none of them.'
       );
     }
   }
@@ -734,7 +886,7 @@ function validateRuleInput(
     );
   }
 
-  const sanitized = firstSanitizedPath(raw, rule, '');
+  const sanitized = sanitizedPathOrRefuse(raw, rule, index, type, 'This rule');
   if (sanitized) {
     return refuseOp(
       index,
@@ -826,7 +978,7 @@ function validateRegionInput(raw: unknown, index: number, type: string, label: s
     );
   }
 
-  const sanitized = firstSanitizedPath(raw, region, '');
+  const sanitized = sanitizedPathOrRefuse(raw, region, index, type, label);
   if (sanitized) {
     // `parseRegion` drops a bad optional setting and keeps the region, so
     // `headerRows: 999` becomes the default of one and an unusable column

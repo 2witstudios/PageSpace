@@ -93,6 +93,40 @@ export function formatDisplayValue(value: SheetPrimitive): string {
 /**
  * Evaluate a function call
  */
+/**
+ * Thrown for a function name this build does not implement.
+ *
+ * A type rather than a message, because a caller needs to tell "I do not know
+ * this function" apart from "I know it and you called it wrong", and matching
+ * on prose is how that distinction rots. Still an `Error` with the same text,
+ * so every existing catch behaves exactly as before.
+ */
+export class UnsupportedFunctionError extends Error {
+  constructor(readonly functionName: string) {
+    super(`Unsupported function ${functionName}`);
+    this.name = 'UnsupportedFunctionError';
+  }
+}
+
+/**
+ * Whether this build implements a function, asked of the dispatch itself.
+ *
+ * The alternative is a list of names beside the switch, which is a second copy
+ * free to drift the first time someone adds a function and forgets it — the
+ * exact failure the switch would then hide. Probing costs one call of a pure
+ * function with no arguments: a name that is implemented either returns
+ * something or complains about its arguments, and only an unimplemented one
+ * raises `UnsupportedFunctionError`.
+ */
+export function isSupportedFunction(name: string): boolean {
+  try {
+    evaluateFunction(name, [], () => '');
+    return true;
+  } catch (error) {
+    return !(error instanceof UnsupportedFunctionError);
+  }
+}
+
 export function evaluateFunction(
   name: string,
   args: ASTNode[],
@@ -462,6 +496,6 @@ export function evaluateFunction(
       return Math.floor(Math.random() * (top - bottom + 1)) + bottom;
     }
     default:
-      throw new Error(`Unsupported function ${upperName}`);
+      throw new UnsupportedFunctionError(upperName);
   }
 }
