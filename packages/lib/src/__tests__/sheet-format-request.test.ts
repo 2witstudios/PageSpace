@@ -1744,6 +1744,21 @@ describe('planFormatOps — never something other than what was asked for', () =
       ])
     ).toContain('is 1 row tall and that row is a header');
 
+    // And a taller all-header region, which is the other half of that sentence.
+    expect(
+      refusalOf([
+        {
+          type: 'upsertRegion',
+          region: {
+            id: 'r1',
+            range: 'A1:B3',
+            headerRows: 3,
+            columns: [{ column: 'A', role: 'currency' }],
+          },
+        },
+      ])
+    ).toContain('is 3 rows tall and every one of them is a header');
+
     // A bodyless region that declares no columns is only a header strip, which
     // is a legitimate thing to want.
     expect(
