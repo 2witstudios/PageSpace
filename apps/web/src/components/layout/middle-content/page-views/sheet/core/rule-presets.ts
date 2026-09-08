@@ -44,7 +44,13 @@ export const OPERATOR_LABELS: ReadonlyArray<{ value: ConditionalOperator; label:
  * there. Kept as re-exports so every existing importer of this module is
  * untouched.
  */
-export { VALUELESS_OPERATORS, RANGE_OPERATORS } from '@pagespace/lib/sheets/sheet';
+import { VALUELESS_OPERATORS, RANGE_OPERATORS } from '@pagespace/lib/sheets/sheet';
+
+// Imported AND re-exported, not `export … from`: a bare re-export forwards the
+// names without binding them in this module, and `describeRule` below reads
+// both. That distinction compiles fine in the package that defines them and
+// fails only where the module is actually type-checked.
+export { VALUELESS_OPERATORS, RANGE_OPERATORS };
 
 export type RuleKind = ConditionalRule['kind'];
 
