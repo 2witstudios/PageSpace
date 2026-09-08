@@ -1130,6 +1130,31 @@ describe('read_sheet — includeFormatting', () => {
     });
   });
 
+  it('answers an unformatted sheet with an empty block, not a missing key', async () => {
+    // The complement of the unmigrated case, and the reason `formatting` is
+    // spread on `includeFormatting` rather than on the block being non-empty.
+    // A sheet that genuinely has no formatting is a real answer an agent can
+    // act on — start from scratch. A MISSING key is the answer to a question
+    // that was not asked. Collapsing the two would make "nothing here" and
+    // "you did not ask" indistinguishable, which is the ambiguity the whole
+    // block is shaped to avoid.
+    mockGetTab.mockResolvedValue(tab); // no regions, freezes, formats or rules
+    mockReadRows.mockResolvedValue([
+      { rowIndex: 0, cells: { A: { raw: 'plain', value: 'plain' } } },
+    ]);
+
+    const asked = await run({ pageId: 'page-1', includeFormatting: true });
+    const notAsked = await run({ pageId: 'page-1' });
+
+    assert({
+      given: 'a formatting read of a sheet that carries none',
+      should: 'say so with an empty block rather than by omitting the key',
+      actual: { asked: asked.formatting, hasKey: 'formatting' in asked },
+      expected: { asked: {}, hasKey: true },
+    });
+    expect('formatting' in notAsked).toBe(false);
+  });
+
   it('advertises includeFormatting so an agent can discover it', async () => {
     expect(sheetReadTools.read_sheet.description ?? '').toContain('includeFormatting');
     expect(
