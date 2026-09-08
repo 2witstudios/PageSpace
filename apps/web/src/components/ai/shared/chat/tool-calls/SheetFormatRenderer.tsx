@@ -164,12 +164,14 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
 }) {
   const { navigateToPage } = usePageNavigation();
   const colours = collectColours(regions, ops, rules);
+  // The executor removes a repeated id once; the card must not list it twice.
+  const removedIds = [...new Set(removedRuleIds)];
   const duplicateIndexes = new Set(skippedDuplicates.map((entry) => entry.index));
 
   const regionCount = regionsApplied ?? regions.length;
   const opCount = opsApplied ?? ops.length;
   const added = rulesAdded ?? 0;
-  const removed = rulesRemoved ?? removedRuleIds.length;
+  const removed = rulesRemoved ?? removedIds.length;
   const replacedAll = regionMode === 'replaceAll';
   const summary = [
     ...(regionCount > 0 ? [count(regionCount, 'region')] : []),
@@ -181,7 +183,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
     ...(removed > 0 ? [`${removed} removed`] : []),
   ].join(' · ');
 
-  const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedRuleIds.length === 0 && !replacedAll;
+  const empty = regions.length === 0 && ops.length === 0 && rules.length === 0 && removedIds.length === 0 && !replacedAll;
 
   return (
     <div className="rounded-lg border bg-card overflow-hidden my-2 shadow-sm">
@@ -272,7 +274,7 @@ export const SheetFormatRenderer: React.FC<SheetFormatRendererProps> = memo(func
                 </div>
               );
             })}
-            {removedRuleIds.map((id) => (
+            {removedIds.map((id) => (
               <div key={`removed-${id}`} className={cn(ROW, 'text-muted-foreground')} data-testid="sheet-format-removed">
                 <Paintbrush className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 min-w-0 truncate font-mono text-xs line-through">{id}</span>

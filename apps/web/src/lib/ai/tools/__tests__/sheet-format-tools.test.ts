@@ -11,6 +11,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
 import { assert } from './riteway';
+import { logSheetCellActivity } from '@/services/api/sheet-activity';
+import { broadcastPageEvent } from '@/lib/websocket';
 import type * as SheetStore from '@pagespace/lib/sheets/store';
 import {
   MAX_CONDITIONAL_RULES,
@@ -626,6 +628,53 @@ describe('set_conditional_format', () => {
     expect(message(result)).toContain('"rule-a"');
     expect(message(result)).toContain('"rule-b"');
     expect(mockApplyFormatOps).not.toHaveBeenCalled();
+  });
+
+  it('format_sheet: retrying a new-region call is idempotent — the twin reuses the existing id', async () => {
+    // A region declared without an id gets a minted one. The same call
+    // retried after a timed-out response used to mint a second id and land a
+    // content-identical, overlapping twin on every attempt.
+    const region = { range: 'A1:D', headerRows: 1, name: 'Orders', columns: [{ column: 'C', role: 'currency' as const }] };
+    const first = await format({ regions: [region] });
+    assert({ given: 'the first call', should: 'declare one region', actual: state.regions.length, expected: 1 });
+    const second = await format({ regions: [region] });
+    assert({ given: 'the identical call again', should: 'still succeed', actual: second.success, expected: true });
+    assert({ given: 'the tab after the retry', should: 'hold ONE region', actual: state.regions.length, expected: 1 });
+    assert({
+      given: 'the retry',
+      should: 'report the id the first call minted',
+      actual: (second as { regionIds?: string[] }).regionIds,
+      expected: (first as { regionIds?: string[] }).regionIds,
+    });
+    const changed = await format({ regions: [{ ...region, theme: 'blue' }] });
+    assert({ given: 'a different region', should: 'still get its own id', actual: state.regions.length, expected: 2 });
+    expect(changed.success).toBe(true);
+  });
+
+  it('a call that changed nothing logs no activity and broadcasts nothing', async () => {
+    // The store reports a no-op (a bold that was already bold, a retry) with
+    // rowsTouched 0 and no tab field changed, and bumps no revision. The tool
+    // must not turn that into an activity entry, a workflow trigger and a
+    // content-updated broadcast.
+    mockApplyFormatOps.mockImplementationOnce(async () => ({
+      cellsFormatted: 0,
+      rowsTouched: 0,
+      tabFieldsChanged: [],
+      conditionalRules: 0,
+      regions: 0,
+      rowCount: 500,
+      columnCount: 16,
+      recomputed: [],
+    }));
+    const noop = await format({ ops: [{ op: 'setFormat', range: 'A1', format: { bold: true } }] });
+    assert({ given: 'a no-op format', should: 'still succeed', actual: noop.success, expected: true });
+    expect(vi.mocked(logSheetCellActivity)).not.toHaveBeenCalled();
+    expect(vi.mocked(broadcastPageEvent)).not.toHaveBeenCalled();
+
+    const real = await format({ ops: [{ op: 'setFormat', range: 'A1', format: { bold: true } }] });
+    assert({ given: 'a format that changed a row', should: 'succeed', actual: real.success, expected: true });
+    expect(vi.mocked(logSheetCellActivity)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(broadcastPageEvent)).toHaveBeenCalledTimes(1);
   });
 
   it('format_sheet: replaceAll with an empty region list clears every region', async () => {

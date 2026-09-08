@@ -78,6 +78,7 @@ import { tool } from 'ai';
 import { z } from 'zod';
 import { PageType } from '@pagespace/lib/utils/enums';
 import {
+  regionContentKey,
   MAX_ADDRESSABLE_ROW,
   MAX_CONDITIONAL_RULES,
   MAX_DECIMALS,
@@ -779,11 +780,12 @@ const mintId = (prefix: string, taken: ReadonlySet<string>): string => {
  */
 function validateRegions(
   regions: readonly RegionInput[],
-  existingIds: ReadonlySet<string>
+  existing: readonly SheetRegion[]
 ): { regions: SheetRegion[]; labels: string[]; frozenRows: number | undefined } {
   const out: SheetRegion[] = [];
   const labels: string[] = [];
-  const taken = new Set(existingIds);
+  const taken = new Set(existing.map((region) => region.id));
+  const existingByContent = new Map(existing.map((region) => [regionContentKey(region), region.id]));
   let frozenRows: number | undefined;
 
   regions.forEach((input, index) => {
@@ -831,6 +833,18 @@ function validateRegions(
       region.columns = [...byColumn.values()];
     }
     if (input.theme !== undefined) region.theme = input.theme;
+
+    // A new region (no id) that is content-identical to one already on the
+    // tab IS that region: a retried call after a timed-out response would
+    // otherwise mint a twin under a fresh id on every attempt, and the
+    // store upserts by id. Reusing the id makes the retry a no-op upsert.
+    if (input.id === undefined) {
+      const twin = existingByContent.get(regionContentKey(region));
+      if (twin !== undefined) {
+        taken.delete(id);
+        region.id = twin;
+      }
+    }
 
     const freezeHeader = input.freezeHeader;
     if (freezeHeader === true) {
@@ -1214,6 +1228,15 @@ async function applyPlanned(
     throw cause;
   }
 
+  // The store reports a request that changed nothing — a bold that was
+  // already bold, a retried call — with no rows touched and no tab field
+  // changed, and deliberately bumps no revision for it. Logging an activity
+  // entry, firing the workflow trigger and broadcasting content-updated for
+  // that would turn a harmless retry into an observable automation run.
+  if (result.rowsTouched === 0 && result.tabFieldsChanged.length === 0) {
+    return result;
+  }
+
   await logSheetCellActivity({
     pageId: page.id,
     driveId: page.driveId,
@@ -1291,10 +1314,7 @@ export const sheetFormatTools = {
         // Regions first, then the freeze a region asked for, then the
         // model's own ops — so an explicit op layers over what a region
         // implies, never under it.
-        const declared = validateRegions(
-          regions ?? [],
-          new Set(formatting.regions.map((region) => region.id))
-        );
+        const declared = validateRegions(regions ?? [], formatting.regions);
         if (regionMode === 'replaceAll') {
           planned.push({ label: 'regions', op: { type: 'setRegions', regions: declared.regions } });
         } else {

@@ -203,6 +203,14 @@ describe('set_conditional_format renderer', () => {
     expect(queryByTestId('sheet-format-removed')).toBeNull();
   });
 
+  it('lists a repeated removeRuleIds entry once, as the executor removes it once', () => {
+    const { getAllByTestId, getByText } = render(
+      <>{renderTool('set_conditional_format', { removeRuleIds: ['r-1', 'r-1', 'r-2'] }, { success: true, title: 'S', added: 0, removed: 2 })}</>,
+    );
+    expect(getAllByTestId('sheet-format-removed')).toHaveLength(2);
+    expect(getByText('2 removed')).toBeTruthy();
+  });
+
   it('falls through on the execute_tool error envelope even when the input looks well-formed', () => {
     // A read-only agent in search mode gets `{ error: 'not permitted' }` with
     // valid-looking rules as the input; nothing landed, so no card.

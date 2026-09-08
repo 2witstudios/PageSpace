@@ -393,7 +393,21 @@ export class SheetDuplicateRuleError extends SheetFormatError {
  * retry cannot reproduce. Exported so the planner's content refusal and a
  * caller's pre-flight dedupe are one definition, not two that drift.
  */
+/**
+ * A region's identity by content — everything but `id`, canonicalised the
+ * same way as a rule's — so a caller that declares a region without an id
+ * can recognise the one it already declared and reuse its id instead of
+ * minting a twin. Retries after a timed-out response are routine.
+ */
+export function regionContentKey(region: Omit<SheetRegion, 'id'> | SheetRegion): string {
+  return contentKey(region);
+}
+
 export function conditionalRuleContentKey(rule: Omit<ConditionalRule, 'id'> | ConditionalRule): string {
+  return contentKey(rule);
+}
+
+function contentKey(value: object): string {
   const canonical = (value: unknown): unknown => {
     if (Array.isArray(value)) return value.map(canonical);
     if (typeof value === 'object' && value !== null) {
@@ -407,7 +421,7 @@ export function conditionalRuleContentKey(rule: Omit<ConditionalRule, 'id'> | Co
     }
     return value;
   };
-  return JSON.stringify(canonical(rule));
+  return JSON.stringify(canonical(value));
 }
 
 /**
