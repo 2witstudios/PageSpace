@@ -39,6 +39,18 @@
  *    checks for the cases that survive storage intact and only mean something
  *    else at RENDER time (`anchorProblem`, the palette hue).
  *
+ * A word on why this is STRICTER than the panel, since the two are meant to
+ * agree. They do agree about what a rule IS — the caps, the operators that need
+ * an operand, the fields a format may carry — and those definitions are shared
+ * rather than restated, because an API that accepts a rule the panel would not
+ * offer is a bug in one of them. That shared floor is not a ceiling. Beyond it
+ * this module refuses several things the panel allows, all of the same kind: a
+ * formula that will not parse, a hue the palette lost, an anchor with no value.
+ * A person doing any of those sees the result instantly — the cells do not
+ * change colour, and they try something else. An agent gets a success response
+ * and moves on, and the missing formatting surfaces days later as a dashboard
+ * nobody trusts. The feedback loop is the difference, so the refusals are too.
+ *
  * Pure: no database, no I/O, no clock. The refusals are the contract, and they
  * have to be testable without any of that.
  */
