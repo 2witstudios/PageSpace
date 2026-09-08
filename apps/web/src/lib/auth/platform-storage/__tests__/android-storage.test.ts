@@ -405,6 +405,21 @@ describe('AndroidStorage', () => {
       expect((await storage.getStoredSession())?.deviceToken).toBe('legacy-device-token');
     });
 
+    it('returns null when csrfToken is the wrong shape', async () => {
+      // Both wrong-shape tests used deviceToken, so dropping the csrfToken half
+      // of the guard passed everything.
+      keychainMock.get.mockResolvedValue({
+        value: JSON.stringify({
+          sessionToken: 'session-token',
+          deviceId: 'device-1',
+          csrfToken: {},
+        }),
+      });
+      const storage = await importAndroidStorage();
+
+      expect(await storage.getStoredSession()).toBeNull();
+    });
+
     it('falls back to the legacy session when an optional field is the wrong shape', async () => {
       localStorage.setItem('deviceToken', 'legacy-device-token');
       keychainMock.get.mockResolvedValue({
@@ -875,6 +890,36 @@ describe('AndroidStorage', () => {
 
       expect(await storage.getDeviceId()).toBe('web_abc123');
       expect(minted).not.toBe('web_abc123');
+    });
+
+    it('rejects rather than minting when the preferences bridge hangs', async () => {
+      // getDeviceInfo is awaited by refreshBearerSession with no timeout, so a
+      // bridge call that never settles would leave the refresh — and every
+      // request queued behind it — pending forever. Minting instead would hand
+      // the server an id the live token is not bound to.
+      vi.useFakeTimers();
+      preferencesMock.get.mockReturnValue(new Promise(() => {}));
+      const storage = await importAndroidStorage();
+
+      const pending = storage.getDeviceId();
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(3000);
+      await assertion;
+
+      expect(preferencesMock.set).not.toHaveBeenCalled();
+    });
+
+    it('does not persist a device id when the preferences write hangs', async () => {
+      vi.useFakeTimers();
+      preferencesMock.set.mockReturnValue(new Promise(() => {}));
+      const storage = await importAndroidStorage();
+
+      const pending = storage.getDeviceId();
+      const assertion = expect(pending).rejects.toThrow(/timed out/);
+      await vi.advanceTimersByTimeAsync(3000);
+      await assertion;
+
+      expect(preferencesStore.get('pagespace_device_id')).toBeUndefined();
     });
 
     it('does not cache a failed resolution', async () => {

@@ -97,10 +97,23 @@ const {
 });
 
 // Mock dependencies with hoisted mocks
-const { mockClearNativeSession, mockGetStoredSession } = vi.hoisted(() => ({
+const { mockClearNativeSession, mockGetStoredSession, bridgeState } = vi.hoisted(() => ({
   mockClearNativeSession: vi.fn(async () => {}),
   mockGetStoredSession: vi.fn(async () => null),
+  bridgeState: { failsToLoad: false },
 }));
+
+// The capability lookup is a dynamic import inside logout's `finally`. A getter
+// that throws stands in for a chunk that will not load: the destructure at the
+// call site raises exactly as a rejected import would.
+vi.mock('@/lib/capacitor-bridge', () => ({
+  get hasNativeCapability() {
+    if (bridgeState.failsToLoad) throw new Error('Loading chunk failed');
+    return (capability: string) => capability === 'secureStore' && isNativeMock;
+  },
+}));
+
+let isNativeMock = false;
 
 // Logout has to clear the native secure store on every platform that has one.
 // Android writes to the same keychain under the same key as iOS, so this is
@@ -284,10 +297,7 @@ describe('useAuth', () => {
       // Regression: an iOS-only branch here left a revoked session in the
       // Android keychain for fetchWithAuth to keep presenting until a 401.
       mockPost.mockResolvedValue({ ok: true });
-      (window as Window & { Capacitor?: unknown }).Capacitor = {
-        isNativePlatform: () => true,
-        getPlatform: () => 'android',
-      };
+      isNativeMock = true;
 
       const { result } = renderHook(() => useAuth());
       await act(async () => {
@@ -295,7 +305,7 @@ describe('useAuth', () => {
       });
 
       expect(mockClearNativeSession).toHaveBeenCalled();
-      delete (window as Window & { Capacitor?: unknown }).Capacitor;
+      isNativeMock = false;
     });
 
     it('does not reach for a native store in a plain browser tab', async () => {
@@ -307,6 +317,25 @@ describe('useAuth', () => {
       });
 
       expect(mockClearNativeSession).not.toHaveBeenCalled();
+    });
+
+    it('finishes the logout even if the capability lookup cannot load', async () => {
+      // This runs in logout's `finally`, so anything escaping here skips the
+      // localStorage clear, the store reset and the redirect — stranding the
+      // user in a half-logged-out shell over a chunk that would not load.
+      mockPost.mockResolvedValue({ ok: true });
+      bridgeState.failsToLoad = true;
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+      const { result } = renderHook(() => useAuth());
+      await act(async () => {
+        await result.current.actions.logout();
+      });
+
+      expect(mockLocalStorage.removeItem).toHaveBeenCalledWith('deviceToken');
+      expect(mockPush).toHaveBeenCalledWith('/auth/signin');
+      bridgeState.failsToLoad = false;
+      consoleError.mockRestore();
     });
 
     it('should clear deviceToken from localStorage', async () => {

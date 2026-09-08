@@ -108,6 +108,30 @@ function storageError(operation: string, cause: unknown): Error {
   return new Error(`[Android] Secure storage ${operation} failed: ${detail}`, { cause });
 }
 
+/**
+ * Bound a native bridge call so it cannot hang a caller that has no timeout.
+ *
+ * `getDeviceInfo()` is awaited by `refreshBearerSession` with no timeout of its
+ * own, and a Capacitor call that never settles leaves that refresh — and every
+ * request queued behind `isRefreshing` — pending forever. A rejection instead
+ * lands in the refresh's outer catch as a retryable failure.
+ *
+ * Deliberately a rejection rather than a fallback value: if preferences cannot
+ * be read or written, we do not know the device's identity, and answering with
+ * a freshly minted one would hand the server an id the live token is not bound
+ * to. Nor may a timed-out `set` be treated as persisted.
+ */
+function withBridgeTimeout<T>(operation: string, call: Promise<T>): Promise<T> {
+  let timeoutId: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(
+      () => reject(storageError(operation, `timed out after ${BOUND_DEVICE_ID_TIMEOUT_MS}ms`)),
+      BOUND_DEVICE_ID_TIMEOUT_MS
+    );
+  });
+  return Promise.race([call, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 /** `undefined`, `null` and strings are all legal for an optional session field. */
 function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === 'string';
@@ -432,11 +456,19 @@ export class AndroidStorage implements PlatformStorage {
     const { answered, deviceId: bound } = await this.boundDeviceId();
 
     const { Preferences } = await import('@capacitor/preferences');
-    const { value } = await Preferences.get({ key: DEVICE_ID_KEY });
+    const { value } = await withBridgeTimeout(
+      'device id read',
+      Preferences.get({ key: DEVICE_ID_KEY })
+    );
 
     if (bound) {
       // Catch preferences up rather than let it contradict the live binding.
-      if (bound !== value) await Preferences.set({ key: DEVICE_ID_KEY, value: bound });
+      if (bound !== value) {
+        await withBridgeTimeout(
+          'device id write',
+          Preferences.set({ key: DEVICE_ID_KEY, value: bound })
+        );
+      }
       return bound;
     }
 
@@ -444,7 +476,7 @@ export class AndroidStorage implements PlatformStorage {
 
     // CUID2 for consistency across the codebase (matches iOS and web).
     const id = createId();
-    await Preferences.set({ key: DEVICE_ID_KEY, value: id });
+    await withBridgeTimeout('device id write', Preferences.set({ key: DEVICE_ID_KEY, value: id }));
 
     // If a legacy device token is live but named no id, publish the minted one
     // where the *server* binding will look for it. `WebStorage.getDeviceId`
